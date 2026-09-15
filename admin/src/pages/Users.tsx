@@ -1,11 +1,12 @@
 import { UserAvatar } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookUser, Plus, Trash2 } from 'lucide-react'
+import { BookUser, Plus, RefreshCw, Trash2, UserMinus } from 'lucide-react'
 import { useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import type { Column } from '@/components/data-table'
 import { DataTable } from '@/components/data-table'
+import { DepartedHandoffDialog } from '@/components/departed-handoff-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -52,6 +53,19 @@ export function UsersPage() {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  // Directory verdict filter — `?directory=departed` is the link the nightly
+  // check's admin notification carries.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const directoryFilter = searchParams.get('directory') ?? ''
+  const setDirectoryFilter = (v: string) => {
+    setSearchParams((p) => {
+      const n = new URLSearchParams(p)
+      if (v) n.set('directory', v)
+      else n.delete('directory')
+      return n
+    })
+  }
+  const [handoffOpen, setHandoffOpen] = useState(false)
   const limit = 25
 
   const [showCreate, setShowCreate] = useState(false)
@@ -60,7 +74,7 @@ export function UsersPage() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
-    queryKey: ['users', page, search, sort, statusFilter],
+    queryKey: ['users', page, search, sort, statusFilter, directoryFilter],
     queryFn: () =>
       api
         .get('/users', {
@@ -69,7 +83,17 @@ export function UsersPage() {
             offset: (page - 1) * limit,
             search: search || undefined,
             sort: sort || undefined,
-            filter: statusFilter ? JSON.stringify({ status: { _eq: statusFilter } }) : undefined,
+            filter:
+              statusFilter || directoryFilter
+                ? JSON.stringify({
+                    ...(statusFilter ? { status: { _eq: statusFilter } } : {}),
+                    ...(directoryFilter === 'departed'
+                      ? { directory_status: { _in: ['disabled', 'missing'] } }
+                      : directoryFilter
+                        ? { directory_status: { _eq: directoryFilter } }
+                        : {})
+                  })
+                : undefined,
             // Management surface — the default picker-safe list hides suspended.
             include_suspended: true
           }
@@ -157,6 +181,51 @@ export function UsersPage() {
     set('email', hit.email ?? hit.upn)
     setDirQuery('')
   }
+
+  // Directory check — "is this person still with the company?" — for one row
+  // or for everyone. Departed people are suspended per Settings; the hand-off
+  // dialog moves what they still own to a successor.
+  const checkDirectory = useMutation({
+    mutationFn: (userIds: string[] | null) =>
+      api.post('/directory/check', userIds ? { user_ids: userIds } : {}).then(
+        (r) =>
+          r.data.data as {
+            checked: number
+            active: number
+            disabled: number
+            missing: number
+            suspended: number
+            changes: Array<{ name: string; status: string; suspended: boolean }>
+          }
+      ),
+    onSuccess: (s, ids) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      queryClient.invalidateQueries({ queryKey: ['directory-report'] })
+      if (ids && ids.length === 1) {
+        const c = s.changes[0]
+        const verdict =
+          s.missing > 0
+            ? 'not in the directory'
+            : s.disabled > 0
+              ? 'disabled in Azure'
+              : 'still with the company'
+        toast[s.active > 0 ? 'success' : 'warning'](
+          `${c?.name ?? 'User'}: ${verdict}${c?.suspended ? ' — suspended' : ''}`
+        )
+        return
+      }
+      toast.success(
+        `Checked ${s.checked} users — ${s.disabled} disabled, ${s.missing} not in the directory, ${s.suspended} suspended`
+      )
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Directory check failed')
+    }
+  })
+  const departedUsers = users.filter(
+    (u) => u.directory_status === 'disabled' || u.directory_status === 'missing'
+  )
 
   const handleCreateSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -270,11 +339,71 @@ export function UsersPage() {
           )}
         </div>
       )
+    },
+    {
+      key: 'directory_status',
+      header: 'Directory',
+      sortable: true,
+      render: (user) => {
+        const s = user.directory_status ?? null
+        const label =
+          s === 'active'
+            ? 'With the company'
+            : s === 'disabled'
+              ? 'Disabled in Azure'
+              : s === 'missing'
+                ? 'Not in directory'
+                : 'Not checked'
+        const tone =
+          s === 'active'
+            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300'
+            : s === 'disabled'
+              ? 'bg-amber-50 text-amber-800 dark:bg-amber-400/10 dark:text-amber-200'
+              : s === 'missing'
+                ? 'bg-red-50 text-red-700 dark:bg-red-400/10 dark:text-red-300'
+                : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-muted-foreground'
+        const checking =
+          checkDirectory.isPending &&
+          Array.isArray(checkDirectory.variables) &&
+          checkDirectory.variables.includes(user.id)
+        return (
+          <div className='flex items-center gap-1.5'>
+            <span
+              className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}
+              title={
+                user.directory_checked_at
+                  ? `Checked ${formatRelative(user.directory_checked_at)}`
+                  : 'Never checked against the directory'
+              }
+            >
+              {label}
+            </span>
+            <button
+              type='button'
+              aria-label={`Check ${user.email} against the directory`}
+              title='Check against the directory'
+              disabled={checkDirectory.isPending}
+              onClick={(e) => {
+                e.stopPropagation()
+                checkDirectory.mutate([user.id])
+              }}
+              className='rounded p-0.5 text-slate-300 hover:text-slate-600 disabled:opacity-40 dark:hover:text-slate-200'
+            >
+              <RefreshCw className={`h-3 w-3 ${checking ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        )
+      }
     }
   ]
 
   return (
     <>
+      <DepartedHandoffDialog
+        open={handoffOpen}
+        onOpenChange={setHandoffOpen}
+        users={departedUsers}
+      />
       {/* Page header */}
       <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between'>
@@ -287,6 +416,31 @@ export function UsersPage() {
             )}
           </div>
           <div className='flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => checkDirectory.mutate(null)}
+              disabled={checkDirectory.isPending}
+              title='Check every user against the Microsoft directory'
+            >
+              <RefreshCw
+                className={`mr-1.5 h-3.5 w-3.5 ${checkDirectory.isPending && !checkDirectory.variables ? 'animate-spin' : ''}`}
+              />
+              {checkDirectory.isPending && !checkDirectory.variables
+                ? 'Checking…'
+                : 'Check directory'}
+            </Button>
+            {departedUsers.length > 0 && (
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() => setHandoffOpen(true)}
+                className='border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-400/40 dark:text-amber-200'
+              >
+                <UserMinus className='mr-1.5 h-3.5 w-3.5' />
+                Hand off {departedUsers.length} departed
+              </Button>
+            )}
             <Button size='sm' variant='outline' onClick={() => setShowInactive((v) => !v)}>
               {showInactive ? 'Hide' : 'Inactive report'}
             </Button>
@@ -334,12 +488,26 @@ export function UsersPage() {
                 { label: 'Inactive', value: 'inactive' },
                 { label: 'Suspended', value: 'suspended' }
               ]
+            },
+            {
+              key: 'directory',
+              placeholder: 'Directory: any',
+              options: [
+                { label: 'Departed (disabled or missing)', value: 'departed' },
+                { label: 'With the company', value: 'active' },
+                { label: 'Disabled in Azure', value: 'disabled' },
+                { label: 'Not in directory', value: 'missing' }
+              ]
             }
           ]}
-          filterValues={{ status: statusFilter }}
+          filterValues={{ status: statusFilter, directory: directoryFilter }}
           onFilterChange={(key, val) => {
+            const v = typeof val === 'string' ? val : (val[0] ?? '')
             if (key === 'status') {
-              setStatusFilter(typeof val === 'string' ? val : (val[0] ?? ''))
+              setStatusFilter(v)
+              setPage(1)
+            } else if (key === 'directory') {
+              setDirectoryFilter(v)
               setPage(1)
             }
           }}

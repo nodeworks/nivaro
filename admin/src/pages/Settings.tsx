@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { DirectorySyncCard } from '@/components/directory-sync-card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -2246,6 +2247,7 @@ export function SettingsPage() {
                   onSave={saveMicrosoft}
                   saving={mutation.isPending}
                 >
+                  <DirectorySyncCard />
                   <Field
                     label='Teams Incoming Webhook URL'
                     hint='In-app notifications will also be posted to this Teams channel.'

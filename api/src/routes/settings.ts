@@ -52,6 +52,9 @@ const allowedSettingsKeys = [
   'activity_retention_days',
   'revision_retention_count',
   'available_locales',
+  // Directory sync (Microsoft Graph)
+  'directory_sync_enabled',
+  'directory_sync_suspend',
   // SMTP / email
   'smtp_host',
   'smtp_port',

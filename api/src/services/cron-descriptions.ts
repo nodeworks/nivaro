@@ -59,6 +59,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every 15 minutes — flips users into/out of out-of-office on their scheduled window and reassigns their open tasks to the delegate.',
   'access-requests-expire':
     'Daily — closes access requests nobody acted on within 14 days and tells the requester.',
+  'directory-sync':
+    'Nightly — checks every user against the Microsoft directory; people the directory no longer has are suspended (Settings → Microsoft → Directory sync). Skips itself until the switch is on and the app token carries User.Read.All.',
   'staged-imports':
     'Every 10 seconds — starts the next queued staged import (file → staging table → stored procedure) when nothing else is running.',
   'erp-auto-retry':

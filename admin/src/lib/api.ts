@@ -97,6 +97,8 @@ export type User = {
   is_admin?: boolean
   is_redacted?: boolean
   redacted_at?: string | null
+  directory_status?: 'active' | 'disabled' | 'missing' | null
+  directory_checked_at?: string | null
 }
 
 export interface Workspace {
@@ -176,6 +178,10 @@ export type CMSSettings = {
   default_language: string
   updated_at: string
   teams_webhook_url: string | null
+  directory_sync_enabled?: boolean
+  directory_sync_suspend?: boolean
+  directory_sync_last_run?: string | null
+  directory_sync_last_summary?: string | null
   ad_group_role_map: Array<{ ad_group_id: string; role_id: string }> | null
   anthropic_api_key: string | null
   /** Off hides two-factor setup from every profile. */

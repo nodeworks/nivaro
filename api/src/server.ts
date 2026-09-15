@@ -1211,6 +1211,17 @@ export async function buildServer() {
         })
       }
 
+      // Directory sync: is every user still with the company? Registered
+      // always so Background Jobs lists it; the body skips itself until the
+      // Settings switch is on AND the app token carries User.Read.All.
+      {
+        const { runDirectorySyncCron } = await import('./services/directory-sync.js')
+        app.cron.schedule('directory-sync', '15 4 * * *', async () => {
+          const outcome = await runDirectorySyncCron(app)
+          app.log.info(`directory-sync: ${outcome}`)
+        })
+      }
+
       // Line-level SLA (backlog #16): lines still missing a required id N
       // days after a state — OFF until a grid enables options.line_sla.
       // Notifies owners once a day; the daily digest carries a section.

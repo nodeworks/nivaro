@@ -3,7 +3,7 @@ import { BookUser, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api, type User } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 /**
  * Directory card — what Microsoft's directory says about this person right
@@ -77,16 +77,25 @@ export function UserDirectoryCard({ user }: { user: User }) {
     staleTime: 60_000
   })
   const sync = useMutation({
-    mutationFn: () => api.post(`/directory/sync/${user.id}`).then((r) => r.data.data),
-    onSuccess: (data: { changed: string[] }) => {
+    mutationFn: () =>
+      api.post(`/directory/sync/${user.id}`).then(
+        (r) =>
+          r.data.data as {
+            summary: { active: number; disabled: number; missing: number; suspended: number }
+          }
+      ),
+    onSuccess: ({ summary: s }) => {
       queryClient.invalidateQueries({ queryKey: ['user', user.id] })
       queryClient.invalidateQueries({ queryKey: ['users'] })
       queryClient.invalidateQueries({ queryKey: ['user-avatar', user.id] })
-      toast.success(
-        data.changed.length === 0
-          ? 'Profile already matches the directory'
-          : `Updated ${data.changed.map((c) => c.replace(/_/g, ' ')).join(', ')}`
-      )
+      queryClient.invalidateQueries({ queryKey: ['directory-entry', user.email] })
+      if (s.active > 0) toast.success('Still with the company — profile synced from the directory')
+      else
+        toast.warning(
+          `${s.missing > 0 ? 'Not in the directory' : 'Disabled in Azure'}${
+            s.suspended > 0 ? ' — suspended' : ''
+          }`
+        )
     },
     onError: (err: unknown) => {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
@@ -113,7 +122,7 @@ export function UserDirectoryCard({ user }: { user: User }) {
             directory has a value for; blanks there never clear a stored value.
           </p>
         </div>
-        {status.data.granted && e && (
+        {status.data.granted && (
           <Button
             type='button'
             variant='outline'
@@ -123,10 +132,45 @@ export function UserDirectoryCard({ user }: { user: User }) {
             className='gap-1.5 text-[12px]'
           >
             <RefreshCw className={cn('h-3.5 w-3.5', sync.isPending && 'animate-spin')} />
-            {sync.isPending ? 'Pulling…' : 'Pull into profile'}
+            {sync.isPending ? 'Checking…' : 'Sync from directory'}
           </Button>
         )}
       </div>
+
+      {/* The verdict the last check stored — the one line an admin reads first. */}
+      {(() => {
+        const s = user.directory_status ?? null
+        const tone =
+          s === 'active'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200'
+            : s === 'disabled' || s === 'missing'
+              ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-200'
+              : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted dark:text-muted-foreground'
+        const text =
+          s === 'active'
+            ? 'Still with the company'
+            : s === 'disabled'
+              ? 'Account disabled in Azure — no longer with the company'
+              : s === 'missing'
+                ? 'Not in the Microsoft directory — no longer with the company'
+                : 'Not checked against the directory yet'
+        return (
+          <div className={cn('mt-3 rounded-md border px-3 py-2 text-[12.5px]', tone)}>
+            <span className='font-medium'>{text}</span>
+            {user.directory_checked_at && (
+              <span className='ml-2 text-[11px] opacity-70'>
+                checked {formatRelative(user.directory_checked_at)}
+              </span>
+            )}
+            {(s === 'disabled' || s === 'missing') && (
+              <p className='mt-0.5 text-[11.5px] opacity-80'>
+                Hand off what they still own with the Offboarding card below. Redaction stays a
+                separate step.
+              </p>
+            )}
+          </div>
+        )
+      })()}
 
       {!status.data.granted ? (
         <div className='mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200'>

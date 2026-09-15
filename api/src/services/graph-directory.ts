@@ -338,6 +338,25 @@ export async function searchDirectoryUsers(q: string, top = 25): Promise<Directo
   return (body.value ?? []).map(mapUser)
 }
 
+/**
+ * Every user in the tenant, paged 999 at a time — the way to check the whole
+ * user table without one Graph call per person. A 5k-user tenant is six calls.
+ */
+export async function walkDirectoryUsers(): Promise<DirectoryUser[]> {
+  const out: DirectoryUser[] = []
+  let next: string | null = `/users?$select=${USER_SELECT}&$top=999`
+  let pages = 0
+  while (next && pages < 200) {
+    pages += 1
+    const res = await graphGet(next)
+    const body = (await res.json()) as { value?: GraphUser[]; '@odata.nextLink'?: string }
+    for (const g of body.value ?? []) out.push(mapUser(g))
+    const link = body['@odata.nextLink']
+    next = link ? link.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, '') : null
+  }
+  return out
+}
+
 export async function fetchDirectoryManager(key: string): Promise<DirectoryUser | null> {
   try {
     const res = await graphGet(

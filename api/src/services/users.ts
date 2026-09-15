@@ -158,7 +158,9 @@ const USER_COLS = [
   'ooo_start',
   'ooo_end',
   'is_out_of_office',
-  'created_at'
+  'created_at',
+  'directory_status',
+  'directory_checked_at'
 ] as const
 
 // preferences is nvarchar JSON — parse on read, stringify on write so callers

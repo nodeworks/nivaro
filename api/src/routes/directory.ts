@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { logActivity } from '../services/activity.js'
+import { checkDirectory } from '../services/directory-sync.js'
 import {
   DirectoryError,
   type DirectoryUser,
@@ -12,7 +12,7 @@ import {
   resetDirectoryToken,
   searchDirectoryUsers
 } from '../services/graph-directory.js'
-import { queueOfficeGeocode } from '../services/office-geocode.js'
+import { withJobRun } from '../services/job-runs.js'
 import { getUser } from '../services/users.js'
 
 // ─── Directory (Microsoft Graph) ─────────────────────────────────────────────
@@ -20,8 +20,8 @@ import { getUser } from '../services/users.js'
 // never signed in included. Reads are for every signed-in user (the same
 // information the org's address book already shows), with the admin-only
 // columns (employee id, city/state/country) stripped for non-admins, mirroring
-// listUsers' DIRECTORY projection. Writing a directory entry onto a Nivaro
-// profile is admin-only.
+// listUsers' DIRECTORY projection. Writing a directory verdict or entry onto
+// a Nivaro profile is admin-only.
 
 const ADMIN_ONLY_FIELDS = ['employee_id', 'city', 'state', 'country'] as const
 
@@ -129,11 +129,9 @@ export async function directoryRoutes(app: FastifyInstance) {
     }
   )
 
-  // Pull a Nivaro user's profile from the directory NOW, without waiting for
-  // their next login. Same rule as login enrichment: the directory wins for
-  // every field it has a value for, a blank directory field never clears a
-  // stored one. The manager links when the directory's manager is a Nivaro
-  // user; otherwise it is left alone.
+  // Sync ONE Nivaro user from the directory: verdict (still with the company?)
+  // + profile pull. A person the directory no longer has is suspended when the
+  // Settings switch says so — same rule as the nightly cron.
   app.post<{ Params: { userId: string } }>(
     '/sync/:userId',
     { preHandler: requireAdmin },
@@ -142,84 +140,91 @@ export async function directoryRoutes(app: FastifyInstance) {
       if (!user) return reply.code(404).send({ error: 'User not found' })
       if (!user.email) return reply.code(422).send({ error: 'User has no email to look up' })
       try {
-        const entry = await lookupDirectoryUser(user.email)
-        if (!entry) {
-          return reply
-            .code(404)
-            .send({ error: `No directory entry for ${user.email}`, code: 'not_found' })
-        }
-        const [manager, avatar] = await Promise.all([
-          fetchDirectoryManager(entry.id).catch(() => null),
-          fetchDirectoryPhoto(entry.id).catch(() => null)
-        ])
-
-        const updates: Record<string, unknown> = {}
-        const changed: string[] = []
-        const consider = (col: string, next: string | null) => {
-          if (!next) return
-          const current = (user as unknown as Record<string, unknown>)[col]
-          if (current === next) return
-          updates[col] = next
-          changed.push(col)
-        }
-        consider('first_name', entry.first_name)
-        consider('last_name', entry.last_name)
-        consider('title', entry.title)
-        consider('company', entry.company)
-        consider('department', entry.department)
-        consider('phone', entry.phone)
-        consider('office_location', entry.office_location)
-        consider('city', entry.city)
-        consider('state', entry.state)
-        consider('country', entry.country)
-        consider('employee_id', entry.employee_id)
-        consider('preferred_language', entry.preferred_language)
-        if (avatar) {
-          updates.avatar = avatar
-          updates.avatar_updated_at = new Date()
-          changed.push('avatar')
-        }
-        let managerLinked: { id: string; name: string } | null = null
-        if (manager) {
-          const match = await nivaroMatch(manager)
-          if (match && match.id !== user.id && match.id !== user.manager_id) {
-            updates.manager_id = match.id
-            changed.push('manager_id')
-          }
-          if (match) {
-            managerLinked = {
-              id: match.id,
-              name: manager.display_name ?? manager.email ?? match.id
-            }
-          }
-        }
-
-        if (changed.length > 0) {
-          updates.updated_at = new Date()
-          await db('nivaro_users').where({ id: user.id }).update(updates)
-          if (changed.includes('office_location')) queueOfficeGeocode(user.id)
-          await logActivity({
-            action: 'directory-sync',
-            collection: 'nivaro_users',
-            item: user.id,
-            user: req.user?.id,
-            comment: `Pulled from Microsoft directory: ${changed.join(', ')}`,
-            req
-          })
-        }
-        return {
-          data: {
-            user: await getUser(user.id),
-            changed,
-            directory: entry,
-            manager: manager
-              ? { ...manager, nivaro_user: managerLinked ? { id: managerLinked.id } : null }
-              : null
-          }
-        }
+        const summary = await checkDirectory(app, {
+          userIds: [user.id],
+          actorId: req.user?.id ?? null,
+          pullProfile: true
+        })
+        return { data: { user: await getUser(user.id), summary } }
       } catch (err) {
         return sendDirectoryError(reply, err)
       }
     }
   )
+
+  // Check MANY (or all) users against the directory — the Users page's bulk
+  // button. Recorded as a job run so Background Jobs shows it beside the cron.
+  app.post<{ Body: { user_ids?: string[]; pull_profile?: boolean } }>(
+    '/check',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const ids = Array.isArray(req.body?.user_ids)
+        ? req.body.user_ids.filter((v) => typeof v === 'string').slice(0, 5000)
+        : null
+      try {
+        const summary = await withJobRun(
+          'directory',
+          'directory-check',
+          {
+            label: ids ? `Directory check (${ids.length} users)` : 'Directory check (all users)',
+            triggeredBy: req.user?.id ?? null
+          },
+          async (run) => {
+            const s = await checkDirectory(app, {
+              userIds: ids && ids.length > 0 ? ids : null,
+              actorId: req.user?.id ?? null,
+              pullProfile: Boolean(req.body?.pull_profile),
+              notifyAdmins: false
+            })
+            run.progress({ checked: s.checked, disabled: s.disabled, missing: s.missing })
+            return s
+          }
+        )
+        return { data: summary }
+      } catch (err) {
+        return sendDirectoryError(reply, err)
+      }
+    }
+  )
+
+  // The newest whole-table run, for the Settings card.
+  app.get('/report', { preHandler: requireAdmin }, async () => {
+    const row = (await db('nivaro_settings').first(
+      'directory_sync_enabled',
+      'directory_sync_suspend',
+      'directory_sync_last_run',
+      'directory_sync_last_summary'
+    )) as
+      | {
+          directory_sync_enabled?: boolean | number | null
+          directory_sync_suspend?: boolean | number | null
+          directory_sync_last_run?: Date | null
+          directory_sync_last_summary?: string | null
+        }
+      | undefined
+    let summary: unknown = null
+    try {
+      summary = row?.directory_sync_last_summary
+        ? JSON.parse(row.directory_sync_last_summary)
+        : null
+    } catch {
+      summary = null
+    }
+    const counts = (await db('nivaro_users')
+      .where((b) => b.where('is_redacted', false).orWhereNull('is_redacted'))
+      .select('directory_status')
+      .count<{ directory_status: string | null; n: number }[]>('id as n')
+      .groupBy('directory_status')) as Array<{ directory_status: string | null; n: number }>
+    return {
+      data: {
+        enabled: Boolean(row?.directory_sync_enabled),
+        suspend: row?.directory_sync_suspend == null ? true : Boolean(row.directory_sync_suspend),
+        last_run: row?.directory_sync_last_run ?? null,
+        summary,
+        counts: Object.fromEntries(
+          counts.map((c) => [c.directory_status ?? 'unchecked', Number(c.n)])
+        )
+      }
+    }
+  })
 }

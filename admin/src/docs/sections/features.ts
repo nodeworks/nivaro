@@ -821,6 +821,15 @@ export const userMicrosoftGuide: DocSection = {
     {
       type: 'note',
       text: 'A delegated User.Read.All is not enough: it only widens the token of the person logging in. The app token must carry the role — the status endpoint says "no Graph roles" until admin consent is granted. Credentials default to the OIDC app registration; `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` override them when a separate app owns the directory permission.'
+    },
+    { type: 'h3', text: 'Directory sync — is this person still with the company?' },
+    {
+      type: 'p',
+      text: 'Every user carries a directory verdict: **With the company** (found, account enabled), **Disabled in Azure**, **Not in directory**, or not checked yet. Three ways to take it: the nightly `directory-sync` job (04:15; Settings → Microsoft → Directory sync switches it on, and it skips itself until the app token carries User.Read.All), the **Check directory** button on the Users page (`POST /api/directory/check`, everyone or a selected list), and the per-user check — the refresh glyph beside each verdict pill, or **Sync from directory** on the user page (`POST /api/directory/sync/:id`, which also pulls the profile). A whole-table check walks the tenant once, 999 users per call; a handful of ids are looked up directly.'
+    },
+    {
+      type: 'p',
+      text: 'Someone the directory no longer has — missing or disabled — is **suspended** while the "Suspend people the directory no longer has" switch is on (the default). A suspension is never lifted by the check, and redaction stays a separate, deliberate action. The Users page filter **Directory: Departed** lists them, and **Hand off N departed** moves everything they still hold (queue claims, open record ownerships, tasks, owner-group seats, delegate chains, subscriptions) to one successor in a single pass — the same offboarding run each user page offers alone. Admins get one notification per nightly run naming who left; `GET /api/directory/report` carries the last run and the current counts.'
     }
   ]
 }
