@@ -9,6 +9,7 @@ import {
   fetchDirectoryManager,
   fetchDirectoryPhoto,
   lookupDirectoryUser,
+  resetDirectoryToken,
   searchDirectoryUsers
 } from '../services/graph-directory.js'
 import { queueOfficeGeocode } from '../services/office-geocode.js'
@@ -55,9 +56,16 @@ async function nivaroMatch(u: DirectoryUser) {
 
 export async function directoryRoutes(app: FastifyInstance) {
   // What the app token can do — the card and the Add-user dialog gate on this.
-  app.get('/status', { preHandler: requireAuth }, async () => {
-    return { data: await directoryStatus() }
-  })
+  // `?fresh=1` drops the cached token first: a consent granted in Azure only
+  // shows up on the next token, and the cache lives up to an hour.
+  app.get<{ Querystring: { fresh?: string } }>(
+    '/status',
+    { preHandler: requireAuth },
+    async (req) => {
+      if (req.query.fresh === '1') resetDirectoryToken()
+      return { data: await directoryStatus() }
+    }
+  )
 
   app.get<{ Querystring: { q?: string; limit?: string } }>(
     '/users',
