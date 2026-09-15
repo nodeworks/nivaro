@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-15T00:24:20.482Z",
+  "generated_at": "2026-09-15T01:56:51.465Z",
   "releases": [
+    {
+      "version": "0.1.288",
+      "tag": "v0.1.288",
+      "date": "2026-09-14T21:56:40-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "enhancement batch — one email per save, integration notes, spread remaining, edit-this-section, fulfilment dots; EFP wording sweep",
+              "hash": "14a06544"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "extensions",
+              "text": "exclude extension e2e specs from the extension typecheck",
+              "hash": "2d2bd2f8"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.287",
       "tag": "v0.1.287",
-      "date": "2026-09-14T20:24:11-04:00",
+      "date": "2026-09-14T20:24:20-04:00",
       "sections": [
         {
           "label": "Fixed",
