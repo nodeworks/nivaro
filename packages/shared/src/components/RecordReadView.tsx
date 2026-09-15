@@ -70,6 +70,8 @@ interface RelationRow {
   one_collection: string | null
   one_field?: string | null
   junction_field?: string | null
+  one_collection_field?: string | null
+  one_allowed_collections?: string | null
 }
 
 const parseOverrides = (o: LayoutAssignment['overrides']): Record<string, unknown> => {
@@ -196,7 +198,16 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
       .trim()
   }
   if (!label) {
-    for (const k of ['name', 'title', 'label', 'number', 'subject', 'email', 'filename_download', 'filename']) {
+    for (const k of [
+      'name',
+      'title',
+      'label',
+      'number',
+      'subject',
+      'email',
+      'filename_download',
+      'filename'
+    ]) {
       if (row[k]) {
         label = String(row[k])
         break
@@ -294,31 +305,68 @@ function M2MValue({
     staleTime: 10 * 60_000,
     retry: false
   })
-  const target =
-    (jMeta?.relations ?? []).find(
-      (r) => r.many_collection === junction && r.many_field === junctionField && r.one_collection
-    )?.one_collection ?? null
-  const { data: ids } = useQuery({
-    queryKey: ['rrv-m2m', junction, parentFk, parentId, junctionField],
+  // The junction's companion leg names the target. An M2A leg (IR Ship-To
+  // Contact: inventory_request_internal_contact.item) has NO one_collection —
+  // each junction row carries its own collection in `one_collection_field`
+  // ('collection'), drawn from one_allowed_collections ('additional_emails,
+  // directus_users'). Before this branch the read view waited forever for a
+  // target that never came (Rob's st.png: Ship-To Contact stuck loading).
+  const companion = (jMeta?.relations ?? []).find(
+    (r) => r.many_collection === junction && r.many_field === junctionField
+  )
+  const allowed = String(companion?.one_allowed_collections ?? '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean)
+  const isM2A =
+    !!companion &&
+    !companion.one_collection &&
+    (allowed.length > 0 || !!companion.one_collection_field)
+  const discField = companion?.one_collection_field ?? 'collection'
+  // Legacy Directus rows name the user table 'directus_users' — same uuid
+  // space as nivaro_users, which is where the labels live.
+  const mapTarget = (c: string | null | undefined): string | null =>
+    !c ? null : c === 'directus_users' ? 'nivaro_users' : c
+  const staticTarget =
+    companion?.one_collection ??
+    (isM2A
+      ? allowed.some((c) => c === 'directus_users' || c === 'nivaro_users')
+        ? 'nivaro_users'
+        : mapTarget(allowed[0])
+      : null)
+  const { data: rows } = useQuery({
+    queryKey: ['rrv-m2m', junction, parentFk, parentId, junctionField, isM2A ? discField : ''],
     queryFn: () =>
       client
         .request<{ data: Array<Record<string, unknown>> }>(
           get(`/items/${junction}`, {
             filter: JSON.stringify({ [parentFk]: { _eq: parentId } }),
-            fields: `id,${junctionField}`,
+            fields: isM2A ? `id,${junctionField},${discField}` : `id,${junctionField}`,
             limit: 200
           })
         )
         .then((r) =>
           (r.data ?? [])
-            .map((row) => row[junctionField])
-            .filter((v) => v != null)
-            .map((v) => String(typeof v === 'object' ? (v as { id?: unknown }).id : v))
+            .filter((row) => row[junctionField] != null)
+            .map((row) => {
+              const v = row[junctionField]
+              return {
+                id: String(typeof v === 'object' ? (v as { id?: unknown }).id : v),
+                collection: isM2A ? mapTarget(row[discField] as string | null) : null
+              }
+            })
         )
-        .catch(() => [] as string[]),
+        .catch(() => [] as Array<{ id: string; collection: string | null }>),
+    // The fields list depends on the companion leg — wait for it.
+    enabled: !!jMeta,
     staleTime: 30_000,
     retry: false
   })
+  const ids = rows?.map((r) => r.id)
+  // An M2A leg whose allowed list did not come through still names each
+  // row's collection on the row itself — take the target from the data.
+  const target =
+    staticTarget ?? (isM2A ? (rows?.find((r) => r.collection)?.collection ?? null) : null)
   const linked = ids?.length
   useEffect(() => {
     if (linked !== undefined) onCount?.(linked)
@@ -326,6 +374,9 @@ function M2MValue({
   useEffect(() => {
     if (target) onTarget?.(target)
   }, [target, onTarget])
+  // No companion leg at all once the meta is in = nothing to resolve; say so
+  // instead of pulsing forever.
+  if (jMeta && !target && (!isM2A || rows)) return <Empty />
   if (!ids || !target)
     return (
       <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
@@ -347,9 +398,12 @@ function M2MValue({
     )
   return (
     <span className='flex flex-wrap gap-x-1.5 gap-y-0.5'>
-      {ids.map((id, i) => (
-        <span key={id} className='inline-flex items-center whitespace-nowrap'>
-          <RelatedOrFile collection={target} id={id} />
+      {(rows ?? []).map(({ id, collection }, i) => (
+        <span
+          key={`${collection ?? target}:${id}`}
+          className='inline-flex items-center whitespace-nowrap'
+        >
+          <RelatedOrFile collection={collection ?? target} id={id} />
           {i < ids.length - 1 && <span className='text-slate-300 dark:text-slate-600'>,</span>}
         </span>
       ))}
@@ -975,7 +1029,8 @@ export function RecordReadView({
   // a second grid on one relation has to use).
   const aliasChild = (field: string) =>
     relations.find(
-      (r) => r.one_collection === collection && (r.one_field === field || r.many_collection === field)
+      (r) =>
+        r.one_collection === collection && (r.one_field === field || r.many_collection === field)
     ) ?? null
 
   // Same gate as the edit form: assignment visibility, the layout's hidden
@@ -1269,7 +1324,8 @@ export function RecordReadView({
     // Board width is CONFIGURATION (group.read_width, Table Editor), never a
     // function of what loaded. Auto = half for a short fact list, full when
     // the section holds a grid, a widget, a live slot or many fields.
-    const configured = g.read_width === 'full' || g.read_width === 'half' || g.read_width === 'third'
+    const configured =
+      g.read_width === 'full' || g.read_width === 'half' || g.read_width === 'third'
     const width = configured
       ? (g.read_width as 'full' | 'half' | 'third')
       : grids.length > 0 || groupWidgets.length > 0 || groupLive.length > 0 || scalars.length > 4
@@ -1339,8 +1395,11 @@ export function RecordReadView({
                       // alias (Zone, Region) stays a fact in one track.
                       className={`min-w-0 ${
                         long ||
-                        (isM2M(a) &&
-                          (relTargets[a.field] === 'nivaro_files' || (relCounts[a.field] ?? 0) > 3))
+                        (
+                          isM2M(a) &&
+                            (relTargets[a.field] === 'nivaro_files' ||
+                              (relCounts[a.field] ?? 0) > 3)
+                        )
                           ? 'col-span-full'
                           : emphasis || wide
                             ? 'col-span-2'

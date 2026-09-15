@@ -21,6 +21,22 @@ function serializeCollection(col: CMSCollection): CMSCollection {
   }
 }
 
+/** `one_allowed_collections` is JSON on rows the Data Model wrote and a bare
+ *  comma list on legacy Directus M2A imports ('additional_emails,directus_users');
+ *  parseJson() returned null for the latter, so every M2A companion leg read
+ *  as target-less (the IR Ship-To Contact skeleton, 2026-09-14). */
+export function parseAllowedCollections(v: unknown): string[] | null {
+  if (v == null || v === '') return null
+  if (Array.isArray(v)) return v.map(String)
+  const parsed = parseJson<unknown>(v)
+  if (Array.isArray(parsed)) return parsed.map(String)
+  const list = String(v)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return list.length ? list : null
+}
+
 export async function listCollections(workspaceId?: string | null): Promise<CMSCollection[]> {
   const q = db<CMSCollection>('nivaro_collections')
     .orderBy('sort', 'asc')
@@ -216,7 +232,7 @@ export async function getRelations(collection?: string): Promise<CMSRelation[]> 
     const rows = await db<CMSRelation>('nivaro_relations')
     return rows.map((r) => ({
       ...r,
-      one_allowed_collections: parseJson<string[]>(r.one_allowed_collections)
+      one_allowed_collections: parseAllowedCollections(r.one_allowed_collections)
     }))
   }
 
@@ -233,7 +249,7 @@ export async function getRelations(collection?: string): Promise<CMSRelation[]> 
   if (junctionTables.length === 0) {
     return direct.map((r) => ({
       ...r,
-      one_allowed_collections: parseJson<string[]>(r.one_allowed_collections)
+      one_allowed_collections: parseAllowedCollections(r.one_allowed_collections)
     }))
   }
 
@@ -244,6 +260,6 @@ export async function getRelations(collection?: string): Promise<CMSRelation[]> 
 
   return [...direct, ...junctionRels].map((r) => ({
     ...r,
-    one_allowed_collections: parseJson<string[]>(r.one_allowed_collections)
+    one_allowed_collections: parseAllowedCollections(r.one_allowed_collections)
   }))
 }
