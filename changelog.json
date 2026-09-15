@@ -1,10 +1,69 @@
 {
-  "generated_at": "2026-09-15T14:16:50.063Z",
+  "generated_at": "2026-09-15T15:00:25.108Z",
   "releases": [
+    {
+      "version": "0.1.290",
+      "tag": "v0.1.290",
+      "date": "2026-09-15T11:00:15-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "graphql",
+              "text": "list queries return items directly; page facts on <collection>_metadata",
+              "hash": "a4a17044"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "before-hooks may replace the update change reason",
+              "hash": "f7a05cc5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "let a before-hook supply the change reason on update",
+              "hash": "0ea46dd0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "re-read alias M2M writes after before-hooks",
+              "hash": "79277501"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "stamp user-created/date-created/user-updated/date-updated specials",
+              "hash": "74e80d23"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "aggregate-caps",
+              "text": "fixture must raise the group total to expect a refusal",
+              "hash": "32fb5068"
+            }
+          ]
+        }
+      ],
+      "count": 6
+    },
     {
       "version": "0.1.289",
       "tag": "v0.1.289",
-      "date": "2026-09-15T10:16:38-04:00",
+      "date": "2026-09-15T10:16:50-04:00",
       "sections": [
         {
           "label": "Fixed",
