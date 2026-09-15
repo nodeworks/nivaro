@@ -1,3 +1,4 @@
+import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { overlaySettings } from './settings-overrides.js'
@@ -102,7 +103,9 @@ export async function portalRegistration(): Promise<LinkRegistration | null> {
   return (await fromSettings()) ?? registered
 }
 
-const adminBase = () => config.ADMIN_URL.replace(/\/$/, '')
+// The same resolver every other admin link uses — ADMIN_URL alone is the
+// portal on deployments where the headless frontend proxies /api.
+const adminBase = () => adminBaseUrl() ?? config.ADMIN_URL.replace(/\/$/, '')
 
 function fill(template: string, params: LinkParams): string {
   return template.replace(/\{(\w+)\}/g, (_, k: string) => {

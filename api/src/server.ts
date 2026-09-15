@@ -429,6 +429,23 @@ export async function buildServer() {
   // In cloud mode, retention runs per-tenant via the provisioning system.
   if (!process.env.CLOUD_META_DB_URL)
     app.addHook('onReady', async () => {
+      // Admin links (replay button, task/approval notifications, record_url
+      // fallbacks) all resolve through adminBaseUrl(). When that answer IS the
+      // registered portal, every such link lands on the headless frontend's
+      // router instead of the admin page — say so once at boot, since no env
+      // rule can tell a genuine admin host from a mis-pointed ADMIN_URL.
+      void import('./services/app-links.js')
+        .then(async ({ portalRegistration }) => {
+          const { adminBaseUrl } = await import('./admin-base.js')
+          const portal = (await portalRegistration())?.base?.replace(/\/$/, '')
+          const admin = adminBaseUrl()
+          if (portal && admin && portal === admin)
+            app.log.warn(
+              { admin_url: admin, portal_url: portal },
+              'adminBaseUrl() resolves to the registered portal — set ADMIN_URL to the host that serves the admin build or admin links will open the portal'
+            )
+        })
+        .catch(() => {})
       async function runRetentionPurge() {
         try {
           {
