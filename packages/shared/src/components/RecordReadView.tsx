@@ -1381,8 +1381,12 @@ export function RecordReadView({
             </button>
           )}
         </h3>
-        {isOpen(g) && (
-          <div className='px-5 pb-5 pt-4'>
+        {/* The body stays MOUNTED while collapsed (hidden, not unrendered): a
+            collapsed section's widgets, grids and links must still fetch and
+            report, or an "Invoice Approvals" card holding only a review
+            widget could never say it has content and hide_empty would drop
+            it for good. */}
+        <div className='px-5 pb-5 pt-4' hidden={!isOpen(g)}>
             {scalars.length > 0 && (
               // One column rhythm for the whole page: every section's facts sit
               // on the same 2 / 3 / 4 / 6 tracks, so values line up card to
@@ -1463,7 +1467,6 @@ export function RecordReadView({
             {renderWidgets(g.key)}
             {renderLiveSlots(g.key)}
           </div>
-        )}
       </section>
     )
   }
