@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-09-15T15:00:25.108Z",
+  "generated_at": "2026-09-15T16:42:39.760Z",
   "releases": [
+    {
+      "version": "0.1.291",
+      "tag": "v0.1.291",
+      "date": "2026-09-15T12:42:26-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "read-view",
+              "text": "pipeline slot leads Summary mode, open by default",
+              "hash": "3fee0252"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "read-view",
+              "text": "pipeline slot follows its layout default_expanded in Summary mode",
+              "hash": "0c70908f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "read-view",
+              "text": "keep collapsed section bodies mounted so they can report content",
+              "hash": "da307af2"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.290",
       "tag": "v0.1.290",
-      "date": "2026-09-15T11:00:15-04:00",
+      "date": "2026-09-15T11:00:25-04:00",
       "sections": [
         {
           "label": "Added",
