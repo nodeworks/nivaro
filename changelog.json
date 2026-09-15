@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-09-15T20:35:28.147Z",
+  "generated_at": "2026-09-15T21:54:00.217Z",
   "releases": [
+    {
+      "version": "0.1.295",
+      "tag": "v0.1.295",
+      "date": "2026-09-15T17:53:49-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "users",
+              "text": "directory sync — is this person still with the company?",
+              "hash": "576edc25"
+            },
+            {
+              "section": "Added",
+              "scope": "directory",
+              "text": "?fresh=1 on /directory/status drops the cached app token",
+              "hash": "911eed15"
+            },
+            {
+              "section": "Added",
+              "scope": "users",
+              "text": "Microsoft directory lookups through the app's own Graph token",
+              "hash": "1eac2685"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "directory",
+              "text": "forced token refresh is admin-only and rate-limited",
+              "hash": "9fe5e30c"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.294",
       "tag": "v0.1.294",
-      "date": "2026-09-15T16:35:16-04:00",
+      "date": "2026-09-15T16:35:28-04:00",
       "sections": [
         {
           "label": "Fixed",
