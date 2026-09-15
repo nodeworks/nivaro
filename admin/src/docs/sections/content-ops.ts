@@ -1876,6 +1876,35 @@ export const contentOpsGridPresets: DocSection = {
       type: 'p',
       text: 'Clicking the chip lists the contributing rows biggest-first (named by `row_label`, e.g. "Line {{line_number}} · {{item_description}}") and opens whichever you pick. Rollup header fields carry their own explainer beneath the value — "= 5 lines · 1 excluded (line type is not 4)" — whose popover lists the contributors, the rows the source filter left out with the reason, and per-source subtotals.'
     },
+    { type: 'h3', id: 'grid-compare-series', text: 'Comparison series (compare_series)' },
+    {
+      type: 'p',
+      text: 'An inline-table grid may carry `options.compare_series` (layout-local; grid ⚙ → Comparison series): an endpoint that reports, for the same rows and columns, what actually happened beside what the grid plans — a month × year forecast grid with invoiced spend under every month is the typical use. The grid stays domain-blind: the endpoint names the series ("Actual"), what the grid\'s own figures are called ("Forecast"), the noun for a detail row ("invoice"), which row key and columns it speaks about, which months are closed, the verdict to show and why, and any headline figures. `{{$parent.<field>}}` tokens in the endpoint read the record draft.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "compare_series": { "endpoint": "/my-extension/actuals/{{$parent.id}}" }
+}
+
+// Endpoint response, under "data":
+{
+  "label": "Actual",
+  "plan_label": "Forecast",
+  "unit": { "one": "invoice", "many": "invoices" },
+  "key_field": "year",
+  "columns": ["january", "february", "…", "total"],
+  "rows": [{ "key": 2026, "values": { "april": 438228.88 }, "details": { "april": [{ "id": 1, "label": "INV-1", "sub": "Vendor", "amount": 438228.88, "date": "2026-04-03", "tone": "warn", "note": "On hold", "meta": [{ "label": "PO", "value": "102-…" }] }] } }],
+  "closed_through": "2026-09",
+  "closed_rule": "A month closes 45 days before its end (payment terms).",
+  "status": { "key": "good", "label": "On track", "tone": "ok", "reason": "Every closed month reconciles" },
+  "figures": [{ "label": "Invoiced to date", "value": 4887306.79, "format": "currency" }]
+}`
+    },
+    {
+      type: 'p',
+      text: 'What renders, in both Edit and Summary mode: a second read-only line under every cell (the figure opens a popover listing the detail rows behind it — number, vendor, date, amount, tone and note), a signed delta in role colours where the two disagree (a closed month that disagrees is the reviewable case; an open month already over its plan is the alarming one; an open month still under plan stays quiet), closed months shaded, the verdict chip leading the figure strip with its reason on hover, a "Closed through" lock chip, the endpoint\'s figures as chips, an "Actual · closed" hint under each input in the row editor, a ghost row for any series key the grid has no row for ("No plan for this year"), and the series sum in the footer. An endpoint failure shows one quiet "unavailable" chip and leaves the grid alone.'
+    },
     { type: 'h3', text: 'Row lints' },
     {
       type: 'p',

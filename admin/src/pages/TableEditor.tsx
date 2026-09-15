@@ -12906,6 +12906,7 @@ function FieldSettingsPopover({
   const [gridStatsLocal, setGridStatsLocal] = useState<string>('')
   const [sumCapLocal, setSumCapLocal] = useState<string>('')
   const [spreadLocal, setSpreadLocal] = useState<string>('')
+  const [compareLocal, setCompareLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -13331,6 +13332,7 @@ function FieldSettingsPopover({
         setGridStatsLocal(opts.stats ? JSON.stringify(opts.stats, null, 2) : '')
         setSumCapLocal(opts.sum_cap ? JSON.stringify(opts.sum_cap, null, 2) : '')
         setSpreadLocal(opts.spread_remaining ? JSON.stringify(opts.spread_remaining, null, 2) : '')
+        setCompareLocal(opts.compare_series ? JSON.stringify(opts.compare_series, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -13550,6 +13552,18 @@ function FieldSettingsPopover({
                           ) as Record<string, unknown>
                         } catch {
                           return { spread_remaining: undefined } as Record<string, unknown>
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = compareLocal.trim() ? JSON.parse(compareLocal) : null
+                          return (
+                            parsed && typeof parsed.endpoint === 'string' && parsed.endpoint
+                              ? { compare_series: parsed }
+                              : { compare_series: undefined }
+                          ) as Record<string, unknown>
+                        } catch {
+                          return { compare_series: undefined } as Record<string, unknown>
                         }
                       })()
                     })
@@ -14907,6 +14921,28 @@ function FieldSettingsPopover({
                       A row-editor button that puts the remaining amount evenly onto the row's empty
                       target fields (only_empty false = overwrite all). Same tokens as the figure
                       strip.
+                    </p>
+                  </div>
+                )}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Comparison series (JSON)</Label>
+                    <Textarea
+                      value={compareLocal}
+                      onChange={(e) => setCompareLocal(e.target.value)}
+                      placeholder={
+                        '{ "endpoint": "/my-extension/actuals/{{$parent.id}}", "label": "Actual" }'
+                      }
+                      rows={3}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      A second, read-only line of figures under the grid's cells ("what actually
+                      happened" beside the plan), fetched from an endpoint that returns the
+                      comparison-series contract: rows keyed like the grid ({'{'}key_field, columns,
+                      rows[{'{'}key, values, details{'}'}], closed_through, status, figures{'}'}).
+                      Closed columns shade, the verdict leads the figure strip, each figure opens
+                      the entries behind it.
                     </p>
                   </div>
                 )}
@@ -20758,6 +20794,7 @@ function FieldGroupsTab({
     'stats',
     'sum_cap',
     'spread_remaining',
+    'compare_series',
     'picker_facets',
     'option_sort',
     'option_filter',

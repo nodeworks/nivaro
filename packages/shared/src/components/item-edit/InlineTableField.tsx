@@ -9,6 +9,7 @@ import {
   History,
   ListChecks,
   Loader2,
+  Lock,
   PanelBottomOpen,
   Rows3,
   SquarePen,
@@ -153,6 +154,18 @@ import {
   useStagedRelations
 } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
+import {
+  CompareCell,
+  type CompareSeriesConfig,
+  CompareStripChips,
+  compareColumnClosed,
+  compareColumnSum,
+  compareRowFor,
+  fmtMoney,
+  GridStatChip,
+  resolveCompareEndpoint,
+  useCompareSeries
+} from './CompareSeries'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import {
   parseImportStamp,
@@ -1345,6 +1358,7 @@ export function InlineTableField({
   lineSla,
   rowLints,
   stats,
+  compareSeries,
   sumCap,
   spreadRemaining,
   submissionErrors,
@@ -1419,6 +1433,11 @@ export function InlineTableField({
    *  edits and the row being typed into included) and `{{$count}}`. A
    *  negative result reads red when `negative` is 'danger'. */
   stats?: GridStatConfig[] | null
+  /** options.compare_series — a second, read-only line of figures under the
+   *  cells ("what actually happened" beside the plan) fetched from an endpoint
+   *  the layout names; closed columns shade, a verdict chip leads the strip,
+   *  each figure opens the rows behind it. See CompareSeries.tsx. */
+  compareSeries?: CompareSeriesConfig | null
   /** options.sum_cap — refuse to save/stage a row when `field` summed over the
    *  grid (this row's draft included) would exceed `cap` (same tokens as
    *  stats). The client twin of the server's sum_cap validation rule. */
@@ -2759,6 +2778,28 @@ export function InlineTableField({
     if (!stats?.length) return null
     return stats.map((st) => ({ ...st, result: evaluateNumeric(st.value, resolveGridToken) }))
   }, [stats, resolveGridToken])
+
+  // Comparison series (options.compare_series): the endpoint's `$parent`
+  // tokens read the parent draft, so a new record (no id yet) never asks.
+  const compareEndpoint = useMemo(
+    () =>
+      compareSeries?.endpoint
+        ? resolveCompareEndpoint(compareSeries.endpoint, parentDraftForStats)
+        : null,
+    [compareSeries?.endpoint, parentDraftForStats]
+  )
+  const compareQ = useCompareSeries({
+    client,
+    endpoint: compareEndpoint,
+    enabled: !!compareSeries && !isNew
+  })
+  const compareData = compareSeries && !isNew ? (compareQ.data ?? null) : null
+  const compareLoading = !!compareSeries && !isNew && !!compareEndpoint && compareQ.isLoading
+  const compareError = !!compareSeries && !isNew && compareQ.isError
+  const compareLabelFor = useCallback(
+    (c: { field: string; label?: string | null }) => c.label || titleCase(c.field),
+    []
+  )
 
   const reportLiveRows = liveRows?.report
   useEffect(() => {
@@ -6297,6 +6338,39 @@ export function InlineTableField({
                     pinnedOption={pinnedOptionFor(c.field, args.draft)}
                   />
                 )}
+                {/* What actually landed for this cell, while the plan is being typed. */}
+                {compareData &&
+                  compareData.columns.includes(c.field) &&
+                  (() => {
+                    const cmpRow = compareRowFor(compareData, args.draft)
+                    const actual = cmpRow?.values[c.field]
+                    const closed = compareColumnClosed(
+                      compareData,
+                      args.draft[compareData.key_field],
+                      c.field
+                    )
+                    return (
+                      <div
+                        data-compare-editor-hint={c.field}
+                        className='mt-1 flex items-center gap-1 text-[11px] text-slate-500 dark:text-muted-foreground'
+                      >
+                        <span className='font-mono text-[9px] uppercase tracking-wide text-slate-400'>
+                          {compareData.label}
+                        </span>
+                        <span className='tabular-nums font-medium text-slate-700 dark:text-slate-200'>
+                          {actual == null ? '—' : fmtMoney(actual)}
+                        </span>
+                        {closed && (
+                          <span
+                            className='inline-flex items-center gap-0.5 text-[10px] uppercase tracking-wide text-slate-400'
+                            data-tip={compareData.closed_rule}
+                          >
+                            <Lock className='h-2.5 w-2.5' aria-hidden='true' /> closed
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })()}
               </div>
             )
           })}
@@ -6951,41 +7025,20 @@ export function InlineTableField({
           <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
         </div>
       )}
-      {gridStatValues && gridStatValues.length > 0 && (
+      {((gridStatValues && gridStatValues.length > 0) ||
+        (compareSeries && !isNew && (compareData || compareLoading || compareError))) && (
         <div data-o2m-stats className='mb-2 flex flex-wrap items-stretch gap-1.5'>
-          {gridStatValues.map((st) => {
-            const n = st.result
-            const neg = n != null && n < -0.005 && st.negative === 'danger'
-            const text =
-              n == null
-                ? '—'
-                : st.format === 'currency'
-                  ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
-                  : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
-            return (
-              <div
-                key={st.label}
-                data-o2m-stat={st.label}
-                data-stat-negative={neg ? 'true' : undefined}
-                className={`flex items-baseline gap-2 rounded-md border px-2.5 py-1 ${
-                  neg
-                    ? 'border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30'
-                    : 'border-slate-200 bg-slate-50 dark:border-border dark:bg-muted/40'
-                }`}
-              >
-                <span className='text-[10.5px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
-                  {st.label}
-                </span>
-                <span
-                  className={`text-[12.5px] font-semibold tabular-nums ${
-                    neg ? 'text-red-700 dark:text-red-300' : 'text-slate-800 dark:text-slate-100'
-                  }`}
-                >
-                  {text}
-                </span>
-              </div>
-            )
-          })}
+          {/* The verdict leads: what the reader came for, then the figures it rests on. */}
+          <CompareStripChips data={compareData} loading={compareLoading} error={compareError} />
+          {(gridStatValues ?? []).map((st) => (
+            <GridStatChip
+              key={st.label}
+              label={st.label}
+              value={st.result}
+              format={st.format}
+              negative={st.result != null && st.result < -0.005 && st.negative === 'danger'}
+            />
+          ))}
         </div>
       )}
       {/* readOnly grids skip the !readOnly toolbar above, so the preset switcher gets its own strip */}
@@ -7217,7 +7270,7 @@ export function InlineTableField({
                             ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15'
                             : ri % 2 === 0
                               ? 'bg-white hover:bg-slate-50/80 dark:bg-card dark:hover:bg-muted cursor-pointer'
-                              : 'bg-slate-50/50 hover:bg-slate-100/60 cursor-pointer'
+                              : 'bg-slate-50/50 hover:bg-slate-100/60 dark:bg-white/[0.03] dark:hover:bg-muted cursor-pointer'
                           : ''
                       )}
                     >
@@ -7384,8 +7437,25 @@ export function InlineTableField({
                                   key={c.field}
                                   className={cn(
                                     'px-2 py-1 align-top',
-                                    (prov || (ci === 0 && firstLeadCell === 'data')) && 'relative'
+                                    (prov || (ci === 0 && firstLeadCell === 'data')) && 'relative',
+                                    compareData &&
+                                      compareColumnClosed(
+                                        compareData,
+                                        displayRow[compareData.key_field],
+                                        c.field
+                                      ) &&
+                                      'bg-slate-50/80 dark:bg-white/[0.035]'
                                   )}
+                                  data-compare-closed={
+                                    compareData &&
+                                    compareColumnClosed(
+                                      compareData,
+                                      displayRow[compareData.key_field],
+                                      c.field
+                                    )
+                                      ? ''
+                                      : undefined
+                                  }
                                   data-tip={provTip}
                                 >
                                   {ci === 0 && firstLeadCell === 'data' && sinceTick(id)}
@@ -7467,6 +7537,20 @@ export function InlineTableField({
                                         row.id != null ? String(row.id) : undefined
                                       )}
                                     </div>
+                                  )}
+                                  {compareData && (
+                                    <CompareCell
+                                      data={compareData}
+                                      row={compareRowFor(compareData, displayRow)}
+                                      rowKey={displayRow[compareData.key_field]}
+                                      column={c.field}
+                                      planned={
+                                        inlineEdit && !isPendingDelete
+                                          ? editState?.draft[c.field]
+                                          : displayRow[c.field]
+                                      }
+                                      columnLabel={compareLabelFor(c)}
+                                    />
                                   )}
                                 </td>
                               )
@@ -7930,6 +8014,75 @@ export function InlineTableField({
                 </td>
               </tr>
             )}
+            {/* Series rows with NO grid row: spend that landed under a key nobody
+                planned for must never be invisible — it renders as a read-only
+                ghost row the reader can turn into a real one. */}
+            {compareData &&
+              activeView === 'original' &&
+              (() => {
+                const seen = new Set<string>()
+                for (const r of rows ?? []) seen.add(String(r[compareData.key_field] ?? ''))
+                for (const r of pendingRows) seen.add(String(r[compareData.key_field] ?? ''))
+                const ghosts = compareData.rows.filter((r) => !seen.has(String(r.key)))
+                if (ghosts.length === 0) return null
+                return ghosts.map((g) => (
+                  <tr
+                    key={`compare-ghost:${String(g.key)}`}
+                    data-o2m-compare-ghost={String(g.key)}
+                    className='border-b border-dashed border-slate-200 bg-slate-50/60 dark:border-border dark:bg-white/[0.025]'
+                  >
+                    {selectColOn && <td />}
+                    {enableReorder && (rowOrderField || isNew || isPendingMode) && <td />}
+                    {showLineNumbers && <td />}
+                    {(isNew || isPendingMode) && (
+                      <td className='px-3 py-1 align-top'>
+                        <span className='text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+                          {compareData.label} only
+                        </span>
+                      </td>
+                    )}
+                    {effectiveCols.map((c) =>
+                      c.field === compareData.key_field ? (
+                        <td key={c.field} className='px-2 py-1 align-top'>
+                          <div className='py-0.5 text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+                            {String(g.key)}
+                          </div>
+                          <div
+                            className='mt-0.5 text-[10.5px] text-slate-600 dark:text-slate-300'
+                            data-tip={`${compareData.label} recorded for ${String(g.key)} with no ${
+                              emptyLabel ? emptyLabel.toLowerCase() : 'row'
+                            } to compare against — add a row for ${String(g.key)} to plan against it`}
+                          >
+                            No plan for this {titleCase(compareData.key_field).toLowerCase()}
+                          </div>
+                        </td>
+                      ) : (
+                        <td
+                          key={c.field}
+                          className={cn(
+                            'px-2 py-1 align-top',
+                            compareColumnClosed(compareData, g.key, c.field) &&
+                              'bg-slate-100/70 dark:bg-white/[0.035]'
+                          )}
+                        >
+                          {compareData.columns.includes(c.field) && (
+                            <div className='py-0.5 text-[12px] text-slate-300 dark:text-slate-600'>—</div>
+                          )}
+                          <CompareCell
+                            data={compareData}
+                            row={g}
+                            rowKey={g.key}
+                            column={c.field}
+                            planned={0}
+                            columnLabel={compareLabelFor(c)}
+                          />
+                        </td>
+                      )
+                    )}
+                    <td />
+                  </tr>
+                ))
+              })()}
             {pendingRows.length > 0 &&
               pendingRows.map((row, ri) => {
                 const pendingRowId = `pending:${ri}`
@@ -8180,6 +8333,19 @@ export function InlineTableField({
                                       {renderCell(c, displayVal, String(row.id))}
                                     </div>
                                   )}
+                                  {compareData && (
+                                    <CompareCell
+                                      data={compareData}
+                                      row={compareRowFor(
+                                        compareData,
+                                        isEditing ? editState!.draft : row
+                                      )}
+                                      rowKey={(isEditing ? editState!.draft : row)[compareData.key_field]}
+                                      column={c.field}
+                                      planned={isEditing ? editState!.draft[c.field] : row[c.field]}
+                                      columnLabel={compareLabelFor(c)}
+                                    />
+                                  )}
                                 </td>
                               )
                             })
@@ -8317,7 +8483,7 @@ export function InlineTableField({
               ]
               return (
                 <tfoot>
-                  <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600'>
+                  <tr className='border-t border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600 dark:border-slate-700 dark:bg-white/[0.03] dark:text-slate-300'>
                     {/* Leading cells must mirror the header exactly: reorder, line #, status */}
                     {selectColOn && <td />}
                     {enableReorder && (rowOrderField || isNew || isPendingMode) && <td />}
@@ -8336,7 +8502,29 @@ export function InlineTableField({
                             : c.options) as Record<string, unknown>)
                         : {}
                       const agg = opts.aggregate as string | undefined
-                      if (!agg) return <td key={c.field} className='px-3 py-1.5' />
+                      const cmpSum = compareColumnSum(compareData, c.field)
+                      // Footer lines WRAP inside their column (label, then the
+                      // figure on its own line when the column is narrow) — a
+                      // month grid has 15 columns, and "SUM $250,583.75" ran
+                      // straight into the neighbouring cell.
+                      const cmpLine =
+                        cmpSum != null ? (
+                          <div
+                            data-compare-footer={c.field}
+                            className='mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-1 text-[11px] font-normal leading-4 text-slate-500 dark:text-slate-400'
+                          >
+                            <span className='font-mono text-[9px] uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+                              {compareData?.label}
+                            </span>
+                            <span className='tabular-nums'>{fmtMoney(cmpSum)}</span>
+                          </div>
+                        ) : null
+                      if (!agg)
+                        return (
+                          <td key={c.field} className='px-2 py-1.5 align-top'>
+                            {cmpLine}
+                          </td>
+                        )
                       // A formula column has no stored value — evaluate it per row
                       // (bare refs off the row, dotted refs off resolve-paths).
                       const colFormula =
@@ -8393,11 +8581,14 @@ export function InlineTableField({
                               }
                             })()
                       return (
-                        <td key={c.field} className='px-3 py-1.5'>
-                          <span className='text-slate-400 text-[10px] font-mono mr-1'>
-                            {agg.toUpperCase()}
-                          </span>
-                          <span className='tabular-nums'>{display}</span>
+                        <td key={c.field} className='px-2 py-1.5 align-top'>
+                          <div className='flex min-w-0 flex-wrap items-baseline gap-x-1 leading-4'>
+                            <span className='font-mono text-[10px] text-slate-500 dark:text-slate-400'>
+                              {agg.toUpperCase()}
+                            </span>
+                            <span className='tabular-nums'>{display}</span>
+                          </div>
+                          {cmpLine}
                         </td>
                       )
                     })}

@@ -899,6 +899,13 @@ export function FieldRenderer({
                 ? opts.spread_remaining
                 : null) as import('./InlineTableField').GridSpreadConfig | null
             }
+            compareSeries={
+              (opts.compare_series &&
+              typeof opts.compare_series === 'object' &&
+              typeof (opts.compare_series as { endpoint?: unknown }).endpoint === 'string'
+                ? opts.compare_series
+                : null) as import('./CompareSeries').CompareSeriesConfig | null
+            }
             submissionErrors={submissionErrors}
             prefillParentId={prefillParentId}
             parentFieldKey={field.field}
