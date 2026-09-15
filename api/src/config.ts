@@ -85,6 +85,15 @@ const schema = z.object({
     .transform((v) => v !== 'false')
     .default('true'),
 
+  // Microsoft Graph directory lookups (User.Read.All as an APPLICATION
+  // permission with admin consent): the server reads any tenant user with its
+  // own client-credentials token, no login token involved. Defaults to the
+  // OIDC app registration; set these only when a separate app owns the
+  // directory permission.
+  GRAPH_TENANT_ID: z.string().default(''),
+  GRAPH_CLIENT_ID: z.string().default(''),
+  GRAPH_CLIENT_SECRET: z.string().default(''),
+
   ADMIN_URL: z.string().default('http://localhost:3056'),
   // Comma-separated list of trusted app origins allowed as returnTo targets
   APP_URLS: z.string().default(''),

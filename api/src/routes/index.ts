@@ -54,6 +54,7 @@ import { dataQualityRoutes } from './data-quality.js'
 import { deadLettersRoutes } from './dead-letters.js'
 import { delegationRoutes } from './delegation.js'
 import { devToolsRoutes } from './dev-tools.js'
+import { directoryRoutes } from './directory.js'
 import { dossierRoutes } from './dossier.js'
 import { draftPublishRoutes } from './draft-publish.js'
 import { environmentRoutes } from './environments.js'
@@ -322,6 +323,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })
   await app.register(usersRoutes, { prefix: '/users' })
+  await app.register(directoryRoutes, { prefix: '/directory' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
   await app.register(rolesRoutes, { prefix: '/roles' })
   await app.register(filesRoutes, { prefix: '/files' })

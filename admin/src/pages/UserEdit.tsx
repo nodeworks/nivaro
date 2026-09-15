@@ -1,13 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { UserAvatar } from '@nivaro/shared'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Copy, Eye, EyeOff, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { DelegationCard } from '@/components/delegation-card'
-import { UserMergeCard, UserOffboardingCard } from '@/components/user-offboarding-card'
-import { UserScopesCard } from '@/components/user-scopes-card'
 import { JourneyTrail } from '@/components/journey-trail'
 import { RevisionsPanel } from '@/components/revisions-panel'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -24,8 +21,12 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { UserActivityPanel } from '@/components/user-activity-panel'
+import { UserDirectoryCard } from '@/components/user-directory-card'
+import { UserMergeCard, UserOffboardingCard } from '@/components/user-offboarding-card'
+import { UserScopesCard } from '@/components/user-scopes-card'
 import { api, type Role, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { useGoBack } from '@/lib/nav'
 import { formatDate, formatRelative } from '@/lib/utils'
 
 const STATUS_VARIANTS: Record<string, 'success' | 'destructive' | 'secondary'> = {
@@ -359,6 +360,9 @@ export function UserEditPage() {
                 )}
               </div>
             </form>
+
+            {/* Directory (Microsoft Graph) — pull the profile without waiting for a login */}
+            <UserDirectoryCard user={user} />
 
             {/* Delegation (own save, outside the profile form) */}
             <DelegationCard user={user} mode='admin' />

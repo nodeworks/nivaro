@@ -812,6 +812,15 @@ export const userMicrosoftGuide: DocSection = {
     {
       type: 'p',
       text: 'All auth flows through Microsoft OIDC (PKCE). First name, last name, and email are synced from the OIDC token on every login. No separate user creation required.'
+    },
+    { type: 'h3', text: 'Directory lookups (User.Read.All)' },
+    {
+      type: 'p',
+      text: 'Login enrichment only refreshes a profile when that person signs in. With `User.Read.All` granted to the app registration as an **application** permission (admin-consented), the server reads any tenant user with its own token: `GET /api/directory/users?q=` searches by name or email, `GET /api/directory/users/:key` returns one entry (Graph id, UPN or email) with their manager and the Nivaro account it maps to, and `POST /api/directory/sync/:userId` (admin) pulls a directory entry onto a Nivaro profile — the directory wins for every field it has a value for; blanks never clear a stored value. `GET /api/directory/status` reports whether the app token actually carries the permission, and the Users page shows the same verdict: the Microsoft directory card on a user, and a "Find in Microsoft directory" search inside Add User that fills the form from the tenant.'
+    },
+    {
+      type: 'note',
+      text: 'A delegated User.Read.All is not enough: it only widens the token of the person logging in. The app token must carry the role — the status endpoint says "no Graph roles" until admin consent is granted. Credentials default to the OIDC app registration; `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` override them when a separate app owns the directory permission.'
     }
   ]
 }
@@ -1446,9 +1455,21 @@ export const externalApiSpecImportDoc: DocSection = {
       type: 'table',
       head: ['Method', 'Path', 'Description'],
       rows: [
-        ['POST', '/api/external-apis/:id/import-spec', 'Parse spec and bulk-create endpoint templates. Body: `{ spec: string | object }`. Returns `{ inserted, skipped, schema_id }`.'],
-        ['GET', '/api/external-apis/:id/schemas', 'List imported schema records. Returns id, title, spec_version, endpoint_count, imported_at.'],
-        ['DELETE', '/api/external-apis/:id/schemas/:sid', 'Remove a schema record (does not delete created templates).']
+        [
+          'POST',
+          '/api/external-apis/:id/import-spec',
+          'Parse spec and bulk-create endpoint templates. Body: `{ spec: string | object }`. Returns `{ inserted, skipped, schema_id }`.'
+        ],
+        [
+          'GET',
+          '/api/external-apis/:id/schemas',
+          'List imported schema records. Returns id, title, spec_version, endpoint_count, imported_at.'
+        ],
+        [
+          'DELETE',
+          '/api/external-apis/:id/schemas/:sid',
+          'Remove a schema record (does not delete created templates).'
+        ]
       ]
     },
     {

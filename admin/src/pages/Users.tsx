@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { UserAvatar } from '@nivaro/shared'
-import { Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BookUser, Plus, Trash2 } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import type { Column } from '@/components/data-table'
@@ -111,6 +111,52 @@ export function UsersPage() {
     },
     onError: () => toast.error('Failed to delete user')
   })
+
+  // Directory lookup inside Add User: pick a tenant user and the form fills
+  // itself — the way to onboard someone before their first login.
+  const createFormRef = useRef<HTMLFormElement>(null)
+  const [dirQuery, setDirQuery] = useState('')
+  const directoryStatus = useQuery<{ configured: boolean; granted: boolean }>({
+    queryKey: ['directory-status'],
+    queryFn: () => api.get('/directory/status').then((r) => r.data.data),
+    enabled: showCreate,
+    staleTime: 5 * 60_000
+  })
+  const directoryHits = useQuery<
+    Array<{
+      id: string
+      display_name: string | null
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+      upn: string | null
+      title: string | null
+      department: string | null
+    }>
+  >({
+    queryKey: ['directory-search', dirQuery],
+    queryFn: () =>
+      api.get('/directory/users', { params: { q: dirQuery, limit: 8 } }).then((r) => r.data.data),
+    enabled: showCreate && Boolean(directoryStatus.data?.granted) && dirQuery.trim().length > 1,
+    staleTime: 60_000
+  })
+  const fillFromDirectory = (hit: {
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+    upn: string | null
+  }) => {
+    const form = createFormRef.current
+    if (!form) return
+    const set = (name: string, value: string | null) => {
+      const el = form.elements.namedItem(name) as HTMLInputElement | null
+      if (el && value != null) el.value = value
+    }
+    set('first_name', hit.first_name)
+    set('last_name', hit.last_name)
+    set('email', hit.email ?? hit.upn)
+    setDirQuery('')
+  }
 
   const handleCreateSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -307,9 +353,54 @@ export function UsersPage() {
           <DialogHeader>
             <DialogTitle>Add User</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleCreateSubmit}>
+          <form ref={createFormRef} onSubmit={handleCreateSubmit}>
             <DialogBody>
               <div className='space-y-4'>
+                {directoryStatus.data?.granted && (
+                  <div className='space-y-1.5'>
+                    <Label htmlFor='directory-search' className='flex items-center gap-1.5'>
+                      <BookUser className='h-3.5 w-3.5 text-slate-400' />
+                      Find in Microsoft directory
+                    </Label>
+                    <Input
+                      id='directory-search'
+                      value={dirQuery}
+                      onChange={(e) => setDirQuery(e.target.value)}
+                      placeholder='Name or email — fills the fields below'
+                      autoComplete='off'
+                    />
+                    {dirQuery.trim().length > 1 && (
+                      <div className='max-h-48 overflow-y-auto rounded-md border border-slate-200 dark:border-border'>
+                        {directoryHits.isLoading ? (
+                          <p className='px-3 py-2 text-[12px] text-slate-400'>Searching…</p>
+                        ) : (directoryHits.data ?? []).length === 0 ? (
+                          <p className='px-3 py-2 text-[12px] text-slate-400'>
+                            No one in the directory matches.
+                          </p>
+                        ) : (
+                          (directoryHits.data ?? []).map((hit) => (
+                            <button
+                              key={hit.id}
+                              type='button'
+                              onClick={() => fillFromDirectory(hit)}
+                              className='flex w-full flex-col items-start px-3 py-1.5 text-left hover:bg-muted'
+                            >
+                              <span className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
+                                {hit.display_name ??
+                                  `${hit.first_name ?? ''} ${hit.last_name ?? ''}`.trim()}
+                              </span>
+                              <span className='text-[11px] text-slate-400'>
+                                {[hit.email ?? hit.upn, hit.title, hit.department]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className='grid grid-cols-2 gap-3'>
                   <div className='space-y-1.5'>
                     <Label htmlFor='first_name'>First Name</Label>
