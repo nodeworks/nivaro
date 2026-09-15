@@ -1077,18 +1077,34 @@ export function RecordReadView({
     : []
   // Only slots the host actually renders count as content — a `__pdf__` or
   // `__pipeline__` slot the host declines must not keep an empty card alive.
-  const liveNodes = (groupKey: string | null) =>
+  // Ungrouped slots split by what they are: the pipeline slot (state track,
+  // owners, approval chain) LEADS the board — where the record stands is the
+  // first thing a reader wants — while the conversation slots (notes, tasks)
+  // follow the facts.
+  const LEADING_SLOTS = new Set(['__pipeline__'])
+  const liveNodes = (groupKey: string | null, position: 'leading' | 'trailing' = 'trailing') =>
     renderSlot
       ? liveSlots
-          .filter((a) => (groupKey === null ? a.group_key == null : a.group_key === groupKey))
+          .filter((a) =>
+            groupKey === null
+              ? a.group_key == null &&
+                (position === 'leading') === LEADING_SLOTS.has(a.field)
+              : a.group_key === groupKey
+          )
           .map((a) => ({ key: a.field, node: renderSlot(a.field, a) }))
           .filter((s) => s.node != null)
       : []
-  const renderLiveSlots = (groupKey: string | null) => {
-    const nodes = liveNodes(groupKey)
+  const renderLiveSlots = (
+    groupKey: string | null,
+    position: 'leading' | 'trailing' = 'trailing'
+  ) => {
+    const nodes = liveNodes(groupKey, position)
     if (nodes.length === 0) return null
     return (
-      <div className='mt-3 space-y-4' data-read-live-slots>
+      <div
+        className={position === 'leading' ? 'mb-4 space-y-4' : 'mt-3 space-y-4'}
+        data-read-live-slots={position}
+      >
         {nodes.map((s) => (
           <div key={s.key}>{s.node}</div>
         ))}
@@ -1474,6 +1490,7 @@ export function RecordReadView({
   // orders them in its unified group order; here they follow the cards, which
   // is where a reviewer looks for the conversation after the facts.
   const trailingSlots = renderLiveSlots(null)
+  const leadingSlots = renderLiveSlots(null, 'leading')
 
   // Header band: the layout's identity fields above the cards — first one as
   // the title, the rest as compact label/value pairs. Empty ones drop out.
@@ -1491,6 +1508,7 @@ export function RecordReadView({
           : 'min-h-0 flex-1 overflow-y-auto bg-slate-50/60 px-5 py-4 dark:bg-transparent'
       }
     >
+      {leadingSlots}
       {headerAssignments.length > 0 && (
         <div
           data-read-header
