@@ -193,13 +193,35 @@ export async function getFields(collection: string): Promise<CMSField[]> {
   }
 }
 
+/**
+ * `special` is stored as a JSON array by the admin editor, but rows imported
+ * from a legacy schema carry a bare comma list ("user-created", "m2o,…").
+ * Both shapes must read as the same string[] — a bare value parsed as JSON
+ * came back null, which silently disabled every special-driven behaviour
+ * (audit stamping) on imported collections.
+ */
+export function parseSpecial(v: unknown): string[] | null {
+  if (v == null) return null
+  if (Array.isArray(v)) return v.map(String)
+  const s = String(v).trim()
+  if (s === '') return null
+  if (s.startsWith('[')) {
+    const parsed = parseJson<unknown>(s)
+    return Array.isArray(parsed) ? parsed.map(String) : null
+  }
+  return s
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+}
+
 async function loadFields(collection: string): Promise<CMSField[]> {
   const rows = await db<CMSField>('nivaro_fields').where({ collection }).orderBy('sort', 'asc')
   return rows.map((f) => ({
     ...f,
     display_options: parseJson(f.display_options),
     options: parseJson(f.options),
-    special: parseJson<string[]>(f.special),
+    special: parseSpecial(f.special),
     validation: parseJson(f.validation)
   }))
 }

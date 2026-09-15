@@ -6,7 +6,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { hooks } from '../hooks/registry.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
-import type { CMSRelation, ItemsQuery, User } from '../types.js'
+import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
 import {
   applyAutoIdsExt,
   autoIdFieldsFor,
@@ -258,6 +258,47 @@ export async function getActualColumns(table: string): Promise<Set<string>> {
   const set = new Set(rows.map((r) => r.COLUMN_NAME))
   columnCache.set(table, set)
   return set
+}
+
+/**
+ * Stamp the audit `special`s a collection declares on its fields
+ * (`user-created` / `date-created` on create, `user-updated` / `date-updated`
+ * on update) — the same contract the schema's origin platform honoured, so an
+ * imported collection's creator/created columns are populated by every write
+ * path (form, REST, GraphQL, extensions) instead of staying NULL. A value the
+ * caller sent explicitly wins; a field with no physical column is skipped.
+ */
+async function applyAuditSpecials(
+  collection: string,
+  payload: Record<string, unknown>,
+  user: User,
+  phase: 'create' | 'update',
+  callerFields: Set<string>,
+  actualCols?: Set<string>
+): Promise<void> {
+  let fields: CMSField[]
+  try {
+    fields = await getFields(collection)
+  } catch {
+    return
+  }
+  const wantUser = phase === 'create' ? 'user-created' : 'user-updated'
+  const wantDate = phase === 'create' ? 'date-created' : 'date-updated'
+  let now: Date | null = null
+  for (const f of fields) {
+    const specials = f.special ?? []
+    if (specials.length === 0) continue
+    if (callerFields.has(f.field)) continue
+    if (actualCols && !actualCols.has(f.field)) continue
+    if (specials.includes(wantUser)) {
+      if (phase === 'create' && payload[f.field] != null) continue
+      payload[f.field] = user.id
+    } else if (specials.includes(wantDate)) {
+      if (phase === 'create' && payload[f.field] != null) continue
+      now ??= new Date()
+      payload[f.field] = now
+    }
+  }
 }
 
 function filterToActualColumns(payload: Record<string, unknown>, cols: Set<string>) {
@@ -2610,6 +2651,10 @@ export async function createOne(
   // Datetime auto-fields — on_create: 'now' sets the field to current timestamp
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_create')
 
+  // Audit specials — fields declared `user-created` / `date-created` get the
+  // acting user and the current time unless the caller set them explicitly.
+  await applyAuditSpecials(collection, ctx.payload, user, 'create', callerFields)
+
   // Auto-ID generation — fill any auto_id fields not explicitly provided
   await applyAutoIdsExt(db, collection, ctx.payload)
 
@@ -2895,6 +2940,9 @@ export async function updateOne(
   // .update(). Skip the UPDATE but still run the read-back + after hooks so
   // the call stays a graceful no-op instead of a 500.
   if (Object.keys(columnPayload).length > 0) {
+    // Audit specials — `user-updated` / `date-updated` fields follow every
+    // real column write (never a no-op update, so they cannot manufacture one).
+    await applyAuditSpecials(collection, columnPayload, user, 'update', callerFields, actualCols)
     await span('update', async () => {
       const updQ = db(collection).where({ id })
       await applyWorkspaceScope(updQ, collection, workspaceId)
