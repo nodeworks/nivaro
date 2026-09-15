@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-15T18:32:30.157Z",
+  "generated_at": "2026-09-15T19:47:03.811Z",
   "releases": [
+    {
+      "version": "0.1.293",
+      "tag": "v0.1.293",
+      "date": "2026-09-15T15:46:53-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "links",
+              "text": "ADMIN_URL wins over PUBLIC_URL when they name different hosts",
+              "hash": "64847192"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.292",
       "tag": "v0.1.292",
-      "date": "2026-09-15T14:32:19-04:00",
+      "date": "2026-09-15T14:32:30-04:00",
       "sections": [
         {
           "label": "Added",
