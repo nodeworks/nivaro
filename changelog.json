@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-15T21:54:00.217Z",
+  "generated_at": "2026-09-15T23:12:56.699Z",
   "releases": [
+    {
+      "version": "0.1.296",
+      "tag": "v0.1.296",
+      "date": "2026-09-15T19:12:47-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "comparison series — actuals under every planned figure, with the rows behind each number",
+              "hash": "2c5f0288"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "rules",
+              "text": "generic CIFAs are never re-derived over a hand pick, and never listed in the picker",
+              "hash": "c2ad7d86"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.295",
       "tag": "v0.1.295",
-      "date": "2026-09-15T17:53:49-04:00",
+      "date": "2026-09-15T17:54:00-04:00",
       "sections": [
         {
           "label": "Added",
