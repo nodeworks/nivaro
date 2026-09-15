@@ -57,12 +57,19 @@ async function nivaroMatch(u: DirectoryUser) {
 export async function directoryRoutes(app: FastifyInstance) {
   // What the app token can do — the card and the Add-user dialog gate on this.
   // `?fresh=1` drops the cached token first: a consent granted in Azure only
-  // shows up on the next token, and the cache lives up to an hour.
+  // shows up on the next token, and the cache lives up to an hour. Admin-only
+  // and rate-limited — every forced refresh is a call to Microsoft's token
+  // endpoint on the tenant's behalf, not something any signed-in user should
+  // be able to repeat in a loop.
+  let lastForcedRefresh = 0
   app.get<{ Querystring: { fresh?: string } }>(
     '/status',
     { preHandler: requireAuth },
     async (req) => {
-      if (req.query.fresh === '1') resetDirectoryToken()
+      if (req.query.fresh === '1' && req.isAdmin && Date.now() - lastForcedRefresh > 30_000) {
+        lastForcedRefresh = Date.now()
+        resetDirectoryToken()
+      }
       return { data: await directoryStatus() }
     }
   )
