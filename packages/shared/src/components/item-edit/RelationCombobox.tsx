@@ -339,10 +339,17 @@ export function RelationCombobox({
           })
         )
         .then((r) => r.data ?? []),
-    enabled: !!value && !!selected,
+    // The pinned option is offered OUTSIDE the option filter (a type's generic
+    // item is excluded from the general list on purpose), so a value that IS
+    // the pin is available by construction — never probe it, never flag it.
+    enabled: !!value && !!selected && String(value) !== pinnedId,
     staleTime: 30_000
   })
-  const isStale = !!value && availabilityData !== undefined && availabilityData.length === 0
+  const isStale =
+    !!value &&
+    String(value) !== pinnedId &&
+    availabilityData !== undefined &&
+    availabilityData.length === 0
 
   // auto_select_single: with the field EMPTY, probe the filtered option set
   // (limit 2 — only the "exactly one?" answer matters) and pick the sole

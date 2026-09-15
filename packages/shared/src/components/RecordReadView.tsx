@@ -1322,9 +1322,14 @@ export function RecordReadView({
   }
 
   const renderSection = (g: LayoutGroup) => {
+    // hide_empty hides SLOTS whose content is truly empty — a widget that
+    // reported nothing, a grid with no rows, an alias with no links — and
+    // the section when only such slots remain. Plain fields are the record's
+    // shape, not content that comes and goes: an "Additional" card with every
+    // value blank still says what the record could hold, so it stays, dashes
+    // and all.
     const items = visible
       .filter((a) => a.group_key === g.key && !headerSet.has(a.field))
-      .filter((a) => !(hideEmpty && !isGrid(a) && isEmptyValue(a)))
       .sort((a, b) => a.sort - b.sort)
     const groupWidgets = widgetSlots.filter((w) => w.group_key === g.key)
     const groupLive = liveNodes(g.key)

@@ -707,6 +707,28 @@ export class RowRuleLookupCache {
       this.database(collection).where(where).orderBy('id', 'asc').first()
     )
   }
+
+  private readonly sets = new Map<string, Promise<Set<string>>>()
+  /** Every distinct non-empty value `column` holds anywhere in `collection`
+   *  — "the defaults that exist at all", one round trip per pair. */
+  distinctValues(collection: string, column: string): Promise<Set<string>> {
+    const key = `${collection}|${column}`
+    const hit = this.sets.get(key)
+    if (hit) return hit
+    this.queries += 1
+    const p = (
+      this.database(collection).whereNotNull(column).distinct(column) as Promise<
+        Array<Record<string, unknown>>
+      >
+    )
+      .then((rows) => new Set(rows.map((r) => String(r[column]))))
+      .catch((err) => {
+        this.sets.delete(key)
+        throw err
+      })
+    this.sets.set(key, p)
+    return p
+  }
 }
 
 export async function evaluateRowRules(
@@ -945,6 +967,33 @@ export async function evaluateRowRules(
             )
           )
           stillAuto = pool.some((v) => v != null && String(v) === String(existing))
+          if (!stillAuto) {
+            // Not THIS parent's default — but a value that is SOME parent's
+            // default (another type's generic item) was never hand-picked
+            // either: defaults are pinned, not offered in the general list,
+            // so the row was seeded before its parent changed. Widen the
+            // pool to every default the source columns hold anywhere.
+            const anywhere = await Promise.all(
+              family.flatMap((r) =>
+                (r.sources ?? [])
+                  .filter(
+                    (s) =>
+                      s.source_type === 'parent_m2o' &&
+                      s.source_one_collection &&
+                      s.source_related_field
+                  )
+                  .map((s) =>
+                    cache
+                      .distinctValues(
+                        s.source_one_collection as string,
+                        s.source_related_field as string
+                      )
+                      .catch(() => new Set<string>())
+                  )
+              )
+            )
+            stillAuto = anywhere.some((set) => set.has(String(existing)))
+          }
         }
         if (!stillAuto) {
           note('skipped:only-if-empty', existing)

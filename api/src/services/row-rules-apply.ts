@@ -156,12 +156,18 @@ export async function planRowRuleChanges(opts: {
 }): Promise<RowRulePlan> {
   const rules = opts.rules.filter((r) => r && typeof r.target_field === 'string')
   // Every non-lock target is judged for drift; only targets that some
-  // NON-seed rule derives are blanked for re-derivation — a seed_only target
-  // (default category / default item) is an input the rules fill when empty, never
-  // one they own.
+  // NON-seed rule DERIVES A VALUE for are blanked for re-derivation — a
+  // seed_only target (default category / default item) is an input the rules
+  // fill when empty, never one they own, and a `clear` rule derives nothing:
+  // it only empties its target on the rows it matches. Blanking a target
+  // because a clear rule names it would hand a hand-picked value back to the
+  // seed rules, which then "correct" it to the default — the seed rules'
+  // own still-auto check is what decides whether an existing value re-derives.
   const targets = new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))
   const derivable = new Set(
-    rules.filter((r) => r.target_type !== 'lock' && !r.seed_only).map((r) => r.target_field)
+    rules
+      .filter((r) => r.target_type !== 'lock' && r.target_type !== 'clear' && !r.seed_only)
+      .map((r) => r.target_field)
   )
   const plan: RowRulePlan = { rows: opts.rows.length, fields: {}, changes: [] }
   if (targets.size === 0) return plan
