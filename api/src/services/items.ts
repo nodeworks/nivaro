@@ -2553,7 +2553,7 @@ export async function createOne(
   // reshape it — the contract judges what the integration actually sent.
   await enforceContracts(collection, user?.id, data, 'create')
   data = await coerceRelationObjects(collection, data)
-  const aliasWrites = await extractAliasM2MWrites(collection, data)
+  let aliasWrites = await extractAliasM2MWrites(collection, data)
   // The fields the CALLER explicitly sent, captured before any rule, autofill
   // or computed pass mutates the payload — explicit values always win over
   // layout autofill, and validation only ever judges what the caller wrote.
@@ -2620,6 +2620,11 @@ export async function createOne(
 
   const ctx = { collection, action: 'create' as const, payload: data, user, database: db, req }
   await hooks.trigger('before', ctx)
+  // A before-hook may ADD or change alias M2M links (an extension deriving a
+  // record's regions from its location) — re-read them off the hooked
+  // payload; the first pass already normalised the caller's own to id arrays,
+  // so this is idempotent for everything the caller sent.
+  aliasWrites = await extractAliasM2MWrites(collection, ctx.payload as Record<string, unknown>)
 
   if (typeof (ctx.payload as Record<string, unknown>)._change_reason === 'string') {
     if (!createReason)
@@ -2747,7 +2752,7 @@ export async function updateOne(
   assertNotRouteOnly(collection)
   await enforceContracts(collection, user?.id, data, 'update')
   data = await coerceRelationObjects(collection, data)
-  const aliasWrites = await extractAliasM2MWrites(collection, data)
+  let aliasWrites = await extractAliasM2MWrites(collection, data)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
@@ -2839,6 +2844,8 @@ export async function updateOne(
     req
   }
   await span('hooks:before-update', () => hooks.trigger('before', ctx))
+  // Same as createOne: a before-hook may add alias M2M links.
+  aliasWrites = await extractAliasM2MWrites(collection, ctx.payload as Record<string, unknown>)
 
   // Row-level security — filter applies to both the previousData fetch and the mutation
   const rowFilter = await getRowFilter(user, 'update', collection)
