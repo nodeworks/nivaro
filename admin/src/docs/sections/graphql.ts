@@ -24,6 +24,11 @@ export const graphqlOverview: DocSection = {
     {
       type: 'note',
       text: 'GraphQL queries and mutations go through the same RBAC permission layer as the REST API. Unauthenticated requests receive `UNAUTHENTICATED` errors; forbidden operations receive `FORBIDDEN` errors.'
+    },
+    { type: 'h2', id: 'graphql-cost-limits', text: 'Query cost limits' },
+    {
+      type: 'p',
+      text: 'A query is measured before it executes. The total number of selected fields is capped at `GRAPHQL_MAX_SELECTIONS` (default 2500). Nesting depth is unlimited by default — set `GRAPHQL_MAX_DEPTH` on the instance to cap it, or give a named API key its own `graphql_max_depth`, which applies only to that key. A refused query answers HTTP 400 with an `errors[]` message naming the measured cost and the limit.'
     }
   ]
 }

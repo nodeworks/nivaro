@@ -242,20 +242,25 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       return reply.send({ errors: validationErrors })
     }
 
-    // GraphQL cost limits (#162): depth + selection-count caps, overridable
-    // per API key (nivaro_api_keys.graphql_max_depth). A runaway nested query
-    // is refused before execution, not after it has fanned out.
+    // GraphQL cost limits (#162): a selection-count cap plus an OPTIONAL depth
+    // cap. Depth is unlimited unless a named API key carries its own
+    // `graphql_max_depth` or the instance sets GRAPHQL_MAX_DEPTH (0 = off) —
+    // legitimate integration reads routinely nest 13–15 levels, since every
+    // M2M hop costs two, so a low fixed default only ever blocked real callers.
+    // Selections still bound the fan-out of a runaway query.
     {
       const keyDepth = (req.user as { api_key_graphql_max_depth?: number | null } | undefined)
         ?.api_key_graphql_max_depth
-      const maxDepth = keyDepth ?? Number(process.env.GRAPHQL_MAX_DEPTH ?? 12)
+      const envDepth = Number(process.env.GRAPHQL_MAX_DEPTH ?? 0)
+      const maxDepth = keyDepth ?? (Number.isFinite(envDepth) && envDepth > 0 ? envDepth : null)
       const maxSelections = Number(process.env.GRAPHQL_MAX_SELECTIONS ?? 2500)
       const cost = measureQueryCost(document)
-      if (cost.depth > maxDepth) {
+      if (maxDepth != null && cost.depth > maxDepth) {
+        const scope = keyDepth != null ? ' for this API key' : ''
         return reply.code(400).send({
           errors: [
             {
-              message: `Query depth ${cost.depth} exceeds the limit of ${maxDepth} for this key`
+              message: `Query depth ${cost.depth} exceeds the limit of ${maxDepth}${scope}`
             }
           ]
         })
