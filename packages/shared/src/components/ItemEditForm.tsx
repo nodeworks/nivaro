@@ -6759,7 +6759,7 @@ export function ItemEditForm({
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id })
   }
 
-  function renderSentinel(key: string, opts?: { expanded?: boolean }) {
+  function renderSentinel(key: string) {
     if (key === '__pipeline__' && showPipeline) {
       return (
         <PipelinePanel
@@ -6767,7 +6767,7 @@ export function ItemEditForm({
           collection={pipelineCollection}
           item={pipelineItem}
           title={pipelineSlot?.label_override ?? undefined}
-          defaultExpanded={opts?.expanded ?? pipelineSlot?.default_expanded ?? false}
+          defaultExpanded={pipelineSlot?.default_expanded ?? false}
           showApprovalChain={
             !!(pipelineSlot as unknown as Record<string, unknown>)?.show_approval_chain
           }
@@ -9932,13 +9932,11 @@ export function ItemEditForm({
                                       // and the pipeline slot (state track, owners, approval
                                       // chain) is what a reader wants first.
                                       renderSlot={(key) =>
-                                        key === '__comments__' || key === '__tasks__'
+                                        key === '__comments__' ||
+                                        key === '__tasks__' ||
+                                        key === '__pipeline__'
                                           ? renderSentinel(key)
-                                          : key === '__pipeline__'
-                                            ? // Open by default here: state, owners and the
-                                              // approval chain are the reading, not a drawer.
-                                              renderSentinel(key, { expanded: true })
-                                            : null
+                                          : null
                                       }
                                       // The integrity banner is hidden in Summary mode; the
                                       // affected fields carry an amber mark instead.
