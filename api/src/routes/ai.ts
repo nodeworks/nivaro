@@ -337,7 +337,7 @@ export async function aiRoutes(app: FastifyInstance) {
           : []),
         '',
         'RULES (follow strictly):',
-        '1. When the user\'s query refers to a concept that matches a relation name (e.g. "funding year" → use "funding_years.<field>"), ALWAYS use the dotted relational path — never substitute a different direct field as a proxy.',
+        '1. When the user\'s query refers to a concept that matches a relation name (e.g. "category" → use "categories.<field>"), ALWAYS use the dotted relational path — never substitute a different direct field as a proxy.',
         "2. If no field or relational path accurately matches the user's intent, omit that filter entirely rather than approximating with an unrelated field.",
         '3. Only use fields and dotted paths from the lists above. "sort" must be a direct field. "limit" is optional.',
         '4. op must be one of: eq, neq, gt, gte, lt, lte, contains, in, null, nnull. "in" takes an array value; "null"/"nnull" take no value.',
@@ -781,7 +781,7 @@ export async function aiRoutes(app: FastifyInstance) {
         ? `Explain what this SQL query does, in plain language a business analyst understands. Note any correctness risks.\n\nSQL:\n${b.current_sql}`
         : mode === 'fix'
           ? `This SQL query failed. Fix it. Return the corrected SQL in a fenced sql code block followed by ONE sentence about what was wrong.\n\nSQL:\n${b.current_sql}\n\nError:\n${b.error ?? '(not provided)'}`
-          : `Write a Microsoft SQL Server (T-SQL) query for this request. Params use :name placeholders (e.g. :funding_year). Return the SQL in a fenced sql code block followed by ONE sentence describing it.\n\nRequest: ${b.prompt}${b.current_sql ? `\n\nCurrent query (revise it): ${b.current_sql}` : ''}`
+          : `Write a Microsoft SQL Server (T-SQL) query for this request. Params use :name placeholders (e.g. :year). Return the SQL in a fenced sql code block followed by ONE sentence describing it.\n\nRequest: ${b.prompt}${b.current_sql ? `\n\nCurrent query (revise it): ${b.current_sql}` : ''}`
 
     const { model } = await getAiSettings()
     try {

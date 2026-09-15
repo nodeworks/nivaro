@@ -7,7 +7,7 @@ import { logActivity } from '../services/activity.js'
  * Stored-procedure management (admin) — the Developer → Procedures page.
  *
  * The database is the runtime source of truth; deployments that vendor their
- * procs (efp-ops/procedures) get drift visibility via that extension's
+ * procs (an extension's procedures dir) get drift visibility via that extension's
  * registry route, which the page merges in when present.
  *
  * Trust model: requireAdmin end to end, same tier as custom queries (an

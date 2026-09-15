@@ -1,11 +1,11 @@
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-// Exhaustive coverage of the EFP workflow state machine: every state in the
+// Exhaustive coverage of a multi-level approval state machine: every state in the
 // real approval chain, every transition out of it, and every role, asserted
 // against POST /pipelines/instance/:collection/:item/transition.
 //
-// The state names mirror the machine_names in the live EFP data (extracted from
+// The state names mirror a real legacy approval chain (extracted from
 // the legacy app): started -> peer review -> manager -> VP -> project ->
 // oracle submission -> oracle approval -> PO -> completion -> completed, with
 // rejected/canceled reachable from most points.
@@ -65,7 +65,7 @@ function buildApp() {
   return app
 }
 
-/** The EFP approval chain, in order, with the role that owns each step. */
+/** The approval chain, in order, with the role that owns each step. */
 interface Step {
   /** machine_name of the state the workflow sits in. */
   from: string
@@ -251,7 +251,7 @@ afterEach(() => {
 
 // ─── Every step, every role ────────────────────────────────────────────────
 
-describe('EFP approval chain — role matrix over every state', () => {
+describe('Approval chain — role matrix over every state', () => {
   for (const step of [...CHAIN, ...EXITS]) {
     const permitted = step.roles.length === 0 ? ROLES : step.roles
     const denied = ROLES.filter((r) => !permitted.includes(r))
@@ -308,7 +308,7 @@ describe('EFP approval chain — role matrix over every state', () => {
 
 // ─── Wrong-state guards ────────────────────────────────────────────────────
 
-describe('EFP approval chain — a transition is valid only from its own state', () => {
+describe('Approval chain — a transition is valid only from its own state', () => {
   const OTHER_STATES = CHAIN.map((s) => s.from)
 
   for (const step of CHAIN) {
@@ -334,7 +334,7 @@ describe('EFP approval chain — a transition is valid only from its own state',
 
 // ─── Terminal states ───────────────────────────────────────────────────────
 
-describe('EFP approval chain — terminal states', () => {
+describe('Approval chain — terminal states', () => {
   for (const terminal of ['completed', 'rejected', 'canceled']) {
     it(`marks the instance complete on arrival at ${terminal}`, async () => {
       const step: Step = { from: 'waiting_on_completion', to: terminal, label: 'Finish', roles: [] }
@@ -386,7 +386,7 @@ describe('EFP approval chain — terminal states', () => {
 
 // ─── History ───────────────────────────────────────────────────────────────
 
-describe('EFP approval chain — audit trail', () => {
+describe('Approval chain — audit trail', () => {
   it('records who moved the workflow and between which states', async () => {
     login(APPROVER)
     const step = CHAIN[1]

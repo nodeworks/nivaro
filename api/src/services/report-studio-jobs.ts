@@ -21,7 +21,7 @@ import {
  * Report Studio background jobs.
  *
  * Alert checks (hourly): evaluate every active report alert against its
- * widget's KPI metrics with EFP's firing/resolve state machine — one open
+ * widget's KPI metrics with a firing/resolve state machine — one open
  * 'firing' log row per alert IS the cooldown; it never re-notifies while
  * firing, and resolves (with timestamp) when conditions stop matching.
  *

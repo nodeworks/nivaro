@@ -176,7 +176,7 @@ const COMMANDS: CmdDef[] = [
     description: 'Update the current user profile.',
     method: 'PATCH',
     path: '/auth/me',
-    params: [p('data', 'json', 'body-raw', true, '{ "first_name": "Rob" }')]
+    params: [p('data', 'json', 'body-raw', true, '{ "first_name": "Alex" }')]
   },
   {
     name: 'readUsers',

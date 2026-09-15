@@ -102,7 +102,7 @@ export async function buildCoverageGapReport(): Promise<CoverageGapReport> {
     .join('nivaro_workflow_states as s', 'wi.current_state', 's.id')
     .where('s.is_terminal', 0)
     // States flagged owners-not-required (Started…) are deliberately unowned —
-    // reporting them as gaps buried the real ones (Rob 2026-08-26).
+    // reporting them as gaps buried the real ones (2026-08-26).
     .where((qb) => {
       qb.where('s.owners_not_required', false).orWhereNull('s.owners_not_required')
     })
@@ -237,7 +237,7 @@ export async function buildCoverageGapReport(): Promise<CoverageGapReport> {
   }
 }
 
-// ─── OOO runway (#727, Rob 2026-08-26) ───────────────────────────────────────
+// ─── OOO runway (#727, 2026-08-26) ───────────────────────────────────────────
 // Forward-looking coverage: who is scheduled out over the next N days, whether
 // their delegate can actually work, and roughly how much approval load sits
 // in states they help cover. "Next week 3 Zone-2 approvers are out with no

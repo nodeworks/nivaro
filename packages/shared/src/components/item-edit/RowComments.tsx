@@ -9,7 +9,7 @@ import { formatRelative } from '../../lib/utils'
 
 /**
  * Line-item comments (#11): a comment thread anchored to ONE child grid row
- * ("line 7: wrong CIFA"). The rows are ordinary nivaro_comments keyed by the
+ * ("line 7: wrong part"). The rows are ordinary nivaro_comments keyed by the
  * CHILD collection + row id — the parent record's Notes thread also surfaces
  * them (labelled "Line comment") via /comments/related, so nothing said about
  * a line is invisible at the record level. Enabled per grid via the

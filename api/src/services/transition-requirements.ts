@@ -46,7 +46,7 @@ export interface RequirementFieldMeta {
   max_values?: number
   /** entry.optional_when rule: this field is NOT required (and the dialog
    *  disables it) when the row's controlling field matches one of `in` —
-   *  e.g. sales_order_id waived for lines whose warehouse is MDSi. */
+   *  e.g. an order id waived for lines whose warehouse is auto-submitted. */
   optional_when?: { field: string; in: Array<string | number>; placeholder?: string }
 }
 

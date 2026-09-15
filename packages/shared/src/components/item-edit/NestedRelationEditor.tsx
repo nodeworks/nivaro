@@ -43,7 +43,7 @@ interface NestedRelationEditorProps {
   stagedOps?: NestedOps
   onStagedOpsChange?: (ops: NestedOps) => void
   /** Match mode: rows come from an arbitrary collection selected by a filter
-   *  instead of an FK to this row (EFP unit allocations matched by cifa).
+   *  instead of an FK to this row (e.g. allocations matched by item number).
    *  Live-write only; creates are seeded with matchSeed. */
   matchCollection?: string
   matchQuery?: Record<string, unknown> | null

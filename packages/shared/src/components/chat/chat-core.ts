@@ -15,7 +15,7 @@ import { del, get, patch as patch2, post } from '../../lib/commands'
  * which is per-user by nature. Live delivery comes from a host-provided
  * realtime adapter, with polling fallbacks baked into every query.
  *
- * Ported from the EFP implementation with its semantics preserved:
+ * Ported from the original host implementation with its semantics preserved:
  * - DM room keys are 'dm:<A>:<B>' with UPPERCASED sorted uuids (MSSQL returns
  *   uuids uppercased — a casing mismatch forks a second room).
  * - Read watermarks are serialized per room (markInFlight) because the reads
@@ -68,7 +68,7 @@ export interface ChatConfig {
   /** Label for a non-global, non-dm room key (null = uppercased key). */
   roomLabel?: (room: string) => string | null
   /** Host route for a resolved record (entity rooms' "Open record" action) —
-   *  admin passes /collections/:c/:id, efp-new /records/:c/:id. Absent = the
+   *  admin passes /collections/:c/:id, a portal its own record route. Absent = the
    *  admin shape; return null = hide the action. */
   recordUrl?: (collection: string, id: string | number) => string | null
   /** Host route for a session replay (the online list's admin-only "watch
@@ -607,7 +607,7 @@ interface ChatRoomType {
 }
 
 /**
- * Resolves an entity room ('wf:CR26-76773') to the record's URL, host-routed
+ * Resolves an entity room ('<prefix>:<token>') to the record's URL, host-routed
  * via cfg.recordUrl. The room-type registry maps the prefix to a collection +
  * match field; when the match field isn't the PK the record is looked up by
  * it (readable by construction — room visibility already required record

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Pencil } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
@@ -305,12 +305,12 @@ function M2MValue({
     staleTime: 10 * 60_000,
     retry: false
   })
-  // The junction's companion leg names the target. An M2A leg (IR Ship-To
-  // Contact: inventory_request_internal_contact.item) has NO one_collection —
+  // The junction's companion leg names the target. An M2A leg (e.g. a contact
+  // alias through `<junction>.item`) has NO one_collection —
   // each junction row carries its own collection in `one_collection_field`
   // ('collection'), drawn from one_allowed_collections ('additional_emails,
   // directus_users'). Before this branch the read view waited forever for a
-  // target that never came (Rob's st.png: Ship-To Contact stuck loading).
+  // target that never came (reported: an M2A contact field stuck loading).
   const companion = (jMeta?.relations ?? []).find(
     (r) => r.many_collection === junction && r.many_field === junctionField
   )
@@ -384,7 +384,7 @@ function M2MValue({
   if (ids.length === 0) return <Empty />
   // Files read as the edit form's file rows (icon, name, type, size, date,
   // uploader, missing badge, download) minus remove/upload — a name list
-  // says less and looks worse (Rob's files2.png).
+  // says less and looks worse (user report).
   if (target === 'nivaro_files' && relation)
     return (
       <div className='mt-1'>
@@ -928,6 +928,7 @@ export function RecordReadView({
   renderSlot,
   integrityMarks,
   renderGrid,
+  onEditSection,
   gridCounts
 }: {
   collection: string
@@ -938,11 +939,15 @@ export function RecordReadView({
   /**
    * Page-slot sentinels (`__comments__`, `__tasks__`, …) the host wants to
    * keep LIVE inside the read view — Summary mode is read-only for the
-   * record's fields, but notes and tasks stay editable (Rob). Return null to
+   * record's fields, but notes and tasks stay editable. Return null to
    * skip a slot. A slot placed in a section renders inside that card; the
    * rest render full-width under the cards, in layout order.
    */
   renderSlot?: (key: string, assignment: LayoutAssignment) => ReactNode
+  /** Summary-mode hosts: a pencil on every section header that hands back the
+   *  group key + its first field so the host can flip to Edit and land there
+   *  (whole-form flip + scroll was the only way in). */
+  onEditSection?: (groupKey: string, firstField: string | null) => void
   /**
    * Summary mode hides the data-integrity banner but must not hide the
    * problem: with this on, every field (or child grid) that carries a
@@ -1091,8 +1096,8 @@ export function RecordReadView({
     )
   }
   // A read view is for reading — a widget with nothing to show ("No
-  // deployments yet") is pure chrome here (Rob: "empty slots just take up
-  // space"). Widgets report content through onContentChange; unreported =
+  // items yet") is pure chrome here (empty slots just take up
+  // space). Widgets report content through onContentChange; unreported =
   // empty, so a slot only appears once it has something. The slot stays
   // MOUNTED (hidden) so its fetch and report keep running.
   const [widgetContent, setWidgetContent] = useState<Record<string, boolean>>({})
@@ -1333,7 +1338,7 @@ export function RecordReadView({
         : 'half'
     // Spans and field tracks come from READ_BOARD_CSS (attribute selectors in
     // a style block of our own) — Tailwind responsive utilities lost to host
-    // apps whose own sheet emits the same class names later (efp-new's
+    // apps whose own sheet emits the same class names later (a host's
     // `.grid-cols-1` / `.lg:grid-cols-4` outranked ours at equal specificity).
     return (
       <section
@@ -1344,7 +1349,7 @@ export function RecordReadView({
         className='min-w-0 rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40'
       >
         <h3
-          className={`flex items-center justify-between px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
+          className={`group/rs flex items-center justify-between gap-2 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
             isOpen(g) ? 'border-b border-slate-100 dark:border-slate-800' : ''
           }`}
         >
@@ -1353,7 +1358,7 @@ export function RecordReadView({
               type='button'
               onClick={() => toggleOpen(g.key)}
               aria-expanded={isOpen(g)}
-              className='flex w-full items-center justify-between text-left uppercase hover:text-slate-700 dark:hover:text-slate-200'
+              className='flex min-w-0 flex-1 items-center justify-between text-left uppercase hover:text-slate-700 dark:hover:text-slate-200'
             >
               <span>{g.label}</span>
               <ChevronDown
@@ -1361,7 +1366,19 @@ export function RecordReadView({
               />
             </button>
           ) : (
-            g.label
+            <span className='min-w-0 flex-1'>{g.label}</span>
+          )}
+          {onEditSection && (scalars.length > 0 || grids.length > 0) && (
+            <button
+              type='button'
+              data-read-edit-section={g.key}
+              onClick={() => onEditSection(g.key, scalars[0]?.field ?? grids[0]?.field ?? null)}
+              title={`Edit ${g.label}`}
+              aria-label={`Edit ${g.label}`}
+              className='-my-1 rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-100 hover:text-slate-700 focus-visible:opacity-100 group-hover/rs:opacity-100 dark:hover:bg-white/5 dark:hover:text-slate-200 motion-reduce:transition-none'
+            >
+              <Pencil className='h-3 w-3' />
+            </button>
           )}
         </h3>
         {isOpen(g) && (
@@ -1512,9 +1529,9 @@ export function RecordReadView({
           pockets beside every short section and read as splayed. */}
       {/* No base `grid-cols-1` on the board: a host app's own Tailwind sheet
           loads after ours and its .grid-cols-1 outranks our media-scoped
-          lg:grid-cols-6 (efp-new did exactly that — two half sections rendered
+          lg:grid-cols-6 (one host did exactly that — two half sections rendered
           76/23); a grid with no template is one column anyway. Sections
-          STRETCH to their row (Rob: "no row where one element is shorter"). */}
+          STRETCH to their row (no row where one element is shorter). */}
       <style>{READ_BOARD_CSS}</style>
       {meta ? (
         <div className='grid items-stretch gap-4' data-read-board>

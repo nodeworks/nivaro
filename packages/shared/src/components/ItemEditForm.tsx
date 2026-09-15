@@ -1229,7 +1229,7 @@ export function ItemEditForm({
   const ownSaveAtRef = useRef(0)
   const lastTouchRef = useRef<{ user_id: string | null; user_name: string | null } | null>(null)
   // Summary mode (#3): the grouped layout as RecordReadView. Session-only —
-  // nothing is persisted (Rob): every load starts in Edit unless the
+  // nothing is persisted: every load starts in Edit unless the
   // collection's summary_mode_rules (role × state) say otherwise — see the
   // rule-resolution effect. The toggle then flips it for this mount only.
   const [readMode, setReadModeRaw] = useState<boolean>(false)
@@ -1240,7 +1240,7 @@ export function ItemEditForm({
   )
   // State (not just a ref) so the body can HOLD until the opening mode is
   // known — otherwise the form paints Edit for a beat and snaps to Summary
-  // (Rob: "flashes edit mode first"). Resolved by the effect further down.
+  // ("flashes edit mode first"). Resolved by the effect further down.
   const [summaryResolvedKey, setSummaryResolvedKey] = useState<string | null>(null)
   const summaryRecordKey = `${collection}|${String(itemId)}`
   // True once the opening mode is known: new records and collections without
@@ -2640,7 +2640,7 @@ export function ItemEditForm({
     return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string') : []
   }, [activeLayoutData])
   // Opened from the header's "Quick pick" button only — never always-on
-  // (Rob: less intrusive). Done / the button again hides it.
+  // (less intrusive). Done / the button again hides it.
   const [quickPickOpen, setQuickPickOpen] = useState(false)
   const setQuickPickerM2M = useCallback(
     (field: string, ids: string[]) => {
@@ -3114,7 +3114,7 @@ export function ItemEditForm({
               if (m2mAliasFieldsForRules.has(target)) continue
               if (srcAliasFor(String(sourceField).split('||')[0].trim())) continue
               // 'a||b' = first non-null of the listed source fields; 'id'
-              // refers to the source record itself (EFP: a location's
+              // refers to the source record itself (e.g. a location's
               // designated shipping_location, else the location itself).
               const candidates = String(sourceField)
                 .split('||')
@@ -3479,7 +3479,7 @@ export function ItemEditForm({
   )
 
   // ── Item lock ──────────────────────────────────────────────────────────────
-  // Summary mode neither takes nor honours the edit lock (Rob): the lock is
+  // Summary mode neither takes nor honours the edit lock: the lock is
   // only acquired once the opening mode has settled on Edit, released when
   // the person flips to Summary, re-acquired on the way back.
   const lockEnabled =
@@ -5114,7 +5114,7 @@ export function ItemEditForm({
   // Full subtitle text for the hover tip + the copy button — the rendered row
   // is capped at 350px and ellipsised, so this is the only place the whole
   // value is available.
-  // "Edited 3d ago by Beth" — one activity row for the header chip.
+  // "Edited 3d ago by <name>" — one activity row for the header chip.
   const { data: lastTouch } = useQuery<{
     action: string
     timestamp: string
@@ -5151,7 +5151,7 @@ export function ItemEditForm({
   // with required gaps called out. Display only — nothing blocks on it.
   // Judged against the CURRENTLY VIEWED layout's own assignments when one is
   // active — a field the open layout doesn't show must not count against the
-  // percentage (Rob, 2026-08-24).
+  // percentage (2026-08-24).
   const completeness = useMemo(() => {
     const layoutFieldSet =
       (activeLayoutData?.assignments?.length ?? 0) > 0
@@ -5596,7 +5596,7 @@ export function ItemEditForm({
           const hit = t.changedFields.filter((f) => cfg.fields!.includes(f))
           if (hit.length) {
             // Staged grid rows: name the row each change belongs to (the
-            // config's context_fields — a forecast's Year) the way the server
+            // config's context_fields — e.g. a budget row's Year) the way the server
             // does for a direct write, reading the rows off the grid's cache.
             // One row → context chips + "for Year 2027"; several rows → each
             // field carries its row: "May (2027), November (2026)".
@@ -6046,7 +6046,7 @@ export function ItemEditForm({
                     ...cleanData,
                     [mf]: savedId,
                     // The record's change reason covers the lines it stages
-                    // (a new forecast year on an existing workflow).
+                    // (a new child row on an existing record).
                     ...(changeReasonRef.current ? { _change_reason: changeReasonRef.current } : {})
                   })
                 )
@@ -6705,7 +6705,7 @@ export function ItemEditForm({
     pipelineInstanceData,
     pipelineInstanceError
   ])
-  // Summary mode collapses the right-hand rail by default (Rob) — the read
+  // Summary mode collapses the right-hand rail by default — the read
   // view is the summary; the rail would repeat it. Restore whatever the rail
   // was doing when the person switches back to Edit.
   const railBeforeSummary = useRef<boolean | null>(null)
@@ -8467,7 +8467,7 @@ export function ItemEditForm({
                                           dialog; the group supplies border + dividers. */}
                                       {/* Summary ⇄ Edit — a labelled segmented control, not an
                                           icon pill: the active side is filled so the current mode
-                                          reads at a glance (Rob: "make it obvious what mode I'm in"). */}
+                                          reads at a glance ("make it obvious what mode I'm in"). */}
                                       {!isNew && itemId && !!colMeta?.read_mode_toggle && summaryModeSettled ? (
                                         <div
                                           role='radiogroup'
@@ -8879,6 +8879,7 @@ export function ItemEditForm({
                                                 type='button'
                                                 variant='outline'
                                                 size='sm'
+                                                data-nvr-menu-close
                                                 onClick={() => setRawEditOpen(true)}
                                                 title='Edit every field with conditional logic bypassed (admin)'
                                                 className='gap-1.5'
@@ -9297,7 +9298,7 @@ export function ItemEditForm({
                               )}
                               {/* Dialogs live OUTSIDE HeaderTools: a collapsed header (⋯) unmounts its
                                 children, so a change-reason / collision prompt raised from Save never
-                                rendered once the tool strip had folded (Rob, forecasts, 2026-09-14). */}
+                                rendered once the tool strip had folded (reported 2026-09-14). */}
                               {collision && (
                                 <MidairCollisionDialog
                                   collision={collision}
@@ -9650,7 +9651,7 @@ export function ItemEditForm({
                                                 )
                                                 // Configured link template ({{value}} + any {{field}} from
                                                 // the draft) turns the header value into an external link
-                                                // — how e.g. an MWF ID deep-links to the MWF system with
+                                                // — how e.g. an external system id deep-links to that system with
                                                 // zero hardcoding (Table Editor header chip ⚙ → Link URL).
                                                 const linkTemplate = (
                                                   f as { linkTemplate?: string }
@@ -9812,7 +9813,7 @@ export function ItemEditForm({
                                   )}
                                   {/* No wrapper div: the strip renders null until there is a
                                       recap, and an EMPTY sibling inside this space-y stack still
-                                      costs a 16px gap above the next banner (Rob's "more top
+                                      costs a 16px gap above the next banner (the "more top
                                       padding than side padding"). */}
                                   {!isNew && itemId && (
                                     <RecordRecapStrip
@@ -9823,7 +9824,7 @@ export function ItemEditForm({
                                   {!isNew &&
                                     itemId &&
                                     !activeLayoutData?.layout?.hide_integrity_banner &&
-                                    // Summary mode marks the affected fields instead (Rob) —
+                                    // Summary mode marks the affected fields instead —
                                     // the banner would only push the record down.
                                     !(readMode && summaryModeSettled) && (
                                       <RecordIntegrityBanner
@@ -9912,6 +9913,12 @@ export function ItemEditForm({
                                     <RecordReadView
                                       collection={collection}
                                       itemId={String(itemId)}
+                                      // Section pencil → Edit mode, landing on the section's
+                                      // first field.
+                                      onEditSection={(_groupKey, firstField) => {
+                                        setReadMode(false)
+                                        if (firstField) window.setTimeout(() => jumpToField(firstField), 350)
+                                      }}
                                       // The collection's Summary layout when it has one (Table
                                       // Editor → Layouts → type Summary), else the grouped layout
                                       // rendered read-only.
@@ -9932,8 +9939,8 @@ export function ItemEditForm({
                                       integrityMarks
                                       // Child grids are the REAL inline grid, read-only — PO
                                       // match dots, row lints, submission errors, presets and
-                                      // the aggregate footer all come along (Rob: "linked lines
-                                      // to POs, highlighted errors, MDSi errors — just can't
+                                      // the aggregate footer all come along ("linked lines
+                                      // to orders, highlighted errors, integration errors — just can't
                                       // edit").
                                       renderGrid={(a) => {
                                         const f = (fieldConfig ?? []).find((x) => x.field === a.field)

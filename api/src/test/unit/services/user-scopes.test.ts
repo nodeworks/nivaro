@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// User scopes are EFP's dimensional row security — the successor to legacy
-// EFP's restricted_divisions/regions/project_types junctions. Two modes exist
+// User scopes are dimensional row security — the successor to legacy
+// per-user restricted_<dimension> junctions. Two modes exist
 // and they are NOT symmetric:
 //
 //   mode 'default'  — advisory only. Pre-selects filter chips in the UI.

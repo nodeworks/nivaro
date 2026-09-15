@@ -162,9 +162,9 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const groupValue = payload[rule.group_by] ?? currentRow?.[rule.group_by] ?? null
   if (groupValue == null) return
 
-  // The sum field may be WRITE-COMPUTED (forecasts.total = the months added
-  // up) and this hook runs BEFORE items.ts applies those formulas — a grid
-  // that sends only the months would otherwise be judged on the stale stored
+  // The sum field may be WRITE-COMPUTED (a `total` = its parts added up) and
+  // this hook runs BEFORE items.ts applies those formulas — a grid that sends
+  // only the parts would otherwise be judged on the stale stored
   // total (or 0 on create). Re-derive it over the merged row; a caller who
   // sent the field explicitly still wins when no formula owns it.
   const merged: Record<string, unknown> = { ...(currentRow ?? {}), ...payload }

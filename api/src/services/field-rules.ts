@@ -503,9 +503,9 @@ export async function evaluateRulesForTrigger(
 // ─── Layout row rules (grid autofill) ─────────────────────────────────────────
 //
 // The per-row autofill rules configured on an inline-grid layout assignment
-// (`options.row_rules` — oracle category from the picked CIFA, task via the
-// project-type-filtered cifa_tasks/category_tasks precedence chain, line_type
-// from the parent's workflow_type, …). This logic lived inline in
+// (`options.row_rules` — a derived category from the picked item, a task via a
+// parent-filtered precedence chain of lookups, a line type from the parent's
+// type, …). This logic lived inline in
 // POST /field-rules/evaluate, which meant it ONLY ran when a browser asked:
 // a child row created straight through the items API got none of it. It is a
 // service now so createOne can run the same rules with the same semantics —
@@ -549,7 +549,7 @@ export interface RowRule {
   sources?: RowRuleSource[]
   only_if_empty?: boolean
   /** The target is an INPUT the rule merely seeds when empty (a project's
-   *  default category / CIFA for a new line): re-derivation passes never
+   *  default category / default item for a new line): re-derivation passes never
    *  blank it, drift sweeps never judge it, and it always behaves as
    *  only_if_empty. Without this, a "default" rule would turn a hand-picked
    *  input into a target that "re-run rules" wipes and re-derives. */
@@ -625,7 +625,7 @@ export interface RowRuleEvalOptions {
 
 /**
  * Memoizes the lookups a rule pass repeats: the same `nivaro_relations` row
- * and the same related record (the picked category, the picked CIFA) are
+ * and the same related record (the picked category, the picked item) are
  * resolved by most of the rules on a grid, and every one of them used to be a
  * separate ~40ms round trip. Promises are memoized so concurrent sources
  * dedupe too; a rejected lookup is forgotten so a transient error is not
@@ -695,8 +695,8 @@ export class RowRuleLookupCache {
   }
 
   /** First row of `collection` matching `where` (id ascending). Memoized on
-   *  the where-clause — precedence sources like "cifa_tasks for this cifa +
-   *  project type" repeat across every line sharing the pair, and a sweep
+   *  the where-clause — precedence sources like "lookup rows for this item +
+   *  parent type" repeat across every line sharing the pair, and a sweep
    *  over thousands of lines would otherwise pay one round trip each. */
   firstWhere(collection: string, where: Record<string, string>) {
     const key = `first|${collection}|${Object.keys(where)
@@ -920,7 +920,7 @@ export async function evaluateRowRules(
       if (existing != null && existing !== '') {
         // A seed-only target still holding one of the rule's OWN defaults
         // (any source, gates ignored) is still "auto" — it follows the
-        // trigger (materials → equipment swaps the default CIFA). Anything
+        // trigger (a category swap changes the default item). Anything
         // else is a hand pick and stays.
         let stillAuto = false
         if (rule.seed_only && rule.target_type === 'precedence') {
@@ -992,7 +992,7 @@ export async function evaluateRowRules(
       )
       const picked = candidates.find((c) => c != null) ?? null
       // A seed rule that derives nothing for the new state leaves the value
-      // it seeded earlier (a labor line keeps its CIFA rather than losing it).
+      // it seeded earlier (a line keeps its seeded item rather than losing it).
       if (rule.seed_only && picked == null && working[rule.target_field] != null) {
         note('skipped:seed-no-candidate')
         continue

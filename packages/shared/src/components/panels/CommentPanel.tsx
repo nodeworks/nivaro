@@ -340,7 +340,7 @@ function MentionTextarea({
  *  the transition, change or addendum that captured it. */
 interface RelatedNote {
   id: string
-  source: 'transition' | 'change_reason' | 'addendum' | 'note'
+  source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external'
   label: string
   text: string
   context: string | null
@@ -396,7 +396,9 @@ function RecordedNote({ note }: { note: RelatedNote }) {
       ? 'border-nvr-cyan/30 bg-nvr-cyan/[0.06] text-nvr-navy dark:text-nvr-cyan'
       : note.source === 'addendum'
         ? 'border-amber-200 bg-amber-50/60 text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-400'
-        : 'border-slate-200 bg-slate-50/80 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
+        : note.source === 'external'
+          ? 'border-sky-200 bg-sky-50/70 text-sky-700 dark:border-sky-900/40 dark:bg-sky-900/10 dark:text-sky-300'
+          : 'border-slate-200 bg-slate-50/80 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
   return (
     <div className='flex gap-3' data-recorded-note={note.source}>
       <div className='mt-1 h-8 w-8 shrink-0' aria-hidden />
@@ -700,7 +702,7 @@ export function CommentPanel({
               <span className='mt-1 w-full truncate pl-6 text-[11.5px] text-slate-400'>
                 <span className='font-medium text-slate-500 dark:text-slate-400'>{who}:</span>{' '}
                 {/* plain mode resolves record references to their display
-                    labels (workflows/283819 → CI20-1413) without nesting
+                    labels (orders/283819 → AB20-1413) without nesting
                     links inside the expand-toggle button. */}
                 <AutolinkedText text={text} plain />
               </span>

@@ -167,9 +167,9 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
       'one_field',
       'junction_field'
     ) as Promise<RelRow[]>,
-    // nivaro_relations can outlive the physical schema: EFP carries rows for
-    // junctions that were never created (forecasts_divisions / _regions /
-    // _project_types). Routing a scope through one produced SQL against a
+    // nivaro_relations can outlive the physical schema: a legacy import can
+    // carry rows for junctions that were never created. Routing a scope
+    // through one produced SQL against a
     // non-existent table and 500'd EVERY read of that collection for any
     // scoped user. Metadata is a claim; information_schema is the truth.
     db('information_schema.tables').select('table_name') as Promise<Array<{ table_name: string }>>
@@ -279,11 +279,11 @@ export async function resolveScopeHops(
   while (queue.length > 0) {
     const { at, hops } = queue.shift() as { at: string; hops: ScopeHop[] }
     if (hops.length >= MAX_DEPTH) continue
-    // A collection can hold SEVERAL links to the same target — workflows has
-    // both `project_type` and `car_project_type` pointing at project_types —
-    // and taking whichever the relation order happened to yield silently
-    // scoped every user by the CAR-only column, hiding every non-CAR record
-    // from people who were entitled to it. Prefer the canonically-named link:
+    // A collection can hold SEVERAL links to the same target — e.g. both
+    // `category` and `alt_category` pointing at categories — and taking
+    // whichever the relation order happened to yield silently scoped every
+    // user by the rarely-set column, hiding records from people who were
+    // entitled to them. Prefer the canonically-named link:
     // the one named after the target itself, over any qualified variant.
     const singular = (t: string) => (t.endsWith('s') ? t.slice(0, -1) : t)
     const linkName = (h: ScopeHop) =>
@@ -291,12 +291,12 @@ export async function resolveScopeHops(
     const nameRank = (h: ScopeHop) => {
       const n = (linkName(h) ?? '').toLowerCase()
       const t = h.to.toLowerCase()
-      if (n === singular(t) || n === t) return 0 // project_type → project_types
+      if (n === singular(t) || n === t) return 0 // category → categories
       if (n === `${singular(t)}_id` || n === `${t}_id`) return 1 // junction leg
       if (h.kind === 'junction' && h.junction.toLowerCase() === `${h.from.toLowerCase()}_${t}`) {
-        return 1 // workflows_divisions
+        return 1 // <parent>_<target> canonical junction
       }
-      return 2 // car_project_type and friends
+      return 2 // qualified variants (alt_category and friends)
     }
     const edges = [...(adj.get(at) ?? [])]
       // NEVER scope through a reverse (o2m) hop. An o2m route says "this row is
@@ -605,7 +605,7 @@ export async function getUserScopeEnforcement(
   ]
   if (restricts.length === 0) return none
   const dims = await listScopeDimensions()
-  // A dimension TARGET table (divisions, regions, project_types, …) is shared
+  // A dimension TARGET table (regions, departments, categories, …) is shared
   // reference data every user must read to render a label. Filtering one by a
   // DIFFERENT dimension is meaningless — a division does not live in a region —
   // and ANDing several of them together made these tables resolve to zero rows,

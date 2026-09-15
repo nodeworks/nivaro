@@ -510,7 +510,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       }
 
       // No SSRF guard here — external APIs are admin-only and intentionally reach
-      // internal corporate services (Oracle EBS, MWF, MDSi, etc.).
+      // internal corporate services (ERPs, ticketing systems, etc.).
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 10_000)
       init.signal = controller.signal

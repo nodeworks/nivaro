@@ -8,19 +8,19 @@ import {
 } from './summary-mode'
 
 const ROLE = 'ABCDEF01-0000-0000-0000-000000000001'
-const efp = normalizeSummaryModeRules({
+const rules = normalizeSummaryModeRules({
   default: 'summary',
   rules: [{ states: ['started', NO_STATE], states_op: 'in', mode: 'edit' }]
 })
 
 describe('resolveSummaryMode', () => {
   it('new records always edit', () => {
-    expect(resolveSummaryMode(efp, { role: null, stateKey: 'completed', isNew: true })).toBe('edit')
+    expect(resolveSummaryMode(rules, { role: null, stateKey: 'completed', isNew: true })).toBe('edit')
   })
-  it('EFP shape: started + stateless edit, everything else summary', () => {
-    expect(resolveSummaryMode(efp, { role: null, stateKey: 'started', isNew: false })).toBe('edit')
-    expect(resolveSummaryMode(efp, { role: null, stateKey: null, isNew: false })).toBe('edit')
-    expect(resolveSummaryMode(efp, { role: null, stateKey: 'completed', isNew: false })).toBe(
+  it('rule shape: started + stateless edit, everything else summary', () => {
+    expect(resolveSummaryMode(rules, { role: null, stateKey: 'started', isNew: false })).toBe('edit')
+    expect(resolveSummaryMode(rules, { role: null, stateKey: null, isNew: false })).toBe('edit')
+    expect(resolveSummaryMode(rules, { role: null, stateKey: 'completed', isNew: false })).toBe(
       'summary'
     )
   })
@@ -60,8 +60,8 @@ describe('resolveSummaryMode', () => {
     )
   })
   it('need-role / need-state detection', () => {
-    expect(summaryRulesNeedRole(efp)).toBe(false)
-    expect(summaryRulesNeedState(efp)).toBe(true)
+    expect(summaryRulesNeedRole(rules)).toBe(false)
+    expect(summaryRulesNeedState(rules)).toBe(true)
     expect(summaryRulesNeedRole(normalizeSummaryModeRules({ rules: [{ roles: [ROLE], mode: 'edit' }] }))).toBe(true)
     expect(summaryRulesNeedState(null)).toBe(false)
   })

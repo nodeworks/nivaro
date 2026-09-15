@@ -1,5 +1,5 @@
 /**
- * Per-instance settings overrides (Rob, 2026-08-24): local dev and staging can
+ * Per-instance settings overrides (2026-08-24): local dev and staging can
  * share ONE database, which means they share ONE nivaro_settings row — so the
  * staging SMTP relay config is also what local mail resolution finds, and it
  * only works from the staging box.

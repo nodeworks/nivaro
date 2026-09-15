@@ -19,8 +19,8 @@ interface ApiLogRow {
 
 /**
  * Root-level Directus-era aliases (plugins/legacy-compat.ts) that third
- * parties like MWF still call. They sit outside /api/ but ARE API traffic —
- * without this MWF's file pushes were invisible to every log surface.
+ * parties still call. They sit outside /api/ but ARE API traffic — without
+ * this an integration's file pushes were invisible to every log surface.
  */
 const LEGACY_ALIASES = new Set(['/files', '/graphql'])
 /**

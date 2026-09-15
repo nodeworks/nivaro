@@ -303,7 +303,7 @@ export function PipelineSkipCriteria({
                           <Input
                             value={cond.record_field}
                             onChange={(e) => updateCondition(idx, { record_field: e.target.value })}
-                            placeholder='requisition_amount'
+                            placeholder='total_amount'
                             className='h-8 font-mono text-[12px]'
                           />
                         </div>

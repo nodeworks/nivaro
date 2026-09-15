@@ -31,7 +31,7 @@ function httpError(statusCode: number, message: string): Error & { statusCode: n
 
 /** nivaro_users.last_access used to be written ONLY at OIDC login, so a
  *  7-day session or a static-token user read "last active Sep 1" while
- *  working all day (Rob's report). Every authenticated request now touches
+ *  working all day. Every authenticated request now touches
  *  it, throttled to once per user per 5 minutes in-process and written
  *  fire-and-forget so auth never waits on it. Masquerade requests never
  *  touch the TARGET (the admin is the one active); API-key requests track

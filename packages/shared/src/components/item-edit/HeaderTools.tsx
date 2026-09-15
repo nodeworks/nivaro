@@ -202,6 +202,14 @@ export function HeaderMenu({
           <div
             data-nvr-header-menu-panel
             role='menu'
+            // Rows that open something OUTSIDE the menu (Raw edit's sheet
+            // renders beside the header now) mark themselves
+            // `data-nvr-menu-close`; the menu otherwise stays open so rows
+            // whose dialogs/confirms render inside them keep working. Without
+            // this the panel sat on top of the Raw edit sheet (user report).
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('[data-nvr-menu-close]')) setOpen(false)
+            }}
             style={
               container === document.body
                 ? {

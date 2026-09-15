@@ -140,7 +140,7 @@ export interface NotifyUserOptions {
 // matrix: {category: {inapp: bool, push: bool}}}. Categories are classified
 // from the subject so every existing caller participates without changes.
 // Quiet hours suppress PUSH only (the inbox row still lands — it IS the
-// inbox); truly critical subjects bypass. All America/New_York — EFP's clock.
+// inbox); truly critical subjects bypass. All America/New_York (the default wall clock).
 
 export type NotifyCategory =
   | 'mentions'

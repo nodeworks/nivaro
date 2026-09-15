@@ -52,10 +52,10 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
           sub.filter_field !== 'id' ||
           String(sub.filter_value) === String(item)
       )
-      // Dimension-scoped subscriptions (`filters` JSON — the EFP-imported
-      // division prefs) are evaluated against THIS record with the same
-      // evaluator the notification hook uses, so a Zone-2 subscriber doesn't
-      // count toward a Zone-3 record's audience.
+      // Dimension-scoped subscriptions (`filters` JSON — e.g. legacy-imported
+      // region prefs) are evaluated against THIS record with the same
+      // evaluator the notification hook uses, so a subscriber scoped to one
+      // region doesn't count toward another region's record audience.
       if (matchingSubs.some((sub) => sub.filters)) {
         try {
           const { filterMatches } = await import('../hooks/notification-subscriptions.js')

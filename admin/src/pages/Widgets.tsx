@@ -1859,7 +1859,7 @@ function BtnToggleForm({
               className='h-7 text-[12px]'
               value={btn.label_on}
               onChange={(e) => updateBtn(i, { label_on: e.target.value })}
-              placeholder='Disable Auto Reforecast'
+              placeholder='Disable Auto Sync'
             />
           </div>
           <div className='space-y-1'>
@@ -1884,7 +1884,7 @@ function BtnToggleForm({
               className='h-7 text-[12px]'
               value={btn.label_off}
               onChange={(e) => updateBtn(i, { label_off: e.target.value })}
-              placeholder='Enable Auto Reforecast'
+              placeholder='Enable Auto Sync'
             />
           </div>
           <div className='space-y-1'>

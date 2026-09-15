@@ -17,7 +17,7 @@ import { validatorRegistry } from '../extensions/validators.js'
  *
  *   - Only fields PRESENT in the payload are judged. Demanding absent fields
  *     would break every integration that legitimately writes partial rows
- *     (mwf-ingest, Nuvolo shaping, import execute) — `required` therefore
+ *     (extension ingests, inbound shaping hooks, import execute) — `required` therefore
  *     fires only when a caller EXPLICITLY sends an empty value, which is the
  *     one case where emptiness is a statement rather than an omission.
  *   - Every non-required rule already skips empty values (same as the client),

@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
  * "Changes so far" (#6) — a compact pill beside the Save button ("5 changes")
  * that opens an anchored popover listing every unsaved field and staged line
  * as `label: old → new`, each with its own revert. Lives in the header, never
- * in the form body (Rob: the bottom tray took real estate). Per-LAYOUT opt-in
+ * in the form body (a bottom tray took real estate). Per-LAYOUT opt-in
  * (`nivaro_collection_layouts.changes_tray`). The Save button reads it as a
  * checklist: nothing in the list = nothing to save.
  */

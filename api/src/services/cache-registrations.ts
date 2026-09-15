@@ -20,7 +20,7 @@ export function registerKnownCaches(): void {
   )
   registerCache(
     'owner-groups',
-    'Pipeline owner groups per state (60s TTL — ~3,900 groups on EFP)',
+    'Pipeline owner groups per state (60s TTL — thousands of groups on large deployments)',
     bustOwnerGroupCache
   )
   registerCache(

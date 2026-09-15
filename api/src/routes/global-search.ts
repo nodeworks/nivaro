@@ -81,7 +81,7 @@ function pickSearchFields(fields: FieldRow[]): string[] {
 //
 // One UNION ALL round trip over each searchable collection's human columns
 // (display_template plain tokens, name/title/label/subject, and string-typed
-// *_id business identifiers like workflow_id), then the candidate ids are
+// *_id business identifiers like order_id), then the candidate ids are
 // CONFIRMED through readItems per collection so RBAC, row-level security and
 // User Scopes all apply — the raw scan can never leak a row the items API
 // would refuse. Replaces the old first-10-collections per-table search, which
@@ -166,8 +166,8 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       if (available.has(m[1]) && !picked.includes(m[1])) picked.push(m[1])
     }
     for (const n of NAMEISH) if (available.has(n) && !picked.includes(n)) picked.push(n)
-    // String-typed *_id columns are business identifiers (workflow_id,
-    // project_id, inventory_request_id) — FK columns are ints/uuids.
+    // String-typed *_id columns are business identifiers (order_id,
+    // project_id, request_id) — FK columns are ints/uuids.
     for (const c of available) {
       if (c.endsWith('_id') && c !== 'id' && !picked.includes(c)) picked.push(c)
     }

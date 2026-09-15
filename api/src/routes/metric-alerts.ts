@@ -10,9 +10,9 @@ import {
 } from '../services/metric-alerts.js'
 
 /**
- * Metric alert engine routes (EFP Alert Manager parity).
+ * Metric alert engine routes.
  *
- * Visibility model mirrors EFP: definitions/anomaly-definitions are a shared
+ * Visibility model: definitions/anomaly-definitions are a shared
  * catalog (admin-curated); rules are readable when shared or your own; log
  * entries follow rule visibility; subscriptions are strictly your own.
  */
@@ -207,7 +207,7 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
       })
       .returning('*')) as Array<Record<string, unknown>>
 
-    // Auto-subscribe the creator (EFP behavior)
+    // Auto-subscribe the creator
     await db('nivaro_metric_alert_subscriptions')
       .insert({
         rule_id: row.id,

@@ -68,7 +68,7 @@ const fmt = (v: unknown): string => {
   return s.length > 80 ? `${s.slice(0, 80)}…` : s
 }
 
-/** "was X · Beth, just now" under a field another person changed while this
+/** "was X · Jane, just now" under a field another person changed while this
  *  form was open. Dismisses per field; the form drops it on the next save. */
 export function RemoteChangeGhost({
   change,
@@ -209,7 +209,7 @@ export function useFieldContextMenu({
   // The element under the cursor when the menu opened. "Copy value" reads
   // THIS, not the field's draft value: an inline grid is one FieldRow whose
   // alias value is never in the draft (rows live in their own query), so the
-  // draft-only copy pasted blank on every line cell (Rob, 2026-09-14).
+  // draft-only copy pasted blank on every line cell (reported 2026-09-14).
   const targetRef = useRef<HTMLElement | null>(null)
 
   const onContextMenu = useCallback(
@@ -430,8 +430,8 @@ function FieldContextMenu({
 
 /**
  * Hosts mark a field wrapper someone else is focused on with
- * `data-remote-editor="<name>"` (admin use-record-presence, efp-new
- * record-presence). This hook watches the wrapper's own attribute and, while
+ * `data-remote-editor="<name>"` (admin use-record-presence, or a host's own
+ * record-presence hook). This hook watches the wrapper's own attribute and, while
  * it is set, asks once before letting the local user type into the same
  * field — a soft lock: editable, never blocking.
  */

@@ -331,7 +331,7 @@ function StateTrack({
   // Who moved the record across this gap. Position-based, not exact-pair:
   // a transition that SKIPS steps (manager approval jumping straight to VP)
   // has no adjacent-pair edge, so exact matching silently dropped the
-  // approver's initials from the track (Rob's transition.png report). A
+  // approver's initials from the track (user report). A
   // forward hop annotates the segment leaving its ORIGIN; a send-back the
   // segment beside its destination — one attribution per hop, never one per
   // crossed segment (that would read as three approvals).
@@ -1494,7 +1494,7 @@ function PipelinePanelInner({
       toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
         duration: 12000
       })
-      // A blocked transition (e.g. MDSi failure) lands here as a plain 422:
+      // A blocked transition (e.g. an ERP push failure) lands here as a plain 422:
       // the dialog's line values already saved — close it and refresh the
       // persistent failure banner immediately.
       setRequirementsDialog(null)
@@ -2010,7 +2010,7 @@ function PipelineTransitionButtonsInner({
       toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
         duration: 12000
       })
-      // A blocked transition (e.g. MDSi failure) lands here as a plain 422:
+      // A blocked transition (e.g. an ERP push failure) lands here as a plain 422:
       // the dialog's line values already saved — close it and refresh the
       // persistent failure banner immediately.
       setRequirementsDialog(null)

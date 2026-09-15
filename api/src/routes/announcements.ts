@@ -20,8 +20,8 @@ import { sendSms } from '../services/sms.js'
 const CHANNELS = ['banner', 'message', 'email', 'sms', 'login'] as const
 type Channel = (typeof CHANNELS)[number]
 
-/** One audience group: ANDed scope conditions ({division: [2], project_type: [35]}
- *  = "Zone 2 AND Node Splits"). Multiple groups OR together. */
+/** One audience group: ANDed scope conditions ({region: [2], category: [35]}
+ *  = "Region 2 AND Category 35"). Multiple groups OR together. */
 type AudienceGroup = Record<string, Array<string | number>>
 
 interface Audience {

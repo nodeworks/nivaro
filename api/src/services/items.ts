@@ -1017,7 +1017,7 @@ export function findM2MRelation(
 /**
  * When a row is written to a junction collection (M2M through-table), any auto_id
  * field on the parent side whose pattern draws a token from that junction
- * (e.g. `{funding_years[0] % 100}`) may now render a different prefix — the row
+ * (e.g. `{years[0] % 100}`) may now render a different prefix — the row
  * just inserted/deleted changes which value "wins" the ordered lookup. Recompute
  * and write those parent fields. Never throws — mirrors recalcAffectedRollups.
  */
@@ -1588,7 +1588,7 @@ async function applyConditions(
 ) {
   for (const cond of conditions) {
     // OR group: each branch is a normal path condition; the group ANDs with
-    // the rest of the conditions (EFP project-type _or parity).
+    // the rest of the conditions.
     if ('or' in cond && Array.isArray(cond.or)) {
       type Branch =
         | { kind: 'path'; plan: NonNullable<PathPlan>; op: string; value: unknown }
@@ -2145,7 +2145,7 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
  * Turn a URL segment into a primary key when a collection is configured to be
- * addressed by something people recognise ("CM26-79826" instead of 371373).
+ * addressed by something people recognise ("REQ-1234" instead of 98765).
  *
  * Returns the id, or null when the collection has no alias configured / the
  * segment does not resolve — callers keep their existing not-found behaviour.
@@ -2155,7 +2155,7 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
  *    "Conversion failed" and the request 500s instead of 404ing, so the id
  *    lookup is skipped entirely when the segment cannot be one.
  *  - Silently pick among several matches. Alias columns carry no uniqueness
- *    guarantee (workflows.workflow_id has real duplicates), so the LOWEST id
+ *    guarantee (legacy business ids have real duplicates), so the LOWEST id
  *    wins deterministically — the same URL always resolves to the same record,
  *    rather than shifting as rows are added.
  */
@@ -2172,7 +2172,7 @@ export async function resolveAliasId(
 
   // A multi-field alias joins its parts with '-', so split from the LEFT by
   // field count and let the final field absorb any remaining separators —
-  // values themselves routinely contain '-' ("CM26-79826").
+  // values themselves routinely contain '-' ("REQ-1234").
   const parts =
     names.length === 1
       ? [segment]
@@ -2276,7 +2276,7 @@ export async function readOne(
     if (selectCols.length === 0) selectCols = ['*']
   }
 
-  // An alias segment ("CM26-79826") is not a key. Resolve it first, and never
+  // An alias segment ("REQ-1234") is not a key. Resolve it first, and never
   // pass it to the id column: an int primary key raises a conversion error
   // rather than simply not matching.
   let key: string | number = id
@@ -2359,7 +2359,7 @@ interface AliasM2MWrite {
 
 /**
  * Directus-era integrations write M2M relations as alias keys on the record
- * payload — `regions: {id: 9}`, `funding_years: [{funding_years_year: {id: 2026}}]`,
+ * payload — `regions: {id: 9}`, `years: [{years_year: {id: 2026}}]`,
  * `files: [{directus_files_id: {id: "…"}}]`, or `{create: [...]}`. Nivaro's own
  * clients write junction rows directly, so these keys used to be silently
  * stripped and the links were lost.
@@ -2558,7 +2558,7 @@ export async function createOne(
   )
   // The throw waits until the before hooks have run: an extension hook may
   // supply the reason on the caller's behalf (an integration that cannot
-  // send one — LinX's forecast creates), which is a stated provenance, not a
+  // send one — e.g. a GraphQL integration's creates), which is a stated provenance, not a
   // bypass. Flagged fields are still judged on what the CALLER wrote.
   const createFlagged =
     crCreateConfig?.on_create && !createReason
@@ -2599,8 +2599,8 @@ export async function createOne(
   await applyFieldRules(collection, ctx.payload)
 
   // Layout row-rule autofill — the grid rules the admin form runs per row
-  // (oracle category from CIFA, task precedence chain, line_type from the
-  // parent's workflow_type) now apply to API creates too. Fills only fields
+  // (derived category from the picked item, task precedence chain, line type
+  // from the parent's type) now apply to API creates too. Fills only fields
   // the caller left out; never throws.
   // Locked child-row fields (layout 'lock' row rules) are never caller-set —
   // drop them first so the autofill below owns their value.

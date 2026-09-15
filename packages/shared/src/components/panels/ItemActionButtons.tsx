@@ -8,8 +8,8 @@ import { get, post } from '../../lib/commands'
 import { Button } from '../ui/button'
 
 /**
- * Extension-registered item actions (ctx.itemActions.register — e.g. EFP's
- * "Push to Fusion") rendered as toolbar buttons for the current record.
+ * Extension-registered item actions (ctx.itemActions.register — e.g. an
+ * extension's "Push to ERP") rendered as toolbar buttons for the current record.
  * Headless counterpart of the block the admin's ItemEdit page renders in its
  * own header; hosts opt in via ItemEditForm's `showItemActions`.
  */
@@ -73,8 +73,8 @@ export function ItemActionButtons({
       // a manual reload.
       void qc.invalidateQueries({ queryKey: ['addendums', collection] })
       void qc.invalidateQueries({ queryKey: ['pipeline-all-owners'] })
-      // An action can change the record's CHILDREN too — Push to Fusion stamps
-      // the requisition id onto every line — and those live in their own
+      // An action can change the record's CHILDREN too — an ERP push may stamp
+      // an external id onto every line — and those live in their own
       // queries, so refreshing the record alone left the grid showing stale
       // values until a manual page reload.
       void qc.invalidateQueries({ queryKey: ['o2m-rows'] })

@@ -2,8 +2,8 @@ import { NivaroProvider, SlaRulesView } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
 import { Clock } from 'lucide-react'
 
-// SLA rules — shared view (packages/shared SlaRulesView) hosted here; efp-new
-// can mount the same component. Routes are requireAdmin.
+// SLA rules — shared view (packages/shared SlaRulesView) hosted here; a headless
+// frontend can mount the same component. Routes are requireAdmin.
 const client = createNivaro(window.location.origin)
 
 export function SlaRulesPage() {

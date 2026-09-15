@@ -410,7 +410,7 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
         ]
       : []),
     {
-      k: 'CR26-12345',
+      k: 'AB26-12345',
       kind: 'code',
       v: 'Type a workflow or request ID and it becomes a live card showing its current state — click it to open the record.'
     },
@@ -1168,7 +1168,7 @@ export function ChatRoomView({
                 <p>No messages yet — say hello.</p>
                 <p className='mt-1 text-[11px]'>
                   Tip: @ mentions someone{botName ? `, @${botName} asks the AI` : ''}, and a record
-                  ID like CR26-12345 becomes a live link.
+                  ID like AB26-12345 becomes a live link.
                 </p>
               </>
             )}
@@ -2830,7 +2830,7 @@ export function ChatPanel({
                     // /presence/online is the ONE classifier of idle: it weighs
                     // last_active freshness against the row's is_idle bit, so a
                     // host feeding raw table rows here (admin) must not disagree
-                    // with a host feeding the endpoint's own rows (efp-new).
+                    // with a host feeding the endpoint's own rows (a portal).
                     const px = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
                     const isIdle = px?.is_idle ?? u.is_idle
                     const idleSrc = px ?? u
@@ -2891,7 +2891,7 @@ export function ChatPanel({
                                   if (f === 'scopes') return (x?.scopes ?? []).join(', ') || null
                                   if (f === 'page') {
                                     // The server renders a record's display template
-                                    // ("Workflows › CR26-79811"); prettyPath can only
+                                    // ("Orders › AB26-12345"); prettyPath can only
                                     // reach the raw id, so it is the fallback.
                                     const page =
                                       (x as { page?: string | null })?.page ??

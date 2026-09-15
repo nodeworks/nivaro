@@ -39,9 +39,9 @@ export interface NormalizedRollup {
   /** Optional PARENT-row condition (same operator vocabulary as a source
    *  filter). A parent that does not match is left alone by every compute
    *  path — recalc, backfill, virtual read, the client's live figure — so the
-   *  column holds a plain, hand-entered value for those rows. The CAR case:
-   *  workflows.requisition_amount is a rollup over lines for purchase order requests but a simple
-   *  decimal for CARs (workflow_type 2), which have no lines. */
+   *  column holds a plain, hand-entered value for those rows. Typical case: an
+   *  amount that is a rollup over lines for one record type but a simple
+   *  hand-entered decimal for another type that has no lines. */
   parent_filter?: Record<string, unknown>
 }
 
@@ -553,8 +553,8 @@ export function bustRollupContributorCache(): void {
  * Skips the write when the recomputed total matches the current value.
  * Never throws: a recalc failure must not break the write that triggered it.
  */
-// A stored rollup can itself feed another stored rollup (workflow lines →
-// workflows.requisition_amount → projects.pub_amount). The parent write here
+// A stored rollup can itself feed another stored rollup (lines → order total
+// → project total). The parent write here
 // is RAW, so nothing downstream would ever notice it; cascade explicitly,
 // bounded so a mis-configured cycle cannot run away.
 const MAX_CASCADE_DEPTH = 3

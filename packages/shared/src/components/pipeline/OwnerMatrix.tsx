@@ -232,7 +232,7 @@ function useRoleNames(): Map<string, string> | null {
 }
 
 /** Server-side people search — the directory exceeds any client-side fetch
- *  cap (>1000 users on EFP), so slicing locally silently hides people. Every
+ *  cap (large directories exceed 1000 users), so slicing locally silently hides people. Every
  *  picker queries /users with search + alphabetical sort instead. */
 function usePeopleSearch(query: string): { people: User[]; isFetching: boolean } {
   const client = useNivaroClient()

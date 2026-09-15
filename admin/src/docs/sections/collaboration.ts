@@ -712,7 +712,7 @@ export const collabChat: DocSection = {
     { type: 'h3', text: 'Record conversations' },
     {
       type: 'p',
-      text: 'A record room needs no setup beyond registering its prefix: `wf:CR26-76773` resolves through the room-type registry to `workflows` matched on `workflow_id`. Nobody is enrolled in these — visibility is recomputed from the record each time, so a scope change takes effect immediately and there is no membership list to maintain across tens of thousands of records. An unregistered prefix is refused rather than treated as a free-form room.'
+      text: 'A record room needs no setup beyond registering its prefix: `ord:ORD-10042` resolves through the room-type registry to `orders` matched on `order_number`. Nobody is enrolled in these — visibility is recomputed from the record each time, so a scope change takes effect immediately and there is no membership list to maintain across tens of thousands of records. An unregistered prefix is refused rather than treated as a free-form room.'
     },
     {
       type: 'warn',

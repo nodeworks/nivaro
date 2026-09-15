@@ -13,8 +13,8 @@ export function registerCoreTriggers(): void {
       'Payload: collection, item, template, transition_label, source (manual|auto), comment, ' +
       'user_id, from_state {key,label}, to_state {key,label}, owners (resolved owner list for ' +
       'the NEW state: id/email/first_name/last_name) and owner_emails (comma-joined). ' +
-      'Filter with a Condition operation (e.g. collection eq inventory_request, ' +
-      'to_state.key eq finance_review).',
+      'Filter with a Condition operation (e.g. collection eq orders, ' +
+      'to_state.key eq review).',
     fields: []
   })
   registerTrigger({
@@ -24,7 +24,7 @@ export function registerCoreTriggers(): void {
       'Fires after a staged (file → staging table → procedure) import run completes successfully. ' +
       'Payload: run_id, import_key, definition_label, staging_table, procedure, row_count, ' +
       'duration_seconds, created_by. Filter with a Condition operation ' +
-      '(e.g. import_key eq purchase_orders).',
+      '(e.g. import_key eq orders).',
     fields: []
   })
 }

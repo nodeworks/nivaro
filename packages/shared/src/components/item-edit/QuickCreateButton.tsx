@@ -10,7 +10,7 @@ import { titleCase } from '../../lib/utils'
  *  to the picker that creates a record in the TARGET collection inline and
  *  selects it. `from` values seed hidden fields from the parent form draft
  *  ('$parent.<field>') or a literal; fields without `from` render as inputs.
- *  EFP "Is New unit" parity, fully generic. */
+ *  Inline "create a new related record" pattern, fully generic. */
 export interface QuickCreateConfig {
   label?: string
   title?: string

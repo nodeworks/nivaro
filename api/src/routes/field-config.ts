@@ -377,7 +377,7 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     // Virtual fields (O2M/M2M alias with no nivaro_fields row) that are in assignments
     for (const [field, fieldAssignments] of assignmentsByField.entries()) {
       if (knownFields.has(field)) continue
-      // Relation-path field ('purchase_order.workflow.workflow_id'): read-only
+      // Relation-path field ('order.customer.account_number'): read-only
       // display of a value reached through M2O hops. Rendered via the shared
       // form's relation-path handling; value resolved by /items/:col/:id/resolve-paths.
       if (field.includes('.') && !field.startsWith('__')) {

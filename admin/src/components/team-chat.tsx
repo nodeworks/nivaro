@@ -122,7 +122,7 @@ function DockInner() {
   } | null>(null)
   const { totalUnread, rooms } = useChatRooms()
   useUnreadChirp(totalUnread, rooms)
-  // Online-people bubble (Rob): who's around, before opening the panel.
+  // Online-people bubble: who's around, before opening the panel.
   // Same query the panel's Online tab uses — react-query dedupes them.
   const { user: dockUser } = useAuth()
   const { users: onlineUsers } = useOnlineUsers()

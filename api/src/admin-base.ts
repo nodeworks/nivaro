@@ -5,7 +5,7 @@ import { config } from './config.js'
 /**
  * Where the admin SPA is actually reachable.
  *
- * Headless hosts (efp-new and friends) need an ABSOLUTE url to link into admin
+ * Headless hosts (custom frontends) need an ABSOLUTE url to link into admin
  * pages — a relative one hits their own router, which has no such route, and
  * silently lands the user on their dashboard.
  *
@@ -13,7 +13,7 @@ import { config } from './config.js'
  * runs on its own vite server. It is NOT reliable in a deployment: the release
  * image serves the admin build itself, and an operator may point ADMIN_URL at
  * whichever frontend is the "app" for that environment — which is exactly how a
- * replay link ended up opening efp-new.
+ * replay link ended up opening a headless frontend.
  *
  * So: when this process is the one serving the admin build (the same
  * `existsSync` check server.ts registers static hosting on), admin lives at our

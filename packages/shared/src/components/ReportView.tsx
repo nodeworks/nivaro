@@ -482,7 +482,7 @@ function buildTree(
       }
       return node
     })
-    // EFP ordering: top level alphabetical, deeper levels by first value desc
+    // Ordering: top level alphabetical, deeper levels by first value desc
     if (depth === 0) nodes.sort((a, b) => a.label.localeCompare(b.label))
     else nodes.sort((a, b) => (b.sums[seriesFields[0]] ?? 0) - (a.sums[seriesFields[0]] ?? 0))
     return nodes
@@ -512,7 +512,7 @@ function TreeWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, tc]
   )
-  // top-level collapsed by default (EFP), deeper levels expanded
+  // top-level collapsed by default, deeper levels expanded
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [seeded, setSeeded] = useState(false)
   useEffect(() => {
@@ -3225,7 +3225,7 @@ export function ReportView({
     [outerDrill, drill.push]
   )
   // Applied state drives the widget queries; draft state is what the bar edits
-  // until Apply is pressed (EFP GlobalFilterBar model).
+  // until Apply is pressed (draft-vs-applied filter-bar model).
   const [localRange, setLocalRange] = useState<ReportDateRange | null | undefined>(undefined)
   const [entityFilters, setEntityFilters] = useState<ReportEntityFilter[]>(initialEntityFilters)
   const [draftRange, setDraftRange] = useState<ReportDateRange | null | undefined>(undefined)
@@ -3340,7 +3340,7 @@ export function ReportView({
     onSuccess: invalidateNotes
   })
   // Cross-filter: a clicked segment's value applied report-wide as an entity
-  // filter — widgets without the column are simply unaffected (EFP semantics).
+  // filter — widgets without the column are simply unaffected.
   const applyCrossFilter = useCallback((field: string, value: unknown, label: string) => {
     const entry: ReportEntityFilter = {
       field,

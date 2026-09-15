@@ -51,8 +51,8 @@ const schema = z.object({
 
   // Deploy preflight — comma-separated extension ids this deployment REQUIRES.
   // An instance that boots without one of them looks healthy while silently
-  // doing none of that extension's work (EFP's volume-mounted efp-ops is the
-  // case this exists for). Empty = no expectation, which is the default.
+  // doing none of that extension's work (a volume-mounted deployment extension
+  // is the case this exists for). Empty = no expectation, which is the default.
   REQUIRED_EXTENSIONS: z.string().optional(),
 
   REDIS_URL: z.string().default('redis://localhost:6379'),

@@ -294,7 +294,7 @@ export function FieldRenderer({
     // cascade filter — curation of the picker's option set, not security.
     // String values may be '$parent.<field>' tokens resolved from the parent
     // record draft ('$parent.id' = the record id). A top-level _and entry whose
-    // tokens are unresolved is PRUNED (EFP semantics: clauses apply only when
+    // tokens are unresolved is PRUNED (clauses apply only when
     // their driving value is set); any other unresolved shape drops the filter.
     const staticFilter = resolveOptionFilterTokens(
       m2oOpts?.option_filter && typeof m2oOpts.option_filter === 'object'
@@ -893,6 +893,11 @@ export function FieldRenderer({
               (opts.sum_cap && typeof opts.sum_cap === 'object' ? opts.sum_cap : null) as
                 | import('./InlineTableField').GridSumCapConfig
                 | null
+            }
+            spreadRemaining={
+              (opts.spread_remaining && typeof opts.spread_remaining === 'object'
+                ? opts.spread_remaining
+                : null) as import('./InlineTableField').GridSpreadConfig | null
             }
             submissionErrors={submissionErrors}
             prefillParentId={prefillParentId}

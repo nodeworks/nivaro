@@ -54,7 +54,7 @@ export default function ConfigSearch() {
           autoFocus
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder='e.g. update_workflow.php, requisition_amount, waiting_on_peer_review…'
+          placeholder='e.g. update_order.php, total_amount, waiting_on_review…'
           className='mt-3 h-9 w-full max-w-[640px] rounded-md border border-slate-200 bg-background px-3 font-mono text-[13px] dark:border-border'
         />
       </header>

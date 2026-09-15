@@ -10,8 +10,7 @@ import { resolvePipelineSubject } from './pipeline-subject.js'
 // Ops: eq, neq, gt, gte, lt, lte, contains, null, nnull,
 //      in            — comma-separated value list, matched loosely (numericish)
 //      within_days   — date field is <= N calendar days from today (past dates
-//                      count as within, mirroring EFP's differenceInCalendarDays
-//                      <= N semantics)
+//                      count as within — calendar-day difference <= N)
 //      beyond_days   — date field is > N calendar days from today
 //      related_some / related_none
 //                    — field '<childCollection>:<fkField>', value = optional
@@ -25,7 +24,7 @@ import { resolvePipelineSubject } from './pipeline-subject.js'
 //                      are. Zero children passes both (vacuous).
 //
 // Fields may be DOTTED M2O paths (up to 3 segments, e.g. 'unit.schedule_date',
-// 'project.project_type'): fetchRecordForConditions resolves each hop via
+// 'project.category'): fetchRecordForConditions resolves each hop via
 // nivaro_relations and merges the resolved value under the dotted key.
 
 export interface ConditionRule {
@@ -55,7 +54,7 @@ function calendarDaysFromToday(raw: unknown): number | null {
  * Keyed by field AND filter, because two transitions on the same template
  * routinely count the same child collection with DIFFERENT filters — "has any
  * lines" and "has any line still missing a REQ ID" are both
- * workflow_line_items:workflow. Keyed by field alone, the second resolution
+ * `<child>:<fk>`. Keyed by field alone, the second resolution
  * overwrote the first and every rule then read the wrong count: the unfiltered
  * "has any lines" check silently became "has lines without a REQ ID", so the
  * transition vanished the moment those ids were filled in.
@@ -180,7 +179,7 @@ export function evalConditionRule(rule: ConditionRule, record: Record<string, un
 //                                          unresolved token fails the whole
 //                                          filter CLOSED (count 0), never open
 //   ops: _eq _neq _gt _gte _lt _lte _null _nnull _in
-//        _round_eq — ROUND(col, 0) = ROUND(v, 0)  (legacy EFP PO-match semantics)
+//        _round_eq — ROUND(col, 0) = ROUND(v, 0)  (whole-unit amount matching)
 // Identifier-checked; nivaro_* child collections rejected.
 const RELATED_FIELD_RE = /^([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)$/
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/

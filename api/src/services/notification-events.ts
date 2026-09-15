@@ -59,18 +59,18 @@ export const NOTIFICATION_EVENTS: NotificationEventDef[] = [
       'Sent to workflow-state subscribers and record watchers when a record moves between states.',
     category: 'workflow',
     tokens: [
-      { name: 'record', description: 'The record’s friendly id (CR26-80332)' },
-      { name: 'collection', description: 'Collection name (workflows)' },
+      { name: 'record', description: 'The record’s friendly id (REQ-1234)' },
+      { name: 'collection', description: 'Collection name (orders)' },
       { name: 'state', description: 'The state it moved INTO' },
       { name: 'transition', description: 'The transition label (Approve, Send back)' },
       { name: 'actor', description: 'Who moved it (empty for automatic moves)' },
-      { name: 'label', description: 'The subscription’s label ("Watching CR26-80332")' }
+      { name: 'label', description: 'The subscription’s label ("Watching REQ-1234")' }
     ],
     default_template:
       '{{ label }} {{ record }}: {{ transition }} → {{ state }}{% if actor != "" %} by {{ actor }}{% endif %}\n{% if actor != "" %}{{ actor }} moved {{ record }} to "{{ state }}" ({{ transition }}){% else %}{{ record }} moved to "{{ state }}" ({{ transition }}){% endif %}',
     fallback: {
-      record: 'CR26-80332',
-      collection: 'workflows',
+      record: 'REQ-1234',
+      collection: 'orders',
       state: 'Waiting on Level 2 Approval',
       transition: 'Approve',
       actor: 'Robert Lee',
@@ -122,8 +122,8 @@ export const NOTIFICATION_EVENTS: NotificationEventDef[] = [
       collection: 'workflows',
       actor: 'Robert Lee',
       event: ev,
-      label: 'Watching CR26-80329',
-      changes: ev === 'update' ? 'requisition_amount: 39900 → 41200' : ''
+      label: 'Watching REQ-1234',
+      changes: ev === 'update' ? 'total_amount: 39900 → 41200' : ''
     },
     sample: async () => {
       const a = (await db('nivaro_activity')

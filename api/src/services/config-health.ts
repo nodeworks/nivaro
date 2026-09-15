@@ -172,7 +172,7 @@ async function hygieneFindings(): Promise<Finding[]> {
     // fine
   }
 
-  // Suspended/redacted people still holding OWNER seats (Rob 2026-08-26):
+  // Suspended/redacted people still holding OWNER seats (2026-08-26):
   // owner-group memberships and open-instance owner rows for users who can
   // no longer act. Warn-level — these silently shrink real coverage. The fix
   // is one click on the pipeline's Owner-cleanup bar.

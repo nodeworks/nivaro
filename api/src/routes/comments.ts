@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
@@ -357,7 +358,7 @@ export async function commentsRoutes(app: FastifyInstance) {
       const CAP = 200
       type Entry = {
         id: string
-        source: 'transition' | 'change_reason' | 'addendum' | 'note'
+        source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external'
         label: string
         text: string
         user: string | null
@@ -663,6 +664,22 @@ export async function commentsRoutes(app: FastifyInstance) {
         // Same posture: a broken child table never takes the thread down.
       }
 
+      // Extension-provided history (an integration's shipment/sync events).
+      // These are MACHINE events by design, so they bypass the human-note filter
+      // that drops importer stamps and transition breadcrumbs.
+      const externalEntries: Entry[] = (
+        await relatedNoteRegistry.load(collection, String(item)).catch(() => [])
+      ).map((e) => ({
+        id: `external:${e.id}`,
+        source: 'external' as const,
+        label: e.label,
+        text: e.text,
+        user: e.user ?? null,
+        created_at: e.created_at,
+        context: e.context ?? null,
+        link: e.link
+      }))
+
       const entries: Entry[] = [
         ...lineComments.map((r) => ({
           id: `linecomment:${r.id}`,
@@ -745,6 +762,7 @@ export async function commentsRoutes(app: FastifyInstance) {
           context: (n.context as string) ?? null
         }))
       ].filter((e) => isHumanNote(e.text))
+      entries.push(...externalEntries)
 
       // Saving a child with a reason can also stamp the parent with the same
       // text (an edit that changed nothing on the parent row still records the

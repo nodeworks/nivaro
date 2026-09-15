@@ -57,7 +57,7 @@ export interface ReviewListConfig {
     /** POST this endpoint with {ids, status, note, workflow_id} instead of
      *  per-row PATCHes — lets a deployment route decisions through an
      *  endpoint that owns stamping, authorization, notes and notifications
-     *  (EFP: /efp/invoice-approvals/decide). */
+     *  (e.g. an extension's /decide route). */
     action_endpoint?: string | null
   }
 }

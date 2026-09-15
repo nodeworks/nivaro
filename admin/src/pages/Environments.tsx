@@ -884,7 +884,7 @@ function ComponentForm({
           <Input
             value={draft.name}
             onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-            placeholder={isApi ? 'API' : 'EFP Frontend'}
+            placeholder={isApi ? 'API' : 'Frontend'}
             className='h-8 text-[12.5px]'
           />
         </Field>

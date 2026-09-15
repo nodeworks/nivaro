@@ -12905,6 +12905,7 @@ function FieldSettingsPopover({
   const [rowLintsLocal, setRowLintsLocal] = useState<string>('')
   const [gridStatsLocal, setGridStatsLocal] = useState<string>('')
   const [sumCapLocal, setSumCapLocal] = useState<string>('')
+  const [spreadLocal, setSpreadLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -13329,6 +13330,7 @@ function FieldSettingsPopover({
         setRowLintsLocal(opts.row_lints ? JSON.stringify(opts.row_lints, null, 2) : '')
         setGridStatsLocal(opts.stats ? JSON.stringify(opts.stats, null, 2) : '')
         setSumCapLocal(opts.sum_cap ? JSON.stringify(opts.sum_cap, null, 2) : '')
+        setSpreadLocal(opts.spread_remaining ? JSON.stringify(opts.spread_remaining, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -13536,6 +13538,18 @@ function FieldSettingsPopover({
                             : { sum_cap: undefined }) as Record<string, unknown>
                         } catch {
                           return { sum_cap: undefined } as Record<string, unknown>
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = spreadLocal.trim() ? JSON.parse(spreadLocal) : null
+                          return (
+                            Array.isArray(parsed?.fields) && parsed?.remaining
+                              ? { spread_remaining: parsed }
+                              : { spread_remaining: undefined }
+                          ) as Record<string, unknown>
+                        } catch {
+                          return { spread_remaining: undefined } as Record<string, unknown>
                         }
                       })()
                     })
@@ -14874,6 +14888,25 @@ function FieldSettingsPopover({
                       A row cannot be saved or staged when the column summed over the grid (this row
                       included) would exceed the cap. Pair with a server sum_cap validation rule on the
                       child collection — this is the browser half only.
+                    </p>
+                  </div>
+                )}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Spread remaining (JSON)</Label>
+                    <Textarea
+                      value={spreadLocal}
+                      onChange={(e) => setSpreadLocal(e.target.value)}
+                      placeholder={
+                        '{ "fields": ["january", "february"], "remaining": "{{$parent.requisition_amount}} - {{$sum.total}}", "label": "Spread left to forecast", "format": "currency" }'
+                      }
+                      rows={3}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      A row-editor button that puts the remaining amount evenly onto the row's empty
+                      target fields (only_empty false = overwrite all). Same tokens as the figure
+                      strip.
                     </p>
                   </div>
                 )}
@@ -20724,6 +20757,7 @@ function FieldGroupsTab({
     'row_lints',
     'stats',
     'sum_cap',
+    'spread_remaining',
     'picker_facets',
     'option_sort',
     'option_filter',

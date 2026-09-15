@@ -291,7 +291,7 @@ export async function commandCenterRoutes(app: FastifyInstance) {
             }
           }
           // Group PEOPLE by region so the pane mirrors the map bubbles —
-          // "hard to distinguish who is where" (Rob). Users with no region
+          // "hard to distinguish who is where". Users with no region
           // placement land in an honest "No region set" bucket.
           const regionLabels = new Map<number, string>()
           const allRegionIds = [...new Set([...regionByUser.values()].flat())]

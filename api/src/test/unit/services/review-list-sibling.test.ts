@@ -6,7 +6,7 @@ const base = {
   collection: 'invoices',
   group_by: 'invoice_id',
   status: {
-    field: 'efp_review_status',
+    field: 'review_status',
     options: [{ value: 'approved', label: 'Approve', color: 'green' }]
   }
 }
@@ -50,7 +50,7 @@ describe('review_list sibling mode', () => {
           ...base,
           path: [],
           sibling_field: 'invoice_id',
-          enrich_endpoint: '/efp/invoice-approvals/enrich'
+          enrich_endpoint: '/my-ext/invoice-approvals/enrich'
         },
         []
       )

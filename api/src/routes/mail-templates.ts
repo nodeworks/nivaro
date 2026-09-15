@@ -29,7 +29,7 @@ const SAMPLE_DATA: Record<string, unknown> = {
   user_name: 'Alex Sample',
   sender_name: 'Nivaro',
   collection: 'workflows',
-  item: 'CR26-76773',
+  item: 'REQ-1234',
   action_url: 'https://example.com/collections/workflows/1',
   action_label: 'View item',
   entries: [

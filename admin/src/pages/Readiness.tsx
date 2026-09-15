@@ -7,8 +7,8 @@ import { cn } from '@/lib/utils'
 
 /**
  * Go-live readiness scorecard. The checks come from the deployment's
- * extension (EFP: legacy writes, takeover flags, sequence margins, UAT
- * hosts…); this page just runs and renders them, grouped, with the blockers
+ * extension (e.g. legacy-system writes, cron takeover flags, id-sequence
+ * margins, non-production hosts…); this page just runs and renders them, grouped, with the blockers
  * spelled out. Refresh re-runs everything live.
  */
 

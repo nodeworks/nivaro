@@ -774,7 +774,7 @@ function UserCardPopover({
   onAction?: () => void
 }) {
   const managerName = user?.manager_name?.trim() || null
-  // Local-time chip (#175): "6:12 PM for Beth" — only when their timezone pref
+  // Local-time chip (#175): "6:12 PM for Jane" — only when their timezone pref
   // is set AND differs from the viewer's, so same-office teams see no noise.
   const localTime = (() => {
     const tz = user?.timezone
@@ -1278,7 +1278,7 @@ export function StripFieldValue({
   // drilldown override still supplies the layout/width.
   const drillCfg = fieldDrilldownConfig(field) ?? { enabled: true, layout_id: null, width: null }
 
-  // M2M alias (e.g. workflows.purchase_orders): the value is a list of RELATED
+  // M2M alias (e.g. orders.tags): the value is a list of RELATED
   // record ids resolved from the junction — never a column on the record, so it
   // has to be matched on the alias relation, not many_field. Without this the
   // header renders '—' for every M2M field even when links exist.

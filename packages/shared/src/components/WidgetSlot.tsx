@@ -1132,8 +1132,8 @@ export function WidgetSlot({
     const raw = String(drillValue)
     let itemId: string | null = null
     // The same widget can be bound to a PK on one layout and to a HUMAN id on
-    // another (workflows binds project → FK; the projects layout binds the
-    // project_id string), so resolve tolerantly instead of trusting one shape:
+    // another (a child layout binds the parent FK; the parent's own layout
+    // binds its human id string), so resolve tolerantly instead of trusting one shape:
     // try the configured lookup column, then fall back to treating the value
     // as a primary key. Silent on failure — an unresolvable id means no sheet,
     // never a broken-looking error in a header cell.

@@ -468,7 +468,7 @@ function ContractsCard() {
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder='Contract name (e.g. MWF workflow feed)'
+            placeholder='Contract name (e.g. Partner order feed)'
             className='h-8 rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
           />
           <input

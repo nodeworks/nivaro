@@ -47,7 +47,7 @@ import type {
 import { fmtDateTime, fmtMetric, OPERATOR_LABELS } from './types'
 
 /**
- * AlertManagerView — the full EFP /alerts surface as a headless shared
+ * AlertManagerView — the full alert-manager surface as a headless shared
  * component over the nivaro metric-alert engine:
  *
  *   Catalog · Rules · My Subscriptions · Alert History ·
@@ -568,7 +568,7 @@ export function AlertManagerView({
         await raw('PATCH', `/metric-alerts/rules/${editRule.id}`, values)
         note('Alert rule updated')
       } else {
-        // EFP parity: merge the user's restricted visibility into the rule's
+        // Merge the user's restricted visibility into the rule's
         // scope for any supported filter left blank, so the backend evaluates
         // metrics only within what the user can see.
         const def = definitions.find((d) => d.id === values.definition_id)

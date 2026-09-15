@@ -7,8 +7,8 @@ import fp from 'fastify-plugin'
  *
  * - Window: 60s, keyed per user (authenticated) or bearer-token hash or IP.
  * - OFF unless RATE_LIMIT_PER_MINUTE is set (> 0). Nivaro ships with no rate
- *   limit (Rob, 2026-09-14 — the old 1000/min default 429'd real record pages:
- *   a workflow form is 100+ requests, two reloads hit it). Named API keys keep
+ *   limit (2026-09-14 — the old 1000/min default 429'd real record pages:
+ *   a large record form is 100+ requests, two reloads hit it). Named API keys keep
  *   their own per-key `rate_limit`, enforced in authenticate.
  * - Headers: X-RateLimit-Limit / X-RateLimit-Remaining / X-RateLimit-Reset
  *   on every /api response; 429 + Retry-After when exceeded.

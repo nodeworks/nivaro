@@ -138,7 +138,7 @@ export function RecordIntegrityBanner({
   // Two reads race on mount: the STORED findings (the latest collection
   // sweep — instant, but as old as that sweep) paint first, then the LIVE
   // check (POST …/check, the same evaluator over this one record, sub-second)
-  // replaces them. Rob 2026-09-14: the sweep view lagged days behind the
+  // replaces them. Reported 2026-09-14: the sweep view lagged days behind the
   // record — lines fixed since still read as broken. See useRecordIntegrity.
   const { data, checking } = useRecordIntegrity(collection, itemId)
 

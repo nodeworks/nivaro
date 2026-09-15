@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 
 /**
- * Realtime sprint client contract. A HOST (admin, efp-new) owns the actual
+ * Realtime sprint client contract. A HOST (admin, a portal app) owns the actual
  * Socket.io connection and provides this to shared components; components
  * that render without it degrade to polling exactly as before — the context
  * is always optional.

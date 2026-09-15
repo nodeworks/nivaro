@@ -4,8 +4,8 @@ import { defaultItemUrl, useNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 
 /**
- * Renders plain text with entity-registry-shaped record ids (CR26-76773,
- * HQ26INV-1234…) as live record chips — the token linked to the record plus
+ * Renders plain text with entity-registry-shaped record ids (e.g. AB26-12345,
+ * XY26INV-1234…) as live record chips — the token linked to the record plus
  * its current pipeline state as a colored pill, exactly like chat entity
  * tokens, resolved through the same nivaro_chat_room_types registry. A token
  * that resolves to nothing (unregistered prefix, no record) renders as plain

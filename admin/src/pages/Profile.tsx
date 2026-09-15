@@ -645,8 +645,8 @@ export function ProfilePage() {
             {/* Browser push (own save, outside the profile form) */}
             <NivaroProvider client={sharedClient}>
               {/* Shared self-serve cards — timezone + display prefs lived only
-                  in the headless ProfileView; admin users never saw them
-                  (Rob, 2026-08-24). Same provider the sources card uses. */}
+                  in the headless ProfileView; admin users never saw them.
+                  Same provider the sources card uses. */}
               <TimezoneCard />
               <DisplayPrefsCard />
               <LinkAppCard />

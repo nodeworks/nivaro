@@ -53,7 +53,7 @@ export type CascadeRule = {
   /** Derive the filter value(s) from the parent's value instead of using it
    *  directly: {parentValue: filterValue | filterValue[]}. Missing keys fall
    *  back to value_map_default, then the raw parent value. Arrays become _in.
-   *  (EFP parent-unit hierarchy: DAAS→PPOD ids, PPOD→CPOD id, …) */
+   *  (e.g. a parent-type hierarchy: tier A → tier B ids, tier B → tier C id, …) */
   value_map?: Record<string, unknown>
   value_map_default?: unknown
   clear_on_parent_change?: boolean
@@ -166,9 +166,9 @@ export function buildCascadeFilter(input: CascadeFilterInput): CascadeFilterResu
 // Default walk order for a layout's quick picker, derived from the cascade
 // graph: parents before children, required parents (show_all_if_no_parent
 // false) strictly before the fields that need them, ties broken toward the
-// field with fewer rules. Cycles (every EFP rule is also an upstream link)
-// resolve the same way — the graph is a preference, not a DAG. Workflows:
-// funding_years → divisions → regions → project_type → project → project_sub_types.
+// field with fewer rules. Cycles (a rule that is also an upstream link)
+// resolve the same way — the graph is a preference, not a DAG. Example:
+// year → zone → region → type → parent → sub_type.
 
 export function seedQuickPickerSteps(
   fieldConfig: Array<{
@@ -204,14 +204,14 @@ export function seedQuickPickerSteps(
     for (const r of rules) if (isRelation(r.parent_field)) members.add(r.parent_field)
   // A step earns its place by NARROWING a later one: drop members nothing
   // cascades from (billing / shipping location, default sub type), then
-  // members whose only children were those leaves (CAR project type). If that
+  // members whose only children were those leaves (a variant type field). If that
   // empties the set, the graph has no spine — keep everyone.
   const childrenOf = (f: string, pool: Set<string>) =>
     [...pool].filter((c) => c !== f && (rulesOf.get(c) ?? []).some((r) => r.parent_field === f))
   // …except a REQUIRED leaf whose options genuinely depend on its parents
   // (a strict rule, not show_all_if_no_parent): that is the chain's
-  // destination — inventory_request.project narrows to nothing further but
-  // is the whole point of the walk.
+  // destination — a required leaf may narrow nothing further but
+  // be the whole point of the walk.
   const requiredOf = new Set(fieldConfig.filter((f) => f.required).map((f) => f.field))
   const isDestination = (f: string) =>
     requiredOf.has(f) && (rulesOf.get(f) ?? []).some((r) => r.show_all_if_no_parent !== true)

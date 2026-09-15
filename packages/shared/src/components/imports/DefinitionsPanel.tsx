@@ -447,7 +447,7 @@ export function DefinitionsPanel({
                   value={draft.key}
                   disabled={selectedId !== NEW}
                   onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
-                  placeholder='purchase_orders'
+                  placeholder='orders'
                   className='h-8 font-mono text-[12px]'
                 />
                 {keyProblem && <Problem>{keyProblem}</Problem>}

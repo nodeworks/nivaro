@@ -41,7 +41,7 @@ export function useItemLock(
   const [myPosition, setMyPosition] = useState<number | null>(null)
   const [joining, setJoining] = useState(false)
   const [myNote, setMyNote] = useState('')
-  // Manual release (Rob, 2026-09-14): the holder can free the record from the
+  // Manual release (2026-09-14): the holder can free the record from the
   // header pill at any time, waiting room or not. `released` keeps the pill
   // visible as an unlocked glyph so they can lock it again; the form's next
   // real edit re-acquires via `relock`.

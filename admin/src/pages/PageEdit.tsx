@@ -511,7 +511,7 @@ function WidgetConfigPanel({
               <Input
                 value={String(cfg.query_slug ?? '')}
                 onChange={(e) => set('query_slug', e.target.value)}
-                placeholder='project-type-allocations'
+                placeholder='sales-by-region'
                 className='h-8 font-mono text-[12px]'
               />
             </div>

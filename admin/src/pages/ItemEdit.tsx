@@ -608,7 +608,7 @@ export function ItemEditPage() {
   // ── Pre-fill parent from URL params (new items via tree "Add child") ──────
   const parentFieldParam = searchParams.get('parentField')
   const parentIdParam = searchParams.get('parentId')
-  // ?prefill=<base64 JSON> — deep links (efp-new precedent)
+  // ?prefill=<base64 JSON> — deep links (same contract headless frontends use)
   const prefillValues = useMemo<Record<string, unknown> | null>(() => {
     const raw = searchParams.get('prefill')
     if (!raw) return null

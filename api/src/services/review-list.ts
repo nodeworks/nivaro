@@ -5,7 +5,7 @@ import { resolveDisplayValue } from './display-value.js'
 
 // ─── Review list widget (generic grouped-review form slot) ─────────────────
 //
-// Generalizes the legacy EFP "Invoice Approvals" slot: rows of a target
+// Generalizes a legacy "invoice approvals" slot: rows of a target
 // collection reached from a host record via a relation path, grouped with a
 // sum aggregate, with per-group status actions. This module owns the config
 // validation (widget create/PATCH) and the reverse path walk + row
@@ -282,7 +282,7 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
   }
   if (c.enrich_endpoint !== undefined && c.enrich_endpoint !== null) {
     if (typeof c.enrich_endpoint !== 'string' || !/^\/[A-Za-z0-9_\-./]+$/.test(c.enrich_endpoint))
-      return 'enrich_endpoint must be an API path like /efp/invoice-approvals/enrich'
+      return 'enrich_endpoint must be an API path like /my-ext/approvals/enrich'
   }
   const path: Array<{ kind: 'm2o' | 'm2m'; field: string }> = []
   const rawPath: unknown[] = Array.isArray(c.path) ? (c.path as unknown[]) : []

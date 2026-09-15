@@ -224,7 +224,7 @@ export const mailHarnessDocs: DocSection = {
           'a recent inbox row of that category'
         ],
         [
-          'Extension types (e.g. EFP invoices on hold)',
+          "Extension types (e.g. an extension's invoices-on-hold digest)",
           'invoice_on_hold',
           'registered by the extension through ctx.mail.registerType'
         ]

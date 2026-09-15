@@ -3,14 +3,14 @@
  *
  * The profile's "Notifications & alerts" card aggregates every way the
  * platform can notify a user (/users/me/notification-sources). Extensions
- * that keep their own alert subscriptions (e.g. EFP's warehouse stock
+ * that keep their own alert subscriptions (e.g. a deployment's stock-level
  * watches) register a provider here so those subscriptions appear alongside
  * the native ones instead of being invisible to the user.
  */
 
 export interface ExternalNotificationSourceItem {
   id: string | number
-  /** What the user is watching, e.g. "CIFA 26824 · PAE77". */
+  /** What the user is watching, e.g. "Part 26824 · Main warehouse". */
   label: string
   /** Secondary line, e.g. "alert when on-hand < 50". */
   detail?: string | null

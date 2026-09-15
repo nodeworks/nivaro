@@ -34,8 +34,8 @@ const SAMPLES: Array<{
 }> = [
   {
     category: 'workflow',
-    subject: 'Sample: Approve — workflow CM26-00001 is now Waiting on Level 2 Approval',
-    message: 'Robert Lee moved CM26-00001 to "Waiting on Level 2 Approval" (Approve).',
+    subject: 'Sample: Approve — request REQ-00001 is now Waiting on Level 2 Approval',
+    message: 'Jane Doe moved REQ-00001 to "Waiting on Level 2 Approval" (Approve).',
     target: { kind: 'my_work', action: 'open' }
   },
   {
@@ -47,19 +47,19 @@ const SAMPLES: Array<{
   {
     category: 'sla',
     subject: 'Sample: SLA escalation (tier 1): Level 2 approval within 2 days',
-    message: 'CM26-00001 has been in "Waiting on Level 2 Approval" 2h past its SLA.',
+    message: 'REQ-00001 has been in "Waiting on Level 2 Approval" 2h past its SLA.',
     target: { kind: 'my_work', action: 'open' }
   },
   {
     category: 'mentions',
-    subject: 'Sample: Robert Lee mentioned you in chat',
-    message: '@you can you look at the allocation on CM26-00001?',
+    subject: 'Sample: Jane Doe mentioned you in chat',
+    message: '@you can you look at the allocation on REQ-00001?',
     target: { kind: 'chat', room: 'global', action: 'reply' }
   },
   {
     category: 'watch',
-    subject: 'Sample: Watching CM26-00001: updated by Robert Lee',
-    message: 'Requisition Amount $39,900.00 → $41,200.00',
+    subject: 'Sample: Watching REQ-00001: updated by Jane Doe',
+    message: 'Total Amount $39,900.00 → $41,200.00',
     target: { kind: 'my_work', action: 'open' }
   },
   {
@@ -70,7 +70,7 @@ const SAMPLES: Array<{
   },
   {
     category: 'anomaly',
-    subject: 'Sample: Anomaly Detected: amount outlier on CM26-00001',
+    subject: 'Sample: Anomaly Detected: amount outlier on REQ-00001',
     message: 'A line amount is 4.2σ above the vendor mean.',
     target: { kind: 'alerts', action: 'open' }
   },

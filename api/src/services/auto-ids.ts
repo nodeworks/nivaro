@@ -117,7 +117,7 @@ export function parseAutoIdPattern(pattern: string): ParsedAutoIdPattern {
   if (seqIdxs.length > 1) throw new Error('Pattern may contain at most one {seq} token')
   // Seq-less patterns are legal: the field is a rendered TEMPLATE (generated on
   // create, prefix-recomputed on relation change) with no sequence suffix —
-  // e.g. a human-readable request name '{region.short_name}{funding_year % 100}…'.
+  // e.g. a human-readable request name '{region.short_name}{year % 100}…'.
   if (seqIdxs.length === 0) return { tokens, literals, separator: '' }
   const seqIdx = seqIdxs[0]
   if (seqIdx !== tokens.length - 1) throw new Error('{seq} must be the final token')
@@ -200,9 +200,9 @@ async function resolveRelationToken(
       // generic hop loop, which went looking for an M2O column named after
       // the alias on the PARENT collection; no such column exists, so every
       // multi-segment M2M token ({regions[0].short_code}) rendered empty on
-      // recompute — which is how editing a workflow's description silently
+      // recompute — which is how editing a record's description silently
       // stripped the region prefix off its name. Single-segment tokens
-      // ({funding_years[0] % 100}) never hit the loop and always worked,
+      // ({years[0] % 100}) never hit the loop and always worked,
       // which kept the bug half-invisible.
       const rels = await ctx.lookups.relationsFor(ctx.collection)
       const alias = rels.find(

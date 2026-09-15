@@ -29,7 +29,7 @@ import {
   resolveTransitionTarget,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
-import { builtinAllowed } from '../services/bulk-actions.js'
+import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { ItemsQuery, User } from '../types.js'
 
@@ -240,15 +240,29 @@ export async function itemsRoutes(app: FastifyInstance) {
     if (!data || typeof data !== 'object')
       return reply.code(400).send({ error: 'data object required' })
     let updated = 0
+    let skipped = 0
+    const fields = Object.keys(data).filter((k) => !k.startsWith('_'))
     for (const id of ids) {
       try {
+        // A record already holding every value gets no write and no change
+        // reason on its history — the note belongs to the ones that moved.
+        if (fields.length > 0) {
+          const current = (await readOne(req.user!, collection, id).catch(() => null)) as Record<
+            string,
+            unknown
+          > | null
+          if (current && fields.every((k) => valueUnchanged(current[k], data[k]))) {
+            skipped++
+            continue
+          }
+        }
         await updateOne(req.user!, collection, id, data, req, req.workspaceId ?? undefined)
         updated++
       } catch {
         // skip permission/not-found errors per item
       }
     }
-    return reply.send({ updated })
+    return reply.send({ updated, skipped })
   })
 
   app.post('/:collection/bulk-transition', async (req, reply) => {

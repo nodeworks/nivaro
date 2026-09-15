@@ -9,7 +9,7 @@ import { applyScopeEnforcement, getUserScopeEnforcement } from './user-scopes.js
 /**
  * Report Studio — generic widget engine.
  *
- * Where EFP backed every widget with a hand-written stored procedure, Nivaro
+ * Where a legacy reporting stack backed every widget with a hand-written stored procedure, Nivaro
  * resolves user-defined widget configs against any registered collection:
  * one aggregate (count/sum/avg/min/max), an optional dimension (a column or
  * a date bucket), filters, and a report-level date range applied to the
@@ -678,7 +678,7 @@ export async function resolveWidgetData(
   }
 
   // Report-level entity filters apply wherever the widget's collection has
-  // the column; widgets without it are simply unaffected (EFP semantics).
+  // the column; widgets without it are simply unaffected.
   const entityAsFilters: WidgetFilter[] = entityFilters
     .filter((f) => valid.has(f.field) && f.values.length > 0)
     .map((f) => ({ field: f.field, op: 'in', value: f.values.join(',') }))

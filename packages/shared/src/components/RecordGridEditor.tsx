@@ -15,8 +15,8 @@ import { JsonMapEditor, type JsonMapEditorConfig } from './JsonMapEditor'
 import { colorPair } from './QueryTable'
 
 // Generic editable flat grid over /items — config-driven upsert editor for
-// month-columnar collections (EFP Manage Production Numbers / Manage Project
-// Type Forecast). Scope pickers gate loading and seed created rows; rows come
+// month-columnar collections (e.g. production numbers or per-type forecasts
+// by month). Scope pickers gate loading and seed created rows; rows come
 // either from the collection itself (free-form add/delete) or one per record
 // of a `row_source` collection (production numbers per region). All writes go
 // through /items (RBAC, hooks, activity apply). Optional `after_save` runs a
@@ -95,7 +95,7 @@ export interface RecordGridEditorConfig {
   computed_total_field?: string
   /** Custom query run after a successful save — params support '$scope.<f>'. */
   after_save?: { query_slug: string; params?: Record<string, unknown> }
-  /** Nested map editors opened from toolbar buttons (EFP Manage Cost Tables) —
+  /** Nested map editors opened from toolbar buttons (e.g. cost tables) —
    *  receive the current scope; enabled once `require_scope` fields are set. */
   toolbar_editors?: Array<{
     button_label: string

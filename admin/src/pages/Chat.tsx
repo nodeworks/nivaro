@@ -155,7 +155,7 @@ function CollectionCombobox({ value, onChange }: { value: string; onChange: (v: 
 
 /**
  * Entity-room registry (admin only). A row here is what turns a room key like
- * `wf:CR26-76773` into "the chat room of that record" — visibility derives
+ * `ord:ORD-10042` into "the chat room of that record" — visibility derives
  * from whether the viewer can read the record, so an unregistered prefix
  * fails closed.
  */

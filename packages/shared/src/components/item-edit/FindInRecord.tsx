@@ -15,8 +15,8 @@ import { applyDisplayTemplate } from './helpers'
  * Values are FRIENDLY: the host passes relation descriptors instead of raw
  * FKs, and this component resolves display-template labels lazily (only once
  * the popover opens) — one batched /items query per target collection for
- * M2O/M2M ids, one per O2M field. Searching "example" finds the vendor field
- * even though the draft only holds vendor id 802.
+ * M2O/M2M ids, one per O2M field. Searching "Acme" finds the vendor field
+ * even though the draft only holds the vendor's id.
  */
 export interface FindableRelation {
   kind: 'm2o' | 'm2m' | 'o2m'

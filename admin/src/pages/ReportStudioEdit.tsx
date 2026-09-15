@@ -65,7 +65,7 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Report Studio builder — 12-col drag/resize grid (react-grid-layout) of
- * user-defined widgets over any collection, with an EFP-grade global filter
+ * user-defined widgets over any collection, with a global filter
  * bar (entity filters + date range + ask-AI), per-widget freshness/refresh,
  * prior-period comparison, multi-KPI cards, and Build-with-AI composition.
  * No Save button: edits debounce-persist automatically.
@@ -75,8 +75,8 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
 type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'queue' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative' | 'pareto' | 'stats' | 'scatter' | 'hot_records' | 'metric' | 'pivot' | 'ai_insight'
 
 // ─── Prebuilt widget catalog ──────────────────────────────────────────────────
-// Data-driven presets (nivaro_report_widget_presets — EFP seeds its staging
-// report library). Users pick a ready-made widget instead of building the
+// Data-driven presets (nivaro_report_widget_presets — a deployment seeds its
+// own report library). Users pick a ready-made widget instead of building the
 // metric by hand; Blank chips below keep the build-your-own path.
 
 interface WidgetPreset {
@@ -2045,7 +2045,7 @@ function KpiGroupEditor({
       ))}
       {metrics.length === 0 && (
         <p className='text-[11.5px] text-slate-400'>
-          Each tile is its own collection + aggregate — like EFP's KPI Summary.
+          Each tile is its own collection + aggregate — a KPI summary strip.
         </p>
       )}
     </div>
@@ -3929,7 +3929,7 @@ export function ReportStudioEditPage() {
           </div>
         </div>
 
-        {/* Global filter bar — EFP-style */}
+        {/* Global filter bar */}
         <div className='mt-2 flex flex-wrap items-center gap-1.5'>
           <select
             value={dateRange?.preset ?? ''}

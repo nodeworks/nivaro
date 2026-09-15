@@ -187,7 +187,7 @@ export const dataImportGuide: DocSection = {
     { type: 'h2', id: 'imports-definitions', text: 'Definitions' },
     {
       type: 'p',
-      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition\'s post-run handler defines the summary — the EFP purchase-order import reports linked PO number, matched and unmatched line counts).'
+      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition\'s post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).'
     },
     {
       type: 'warn',
@@ -930,11 +930,11 @@ export const dataIntegrityGuide: DocSection = {
         ],
         [
           'Lines missing rule inputs',
-          "A line's rule INPUT is empty — a workflow line with no category has no basis for its task, Oracle category or PO line type, whatever those hold today. Reported per line naming the empty field and the targets it drives; fixed by filling the input on the record, never automatically."
+          "A line's rule INPUT is empty — a line item with no category has no basis for its task, GL category or PO line type, whatever those hold today. Reported per line naming the empty field and the targets it drives; fixed by filling the input on the record, never automatically."
         ],
         [
           'Lines off their rules',
-          'An inline-grid row rule (task from the CIFA, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \\"X\\" — rules derive \\"Y\\"".'
+          'An inline-grid row rule (task from the SKU, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \\"X\\" — rules derive \\"Y\\"".'
         ]
       ]
     },
@@ -965,7 +965,7 @@ export const dataIntegrityGuide: DocSection = {
         ],
         [
           'Lines missing rule inputs',
-          "Set the missing input from what sibling lines carry (lines with the same CIFA elsewhere, this record's other lines) or choose it — either way the rules derive the rest of the line (task, Oracle category, PO line type, price) in the same write."
+          "Set the missing input from what sibling lines carry (lines with the same SKU elsewhere, this record's other lines) or choose it — either way the rules derive the rest of the line (task, GL category, PO line type, price) in the same write."
         ],
         [
           'Lines off their rules',

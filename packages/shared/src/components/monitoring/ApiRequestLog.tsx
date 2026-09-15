@@ -8,8 +8,8 @@ import { UserAvatar } from '../UserAvatar'
 
 /**
  * Per-request API log — the list behind the /api-analytics aggregates, and
- * the surface an integration's calls are read from ("why did MWF's push at
- * 10:42 400?"). Reads GET /api-analytics/requests (admin). Filters compile to
+ * the surface an integration's calls are read from ("why did the partner's push
+ * at 10:42 400?"). Reads GET /api-analytics/requests (admin). Filters compile to
  * query params so the server does the work; the table pages at 50.
  *
  * `InboundCallersView` sits above it on the Integrations page: one card per
@@ -529,7 +529,7 @@ function Segment({
 /**
  * Inbound integrations — every caller that is not a person's browser session,
  * as cards, plus the request log scoped to the picked one. This is the
- * dedicated "external API logs" view: MWF's file pushes, LinX/Nuvolo GraphQL
+ * dedicated "external API logs" view: partner file pushes, legacy GraphQL
  * writes, named API keys — who called, how often, what failed, and the exact
  * response body the caller got back.
  */

@@ -15,8 +15,8 @@ export function darkVariant(color: string): string {
 }
 
 /** Named colour roles a column / stat may use instead of a hex. `accent`,
- *  `ink` and `muted` read the HOST's theme tokens (so efp-new's amber brand
- *  and the admin's cyan both look native); the semantic roles carry their own
+ *  `ink` and `muted` read the HOST's theme tokens (so a host's own brand
+ *  colour and the admin's cyan both look native); the semantic roles carry their own
  *  light / dark pair. A hex still works and gets `darkVariant` for dark. */
 export const COLOR_ROLES: Record<string, [light: string, dark: string]> = {
   // Brand ink for TEXT: the raw brand (cyan on white ≈ 1.6:1) is a fill
@@ -26,7 +26,7 @@ export const COLOR_ROLES: Record<string, [light: string, dark: string]> = {
   muted: ['hsl(var(--muted-foreground))', 'hsl(var(--muted-foreground))'],
   // Semantic hues ride CSS vars (--nvr-role-<name>[-dark]) so a host theme
   // can re-point them; the fallbacks are deliberately DESATURATED in dark —
-  // neon green / lavender on charcoal read as foreign (Rob, 2026-09-13).
+  // neon green / lavender on charcoal read as foreign (reported 2026-09-13).
   positive: ['var(--nvr-role-positive, #15803d)', 'var(--nvr-role-positive-dark, #9fbf8a)'],
   negative: ['var(--nvr-role-negative, #dc2626)', 'var(--nvr-role-negative-dark, #e08383)'],
   warning: ['var(--nvr-role-warning, #b45309)', 'var(--nvr-role-warning-dark, #d4936a)'],
@@ -65,7 +65,7 @@ export interface QueryTableColumn {
    *  the formula over the summed values — weighted, not averaged). */
   sum?: boolean
   /** 'progress' renders the value with a bar underneath, filled to
-   *  value / progress_max (EFP PUB'd-vs-budget style). Over 100% turns red. */
+   *  value / progress_max (spend-vs-budget style). Over 100% turns red. */
   display?: 'progress'
   /** Denominator for display 'progress': a row field name or a {{col}} formula. */
   progress_max?: string
@@ -73,7 +73,7 @@ export interface QueryTableColumn {
    *  rows — group cells spanning their children ('Jan' over Fcst/Act) — and
    *  alternating groups get a faint band so wide grids stay scannable. */
   group?: string
-  /** Cell text color (any CSS color) — EFP forecast/actual column tinting.
+  /** Cell text color (any CSS color) — e.g. forecast/actual column tinting.
    *  color_dark overrides in dark mode (defaults to color). Either may be a
    *  role name — accent | ink | muted | positive | negative | warning | info —
    *  instead of a hex; roles follow the host theme (see COLOR_ROLES). */
@@ -83,7 +83,7 @@ export interface QueryTableColumn {
    *  negative — a Remaining Budget column reads green until it goes red. */
   color_negative?: string
   /** Second field rendered as a stacked line under the main value in the SAME
-   *  cell (EFP month cells: Fcst over Act — halves the column count). Toggles
+   *  cell (e.g. month cells: Fcst over Act — halves the column count). Toggles
    *  hide individual lines; the column collapses when both lines hide. */
   stack?: string
   stack_color?: string
@@ -119,14 +119,14 @@ export interface QueryTableConfig {
   tree_strip_section_prefix?: boolean
   /** Per-row numeric format override: name of a row field holding
    *  'currency' | 'number' — lets unit-count rows sit alongside dollar rows
-   *  (EFP forecasting grid). Falls back to the column format. */
+   *  (forecasting-style grids). Falls back to the column format. */
   row_format_field?: string
   /** Pin the first column and the header row while the grid scrolls — wide
    *  month grids keep their row labels in view. */
   sticky?: boolean
   /** Render zeroes as an em dash — de-noises mostly-empty month grids. */
   zero_dash?: boolean
-  /** Column show/hide toggle pills above the table (EFP Actuals / Forecasts /
+  /** Column show/hide toggle pills above the table (e.g. Actuals / Forecasts /
    *  Calendar Year). A toggle turned OFF hides columns matched by exact
    *  `fields` or a field-name `suffix` — unless `hide_when_on` inverts it
    *  (Calendar Year ON hides the Prior/Carryover columns). */
@@ -145,7 +145,7 @@ export interface QueryTableConfig {
    *  year — highlight_group is dropped unless it equals the current year. */
   highlight_year_param?: string
   /** Tiny colored line-name legend under stacked-column headers, e.g.
-   *  ['Fcst', 'Act'] (EFP listHeaderSubLabel). */
+   *  ['Fcst', 'Act']. */
   stack_legend?: [string, string]
   /** Pivot long rows into month columns BEFORE rendering. Rows sharing the
    *  same key fields merge into one row with Jan…Dec (+ optional
@@ -162,7 +162,7 @@ export interface QueryTableConfig {
     year_param?: string
     /** Add a Total column summing every pivoted cell. */
     total?: boolean
-    /** Render a Months/Quarters toggle above the table (EFP quarterly view).
+    /** Render a Months/Quarters toggle above the table (quarterly view).
      *  Quarter columns sum their three months — same drill/total math. */
     quarter_toggle?: boolean
     /** Colour role/hex for the generated period + year columns, an optional
@@ -305,7 +305,7 @@ function fmt(v: unknown, format?: QueryTableColumn['format']): string {
   if (!Number.isFinite(n)) return String(v)
   switch (format) {
     case 'currency': {
-      // EFP's numeral '$0,0[.]00': whole dollars stay whole, cents show as a
+      // numeral-style '$0,0[.]00': whole dollars stay whole, cents show as a
       // full pair (never '$128,308.6').
       const whole = Number.isInteger(n)
       return n.toLocaleString('en-US', {
@@ -435,7 +435,7 @@ export function QueryTable({
   const showTop = (c: QueryTableColumn) => !!c.field && !hiddenFields.has(c.field)
   const showStack = (c: QueryTableColumn) => !!c.stack && !hiddenFields.has(c.stack)
 
-  // Group highlight (EFP current-month column): tint + top accent on the
+  // Group highlight (e.g. the current-month column): tint + top accent on the
   // matched group's header and cells.
   const MONTH_SHORT = [
     'Jan',
@@ -462,7 +462,7 @@ export function QueryTable({
   const hlCls = (c: QueryTableColumn) =>
     isHighlighted(c) ? 'bg-[#6366f10f] dark:bg-[#a5b4fc12]' : ''
 
-  // Per-column cell color (EFP forecast indigo / actual emerald). Runtime hex
+  // Per-column cell color (e.g. forecast indigo / actual emerald). Runtime hex
   // rides CSS vars so the dark override stays a static Tailwind class.
   const colorStyle = (c: QueryTableColumn, value?: unknown): Record<string, string> | undefined => {
     if (!c.color) return undefined
@@ -716,8 +716,7 @@ export function QueryTable({
   if (config?.tree_group_by) {
     const field = config.tree_group_by
     // Rows with an EMPTY section value render flat, in data order, above the
-    // sections (EFP forecasting: Production / Average Cost sit outside the
-    // expandable Production Forecast / Workflow Forecast groups).
+    // sections (e.g. summary rows that sit outside the expandable groups).
     const flatRows = effective.filter((row) => !String(row[field] ?? '').trim())
     const sections = new Map<string, Array<Record<string, unknown>>>()
     for (const row of effective) {

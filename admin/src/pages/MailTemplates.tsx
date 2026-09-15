@@ -336,7 +336,7 @@ export default function MailTemplates() {
                       onChange={(e) => setDataText(e.target.value)}
                       spellCheck={false}
                       rows={7}
-                      placeholder='{ "recipient_name": "Beth", "item": "CR26-76773", ... }'
+                      placeholder='{ "recipient_name": "Beth", "item": "ORD-10042", ... }'
                       className={cn(
                         'w-full resize-y rounded-md border bg-white p-2.5 font-mono text-[11.5px] leading-relaxed outline-none dark:bg-background',
                         parsedData.error

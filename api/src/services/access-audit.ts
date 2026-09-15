@@ -68,8 +68,8 @@ function chunks<T>(arr: T[], size: number): T[][] {
  * Human label map for the audited records. Resolution chain: the collection's
  * display_template (plain tokens only) → the entity-room registry's
  * match_field (nivaro_chat_room_types — the same "friendly id" source
- * resolveFriendlyId uses: workflows.workflow_id, inventory_request.
- * inventory_request_id) → a name/title-style column.
+ * resolveFriendlyId uses: each collection's business id column) → a
+ * name/title-style column.
  */
 async function buildLabelMap(collection: string, ids: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>()

@@ -8,9 +8,9 @@ import { cn } from '../lib/utils'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { colorPair } from './QueryTable'
 
-// Generic tuple-scoped value editor. Base shape (EFP ProjectTypeBudgetForm):
+// Generic tuple-scoped value editor. Base shape (budget-target form):
 // scope pickers → one row per OPTION with current value + input → upsert.
-// Extended shape (EFP ManageAllocations): OPTION rows grouped under GROUP
+// Extended shape (allocation matrix): OPTION rows grouped under GROUP
 // sections (e.g. categories × regions), synthetic Uncategorized/Inventory
 // buckets, a misallocated line for target rows matching no cell, per-cell
 // metric columns from a custom query, seeds derived from a scope record, and
@@ -32,8 +32,8 @@ export interface MatrixEditorConfig {
   value_label?: string
   value_format?: 'currency' | 'number'
   /** Scope pickers. `filter` narrows a picker's options; '$scope.<field>'
-   *  tokens resolve from the other scope values (EFP: sub types limited to the
-   *  chosen project's linked sub types) — unresolved tokens drop the filter. */
+   *  tokens resolve from the other scope values (e.g. a child picker limited to
+   *  the chosen parent's linked options) — unresolved tokens drop the filter. */
   scope_fields: Array<{
     field: string
     collection: string
@@ -41,8 +41,8 @@ export interface MatrixEditorConfig {
     filter?: Record<string, unknown>
   }>
   /** Third level: sub-group options WITHIN a group section by a template over
-   *  the option record (EFP region → core category → Labor/Materials/Equipment:
-   *  label_template '{{core_category.name}}', row_label_template
+   *  the option record (e.g. group → parent category → sub-category rows:
+   *  label_template '{{parent_category.name}}', row_label_template
    *  '{{sub_category.name}}'). Sub-headers aggregate their children and
    *  collapse independently. */
   option_section?: {
@@ -61,7 +61,7 @@ export interface MatrixEditorConfig {
    *  and use [n] (e.g. '$project.funding_years[0].funding_year'). */
   scope_seeds?: Record<string, string>
   /** Auto-fill a scope picker from another scope record when empty, e.g.
-   *  {project_sub_type: '$project.default_sub_type'} (EFP default sub type). */
+   *  {sub_type: '$parent.default_sub_type'} (a parent record's default). */
   scope_defaults?: Record<string, string>
   /** Seeds copied from the GROUP record onto rows created in that section,
    *  {targetField: groupField} — e.g. {division: 'division'} (allocation rows
@@ -363,8 +363,8 @@ export function MatrixEditor({
     staleTime: 30_000
   })
 
-  // Auto-fill empty scope pickers from loaded scope records (EFP: sub type
-  // defaults to the project's default_sub_type).
+  // Auto-fill empty scope pickers from loaded scope records (e.g. a sub type
+  // defaulting to the parent record's default_sub_type).
   useEffect(() => {
     if (!config.scope_defaults) return
     for (const [field, expr] of Object.entries(config.scope_defaults)) {
@@ -487,8 +487,8 @@ export function MatrixEditor({
     return [...m.entries()].map(([name, rows]) => ({ name, rows }))
   }, [optionRows, config.option_section])
 
-  // Groups start collapsed except those already holding target rows (EFP
-  // allocate-drawer behavior); re-init when the scope changes.
+  // Groups start collapsed except those already holding target rows
+  // (allocate-drawer behavior); re-init when the scope changes.
   const collapseInitRef = useRef<string | null>(null)
   useEffect(() => {
     if (!groupCfg || groups.length === 0 || tgtLoading) return

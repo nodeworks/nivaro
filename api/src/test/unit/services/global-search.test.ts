@@ -4,8 +4,8 @@ import { labelFor, scoreRow } from '../../../services/global-search.js'
 describe('labelFor', () => {
   it('renders the display template when there is one', () => {
     expect(
-      labelFor({ id: 1, workflow_id: 'PW26-1', name: 'Thing' }, '{{workflow_id}} · {{name}}')
-    ).toBe('PW26-1 · Thing')
+      labelFor({ id: 1, workflow_id: 'AB26-1', name: 'Thing' }, '{{workflow_id}} · {{name}}')
+    ).toBe('AB26-1 · Thing')
   })
 
   it('falls back through the usual naming columns', () => {
@@ -21,29 +21,29 @@ describe('labelFor', () => {
 })
 
 describe('scoreRow', () => {
-  const row = { id: 368808, workflow_id: 'PW26-77260', description: 'Canton grounding' }
+  const row = { id: 368808, workflow_id: 'AB26-77260', description: 'Canton grounding' }
 
   it('puts an exact id first — what someone pasting a reference wants', () => {
-    expect(scoreRow(row, 'PW26-77260', '368808')).toEqual({ score: 100, matched: 'id' })
+    expect(scoreRow(row, 'AB26-77260', '368808')).toEqual({ score: 100, matched: 'id' })
   })
 
   it('ranks exact label over prefix over contains', () => {
-    expect(scoreRow(row, 'PW26-77260', 'PW26-77260').score).toBe(90)
-    expect(scoreRow(row, 'PW26-77260', 'PW26').score).toBe(70)
-    expect(scoreRow(row, 'PW26-77260', '77260').score).toBe(50)
+    expect(scoreRow(row, 'AB26-77260', 'AB26-77260').score).toBe(90)
+    expect(scoreRow(row, 'AB26-77260', 'AB26').score).toBe(70)
+    expect(scoreRow(row, 'AB26-77260', '77260').score).toBe(50)
   })
 
   it('is case-insensitive', () => {
-    expect(scoreRow(row, 'PW26-77260', 'pw26-77260').score).toBe(90)
+    expect(scoreRow(row, 'AB26-77260', 'ab26-77260').score).toBe(90)
   })
 
   it('explains itself when the label does not contain the query', () => {
-    const hit = scoreRow(row, 'PW26-77260', 'canton')
+    const hit = scoreRow(row, 'AB26-77260', 'canton')
     expect(hit.matched).toBe('description')
     expect(hit.score).toBe(30)
   })
 
   it('scores a row that matches nothing at the floor, so the caller can drop it', () => {
-    expect(scoreRow(row, 'PW26-77260', 'zzz').score).toBe(10)
+    expect(scoreRow(row, 'AB26-77260', 'zzz').score).toBe(10)
   })
 })

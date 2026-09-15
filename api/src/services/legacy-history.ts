@@ -1,6 +1,6 @@
 /**
  * JS reference implementation of the legacy transition extraction — mirrors
- * both the EFP WorkflowTimeline reduce and the SQL LAG() statement in
+ * both the legacy timeline reduce and the SQL LAG() statement in
  * scripts/migrate-legacy-history.ts. Used by that script's --verify sampler.
  */
 export interface LegacySnap {

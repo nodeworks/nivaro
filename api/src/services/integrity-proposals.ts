@@ -938,7 +938,7 @@ async function rowInputProposals(
         .map((r) => r.trigger_field as string)
     )
   ]
-  // Sibling FKs the majority inference may lean on: real inputs (CIFA), never
+  // Sibling FKs the majority inference may lean on: real inputs (the picked item), never
   // a field the rules DERIVE from the missing one — "lines with the same PO
   // line type" is circular when PO line type comes from the category.
   const ruleTargets = new Set(cfg.rowRules.filter((r) => !r.seed_only).map((r) => r.target_field))
@@ -961,7 +961,7 @@ async function rowInputProposals(
       const tm = childMeta.get(tf)
       const tLabel = tm?.label ?? titleCase(tf)
       const cands: Array<{ value: string; basis: string; confidence: Proposal['confidence'] }> = []
-      // a. lines elsewhere sharing another FK (same CIFA → same category)
+      // a. lines elsewhere sharing another FK (same item → same category)
       const usable = siblingFks.filter((x) => x.field !== tf && !isEmpty(line[x.field]))
       const peerSets = await Promise.all(
         usable.map(

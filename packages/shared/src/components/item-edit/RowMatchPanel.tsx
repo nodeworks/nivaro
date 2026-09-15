@@ -11,8 +11,8 @@ import type { CMSRelation } from './types'
  * "Which related record is this row matched to, and if none, why not?"
  *
  * Config-driven (`options.row_match_panel` on an inline-table field): the
- * O2M alias on the child that points at the matched records (a workflow
- * line's `po_line_items`), the columns to show for a match, and — for the
+ * O2M alias on the child that points at the matched records (a request
+ * line's PO lines), the columns to show for a match, and — for the
  * unmatched case — how to find the nearest candidate among a filtered set
  * (the record's linked purchase orders) and which keys the match rule
  * compares. `useRowMatches` resolves this ONCE for every saved row of a
@@ -20,7 +20,7 @@ import type { CMSRelation } from './types'
  * full panel with the reason a match fails.
  */
 export interface RowMatchPanelConfig {
-  /** O2M alias on the child collection (e.g. workflow_line_items.po_line_items). */
+  /** O2M alias on the child collection (e.g. request_lines.po_lines). */
   relation: string
   /** Panel heading. Default "Match". */
   title?: string

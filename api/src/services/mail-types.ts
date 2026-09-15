@@ -11,7 +11,7 @@ import { getLabels } from './queues.js'
  * can preview / send the exact email production would send, without waiting
  * for the event. Senders that go through `renderMailType` share the builder
  * with the harness; extensions register their own types via
- * `ctx.mail.registerType` (efp-ops: invoice on-hold, PO received…).
+ * `ctx.mail.registerType` (e.g. invoice on-hold, PO received…).
  */
 
 export type MailSampleKind = 'record' | 'history' | 'user' | 'notification' | 'none'

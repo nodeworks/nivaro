@@ -436,7 +436,7 @@ type QueryWidgetFilter = {
   /** Option fetch cap (default 500) — bump for big pick lists (projects). */
   limit?: number
   /** Pre-selected values on load. '$current_year' resolves to the current
-   *  calendar year (EFP default-funding-year behavior). */
+   *  calendar year (default-year behavior). */
   default_values?: Array<string | number>
 }
 
@@ -504,8 +504,8 @@ export interface QueryWidgetConfig {
   row_actions?: Array<{ label: string; sheet: QuerySheetDef }>
   /** Toolbar action buttons running a (write) custom query — params support
    *  the same tokens as sheets ('$filters.<param>' / '$param.<name>' /
-   *  '$rows.<field>'); an unresolved param blocks the run with a message.
-   *  EFP 'Run Reforecasting'. */
+   *  '$rows.<field>'); an unresolved param blocks the run with a message
+   *  (e.g. a "recalculate" stored-procedure button). */
   actions?: Array<{
     label: string
     query_slug: string
@@ -979,7 +979,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const actionBusy = actionRun?.phase === 'running'
   const qcRef = useQueryClient()
   // Live elapsed ticker while an action runs — visible progress for the long
-  // stored-proc actions (Reforecast runs for tens of seconds).
+  // stored-proc actions (a recalculation can run for tens of seconds).
   useEffect(() => {
     if (actionRun?.phase !== 'running') return
     const t = window.setInterval(() => {
@@ -1070,7 +1070,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   })
   const isLoading = isPending
   if (!cfg.query_slug) return <div className='p-3 text-[12px] text-slate-400'>Set a query slug</div>
-  // Widget actions (e.g. "Run Reforecast") run through a styled dialog:
+  // Widget actions (e.g. "Run recalculation") run through a styled dialog:
   // confirm → live run timer → result summary — replacing window.confirm and
   // giving long stored-proc runs visible progress instead of a frozen button.
   const runAction = (a: NonNullable<QueryWidgetConfig['actions']>[number]) => {
@@ -1245,7 +1245,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
         rows={data ?? []}
         config={
           // Current-month highlight only applies when the selected year param
-          // IS the current year (EFP guard) — otherwise strip it.
+          // IS the current year — otherwise strip it.
           cfg.table?.highlight_group && cfg.table.highlight_year_param
             ? Number(
                 String(effectiveParams[cfg.table.highlight_year_param] ?? '').split(',')[0]

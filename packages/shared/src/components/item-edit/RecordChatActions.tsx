@@ -8,7 +8,7 @@ import { canOpenChatRoom, openChatRoom } from '../chat/chat-core'
 import { SimpleSelect } from '../ui/SimpleSelect'
 
 /**
- * Record ↔ chat: "Discuss" opens the record's entity room (`wf:CR26-…`) in the
+ * Record ↔ chat: "Discuss" opens the record's entity room (`<prefix>:<id>`) in the
  * host's chat dock, and "Send to a room…" posts the record's token (+ note)
  * into any of my rooms, where it renders as a live record chip.
  *

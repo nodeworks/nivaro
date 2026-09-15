@@ -4,7 +4,7 @@
  * `last_seen` cannot answer this — the heartbeat keeps beating while a tab sits
  * open in the background — so idleness is a client observation and every host
  * that writes presence has to report it. It lives here rather than in each app
- * because it did not: admin reported it and efp-new did not, so a row marked
+ * because it did not: admin reported it and another host did not, so a row marked
  * idle by one never cleared in the other and the person stayed idle forever.
  *
  * Call `trackActivity()` once at startup, then include `idleState()` in each

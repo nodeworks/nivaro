@@ -443,6 +443,33 @@ export async function transitionLabelsFor(collection: string): Promise<string[]>
   return out
 }
 
+/** Loose "already that value" test for a bulk write: null/''/undefined agree,
+ *  booleans accept 1/'1'/'true', numbers compare numerically, else as strings.
+ *  A record already holding every value an action would set is SKIPPED —
+ *  no write, no change reason on its history (the note belongs to the
+ *  records that actually moved). */
+export function valueUnchanged(current: unknown, next: unknown): boolean {
+  const empty = (v: unknown) => v === null || v === undefined || v === ''
+  if (empty(current) && empty(next)) return true
+  if (empty(current) !== empty(next)) return false
+  const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
+  const falsy = (v: unknown) => v === false || v === 0 || v === '0' || v === 'false'
+  if ((truthy(current) || falsy(current)) && (truthy(next) || falsy(next)))
+    return truthy(current) === truthy(next)
+  const nc = Number(current)
+  const nn = Number(next)
+  if (
+    typeof current !== 'object' &&
+    typeof next !== 'object' &&
+    String(current).trim() !== '' &&
+    String(next).trim() !== '' &&
+    Number.isFinite(nc) &&
+    Number.isFinite(nn)
+  )
+    return nc === nn
+  return JSON.stringify(current) === JSON.stringify(next)
+}
+
 export interface BulkRunResult {
   succeeded: number
   failed: number
@@ -516,6 +543,13 @@ export async function runDefinition(
         }
         if (Object.keys(payload).length === 0)
           throw new Error('The action has no fields configured')
+        // Already at every target value (an on-hold record in an "On hold"
+        // selection): leave it alone — no write, no reason on its history.
+        if (Object.keys(payload).every((k) => valueUnchanged(record[k], payload[k]))) {
+          result.skipped++
+          result.skipped_items.push(item)
+          continue
+        }
         if (reason) payload._change_reason = reason
         await updateOne(user, collection, item, payload, req)
         result.succeeded++

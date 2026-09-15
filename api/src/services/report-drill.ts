@@ -5,7 +5,7 @@ import { readItems } from './items.js'
 /**
  * Automatic drill-down for NON-NATIVE (query) widgets: a stored-proc result
  * row carries no collection/filters, but its columns usually carry business
- * identifiers ("workflow_id", "project_id"). This infers which record a row
+ * identifiers ("order_id", "project_id"). This infers which record a row
  * points at:
  *
  *  1. The entity-room registry (nivaro_chat_room_types) — deployment-declared

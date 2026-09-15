@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router'
 
 /**
  * /command — admin host for the shared Command Center board (map + live flow +
- * people + system rail + ticker). efp-new can mount CommandCenterView with its
- * own recordUrl for /records/:c/:id routing.
+ * people + system rail + ticker). A headless frontend can mount CommandCenterView
+ * with its own recordUrl for its record routing.
  */
 
 const client = createNivaro(window.location.origin)

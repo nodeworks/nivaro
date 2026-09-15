@@ -16,11 +16,11 @@ function parseJson<T>(v: unknown): T | null {
  * Layout row-rule autofill for child rows created straight through the API.
  *
  * The admin form runs a grid's `options.row_rules` on every row it stages —
- * that is how a workflow line picks up its Oracle category from the chosen
- * CIFA, its task from the project-type-filtered cifa_tasks/category_tasks
- * precedence chain, and its line_type from the parent's workflow_type. But
- * those rules lived only in the browser's request loop: a line created via
- * `POST /items/workflow_line_items` (SDK, integration, script) arrived with
+ * that is how a child row picks up a derived category from the chosen catalog
+ * item, its task from a precedence chain of related lookups, and its line
+ * type from the parent's type. But those rules lived only in the browser's
+ * request loop: a row created via `POST /items/<child>` (SDK, integration,
+ * script) arrived with
  * none of that autofill, so API-created data was silently poorer than
  * UI-created data.
  *

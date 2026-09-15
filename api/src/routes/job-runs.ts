@@ -58,7 +58,7 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
       countQ = countQ.where('status', q.status)
     }
     if (q.job_id) {
-      // Contains-match so "mdsi" finds ping-mdsi-shipments; escape LIKE wildcards.
+      // Contains-match so "sweep" finds every *-sweep job; escape LIKE wildcards.
       const like = `%${q.job_id.replace(/[%_[]/g, (c) => `[${c}]`)}%`
       query = query.where('r.job_id', 'like', like)
       countQ = countQ.where('job_id', 'like', like)

@@ -43,6 +43,7 @@ import {
   type NotificationSourceProvider,
   notificationSourceRegistry
 } from './notification-sources.js'
+import { type RelatedNoteProvider, relatedNoteRegistry } from './related-notes.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
@@ -156,6 +157,12 @@ export interface ExtensionContext {
    *  notification-sources aggregation. */
   notificationSources: {
     register(provider: NotificationSourceProvider): void
+  }
+  /** Add read-only entries to a record's Notes thread (GET /comments/related)
+   *  — integration events, external history — beside transitions and
+   *  change reasons. */
+  notes: {
+    registerSource(provider: RelatedNoteProvider): void
   }
   /** Register custom dashboard widget types shown in the dashboard builder. */
   dashboardWidgets: {
@@ -493,6 +500,7 @@ async function loadExtension(
     | 'itemActions'
     | 'notificationChannels'
     | 'notificationSources'
+    | 'notes'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'
@@ -650,6 +658,12 @@ async function loadExtension(
         register: (provider) => {
           note('notification-sources')
           notificationSourceRegistry.register(provider)
+        }
+      },
+      notes: {
+        registerSource: (provider) => {
+          note('notes')
+          relatedNoteRegistry.register(provider)
         }
       },
       dashboardWidgets: {
@@ -845,6 +859,7 @@ export async function loadExtensions(
     | 'itemActions'
     | 'notificationChannels'
     | 'notificationSources'
+    | 'notes'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'
@@ -969,6 +984,7 @@ export async function loadCloudExtensions(
     | 'itemActions'
     | 'notificationChannels'
     | 'notificationSources'
+    | 'notes'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'
@@ -1080,6 +1096,7 @@ export async function loadCloudExtensions(
         notificationSources: {
           register: (provider) => notificationSourceRegistry.register(provider)
         },
+        notes: { registerSource: (provider) => relatedNoteRegistry.register(provider) },
         dashboardWidgets: { register: (def) => dashboardWidgetRegistry.register(def) },
         storage: {
           register: (name, adapter) => storageAdapterRegistry.register(name, adapter),
@@ -1210,6 +1227,7 @@ export async function scanNewExtensions(
     | 'itemActions'
     | 'notificationChannels'
     | 'notificationSources'
+    | 'notes'
     | 'dashboardWidgets'
     | 'storage'
     | 'fieldTypes'

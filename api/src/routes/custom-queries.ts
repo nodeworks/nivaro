@@ -79,7 +79,7 @@ interface ScopeParamDef {
  * declared param:
  *   - admin, or no restriction on the dimension → untouched.
  *   - param omitted → the full allowance is injected (comma-joined, the
- *     STRING_SPLIT convention every EFP proc already uses).
+ *     STRING_SPLIT convention procs conventionally use).
  *   - param provided → intersected with the allowance. An empty intersection
  *     injects a value that matches nothing — a caller asking for a zone they
  *     are not allowed gets zero rows, never everything.

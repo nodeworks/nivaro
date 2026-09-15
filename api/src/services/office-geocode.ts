@@ -6,7 +6,7 @@ import { db } from '../db/index.js'
  * pin actual offices instead of region centroids.
  *
  * Resolution order:
- *  1. The locations table — example facilities are already geocoded there, so
+ *  1. The locations table — company facilities are often already geocoded there, so
  *     a street-line match ("14 Burr St" against address_line_1) is free and
  *     authoritative.
  *  2. Nominatim (OpenStreetMap) — one polite request with a proper User-Agent,

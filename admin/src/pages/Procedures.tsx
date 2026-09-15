@@ -12,8 +12,8 @@ import { cn, formatRelative } from '@/lib/utils'
 /**
  * Developer → Procedures — manage the database's stored procedures in-app.
  *
- * The database is the runtime source of truth; on EFP deployments the
- * efp-ops vendored registry (/efp/procedures) adds per-proc drift status
+ * The database is the runtime source of truth; a deployment's extension may
+ * expose a vendored procedure registry that adds per-proc drift status
  * (in-sync / drifted / live-only / app-managed) which renders as chips —
  * absent on plain deployments, the page degrades to plain management.
  *
@@ -50,7 +50,7 @@ const STATUS_CHIP: Record<VendorStatus, { label: string; cls: string; tip: strin
   'in-sync': {
     label: 'in sync',
     cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-    tip: 'Matches the vendored definition in efp-ops/procedures'
+    tip: 'Matches the vendored definition in the extension registry'
   },
   drifted: {
     label: 'drifted',
@@ -102,7 +102,7 @@ export function ProceduresPage() {
     queryKey: ['procedures'],
     queryFn: () => api.get<{ data: ProcRow[] }>('/procedures').then((r) => r.data.data)
   })
-  // EFP vendored registry — optional enrichment, 404s cleanly elsewhere.
+  // Extension vendored registry — optional enrichment, 404s cleanly elsewhere.
   const { data: vendor } = useQuery<Record<string, VendorStatus>>({
     queryKey: ['procedures-vendor'],
     queryFn: () =>
@@ -323,7 +323,7 @@ function NewProcedurePanel({
           id='proc-ai-prompt'
           value={aiPrompt}
           onChange={(e) => setAiPrompt(e.target.value)}
-          placeholder='e.g. For a given @FundingYear, sum requisition_amount per project type from workflows joined through workflows_regions, excluding CAR workflows…'
+          placeholder='e.g. For a given @Year, sum total_amount per category from orders joined through orders_regions, excluding cancelled orders…'
           className='h-20 w-full resize-y rounded-md border border-slate-200 bg-white p-2 text-[12px] leading-relaxed text-slate-700 outline-none placeholder:text-slate-400 focus:border-nvr-cyan/50 dark:border-border dark:bg-card dark:text-slate-300'
         />
         <div className='mt-1.5 flex items-center gap-2'>

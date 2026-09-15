@@ -145,7 +145,7 @@ export default function NotificationBench() {
   })
   const [category, setCategory] = useState('workflow')
   const [subject, setSubject] = useState(
-    'Approve — workflow CM26-00001 is now Waiting on Level 2 Approval'
+    'Approve — order ORD-10042 is now Waiting on Level 2 Approval'
   )
   const [collection, setCollection] = useState('')
   const [item, setItem] = useState('')

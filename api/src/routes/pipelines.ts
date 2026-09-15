@@ -2091,7 +2091,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
       // Shared mutation chain (instance update, history, materialized queue
       // sync, state_field mirror incl. state_field_map, transition actions).
-      // A blocking action failure (e.g. MDSi submission) aborts BEFORE any
+      // A blocking action failure (e.g. an ERP submission) aborts BEFORE any
       // mutation — the record stays in its current state and the client gets
       // the error to display.
       let applied: Awaited<ReturnType<typeof applyTransition>>
@@ -3360,7 +3360,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     })
   })
 
-  // Owner cleanup (Rob 2026-08-26): the FIX for owner-lint's dead seats —
+  // Owner cleanup (2026-08-26): the FIX for owner-lint's dead seats —
   // removes suspended/redacted members from this template's owner groups and
   // from OPEN instances' manually-added owner rows. Deliberate scope notes:
   // OOO users are NOT touched (delegation handles them), and removal never

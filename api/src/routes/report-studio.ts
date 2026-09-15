@@ -118,7 +118,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
   // ─── Prebuilt widget catalog ────────────────────────────────────────────────
   // Named, categorized widget configs users drop into a report instead of
   // building a metric by hand. Data-driven — admins manage rows, deployments
-  // (EFP) seed their own library.
+  // seed their own library.
   app.get('/widget-presets', { preHandler: requireAuth }, async (_req, reply) => {
     const rows = await db('nivaro_report_widget_presets')
       .where('is_active', true)

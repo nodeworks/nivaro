@@ -15,11 +15,11 @@ import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 //     "endpoint_path": "/customers/x/orders",
 //     "guard": [ {field, op, value}, ... ], // condition rules on the record; all must pass or the action is skipped
 //     "context": {                           // extra template context: one filtered list query per key
-//       "materials": { "collection": "inventory_request_materials", "filter": { "inventory_request": "$id" }, "limit": 500 }
+//       "lines": { "collection": "order_lines", "filter": { "order": "$id" }, "limit": 500 }
 //     },
 //     "payload_template": "{ ...liquid producing JSON... }",
 //     "on_success": { "set": { "order_number": "{{ response.salesOrderNumber }}" } },
-//     "on_failure": { "set": { "mdsi_status": "error" } }
+//     "on_failure": { "set": { "erp_status": "error" } }
 //   }
 //
 // Actions run sequentially; each template renders with
@@ -39,7 +39,7 @@ interface ContextQueryDef {
   filter?: Record<string, unknown>
   /** Restrict rows to those with a matching junction row — expresses
    *  "lines whose <m2m alias> includes X" (e.g. materials whose warehouses
-   *  junction carries the MDSi warehouse id). */
+   *  junction carries a specific warehouse id). */
   junction_filter?: { junction: string; fk_to_row: string; field: string; value: unknown }
   limit?: number
   /** Per-row M2O expansion: fk column → {collection, fields}; merged as <fk>_data. */
@@ -58,7 +58,7 @@ interface TransitionActionDef {
   payload_template: string
   on_success?: { set?: Record<string, string> }
   /** Child-row writebacks applied after a successful call — e.g. autofill each
-   *  MDSi line's sales_order_id from the returned order number. `only_empty`
+   *  submitted line's order id from the returned order number. `only_empty`
    *  updates only rows where the target field is still null (user-entered
    *  values are never overwritten); `junction_filter` narrows to rows with a
    *  matching junction row (same shape as context junction_filter). */
@@ -71,21 +71,21 @@ interface TransitionActionDef {
     junction_filter?: { junction: string; fk_to_row: string; field: string; value: unknown }
   }>
   on_failure?: { set?: Record<string, string> }
-  /** Detect 200-with-error-body responses (Fusion IIP style) — when a `when`
+  /** Detect 200-with-error-body responses (some ERPs do this) — when a `when`
    *  rule matches, the submission records as FAILED with the mined message
    *  even though the HTTP status was 2xx. See ResponseErrorConfig. */
   response_error?: ResponseErrorConfig
   response_success?: ResponseSuccessConfig
   /** Blocking actions run BEFORE the transition mutation; a failure ABORTS
    *  the transition (422 to the caller) instead of landing the new state —
-   *  e.g. the MDSi submission, whose order number the next state requires. */
+   *  e.g. an order submission whose order number the next state requires. */
   blocking?: boolean
   /** Skip the action silently when this context key resolved to zero rows —
-   *  for pushes that only apply when a related record exists (e.g. MWF link). */
+   *  for pushes that only apply when a related record exists (e.g. an external link row). */
   skip_when_empty?: string
   /** Skip silently unless AT LEAST ONE dotted ref resolves non-empty — refs
-   *  walk {record, context} (e.g. ['context.mwf_link.0.mwf_id', 'record.mwf_id']
-   *  = "has an MWF id from either source"). OR-semantics counterpart to guard's
+   *  walk {record, context} (e.g. ['context.ext_link.0.ext_id', 'record.ext_id']
+   *  = "has an external id from either source"). OR-semantics counterpart to guard's
    *  AND rules. */
   skip_unless_any?: string[]
   /** When to push at all — see services/erp-push-gate.ts. Absent = every
@@ -376,7 +376,7 @@ export function extractErpErrorDetails(raw: unknown): string[] {
 
 /**
  * Config shape for erp_submit's optional `response_error` key — some ERPs
- * (Fusion IIP) answer HTTP 200 with `status: "ERROR"` in the BODY, so a 2xx
+ * answer HTTP 200 with `status: "ERROR"` in the BODY, so a 2xx
  * alone is not success. Nothing here is vendor-specific: `when` names the
  * body paths/values that mean failure, `message_paths` names where the human
  * detail lives. Paths are dotted with `[]` to map over arrays
@@ -442,7 +442,7 @@ export function detectConfiguredBodyError(
  * mean the ERP ACCEPTED the write, so the submission records `accepted`
  * instead of parking at `pending` forever. Without config, a small generic
  * heuristic applies: a top-level `status` / `api_status` / `result` string of
- * OK / SUCCESS / ACCEPTED (MWF answers `{"api_status": "OK"}`).
+ * OK / SUCCESS / ACCEPTED (some ERPs answer `{"api_status": "OK"}`).
  */
 export interface ResponseSuccessConfig {
   when: Array<{ path: string; in: string[] }>
@@ -735,8 +735,8 @@ export async function runTransitionActions(opts: {
           error = bodyError
         } else {
           // …and a 2xx whose body says OK/SUCCESS (config or the generic
-          // heuristic) is accepted outright — MWF's `api_status: "OK"` used
-          // to sit at pending forever (Rob, 2026-09-14).
+          // heuristic) is accepted outright — an `api_status: "OK"` body used
+          // to sit at pending forever (2026-09-14).
           status = detectBodyAcceptance(
             action.response_success as ResponseSuccessConfig | undefined,
             res.body
@@ -776,8 +776,8 @@ export async function runTransitionActions(opts: {
       await applyWriteback(collection, item, action.on_failure?.set, postScope)
       if (action.blocking === true) {
         // Abort the transition: the caller keeps the record in its current
-        // state and surfaces the error. on_failure writebacks (mdsi_status =
-        // 'error') already landed, which is what the form banner keys off.
+        // state and surfaces the error. on_failure writebacks (a status column
+        // = 'error') already landed, which is what the form banner keys off.
         await journalTick(`blocked: ${error ?? 'unknown error'}`)
         return {
           blockedError: `${opts.transition.label}: submission failed — ${error ?? 'unknown error'}`
@@ -844,8 +844,8 @@ async function applyChildWritebacks(
  * create_record transition action: render a JSON payload from the transitioning
  * record (+context queries), create a row in another business collection, then
  * optionally link it back onto the record and insert M2M junction rows.
- * Idempotent via skip_if_exists (match on one column). EFP precedent: CAR
- * approval creating the project from workflow fields.
+ * Idempotent via skip_if_exists (match on one column). Typical use: an
+ * approval creating a parent record from the approved record's fields.
  */
 /** Rule-engine entry: run a create_record action for a record OUTSIDE a
  *  transition (a create-time automation rule). Guards are the caller's job. */
@@ -959,8 +959,8 @@ async function runCreateRecordAction(
         .where({ id: item })
         .update({ [action.link_field]: targetId })
       // A raw write never reaches the rollup hooks — but the record just became
-      // a contributor to the NEW parent (a CAR's requisition_amount feeds the
-      // created project's pub_amount). Recalc as if the FK had been set
+      // a contributor to the NEW parent (the record's amount feeds the
+      // created parent's stored rollup). Recalc as if the FK had been set
       // through the items service.
       if (before) {
         const { recalcAffectedRollups } = await import('./rollups.js')

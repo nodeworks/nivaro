@@ -78,7 +78,7 @@ function StateTrack({
 
     // Build forward adjacency from explicit transitions (excludes global from_state=null).
     // For visited states: only follow edges that history shows were actually taken — this
-    // prevents un-taken conditional branches (e.g. "Beeline" when Oracle was chosen) from
+    // prevents un-taken conditional branches (e.g. "Vendor B" when Vendor A was chosen) from
     // appearing in the track.
     // For unvisited states: follow all explicit transitions (future path unknown).
     const explicit = allTransitions.filter((t) => t.from_state !== null)

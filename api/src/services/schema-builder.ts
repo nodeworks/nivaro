@@ -628,7 +628,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     }
 
     // Directus batch forms — `create_<name>_items(data: [...])` and
-    // `delete_<name>_items(ids: [...])`. Legacy integrations (LinX/Nuvolo)
+    // `delete_<name>_items(ids: [...])`. Legacy Directus-era integrations
     // send these verbatim; each row still goes through createOne/deleteOne
     // so hooks, rules, rollups and activity apply per record. Sequential on
     // purpose: line rows read earlier rows (line numbering, rollups).

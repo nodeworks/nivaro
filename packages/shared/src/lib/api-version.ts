@@ -6,8 +6,8 @@ import { useSyncExternalStore } from 'react'
  * The baseline is the version the API reported the FIRST time this tab asked,
  * not a build-time constant: the API and the frontend ship separately, so an
  * API-only deploy has to be detectable by a bundle that never changed. (A
- * frontend's own redeploy is a different signal — efp-new's version.ts owns
- * that one, and the two banners are independent on purpose.)
+ * frontend's own redeploy is a different signal — a host's own version check
+ * owns that one, and the two banners are independent on purpose.)
  *
  * Environment scoping is structural rather than configured: a tab polls the
  * API origin it was served from, so staging tabs learn about staging deploys

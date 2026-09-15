@@ -98,20 +98,20 @@ export const fieldRulesGuide: DocSection = {
     { type: 'h3', text: 'Seed-only rules, conditional sources and pinned picker defaults' },
     {
       type: 'p',
-      text: 'A rule flagged **seed only** (Table Editor → rule footer) treats its target as an INPUT it merely fills when empty — a project\'s default category or default CIFA for a new line. "Re-run rules" never blanks a seed-only target to re-derive it, Data Integrity never reports it as drift, and the row-input check still flags the line when it stays empty. Without the flag, a "default" rule would turn a hand-picked input into a target the re-run wipes. A seed-only value still equal to one of the rule family\'s own defaults counts as auto and FOLLOWS its trigger (switch a line from materials to equipment and the default CIFA swaps); any other value is a hand pick and stays, and the row editor labels it overridden. When the new state derives nothing, the seeded value is left in place.'
+      text: 'A rule flagged **seed only** (Table Editor → rule footer) treats its target as an INPUT it merely fills when empty — a project\'s default category or default SKU for a new line. "Re-run rules" never blanks a seed-only target to re-derive it, Data Integrity never reports it as drift, and the row-input check still flags the line when it stays empty. Without the flag, a "default" rule would turn a hand-picked input into a target the re-run wipes. A seed-only value still equal to one of the rule family\'s own defaults counts as auto and FOLLOWS its trigger (switch a line from materials to equipment and the default SKU swaps); any other value is a hand pick and stays, and the row editor labels it overridden. When the new state derives nothing, the seeded value is left in place.'
     },
     {
       type: 'p',
-      text: 'A precedence source may carry `when: {field, op, value, related_field?}` — the source only yields a candidate when the row (or the parent, via a `$parent.<field>` field) matches, with the same related-field hops as a trigger. One chain can therefore hold "P2 default when the workflow source is P2, services default for labor lines, goods default otherwise" in front of the legacy fallback. A source whose row field is empty is closed unless the op is about emptiness.'
+      text: 'A precedence source may carry `when: {field, op, value, related_field?}` — the source only yields a candidate when the row (or the parent, via a `$parent.<field>` field) matches, with the same related-field hops as a trigger. One chain can therefore hold "alternate default when the parent record comes from a second source system, services default for labor lines, goods default otherwise" in front of a generic fallback. A source whose row field is empty is closed unless the op is about emptiness.'
     },
     {
       type: 'p',
-      text: "An M2O picker column can float a context-dependent default to the top of its list: `options.pinned_options: [{when:{field,op,value}, parent_field, parent_collection, source_field, tag}]` — when the ROW matches `when` (a materials line), the value the parent's linked record holds in `source_field` (workflow → project → default materials CIFA) is pinned first with a tag, above search results and sort. Nothing is pinned without a match or a value. Entries are tried in order (project first, then the project type, say); `when.field` may name a `$parent.<field>` to key on the parent record (a P2 workflow gets the P2 default). Works on the plain and the grouped picker alike."
+      text: "An M2O picker column can float a context-dependent default to the top of its list: `options.pinned_options: [{when:{field,op,value}, parent_field, parent_collection, source_field, tag}]` — when the ROW matches `when` (a materials line), the value the parent's linked record holds in `source_field` (order → project → default materials SKU) is pinned first with a tag, above search results and sort. Nothing is pinned without a match or a value. Entries are tried in order (project first, then the project type, say); `when.field` may name a `$parent.<field>` to key on the parent record (a record from a second source system gets that system's default). Works on the plain and the grouped picker alike."
     },
     { type: 'h3', text: 'Re-running rules over existing lines' },
     {
       type: 'p',
-      text: "A rule added or changed after lines were created never touched them. The grid toolbar's \"re-run rules…\" opens a panel with two modes: **Fill blanks only** writes rule targets that are empty today — plus any target a rule LOCKS on that line, since nobody could have typed those — **Re-derive everything** treats every rule target as blank first so set rules win over hand-typed values (a rule that derives nothing never erases what a line had). Preview lists which fields would change on how many lines and writes nothing. On a staged grid (save mode pending — workflow lines) the re-derived values are queued as row edits: lines show as Edited and land with the record's Save, so they can still be cancelled. Lines not yet saved — a new record's lines, staged additions — are planned alongside the saved ones (sent as `rows` with a client key; the server never writes them) and their patches are written back into the staged rows; staged edits on saved lines are overlaid first so the plan judges what the grid shows. On an immediate-mode grid Apply goes through the normal update path right away, so each line gets a revision attributed to you and the lines timeline shows the batch. The same call is `POST /field-rules/apply` with `{collection, fk_field, parent_id, parent_context, row_rules, mode, dry_run}` — update permission on the child collection is required for a real run, read permission for a preview."
+      text: "A rule added or changed after lines were created never touched them. The grid toolbar's \"re-run rules…\" opens a panel with two modes: **Fill blanks only** writes rule targets that are empty today — plus any target a rule LOCKS on that line, since nobody could have typed those — **Re-derive everything** treats every rule target as blank first so set rules win over hand-typed values (a rule that derives nothing never erases what a line had). Preview lists which fields would change on how many lines and writes nothing. On a staged grid (save mode pending) the re-derived values are queued as row edits: lines show as Edited and land with the record's Save, so they can still be cancelled. Lines not yet saved — a new record's lines, staged additions — are planned alongside the saved ones (sent as `rows` with a client key; the server never writes them) and their patches are written back into the staged rows; staged edits on saved lines are overlaid first so the plan judges what the grid shows. On an immediate-mode grid Apply goes through the normal update path right away, so each line gets a revision attributed to you and the lines timeline shows the batch. The same call is `POST /field-rules/apply` with `{collection, fk_field, parent_id, parent_context, row_rules, mode, dry_run}` — update permission on the child collection is required for a real run, read permission for a preview."
     },
     { type: 'h3', text: 'Testing rules against a record' },
     {
@@ -123,14 +123,14 @@ export const fieldRulesGuide: DocSection = {
       code: `// Live edit from a grid editor (probe returns what the rules WOULD derive):
 // POST /api/field-rules/evaluate
 {
-  "collection": "workflow_line_items",
+  "collection": "order_lines",
   "data": { "category": 67, "task": 42 },
   "changed_field": "category",
   "probe": true,
-  "parent_context": { "workflow_type": 1, "project_type": 2 },
+  "parent_context": { "order_type": 1, "project_type": 2 },
   "row_rules": [ /* the grid's row_rules */ ]
 }
-// → { "updates": { "oracle_category": 720, ... }, "locks": [], "expected": { "task": 1, ... } }
+// → { "updates": { "gl_category": 720, ... }, "locks": [], "expected": { "task": 1, ... } }
 
 // Reset one field to its rule-derived value:
 // { ..., "target_fields": ["task"], "probe": true }
@@ -138,14 +138,14 @@ export const fieldRulesGuide: DocSection = {
 // Dry run against a real row (admin):
 // POST /api/field-rules/explain
 {
-  "collection": "workflow_line_items",
-  "record_id": 465323,
-  "parent_collection": "workflows",
-  "fk_field": "workflow",
-  "parent_context_fields": ["workflow_type", "project_type"],
+  "collection": "order_lines",
+  "record_id": 1234,
+  "parent_collection": "orders",
+  "fk_field": "order",
+  "parent_context_fields": ["order_type", "project_type"],
   "row_rules": [ /* ... */ ]
 }
-// → { "data": { "trace": [{ "index": 0, "target_field": "oracle_category", "outcome": "wrote", ... }], "changes": {...}, "queries": 4, "ms": 260 } }
+// → { "data": { "trace": [{ "index": 0, "target_field": "gl_category", "outcome": "wrote", ... }], "changes": {...}, "queries": 4, "ms": 260 } }
 
 // Rule evaluation cost per collection (admin; also on the API Analytics page):
 // GET /api/field-rules/stats`

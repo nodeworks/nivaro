@@ -157,7 +157,7 @@ export async function planRowRuleChanges(opts: {
   const rules = opts.rules.filter((r) => r && typeof r.target_field === 'string')
   // Every non-lock target is judged for drift; only targets that some
   // NON-seed rule derives are blanked for re-derivation — a seed_only target
-  // (default category / CIFA) is an input the rules fill when empty, never
+  // (default category / default item) is an input the rules fill when empty, never
   // one they own.
   const targets = new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))
   const derivable = new Set(

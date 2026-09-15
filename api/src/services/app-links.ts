@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { overlaySettings } from './settings-overrides.js'
 
 /**
- * One place that turns "the record CR26-80329" into a URL a person can open.
+ * One place that turns "the record REQ-1234" into a URL a person can open.
  *
  * Two apps can own a destination: the admin (always present) and an optional
  * headless frontend — the "portal" — configured in Settings (portal_url +
@@ -12,7 +12,7 @@ import { overlaySettings } from './settings-overrides.js'
  * 'admin') wins; otherwise a role with admin_access → admin, everyone else →
  * portal when one is configured. A destination the portal has no route for
  * falls back to the admin. Shared sends (a flow mailing a list) resolve with
- * no recipient → portal when configured (Rob, 2026-09-13: portal link only).
+ * no recipient → portal when configured (2026-09-13: portal link only).
  */
 
 export type LinkKind =

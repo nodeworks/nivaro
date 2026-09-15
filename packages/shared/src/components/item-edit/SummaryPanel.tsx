@@ -411,7 +411,7 @@ function SummaryFieldValueInner({
 
   // Rich text: judged by CONTENT, not interface. A field whose interface is
   // rich_text today may still hold the legacy EditorJS JSON it was imported
-  // with, and the summary must never show that blob (Rob's report).
+  // with, and the summary must never show that blob (user report).
   if (
     iface === 'extension-editorjs' ||
     iface === 'input-rich-text-html' ||

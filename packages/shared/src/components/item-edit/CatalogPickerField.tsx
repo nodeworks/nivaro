@@ -23,7 +23,7 @@ import { RelationCombobox } from './RelationCombobox'
 import type { CMSRelation } from './types'
 
 // ─── CatalogPickerField ───────────────────────────────────────────────────────
-// EFP-style BOM catalog picker for an inline-table O2M field: instead of listing
+// BOM-style catalog picker for an inline-table O2M field: instead of listing
 // only the record's existing child rows, renders the FULL catalog (the child
 // collection's `item_field` M2O target), grouped into collapsible sections by a
 // dotted path on the catalog collection. Entering a quantity next to a catalog
@@ -31,8 +31,8 @@ import type { CMSRelation } from './types'
 // table lists everything picked and allows adding ARBITRARY catalog items
 // (outside the section filter). `filter` values may reference the parent form
 // draft via '$parent.<field>' tokens — until every referenced parent field has
-// a value the sections are gated behind a hint (EFP: BOM loads after Project
-// Type is chosen). Fully config-driven — nothing here is EFP-specific.
+// a value the sections are gated behind a hint (e.g. the catalog loads after a
+// type is chosen). Fully config-driven — nothing here is deployment-specific.
 
 export interface CatalogModeConfig {
   /** Child M2O field pointing at the catalog collection (e.g. 'item'). */
@@ -71,7 +71,7 @@ export interface CatalogModeConfig {
     summary_only?: boolean
     sections_only?: boolean
     /** 'sum' turns the lookup into an aggregate: value = SUM(value_field)
-     *  across ALL matching rows per item (e.g. open-order quantity per CIFA),
+     *  across ALL matching rows per item (e.g. open-order quantity per item),
      *  instead of the default last-row value. */
     aggregate?: 'sum'
   }>
@@ -80,12 +80,22 @@ export interface CatalogModeConfig {
    *  Re-evaluates live when the related column's `match` inputs change (switching
    *  the warehouse re-resolves on-hand and re-flags). `column` = related_columns key. */
   qty_warning?: { column: string; label?: string }
+  /** Per-row fulfilment dot in the Summary table: the child row's
+   *  `shipped_field` against its quantity — Shipped / Partial / Requested.
+   *  Gated on `show_when` over the PARENT draft (a request that never went to
+   *  the warehouse shows nothing), e.g. shipped_qty when an order status is set. */
+  fulfilment?: {
+    shipped_field: string
+    qty_field?: string
+    show_when?: Record<string, unknown>
+    label?: string
+  }
   /** Flag Summary rows that rode the parent record's LATEST external submission
    *  when it failed (nivaro_erp_submissions): rows are matched against the
    *  stored payload's `products[]` identifiers (cifaNumber/productNumber). The
    *  object form names catalog columns to match on (e.g. ['item_number',
    *  'product_number'] — fetched separately for the picked rows, since payloads
-   *  often carry the product number while row labels show the cifa number);
+   *  often carry the product number while row labels show the item number);
    *  `true` matches on the row label only. Red icon per row — hover shows the
    *  submission's full error. Clears when a newer attempt lands. */
   submission_errors?: boolean | { match_fields?: string[] }
@@ -133,7 +143,7 @@ export interface CatalogBuilderConfig {
   attributes: Array<{ field: string; label_field: string }>
   /** Optional filter on the resolver fetch. */
   filter?: Record<string, unknown>
-  /** Show this builder only when the parent draft matches, e.g. {"project_type": {"_in": [26, 27, 5]}}. */
+  /** Show this builder only when the parent draft matches, e.g. {"type": {"_in": [1, 2]}}. */
   show_when?: Record<string, unknown>
 }
 
@@ -287,8 +297,8 @@ export function CatalogPickerField({
   const tmpl = catalogMeta?.display_template
 
   // '$parent.<field>' tokens in the filter resolve from the live parent draft;
-  // unresolved tokens gate the section list (mirrors EFP's "pick Project Type
-  // first" behaviour).
+  // unresolved tokens gate the section list ("pick the type first"
+  // behaviour).
   const parentDraft = parentDraftCtx?.draft
   const { resolvedFilter, missingParents } = useMemo(() => {
     const missing: string[] = []
@@ -660,7 +670,7 @@ export function CatalogPickerField({
     return { idents, error: latest.last_error ?? 'Submission failed' }
   }, [erpSubs])
   // The payload usually identifies products by columns the catalog fetch never
-  // selects (product_number vs the cifa-number label) — fetch the configured
+  // selects (product_number vs the item-number label) — fetch the configured
   // match columns for the picked rows only, and only while a failure shows.
   const pickedIdsKey = pickedEntries.map((e) => e.key).join(',')
   const { data: identRows } = useQuery({
@@ -764,6 +774,45 @@ export function CatalogPickerField({
     return (summaryM2mResults[idx]?.data as Record<string, string> | undefined)?.[String(rowId)]
   }
 
+  // fulfilment: a dot per picked row from the child's shipped quantity — the
+  // same three-state vocabulary a host's shipment panel uses, so the two agree.
+  const fulfilmentOn =
+    !!config.fulfilment?.shipped_field &&
+    (config.fulfilment.show_when ? matchesShowWhen(config.fulfilment.show_when, parentDraft) : true)
+  const fulfilmentChip = (row: Record<string, unknown>): ReactNode => {
+    if (!fulfilmentOn || !config.fulfilment) return null
+    const qty = Number(row[config.fulfilment.qty_field ?? qtyField] ?? 0) || 0
+    const shipped = Number(row[config.fulfilment.shipped_field] ?? 0) || 0
+    const state =
+      qty > 0 && shipped >= qty
+        ? {
+            dot: 'bg-emerald-500',
+            text: 'text-emerald-700 dark:text-emerald-400',
+            label: 'Shipped'
+          }
+        : shipped > 0
+          ? {
+              dot: 'bg-amber-500',
+              text: 'text-amber-700 dark:text-amber-300',
+              label: `Partial · ${shipped}/${qty}`
+            }
+          : {
+              dot: 'bg-slate-300 dark:bg-slate-600',
+              text: 'text-slate-500 dark:text-slate-400',
+              label: 'Requested'
+            }
+    return (
+      <span
+        className='inline-flex items-center gap-1.5 whitespace-nowrap'
+        data-catalog-fulfilment={state.label.split(' ')[0].toLowerCase()}
+        title={`${config.fulfilment.label ?? 'Warehouse'} · ${shipped} of ${qty} shipped`}
+      >
+        <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${state.dot}`} />
+        <span className={`text-[11px] font-medium ${state.text}`}>{state.label}</span>
+      </span>
+    )
+  }
+
   const allDisplayCols = config.columns ?? []
   const allRelatedCols = config.related_columns ?? []
   const displayCols = allDisplayCols.filter((c) => !c.summary_only)
@@ -861,8 +910,8 @@ export function CatalogPickerField({
     ? 'w-36 shrink-0 truncate text-slate-700 dark:text-slate-200'
     : 'min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'
 
-  // Host-provided detail drawer (e.g. efp-new's stock-planning drawer for
-  // cifa_items): when an opener is registered, item labels become links.
+  // Host-provided detail drawer (e.g. a stock-planning drawer for the catalog
+  // collection): when an opener is registered, item labels become links.
   const itemOpenable = canOpenCatalogItem(catalogCol)
   const itemLabel = (catalogId: string, text: string, cls: string) =>
     itemOpenable ? (
@@ -1567,7 +1616,7 @@ export function CatalogPickerField({
                             className='shrink-0'
                             // TipLayer (viewport-clamped body portal) — the old
                             // absolute CSS tooltip centred on the icon ran off the
-                            // left edge on the first column (Rob's mdsi.png).
+                            // left edge on the first column (user report).
                             data-tip={`This line was in the failed submission\n${submissionError}`}
                             data-submission-error
                           >
@@ -1698,6 +1747,7 @@ export function CatalogPickerField({
                               </span>
                             </span>
                           ))}
+                          {fulfilmentChip(e.row)}
                           {summaryFields.map((sf) => {
                             const v = summaryFieldValue(sf, e)
                             return (
@@ -2065,7 +2115,7 @@ function AttrSelect({
  * Favorites manager — a static 50%-width drawer for browsing the FULL catalog
  * (unfiltered by the record's project type / zone gating) and starring items.
  * The section list only ever shows in-scope items, so without this a user
- * could never favorite a CIFA outside the current request's filter. Related
+ * could never favorite an item outside the current request's filter. Related
  * columns (config.favorites_manager_columns) roll up across only the rows
  * their `match` resolves to — the same warehouse filter the form drives.
  */
@@ -2130,7 +2180,7 @@ function FavoritesManagerDrawer({
   // Full rows ('*') so a description-ish column shows without the component
   // knowing the catalog's schema; the dotted section path rides alongside for
   // the category column. Sorted by the display template's first plain column
-  // (cifa_number on EFP) so the default listing reads as the catalog index.
+  // (typically the item number) so the default listing reads as the catalog index.
   const sortField = useMemo(() => {
     const first = [...(tmpl ?? '').matchAll(/\{\{([\w.]+)\}\}/g)][0]?.[1]
     return first && !first.includes('.') ? first : 'id'

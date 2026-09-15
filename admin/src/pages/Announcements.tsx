@@ -3,8 +3,8 @@ import { createNivaro } from '@nivaro/sdk'
 import { Megaphone } from 'lucide-react'
 
 // Broadcasts — the shared compose/history surface (banner, in-app message,
-// email, SMS, zone/role targeting). Shared so efp-new can mount the same
-// view; this page is just the admin host.
+// email, SMS, scope/role targeting). Shared so a headless frontend can mount
+// the same view; this page is just the admin host.
 const client = createNivaro(window.location.origin)
 
 export default function Announcements() {

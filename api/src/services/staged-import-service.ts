@@ -10,7 +10,7 @@ import { getLabels } from './queues.js'
  * — raw SQL, so no revisions, no activity, no field rules, no hooks. This
  * processor takes the same parsed + header-mapped rows and instead:
  *
- *   1. batch-resolves lookup columns (warehouse name → id, cifa_number → id),
+ *   1. batch-resolves lookup columns (warehouse name → id, part number → id),
  *   2. builds one target payload per file row (derived month, type coercion),
  *   3. dedupes last-wins on the natural key,
  *   4. DIFFS against the existing rows and only writes real changes —
@@ -30,7 +30,7 @@ export interface ServiceColumnConfig {
   /** Coercion applied before diff/write; default 'string'. Empty string → null. */
   type?: 'string' | 'number' | 'int' | 'date' | 'datetime' | 'boolean'
   /** Resolve the file value to a related row's id. Duplicate match values
-   *  collapse to the LOWEST id (the procs' MIN(id) convention for cifa).
+   *  collapse to the LOWEST id (the legacy procs' MIN(id) convention).
    *  on_missing 'create' inserts a stub row ({match_field: value}) through
    *  the items service for every unmatched value; 'null' keeps the file row
    *  with an empty link (the procs' LEFT JOIN semantics). Default (absent)
@@ -200,7 +200,7 @@ async function resolveLookup(
       const key = String(r[cfg.match_field ?? ''] ?? '')
         .trim()
         .toLowerCase()
-      // first (lowest id) wins — MIN(id) convention for duplicate cifa_numbers
+      // first (lowest id) wins — MIN(id) convention for duplicate match values
       if (!map.has(key)) map.set(key, r.id)
     }
   }

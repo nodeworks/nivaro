@@ -304,7 +304,7 @@ export default function AutomationTests() {
           <div className='rounded-lg border border-dashed border-slate-300 p-8 text-center dark:border-border'>
             <p className='text-[13px] font-medium text-slate-600 dark:text-foreground'>No tests yet</p>
             <p className='mt-1 text-[12px] text-slate-400'>
-              Save a regression case for a critical flow (the MDSi push, owner notifications) so a
+              Save a regression case for a critical flow (an ERP push, owner notifications) so a
               deploy can't silently break it.
             </p>
           </div>

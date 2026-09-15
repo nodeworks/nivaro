@@ -159,7 +159,7 @@ function withLiveDelta(
 }
 
 // ─── DeltaAmountField ─────────────────────────────────────────────────────────
-// EFP PUB-addendum entry: the reviewer types the amount to increase/decrease
+// Delta-style addendum entry: the reviewer types the amount to increase/decrease
 // BY (negative decreases); the proposed value stored is current + delta, and
 // the strip previews Current → New total live.
 
@@ -293,7 +293,7 @@ const ProposedChangesForm = memo(function ProposedChangesForm({
             )
           }
           // Delta entry (overrides.options.entry_mode = 'delta'): type the
-          // change, not the new total — EFP PUB addendum semantics.
+          // change, not the new total.
           const aOv =
             typeof a.overrides === 'string'
               ? (() => {

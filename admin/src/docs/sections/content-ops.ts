@@ -1422,7 +1422,7 @@ Authorization: Bearer <token>
 {
   "data": [
     { "revision_id": 12, "timestamp": "2026-01-01T09:00:00Z", "value": 1200, "user": "Jane Smith" },
-    { "revision_id": 18, "timestamp": "2026-01-08T14:23:00Z", "value": 1350, "user": "Rob Lee" },
+    { "revision_id": 18, "timestamp": "2026-01-08T14:23:00Z", "value": 1350, "user": "Alex Chen" },
     { "revision_id": 24, "timestamp": "2026-02-01T11:00:00Z", "value": 1500, "user": "Jane Smith" }
   ]
 }`
@@ -1614,10 +1614,10 @@ export const upsertKeysGuide: DocSection = {
     {
       type: 'pre',
       code: `// Stored on nivaro_collections.upsert_keys — a JSON array of column names
-["workflow", "year"]
+["project", "year"]
 
-// PATCH /api/collections/forecasts
-{"upsert_keys": ["workflow", "year"]}
+// PATCH /api/collections/budgets
+{"upsert_keys": ["project", "year"]}
 
 // Empty list = plain inserts (the default)`
     },
@@ -1632,7 +1632,7 @@ export const upsertKeysGuide: DocSection = {
     },
     {
       type: 'note',
-      text: 'Example: `forecasts` is keyed on (workflow, year). A partner integration that models every re-forecast as a new record now lands as an in-place update with a revision snapshot, rather than a second row for the same year.'
+      text: 'Example: `budgets` is keyed on (project, year). A partner integration that models every revised budget as a new record now lands as an in-place update with a revision snapshot, rather than a second row for the same year.'
     }
   ]
 }
@@ -1813,7 +1813,7 @@ export const contentOpsGridPresets: DocSection = {
     { type: 'h3', text: 'Row match panel' },
     {
       type: 'p',
-      text: 'A third per-field option, `row_match_panel`, answers "which related record is this row matched to — and if none, why not?" inside the row editor. Point it at an O2M alias on the child collection (a workflow line\'s `po_line_items`) and list the columns to show for a match. For the unmatched case, describe how to find the nearest candidate: a filter over the target collection (with `$parent.<field>` tokens, so an M2M alias on the parent gives the linked purchase orders) and the keys the match rule compares. The panel then says which key disagrees with the nearest candidate — "PO 12345 line 3 differs — Amount: $500.00 here vs $520.00 on the PO" — or that no candidate carries that line number, or that the parent has nothing linked to match against yet.'
+      text: 'A third per-field option, `row_match_panel`, answers "which related record is this row matched to — and if none, why not?" inside the row editor. Point it at an O2M alias on the child collection (a request line\'s `po_line_items`) and list the columns to show for a match. For the unmatched case, describe how to find the nearest candidate: a filter over the target collection (with `$parent.<field>` tokens, so an M2M alias on the parent gives the linked purchase orders) and the keys the match rule compares. The panel then says which key disagrees with the nearest candidate — "PO 12345 line 3 differs — Amount: $500.00 here vs $520.00 on the PO" — or that no candidate carries that line number, or that the parent has nothing linked to match against yet.'
     },
     {
       type: 'pre',
@@ -1837,7 +1837,7 @@ export const contentOpsGridPresets: DocSection = {
       "parent_label": "PO",
       "parent_path": "purchase_order.number"
     },
-    "no_parent_message": "No purchase order is linked to this workflow yet."
+    "no_parent_message": "No purchase order is linked to this record yet."
   }
 }`
     },
@@ -1879,7 +1879,7 @@ export const contentOpsGridPresets: DocSection = {
     { type: 'h3', text: 'Row lints' },
     {
       type: 'p',
-      text: 'An inline-table field may carry `options.row_lints` (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (`{label, when: {field, op, value}, expect: {field, op, value}}`, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. Workflow lines check that a Labor line carries a Services PO line type and a Materials line a Goods one.'
+      text: 'An inline-table field may carry `options.row_lints` (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (`{label, when: {field, op, value}, expect: {field, op, value}}`, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. A typical lint checks that a Labor line carries a Services PO line type and a Materials line a Goods one.'
     },
     { type: 'h3', id: 'grid-cascade-swap', text: 'Cascade swap on unavailable (parent_cascades[].on_unavailable)' },
     {
@@ -1933,8 +1933,14 @@ export const contentOpsChangeReasons: DocSection = {
         ['`fields`', 'Fields whose change demands a reason (judged on the caller\'s own payload — machine-derived writes never prompt).'],
         ['`reasons`', 'Preset reasons offered as a pick list.'],
         ['`allow_free_text`', 'Whether a typed reason is accepted (default true).'],
-        ['`context_fields`', 'Identity fields echoed into the challenge so the prompt names WHICH record: `["year"]` on forecasts makes the dialog read "You changed January for Year 2026".'],
-        ['`on_create`', 'Also demand a reason when a NEW record arrives with any flagged field filled — a new forecast year on an existing workflow prompts like an edited month.']
+        [
+          '`context_fields`',
+          'Identity fields echoed into the challenge so the prompt names WHICH record: `["year"]` on a yearly budget collection makes the dialog read "You changed January for Year 2026".'
+        ],
+        [
+          '`on_create`',
+          'Also demand a reason when a NEW record arrives with any flagged field filled — a new budget year on an existing project prompts like an edited month.'
+        ]
       ]
     },
     {

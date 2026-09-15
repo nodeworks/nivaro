@@ -86,7 +86,7 @@ export function RelationCombobox({
   value: unknown
   onChange: (v: unknown) => void
   /** A "floating" option shown FIRST regardless of search or sort — the
-   *  project's default CIFA for a materials line, say. Label = the option's
+   *  parent's default item for a materials line, say. Label = the option's
    *  own display label; `tag` is the small badge beside it ("Default"). */
   pinned?: { id: unknown; tag?: string } | null
   disabled?: boolean
@@ -350,9 +350,9 @@ export function RelationCombobox({
   // dedupe guard as useCascadeEffects: one probe per filter shape, ref cleared
   // on failure so a transient error can't permanently suppress the fill.
   // A MANUAL clear switches the auto-fill off for this field until it holds
-  // a value again (Rob, 2026-09-11: clearing Project on the workflow form put
+  // a value again (reported 2026-09-11: clearing a parent picker on a form put
   // it straight back). Stamping the filter shape was not enough: the clear
-  // itself cascades (Sub Type empties), which changes THIS field's filter
+  // itself cascades (a child picker empties), which changes THIS field's filter
   // shape and re-armed the probe. Fields this one cascades to or from keep
   // their own auto-fill — only the field the user cleared stays empty.
   const autoSelectRef = useRef<string | null>(null)

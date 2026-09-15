@@ -824,7 +824,7 @@ async function runItemRead(op: FlowOperation, data: FlowData, ctx: ExecutionCont
 // for "run right after this import" flows: a staged import writes through raw
 // SQL, so no item hook fires for the rows it changed — the flow is what closes
 // the loop (e.g. staged-import-completed → condition import_key eq
-// purchase_orders → this op on workflows). Idempotent: an instance whose
+// orders → this op on the bound collection). Idempotent: an instance whose
 // conditions do not pass is untouched.
 async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
@@ -836,7 +836,7 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
   const limit = Math.min(Math.max(Number(opts.limit) || 5000, 1), 20000)
   const resultKey = (opts.result_key as string) || 'auto_sweep'
   // `items` scopes the sweep to explicit record ids (a template like
-  // {{po_linked.workflow_ids}} or a literal list). Configured-but-empty means
+  // {{linked.record_ids}} or a literal list). Configured-but-empty means
   // "nothing to evaluate" — it must never widen back to the whole collection.
   const items = resolveSweepItems(opts.items, data, resolveTemplate, getByPath)
   // Raw imports leave every stored rollup on the touched records stale, and a

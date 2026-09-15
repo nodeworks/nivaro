@@ -319,7 +319,7 @@ const IDLE_AFTER_MS = 5 * 60_000
  * GET /online — the enriched online list the chat panels render.
  *
  * Presence rows themselves stay dumb (a heartbeat writes name/path); everything
- * shown UNDER a name is resolved here so admin, efp-new and any other host
+ * shown UNDER a name is resolved here so admin and any headless host
  * agree without each re-implementing it:
  *   role    — the user's role name
  *   scopes  — their RESTRICTED user-scope values per dimension, as labels
@@ -336,7 +336,7 @@ function titleCase(s: string): string {
 }
 
 /**
- * "Workflows › CR26-79811", not "Workflows › 371367".
+ * "Requests › REQ-1234", not "Requests › 98765".
  *
  * The label has to come from the server: rendering a record's display template
  * needs the template and the row, and the chat panel has neither. Resolved in

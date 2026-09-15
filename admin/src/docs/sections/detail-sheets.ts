@@ -44,12 +44,12 @@ export const detailSheets: DocSection = {
      "lookup": {"collection": "line_items", "field": "quantity_received",
                 "match": [{"local": "purchase_order", "remote": "purchase_order"},
                           {"local": "line_item_number", "remote": "line_number"}]}}],
-  "status": {"field": "efp_review_status",
+  "status": {"field": "review_status",
     "options": [{"value": "approved", "label": "Approve", "color": "green"},
                 {"value": "rejected", "label": "Reject", "color": "red", "require_note": true}],
     "empty_label": "Unreviewed", "stamp_user_field": "approved_by", "stamp_date_field": "approved_on",
-    "action_endpoint": "/efp/invoice-approvals/decide"},
-  "enrich_endpoint": "/efp/invoice-approvals/enrich"
+    "action_endpoint": "/my-extension/invoice-approvals/decide"},
+  "enrich_endpoint": "/my-extension/invoice-approvals/enrich"
 }
 
 // enrich endpoint contract

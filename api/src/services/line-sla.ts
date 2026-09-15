@@ -229,7 +229,7 @@ export interface LineSlaFinding {
 }
 
 /** Human ids in one read per collection — the entity-room registry names the
- *  column (workflows.workflow_id); unregistered collections keep their id. */
+ *  column (e.g. orders.order_id); unregistered collections keep their id. */
 async function friendlyIdsFor(collection: string, ids: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   if (ids.length === 0) return out

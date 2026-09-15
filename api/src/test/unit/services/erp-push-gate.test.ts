@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { changeSignature, payloadSignature, shouldPush } from '../../../services/erp-push-gate.js'
 
-const RECORD = { efp_state: 'approved', requisition_id: 'REQ-1', po_number: null, nested: { a: 1 } }
+const RECORD = { ext_state: 'approved', requisition_id: 'REQ-1', po_number: null, nested: { a: 1 } }
 
 describe('changeSignature', () => {
   it('is null when nothing is watched — the caller treats that as "cannot compare"', () => {
@@ -10,15 +10,15 @@ describe('changeSignature', () => {
   })
 
   it('is stable regardless of field order', () => {
-    expect(changeSignature(RECORD, ['efp_state', 'requisition_id'])).toBe(
-      changeSignature(RECORD, ['requisition_id', 'efp_state'])
+    expect(changeSignature(RECORD, ['ext_state', 'requisition_id'])).toBe(
+      changeSignature(RECORD, ['requisition_id', 'ext_state'])
     )
   })
 
   it('changes when a watched value changes, and not when an unwatched one does', () => {
-    const base = changeSignature(RECORD, ['efp_state'])
-    expect(changeSignature({ ...RECORD, efp_state: 'rejected' }, ['efp_state'])).not.toBe(base)
-    expect(changeSignature({ ...RECORD, requisition_id: 'REQ-2' }, ['efp_state'])).toBe(base)
+    const base = changeSignature(RECORD, ['ext_state'])
+    expect(changeSignature({ ...RECORD, ext_state: 'rejected' }, ['ext_state'])).not.toBe(base)
+    expect(changeSignature({ ...RECORD, requisition_id: 'REQ-2' }, ['ext_state'])).toBe(base)
   })
 
   it('treats null and undefined as the same absence', () => {
@@ -98,19 +98,19 @@ describe('shouldPush', () => {
   })
 })
 
-describe('payloadSignature — the MWF case', () => {
+describe('payloadSignature — the rendered-payload case', () => {
   const base = {
     token: 't',
     workflow_id: 'B1',
-    efp_state: 'Waiting on Manager Approval',
-    requisition_id: 'CR26-1'
+    ext_state: 'Waiting on Manager Approval',
+    requisition_id: 'REQ-1'
   }
 
   it('ignores key order — the same payload rendered differently is the same payload', () => {
     expect(payloadSignature(base)).toBe(
       payloadSignature({
-        requisition_id: 'CR26-1',
-        efp_state: 'Waiting on Manager Approval',
+        requisition_id: 'REQ-1',
+        ext_state: 'Waiting on Manager Approval',
         workflow_id: 'B1',
         token: 't'
       })
@@ -118,7 +118,7 @@ describe('payloadSignature — the MWF case', () => {
   })
 
   it('changes when the state label changes', () => {
-    expect(payloadSignature({ ...base, efp_state: 'Approved' })).not.toBe(payloadSignature(base))
+    expect(payloadSignature({ ...base, ext_state: 'Approved' })).not.toBe(payloadSignature(base))
   })
 
   it('changes when a purchase order is linked — the case no record field can see', () => {

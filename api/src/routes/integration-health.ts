@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 
 /**
- * Integration health — one answer to "is MDSi ok?".
+ * Integration health — one answer to "is the ERP integration ok?".
  *
  * The pieces already existed but lived four pages apart: erp-submissions has
  * the push outcomes, dead-letters the failed deliveries, flow runs the
@@ -70,7 +70,7 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
       // table — the /dead-letters page reads flow runs), so the flow-run
       // aggregation below covers them.
       Promise.resolve(undefined) as Promise<{ c: number | string } | undefined>,
-      // Flow runs 24h — event-driven integration pushes (MWF link etc.) run
+      // Flow runs 24h — event-driven integration pushes (record-link pushes etc.) run
       // as flows, not erp submissions.
       db('nivaro_flow_runs')
         .where('started_at', '>=', since)

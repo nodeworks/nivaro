@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { diffMigrations } from '../../../routes/preflight.js'
 
 /**
- * The fail case here is the one that took EFP staging down twice: the ledger
+ * The fail case here is the one that took a staging deploy down twice: the ledger
  * naming a migration the running build does not contain. It cannot be exercised
  * against a real database without inflicting that exact outage on it (knex
  * refuses to boot in that state), so it is pinned here instead.

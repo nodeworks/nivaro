@@ -35,8 +35,9 @@ export interface TransitionRequirementFieldMeta {
   /** m2m selection cap — 1 renders a single-select (pick replaces, closes). */
   max_values?: number
   /** This field is waived + disabled when the row's controlling field matches
-   *  one of `in` — e.g. sales_order_id disabled for MDSi warehouse lines
-   *  (MDSi returns the order id; the server autofills it after submit). */
+   *  one of `in` — e.g. an order-id field disabled for lines bound to an
+   *  integrated warehouse (the integration returns the id; the server autofills
+   *  it after submit). */
   optional_when?: { field: string; in: Array<string | number>; placeholder?: string }
 }
 
@@ -517,7 +518,7 @@ export function TransitionRequirementsDialog({
   }
 
   // Header → lines copy: fill the mapped child field on every AVAILABLE line
-  // (waived inputs — e.g. MDSi order ids — are left alone).
+  // (waived inputs — e.g. integration-supplied order ids — are left alone).
   const [bulkValues, setBulkValues] = useState<Record<string, string>>({})
 
   const copyHeaderToLines = (headerValue: string, childField: string) => {
@@ -615,7 +616,7 @@ export function TransitionRequirementsDialog({
               continue
             }
             // A waived field's draft never rides the PATCH — typing an order
-            // id and THEN switching the line to MDSi must not persist the
+            // id and THEN switching the line to a waived state must not persist the
             // typed value (the server autofills it post-submit).
             if (isWaived(rk, f)) continue
             if (current[f.field] !== saved[f.field]) {

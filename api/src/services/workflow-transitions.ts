@@ -84,7 +84,7 @@ export interface SkipCriteria {
     op?: SkipOp
     value?: unknown
     // lookup_compare: query another collection and compare a record value
-    // against a column of the matched rows (EFP thresholds pattern).
+    // against a column of the matched rows (approval-threshold pattern).
     collection?: string
     filters?: Array<{ column: string; value?: unknown; record_field?: string; op?: 'eq' | 'in' }>
     compare_column?: string
@@ -304,7 +304,7 @@ export async function evaluateSkipCriteriaDetailed(
 
     // Standalone skip-if-no-owners flag: skip the state when THIS RECORD resolves
     // zero owners for it — owner groups may exist but match other dimensions
-    // (EFP getRealOwners semantics; includes manually-assigned instance owners).
+    // (includes manually-assigned instance owners).
     const effectiveSkipNoOwners =
       criteriaOverride?.skipIfNoOwners !== undefined
         ? criteriaOverride.skipIfNoOwners
@@ -437,7 +437,7 @@ async function buildTransitionEventPayload(args: {
     `/collections/${subject.collection}/${encodeURIComponent(subject.itemId)}` +
     (addendumInfo ? `?addendum=${encodeURIComponent(addendumInfo.id)}` : '')
   // Shared sends (a flow mailing owners + creator in one go) link the PORTAL
-  // when one is configured, else the admin (app-links.ts, Rob 2026-09-13).
+  // when one is configured, else the admin (app-links.ts, 2026-09-13).
   const { recordLink } = await import('./app-links.js')
   const recordUrl = await recordLink(subject.collection, subject.itemId, {
     query: addendumInfo ? `addendum=${encodeURIComponent(addendumInfo.id)}` : undefined
@@ -751,7 +751,7 @@ export async function resolveTransitionTarget(
  * Mirror the current state into the bound record's state_field. When the
  * binding carries a state_field_map ({stateKey: value}), the mapped value is
  * written instead of the raw key — this is how legacy INT/enum state columns
- * (e.g. inventory_request.request_state) stay in sync.
+ * (e.g. a legacy `request_state` int column) stay in sync.
  */
 export async function syncStateField(
   collection: string,
@@ -793,8 +793,8 @@ export async function syncStateField(
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
- * Human-facing record id for notifications — workflows show `workflow_id`,
- * inventory requests `inventory_request_id`, etc. The mapping comes from the
+ * Human-facing record id for notifications — each collection's business id
+ * column (`<name>_id` style). The mapping comes from the
  * entity-room registry (`nivaro_chat_room_types.match_field`), which already
  * records each collection's human id column; unregistered collections (or a
  * missing value) fall back to the internal id. Never throws.
@@ -874,7 +874,7 @@ export async function applyTransition(opts: {
   )
   const newState = resolvedTarget?.id ?? transition.to_state
 
-  // Blocking actions (e.g. the MDSi submission) run BEFORE anything mutates:
+  // Blocking actions (e.g. an ERP order submission) run BEFORE anything mutates:
   // a failure throws TransitionBlockedError and the record stays in its
   // current state — no order number, no state change.
   {

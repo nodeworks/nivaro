@@ -5,7 +5,7 @@ import { sendMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
 
 /**
- * Metric alert engine (EFP Alert Manager port, generalized).
+ * Metric alert engine.
  *
  * Definitions are an admin-authored metric CATALOG — each backed by a custom
  * query (slug + value column) or a collection row count. Users create RULES
@@ -55,7 +55,7 @@ export function evaluateOperator(operator: string, value: number, threshold: num
     case 'eq':
       return value === threshold
     case 'change_pct':
-      // EFP semantics: the metric itself returns a % change; fire on |Δ| ≥ threshold
+      // The metric itself returns a % change; fire on |Δ| ≥ threshold
       return Math.abs(value) >= threshold
     default:
       return false

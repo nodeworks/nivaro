@@ -14,7 +14,7 @@ function xlsxBuffer(
 }
 
 const CONFIG = {
-  sheet_match: 'EFP Import Sheet',
+  sheet_match: 'Bid Import Sheet',
   header_row: 1,
   file_types: ['xlsx', 'xlsm', 'csv'] as ('xlsx' | 'xlsm' | 'xls' | 'csv')[]
 }
@@ -23,7 +23,7 @@ describe('readSpreadsheet', () => {
   it('picks the sheet matching sheet_match substring', () => {
     const buf = xlsxBuffer({
       Cover: [{ A: 1 }],
-      'EFP Import Sheet v2': [{ Vendor: 'Acme', 'Line Number': 1 }]
+      'Bid Import Sheet v2': [{ Vendor: 'Acme', 'Line Number': 1 }]
     })
     const { rows, issues } = readSpreadsheet(buf, 'bid.xlsx', CONFIG)
     expect(issues).toEqual([])

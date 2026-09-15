@@ -479,10 +479,10 @@ export interface OwnerResolutionRequest {
 
 // Batched, path-aware resolution of dotted owner-group filter fields for a set
 // of records. Handles what pickWinningGroups' synchronous prefix lookup cannot:
-//   - M2M alias dimensions (e.g. workflows.regions via workflows_regions):
+//   - M2M alias dimensions (e.g. orders.regions via orders_regions):
 //     resolves to a Set of related ids (+ Set of display values).
-//   - Multi-hop M2O chains (e.g. project.project_type.name): resolves the FK at
-//     the final hop (project_type id) and the display column value.
+//   - Multi-hop M2O chains (e.g. project.category.name): resolves the FK at
+//     the final hop (category id) and the display column value.
 // Fields that fail to resolve are simply omitted — pickWinningGroups falls back
 // to its legacy prefix behavior for them.
 async function resolveFilterValues(

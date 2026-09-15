@@ -236,7 +236,7 @@ interface Sources {
       template: string | null
     }>
   }
-  /** Extension-contributed sources (e.g. EFP stock watches) — display-only
+  /** Extension-contributed sources (e.g. an extension's stock watches) — display-only
    *  here; each group links to where it is managed. */
   external?: Array<{
     key: string

@@ -402,7 +402,7 @@ function LevelRow({
                 value={level.junction_child_fk ?? ''}
                 onChange={(v) => onUpdate({ junction_child_fk: v || null })}
                 fields={allFields}
-                placeholder='e.g. workflow_id'
+                placeholder='e.g. order_id'
                 disabled={!isAdmin}
               />
               <FieldComboboxField

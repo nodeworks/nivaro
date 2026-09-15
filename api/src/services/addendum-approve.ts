@@ -290,7 +290,7 @@ export async function applyAddendumApproval(
       // ── 2. Child-row patches (`__line_changes`) through updateOne ─────────
       // Recorded at draft time by actions like PO closeout. Each row goes
       // through the items service AS THE APPROVER so revisions apply and the
-      // parent's stored rollups (requisition_amount) recalc themselves.
+      // parent's stored rollups recalc themselves.
       const lc = data.__line_changes as
         | { collection?: string; rows?: Array<Record<string, unknown>> }
         | undefined
@@ -419,7 +419,7 @@ export async function applyAddendumApproval(
 /** Regenerate the parent record's layout PDF when its __pdf__ slot says
  *  auto_generate_on_save — through the real generate-and-attach route via
  *  in-process inject. Caller headers when provided; otherwise an admin
- *  integration static token (mwf-ingest precedent). Fire-and-forget. */
+ *  integration static token (extension-ingest precedent). Fire-and-forget. */
 async function regenerateParentPdf(
   app: FastifyInstance,
   collection: string,
@@ -480,7 +480,7 @@ async function regenerateParentPdf(
 }
 
 /**
- * Admin revert (#Rob 2026-08-26): roll an APPROVED addendum back so its
+ * Admin revert (2026-08-26): roll an APPROVED addendum back so its
  * changes never landed — parent scalars and sub-rows restored from the
  * revert snapshot captured at approval, line changes re-applied in reverse
  * THROUGH updateOne (revisions + rollups fire again), the change-order row

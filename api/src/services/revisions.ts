@@ -34,10 +34,11 @@ export function computeDelta(
   const delta: Record<string, unknown> = {}
   for (const key of Object.keys(after)) {
     // `after` is the re-read row, which carries VIRTUAL computed fields the
-    // raw `before` select never had — absent vs null is not a change. A key
+    // raw `before` select never had (a read-computed figure lands as 0, a
+    // rollup as null) — a key absent before is never a change. A key
     // genuinely new to the row (a column added mid-flight) is vanishingly
     // rare and would surface on the next real write anyway.
-    if (!(key in before) && (after[key] === null || after[key] === undefined)) continue
+    if (!(key in before)) continue
     if (JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null)) {
       delta[key] = after[key]
     }

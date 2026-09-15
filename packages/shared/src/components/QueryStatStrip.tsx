@@ -4,7 +4,7 @@ import { useNivaroClient } from '../context'
 import { post } from '../lib/commands'
 import { colorPair } from './QueryTable'
 
-// Stat boxes above a query table (EFP Budget Overview strip). Each stat is
+// Stat boxes above a query table (budget-overview-style strip). Each stat is
 // either a client-side SUM of a field over the table's own rows (so it always
 // agrees with the visible data), or an independent custom query (value = sum
 // of value_field over its rows). Optional hover breakdown: `details` sums
@@ -30,13 +30,13 @@ export interface QueryWidgetStat {
   }
   /** Card tint (any CSS color, e.g. '#f9fbd1'). */
   bg?: string
-  /** Only sum rows matching these field values (equality AND) — EFP
-   *  forecasting stats scope to the Workflow Forecast section. */
+  /** Only sum rows matching these field values (equality AND) — e.g. scope a
+   *  stat to one tree section of the table. */
   row_match?: Record<string, unknown>
   /** Delta stat: value = sum(field) − sum(field_subtract); positive values
    *  render with a leading '+'. */
   field_subtract?: string
-  /** EFP stat-card accent: colored top border + value (accent_dark in dark
+  /** Stat-card accent: colored top border + value (accent_dark in dark
    *  mode; accent_negative when a delta goes negative). Each may be a role name
    *  — accent | positive | negative | info … — see QueryTable COLOR_ROLES. */
   accent?: string
@@ -121,7 +121,7 @@ function StatBox({
       : []
     : (stat.details ?? []).map((d) => ({ label: d.label, value: sumField(matchedRows, d.field) }))
 
-  // EFP stat-card accent: colored 2px top border + colored value. A delta
+  // Stat-card accent: colored 2px top border + colored value. A delta
   // that goes negative switches to accent_negative (red by default).
   // A delta tile flips to accent_negative below zero; any other tile does
   // too when it OPTS IN with accent_negative (Remaining Budget overspent).

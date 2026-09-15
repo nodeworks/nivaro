@@ -3,7 +3,7 @@ import { createNivaro } from '@nivaro/sdk'
 import { Siren } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
-// Metric alert engine (EFP Alert Manager parity) — catalog, user rules,
+// Metric alert engine — catalog, user rules,
 // subscriptions, firing history, report-widget alerts, anomaly detection.
 // Distinct from /alerts (per-record threshold engine on collection writes).
 const client = createNivaro(window.location.origin)

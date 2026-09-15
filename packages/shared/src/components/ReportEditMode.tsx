@@ -7,7 +7,7 @@ import { get, post } from '../lib/commands'
 import { cn } from '../lib/utils'
 
 /**
- * Lean report-building surface for headless hosts (efp-new): everything the
+ * Lean report-building surface for headless hosts: everything the
  * admin builder can configure, minus the drag canvas — widgets reorder and
  * resize with steppers instead. Editable is server-decided (owner/admin);
  * ReportView shows the Edit button only when the report says so.

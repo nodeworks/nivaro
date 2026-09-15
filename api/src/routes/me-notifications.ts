@@ -464,7 +464,7 @@ export async function meNotificationRoutes(app: FastifyInstance) {
 
     // Record-scoped subscriptions (the per-record bell): one `id eq` filter
     // (state changes) or filter_field 'id' (every change). Carry the record
-    // and its display label so the profile can say "Watching CM26-79811" and
+    // and its display label so the profile can say "Watching REQ-1234" and
     // link to it, instead of "Only when Id: …".
     try {
       const wanted = new Map<string, Set<string>>()
@@ -518,7 +518,7 @@ export async function meNotificationRoutes(app: FastifyInstance) {
       /* record labels are decoration */
     }
 
-    // Extension-contributed sources (e.g. EFP stock watches) — collected
+    // Extension-contributed sources (e.g. stock-level watches) — collected
     // last, provider errors skipped.
     const external = await notificationSourceRegistry.collect(uid)
 

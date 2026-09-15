@@ -330,7 +330,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
           ...new Set(rules.filter((r) => r.target_type !== 'lock').map((r) => r.target_field))
         ]
         // Derivable targets are blanked together; seed-only targets are
-        // inputs (category feeds cifa feeds oracle) and are probed ONE AT A
+        // inputs (one seed feeds the next down the chain) and are probed ONE AT A
         // TIME with everything else intact — blanking them all at once would
         // starve the very rules that seed them.
         const seedTargets = [

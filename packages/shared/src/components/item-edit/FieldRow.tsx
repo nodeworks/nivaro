@@ -779,7 +779,7 @@ export function FieldRow({
   const value = draft[field.field] ?? null
   const label = field.label ?? titleCase(field.field)
   // A rollup with a parent_filter is only derived for records that MATCH it
-  // (a CAR's Total REQ Amount is typed in — no lines to sum). The lineage
+  // (a hand-entered total is typed in — no lines to sum). The lineage
   // (Σ) affordance is a lie on those records, so it follows the same test.
   const isActuallyComputed = isDerivedForRecord(field, draft)
 

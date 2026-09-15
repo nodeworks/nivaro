@@ -44,7 +44,7 @@ function resolveReturnTo(rawReturnTo: string | undefined): string {
  * Where to send a login that failed or was interrupted.
  *
  * A failed login used to land on the admin's /login regardless of which app
- * started it, so an EFP user who mistyped or was rejected by the IdP ended up
+ * started it, so a headless-app user who mistyped or was rejected by the IdP ended up
  * on a different product with a message about contacting IT. The session's
  * returnTo has already been through resolveReturnTo, so its origin is one of
  * the configured allowed origins and is safe to reuse — that keeps people on

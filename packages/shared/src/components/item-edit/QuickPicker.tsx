@@ -12,8 +12,8 @@ import type { CMSField, CMSRelation } from './types'
 
 /**
  * Quick picker — a guided walk down a record's dependency tree, one field at
- * a time (workflows: Funding Year → Zone → Region → Project Type → Project →
- * Sub Type). Each step's options come through the SAME cascade compiler the
+ * a time (e.g. Year → Zone → Region → Type → Parent → Sub Type). Each step's
+ * options come through the SAME cascade compiler the
  * form's pickers use (helpers.buildCascadeFilter), so a step can never offer a
  * record the field's own picker would refuse, and every pick goes through the
  * host's normal change path — dirty tracking, cascades, auto-select, row rules

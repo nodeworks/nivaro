@@ -286,12 +286,12 @@ function CreateForm({ onDone }: { onDone: () => void }) {
           </Field>
         </div>
         <Field label="Name">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Warehouse inventory feed" className={inputCls} />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Inventory feed" className={inputCls} />
         </Field>
         {type === 'freshness' && (
           <>
             <Field label="Collection">
-              <input value={collection} onChange={(e) => setCollection(e.target.value)} placeholder="warehouse_inventory" className={inputCls} />
+              <input value={collection} onChange={(e) => setCollection(e.target.value)} placeholder="inventory_levels" className={inputCls} />
             </Field>
             <Field label="Max age (hours)">
               <input value={maxAge} onChange={(e) => setMaxAge(e.target.value)} type="number" className={inputCls} />
@@ -316,7 +316,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
         {type === 'ssl_cert' && (
           <>
             <Field label="Domain">
-              <input value={sslHost} onChange={(e) => setSslHost(e.target.value)} placeholder="efp-staging.cable.example.com" className={inputCls} />
+              <input value={sslHost} onChange={(e) => setSslHost(e.target.value)} placeholder="app.example.com" className={inputCls} />
             </Field>
             <Field label="Warn (days before expiry)">
               <input value={warnDays} onChange={(e) => setWarnDays(e.target.value)} type="number" className={inputCls} />

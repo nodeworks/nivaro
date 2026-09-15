@@ -192,7 +192,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const meta = socketMeta.get(socket.id)
       if (meta && typeof payload?.t === 'number') meta.rtt = Date.now() - payload.t
     })
-    // Client self-report: reconnect count + which app (admin/efp-new).
+    // Client self-report: reconnect count + which app (admin/headless host).
     socket.on('client:hello', (payload: { reconnects?: number; app?: string }) => {
       const meta = socketMeta.get(socket.id)
       if (!meta) return
@@ -471,10 +471,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
 
     // The payload names its record: a client with several record tabs mounted
-    // (efp-new keeps every open tab alive) sits in several rooms at once, and
-    // a bare `{viewers}` was applied by EVERY tab's hook — two people sharing
-    // one background tab each saw the other "also viewing" the record they
-    // actually had open (Rob, 2026-09-14).
+    // (a host that keeps every open tab alive) sits in several rooms at once,
+    // and a bare `{viewers}` was applied by EVERY tab's hook — two people
+    // sharing one background tab each saw the other "also viewing" the record
+    // they actually had open (2026-09-14).
     const broadcastViewers = (room: string) => {
       const viewers = [...(recordViewers.get(room)?.values() ?? [])]
       const m = /^record:(.+):([^:]+)$/.exec(room)

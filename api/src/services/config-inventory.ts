@@ -7,7 +7,7 @@ import { db as defaultDb } from '../db/index.js'
  * "What is different between staging and production?" has had no answer. App
  * Blueprints export schema only, Content Promotion moves data rows only, and
  * neither tells you that a queue's sources drifted or that a layout gained a
- * field on one instance and not the other. The EFP go-live scripts carry a
+ * field on one instance and not the other. Deployment go-live scripts carry a
  * classification of every nivaro_* table for exactly this reason; that
  * knowledge is generic to the product, so it lives here rather than in a
  * deployment-specific script.

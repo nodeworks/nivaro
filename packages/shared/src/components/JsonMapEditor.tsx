@@ -6,7 +6,7 @@ import { get, patch, post } from '../lib/commands'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 
 // Generic editor for records whose value columns are JSON DICTS keyed by
-// another collection's record ids (EFP cost tables: `data` = {categoryId:
+// another collection's record ids (e.g. cost tables: `data` = {categoryId:
 // amount}, `timing` = {categoryId: monthOffset}). Pick an existing record or
 // create a new one; rows come from one or more key sections (collections with
 // label templates + optional '$scope' filters) plus static sentinel rows
@@ -241,7 +241,7 @@ export function JsonMapEditor({
         setNewName('')
         setRecordId(savedId ?? null)
       } else {
-        // EFP allows renaming an existing table in place.
+        // Renaming an existing record in place is allowed.
         if (nameDraft !== null && nameDraft.trim()) payload[labelField] = nameDraft.trim()
         await client.request(patch(`/items/${config.collection}/${recordId}`, payload))
       }

@@ -170,7 +170,7 @@ import {
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
-// Oracle/Fusion wrap a JSON fragment ("o:errorDetails": [{ detail: … }]) in an
+// Oracle-style ERPs wrap a JSON fragment ("o:errorDetails": [{ detail: … }]) in an
 // XML element whose content is HTML-entity-escaped — decode and pull every
 // "detail" value; fall back to a tag-stripped copy of the message. Mirrors
 // extractErpErrorDetails on the server.
@@ -287,10 +287,10 @@ const ALL_PRESET_SENTINEL = '__all__'
  * A one-click rewrite of every row in the grid, driven by an aggregate of a
  * related collection.
  *
- * EFP's "Close Out Lines" is one instance of this shape: for each REQ line,
- * sum `open_unbilled_amount` across the PO lines pointing at it and, where the
- * line covers that remainder, subtract it. Expressed as config rather than
- * EFP code so any collection can do the same:
+ * A "Close Out Lines" action is one instance of this shape: for each request
+ * line, sum `open_unbilled_amount` across the PO lines pointing at it and, where
+ * the line covers that remainder, subtract it. Expressed as config rather than
+ * host code so any collection can do the same:
  *
  *   {label:'Close Out Lines', relation:'po_line_items',
  *    aggregate:{field:'open_unbilled_amount', op:'sum'},
@@ -307,17 +307,31 @@ const ALL_PRESET_SENTINEL = '__all__'
  */
 export interface GridStatConfig {
   label: string
-  /** Expression — `{{$parent.requisition_amount}} - {{$sum.total}}`. */
+  /** Expression — `{{$parent.amount}} - {{$sum.total}}`. */
   value: string
   format?: 'currency' | 'number'
   /** 'danger' paints a negative result red (the "over" state). */
   negative?: 'danger'
 }
 
+/** Row-editor action: spread a remaining amount across a row's empty fields
+ *  (a forecast year's open months). `remaining` is a grid-token expression —
+ *  `{{$parent.amount}} - {{$sum.total}}` — evaluated with the row
+ *  being edited included in the sums, so spreading once lands the balance on
+ *  the target fields and a second click has nothing left. */
+export interface GridSpreadConfig {
+  fields: string[]
+  remaining: string
+  label?: string
+  /** Fill only empty/zero targets (default true); false = overwrite all. */
+  only_empty?: boolean
+  format?: 'currency' | 'number'
+}
+
 export interface GridSumCapConfig {
   /** Column summed over the grid (write-computed columns are derived per row). */
   field: string
-  /** Expression for the ceiling — `{{$parent.requisition_amount}}`. */
+  /** Expression for the ceiling — `{{$parent.amount}}`. */
   cap: string
   format?: 'currency' | 'number'
   label?: string
@@ -368,7 +382,7 @@ export function evalClientFormula(formula: string, row: Record<string, unknown>)
  *  the `replace` columns from the parent's defaults (same entry shape as
  *  pinned_options — `when` gates read parent fields only). The swap runs the
  *  grid's row rules with the child field as the changed field, so every
- *  downstream derivation (category type, oracle category, task…) follows. */
+ *  downstream derivation (category type, ERP category, task…) follows. */
 type CascadeSwapConfig = {
   keep?: string[]
   replace: Record<string, PinnedCfg[]>
@@ -447,7 +461,7 @@ function buildMatchedDrawer(
 }
 
 export type AllocateDrawerConfig = {
-  /** Option collection browsed in the drawer (e.g. workflow_line_items). */
+  /** Option collection browsed in the drawer (e.g. request_lines). */
   collection: string
   /** Grid FK column that receives the picked option's id. */
   target_field: string
@@ -463,7 +477,7 @@ export type AllocateDrawerConfig = {
     string | { path?: string; label?: string; format?: string; formula?: string; width?: number }
   >
   /** Group option rows under collapsible headers by this (dotted) path —
-   *  EFP grouped allocation lines by workflow. Groups start collapsed;
+   *  e.g. allocation lines grouped by their parent record. Groups start collapsed;
    *  groups containing an existing allocation start expanded. */
   group_by?: string
   /** Per-row allocation ceiling formula (same tokens as column formulas incl.
@@ -491,7 +505,7 @@ function fmtDrawerVal(v: unknown, format?: string, colOptions?: unknown): string
   return String(v)
 }
 
-/** EFP AllocateCost-style drawer: browse every eligible option row with
+/** Allocate-cost-style drawer: browse every eligible option row with
  *  context columns, type an amount per row → grid rows are created/updated/
  *  removed live. Generic over any O2M grid via options.allocate_drawer. */
 function AllocateDrawer({
@@ -1332,6 +1346,7 @@ export function InlineTableField({
   rowLints,
   stats,
   sumCap,
+  spreadRemaining,
   submissionErrors,
   prefillParentId,
   parentFieldKey,
@@ -1381,12 +1396,12 @@ export function InlineTableField({
   rowFilter?: Record<string, unknown>
   /** Values seeded onto every NEW row created from this grid (e.g. {is_osp: true}). */
   rowDefaults?: Record<string, unknown>
-  /** EFP-style allocate drawer: browse all eligible options, type amounts. */
+  /** Allocate drawer: browse all eligible options, type amounts. */
   allocateDrawer?: AllocateDrawerConfig
   autoAllocate?: AutoAllocateConfig
   /** Toolbar buttons that rewrite EVERY row in one go from an aggregate of a
-   *  related collection — the generic form of EFP's "Close Out Lines" (reduce
-   *  each REQ line by the open unbilled amount across its PO lines). */
+   *  related collection — the generic form of a "Close Out Lines" action (reduce
+   *  each request line by the open unbilled amount across its PO lines). */
   rowBulkActions?: RowBulkActionConfig[]
   /** Import template NAME — renders that template's upload button in this
    *  grid's toolbar (existing records; wired to ItemEditForm's reimport flow). */
@@ -1408,6 +1423,7 @@ export function InlineTableField({
    *  grid (this row's draft included) would exceed `cap` (same tokens as
    *  stats). The client twin of the server's sum_cap validation rule. */
   sumCap?: GridSumCapConfig | null
+  spreadRemaining?: GridSpreadConfig | null
   /** Flag rows a failed ERP push rejected (options.submission_errors) — the
    *  latest failed nivaro_erp_submissions row for the PARENT record is parsed
    *  for "LineNumber N: reason" entries and matching rows tint red with the
@@ -2249,8 +2265,8 @@ export function InlineTableField({
   )
   // Matched-aggregate columns ('match-agg-column'): aggregate rows of another
   // collection matched to each grid row by filters ($parent tokens fetch-scope
-  // the query once; $row tokens group the fetched rows client-side — EFP
-  // "Allocated qty per material by cifa" pattern). options:
+  // the query once; $row tokens group the fetched rows client-side — the
+  // "allocated qty per material by item" pattern). options:
   // { match: {collection, filters}, aggregate?: 'sum'|'count', value_field,
   //   formula?: '{{quantity}} - {{__agg__}}', format?: 'currency' }
   const matchAggCols = useMemo(() => cols.filter((c) => c.interface === 'match-agg-column'), [cols])
@@ -2893,8 +2909,8 @@ export function InlineTableField({
   // Membership filter in LAYOUT order — stored preset column order is ignored for
   // child columns; unknown/stale names in preset.columns are silently skipped.
   // A dotted token is EITHER a relation-path / formula column the layout
-  // carries as its own field ("po_line_items.amount" — kept, filtered like any
-  // child column) OR a drawer summary token ("unit_workflows.unit" — rendered
+  // carries as its own field ("po_lines.amount" — kept, filtered like any
+  // child column) OR a drawer summary token ("allocations.unit" — rendered
   // synthetically below). Dropping every dotted token hid relation-path
   // columns from every named view; they only ever showed under "All".
   const drawerRelationFields = new Set(
@@ -3649,7 +3665,7 @@ export function InlineTableField({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [rowSoftLock])
-  // "Beth is editing line 3 · Kim is editing line 7" — saved rows only, in
+  // "Jane is editing line 3 · Sam is editing line 7" — saved rows only, in
   // display order; the line is the row's line_number, else its position.
   const remoteEditorLines = useMemo(() => {
     if (remoteRowEditors.size === 0) return []
@@ -3849,9 +3865,9 @@ export function InlineTableField({
       }
       // No default on this parent (or its record still loading): leave the
       // rows flagged and try again when the parent rows land. Once the parent
-      // rows HAVE landed and still yield nothing, say so once — a project with
-      // only the "if P2" default set on a non-P2 workflow looks exactly like
-      // a broken swap otherwise (Rob's ROBLEE test, 2026-09-11).
+      // rows HAVE landed and still yield nothing, say so once — a parent whose
+      // only default is gated on a condition the record fails looks exactly
+      // like a broken swap otherwise (reported 2026-09-11).
       if (!resolved) {
         const parentsLanded = Object.values(cfg.replace)
           .flat()
@@ -3931,7 +3947,7 @@ export function InlineTableField({
           if (rowRules && rowRules.length > 0) {
             // Values the rules had derived for the OLD state (equal to the
             // from-scratch probe) are AUTO, not the user's — blank them so
-            // only-if-empty rules (expenditure type, CIFA seed) re-derive for
+            // only-if-empty rules (e.g. a type or item seed) re-derive for
             // the new value instead of keeping the old answer and reading as
             // "overridden" afterwards. A hand-picked value (≠ probe) stays.
             const probe = await client
@@ -4503,7 +4519,7 @@ export function InlineTableField({
    *  these before a rule pass so only-if-empty rules re-derive them for the
    *  new trigger value; a hand-picked value (≠ expected) is never listed and
    *  keeps the 2026-09-08 protection. Rules the change doesn't trigger are
-   *  left alone — a quantity edit must not blank an auto expenditure type. */
+   *  left alone — a quantity edit must not blank an auto-derived type. */
   function autoTargetsFor(
     changedKey: string,
     draft: Record<string, unknown>,
@@ -4615,6 +4631,17 @@ export function InlineTableField({
     })
   }
 
+  /** Several fields at once (the spread action) — one state write, no rule
+   *  pass; calling setDraftField in a loop would read a stale editStateRef
+   *  and keep only the last key. */
+  function setDraftFields(patch: Record<string, unknown>) {
+    const cur = editStateRef.current
+    const rowId = cur?.rowId ?? null
+    if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
+    for (const k of Object.keys(patch)) draftKeySeqRef.current.seqs.set(k, ++ruleEvalSeqRef.current)
+    const nextDraft = applyComputedFields({ ...(cur?.draft ?? {}), ...patch })
+    setEditState((st) => (st ? { ...st, draft: nextDraft } : st))
+  }
   function setDraftField(k: string, v: unknown) {
     const cur = editStateRef.current
     const rowId = cur?.rowId ?? null
@@ -4637,8 +4664,8 @@ export function InlineTableField({
 
     if (rowRules && rowRules.length > 0 && client) {
       const parentCtx = buildParentCtx()
-      // Auto values follow their triggers (Rob, 2026-09-11): a category change
-      // re-derives an auto-filled expenditure type; a hand-picked one stays.
+      // Auto values follow their triggers (2026-09-11): a category change
+      // re-derives an auto-filled dependent field; a hand-picked one stays.
       const autoFields = autoTargetsFor(k, cur?.draft ?? {}, cur?.expected)
       const evalData: Record<string, unknown> = { ...nextDraft }
       for (const f of autoFields) evalData[f] = null
@@ -5487,7 +5514,7 @@ export function InlineTableField({
   // rows, empty states) must span precisely this many cells. Under
   // `table-fixed` an overshooting colSpan is NOT clamped: the browser invents
   // a phantom column with the leftover width and no header cell, which reads
-  // as a darker strip on the right of the header (reported from efp-new dark).
+  // as a darker strip on the right of the header (reported from a host's dark theme).
   // Selection column renders only on the record's own rows (never in the
   // addendum view, which draws its own cells) — and it counts here.
   const selectColOn = selectMode && activeView === 'original' && !readOnly
@@ -5881,7 +5908,7 @@ export function InlineTableField({
       let total: number | null = null
       for (const src of cfg?.sources ?? []) {
         // Heuristic match: the drawer field usually IS the related collection
-        // name (unit_workflows); a single-drawer grid matches by default.
+        // name; a single-drawer grid matches by default.
         const relFields = (drawerRelations ?? []).map((d) => (typeof d === 'string' ? d : d.field))
         const relField =
           relFields.find((f) => f === src.related_collection) ??
@@ -6238,6 +6265,14 @@ export function InlineTableField({
             )
           })}
       </div>
+      {spreadRemaining && spreadRemaining.fields?.length > 0 && !readOnly && (
+        <SpreadRemainingAction
+          config={spreadRemaining}
+          draft={args.draft}
+          remaining={evaluateNumeric(spreadRemaining.remaining, resolveGridToken)}
+          onApply={setDraftFields}
+        />
+      )}
       {rowMatchPanel &&
         args.rowId &&
         !args.rowId.startsWith('pending:') &&
@@ -8519,6 +8554,73 @@ export function InlineTableField({
           restoreFromHistory(snapshot, { ...ctx, itemId: ctx.itemId ?? String(historyRow!.id) })
         }
       />
+    </div>
+  )
+}
+
+/** "Spread left to forecast · $1,234.00" — puts the remaining amount evenly
+ *  onto the row's empty target fields (cent-rounded, the last field takes the
+ *  rounding dust). Disabled with the reason when there is nothing left or
+ *  nowhere to put it. */
+function SpreadRemainingAction({
+  config,
+  draft,
+  remaining,
+  onApply
+}: {
+  config: GridSpreadConfig
+  draft: Record<string, unknown>
+  remaining: number | null
+  onApply: (patch: Record<string, unknown>) => void
+}) {
+  const onlyEmpty = config.only_empty !== false
+  const isBlank = (v: unknown) => v == null || v === '' || Number(v) === 0
+  const targets = onlyEmpty ? config.fields.filter((f) => isBlank(draft[f])) : config.fields
+  const amount =
+    remaining == null || !Number.isFinite(remaining) ? 0 : Math.round(remaining * 100) / 100
+  const fmt = (n: number) =>
+    config.format === 'number'
+      ? n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+      : n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+  const reason =
+    amount <= 0
+      ? amount < 0
+        ? `${fmt(-amount)} over — nothing to spread`
+        : 'Nothing left to spread'
+      : targets.length === 0
+        ? 'Every target field already holds a value'
+        : null
+  const apply = () => {
+    if (reason) return
+    const n = targets.length
+    const per = Math.floor((amount / n) * 100) / 100
+    const patch: Record<string, unknown> = {}
+    targets.forEach((f, i) => {
+      patch[f] = i === n - 1 ? Math.round((amount - per * (n - 1)) * 100) / 100 : per
+    })
+    onApply(patch)
+  }
+  return (
+    <div className='mt-2 flex items-center gap-2' data-o2m-spread>
+      <button
+        type='button'
+        onClick={apply}
+        disabled={!!reason}
+        title={
+          reason ??
+          `${fmt(amount)} across ${targets.length} ${targets.length === 1 ? 'field' : 'fields'}`
+        }
+        className='inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11.5px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-border dark:bg-background dark:text-slate-200 dark:hover:bg-white/5'
+      >
+        {config.label ?? 'Spread remaining'}
+        <span className='tabular-nums text-slate-500 dark:text-slate-400'>{fmt(amount)}</span>
+      </button>
+      {!reason && (
+        <span className='text-[11px] text-slate-400 dark:text-slate-500'>
+          across {targets.length} empty {targets.length === 1 ? 'field' : 'fields'}
+        </span>
+      )}
+      {reason && <span className='text-[11px] text-slate-400 dark:text-slate-500'>{reason}</span>}
     </div>
   )
 }

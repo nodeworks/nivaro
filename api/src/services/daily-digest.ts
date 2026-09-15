@@ -27,7 +27,7 @@ import { fetchQueueItems } from './queues.js'
  *
  * The separate "Your daily Nivaro digest" email + digest-daily/weekly crons
  * were folded in here (2026-09-10): two digests with different names and
- * hours were the collision Rob asked about.
+ * hours were a reported collision.
  */
 
 const DIGEST_WHY = 'you asked for a daily summary instead of individual emails'

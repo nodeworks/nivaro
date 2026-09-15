@@ -313,8 +313,8 @@ export function AlertRuleDrawer({
       setFrequency('daily')
       setIsShared(false)
       setStatus('active')
-      // Seed the scope from the user's restricted visibility (EFP
-      // mergeEffectiveFilters behavior) for the filters this metric supports.
+      // Seed the scope from the user's restricted visibility (merge-effective-
+      // filters behavior) for the filters this metric supports.
       const seeded: Record<string, Array<string | number>> = {}
       for (const spec of def?.supported_filters ?? []) {
         const seed = scopeSeeds?.[spec.key]

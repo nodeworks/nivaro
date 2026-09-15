@@ -176,7 +176,7 @@ function parsePreferences<T extends { preferences?: unknown }>(row: T): T {
 /**
  * What a NON-ADMIN may see of another user. The assignee/mention pickers that
  * every record form renders need a person directory, but the full USER_COLS set
- * carries `preferences` (efp-new stores access-request notes there), phone, and
+ * carries `preferences` (headless hosts store access-request notes there), phone, and
  * the manager/delegate graph — none of which belong in a picker payload.
  */
 const DIRECTORY_USER_COLS = [
@@ -235,7 +235,7 @@ export async function listUsers(
   const applyConditions = (qb: Knex.QueryBuilder) => {
     if (search) {
       // AND across whitespace-separated terms, OR across columns, so a full
-      // name ("Rob Lee") matches — a single %Rob Lee% never hits any one
+      // name ("Jane Doe") matches — a single %Jane Doe% never hits any one
       // column and made every multi-word search return nothing.
       for (const term of search.trim().split(/\s+/)) {
         qb.where((inner) => {
@@ -264,7 +264,7 @@ export async function listUsers(
 
   // Hidden accounts: rows flagged is_redacted, plus rows the anonymiser
   // scrubbed by email only ('Redacted_…') and legacy import placeholders
-  // ('legacy-…') whose flag was never set. The EFP clients used to hide the
+  // ('legacy-…') whose flag was never set. Legacy clients used to hide the
   // email-prefix rows per page, which blanked whole pages and inflated the
   // page count because the server still returned and counted them.
   const applyHiddenAccountFilter = (qb: Knex.QueryBuilder) => {

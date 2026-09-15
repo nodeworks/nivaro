@@ -226,7 +226,7 @@ export function RawEditSheet({
         onClose()
       }}
     >
-      <SheetContent side='right' className='flex w-[720px] max-w-[92vw] flex-col p-0 sm:max-w-[92vw]'>
+      <SheetContent side='right' className='flex w-[1040px] max-w-[94vw] flex-col p-0 sm:max-w-[94vw]'>
         <SheetHeader className='shrink-0 border-b border-slate-200 px-5 py-3 dark:border-border'>
           <SheetTitle className='flex items-center gap-2 text-[14px]'>
             <Wrench className='h-4 w-4 text-nvr-cyan' />

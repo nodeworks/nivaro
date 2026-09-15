@@ -5,7 +5,7 @@ import { selectInChunks } from './db-batch.js'
  * The record a pipeline instance's RULES are evaluated against.
  *
  * Owner-group filters, transition conditions and skip criteria all read
- * business columns (regions, project.project_type, requisition_amount). An
+ * business columns (regions, project.category, total_amount). An
  * addendum runs its own workflow instance, but the nivaro_addendums row has
  * none of those columns — resolving against it made every state of an
  * addendum's approval chain resolve zero owners and mis-predict skips. The

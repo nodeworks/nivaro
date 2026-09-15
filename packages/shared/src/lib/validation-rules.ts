@@ -141,7 +141,7 @@ export function applyValidationRule(
         return rule.message ?? `${label} must be a valid URL`
       }
     }
-    // Date must be at least N calendar days from today (EFP delivery-date
+    // Date must be at least N calendar days from today (e.g. delivery-date
     // minimums). max_days_from_today caps how far out a date may be.
     case 'min_days_from_today': {
       const diff = calendarDaysFromToday(value)

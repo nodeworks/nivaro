@@ -8,8 +8,8 @@ import { getSocket, onCollectionUpdate } from '@/lib/socket'
 
 /**
  * Chat presence rides the `user_presence` collection (upserted heartbeat every
- * 30 s), read back with a 5-minute online window — the same model efp-new
- * uses, pure /items so RBAC + live collection:update apply. Distinct from the
+ * 30 s), read back with a 5-minute online window — the same model headless
+ * frontends use, pure /items so RBAC + live collection:update apply. Distinct from the
  * socket-based page presence (`use-page-presence.ts`, the admin journey feed):
  * this one is what the chat Online tab and typing indicators read.
  */
@@ -71,8 +71,8 @@ async function beat(userId: string, name: string, path: string, roleName: string
     // hold a role UUID here, which rendered as the user's subtitle).
     role_name: roleName,
     last_seen: new Date().toISOString(),
-    // 'API' — what people call this console. efp-new sends nothing, so the
-    // ordinary case stays unlabelled.
+    // 'API' — what people call this console. Headless frontends send nothing,
+    // so the ordinary case stays unlabelled.
     app: 'API',
     // Re-asserted every beat: the socket's disconnect bookkeeping is
     // per-process, so a server restart strands is_online=false/true bits —

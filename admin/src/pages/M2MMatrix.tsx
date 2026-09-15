@@ -7,8 +7,8 @@ import { api } from '@/lib/api'
 
 /**
  * M2M matrix bulk editor (#57): records as rows, link targets as columns,
- * checkboxes toggling junction rows — the zone-scoping-BOM-categories script
- * as a UI. Every write goes through the items service, so RBAC, hooks and
+ * checkboxes toggling junction rows — bulk category-to-region scoping as a UI.
+ * Every write goes through the items service, so RBAC, hooks and
  * junction-driven recomputes (auto-ids, rollups) all fire per toggle.
  */
 

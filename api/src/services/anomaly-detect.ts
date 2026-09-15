@@ -7,7 +7,7 @@ import { parseJsonSafe } from './metric-alerts.js'
 import { notifyUser } from './notification-channels.js'
 
 /**
- * Statistical anomaly detection (EFP AnomalyChecks port, generalized).
+ * Statistical anomaly detection.
  *
  * A definition names a DETECTOR (key) + a row source: a custom query returning
  * one row per transaction with subject / group / value / date columns. Rules

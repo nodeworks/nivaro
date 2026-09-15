@@ -13,7 +13,7 @@ import { getLabels } from '../services/queues.js'
  * timeline, workflow history, comments and tasks. Built for audits and
  * hand-offs ("print me everything about this request").
  *
- * Configurable per layout (Rob's explicit ask): the collection's ACTIVE
+ * Configurable per layout: the collection's ACTIVE
  * grouped layout must have `dossier_enabled` on (migration 278, default OFF)
  * or the route answers 404 — the button simply doesn't exist for that
  * collection. Record access = readOne as the caller (RBAC/RLS/scopes bind).

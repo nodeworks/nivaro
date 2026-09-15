@@ -23,8 +23,7 @@ import {
 
 // ─── Rollup widget (generic grouped-measure summary) ────────────────────────
 //
-// Generalizes the legacy EFP "Deployments" cost summary slot
-// (efp/src/components/molecules/WorkflowDeployments): rows of a target
+// Generalizes a legacy cost-summary slot: rows of a target
 // collection reached from a host record via a relation path, grouped by 1-3
 // levels client-side, with per-row numeric measures (each with its own
 // eq/neq/nnull filter) summed at every level. This module owns config

@@ -8,10 +8,10 @@ import { logActivity } from './activity.js'
 import { parseRoom } from './chat.js'
 
 /**
- * Chat AI bot — "@efp what state is CR26-76773".
+ * Chat AI bot — "@bot what state is REQ-1234".
  *
  * The bot NAME is instance config (`nivaro_settings.chat_bot_name`, null =
- * disabled) — EFP calls it @efp, a fresh install can pick anything. Questions
+ * disabled) — each install picks its own. Questions
  * run through the SAME permission-checked AI chat tools as /ai/ask, AS THE
  * PERSON WHO ASKED — the bot can never reveal a record the asker couldn't
  * read themselves. Replies post as a real (suspended) bot user so the message
@@ -170,13 +170,13 @@ export function registerBotTool(def: BotToolDef): void {
   extensionBotTools.set(def.name, def)
 }
 
-/** Watch command (#223): "@bot watch CR26-76773" — subscribes the asker via
+/** Watch command (#223): "@bot watch REQ-1234" — subscribes the asker via
  *  the entity-room registry (token → collection/record), same per-record
  *  subscription shape as the record bell. */
 const WATCH_TOOL: Anthropic.Tool = {
   name: 'watch_record',
   description:
-    'Subscribe the asking user to a record so every change notifies them. Use when they say "watch <record id>" or "follow <record id>". Pass the human record id exactly as they wrote it (e.g. CR26-76773).',
+    'Subscribe the asking user to a record so every change notifies them. Use when they say "watch <record id>" or "follow <record id>". Pass the human record id exactly as they wrote it (e.g. REQ-1234).',
   input_schema: {
     type: 'object',
     properties: { record_token: { type: 'string', description: 'The record id/token to watch' } },
@@ -283,7 +283,7 @@ const HELP_TOOL: Anthropic.Tool = {
 }
 
 /** The bot-only reminder tool — extracts the WHEN so "remind me Friday at 9
- *  about the CR26-76773 PO" needs no date-picker UI. */
+ *  about the REQ-1234 order" needs no date-picker UI. */
 const SET_REMINDER_TOOL: Anthropic.Tool = {
   name: 'set_reminder',
   description:

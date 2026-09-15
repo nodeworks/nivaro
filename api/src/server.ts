@@ -382,7 +382,7 @@ export async function buildServer() {
       // Segment-exact prefix match: '/api/...' is an API miss, but the admin
       // SPA routes /api-analytics, /api-keys and /api-docs also START WITH
       // '/api' — a bare startsWith('/api') served them a JSON 404 on hard
-      // reload instead of the app (Rob hit it live on /api-analytics).
+      // reload instead of the app (seen live on /api-analytics).
       if (/^\/api([/?]|$)/.test(req.url) || req.url.startsWith('/socket.io')) {
         return reply.code(404).send({ error: 'Not found' })
       }
@@ -1027,7 +1027,7 @@ export async function buildServer() {
         })
       })
 
-      // Chat-bot reminders — "@efp remind me Friday about X". Due rows deliver
+      // Chat-bot reminders — "@bot remind me Friday about X". Due rows deliver
       // via notifyUser (in-app + web push) and mark sent; failures retry next tick.
       app.cron.schedule('chat-reminders', '*/5 * * * *', async () => {
         const { db } = await import('./db/index.js')
@@ -1285,7 +1285,7 @@ export async function buildServer() {
         }
       })
 
-      // ── Metric alert engine (EFP Alert Manager parity) ────────────────────────
+      // ── Metric alert engine ───────────────────────────────────────────────────
       // Rule checks by check_frequency, immediate notifications inside the check;
       // daily/weekly digests bundle firing alerts per subscriber; anomaly
       // detection runs its own daily/weekly passes.

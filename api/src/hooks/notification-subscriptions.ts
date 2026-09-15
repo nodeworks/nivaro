@@ -89,6 +89,99 @@ export function setApp(app: FastifyInstance) {
   _app = app
 }
 
+/** Everything one person changed on one record in one sitting: header field
+ *  diffs plus child-row diffs / adds / removes, each labelled the way the
+ *  email table shows them. */
+export interface RecordChangeBundle {
+  changes: Array<{ field: string; label: string; old: string; new: string }>
+  /** Distinct child collections touched, for the subject line. */
+  children: string[]
+  /** Number of distinct writes folded in. */
+  writes: number
+}
+
+// ── Per-record coalescing (2026-09-14: one edit to a child row + its parent
+// used to send two emails). A form save is several writes: the parent
+// PATCH, then each staged line. Record watches used to get one message per
+// write. Now every record-scoped change is parked per (record, actor) and
+// flushed once the writes go quiet for COALESCE_MS (hard cap COALESCE_MAX_MS
+// so a slow trickle still lands), as ONE notification + ONE email listing
+// all of it. Collection-wide subscriptions keep firing per write — they are
+// feeds, not a watch on a record. Pending work is process-local; a restart
+// mid-window loses the bundle (the writes themselves are safe).
+const COALESCE_MS = Number(process.env.RECORD_WATCH_COALESCE_MS ?? 15_000)
+const COALESCE_MAX_MS = Number(process.env.RECORD_WATCH_COALESCE_MAX_MS ?? 90_000)
+type Pending = {
+  collection: string
+  item: string
+  actorUserId: string | undefined
+  bundle: RecordChangeBundle
+  timer: NodeJS.Timeout | null
+  startedAt: number
+}
+const pendingRecordChanges = new Map<string, Pending>()
+
+async function flushRecordChanges(key: string) {
+  const p = pendingRecordChanges.get(key)
+  if (!p) return
+  pendingRecordChanges.delete(key)
+  if (p.timer) clearTimeout(p.timer)
+  if (p.bundle.changes.length === 0) return
+  await fireSubscriptionNotifications(
+    p.collection,
+    'update',
+    p.item,
+    { id: p.item },
+    p.actorUserId,
+    undefined,
+    null,
+    { scope: 'record', bundle: p.bundle }
+  ).catch(() => undefined)
+}
+
+/** Test/ops hook: flush everything now (unit tests, graceful shutdown). */
+export async function flushAllRecordChanges() {
+  await Promise.all([...pendingRecordChanges.keys()].map((k) => flushRecordChanges(k)))
+}
+
+function enqueueRecordChange(
+  collection: string,
+  item: string,
+  actorUserId: string | undefined,
+  changes: RecordChangeBundle['changes'],
+  child?: string
+) {
+  if (changes.length === 0) return
+  const key = `${collection}:${item}:${actorUserId ?? ''}`
+  let p = pendingRecordChanges.get(key)
+  if (!p) {
+    p = {
+      collection,
+      item,
+      actorUserId,
+      bundle: { changes: [], children: [], writes: 0 },
+      timer: null,
+      startedAt: Date.now()
+    }
+    pendingRecordChanges.set(key, p)
+  }
+  // A field edited twice in one sitting reads old(first) → new(last).
+  for (const c of changes) {
+    const prior = p.bundle.changes.find((x) => x.field === c.field && x.label === c.label)
+    if (prior) prior.new = c.new
+    else p.bundle.changes.push(c)
+  }
+  if (child && !p.bundle.children.includes(child)) p.bundle.children.push(child)
+  p.bundle.writes += 1
+  if (p.timer) clearTimeout(p.timer)
+  const remaining = Math.max(
+    500,
+    Math.min(COALESCE_MS, COALESCE_MAX_MS - (Date.now() - p.startedAt))
+  )
+  p.timer = setTimeout(() => void flushRecordChanges(key), remaining)
+  p.timer.unref?.()
+}
+
 async function fireSubscriptionNotifications(
   collection: string,
   eventType: 'create' | 'update' | 'delete',
@@ -108,14 +201,24 @@ async function fireSubscriptionNotifications(
     changes?: Array<{ field: string; label: string; old: string; new: string }>
   },
   /** The row BEFORE an update — powers the old → new table in the email. */
-  previous?: Record<string, unknown> | null
+  previous?: Record<string, unknown> | null,
+  opts?: {
+    /** Which subscriptions to serve: 'wide' = collection-wide only, 'record'
+     *  = per-record watches only (the coalescer's flush), 'all' = both. */
+    scope?: 'all' | 'wide' | 'record'
+    /** A coalesced bundle of everything one person changed on this record in
+     *  one sitting — header fields and child rows — sent as ONE message. */
+    bundle?: RecordChangeBundle
+  }
 ) {
+  const scope = opts?.scope ?? 'all'
+  const bundle = opts?.bundle
   try {
     // An update that changed nothing (a meta-only PATCH, an alias-only write,
     // a re-save) is not news — nobody wants "X was updated" with an empty
     // change list. Judged on the re-read row vs the row before; child-row
     // roll-ups are judged by the caller on the child's own delta.
-    if (eventType === 'update' && !viaChild && data && previous) {
+    if (eventType === 'update' && !viaChild && !bundle && data && previous) {
       const delta = computeDelta(previous, data)
       for (const k of ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at'])
         delete delta[k]
@@ -165,6 +268,8 @@ async function fireSubscriptionNotifications(
 
     for (const sub of subs) {
       const recordScoped = isRecordScoped(sub)
+      if (scope === 'wide' && recordScoped) continue
+      if (scope === 'record' && !recordScoped) continue
       // Skip the actor for collection-wide subscriptions — nobody wants a
       // "you changed X" for every save. A record-scoped watch is explicit and
       // fires on the watcher's own edits too (Rob, 2026-09-11).
@@ -193,16 +298,26 @@ async function fireSubscriptionNotifications(
               .join(', ')}${viaChild.changes.length > 3 ? ', …' : ''}`
           : ''
       const recordRef = friendly ? friendly : `item ${item} in ${collection}`
-      let subject = viaChild
-        ? `${label}: ${childRef} ${viaChild.event}d${by}`
-        : friendly
-          ? `${label}: ${eventType}d${by}`
-          : `${label}: ${eventType} in ${collection}${by}`
-      let message = viaChild
-        ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childRef} on ${recordRef}${childWhat}`
-        : actorName
-          ? `${actorName} ${eventType}d ${recordRef}${friendly ? ` (${collectionLabel})` : ''}`
-          : `${recordRef} was ${eventType}d${friendly ? ` (${collectionLabel})` : ''}`
+      const bundleWhat = bundle
+        ? ` — ${bundle.changes
+            .slice(0, 3)
+            .map((c) => `${c.label}: ${c.old ? `${c.old} → ` : ''}${c.new}`)
+            .join(', ')}${bundle.changes.length > 3 ? `, +${bundle.changes.length - 3} more` : ''}`
+        : ''
+      let subject = bundle
+        ? `${label}: ${bundle.changes.length} ${bundle.changes.length === 1 ? 'change' : 'changes'}${by}`
+        : viaChild
+          ? `${label}: ${childRef} ${viaChild.event}d${by}`
+          : friendly
+            ? `${label}: ${eventType}d${by}`
+            : `${label}: ${eventType} in ${collection}${by}`
+      let message = bundle
+        ? `${actorName ?? 'Someone'} changed ${recordRef}${bundleWhat}`
+        : viaChild
+          ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childRef} on ${recordRef}${childWhat}`
+          : actorName
+            ? `${actorName} ${eventType}d ${recordRef}${friendly ? ` (${collectionLabel})` : ''}`
+            : `${recordRef} was ${eventType}d${friendly ? ` (${collectionLabel})` : ''}`
       // Notification templates (#126): a `notification:subscription.<event>`
       // mail-template override rewrites the wording; {{changes}} carries the
       // field diff (#384). Hardcoded wording stays the default.
@@ -214,7 +329,9 @@ async function fireSubscriptionNotifications(
         label,
         changes: renderChangesToken(data as Record<string, unknown>, null)
       }).catch(() => null)
-      if (templated) {
+      // A coalesced bundle already says exactly what moved — an admin
+      // template for the bare event would hide it.
+      if (templated && !bundle) {
         subject = templated.subject
         message = templated.message || message
       }
@@ -285,11 +402,13 @@ async function fireSubscriptionNotifications(
             record_card: card,
             record_url: card?.url ?? `${config.ADMIN_URL}/collections/${collection}/${item}`,
             friendly_id: friendly ?? card?.title ?? String(item),
-            changes: viaChild
-              ? (viaChild.changes ?? [])
-              : delta
-                ? await labelledChanges(collection, delta, previous)
-                : [],
+            changes: bundle
+              ? bundle.changes
+              : viaChild
+                ? (viaChild.changes ?? [])
+                : delta
+                  ? await labelledChanges(collection, delta, previous)
+                  : [],
             via_child: viaChild
               ? {
                   collection: viaChild.collection,
@@ -609,27 +728,28 @@ async function rollUpToParents(
   }
   const label = await friendlyRecordLabel(child, childItem).catch(() => null)
   const rowLabel = label && label !== `#${childItem}` ? label : null
-  // Each change names the row it belongs to — "May · 2027: 2 → 1". A month
-  // alone does not say which year was forecast (Rob, 2026-09-14), and the
-  // same holds for a line's Price or an allocation's Amount.
-  if (rowLabel && changes) changes = changes.map((c) => ({ ...c, label: `${c.label} · ${rowLabel}` }))
+  // Each change names the row it belongs to — "Amount · Line 3: 2 → 1". A
+  // field name alone does not say which child row moved.
+  if (rowLabel && changes)
+    changes = changes.map((c) => ({ ...c, label: `${c.label} · ${rowLabel}` }))
+  const childLabel = child.replace(/_/g, ' ')
+  const rowRef = rowLabel ? `${childLabel} ${rowLabel}` : `${childLabel} row`
+  // Adds/removes become one change line each; updates carry their diff.
+  const bundleChanges: RecordChangeBundle['changes'] =
+    event === 'update'
+      ? (changes ?? [])
+      : [
+          {
+            field: `__${event}__:${child}:${childItem}`,
+            label: rowRef,
+            old: '',
+            new: event === 'create' ? 'added' : 'removed'
+          }
+        ]
   for (const rel of rels) {
     const parentId = row[rel.fk]
     if (parentId == null || parentId === '') continue
-    await fireSubscriptionNotifications(
-      rel.parent,
-      'update',
-      String(parentId),
-      { id: parentId },
-      actorUserId,
-      {
-        collection: child,
-        item: childItem,
-        event,
-        label: rowLabel,
-        changes
-      }
-    ).catch(() => undefined)
+    enqueueRecordChange(rel.parent, String(parentId), actorUserId, bundleChanges, child)
   }
 }
 
@@ -646,6 +766,9 @@ export function registerNotificationSubscriptionHooks() {
     if (ctx.collection.startsWith('nivaro_')) return
     const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
     const row = ctx.result as Record<string, unknown> | null
+    const previous = (ctx.previousData as Record<string, unknown> | null) ?? null
+    // Collection-wide feeds fire per write; the record's own watchers get
+    // one coalesced message once the sitting's writes go quiet.
     await fireSubscriptionNotifications(
       ctx.collection,
       'update',
@@ -653,8 +776,21 @@ export function registerNotificationSubscriptionHooks() {
       row,
       ctx.user?.id,
       undefined,
-      (ctx.previousData as Record<string, unknown> | null) ?? null
+      previous,
+      {
+        scope: 'wide'
+      }
     )
+    if (row && previous) {
+      const delta = computeDelta(previous, row)
+      for (const k of ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at'])
+        delete delta[k]
+      if (Object.keys(delta).length > 0) {
+        const { labelledChanges } = await import('../services/mail-types.js')
+        const changes = await labelledChanges(ctx.collection, delta, previous).catch(() => [])
+        enqueueRecordChange(ctx.collection, item, ctx.user?.id, changes)
+      }
+    }
     await rollUpToParents(
       ctx.collection,
       'update',

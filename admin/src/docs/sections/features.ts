@@ -370,7 +370,7 @@ export const commentsApiDoc: DocSection = {
       "id": "uuid",
       "collection": "projects",
       "item": "123",
-      "user": { "id": "...", "first_name": "Rob", "last_name": "Lee", "email": "rob@..." },
+      "user": { "id": "...", "first_name": "Alex", "last_name": "Chen", "email": "alex@..." },
       "text": "Looks good @finance_team",
       "created_at": "...",
       "updated_at": "...",

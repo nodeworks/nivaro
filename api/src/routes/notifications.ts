@@ -249,8 +249,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
     return reply.code(201).send({ ok: true })
   })
 
-  // POST /bulk — admin broadcast to a scope-dimension audience (EFP Bulk
-  // Message port, generalized): recipients = users whose RESTRICT-mode scope
+  // POST /bulk — admin broadcast to a scope-dimension audience:
+  // recipients = users whose RESTRICT-mode scope
   // for `dimension` intersects `values`, plus any explicit user_ids. Email
   // rides sendRawMail (mail test mode applies); in-app rides notifyUser.
   app.post('/bulk', { preHandler: requireAdmin }, async (req, reply) => {

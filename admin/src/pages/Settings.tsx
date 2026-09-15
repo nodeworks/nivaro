@@ -1968,7 +1968,7 @@ export function SettingsPage() {
                     <Input
                       value={brandLoginTitle}
                       onChange={(e) => setBrandLoginTitle(e.target.value)}
-                      placeholder='e.g. EFP Portal'
+                      placeholder='e.g. Acme Portal'
                       className='h-8 text-[13px]'
                     />
                   </Field>

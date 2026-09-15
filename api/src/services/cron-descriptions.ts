@@ -62,7 +62,7 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
   'staged-imports':
     'Every 10 seconds — starts the next queued staged import (file → staging table → stored procedure) when nothing else is running.',
   'erp-auto-retry':
-    'Every 10 minutes — retries failed ERP submissions (MDSi, MWF, Fusion, Nuvolo pushes) that are eligible for automatic retry.',
+    'Every 10 minutes — retries failed ERP submissions (external system pushes) that are eligible for automatic retry.',
   'maintenance-windows':
     'Every minute — turns maintenance mode on/off at scheduled window boundaries, pre-announces upcoming windows, sends the all-clear after a passing smoke check.',
   'presence-janitor':

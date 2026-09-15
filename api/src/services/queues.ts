@@ -824,7 +824,7 @@ export interface ExtraFieldMeta {
 }
 
 /** Classify each configured extra-field path so the admin can render the right
- *  filter control: relation paths (regions.short_name, project.project_type.name)
+ *  filter control: relation paths (regions.short_name, project.category.name)
  *  become server-searchable comboboxes against the FINAL hop's target collection. */
 export async function computeExtraFieldMeta(
   sources: QueueSourceRow[],
@@ -1013,7 +1013,7 @@ export function validateAggregates(input: unknown): string | null {
     }
     const segs = path.split('.').length
     if (fn === 'count' ? segs > 2 : segs !== 2) {
-      return `aggregates.${path}: ${fn} needs exactly one relation hop${fn === 'count' ? '' : ' plus a leaf field'} (e.g. purchase_orders.amount) — multi-hop paths cannot be aggregated`
+      return `aggregates.${path}: ${fn} needs exactly one relation hop${fn === 'count' ? '' : ' plus a leaf field'} (e.g. orders.amount) — multi-hop paths cannot be aggregated`
     }
   }
   return null
@@ -1142,7 +1142,7 @@ export async function renderTemplateLabels(
       db(collection).whereIn('id', chunk).select(selectCols)
     )) as Array<Record<string, unknown>>
 
-    // Dotted template paths ({{unit.name}}, {{workflow_line.workflow.workflow_id}})
+    // Dotted template paths ({{unit.name}}, {{line.order.order_id}})
     // reference M2O parents — the raw row only holds the fk, so walk each hop
     // through nivaro_relations and attach nested objects for resolveDisplayValue.
     // Unknown relations/paths degrade to empty, same as before.
@@ -1287,7 +1287,7 @@ export async function resolvePathValues(
   const classified = classifyRelationSegment(collection, head, relations)
 
   if (!classified) {
-    // head === 'id' (paths like funding_years.id when the target has no display
+    // head === 'id' (paths like years.id when the target has no display
     // columns) must not select [id, id]: tedious collapses duplicate column
     // names into an ARRAY value, so String(row.id) becomes "2022,2022" and
     // every map lookup downstream misses — the whole path resolved empty.
@@ -1329,7 +1329,7 @@ export async function resolvePathValues(
       for (const [rowId, fk] of fkByRowId) {
         const v = nested.get(fk)
         // A plain leaf reports no ids — the final ENTITY on the path is then the
-        // record this hop resolved to (e.g. project_type.name -> the project_types
+        // record this hop resolved to (e.g. category.name -> the categories
         // row), so substitute this hop's fk. Deeper m2o/m2m hops report their own.
         if (v !== undefined) out.set(rowId, v.ids.length > 0 ? v : { value: v.value, ids: [fk] })
       }
@@ -1570,7 +1570,7 @@ function joinMultiHop(
       if (pv.value !== '' && !values.includes(pv.value)) values.push(pv.value)
       if (pv.ids.length > 0) for (const id of pv.ids) idSet.add(id)
       // Plain leaf remainder reports no ids — the final ENTITY is this hop's
-      // related row (e.g. the workflow whose workflow_id we just read).
+      // related row (e.g. the order whose order_id we just read).
       else idSet.add(String(r.id))
     }
     if (values.length === 0 && idSet.size === 0) continue

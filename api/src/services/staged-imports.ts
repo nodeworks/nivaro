@@ -101,7 +101,7 @@ export async function getImportDefinition(key: string): Promise<ImportDefinition
   return r ? ({ ...r, is_active: !!r.is_active } as ImportDefinition) : null
 }
 
-/** Row cleaning inherited from the legacy EFP importer. These rules are
+/** Row cleaning inherited from the legacy importer. These rules are
  *  load-bearing wherever a procedure consumes the staging table: the SQL is
  *  written against values that have already been through them. */
 export function cleanRow(row: Record<string, unknown>): Record<string, string> {
@@ -301,7 +301,7 @@ async function ensureStagingTable(
  *
  * tedious applies a connection-level 15s requestTimeout, which neither stage of
  * a staged import fits inside: a bulk load of 40k rows runs ~15s on its own, and
- * the procedures are the whole point — the legacy `purchase_orders` runs took
+ * the procedures are the whole point — legacy order-import runs took
  * over three minutes. Past the timeout tedious sends an attention and the batch
  * is cancelled mid-flight, which for a procedure wrapped in BEGIN TRAN … COMMIT
  * means the work is thrown away (and, without SET XACT_ABORT ON, can leave the

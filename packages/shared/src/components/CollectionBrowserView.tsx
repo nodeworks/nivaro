@@ -3026,13 +3026,13 @@ function BulkBar({
     if (r.action_type === 'update' && r.config?.field) {
       const cfg = r.config
       void run(async () => {
-        const res = await client.request<{ updated: number }>(
+        const res = await client.request<{ updated: number; skipped?: number }>(
           post(`/items/${collection}/bulk-update`, {
             ids: selectedIds,
             data: { [String(cfg.field)]: cfg.value ?? '' }
           })
         )
-        return `${r.name}: updated ${res.updated} items`
+        return `${r.name}: updated ${res.updated} items${res.skipped ? ` · ${res.skipped} already there` : ''}`
       })
     } else if (r.action_type === 'transition' && r.config?.transition_label) {
       const t = transitions.find((x) => x.label === r.config?.transition_label)
@@ -3244,13 +3244,13 @@ function BulkBar({
             e.preventDefault()
             if (!field.trim()) return
             void run(async () => {
-              const res = await client.request<{ updated: number }>(
+              const res = await client.request<{ updated: number; skipped?: number }>(
                 post(`/items/${collection}/bulk-update`, {
                   ids: selectedIds,
                   data: { [field.trim()]: value }
                 })
               )
-              return `Updated ${res.updated} items`
+              return `Updated ${res.updated} items${res.skipped ? ` · ${res.skipped} already there` : ''}`
             })
           }}
         >
@@ -4203,7 +4203,7 @@ export function CollectionBrowserView({
 
   // ── Pipeline state column + bulk transitions ──────────────────────────────
   // Scoped to the visible page's ids: the unscoped endpoint returns every
-  // instance in the collection (13s on 88k workflows) to fill 25 state badges.
+  // instance in the collection (13s on an 88k-row collection) to fill 25 state badges.
   // Addendum presence for the visible page — one batched call, only when the
   // collection opted in. Drives the Addendums column.
   const addendumsEnabled = !!meta?.addendums_enabled

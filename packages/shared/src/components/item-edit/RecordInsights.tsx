@@ -361,7 +361,7 @@ const MAIL_STATUS: Record<string, { label: string; cls: string }> = {
   }
 }
 
-/** "beth@x.com, rob@y.com, …" → "beth, rob +3" — full list rides the tip. */
+/** "jane@x.com, sam@y.com, …" → "jane, sam +3" — full list rides the tip. */
 function shortRecipients(to: string): string {
   const parts = to
     .split(/[,;]/)

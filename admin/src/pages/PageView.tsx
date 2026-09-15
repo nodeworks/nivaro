@@ -396,7 +396,7 @@ function IframeWidgetBody({ widget }: { widget: PageWidget }) {
 
 /** Shared widget body renderer — used by the public page view and the builder preview. */
 export function WidgetBody({ slug, widget }: { slug: string; widget: PageWidget }) {
-/** Right-side sheet hosting a MatrixEditor — the EFP drawer pattern. */
+/** Right-side sheet hosting a MatrixEditor — the drawer pattern. */
 function MatrixSheet({
   config,
   initialScope,
@@ -443,7 +443,7 @@ function MatrixSheet({
 function MatrixWidgetBody({ widget }: { widget: PageWidget }) {
   const cfg = (widget.config ?? {}) as Partial<MatrixEditorConfig> & {
     /** 'drawer' renders a button that opens the editor in a right sheet
-     *  (EFP drill-down pattern) instead of inlining it on the page. */
+     *  (drill-down pattern) instead of inlining it on the page. */
     display?: 'inline' | 'drawer'
     button_label?: string
     sheet_width?: number | string
@@ -481,7 +481,7 @@ function MatrixWidgetBody({ widget }: { widget: PageWidget }) {
 
 /** Declarative param filter above a query table: options fetched from a
  *  collection, selections comma-joined into the named query param (matches the
- *  STRING_SPLIT convention the EFP procs use). */
+ *  STRING_SPLIT convention stored procedures commonly use). */
 type QueryWidgetFilter = {
   param: string
   label?: string
@@ -607,8 +607,8 @@ function QueryFilterSelect({
 }
 
 type QueryRowClick = {
-  /** Optional intermediate record picker before drilling (EFP ManageAllocations:
-   *  click a project type → choose a project → open it). Filter values may use
+  /** Optional intermediate record picker before drilling (e.g. click a category
+   *  row → choose a project → open it). Filter values may use
    *  '$row.<field>' tokens resolved from the clicked row. */
   picker?: { collection: string; filter?: Record<string, unknown>; title?: string }
   drill?: { collection?: string; layout_id?: number; width?: number | string }

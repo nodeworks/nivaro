@@ -234,7 +234,7 @@ function ReplayPlayer({
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
   const [following, setFollowing] = useState(!!live)
-  // Replay context (#Rob 2026-08-24): route changes + the user's console
+  // Replay context: route changes + the user's console
   // lines ride the recording as rrweb custom events (type 5) — markers on
   // the scrubber, console panel underneath, both seekable.
   const [markers, setMarkers] = useState<
@@ -671,7 +671,7 @@ export function SessionReplaysPage() {
 
   // Origin hosts → environment buckets: any localhost variant is 'Local',
   // everything else groups by host with '-api' folded into its base host
-  // (efp-staging and efp-staging-api are one environment).
+  // (app-staging and app-staging-api are one environment).
   const envBuckets = useMemo(() => {
     const buckets = new Map<string, string[]>()
     for (const row of originRows) {

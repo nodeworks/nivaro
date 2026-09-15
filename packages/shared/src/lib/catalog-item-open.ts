@@ -1,7 +1,7 @@
 // ─── Catalog item opener (host-provided detail drawer) ───────────────────────
 // Same module-singleton pattern as chat's registerDmOpener: a host app that
-// has a rich detail surface for a catalog collection (efp-new's stock
-// planning drawer for cifa_items) registers an opener; CatalogPickerField
+// has a rich detail surface for a catalog collection (e.g. a stock-planning
+// drawer for the item catalog) registers an opener; CatalogPickerField
 // then renders item labels as clickable links. Hosts without one see plain
 // text — the affordance only exists where clicking actually goes somewhere.
 

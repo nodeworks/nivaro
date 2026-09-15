@@ -72,11 +72,11 @@ describe('validateAutoIdPattern', () => {
 describe('renderAutoIdPattern', () => {
   it('zips literals and token values', () => {
     const p = parseAutoIdPattern(WF)
-    expect(renderAutoIdPattern(p, ['CR', '26', '76800'])).toBe('CR26-76800')
+    expect(renderAutoIdPattern(p, ['AB', '26', '76800'])).toBe('AB26-76800')
   })
   it('handles empty token values', () => {
     const p = parseAutoIdPattern(WF)
-    expect(renderAutoIdPattern(p, ['CR', '', '76800'])).toBe('CR-76800')
+    expect(renderAutoIdPattern(p, ['AB', '', '76800'])).toBe('AB-76800')
   })
 })
 
@@ -133,7 +133,7 @@ const rels = [
 
 const rows: Record<string, Record<string, Record<string, unknown>>> = {
   projects: { '123': { id: 123, project_type: 7 } },
-  project_types: { '7': { id: 7, short_code: 'CR' } },
+  project_types: { '7': { id: 7, short_code: 'AB' } },
   workflows: { '55': { id: 55, project: 123 } },
   regions: { '11': { id: 11, short_code: 'BS' } }
 }
@@ -167,7 +167,7 @@ describe('resolveAutoIdTokens', () => {
       lookups,
       seqValue: '####'
     })
-    expect(out).toBe('CR26-####')
+    expect(out).toBe('AB26-####')
   })
 
   it('resolves M2M via junction when recordId present and no draft value', async () => {
@@ -178,7 +178,7 @@ describe('resolveAutoIdTokens', () => {
       lookups,
       seqValue: '76800'
     })
-    expect(out).toBe('CR26-76800')
+    expect(out).toBe('AB26-76800')
   })
 
   it('renders empty for unresolvable tokens', async () => {
@@ -216,7 +216,7 @@ describe('recompute gating (pure logic exercised through resolveAutoIdTokens)', 
       lookups,
       seqValue: suffix as string
     })
-    expect(out).toBe('CR27-15305')
+    expect(out).toBe('AB27-15305')
   })
 })
 
@@ -236,7 +236,7 @@ describe('junction-triggered recompute (M2O own-row DB fallback)', () => {
       lookups,
       seqValue: '76800'
     })
-    expect(out).toBe('CR26-76800')
+    expect(out).toBe('AB26-76800')
   })
 
   it('leaves an explicit-null draft value unresolved (does not fall back to the DB)', async () => {
@@ -306,7 +306,7 @@ describe('resolveAutoIdTokensDetailed completeness', () => {
       lookups,
       seqValue: '####'
     })
-    expect(rendered).toBe('CR26-####')
+    expect(rendered).toBe('AB26-####')
     expect(complete).toBe(true)
   })
 

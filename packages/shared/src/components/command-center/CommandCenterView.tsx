@@ -13,8 +13,8 @@ import { BaseMap, type BaseMapBubble, type BaseMapPin } from '../BaseMap'
  * number clicks through to its real surface via NavigationContext.
  *
  * Deliberately DARK-FIRST as a designed ops surface — always-dark surfaces
- * use arbitrary-hex classes (never bare bg-slate-900, which efp-new re-points
- * light; documented gotcha).
+ * use arbitrary-hex classes (never bare bg-slate-900, which a host theme may
+ * re-point light; documented gotcha).
  *
  * Hosts: NivaroProvider + NavigationContext required. Polling cadence:
  * snapshot 20s, map pins 60s, centroids 10min — a socket host can additionally

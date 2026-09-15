@@ -440,8 +440,8 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
       // The filter column's mode comes from the TARGET's schema, never from
       // the config flag — the client's filter compiler resolves alias columns
       // transparently, so real configs routinely omit filter_is_m2m on
-      // columns that are aliases (workflows.project_type filtering
-      // project_types.divisions was the live example).
+      // columns that are aliases (a category filtered by the parent's
+      // regions M2M was the live example).
       const filterAlias = await resolveAlias(check.target, c.filter_column)
       if (filterAlias) {
         check.filterIsM2M = true
@@ -1079,7 +1079,7 @@ export async function hasChecks(collection: string): Promise<boolean> {
 // shared across live checks for a short window — the cost of a cold check is
 // almost entirely these reads. 20s is well inside what an integrity banner
 // can be "wrong" by, and the sweep keeps its own per-chunk cache.
-// (60s: reference rows the rules read — categories, cifa items, project
+// (60s: reference rows the rules read — categories, catalog items, parent
 // defaults — change on a human timescale.)
 let liveRowRuleCache: { at: number; cache: RowRuleLookupCache } | null = null
 const LIVE_CACHE_MS = 60_000
