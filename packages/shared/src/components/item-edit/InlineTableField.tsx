@@ -2401,6 +2401,29 @@ export function InlineTableField({
     if (sectionGroupBy?.includes('.')) base.add(sectionGroupBy)
     return [...base]
   }, [relationPathCols, formulaPathRefs, sectionGroupBy])
+  // Every row on screen that EXISTS in the child table resolves its relation
+  // paths: the saved rows, pending rows that carry a real id (an addendum's
+  // prefilled proposals keep their source id — the create form is `isNew`
+  // yet every line is a real, PO-linked record), and the active addendum
+  // view's proposed rows. A brand-new parent's staged rows have no id and
+  // resolve nothing, which is why the query keys on the id list rather than
+  // on `isNew`.
+  const pendingIdsKey = pendingRows.map((r) => String((r as Record<string, unknown>).id ?? '')).join(',')
+  const resolvePathIds = useMemo(() => {
+    const ids = new Set<string>()
+    const add = (v: unknown) => {
+      const s = v == null ? '' : String(v)
+      if (s && !s.startsWith('pending:') && s !== 'new') ids.add(s)
+    }
+    for (const r of rawRows) add(r.id)
+    for (const r of pendingRows) add((r as Record<string, unknown>).id)
+    if (activeView !== 'original') {
+      const entry = addendumO2MEntries.find((e) => e.addendumId === activeView)
+      for (const r of entry?.rows ?? []) add((r as Record<string, unknown>).id)
+    }
+    return [...ids]
+    // biome-ignore lint/correctness/useExhaustiveDependencies: pendingRows is a fresh array per render — its id list is the identity that matters here
+  }, [rawRows, pendingIdsKey, activeView, addendumO2MEntries])
   const { data: resolvedPathData } = useQuery<{
     rows: Record<string, Record<string, { value: string; ids: string[] }>>
     targets: Record<string, string | null>
@@ -2411,7 +2434,7 @@ export function InlineTableField({
       manyField,
       parentId,
       resolvePathList.join(','),
-      rawRows.map((r) => String(r.id)).join(',')
+      resolvePathIds.join(',')
     ],
     queryFn: () =>
       client
@@ -2422,12 +2445,12 @@ export function InlineTableField({
           }
         }>(
           get(`/items/${relatedCollection}/resolve-paths`, {
-            ids: rawRows.map((r) => String(r.id)).join(','),
+            ids: resolvePathIds.join(','),
             paths: resolvePathList.join(',')
           })
         )
         .then((r) => r.data ?? { rows: {}, targets: {} }),
-    enabled: !isNew && resolvePathList.length > 0 && rawRows.length > 0,
+    enabled: resolvePathList.length > 0 && resolvePathIds.length > 0,
     staleTime: 30_000
   })
   const resolvedPathRows = useMemo(() => {
@@ -5341,6 +5364,19 @@ export function InlineTableField({
         currency: (colOpts.currency as string) || 'USD'
       })
     }
+    // Same for options.format: 'number' — a relation-path column's resolved
+    // value is a string ("135297.66") and would otherwise print raw, ignoring
+    // the layout's precision.
+    if (
+      colOpts.format === 'number' &&
+      col.interface === 'relation-path' &&
+      val !== null &&
+      val !== undefined &&
+      val !== '' &&
+      Number.isFinite(Number(val))
+    ) {
+      val = Number(val).toLocaleString('en-US', numericIntlOptions(colOpts, 'number'))
+    }
 
     // Presence display: relation-path column configured display:'presence'
     // renders linked/none instead of the joined values (e.g. "PO Linked").
@@ -7819,7 +7855,12 @@ export function InlineTableField({
                   // diff. An addendum that changes a quantity changes the line's
                   // money too, and a reviewer reading a stale stored total would
                   // approve a figure the save then recalculates to something else.
-                  const row = applyComputedFields({ ...rawRow } as Record<string, unknown>)
+                  // Proposed rows are stored WITHOUT their relation-path
+                  // columns (PO #, Qty Billed …) — those resolve by row id.
+                  const row = applyComputedFields({
+                    ...rawRow,
+                    ...(rawRow.id != null ? (resolvedPathRows?.[String(rawRow.id)] ?? {}) : {})
+                  } as Record<string, unknown>)
                   const rawOrig = rows.find((r) => String(r.id) === String(row.id))
                   const origRow = rawOrig
                     ? applyComputedFields({ ...rawOrig } as Record<string, unknown>)
@@ -8054,14 +8095,22 @@ export function InlineTableField({
                               const isMM = isM2MIface(c.interface)
                               const m2mKey = `__m2m_${c.field}`
                               const m2mTarget = isMM && inlineEdit ? resolveM2MTarget(c) : null
+                              // A prefilled pending row (addendum proposals keep
+                              // their source id) has its relation paths resolved
+                              // like a saved row — read them from the resolve
+                              // map, since the staged object never carries them.
+                              const resolvedCell =
+                                c.interface === 'relation-path' && row.id != null
+                                  ? resolvedPathRows?.[String(row.id)]?.[c.field]
+                                  : undefined
                               const displayVal = isComputedWrite
                                 ? (evalClientFormula(
                                     c.computed_formula as string,
                                     isEditing ? editState!.draft : row
                                   ) ?? row[c.field])
                                 : isEditing
-                                  ? editState!.draft[c.field]
-                                  : row[c.field]
+                                  ? (editState!.draft[c.field] ?? resolvedCell)
+                                  : (row[c.field] ?? resolvedCell)
                               // A staged import line: cells an auto-fill rule wrote
                               // (not the file) say so on hover.
                               const ruleSet = Array.isArray(row.__rule_set)
@@ -8128,7 +8177,7 @@ export function InlineTableField({
                                     </div>
                                   ) : (
                                     <div className='py-0.5 overflow-hidden'>
-                                      {renderCell(c, row[c.field], String(row.id))}
+                                      {renderCell(c, displayVal, String(row.id))}
                                     </div>
                                   )}
                                 </td>
