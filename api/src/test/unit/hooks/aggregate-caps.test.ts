@@ -180,10 +180,13 @@ describe('evaluateSumCapRule', () => {
       throw new Error(`unexpected table ${String(table)}`)
     })
 
+    // The group is already over the cap (999 + 20 > 100); a write only fails
+    // when it RAISES the total — 20 → 25 does, so the fallback group must be
+    // what scopes the sum for it to be judged at all.
     await expect(
       evaluateSumCapRule(
         rule(),
-        ctx({ action: 'update', keys: ['row1'], payload: { allocated_amount: 5 } })
+        ctx({ action: 'update', keys: ['row1'], payload: { allocated_amount: 25 } })
       )
     ).rejects.toBeInstanceOf(CapValidationError)
   })
