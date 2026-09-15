@@ -27,5 +27,5 @@
   // Operational one-off scripts (legacy sync/migration tooling) import from
   // ../../src, which violates rootDir — they run via tsx from the api cwd and
   // are checked by the main api project when their imports drift.
-  "exclude": ["**/scripts/**"]
+  "exclude": ["**/tests/**", "**/scripts/**"]
 }
