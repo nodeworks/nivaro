@@ -2843,17 +2843,19 @@ export async function updateOne(
     database: db,
     req
   }
+  // Before-hooks see the change reason the caller (or the natural-key upsert
+  // branch) supplied and may REPLACE it — an extension speaking for an
+  // integration names the real writer instead of a generic default — or
+  // supply one where the caller could not. Re-injected for the hooks only;
+  // stripped again right after so it never reaches a column write.
+  if (changeReason) (ctx.payload as Record<string, unknown>)._change_reason = changeReason
   await span('hooks:before-update', () => hooks.trigger('before', ctx))
   // Same as createOne: a before-hook may add alias M2M links.
   aliasWrites = await extractAliasM2MWrites(collection, ctx.payload as Record<string, unknown>)
-  // …and may state a change reason on behalf of a caller that cannot (an
-  // integration's own writes) — same contract as createOne: re-read it off
-  // the hooked payload before the requirement is judged below.
   if (typeof (ctx.payload as Record<string, unknown>)._change_reason === 'string') {
-    if (!changeReason)
-      changeReason = String((ctx.payload as Record<string, unknown>)._change_reason).trim()
-    delete (ctx.payload as Record<string, unknown>)._change_reason
+    changeReason = String((ctx.payload as Record<string, unknown>)._change_reason).trim()
   }
+  delete (ctx.payload as Record<string, unknown>)._change_reason
 
   // Row-level security — filter applies to both the previousData fetch and the mutation
   const rowFilter = await getRowFilter(user, 'update', collection)
