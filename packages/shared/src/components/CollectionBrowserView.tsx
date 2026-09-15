@@ -1,4 +1,10 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  type QueryClient,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient
+} from '@tanstack/react-query'
 import {
   Bell,
   BellOff,
@@ -544,6 +550,27 @@ function RelationLabel({ relatedCollection, id }: { relatedCollection: string; i
 /** Per-row Actions menu — labeled trigger (people know what "Actions" means),
  *  portal menu clamped to the viewport, with live pipeline transitions
  *  fetched lazily when opened. */
+/**
+ * Everything the browser derives PER PAGE OF ROWS — rows, pipeline state,
+ * owners, the at-risk tint, addendum chips, resolved relation columns. Every
+ * key but the rows is keyed on the page's ids, so after a write that keeps
+ * the same rows on screen (On hold, a transition, a bulk update) only
+ * invalidating `cbv-items` repaints the columns from cache and the highlight
+ * lags 30s behind. One helper, every mutation path.
+ */
+export function invalidateCbvRowQueries(qc: QueryClient, collection: string): void {
+  for (const key of [
+    'cbv-items',
+    'cbv-pipeline-instances',
+    'cbv-owners',
+    'cbv-risk',
+    'cbv-addendum-summary',
+    'cbv-resolved',
+    'cbv-row-instance'
+  ])
+    void qc.invalidateQueries({ queryKey: [key, collection] })
+}
+
 export function RowActionsMenu({
   collection,
   id,
@@ -736,10 +763,7 @@ export function RowActionsMenu({
     onSuccess: () => {
       setOpen(false)
       toast.success('Transitioned')
-      void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
-      void qc.invalidateQueries({ queryKey: ['cbv-pipeline-instances', collection] })
-      void qc.invalidateQueries({ queryKey: ['cbv-owners', collection] })
-      void qc.invalidateQueries({ queryKey: ['cbv-row-instance', collection, String(id)] })
+      invalidateCbvRowQueries(qc, collection)
       onAfterTransition?.()
     },
     onError: (err: unknown) => toast.error(err instanceof Error ? err.message : 'Transition failed')
@@ -771,10 +795,7 @@ export function RowActionsMenu({
         return
       }
       toast.success(action.label)
-      void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
-      void qc.invalidateQueries({ queryKey: ['cbv-pipeline-instances', collection] })
-      void qc.invalidateQueries({ queryKey: ['cbv-owners', collection] })
-      void qc.invalidateQueries({ queryKey: ['cbv-row-instance', collection, String(id)] })
+      invalidateCbvRowQueries(qc, collection)
       onAfterTransition?.()
     },
     onError: (err: unknown) => {
@@ -7374,7 +7395,7 @@ export function CollectionBrowserView({
           relations={meta?.relations ?? []}
           registryKeys={bc.bulk_actions ?? null}
           onClear={() => setSelectedIds([])}
-          onSuccess={() => void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })}
+          onSuccess={() => invalidateCbvRowQueries(qc, collection)}
         />
       )}
     </div>
