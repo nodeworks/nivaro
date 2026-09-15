@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-15T16:42:39.760Z",
+  "generated_at": "2026-09-15T18:32:30.157Z",
   "releases": [
+    {
+      "version": "0.1.292",
+      "tag": "v0.1.292",
+      "date": "2026-09-15T14:32:19-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "per-transition list-row gate + registry actions in the row menu",
+              "hash": "f3f175ea"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.291",
       "tag": "v0.1.291",
-      "date": "2026-09-15T12:42:26-04:00",
+      "date": "2026-09-15T12:42:39-04:00",
       "sections": [
         {
           "label": "Added",
