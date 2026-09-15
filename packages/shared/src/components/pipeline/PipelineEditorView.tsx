@@ -682,6 +682,7 @@ type RouteEntry = {
   requirements: TransitionRequirement[] | null
   auto_trigger: boolean
   to_previous: boolean
+  in_row_menu: boolean
   comment_mode: string
   actions: TransitionAction[] | null
   minSort: number
@@ -752,6 +753,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         requirements: tx.requirements,
         auto_trigger: !!tx.auto_trigger,
         to_previous: !!(tx as { to_previous?: boolean }).to_previous,
+        in_row_menu: (tx as { in_row_menu?: boolean }).in_row_menu !== false,
         comment_mode: tx.comment_mode ?? 'none',
         actions: (tx.actions as TransitionAction[] | null) ?? null,
         minSort: tx.sort
@@ -1469,6 +1471,7 @@ interface TransitionFormData {
   requirements: TransitionRequirement[] | null
   auto_trigger: boolean
   to_previous: boolean
+  in_row_menu: boolean
   comment_mode: string
   actions: TransitionAction[] | null
 }
@@ -1766,6 +1769,7 @@ function TransitionForm({
     requirements: initial.requirements ?? null,
     auto_trigger: initial.auto_trigger ?? false,
     to_previous: initial.to_previous ?? false,
+    in_row_menu: initial.in_row_menu ?? true,
     comment_mode: initial.comment_mode ?? 'none',
     actions: initial.actions ?? null
   })
@@ -1919,6 +1923,22 @@ function TransitionForm({
           </p>
         </div>
         <Switch checked={form.auto_trigger} onCheckedChange={(v) => set('auto_trigger', v)} />
+      </label>
+
+      <label className='flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2'>
+        <div>
+          <span className='text-[12px] font-medium text-slate-700'>Show in list Actions menu</span>
+          <p className='text-[11px] text-slate-400'>
+            Offer this move from the per-row Actions menu in the collection browser and queues.
+            Off keeps it on the record form only — typical for approvals, so a list never
+            advances a record in one click while send-backs and cancels stay reachable.
+          </p>
+        </div>
+        <Switch
+          checked={form.in_row_menu}
+          onCheckedChange={(v) => set('in_row_menu', v)}
+          data-transition-in-row-menu
+        />
       </label>
 
       <label className='flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2 dark:border-border'>
@@ -2816,6 +2836,7 @@ export function PipelineEditorView({
         requirements: data.requirements,
         auto_trigger: data.auto_trigger,
         to_previous: data.to_previous,
+        in_row_menu: data.in_row_menu,
         comment_mode: data.comment_mode,
         group_label: null,
         actions: data.actions,
@@ -2851,6 +2872,7 @@ export function PipelineEditorView({
           requirements: data.requirements,
           auto_trigger: data.auto_trigger,
           to_previous: data.to_previous,
+          in_row_menu: data.in_row_menu,
           group_label: null,
           actions: data.actions,
           sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
@@ -2885,6 +2907,7 @@ export function PipelineEditorView({
         requirements: data.requirements,
         auto_trigger: data.auto_trigger,
         to_previous: data.to_previous,
+        in_row_menu: data.in_row_menu,
         comment_mode: data.comment_mode,
         actions: data.actions
       }
@@ -3415,6 +3438,7 @@ export function PipelineEditorView({
                                               requirements: route.requirements,
                                               auto_trigger: route.auto_trigger,
                                               to_previous: route.to_previous,
+                                              in_row_menu: route.in_row_menu,
                                               // Without this the form always opened
                                               // on 'No note', whatever was stored —
                                               // and saving then wrote that back.
@@ -3461,6 +3485,15 @@ export function PipelineEditorView({
                                               >
                                                 <Zap className='h-2.5 w-2.5' />
                                                 Auto
+                                              </span>
+                                            )}
+                                            {!route.auto_trigger && !route.in_row_menu && (
+                                              <span
+                                                className='ml-1 inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                                                title='Not offered from list-row Actions menus — record form only'
+                                                data-transition-form-only
+                                              >
+                                                Form only
                                               </span>
                                             )}
                                             {route.to_previous && (

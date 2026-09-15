@@ -45,7 +45,14 @@ import {
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { cn } from '../lib/utils'
-import { BulkActionButtons, useBuiltinGate } from './bulk/BulkActionButtons'
+import {
+  type AvailableBulkAction,
+  BulkActionButtons,
+  guardMatches,
+  mergeBulkActions,
+  useAvailableBulkActions,
+  useBuiltinGate
+} from './bulk/BulkActionButtons'
 import { CellCopyLayer } from './CellCopyLayer'
 import { HScrollProxy } from './HScrollProxy'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
@@ -546,7 +553,9 @@ export function RowActionsMenu({
   onAudit,
   urlFor,
   onDeleted,
-  onAfterTransition
+  onAfterTransition,
+  row,
+  bulkEnabledKeys
 }: {
   collection: string
   id: string | number
@@ -558,8 +567,15 @@ export function RowActionsMenu({
   onAudit?: () => void
   urlFor: (t: { collection: string; itemId: string }) => string
   onDeleted: () => void
-  /** Extra refresh after a transition lands (CBV query invalidations always run). */
+  /** Extra refresh after a transition or registry action lands (CBV query invalidations always run). */
   onAfterTransition?: () => void
+  /** The record's current values when the host has them — registry actions whose
+   *  guard the row already fails (e.g. "Put on hold" on a held record) are hidden;
+   *  without a row every action shows and the server decides. */
+  row?: Record<string, unknown> | null
+  /** Surface allow-list for registry actions (browser_config.bulk_actions /
+   *  display_config.bulk_action_keys); null = all. */
+  bulkEnabledKeys?: string[] | null
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -591,6 +607,8 @@ export function RowActionsMenu({
     color?: string | null
     group_label?: string | null
     to_state?: string | null
+    /** Per-transition list-menu gate (nivaro_workflow_transitions.in_row_menu). */
+    in_row_menu?: boolean
   }
   type RowState = { id: string; label: string; color?: string | null }
   const { data: instance } = useQuery<{
@@ -608,7 +626,28 @@ export function RowActionsMenu({
     enabled: open && hasPipeline,
     staleTime: 15_000
   })
-  const transitions = instance?.available_transitions ?? []
+  // The record form offers every available transition; a list row only the
+  // ones flagged for it (approvals typically stay form-only, send-backs and
+  // cancels show). An older server that omits the flag shows everything.
+  const transitions = useMemo(
+    () => (instance?.available_transitions ?? []).filter((t) => t.in_row_menu !== false),
+    [instance]
+  )
+  // Registry bulk actions (On hold / Remove hold …) offered for this one row —
+  // fetched only once the menu opens, one request per collection (react-query
+  // dedupes across rows). Built-ins are the bar's own buttons, never listed.
+  const { data: bulkData } = useAvailableBulkActions(open ? [collection] : [])
+  const rowActions = useMemo(() => {
+    if (!open) return []
+    return mergeBulkActions(bulkData, [collection], bulkEnabledKeys).filter((a) => {
+      // Transition-kind registry actions (Cancel / Uncancel) are the pipeline
+      // transitions already listed above — never the same move twice.
+      if (a.kind === 'builtin' || a.kind === 'transition') return false
+      if (!row) return true
+      const verdict = guardMatches(a.guard, row)
+      return verdict !== false
+    })
+  }, [open, bulkData, collection, bulkEnabledKeys, row])
   const stateById = useMemo(
     () => new Map((instance?.states ?? []).map((st) => [st.id, st])),
     [instance]
@@ -657,6 +696,8 @@ export function RowActionsMenu({
     label: string
     options: RowTransition[]
     picked: string | null
+    /** Set when the confirm is for a registry action rather than a transition. */
+    action?: AvailableBulkAction
   } | null>(null)
   const [reason, setReason] = useState('')
   useEffect(() => {
@@ -702,6 +743,44 @@ export function RowActionsMenu({
       onAfterTransition?.()
     },
     onError: (err: unknown) => toast.error(err instanceof Error ? err.message : 'Transition failed')
+  })
+
+  // One-record run of a registry action — the same endpoints the selection
+  // bar uses, so guards, access and the reason rule are enforced server-side.
+  const actionMut = useMutation({
+    mutationFn: async ({ action, comment }: { action: AvailableBulkAction; comment?: string }) => {
+      const body = { collection, ids: [id], reason: comment?.trim() || null }
+      const res =
+        action.source === 'db'
+          ? await client.request<{ data: { succeeded?: number; skipped?: number; failed?: number; errors?: Array<{ error: string }> } }>(
+              post('/bulk-actions/run', { ...body, key: action.key })
+            )
+          : await client.request<{ data: { succeeded?: number; skipped?: number; failed?: number; errors?: Array<{ error: string }> } }>(
+              post(`/bulk-actions/${action.key}/execute`, body)
+            )
+      return { action, result: res.data ?? {} }
+    },
+    onSuccess: ({ action, result }) => {
+      setOpen(false)
+      if (result.failed) {
+        toast.error(`${action.label} failed`, { description: result.errors?.[0]?.error })
+        return
+      }
+      if (!result.succeeded && result.skipped) {
+        toast.info(`${action.label}: nothing to change`)
+        return
+      }
+      toast.success(action.label)
+      void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
+      void qc.invalidateQueries({ queryKey: ['cbv-pipeline-instances', collection] })
+      void qc.invalidateQueries({ queryKey: ['cbv-owners', collection] })
+      void qc.invalidateQueries({ queryKey: ['cbv-row-instance', collection, String(id)] })
+      onAfterTransition?.()
+    },
+    onError: (err: unknown) => {
+      const resp = (err as { response?: { error?: string } }).response
+      toast.error(resp?.error ?? (err instanceof Error ? err.message : 'Action failed'))
+    }
   })
 
   const item = (label: string, onClick: () => void, danger = false) => (
@@ -751,6 +830,11 @@ export function RowActionsMenu({
                 >
                   ‹ {confirm.label}
                 </button>
+                {confirm.action && (
+                  <p className='mb-1.5 px-1 text-[11.5px] leading-snug text-slate-500 dark:text-slate-400'>
+                    {confirm.action.confirm_text ?? confirm.action.summary}
+                  </p>
+                )}
                 {confirm.options.length > 1 && (
                   <div className='mb-1.5 space-y-0.5'>
                     {confirm.options.map((t) => (
@@ -777,21 +861,34 @@ export function RowActionsMenu({
                 <textarea
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
-                  placeholder='Reason (optional)…'
+                  placeholder={
+                    confirm.action?.require_reason
+                      ? 'Reason (required — recorded on the record’s history)…'
+                      : 'Reason (optional)…'
+                  }
                   rows={2}
                   className='w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                 />
                 <div className='mt-1.5 flex gap-1.5'>
                   <button
                     type='button'
-                    disabled={!confirm.picked || transitionMut.isPending}
+                    disabled={
+                      confirm.action
+                        ? actionMut.isPending ||
+                          (confirm.action.require_reason && reason.trim().length === 0)
+                        : !confirm.picked || transitionMut.isPending
+                    }
                     onClick={() => {
-                      if (confirm.picked)
+                      if (confirm.action) actionMut.mutate({ action: confirm.action, comment: reason })
+                      else if (confirm.picked)
                         transitionMut.mutate({ transitionId: confirm.picked, comment: reason })
                     }}
-                    className='h-7 flex-1 rounded-md bg-[#00ceff] text-[12px] font-semibold text-white disabled:opacity-40'
+                    data-row-action-confirm
+                    className={`h-7 flex-1 rounded-md text-[12px] font-semibold text-white disabled:opacity-40 ${
+                      confirm.action?.variant === 'danger' ? 'bg-red-600' : 'bg-[#00ceff]'
+                    }`}
                   >
-                    {transitionMut.isPending ? 'Applying…' : 'Confirm'}
+                    {transitionMut.isPending || actionMut.isPending ? 'Applying…' : 'Confirm'}
                   </button>
                   <button
                     type='button'
@@ -852,6 +949,32 @@ export function RowActionsMenu({
                             ▸ {entry.options.length}
                           </span>
                         )}
+                      </button>
+                    ))}
+                  </>
+                )}
+                {rowActions.length > 0 && (
+                  <>
+                    {divider}
+                    <p className='px-3 pb-0.5 pt-1 text-[9.5px] font-bold uppercase tracking-wider text-slate-400'>
+                      Actions
+                    </p>
+                    {rowActions.map((a) => (
+                      <button
+                        key={`${a.source}:${a.key}`}
+                        type='button'
+                        data-row-action={a.key}
+                        title={a.summary}
+                        onClick={() =>
+                          setConfirm({ label: a.label, options: [], picked: null, action: a })
+                        }
+                        className={`block w-full px-3 py-1.5 text-left text-[12px] ${
+                          a.variant === 'danger'
+                            ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-950'
+                            : 'text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {a.label}
                       </button>
                     ))}
                   </>
@@ -6922,6 +7045,8 @@ export function CollectionBrowserView({
                                     onAudit={() => setAuditId(String(id))}
                                     urlFor={urlFor}
                                     onDeleted={() => deleteRow.mutate(id)}
+                                    row={row}
+                                    bulkEnabledKeys={bc.bulk_actions ?? null}
                                   />
                                 </td>
                               )

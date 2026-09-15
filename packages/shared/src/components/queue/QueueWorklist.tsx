@@ -2026,6 +2026,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             onAfterTransition={() =>
               void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
             }
+            bulkEnabledKeys={displayConfig?.bulk_action_keys ?? null}
           />
         </span>
       )

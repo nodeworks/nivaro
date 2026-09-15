@@ -81,6 +81,8 @@ interface WorkflowTransition {
   actions: string | null
   auto_trigger: boolean | number
   to_previous?: boolean | number
+  /** Offered from list-row Actions menus (migration 312; default true). */
+  in_row_menu?: boolean | number | null
   sort: number
   group_label: string | null
   condition_rules: string | null
@@ -237,6 +239,7 @@ function formatTransition(t: WorkflowTransition) {
     actions: parseJson(t.actions) as unknown[] | null,
     auto_trigger: coerceBool(t.auto_trigger),
     to_previous: coerceBool(t.to_previous),
+    in_row_menu: t.in_row_menu == null ? true : coerceBool(t.in_row_menu),
     condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
     requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
@@ -1168,6 +1171,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'actions'
       | 'auto_trigger'
       | 'to_previous'
+      | 'in_row_menu'
       | 'sort'
       | 'group_label'
       | 'condition_rules'
@@ -1191,6 +1195,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       actions: toJsonStr(body.actions),
       auto_trigger: body.auto_trigger ? 1 : 0,
       to_previous: body.to_previous ? 1 : 0,
+      in_row_menu: body.in_row_menu === false ? 0 : 1,
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
       condition_rules: toJsonStr(body.condition_rules),
@@ -1236,6 +1241,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         auto_trigger:
           body.auto_trigger !== undefined ? (body.auto_trigger ? 1 : 0) : tx.auto_trigger,
         to_previous: body.to_previous !== undefined ? (body.to_previous ? 1 : 0) : tx.to_previous,
+        in_row_menu:
+          body.in_row_menu !== undefined ? (body.in_row_menu === false ? 0 : 1) : tx.in_row_menu,
         sort: body.sort ?? tx.sort,
         group_label:
           body.group_label !== undefined ? body.group_label?.trim() || null : tx.group_label,

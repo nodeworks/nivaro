@@ -28,6 +28,60 @@ export interface AvailableBulkAction {
   confirm_text: string | null
   summary: string
   surfaces?: Array<'browser' | 'queue'>
+  /** Registry actions: `[{field, op, value}]` AND'd over the record (server-enforced; the row menu also pre-checks it). */
+  guard?: GuardRule[] | null
+}
+
+export type GuardRule = { field: string; op: string; value?: unknown }
+
+function guardNorm(v: unknown): string {
+  if (v === true || v === 1 || v === '1' || v === 'true') return 'true'
+  if (v === false || v === 0 || v === '0' || v === 'false') return 'false'
+  return String(v ?? '')
+}
+const guardEmpty = (v: unknown) => v === null || v === undefined || v === ''
+
+/**
+ * Client twin of the server's `guardPasses` (services/action-guards.ts): eq /
+ * neq (null counts as "not equal" — a never-held record is "not on hold") /
+ * null / nnull / in / nin over loosely-compared booleans. Returns `null` when
+ * the record does not carry every guarded field — the caller should then show
+ * the action and let the server decide.
+ */
+export function guardMatches(
+  rules: GuardRule[] | null | undefined,
+  record: Record<string, unknown>
+): boolean | null {
+  for (const r of rules ?? []) {
+    if (!r || typeof r.field !== 'string') continue
+    if (!(r.field in record)) return null
+    const v = record[r.field]
+    const want = r.value
+    const list = () =>
+      String(want ?? '')
+        .split(',')
+        .map((x) => guardNorm(x.trim()))
+    const ok = (() => {
+      switch (r.op) {
+        case 'eq':
+          return guardNorm(v) === guardNorm(want)
+        case 'neq':
+          return guardNorm(v) !== guardNorm(want)
+        case 'null':
+          return guardEmpty(v)
+        case 'nnull':
+          return !guardEmpty(v)
+        case 'in':
+          return list().includes(guardNorm(v))
+        case 'nin':
+          return !list().includes(guardNorm(v))
+        default:
+          return false
+      }
+    })()
+    if (!ok) return false
+  }
+  return true
 }
 
 export interface BulkTarget {
