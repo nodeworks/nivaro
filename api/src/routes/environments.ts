@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { instanceKey } from '../services/settings-overrides.js'
 
 /**
  * Environment registry + live probes.
@@ -243,6 +244,89 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
 
   const loadComponent = async (id: string): Promise<ComponentRow | undefined> =>
     (await db('nivaro_environment_components').where('id', id).first()) as ComponentRow | undefined
+
+  // GET /environments/instances — every instance key this database knows about,
+  // for the pickers that key config per instance (external API overrides, mock
+  // rules, settings overrides). A key is a deployment slot name (NIVARO_INSTANCE
+  // else NODE_ENV), and the registry is where those slots are named: each API
+  // component is asked for its key through /api/version, and its environment +
+  // component name become the label. Keys already in use (settings-override
+  // rows, override/mock blocks on any API) are listed too, so a stale slot is
+  // still visible rather than silently orphaned. Probes are best-effort with a
+  // short timeout; an unreachable component contributes nothing.
+  let instancesCache: { at: number; data: unknown } | null = null
+  app.get('/instances', async () => {
+    if (instancesCache && Date.now() - instancesCache.at < 60_000)
+      return { data: instancesCache.data }
+    const entries = new Map<string, { key: string; labels: string[]; sources: string[] }>()
+    const add = (key: string, label: string | null, source: string) => {
+      const k = key.trim()
+      if (!k) return
+      const e = entries.get(k) ?? { key: k, labels: [], sources: [] }
+      if (label && !e.labels.includes(label)) e.labels.push(label)
+      if (!e.sources.includes(source)) e.sources.push(source)
+      entries.set(k, e)
+    }
+    add(instanceKey(), 'This instance', 'self')
+    const envs = (await db('nivaro_environments').select('id', 'name')) as Array<{
+      id: number
+      name: string
+    }>
+    const envName = new Map(envs.map((e) => [e.id, e.name]))
+    const apis = (await db('nivaro_environment_components')
+      .where('kind', 'api')
+      .whereNotNull('base_url')
+      .select('id', 'environment', 'name', 'base_url', 'probe_path')) as ComponentRow[]
+    await Promise.all(
+      apis.map(async (c) => {
+        try {
+          const base = (c.base_url ?? '').replace(/\/+$/, '')
+          const v = await fetchJson(`${base}${c.probe_path || '/api/version'}`, {}, 3000)
+          const key =
+            v.ok && v.body && typeof v.body === 'object'
+              ? (v.body as { instance?: unknown }).instance
+              : null
+          if (typeof key === 'string')
+            add(key, `${envName.get(c.environment) ?? 'Environment'} · ${c.name}`, 'environment')
+        } catch {
+          /* unreachable — contributes nothing */
+        }
+      })
+    )
+    try {
+      const rows = (await db('nivaro_settings_overrides').select('instance_key')) as Array<{
+        instance_key: string
+      }>
+      for (const r of rows) add(r.instance_key, null, 'settings-overrides')
+    } catch {
+      /* table absent on an older schema */
+    }
+    try {
+      const rows = (await db('nivaro_external_apis').select(
+        'name',
+        'instance_overrides',
+        'mock_config'
+      )) as Array<{
+        name: string
+        instance_overrides: string | null
+        mock_config: string | null
+      }>
+      for (const r of rows) {
+        for (const col of ['instance_overrides', 'mock_config'] as const) {
+          const parsed = parseDbConfig(r[col])
+          for (const k of Object.keys(parsed ?? {})) add(k, null, `api:${r.name}`)
+        }
+      }
+    } catch {
+      /* columns absent on an older schema */
+    }
+    const me = instanceKey()
+    const data = [...entries.values()]
+      .sort((a, b) => (a.key === me ? -1 : b.key === me ? 1 : a.key.localeCompare(b.key)))
+      .map((e) => ({ ...e, current: e.key === me }))
+    instancesCache = { at: Date.now(), data }
+    return { data }
+  })
 
   app.get('/', async () => {
     const envs = await db('nivaro_environments').orderBy('sort').orderBy('id')

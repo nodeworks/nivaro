@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { instanceKey } from '../services/settings-overrides.js'
 import { NIVARO_VERSION } from '../version.js'
 
 let changelogCache: { generated_at?: string | null; releases: unknown[] } | null = null
@@ -14,10 +15,16 @@ export async function healthRoutes(app: FastifyInstance) {
   // no Redis, no auth. Clients poll this to notice a deploy (see the shared
   // api-version watcher); /health does I/O on every call and must not be used
   // for that. `environment` lets a client name which environment moved.
+  // `instance` is the per-instance settings key (NIVARO_INSTANCE, else NODE_ENV)
+  // — what mock rules, instance overrides and settings overrides are keyed by.
+  // The Environments registry reads it off every registered API so a picker can
+  // offer real keys instead of a free-text guess. Not a secret: it names a
+  // deployment slot, never a host or credential.
   app.get('/version', async (_req, reply) => {
     return reply.send({
       version: NIVARO_VERSION,
       environment: config.NODE_ENV,
+      instance: instanceKey(),
       cloud: !!process.env.CLOUD_META_DB_URL
     })
   })

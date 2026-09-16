@@ -478,6 +478,7 @@ interface CompStatus {
   reason?: string
   version?: string
   environment?: string
+  instance?: string
   health?: {
     db?: { status?: string; database?: string }
     redis?: { status?: string }
@@ -560,8 +561,9 @@ function ComponentCard({ component, onChanged }: { component: Component; onChang
       </div>
 
       {component.kind === 'api' && status?.reachable && (
-        <div className='gap-px grid grid-cols-2 border-b border-slate-100 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-4'>
+        <div className='gap-px grid grid-cols-2 border-b border-slate-100 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-5'>
           <Stat label='Version' value={status.version ?? '—'} mono />
+          <Stat label='Instance key' value={status.instance ?? '—'} mono />
           <Stat label='Database' value={status.health?.db?.database ?? '—'} mono />
           <Stat
             label='DB / Redis'

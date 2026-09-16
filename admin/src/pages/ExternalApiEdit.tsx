@@ -1352,6 +1352,108 @@ type InstanceOverride = {
   headers?: Record<string, string>
 }
 type OverrideDraft = { base_url: string; auth: KVPair[]; headers: KVPair[] }
+interface InstanceKeyOption {
+  key: string
+  labels: string[]
+  sources: string[]
+  current: boolean
+}
+
+/**
+ * Pick an instance key from the ones this database knows about — the current
+ * process, every API component in the Environments registry (asked through
+ * /api/version), settings-override rows and keys already used by any external
+ * API — instead of guessing NODE_ENV spellings in a text box. "Custom key…"
+ * keeps the escape hatch for a slot nobody has registered yet.
+ */
+function InstanceKeyPicker({
+  taken,
+  onPick,
+  onCustom
+}: {
+  taken: string[]
+  onPick: (key: string) => void
+  onCustom: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const { data: options = [], isLoading } = useQuery({
+    queryKey: ['instance-keys'],
+    queryFn: () =>
+      api.get<{ data: InstanceKeyOption[] }>('/environments/instances').then((r) => r.data.data),
+    enabled: open,
+    staleTime: 60_000
+  })
+  const free = options.filter((o) => !taken.includes(o.key))
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          size='sm'
+          variant='outline'
+          role='combobox'
+          aria-expanded={open}
+          className='h-8'
+          data-instance-add
+        >
+          <Plus className='mr-1 h-3.5 w-3.5' /> Add instance
+          <ChevronsUpDown className='ml-1 h-3 w-3 opacity-50' />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[320px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Instance key…' className='h-8 text-[12px]' />
+          <CommandList>
+            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+              {isLoading ? 'Asking the registry…' : 'No other instances known'}
+            </CommandEmpty>
+            <CommandGroup heading='Known instances'>
+              {free.map((o) => (
+                <CommandItem
+                  key={o.key}
+                  value={o.key}
+                  keywords={o.labels}
+                  onSelect={() => {
+                    onPick(o.key)
+                    setOpen(false)
+                  }}
+                  className='flex flex-col items-start gap-0 text-[12px]'
+                  data-instance-option={o.key}
+                >
+                  <span className='font-mono font-semibold'>
+                    {o.key}
+                    {o.current && (
+                      <span className='ml-2 rounded bg-nvr-cyan/15 px-1.5 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                        this instance
+                      </span>
+                    )}
+                  </span>
+                  <span className='text-[11px] text-muted-foreground'>
+                    {o.labels.length
+                      ? o.labels.join(' · ')
+                      : `used by ${o.sources.map((s) => s.replace(/^api:/, '')).join(', ')}`}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            <CommandGroup>
+              <CommandItem
+                value='__custom__'
+                onSelect={() => {
+                  onCustom()
+                  setOpen(false)
+                }}
+                className='text-[12px]'
+              >
+                Custom key…
+              </CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function InstanceOverridesCard({
   apiId,
   data
@@ -1362,6 +1464,7 @@ function InstanceOverridesCard({
   const queryClient = useQueryClient()
   const [drafts, setDrafts] = useState<Record<string, OverrideDraft>>({})
   const [newKey, setNewKey] = useState('')
+  const [customKey, setCustomKey] = useState(false)
   useEffect(() => {
     const next: Record<string, OverrideDraft> = {}
     for (const [k, v] of Object.entries(data.instance_overrides ?? {})) {
@@ -1409,10 +1512,11 @@ function InstanceOverridesCard({
     <Card className='mt-5 p-6' data-instance-overrides-card>
       <Label>Per-instance credentials & host</Label>
       <p className='text-[12px] text-slate-400'>
-        One API row, different targets per instance: an entry keyed by the instance name
-        (NIVARO_INSTANCE, else NODE_ENV) overrides the base URL, auth fields and headers there. This
-        instance is <span className='font-mono'>{data.current_instance}</span>. Masked secrets left
-        as-is are kept.
+        One API row, different targets per instance: an entry keyed by the instance overrides the
+        base URL, auth fields and headers there. Instances come from the Environments registry (each
+        registered API reports its key) — this one is{' '}
+        <span className='font-mono'>{data.current_instance}</span>. Masked secrets left as-is are
+        kept.
       </p>
       <div className='mt-3 space-y-3'>
         {keys.length === 0 && (
@@ -1479,26 +1583,42 @@ function InstanceOverridesCard({
             </div>
           </div>
         ))}
-        <div className='flex items-center gap-2'>
-          <Input
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value.replace(/[^A-Za-z0-9_.-]/g, ''))}
-            placeholder={data.current_instance ?? 'production'}
-            className='h-8 w-48 font-mono text-[12px]'
-            data-instance-new-key
+        <div className='flex flex-wrap items-center gap-2'>
+          <InstanceKeyPicker
+            taken={keys}
+            onPick={(k) =>
+              setDrafts((d) => ({ ...d, [k]: { base_url: '', auth: [], headers: [] } }))
+            }
+            onCustom={() => setCustomKey(true)}
           />
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-8'
-            disabled={!newKey.trim() || !!drafts[newKey.trim()]}
-            onClick={() => {
-              setDrafts((d) => ({ ...d, [newKey.trim()]: { base_url: '', auth: [], headers: [] } }))
-              setNewKey('')
-            }}
-          >
-            <Plus className='mr-1 h-3.5 w-3.5' /> Add instance
-          </Button>
+          {customKey && (
+            <>
+              <Input
+                value={newKey}
+                onChange={(e) => setNewKey(e.target.value.replace(/[^A-Za-z0-9_.-]/g, ''))}
+                placeholder={data.current_instance ?? 'production'}
+                className='h-8 w-48 font-mono text-[12px]'
+                data-instance-new-key
+                autoFocus
+              />
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8'
+                disabled={!newKey.trim() || !!drafts[newKey.trim()]}
+                onClick={() => {
+                  setDrafts((d) => ({
+                    ...d,
+                    [newKey.trim()]: { base_url: '', auth: [], headers: [] }
+                  }))
+                  setNewKey('')
+                  setCustomKey(false)
+                }}
+              >
+                <Plus className='mr-1 h-3.5 w-3.5' /> Add
+              </Button>
+            </>
+          )}
           <span className='ml-auto' />
           <Button
             size='sm'
