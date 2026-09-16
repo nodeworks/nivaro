@@ -40,6 +40,7 @@ export function NotificationsCenterPage() {
           onNavigate={(p) => navigate(p)}
           app='admin'
           mailLogUrl={(id) => `/mail-log?id=${id}`}
+          subscriptionsPath='/notification-subscriptions'
           onNotice={(m) => toast.success(m)}
           onError={(m) => toast.error(m)}
         />

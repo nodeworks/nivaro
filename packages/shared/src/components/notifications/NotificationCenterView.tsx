@@ -14,15 +14,18 @@ import { del, get, post } from '../../lib/commands'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
+  type NotificationDetailRecord,
   type NotificationLane,
   type NotificationRouteMap,
   type NotificationTargetSpec,
+  type NotificationWhy,
   resolveNotificationTargetFor,
   runNotificationTarget
 } from '../../lib/notification-target'
 import { cn, formatRelative } from '../../lib/utils'
 import { DeliveryChips } from './DeliveryChips'
 import { NotificationActions } from './NotificationActions'
+import { NotificationDetailBits } from './NotificationDetailBits'
 
 /**
  * The full notifications inbox — lane tabs (Critical / Needs you / FYI),
@@ -34,8 +37,24 @@ import { NotificationActions } from './NotificationActions'
 
 const PAGE_SIZE = 25
 
-type StatusFilter = 'all' | 'inbox' | 'read' | 'snoozed'
+type StatusFilter = 'all' | 'inbox' | 'read' | 'snoozed' | 'sent'
 type LaneFilter = 'all' | 'critical' | 'needs_you' | 'fyi'
+
+/** One send the caller made (#64): the rows sharing a subject + minute,
+ *  with each recipient's read state. */
+interface SentGroup {
+  key: string
+  subject: string
+  message: string | null
+  created_at: string | null
+  lane: string | null
+  category: string | null
+  collection: string | null
+  item: string | null
+  recipients: Array<{ id: string; name: string; read: boolean; read_at: string | null }>
+  read_count: number
+  total: number
+}
 
 interface NotificationRow {
   id: number
@@ -57,13 +76,16 @@ interface NotificationRow {
   lane?: NotificationLane | null
   category?: string | null
   delivery?: NotificationDeliveryRecord | null
+  detail?: NotificationDetailRecord | null
+  why?: NotificationWhy | null
 }
 
 const STATUS_TABS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'inbox', label: 'Unread' },
   { key: 'read', label: 'Read' },
-  { key: 'snoozed', label: 'Snoozed' }
+  { key: 'snoozed', label: 'Snoozed' },
+  { key: 'sent', label: 'Sent' }
 ]
 const LANE_TABS: Array<{ key: LaneFilter; label: string }> = [
   { key: 'all', label: 'Every lane' },
@@ -94,6 +116,8 @@ export interface NotificationCenterViewProps {
   onNavigate: (path: string) => void
   app?: 'portal' | 'admin'
   mailLogUrl?: (mailLogId: number) => string | null
+  /** Host route of the subscriptions page (a watch's "Why me?" links there). */
+  subscriptionsPath?: string | null
   /** Toast hooks — hosts wire their own toaster. */
   onNotice?: (message: string) => void
   onError?: (message: string) => void
@@ -105,6 +129,7 @@ export function NotificationCenterView({
   onNavigate,
   app,
   mailLogUrl,
+  subscriptionsPath,
   onNotice,
   onError,
   className
@@ -113,6 +138,19 @@ export function NotificationCenterView({
   const qc = useQueryClient()
   const [status, setStatus] = useState<StatusFilter>('all')
   const [lane, setLane] = useState<LaneFilter>('all')
+  // #64 — the Sent tab: read receipts for what I sent (critical by default).
+  const [sentCriticalOnly, setSentCriticalOnly] = useState(true)
+  const { data: sentGroups = [], isLoading: sentLoading } = useQuery<SentGroup[]>({
+    queryKey: ['notifications', 'sent', sentCriticalOnly],
+    queryFn: () =>
+      client
+        .request<{ data: SentGroup[] }>(
+          get('/notifications/sent', { lane: sentCriticalOnly ? 'critical' : 'all' })
+        )
+        .then((r) => r.data ?? []),
+    enabled: status === 'sent',
+    refetchInterval: status === 'sent' ? 30_000 : false
+  })
   const [page, setPage] = useState(1)
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
   const [snoozeMenuId, setSnoozeMenuId] = useState<number | null>(null)
@@ -154,7 +192,7 @@ export function NotificationCenterView({
         get('/notifications', {
           page,
           limit: PAGE_SIZE,
-          status: status === 'snoozed' ? 'all' : status,
+          status: status === 'snoozed' || status === 'sent' ? 'all' : status,
           snoozed: status === 'snoozed' ? 'true' : undefined,
           lane: lane === 'all' ? undefined : lane,
           search: search || undefined,
@@ -162,7 +200,8 @@ export function NotificationCenterView({
           app
         })
       ),
-    placeholderData: keepPreviousData
+    placeholderData: keepPreviousData,
+    enabled: status !== 'sent'
   })
 
   const { data: collections = [] } = useQuery<string[]>({
@@ -334,7 +373,104 @@ export function NotificationCenterView({
       </header>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
-        {isLoading ? (
+        {status === 'sent' ? (
+          <div className='mx-8 my-6 space-y-3' data-nvr-sent>
+            <div className='flex flex-wrap items-center gap-3 text-[12px] text-slate-500'>
+              <span>
+                What you sent, with who has read it. A send is one subject to its recipients; a
+                critical send bypasses mutes and quiet hours, so its receipts matter most.
+              </span>
+              <label className='ml-auto flex cursor-pointer items-center gap-1.5'>
+                <input
+                  type='checkbox'
+                  checked={sentCriticalOnly}
+                  onChange={(e) => setSentCriticalOnly(e.target.checked)}
+                  className='h-3.5 w-3.5'
+                  data-nvr-sent-critical
+                />
+                Critical only
+              </label>
+            </div>
+            {sentLoading ? (
+              <p className='py-10 text-[13px] text-slate-400'>Loading…</p>
+            ) : sentGroups.length === 0 ? (
+              <div className='flex flex-col items-center justify-center py-24 text-center'>
+                <Bell className='h-10 w-10 text-slate-200 dark:text-slate-700' />
+                <p className='mt-3 text-[14px] font-medium text-slate-500'>Nothing sent yet</p>
+                <p className='mt-1 text-[12px] text-slate-400'>
+                  {sentCriticalOnly
+                    ? 'No critical sends. Untick "Critical only" to see everything you sent.'
+                    : 'Messages you send to stakeholders or colleagues appear here.'}
+                </p>
+              </div>
+            ) : (
+              <div className='divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+                {sentGroups.map((g) => (
+                  <div key={g.key} className='px-4 py-3' data-nvr-sent-row>
+                    <div className='flex items-baseline gap-2'>
+                      {g.lane === 'critical' && (
+                        <span className='shrink-0 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
+                          Critical
+                        </span>
+                      )}
+                      <span className='truncate text-[13px] font-medium text-slate-900 dark:text-slate-100'>
+                        {g.subject.replace(/^critical:\s*/i, '')}
+                      </span>
+                      <span className='shrink-0 text-[10.5px] text-slate-400'>
+                        {formatRelative(g.created_at ?? new Date())}
+                      </span>
+                      <span
+                        className={cn(
+                          'ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-semibold tabular-nums',
+                          g.read_count === g.total
+                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                            : 'bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
+                        )}
+                        data-nvr-sent-read-count
+                      >
+                        {g.read_count} of {g.total} read
+                      </span>
+                    </div>
+                    {g.message && (
+                      <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+                        {g.message.replace(/<[^>]+>/g, '')}
+                      </p>
+                    )}
+                    <div className='mt-1.5 flex flex-wrap gap-1'>
+                      {g.recipients.map((r) => (
+                        <span
+                          key={r.id}
+                          className={cn(
+                            'inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10.5px]',
+                            r.read
+                              ? 'border-emerald-200 bg-emerald-50/70 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/10 dark:text-emerald-300'
+                              : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
+                          )}
+                          data-nvr-receipt={r.read ? 'read' : 'unread'}
+                          data-tip={
+                            r.read && r.read_at
+                              ? `Read ${new Date(r.read_at).toLocaleString()}`
+                              : r.read
+                                ? 'Read'
+                                : 'Not read yet'
+                          }
+                        >
+                          <span
+                            className={cn(
+                              'h-1.5 w-1.5 rounded-full',
+                              r.read ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                            )}
+                          />
+                          {r.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : isLoading ? (
           <p className='px-8 py-10 text-[13px] text-slate-400'>Loading…</p>
         ) : notifications.length === 0 ? (
           <div className='flex flex-col items-center justify-center py-24 text-center'>
@@ -450,6 +586,14 @@ export function NotificationCenterView({
                           onNavigate={onNavigate}
                         />
                       </div>
+                      <NotificationDetailBits
+                        detail={n.detail}
+                        why={n.why}
+                        delivery={n.delivery}
+                        subscriptionsPath={subscriptionsPath}
+                        onNavigate={onNavigate}
+                        className='mt-1'
+                      />
                       {n.actions && n.actions.length > 0 && (
                         <NotificationActions
                           actions={unread ? n.actions : n.actions.filter((a) => !!a.input)}
@@ -540,7 +684,7 @@ export function NotificationCenterView({
             })}
           </div>
         )}
-        {total > PAGE_SIZE && (
+        {status !== 'sent' && total > PAGE_SIZE && (
           <div className='mx-8 mb-6 flex items-center justify-between'>
             <p className='text-[12px] text-slate-400'>
               Page {page} of {totalPages}

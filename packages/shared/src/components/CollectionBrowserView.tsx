@@ -776,12 +776,22 @@ export function RowActionsMenu({
       const body = { collection, ids: [id], reason: comment?.trim() || null }
       const res =
         action.source === 'db'
-          ? await client.request<{ data: { succeeded?: number; skipped?: number; failed?: number; errors?: Array<{ error: string }> } }>(
-              post('/bulk-actions/run', { ...body, key: action.key })
-            )
-          : await client.request<{ data: { succeeded?: number; skipped?: number; failed?: number; errors?: Array<{ error: string }> } }>(
-              post(`/bulk-actions/${action.key}/execute`, body)
-            )
+          ? await client.request<{
+              data: {
+                succeeded?: number
+                skipped?: number
+                failed?: number
+                errors?: Array<{ error: string }>
+              }
+            }>(post('/bulk-actions/run', { ...body, key: action.key }))
+          : await client.request<{
+              data: {
+                succeeded?: number
+                skipped?: number
+                failed?: number
+                errors?: Array<{ error: string }>
+              }
+            }>(post(`/bulk-actions/${action.key}/execute`, body))
       return { action, result: res.data ?? {} }
     },
     onSuccess: ({ action, result }) => {
@@ -900,7 +910,8 @@ export function RowActionsMenu({
                         : !confirm.picked || transitionMut.isPending
                     }
                     onClick={() => {
-                      if (confirm.action) actionMut.mutate({ action: confirm.action, comment: reason })
+                      if (confirm.action)
+                        actionMut.mutate({ action: confirm.action, comment: reason })
                       else if (confirm.picked)
                         transitionMut.mutate({ transitionId: confirm.picked, comment: reason })
                     }}
@@ -2976,6 +2987,9 @@ function MessageStakeholdersForm({
   const [owners, setOwners] = useState(true)
   const [creators, setCreators] = useState(true)
   const [email, setEmail] = useState(false)
+  // #64 — a critical send: Critical lane, bypasses mutes and quiet hours,
+  // and the sender gets read receipts (Notifications → Sent).
+  const [critical, setCritical] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -3003,7 +3017,7 @@ function MessageStakeholdersForm({
         post('/notifications/message-stakeholders', {
           collection,
           ids: selectedIds,
-          subject: subject.trim(),
+          subject: critical ? `Critical: ${subject.trim()}` : subject.trim(),
           message: message.trim(),
           include: { owners, creators },
           email
@@ -3050,6 +3064,19 @@ function MessageStakeholdersForm({
           className='h-3.5 w-3.5'
         />
         Also email
+      </label>
+      <label
+        className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'
+        data-tip='Marks the message critical: it lands in the Critical lane, gets past mutes and quiet hours, and you can see who has read it under Notifications → Sent.'
+      >
+        <input
+          type='checkbox'
+          checked={critical}
+          onChange={(e) => setCritical(e.target.checked)}
+          className='h-3.5 w-3.5'
+          data-msg-critical
+        />
+        Critical
       </label>
       <span
         className='text-[11.5px] text-[#00ceff]'

@@ -112,6 +112,25 @@ export interface NotificationDeliveryRecord {
   escalation?: { push_at?: string; email_at?: string; email_log_id?: number | null }
 }
 
+/** What the row is about beyond subject + message (GET /notifications
+ *  `detail`, #27): the change lines a coalesced watch folded in, the child
+ *  row it concerned. */
+export interface NotificationDetailRecord {
+  changes?: Array<{ field: string; label: string; old: string; new: string }>
+  via_child?: { collection: string; item: string; event: string; label?: string | null } | null
+  bundle?: { writes: number; children: string[] } | null
+}
+
+/** Why the person got the row (#77): which watch / subscription / sender /
+ *  rule produced it. Every row carries one — old rows answer with the
+ *  category's rules. */
+export interface NotificationWhy {
+  kind: string
+  text: string
+  label?: string | null
+  id?: string | number | null
+}
+
 /** The notification row shape every surface receives (GET /notifications). */
 export interface NotificationLike {
   collection?: string | null

@@ -100,6 +100,7 @@ export function NotificationBell({
         extraBadge={pendingAccess}
         mailLogUrl={(id) => `/mail-log?id=${id}`}
         allPath='/notifications'
+        subscriptionsPath='/notification-subscriptions'
         onActionError={(m) => toast.error(m)}
         // The sidebar footer sits bottom-left inside an overflow-clipped rail:
         // portal the panel beside the trigger instead of below it.

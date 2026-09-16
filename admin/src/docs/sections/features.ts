@@ -60,6 +60,26 @@ emitNotification(app.io, targetUserId, {
     {
       type: 'note',
       text: "The Socket.io bell uses the user's static token for authentication. If a user has no static token, real-time delivery is unavailable but they can still poll the REST endpoints."
+    },
+    { type: 'h3', text: 'Why did I get this?' },
+    {
+      type: 'p',
+      text: 'Every notification row carries a "Why me?" expander: which record watch, subscription, sender or notification rule produced it (with a link to manage the subscription), and what each channel did with it — landed in-app, pushed, emailed now, held for the daily summary, or held by quiet hours. Rows written before this shipped answer with the category\'s notification rules.'
+    },
+    { type: 'h3', text: 'Every change in a bundled watch' },
+    {
+      type: 'p',
+      text: 'A record watch folds one sitting\'s edits into a single notification ("3 changes by …"). Its "N changes" expander lists every line as was → now, including the child rows the person touched, so you never have to open the record to see what moved.'
+    },
+    { type: 'h3', text: 'Read receipts for what you sent' },
+    {
+      type: 'p',
+      text: 'Notifications → Sent lists the messages you sent — one row per send, with each recipient and whether they have read it (and when). Critical sends show by default; untick "Critical only" for everything. A send becomes critical by leading its subject with "Critical:" — the Message-stakeholders form has a checkbox for it — which puts it in the Critical lane and past mutes and quiet hours.'
+    },
+    { type: 'h3', text: 'Letting a category through quiet hours' },
+    {
+      type: 'p',
+      text: "Profile → Notification rules has a Quiet hours column: ticked, that category's push and instant email go out even inside your quiet window (the in-app row always lands either way). Critical alerts always get through regardless."
     }
   ]
 }

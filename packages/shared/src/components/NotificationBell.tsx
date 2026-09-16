@@ -13,15 +13,18 @@ import { useNivaroClient } from '../context'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
+  type NotificationDetailRecord,
   type NotificationLane,
   type NotificationRouteMap,
   type NotificationTargetSpec,
+  type NotificationWhy,
   resolveNotificationTargetFor,
   runNotificationTarget
 } from '../lib/notification-target'
 import { formatRelative } from '../lib/utils'
 import { DeliveryChips } from './notifications/DeliveryChips'
 import { NotificationActions } from './notifications/NotificationActions'
+import { NotificationDetailBits } from './notifications/NotificationDetailBits'
 
 // Server serialize() shape. The SDK's NotificationItem carries the raw
 // columns; the bell needs the click-target extras too, so it types the rows
@@ -42,6 +45,8 @@ export interface BellNotification {
   lane?: NotificationLane | null
   category?: string | null
   delivery?: NotificationDeliveryRecord | null
+  detail?: NotificationDetailRecord | null
+  why?: NotificationWhy | null
 }
 
 export type BellLaneTab = 'attention' | 'fyi' | 'all'
@@ -76,6 +81,8 @@ export interface NotificationBellProps {
   renderTrigger?: (state: { open: boolean; badge: number; toggle: () => void }) => ReactNode
   /** Path of the full notifications page — renders a "See all" footer link. */
   allPath?: string | null
+  /** Path of the subscriptions page — a watch's "Why me?" offers a Manage link. */
+  subscriptionsPath?: string | null
   /** Called with an error message when an inline action fails. */
   onActionError?: (message: string) => void
   /** Where the panel opens relative to the trigger. 'below' (default) keeps
@@ -106,6 +113,7 @@ export function NotificationBell({
   mailLogUrl,
   renderTrigger,
   allPath,
+  subscriptionsPath,
   onActionError,
   panelPlacement = 'below'
 }: NotificationBellProps) {
@@ -455,6 +463,17 @@ export function NotificationBell({
                               className='px-3 pb-2 pl-[30px]'
                             />
                           )}
+                          <NotificationDetailBits
+                            detail={n.detail}
+                            why={n.why}
+                            delivery={n.delivery}
+                            subscriptionsPath={subscriptionsPath}
+                            onNavigate={(p) => {
+                              setOpen(false)
+                              onNavigate(p)
+                            }}
+                            className='px-3 pb-2 pl-[30px] -mt-1'
+                          />
                         </Fragment>
                       ))}
                     </div>

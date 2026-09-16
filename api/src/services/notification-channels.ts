@@ -126,8 +126,74 @@ export interface NotifyUserOptions {
    *  center / push / portal click and the inline action. Defaults to the
    *  record named by collection + item. */
   target?: NotificationTargetSpec | null
+  /** What produced this row (#77 — the bell's "why me?"): a watch, a
+   *  subscription, a mention, a task, a flow… `label` names the specific
+   *  rule / watch / flow, `id` its row where one exists. Absent = the
+   *  category's notification rules are the honest answer. */
+  source?: { kind: string; label?: string | null; id?: string | number | null } | null
+  /** Structured content stored with the row (#27): the change lines a
+   *  coalesced watch folded in, the child row it was about. */
+  detail?: Omit<NotificationDetail, 'why'> | null
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
   _retry?: boolean
+}
+
+/** `nivaro_notifications.detail` — what the row is ABOUT, beyond subject +
+ *  message: the diff lines (bundle preview), the child row, and why the
+ *  person got it. Diagnostic + explanatory only; never drives delivery. */
+export interface NotificationDetail {
+  changes?: Array<{ field: string; label: string; old: string; new: string }>
+  via_child?: {
+    collection: string
+    item: string
+    event: string
+    label?: string | null
+  } | null
+  bundle?: { writes: number; children: string[] } | null
+  why?: {
+    kind: string
+    text: string
+    label?: string | null
+    id?: string | number | null
+  } | null
+}
+
+/** Serialise a detail record for the column — bounded, never throws. */
+export function detailColumn(detail: NotificationDetail | null | undefined): string | null {
+  if (!detail) return null
+  const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n)
+  const out: NotificationDetail = {}
+  if (detail.changes?.length)
+    out.changes = detail.changes.slice(0, 40).map((c) => ({
+      field: clip(c.field, 120),
+      label: clip(c.label, 160),
+      old: clip(c.old, 240),
+      new: clip(c.new, 240)
+    }))
+  if (detail.via_child) out.via_child = detail.via_child
+  if (detail.bundle) out.bundle = detail.bundle
+  if (detail.why)
+    out.why = {
+      kind: clip(detail.why.kind, 40),
+      text: clip(detail.why.text, 300),
+      label: detail.why.label != null ? clip(detail.why.label, 160) : null,
+      id: detail.why.id ?? null
+    }
+  try {
+    return JSON.stringify(out)
+  } catch {
+    return null
+  }
+}
+
+export function parseDetail(raw: unknown): NotificationDetail | null {
+  if (!raw) return null
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return v && typeof v === 'object' ? (v as NotificationDetail) : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -206,7 +272,11 @@ export function classifyNotification(subject: string): NotifyCategory {
   return 'other'
 }
 
-const CRITICAL_SUBJECTS = /sla escalation|maintenance|monitor failing/i
+// A person can mark their own send critical by leading the subject with
+// "Critical:" (the Message-stakeholders form's checkbox does exactly that) —
+// it lands in the Critical lane, bypasses mutes and quiet hours, and the
+// sender gets read receipts (#64).
+const CRITICAL_SUBJECTS = /^critical:|sla escalation|maintenance|monitor failing/i
 
 export type EmailMode = 'instant' | 'daily' | 'off'
 
@@ -216,8 +286,20 @@ export interface NotifyPrefs {
   /** Per category: in-app row on/off, browser push on/off, and how EMAIL
    *  reaches the person — each message as it happens, folded into the daily
    *  action summary, or not at all. `email` absent = the legacy
-   *  preferences.email_digest default ('instant' unless 'daily'). */
-  matrix?: Partial<Record<NotifyCategory, { inapp?: boolean; push?: boolean; email?: EmailMode }>>
+   *  preferences.email_digest default ('instant' unless 'daily').
+   *  `quiet_override` (#78): this category's push and instant email go out
+   *  even inside quiet hours. */
+  matrix?: Partial<
+    Record<
+      NotifyCategory,
+      { inapp?: boolean; push?: boolean; email?: EmailMode; quiet_override?: boolean }
+    >
+  >
+}
+
+/** Does this category ignore the person's quiet hours (#78)? */
+export function quietOverridden(prefs: NotifyPrefs | null | undefined, category: NotifyCategory) {
+  return prefs?.matrix?.[category]?.quiet_override === true
 }
 
 /** Effective email mode for one category, honouring the per-category setting
@@ -291,6 +373,7 @@ export interface DeliveryReason {
     | 'matrix_inapp_off'
     | 'matrix_push_off'
     | 'quiet_hours_push'
+    | 'quiet_override'
     | 'email_off'
     | 'email_daily'
     | 'email_quiet_hours'
@@ -442,12 +525,20 @@ export async function decideDelivery(
         text: `Notification rules: push is OFF for "${NOTIFY_CATEGORY_LABELS[category]}".`
       })
     } else if (inQuietHours(prefs, now)) {
-      push = false
-      reasons.push({
-        code: 'quiet_hours_push',
-        channel: 'push',
-        text: `Quiet hours (${prefs?.quiet_start}–${prefs?.quiet_end} ET) — push is held; the inbox row still lands.`
-      })
+      if (quietOverridden(prefs, category)) {
+        reasons.push({
+          code: 'quiet_override',
+          channel: 'push',
+          text: `Quiet hours are on, but "${NOTIFY_CATEGORY_LABELS[category]}" overrides them — push sent.`
+        })
+      } else {
+        push = false
+        reasons.push({
+          code: 'quiet_hours_push',
+          channel: 'push',
+          text: `Quiet hours (${prefs?.quiet_start}–${prefs?.quiet_end} ET) — push is held; the inbox row still lands.`
+        })
+      }
     }
   }
 
@@ -484,7 +575,7 @@ export async function decideDelivery(
           channel: 'email',
           text: `Notification rules: "${NOTIFY_CATEGORY_LABELS[category]}" email goes in the daily summary.`
         })
-      } else if (inQuietHours(prefs, now)) {
+      } else if (inQuietHours(prefs, now) && !quietOverridden(prefs, category)) {
         email = 'deferred'
         reasons.push({
           code: 'email_quiet_hours',
@@ -763,6 +854,19 @@ export async function notifyUser(
       : { status: 'not_requested' }
   }
   let notifId: number | null = null
+  // "Why me?" (#77): the caller's source when it named one, else the honest
+  // default — the recipient's notification rules for the category are on.
+  const why: NotificationDetail['why'] = {
+    kind: opts.source?.kind ?? (opts.sender ? 'message' : 'rules'),
+    text:
+      opts.why ??
+      (opts.sender
+        ? 'Sent to you directly.'
+        : `Your notification rules for "${NOTIFY_CATEGORY_LABELS[decision.category]}" are on.`),
+    label: opts.source?.label ?? null,
+    id: opts.source?.id ?? null
+  }
+  const detail = detailColumn({ ...(opts.detail ?? {}), why })
 
   try {
     if (channels.inapp) {
@@ -781,7 +885,8 @@ export async function notifyUser(
           action: target?.action ?? null,
           category: decision.category,
           lane,
-          delivery: JSON.stringify(delivery)
+          delivery: JSON.stringify(delivery),
+          detail
         })
         .returning('*')
       const rawId = (notif as { id?: unknown } | undefined)?.id

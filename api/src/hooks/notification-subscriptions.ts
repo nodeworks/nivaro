@@ -4,7 +4,7 @@ import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
-import { notificationRowMeta } from '../services/notification-channels.js'
+import { detailColumn, notificationRowMeta } from '../services/notification-channels.js'
 import {
   renderChangesToken,
   renderNotificationTemplate
@@ -301,6 +301,27 @@ async function fireSubscriptionNotifications(
     }
     const by = actorName ? ` by ${actorName}` : ''
 
+    // The row's own labelled old → new list, computed once per write for
+    // the stored detail (#27) and the email table. Bundles and child
+    // roll-ups already carry theirs.
+    let rowChanges: Array<{ field: string; label: string; old: string; new: string }> = []
+    if (!bundle && !viaChild && eventType === 'update' && data && previous && subs.length > 0) {
+      try {
+        const delta: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(data)) {
+          if (JSON.stringify(previous[k] ?? null) !== JSON.stringify(v ?? null)) delta[k] = v
+        }
+        for (const k of ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at'])
+          delete delta[k]
+        if (Object.keys(delta).length > 0) {
+          const { labelledChanges } = await import('../services/mail-types.js')
+          rowChanges = await labelledChanges(collection, delta, previous)
+        }
+      } catch {
+        rowChanges = []
+      }
+    }
+
     for (const sub of subs) {
       const recordScoped = isRecordScoped(sub)
       if (scope === 'wide' && recordScoped) continue
@@ -383,6 +404,28 @@ async function fireSubscriptionNotifications(
       const wantEmail = channelOn(sub.notify_email)
 
       if (wantInapp) {
+        // Stored detail (#27 / #77): every change line the message summarised
+        // ("+3 more" expands in the bell) and which watch produced the row.
+        const detail = detailColumn({
+          changes: bundle ? bundle.changes : viaChild ? (viaChild.changes ?? []) : rowChanges,
+          via_child: viaChild
+            ? {
+                collection: viaChild.collection,
+                item: viaChild.item,
+                event: viaChild.event,
+                label: viaChild.label ?? null
+              }
+            : null,
+          bundle: bundle ? { writes: bundle.writes, children: bundle.children } : null,
+          why: {
+            kind: recordScoped ? 'watch' : 'subscription',
+            text: recordScoped
+              ? `You watch ${friendly ?? 'this record'}.`
+              : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
+            label: sub.label ?? null,
+            id: sub.id
+          }
+        })
         const [notif] = await db('nivaro_notifications')
           .insert({
             recipient: sub.user,
@@ -393,6 +436,7 @@ async function fireSubscriptionNotifications(
             message: message.slice(0, 500),
             collection,
             item,
+            detail,
             ...notificationRowMeta({ subject, category: 'watch', kind: 'record', action: 'open' })
           })
           .returning('*')

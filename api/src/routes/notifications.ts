@@ -13,7 +13,8 @@ import {
   type NotificationLane,
   type NotifyCategory,
   notifyUser,
-  parseDelivery
+  parseDelivery,
+  parseDetail
 } from '../services/notification-channels.js'
 import {
   actionsFor,
@@ -54,6 +55,18 @@ function serialize(row: Record<string, unknown>) {
   // Rows written before delivery tracking existed: the row IS the in-app
   // delivery, nothing else is known.
   const delivery = parseDelivery(row.delivery) ?? { inapp: { status: 'delivered' } }
+  // #77 — every row explains itself. Rows written before `detail` existed
+  // (or by writers that stamp none) fall back to the honest default: the
+  // recipient's rules for the category are on.
+  const detail = parseDetail(row.detail)
+  const why = detail?.why ?? {
+    kind: row.sender ? 'message' : 'rules',
+    text: row.sender
+      ? 'Sent to you directly.'
+      : `Your notification rules for "${NOTIFY_CATEGORY_LABELS[category] ?? category}" are on.`,
+    label: null,
+    id: null
+  }
   return {
     id: row.id,
     user: row.recipient,
@@ -74,6 +87,8 @@ function serialize(row: Record<string, unknown>) {
     category,
     lane,
     delivery,
+    detail: detail ? { ...detail, why: undefined } : null,
+    why,
     actions,
     url: null as string | null
   }
@@ -218,6 +233,95 @@ export async function notificationsRoutes(app: FastifyInstance) {
   // Unread count + lane split. `attention` is what the badge shows: Critical
   // and Needs-you rows; FYI rows sit in the inbox without pulling the eye.
   app.get('/count', async (req, reply) => reply.send(await laneCounts(req.user!.id)))
+
+  /** #64 — read receipts for what the CALLER sent. One "send" = the rows
+   *  sharing a subject within the same minute (message-stakeholders, a
+   *  broadcast, a direct message fan out one row per recipient); each
+   *  recipient's read state rides along. Critical sends by default — that is
+   *  where "did they see it?" matters — `?lane=all` for everything. */
+  app.get('/sent', async (req, reply) => {
+    const userId = req.user!.id
+    const q = req.query as { lane?: string; limit?: string }
+    const limit = Math.min(100, Math.max(1, Number(q.limit) || 50))
+    let query = db('nivaro_notifications').where({ sender: userId })
+    if (q.lane !== 'all') query = query.where('lane', 'critical')
+    const rows = (await query
+      .orderBy('timestamp', 'desc')
+      .limit(2000)
+      .select(
+        'id',
+        'subject',
+        'message',
+        'timestamp',
+        'lane',
+        'category',
+        'collection',
+        'item',
+        'recipient',
+        'status',
+        'read_at'
+      )) as Array<Record<string, unknown>>
+    type Group = {
+      key: string
+      subject: string
+      message: string | null
+      created_at: unknown
+      lane: string | null
+      category: string | null
+      collection: string | null
+      item: string | null
+      recipients: Array<{ id: string; name: string; read: boolean; read_at: unknown }>
+    }
+    const groups = new Map<string, Group>()
+    for (const r of rows) {
+      const minute = new Date(r.timestamp as string).toISOString().slice(0, 16)
+      const key = `${String(r.subject)}|${minute}`
+      let g = groups.get(key)
+      if (!g) {
+        if (groups.size >= limit) continue
+        g = {
+          key,
+          subject: String(r.subject),
+          message: (r.message as string | null) ?? null,
+          created_at: r.timestamp,
+          lane: (r.lane as string | null) ?? null,
+          category: (r.category as string | null) ?? null,
+          collection: (r.collection as string | null) ?? null,
+          item: (r.item as string | null) ?? null,
+          recipients: []
+        }
+        groups.set(key, g)
+      }
+      g.recipients.push({
+        id: String(r.recipient),
+        name: '',
+        read: r.status !== 'inbox',
+        read_at: r.read_at ?? null
+      })
+    }
+    const ids = [...new Set([...groups.values()].flatMap((g) => g.recipients.map((x) => x.id)))]
+    const names = new Map<string, string>()
+    if (ids.length > 0) {
+      const users = (await db('nivaro_users')
+        .whereIn('id', ids)
+        .select('id', 'first_name', 'last_name', 'email')
+        .catch(() => [])) as Array<Record<string, unknown>>
+      for (const u of users)
+        names.set(
+          String(u.id).toUpperCase(),
+          `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? '')
+        )
+    }
+    const data = [...groups.values()].map((g) => ({
+      ...g,
+      recipients: g.recipients
+        .map((x) => ({ ...x, name: names.get(x.id.toUpperCase()) ?? x.id }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      read_count: g.recipients.filter((x) => x.read).length,
+      total: g.recipients.length
+    }))
+    return reply.send({ data })
+  })
 
   // POST / — user-to-user notification (chat @mentions etc.). Sender is always
   // the authenticated user; rides notifyUser so socket + web push fire too.

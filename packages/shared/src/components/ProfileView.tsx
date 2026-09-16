@@ -425,7 +425,10 @@ export function NotificationRulesCard() {
   const np = (prefs?.notification_prefs ?? {}) as {
     quiet_start?: string
     quiet_end?: string
-    matrix?: Record<string, { inapp?: boolean; push?: boolean; email?: EmailMode }>
+    matrix?: Record<
+      string,
+      { inapp?: boolean; push?: boolean; email?: EmailMode; quiet_override?: boolean }
+    >
     escalation?: Record<string, EscalationRule>
   }
   // Legacy account-wide default (instant vs daily) — categories without an
@@ -485,6 +488,15 @@ export function NotificationRulesCard() {
     const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
     commit({ matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, email } } })
   }
+  // #78 — let one category through quiet hours (push + instant email).
+  const toggleQuietOverride = (cat: string) => {
+    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
+    const next = { ...cur }
+    if (cur.quiet_override) delete next.quiet_override
+    else next.quiet_override = true
+    commit({ matrix: { ...(np.matrix ?? {}), [cat]: next } })
+  }
+  const hasQuietHours = !!(effStart && effEnd)
   const setAllEmail = (email: EmailMode) => {
     const matrix: Record<string, { inapp?: boolean; push?: boolean; email?: EmailMode }> = {}
     for (const c of NOTIFY_CATS)
@@ -529,8 +541,9 @@ export function NotificationRulesCard() {
         <p className='mt-0.5 text-[11px] text-slate-400'>
           Per category: whether it lands in your in-app inbox, whether your browser pushes it, and
           how it reaches your email — each one as it happens, folded into the daily action summary,
-          or not at all. Quiet hours pause pushes and hold emails until morning; critical alerts
-          (SLA escalations, maintenance, monitor failures) always get through.
+          or not at all. Quiet hours pause pushes and hold emails until morning unless a category is
+          let through them; critical alerts (SLA escalations, maintenance, monitor failures) always
+          get through.
         </p>
       </header>
       <div className='space-y-3 p-4'>
@@ -599,6 +612,10 @@ export function NotificationRulesCard() {
                 Email
                 <HeaderHelp text='Individual email = one message as each event happens. Daily summary = held and delivered once a day in your action summary (deliver-at time below). No email = never emailed for this category (in-app and push are unaffected).' />
               </th>
+              <th className='py-1 text-center font-semibold'>
+                Quiet hours
+                <HeaderHelp text='Ticked = this category still pushes and emails during your quiet hours (the in-app row always lands either way). Leave it off to have quiet hours hold this category until morning. Critical alerts always get through.' />
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -630,6 +647,22 @@ export function NotificationRulesCard() {
                         onChange={(v: string) => setEmail(c.key, v as EmailMode)}
                       />
                     </div>
+                  </td>
+                  <td className='py-1.5 text-center'>
+                    <input
+                      type='checkbox'
+                      checked={row.quiet_override === true}
+                      onChange={() => toggleQuietOverride(c.key)}
+                      disabled={save.isPending}
+                      aria-label={`Let ${c.label} through quiet hours`}
+                      title={
+                        hasQuietHours
+                          ? undefined
+                          : 'Set quiet hours above for this to matter — it is remembered either way'
+                      }
+                      data-quiet-override={c.key}
+                      className='h-3.5 w-3.5'
+                    />
                   </td>
                 </tr>
               )

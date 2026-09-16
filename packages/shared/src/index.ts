@@ -141,12 +141,13 @@ export { NotificationBell } from './components/NotificationBell'
 export type { NotificationSourcesCardProps } from './components/NotificationSourcesCard'
 export { NotificationSourcesCard } from './components/NotificationSourcesCard'
 export type { DeliveryChipsProps } from './components/notifications/DeliveryChips'
-export { DeliveryChips } from './components/notifications/DeliveryChips'
+export { DeliveryChips, describeDelivery } from './components/notifications/DeliveryChips'
 export type { NotificationActionsProps } from './components/notifications/NotificationActions'
 export { NotificationActions } from './components/notifications/NotificationActions'
 export { NotificationAnalyticsView } from './components/notifications/NotificationAnalyticsView'
 export type { NotificationCenterViewProps } from './components/notifications/NotificationCenterView'
 export { NotificationCenterView } from './components/notifications/NotificationCenterView'
+export { NotificationDetailBits } from './components/notifications/NotificationDetailBits'
 export { NotificationSubscriptionsView } from './components/notifications/NotificationSubscriptionsView'
 export type { NotificationTemplatesViewProps } from './components/notifications/NotificationTemplatesView'
 export { NotificationTemplatesView } from './components/notifications/NotificationTemplatesView'
@@ -257,7 +258,6 @@ export {
 } from './lib/draft-store'
 export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
-export * from './lib/summary-mode'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
 export * from './lib/field-interfaces'
 export {
@@ -293,6 +293,7 @@ export {
 } from './lib/realtime'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, startRum } from './lib/rum'
+export * from './lib/summary-mode'
 export {
   effectiveScopeSeedIds,
   matchScopeDimension,

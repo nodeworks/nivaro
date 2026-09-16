@@ -386,7 +386,10 @@ export async function usersRoutes(app: FastifyInstance) {
           clean.quiet_end = np.quiet_end
         const CATS = NOTIFY_CATEGORIES
         if (np.matrix && typeof np.matrix === 'object') {
-          const m: Record<string, { inapp?: boolean; push?: boolean; email?: string }> = {}
+          const m: Record<
+            string,
+            { inapp?: boolean; push?: boolean; email?: string; quiet_override?: boolean }
+          > = {}
           for (const cat of CATS) {
             const row = (np.matrix as Record<string, unknown>)[cat]
             if (row && typeof row === 'object') {
@@ -394,7 +397,11 @@ export async function usersRoutes(app: FastifyInstance) {
               m[cat] = {
                 inapp: (row as { inapp?: unknown }).inapp !== false,
                 push: (row as { push?: unknown }).push !== false,
-                ...(email === 'instant' || email === 'daily' || email === 'off' ? { email } : {})
+                ...(email === 'instant' || email === 'daily' || email === 'off' ? { email } : {}),
+                // #78 — this category's push + instant email ignore quiet hours.
+                ...((row as { quiet_override?: unknown }).quiet_override === true
+                  ? { quiet_override: true }
+                  : {})
               }
             }
           }

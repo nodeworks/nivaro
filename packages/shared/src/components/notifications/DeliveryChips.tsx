@@ -16,6 +16,10 @@ const TONE: Record<Tone, string> = {
   bad: 'text-red-600 dark:text-red-400'
 }
 
+export function describeDelivery(delivery: NotificationDeliveryRecord | null | undefined) {
+  return describe(delivery)
+}
+
 function describe(delivery: NotificationDeliveryRecord | null | undefined): Array<{
   key: string
   icon: typeof Bell

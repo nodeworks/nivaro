@@ -363,9 +363,8 @@ async function applyDigestDeferral(
     if (users.length === 0) return recipients
     const daily = new Map<string, string>()
     const off = new Set<string>()
-    const { inQuietHours, classifyNotification, emailModeFor, isCriticalSubject } = await import(
-      './notification-channels.js'
-    )
+    const { inQuietHours, classifyNotification, emailModeFor, isCriticalSubject, quietOverridden } =
+      await import('./notification-channels.js')
     const category = explicitCategory ?? classifyNotification(subject)
     const critical = isCriticalSubject(subject)
     for (const u of users) {
@@ -395,9 +394,11 @@ async function applyDigestDeferral(
       if (mode === 'daily') daily.set(u.email.toLowerCase(), u.id)
       else if (!critical) {
         // Quiet hours defer email the same way daily-digest prefs do — the
-        // digest flush delivers everything held overnight.
+        // digest flush delivers everything held overnight — unless the person
+        // let this category through their quiet hours (#78).
         try {
-          if (np && inQuietHours(np)) daily.set(u.email.toLowerCase(), u.id)
+          if (np && inQuietHours(np) && !quietOverridden(np, category))
+            daily.set(u.email.toLowerCase(), u.id)
         } catch {
           // never let a prefs read break mail
         }
