@@ -332,7 +332,10 @@ export function InlineGridField({
   const useGroupedForm = !!fieldsByGroup && sectionGroups.length > 0
 
   return (
-    <div className='relative rounded-lg border border-slate-200 text-[12px]'>
+    // The flat grid shows every displayable child column (a wide legacy table
+    // has dozens) — it scrolls inside its card rather than running off a
+    // narrow host such as a drill sheet.
+    <div className='relative overflow-x-auto rounded-lg border border-slate-200 text-[12px]'>
       <table className='w-full'>
         <thead className='bg-slate-50 border-b border-slate-200'>
           <tr>

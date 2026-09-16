@@ -6680,6 +6680,8 @@ export function ItemEditForm({
       key: `f:${k}`,
       kind: 'field',
       label: labelOf(k),
+      collection,
+      field: k,
       from: initialDataRef.current[k],
       to: draft[k],
       onRevert: () => handleFieldChange(k, initialDataRef.current[k] ?? null),
@@ -6716,6 +6718,7 @@ export function ItemEditForm({
         key: `e:${key}:${rowId}`,
         kind: 'edit',
         label: gridLabel(rc),
+        collection: rc,
         detail: `${lineNo}: ${cellKeys.map((c) => titleCase(c.replace(/_/g, ' '))).join(', ')}`,
         onRevert: () => o2mStagingCtx.cancelPendingEdit(rc, mf, rowId),
         cells: cellKeys.map((c) => ({

@@ -1,7 +1,12 @@
+import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ListChecks, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
-import { cn } from '../../lib/utils'
+import { useOptionalNivaroClient } from '../../context'
+import { get } from '../../lib/commands'
+import { choiceLabel, cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { RelationCell } from './GroupSection'
+import type { CMSField, CMSRelation } from './types'
 
 /**
  * "Changes so far" (#6) — a compact pill beside the Save button ("5 changes")
@@ -27,6 +32,14 @@ export interface ChangeItem {
   onJump?: () => void
   /** A staged line edit broken down per cell, each revertable on its own. */
   cells?: Array<{ field: string; label: string; from: unknown; to: unknown; onRevert: () => void }>
+  /**
+   * The collection the value belongs to (the record's for a field change, the
+   * CHILD collection for a line edit) — lets the tray resolve an M2O id to its
+   * display label and a select value to its choice text instead of printing
+   * the raw id.
+   */
+  collection?: string
+  field?: string
 }
 
 const KIND_LABEL: Record<ChangeKind, string> = {
@@ -65,6 +78,71 @@ const fmt = (v: unknown): string => {
     .replace(/<[^>]+>/g, '')
     .trim()
   return s.length > 48 ? `${s.slice(0, 48)}…` : s
+}
+
+type CollectionMeta = { fields: CMSField[]; relations: CMSRelation[] }
+
+function fieldOptions(f: CMSField | undefined): Record<string, unknown> {
+  if (!f?.options) return {}
+  if (typeof f.options === 'object') return f.options as Record<string, unknown>
+  try {
+    return JSON.parse(f.options) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * A change's old/new value rendered the way the form shows it: an M2O id
+ * becomes the related record's display label, a select value its choice text,
+ * everything else the plain formatter. Without a collection (or a client) it
+ * is exactly `fmt(value)`.
+ */
+function ChangeValue({
+  collection,
+  field,
+  value
+}: {
+  collection?: string
+  field?: string
+  value: unknown
+}) {
+  const client = useOptionalNivaroClient()
+  const { data: meta } = useQuery<CollectionMeta>({
+    queryKey: ['nvr-tray-collection', collection],
+    queryFn: () =>
+      client!
+        .request<{ data: Partial<CollectionMeta> }>(get(`/collections/${collection}`))
+        .then((r) => ({ fields: r.data?.fields ?? [], relations: r.data?.relations ?? [] })),
+    enabled: !!client && !!collection && !!field,
+    staleTime: 300_000
+  })
+  if (value === null || value === undefined || value === '') return <>{fmt(value)}</>
+  if (meta && field) {
+    const rel = meta.relations.find(
+      (r) => r.many_collection === collection && r.many_field === field && !r.junction_field
+    )
+    if (rel?.one_collection) {
+      const id =
+        typeof value === 'object' && !Array.isArray(value)
+          ? (value as Record<string, unknown>).id
+          : value
+      if (id != null && id !== '')
+        return <RelationCell relCollection={rel.one_collection} id={id} className='' />
+    }
+    const f = meta.fields.find((x) => x.field === field)
+    const choices = fieldOptions(f).choices as
+      | Array<{ text?: string; value?: unknown } | string>
+      | undefined
+    if (Array.isArray(choices)) {
+      const hit = choices.find((c) =>
+        typeof c === 'string' ? c === String(value) : String(c.value) === String(value)
+      )
+      if (hit)
+        return <>{choiceLabel(typeof hit === 'string' ? hit : (hit.text ?? String(value)))}</>
+    }
+  }
+  return <>{fmt(value)}</>
 }
 
 export function ChangesTray({
@@ -146,8 +224,13 @@ export function ChangesTray({
                 <span className='ml-2 block truncate text-slate-600 dark:text-slate-300'>
                   {it.detail ?? (
                     <>
-                      <span className='line-through opacity-60'>{fmt(it.from)}</span> →{' '}
-                      <span className='font-medium'>{fmt(it.to)}</span>
+                      <span className='line-through opacity-60'>
+                        <ChangeValue collection={it.collection} field={it.field} value={it.from} />
+                      </span>{' '}
+                      →{' '}
+                      <span className='font-medium'>
+                        <ChangeValue collection={it.collection} field={it.field} value={it.to} />
+                      </span>
                     </>
                   )}
                 </span>
@@ -176,8 +259,17 @@ export function ChangesTray({
                       <span className='min-w-0 flex-1 truncate'>
                         <span className='font-medium'>{c.label}</span>
                         <span className='ml-2 text-slate-600 dark:text-slate-300'>
-                          <span className='line-through opacity-60'>{fmt(c.from)}</span> →{' '}
-                          <span className='font-medium'>{fmt(c.to)}</span>
+                          <span className='line-through opacity-60'>
+                            <ChangeValue
+                              collection={it.collection}
+                              field={c.field}
+                              value={c.from}
+                            />
+                          </span>{' '}
+                          →{' '}
+                          <span className='font-medium'>
+                            <ChangeValue collection={it.collection} field={c.field} value={c.to} />
+                          </span>
                         </span>
                       </span>
                       <button

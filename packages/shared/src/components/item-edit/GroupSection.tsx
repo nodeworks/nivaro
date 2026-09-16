@@ -1151,17 +1151,26 @@ export function RelationCell({
         .request<{ data: { display_template?: string | null } }>(
           get(`/collections/${relCollection}`)
         )
-        .then((r) => r.data),
+        .then((r) => r.data)
+        .catch(() => ({}) as { display_template?: string | null }),
     enabled: !!client && !!idStr,
     staleTime: 300_000
   })
+  // A template with dotted tokens ({{core_category.name}}) needs the nested
+  // rows expanded — a flat read renders every such token empty (" - ").
+  const nestedFields = (colMeta?.display_template?.match(/\{\{\s*[^}]+?\s*\}\}/g) ?? [])
+    .map((t) => t.replace(/[{}\s]/g, ''))
+    .filter((t) => t.includes('.'))
+  const fieldsParam = nestedFields.length ? ['id', ...nestedFields].join(',') : null
   const { data: record, isLoading } = useQuery<Record<string, unknown> | null>({
-    queryKey: ['rel-display', relCollection, idStr],
+    queryKey: ['rel-display', relCollection, idStr, fieldsParam],
     queryFn: () =>
       client!
-        .request<{ data: Record<string, unknown> }>(get(`/items/${relCollection}/${idStr}`))
+        .request<{ data: Record<string, unknown> }>(
+          get(`/items/${relCollection}/${idStr}`, fieldsParam ? { fields: fieldsParam } : undefined)
+        )
         .then((r) => r.data ?? null),
-    enabled: !!client && !!idStr,
+    enabled: !!client && !!idStr && colMeta !== undefined,
     staleTime: 60_000
   })
   if (!idStr) return <span>—</span>

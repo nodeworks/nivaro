@@ -363,11 +363,25 @@ export function ReconcileAction(props: {
           className={cn(
             variant === 'button'
               ? 'inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background dark:text-slate-200 dark:hover:bg-white/5'
-              : 'text-[11px] font-medium text-nvr-cyan underline decoration-dotted underline-offset-2 hover:decoration-solid'
+              : // Wraps at word boundaries inside a narrow month cell ("Carry" /
+                // "forward" / "$1.00") instead of painting over the neighbour.
+                'group/reconcile inline-flex max-w-full flex-wrap items-baseline gap-x-1 text-left text-[11px] font-medium leading-4 text-nvr-cyan'
           )}
         >
-          {remainder > 0 ? 'Carry forward' : 'Reconcile'}
-          <span className='tabular-nums text-slate-500 dark:text-slate-400'>{fmtMoney(Math.abs(remainder))}</span>
+          {/* The underline lives on the label alone — a decoration on the
+              button propagates onto the amount too. */}
+          <span
+            className={
+              variant === 'link'
+                ? 'underline decoration-dotted underline-offset-2 group-hover/reconcile:decoration-solid'
+                : undefined
+            }
+          >
+            {remainder > 0 ? 'Carry forward' : 'Reconcile'}
+          </span>
+          <span className='tabular-nums text-slate-500 dark:text-slate-400'>
+            {fmtMoney(Math.abs(remainder))}
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -554,7 +568,9 @@ export function CompareCell(props: {
       >
         <span className='font-mono text-[9px] uppercase tracking-wide'>{data.label}</span>
         <span>—</span>
-        {reconcileEmpty}
+        {/* The action sits on its own line under the figure: inline after the
+            dash it wrapped mid-label in a month-wide cell ("Carry" / "forward"). */}
+        {reconcileEmpty && <span className='basis-full pt-0.5'>{reconcileEmpty}</span>}
         {extraLines}
         {varianceLine}
       </div>
