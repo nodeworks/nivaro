@@ -327,6 +327,7 @@ export const navCategories: NavCategory[] = [
         to: '/integration-events',
         section: 'Operations'
       },
+      { icon: Inbox, label: 'Inbound Mappings', to: '/inbound-mappings', section: 'Operations' },
       { icon: CalendarClock, label: 'Ops Calendar', to: '/ops-calendar', section: 'Operations' },
       { icon: CalendarClock, label: 'Cron Timeline', to: '/cron-timeline', section: 'Operations' },
       { icon: HeartPulse, label: 'Health', to: '/health', section: 'Operations' },

@@ -72,7 +72,7 @@ type ImportStep =
   | { type: 'wrap_richtext' }
   | { type: 'const'; value: unknown }
 
-interface ImportHeaderRule {
+export interface ImportHeaderRule {
   target: string
   source: string | null
   steps: ImportStep[]
@@ -118,7 +118,7 @@ interface ImportReimportConfig {
   button_label?: string | null
 }
 
-interface ConfigErrorDetail {
+export interface ConfigErrorDetail {
   path: string
   message: string
 }
@@ -174,7 +174,7 @@ interface RelationRow {
   junction_field: string | null
 }
 
-type Option = { value: string; label: string }
+export type Option = { value: string; label: string }
 
 const DEFAULT_LINE_CONFIG: ImportLineConfig = {
   target_field: '',
@@ -344,7 +344,7 @@ function fieldLabel(f: FieldConfigRow): string {
   return f.label || f.field
 }
 
-function useFieldOptions(collection: string | null) {
+export function useFieldOptions(collection: string | null) {
   return useQuery({
     queryKey: ['field-config', collection],
     queryFn: () =>
@@ -367,7 +367,7 @@ function useCollectionOptions(): Option[] {
 
 // ─── Small building blocks ──────────────────────────────────────────────────
 
-function Combobox({
+export function Combobox({
   value,
   onChange,
   options,
@@ -1066,7 +1066,7 @@ function RuleRow({
   )
 }
 
-function RuleEditor({
+export function RuleEditor({
   rules,
   onChange,
   fieldOptions,
@@ -2218,7 +2218,9 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
                       return
                     }
                     patch({ header_map: [...draft.header_map, ...added] })
-                    toast.success(`Drafted ${added.length} rule${added.length === 1 ? '' : 's'} — pick their target fields`)
+                    toast.success(
+                      `Drafted ${added.length} rule${added.length === 1 ? '' : 's'} — pick their target fields`
+                    )
                   })
                   .catch((err) =>
                     toast.error(err?.response?.data?.error ?? 'Could not read the sample file')

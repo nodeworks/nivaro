@@ -1096,10 +1096,20 @@ export async function buildServer() {
         const latest = (await db('nivaro_job_runs')
           .where('kind', 'cron')
           .groupBy('job_id')
-          .select('job_id', db.raw('MAX(started_at) as last_at'))) as Array<{ job_id: string; last_at: unknown }>
-        const lastBy = new Map(latest.map((r) => [r.job_id, r.last_at ? new Date(r.last_at as string).getTime() : 0]))
+          .select('job_id', db.raw('MAX(started_at) as last_at'))) as Array<{
+          job_id: string
+          last_at: unknown
+        }>
+        const lastBy = new Map(
+          latest.map((r) => [r.job_id, r.last_at ? new Date(r.last_at as string).getTime() : 0])
+        )
         const now = Date.now()
-        const out: Array<{ id: string; expected_at: string; last_run_at: string | null; grace_min: number }> = []
+        const out: Array<{
+          id: string
+          expected_at: string
+          last_run_at: string | null
+          grace_min: number
+        }> = []
         for (const j of jobs) {
           const expected = app.cron.expectedPreviousRun(j.id)
           if (!expected) continue
@@ -1110,50 +1120,123 @@ export async function buildServer() {
           if (expected.getTime() < bootAt) continue // expected before this process existed
           const last = lastBy.get(j.id) ?? 0
           if (last >= expected.getTime() - 60_000) continue
-          out.push({ id: j.id, expected_at: expected.toISOString(), last_run_at: last ? new Date(last).toISOString() : null, grace_min: Math.round(grace / 60_000) })
+          out.push({
+            id: j.id,
+            expected_at: expected.toISOString(),
+            last_run_at: last ? new Date(last).toISOString() : null,
+            grace_min: Math.round(grace / 60_000)
+          })
         }
         return out
       }
       const bootAt = Date.now()
-      app.cron.schedule('cron-miss-detector', '*/30 * * * *', async () => {
-        const { trackError } = await import('./services/error-tracking.js')
-        for (const m of await missedCrons()) {
-          await trackError({
-            source: 'server',
-            route: 'cron/miss',
-            message: `Cron "${m.id}" missed its expected run at ${m.expected_at}${m.last_run_at ? ` (last ran ${m.last_run_at})` : ' (never recorded)'}`,
-            severity: 'medium'
-          })
-        }
-      }, { dryRun: missedCrons })
+      app.cron.schedule(
+        'cron-miss-detector',
+        '*/30 * * * *',
+        async () => {
+          const { trackError } = await import('./services/error-tracking.js')
+          for (const m of await missedCrons()) {
+            await trackError({
+              source: 'server',
+              route: 'cron/miss',
+              message: `Cron "${m.id}" missed its expected run at ${m.expected_at}${m.last_run_at ? ` (last ran ${m.last_run_at})` : ' (never recorded)'}`,
+              severity: 'medium'
+            })
+          }
+        },
+        { dryRun: missedCrons }
+      )
 
       // #41 — pre-run the heavy custom queries flagged warm_daily.
       const warmTargets = async () =>
-        (await db('nivaro_custom_queries').where({ enabled: true, warm_daily: true }).select('slug', 'name', 'cache_ttl')) as Array<{ slug: string; name: string; cache_ttl: number }>
-      app.cron.schedule('query-cache-warmers', '0 6 * * *', async () => {
-        const { runCustomQueryBySlug } = await import('./services/custom-query-exec.js')
-        for (const q of await warmTargets()) {
-          const t0 = Date.now()
-          try {
-            const rows = await runCustomQueryBySlug(q.slug, {})
-            if (q.cache_ttl > 0 && app.redis) {
-              // Same key the execute route reads for a default-param call.
-              const { buildFinalParams } = await import('./services/custom-query-exec.js')
-              const row = (await db('nivaro_custom_queries').where({ slug: q.slug }).first('params')) as { params: string | null } | undefined
-              let defs: Array<{ name: string; type: string; required?: boolean; default?: unknown }> = []
-              try { defs = row?.params ? JSON.parse(row.params) : [] } catch { defs = [] }
-              const finalParams = buildFinalParams(defs as never, {})
-              await app.redis.setex(`cq:${q.slug}:${JSON.stringify(finalParams)}`, q.cache_ttl, JSON.stringify(rows))
+        (await db('nivaro_custom_queries')
+          .where({ enabled: true, warm_daily: true })
+          .select('slug', 'name', 'cache_ttl')) as Array<{
+          slug: string
+          name: string
+          cache_ttl: number
+        }>
+      app.cron.schedule(
+        'query-cache-warmers',
+        '0 6 * * *',
+        async () => {
+          const { runCustomQueryBySlug } = await import('./services/custom-query-exec.js')
+          for (const q of await warmTargets()) {
+            const t0 = Date.now()
+            try {
+              const rows = await runCustomQueryBySlug(q.slug, {})
+              if (q.cache_ttl > 0 && app.redis) {
+                // Same key the execute route reads for a default-param call.
+                const { buildFinalParams } = await import('./services/custom-query-exec.js')
+                const row = (await db('nivaro_custom_queries')
+                  .where({ slug: q.slug })
+                  .first('params')) as { params: string | null } | undefined
+                let defs: Array<{
+                  name: string
+                  type: string
+                  required?: boolean
+                  default?: unknown
+                }> = []
+                try {
+                  defs = row?.params ? JSON.parse(row.params) : []
+                } catch {
+                  defs = []
+                }
+                const finalParams = buildFinalParams(defs as never, {})
+                await app.redis.setex(
+                  `cq:${q.slug}:${JSON.stringify(finalParams)}`,
+                  q.cache_ttl,
+                  JSON.stringify(rows)
+                )
+              }
+              app.log.info({ slug: q.slug, rows: rows.length, ms: Date.now() - t0 }, 'query warmed')
+            } catch (err) {
+              app.log.warn({ err, slug: q.slug }, 'query warmer failed')
             }
-            app.log.info({ slug: q.slug, rows: rows.length, ms: Date.now() - t0 }, 'query warmed')
-          } catch (err) {
-            app.log.warn({ err, slug: q.slug }, 'query warmer failed')
+          }
+        },
+        {
+          heavy: true,
+          dryRun: async () => ({
+            would_run: (await warmTargets()).map((q) => `${q.name} (${q.slug})`)
+          })
+        }
+      )
+
+      // #74 — endpoint contract tests, nightly: every enabled API endpoint
+      // that declares a contract is called and judged; failures raise one
+      // deduped issue per endpoint. Dry run lists what would be called.
+      app.cron.schedule(
+        'external-api-contracts',
+        '20 2 * * *',
+        async () => {
+          const { runContracts } = await import('./services/external-api-contracts.js')
+          const results = await runContracts()
+          const failed = results.filter((r) => !r.ok && !r.skipped)
+          for (const f of failed) {
+            void trackError({
+              source: 'server',
+              route: `external-api-contract/${f.endpoint_id}`,
+              message: `Contract failed for endpoint #${f.endpoint_id}: ${f.detail}`,
+              severity: 'medium'
+            })
+          }
+          app.log.info(
+            { ran: results.length, failed: failed.length },
+            'external API contracts checked'
+          )
+        },
+        {
+          dryRun: async () => {
+            const { contractTargets } = await import('./services/external-api-contracts.js')
+            return {
+              would_run: (await contractTargets()).map(
+                (t) => `${t.api_name} · ${t.name} (${t.method})`
+              )
+            }
           }
         }
-      }, {
-        heavy: true,
-        dryRun: async () => ({ would_run: (await warmTargets()).map((q) => `${q.name} (${q.slug})`) })
-      })
+      )
 
       // Dead-file-link sweep: stat every stored file against the storage
       // provider (oldest verification first) and stamp nivaro_files.missing_at,
@@ -1310,21 +1393,26 @@ export async function buildServer() {
         })
       }
 
-      app.cron.schedule('rollup-drift-sweep', '20 3 * * *', async () => {
-        const { detectRollupDrift } = await import('./services/rollup-drift.js')
-        const report = await detectRollupDrift()
-        if (report.drifted_rows > 0) {
-          app.log.warn(
-            `rollup drift: ${report.drifted_rows} stale rows across ${report.fields.length} field(s)`
-          )
-        }
-      }, {
-        // #32 — the same sweep, reported instead of raised.
-        dryRun: async () => {
+      app.cron.schedule(
+        'rollup-drift-sweep',
+        '20 3 * * *',
+        async () => {
           const { detectRollupDrift } = await import('./services/rollup-drift.js')
-          return await detectRollupDrift()
+          const report = await detectRollupDrift()
+          if (report.drifted_rows > 0) {
+            app.log.warn(
+              `rollup drift: ${report.drifted_rows} stale rows across ${report.fields.length} field(s)`
+            )
+          }
+        },
+        {
+          // #32 — the same sweep, reported instead of raised.
+          dryRun: async () => {
+            const { detectRollupDrift } = await import('./services/rollup-drift.js')
+            return await detectRollupDrift()
+          }
         }
-      })
+      )
 
       // Alert definitions sweep — anomaly detections and threshold rules whose
       // data changes outside record writes only fire from a periodic pass.

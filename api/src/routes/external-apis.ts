@@ -3,7 +3,19 @@ import { load as yamlLoad } from 'js-yaml'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { writeApiCallLog } from '../services/external-apis.js'
+import {
+  contractTargets,
+  runContracts,
+  runEndpointContract
+} from '../services/external-api-contracts.js'
+import {
+  instanceOverrideFor,
+  mockConfigFor,
+  resolveInstanceRow,
+  writeApiCallLog
+} from '../services/external-apis.js'
+import { registerReadinessCheck } from '../services/readiness.js'
+import { instanceKey } from '../services/settings-overrides.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -22,6 +34,8 @@ interface ExternalApiRow {
   integration_config: string | null
   retry_policy?: string | null
   outbound_contract?: string | null
+  mock_config?: string | null
+  instance_overrides?: string | null
   created_at: Date
   updated_at: Date
 }
@@ -135,6 +149,78 @@ function maskAuthConfig(cfg: Record<string, unknown> | null): Record<string, unk
   return out
 }
 
+// #66/#74 readiness: a mocked API on a production-shaped instance and any
+// failing endpoint contract both warn on the scorecard. Registered once.
+let readinessRegistered = false
+function registerIntegrationReadiness(): void {
+  if (readinessRegistered) return
+  readinessRegistered = true
+  registerReadinessCheck({
+    id: 'external-api-mock-mode',
+    label: 'No external API is mocked on this instance',
+    description:
+      'Mock mode answers integration calls from canned rules instead of the real system.',
+    group: 'Integrations',
+    run: async () => {
+      const rows = (await db('nivaro_external_apis').select(
+        'id',
+        'name',
+        'mock_config',
+        'enabled'
+      )) as ExternalApiRow[]
+      const mocked = rows.filter((r) => r.enabled && mockConfigFor(r) != null).map((r) => r.name)
+      if (mocked.length === 0)
+        return { status: 'pass', detail: `No API mocked on instance "${instanceKey()}".` }
+      return {
+        status: 'warn',
+        detail: `${mocked.length} API${mocked.length === 1 ? '' : 's'} mocked on "${instanceKey()}"`,
+        blockers: mocked.map((n) => `${n} is answering from mock rules`)
+      }
+    }
+  })
+  registerReadinessCheck({
+    id: 'external-api-contracts',
+    label: 'Endpoint contracts pass',
+    description: 'The last contract run of every external API endpoint that declares one.',
+    group: 'Integrations',
+    run: async () => {
+      const rows = (await db('nivaro_external_api_endpoints as e')
+        .join('nivaro_external_apis as a', 'a.id', 'e.api_id')
+        .whereNotNull('e.contract')
+        .where('a.enabled', true)
+        .select(
+          'e.name',
+          'a.name as api_name',
+          'e.contract_last_ok',
+          'e.contract_last_detail',
+          'e.contract_last_run'
+        )) as Array<{
+        name: string
+        api_name: string
+        contract_last_ok: boolean | null
+        contract_last_detail: string | null
+        contract_last_run: Date | null
+      }>
+      if (rows.length === 0) return { status: 'skip', detail: 'No endpoint declares a contract.' }
+      const failing = rows.filter((r) => r.contract_last_ok === false)
+      const never = rows.filter((r) => r.contract_last_run == null)
+      if (failing.length === 0 && never.length === 0)
+        return {
+          status: 'pass',
+          detail: `${rows.length} contract${rows.length === 1 ? '' : 's'} passing.`
+        }
+      return {
+        status: failing.length ? 'fail' : 'warn',
+        detail: `${failing.length} failing, ${never.length} never run`,
+        blockers: [
+          ...failing.map((r) => `${r.api_name} · ${r.name}: ${r.contract_last_detail ?? 'failed'}`),
+          ...never.map((r) => `${r.api_name} · ${r.name}: never run`)
+        ]
+      }
+    }
+  })
+}
+
 // Serialize a row for client consumption — secrets masked.
 function serializeForRead(row: ExternalApiRow) {
   return {
@@ -152,9 +238,100 @@ function serializeForRead(row: ExternalApiRow) {
     // always showed it empty.
     retry_policy: parseJson(row.retry_policy) ?? null,
     outbound_contract: parseJson(row.outbound_contract) ?? null,
+    // #66 — mock rules per instance + whether THIS instance is mocking.
+    mock_config: parseJson(row.mock_config) ?? null,
+    mock_active: mockConfigFor(row) != null,
+    // #89 — per-instance overrides, credentials masked per instance.
+    instance_overrides: maskInstanceOverrides(
+      parseJson<
+        Record<
+          string,
+          {
+            base_url?: string
+            auth_config?: Record<string, unknown>
+            headers?: Record<string, string>
+          }
+        >
+      >(row.instance_overrides)
+    ),
+    current_instance: instanceKey(),
     created_at: row.created_at,
     updated_at: row.updated_at
   }
+}
+
+function maskInstanceOverrides(
+  all: Record<
+    string,
+    { base_url?: string; auth_config?: Record<string, unknown>; headers?: Record<string, string> }
+  > | null
+) {
+  if (!all) return null
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(all)) {
+    if (!v || typeof v !== 'object') continue
+    out[k] = {
+      ...v,
+      auth_config: v.auth_config ? maskAuthConfig(v.auth_config) : undefined,
+      headers: v.headers
+        ? Object.fromEntries(
+            Object.entries(v.headers).map(([hk, hv]) => [
+              hk,
+              SECRET_HEADER_RE.test(hk) && hv ? MASK : hv
+            ])
+          )
+        : undefined
+    }
+  }
+  return out
+}
+
+// Masked values coming back from the editor keep the stored secret (per instance).
+function mergeInstanceOverrides(
+  incoming:
+    | Record<
+        string,
+        {
+          base_url?: string
+          auth_config?: Record<string, unknown>
+          headers?: Record<string, string>
+        } | null
+      >
+    | null
+    | undefined,
+  existingRaw: string | null | undefined
+): string | null {
+  if (incoming === undefined) return existingRaw ?? null
+  if (incoming === null) return null
+  const existing =
+    parseJson<
+      Record<string, { auth_config?: Record<string, unknown>; headers?: Record<string, string> }>
+    >(existingRaw ?? null) ?? {}
+  const out: Record<string, unknown> = {}
+  for (const [key, v] of Object.entries(incoming)) {
+    if (!v || typeof v !== 'object') continue
+    if (!/^[A-Za-z0-9_.-]{1,60}$/.test(key)) continue
+    const prev = existing[key]
+    const entry: Record<string, unknown> = {}
+    if (typeof v.base_url === 'string' && v.base_url.trim()) entry.base_url = v.base_url.trim()
+    if (v.auth_config && typeof v.auth_config === 'object') {
+      const merged = { ...v.auth_config }
+      for (const [k, val] of Object.entries(merged)) {
+        if (val === MASK && prev?.auth_config && prev.auth_config[k] != null)
+          merged[k] = prev.auth_config[k]
+      }
+      if (Object.keys(merged).length) entry.auth_config = merged
+    }
+    if (v.headers && typeof v.headers === 'object') {
+      const merged: Record<string, string> = { ...v.headers }
+      for (const [k, val] of Object.entries(merged)) {
+        if (val === MASK && prev?.headers && prev.headers[k] != null) merged[k] = prev.headers[k]
+      }
+      if (Object.keys(merged).length) entry.headers = merged
+    }
+    if (Object.keys(entry).length) out[key] = entry
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null
 }
 
 // When updating auth_config: if a secret field still holds the mask value, keep
@@ -309,6 +486,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const rows = (await db('nivaro_external_apis').orderBy('name', 'asc')) as ExternalApiRow[]
     return { data: rows.map(serializeForRead) }
   })
+  registerIntegrationReadiness()
 
   // Single
   app.get<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
@@ -392,6 +570,18 @@ export async function externalApisRoutes(app: FastifyInstance) {
         inline_backoff_ms?: number
         retry_on?: string[]
       } | null
+      mock_config: Record<
+        string,
+        { enabled?: boolean; rules?: unknown[]; fallback?: unknown }
+      > | null
+      instance_overrides: Record<
+        string,
+        {
+          base_url?: string
+          auth_config?: Record<string, unknown>
+          headers?: Record<string, string>
+        } | null
+      > | null
     }>
   }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id)
@@ -450,6 +640,38 @@ export async function externalApisRoutes(app: FastifyInstance) {
                 retry_on: retryOn
               })
       }
+    }
+    // #66 — mock_config: per-instance {enabled, rules[], fallback}; validated
+    // to the shape callExternalApi reads.
+    if (body.mock_config !== undefined) {
+      if (body.mock_config === null) patch.mock_config = null
+      else {
+        const out: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(body.mock_config)) {
+          if (!v || typeof v !== 'object' || !/^[A-Za-z0-9_.-]{1,60}$/.test(k)) continue
+          const rules = Array.isArray(v.rules) ? v.rules : []
+          for (const r of rules) {
+            const rr = r as { status?: unknown; path?: unknown; method?: unknown }
+            if (!rr || typeof rr !== 'object' || !Number.isInteger(rr.status))
+              return reply
+                .code(400)
+                .send({ error: `mock_config.${k}.rules: every rule needs an integer status` })
+            if (rr.path !== undefined && typeof rr.path !== 'string')
+              return reply
+                .code(400)
+                .send({ error: `mock_config.${k}.rules: path must be a string` })
+          }
+          out[k] = { enabled: !!v.enabled, rules, fallback: v.fallback ?? undefined }
+        }
+        patch.mock_config = Object.keys(out).length ? JSON.stringify(out) : null
+      }
+    }
+    // #89 — per-instance overrides, masked secrets preserved.
+    if (body.instance_overrides !== undefined) {
+      patch.instance_overrides = mergeInstanceOverrides(
+        body.instance_overrides,
+        existing.instance_overrides
+      )
     }
     if (body.base_url !== undefined) patch.base_url = body.base_url
     if (body.description !== undefined) patch.description = body.description
@@ -511,10 +733,12 @@ export async function externalApisRoutes(app: FastifyInstance) {
       headers?: Record<string, string>
     }
   }>('/:id/test', { preHandler: requireAdmin }, async (req, reply) => {
-    const row = (await db('nivaro_external_apis')
+    const stored = (await db('nivaro_external_apis')
       .where({ id: Number(req.params.id) })
       .first()) as ExternalApiRow | undefined
-    if (!row) return reply.code(404).send({ error: 'Not found' })
+    if (!stored) return reply.code(404).send({ error: 'Not found' })
+    // #89 — the test talks to the same host/credentials a real call would.
+    const row = resolveInstanceRow(stored)
 
     const method = (req.body?.method ?? 'GET').toUpperCase()
     const path = req.body?.path ?? ''
@@ -659,6 +883,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
     default_query: string | null
     default_headers: string | null
     sort: number
+    contract?: string | null
+    contract_last_run?: Date | null
+    contract_last_ok?: boolean | null
+    contract_last_detail?: string | null
     created_at: Date
     updated_at: Date
   }
@@ -676,6 +904,11 @@ export async function externalApisRoutes(app: FastifyInstance) {
       default_query: parseJson<Record<string, string>>(e.default_query),
       default_headers: parseJson<Record<string, string>>(e.default_headers),
       sort: e.sort,
+      // #74 — contract + last verdict
+      contract: parseJson(e.contract ?? null) ?? null,
+      contract_last_run: e.contract_last_run ?? null,
+      contract_last_ok: e.contract_last_ok == null ? null : !!e.contract_last_ok,
+      contract_last_detail: e.contract_last_detail ?? null,
       created_at: e.created_at,
       updated_at: e.updated_at
     }
@@ -722,6 +955,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       default_query?: Record<string, string> | null
       default_headers?: Record<string, string> | null
       sort?: number
+      contract?: unknown
     }
   }>('/:id/endpoints', { preHandler: requireAdmin }, async (req, reply) => {
     const apiId = Number(req.params.id)
@@ -744,6 +978,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
         default_headers:
           req.body.default_headers != null ? toJsonStr(req.body.default_headers) : null,
         sort: req.body.sort ?? 0,
+        contract: req.body.contract != null ? toJsonStr(req.body.contract) : null,
         created_at: now,
         updated_at: now
       })
@@ -780,6 +1015,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       default_query: Record<string, string> | null
       default_headers: Record<string, string> | null
       sort: number
+      contract: unknown
     }>
   }>('/endpoints/:eid', { preHandler: requireAdmin }, async (req, reply) => {
     const eid = Number(req.params.eid)
@@ -802,6 +1038,16 @@ export async function externalApisRoutes(app: FastifyInstance) {
       patch.default_query = b.default_query != null ? toJsonStr(b.default_query) : null
     if ('default_headers' in b)
       patch.default_headers = b.default_headers != null ? toJsonStr(b.default_headers) : null
+    if ('contract' in b) {
+      if (b.contract != null && (typeof b.contract !== 'object' || Array.isArray(b.contract)))
+        return reply.code(400).send({ error: 'contract must be an object' })
+      patch.contract = b.contract != null ? toJsonStr(b.contract) : null
+      if (b.contract == null) {
+        patch.contract_last_run = null
+        patch.contract_last_ok = null
+        patch.contract_last_detail = null
+      }
+    }
 
     await db('nivaro_external_api_endpoints').where({ id: eid }).update(patch)
     const row = (await db('nivaro_external_api_endpoints')
@@ -816,6 +1062,52 @@ export async function externalApisRoutes(app: FastifyInstance) {
     })
     return { data: serializeEndpoint(row) }
   })
+
+  // #74 — run one endpoint's contract, or every contract on an API.
+  app.post<{ Params: { eid: string } }>(
+    '/endpoints/:eid/contract/run',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      try {
+        const result = await runEndpointContract(Number(req.params.eid))
+        await logActivity({
+          action: 'external-api-contract-run',
+          collection: 'nivaro_external_api_endpoints',
+          item: req.params.eid,
+          user: req.user?.id,
+          req,
+          comment: `${result.ok ? 'pass' : 'FAIL'} — ${result.detail}`
+        })
+        return { data: result }
+      } catch (err) {
+        return reply.code(422).send({ error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+  )
+  app.post<{ Params: { id: string } }>(
+    '/:id/contracts/run',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const apiId = Number(req.params.id)
+      const exists = await db('nivaro_external_apis').where({ id: apiId }).first()
+      if (!exists) return reply.code(404).send({ error: 'Not found' })
+      const results = await runContracts(apiId)
+      // A skipped endpoint (mutation without allow_mutation) is not a failure.
+      const failed = results.filter((r) => !r.ok && !r.skipped).length
+      await logActivity({
+        action: 'external-api-contract-run',
+        collection: 'nivaro_external_apis',
+        item: String(apiId),
+        user: req.user?.id,
+        req,
+        comment: `${results.length} contract${results.length === 1 ? '' : 's'}, ${failed} failing`
+      })
+      return { data: { results, failed } }
+    }
+  )
+  app.get('/contracts', { preHandler: requireAdmin }, async () => ({
+    data: await contractTargets()
+  }))
 
   // Delete endpoint
   app.delete<{ Params: { eid: string } }>(

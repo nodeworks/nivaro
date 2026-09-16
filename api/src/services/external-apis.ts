@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
+import { instanceKey } from './settings-overrides.js'
 
 type AuthType = 'none' | 'bearer' | 'api_key' | 'basic' | 'oauth2_cc' | 'hmac' | 'aws_sigv4'
 
@@ -11,6 +12,100 @@ interface ExternalApiRow {
   auth_config: string | null
   headers: string | null
   enabled: boolean
+  mock_config?: string | null
+  instance_overrides?: string | null
+}
+
+// ─── #89 — per-instance overrides ───────────────────────────────────────────
+// `instance_overrides` = {<instanceKey>: {base_url?, auth_config?, headers?}}
+// so staging and production share one API row but talk to different hosts
+// with different credentials. Applied wherever a row is turned into a call.
+export interface InstanceOverride {
+  base_url?: string
+  auth_config?: Record<string, unknown>
+  headers?: Record<string, string>
+}
+
+export function instanceOverrideFor(
+  row: { instance_overrides?: string | null },
+  key: string = instanceKey()
+): InstanceOverride | null {
+  const all = parseJson<Record<string, InstanceOverride>>(row.instance_overrides ?? null)
+  const o = all?.[key]
+  return o && typeof o === 'object' ? o : null
+}
+
+/** The row with this instance's overrides folded into base_url / auth_config / headers. */
+export function resolveInstanceRow<T extends ExternalApiRow>(
+  row: T,
+  key: string = instanceKey()
+): T {
+  const o = instanceOverrideFor(row, key)
+  if (!o) return row
+  const out: T = { ...row }
+  if (typeof o.base_url === 'string' && o.base_url.trim()) out.base_url = o.base_url.trim()
+  if (o.auth_config && typeof o.auth_config === 'object') {
+    const base = parseJson<Record<string, unknown>>(row.auth_config) ?? {}
+    out.auth_config = JSON.stringify({ ...base, ...o.auth_config })
+  }
+  if (o.headers && typeof o.headers === 'object') {
+    const base = parseJson<Record<string, string>>(row.headers) ?? {}
+    out.headers = JSON.stringify({ ...base, ...o.headers })
+  }
+  return out
+}
+
+// ─── #66 — mock mode ────────────────────────────────────────────────────────
+// `mock_config` = {<instanceKey>: {enabled, rules: [{method?, path?, status,
+// body, delay_ms?}], fallback?: {status, body}}}. While enabled on THIS
+// instance, callExternalApi never leaves the process: the first rule whose
+// method + path match answers, else the fallback, else 200 {mock: true}.
+export interface MockRule {
+  method?: string
+  /** Exact path, a prefix ending in `*`, or omitted = any. */
+  path?: string
+  status: number
+  body?: unknown
+  delay_ms?: number
+}
+export interface MockInstanceConfig {
+  enabled?: boolean
+  rules?: MockRule[]
+  fallback?: { status: number; body?: unknown }
+}
+
+export function mockConfigFor(
+  row: { mock_config?: string | null },
+  key: string = instanceKey()
+): MockInstanceConfig | null {
+  const all = parseJson<Record<string, MockInstanceConfig>>(row.mock_config ?? null)
+  const m = all?.[key]
+  return m && typeof m === 'object' && m.enabled ? m : null
+}
+
+export function pickMockRule(
+  cfg: MockInstanceConfig,
+  method: string,
+  path: string
+): { status: number; body: unknown; delay_ms: number; rule: MockRule | null } {
+  const m = method.toUpperCase()
+  for (const r of cfg.rules ?? []) {
+    if (r.method && r.method.toUpperCase() !== m) continue
+    if (r.path) {
+      if (r.path.endsWith('*')) {
+        if (!path.startsWith(r.path.slice(0, -1))) continue
+      } else if (r.path !== path) continue
+    }
+    return { status: r.status ?? 200, body: r.body ?? null, delay_ms: r.delay_ms ?? 0, rule: r }
+  }
+  if (cfg.fallback)
+    return {
+      status: cfg.fallback.status ?? 200,
+      body: cfg.fallback.body ?? null,
+      delay_ms: 0,
+      rule: null
+    }
+  return { status: 200, body: { mock: true }, delay_ms: 0, rule: null }
 }
 
 interface BearerConfig {
@@ -332,6 +427,8 @@ export interface CallResult {
   status: number
   headers: Record<string, string>
   body: unknown
+  /** #66 — answered by this instance's mock rules, no network call was made. */
+  mock?: boolean
 }
 
 interface EndpointDefRow {
@@ -381,15 +478,17 @@ export async function callExternalApi(
   nameOrId: string | number,
   options: CallOptions = {}
 ): Promise<CallResult> {
-  const row: ExternalApiRow | undefined =
+  const stored: ExternalApiRow | undefined =
     typeof nameOrId === 'number' || /^\d+$/.test(String(nameOrId))
       ? await db('nivaro_external_apis')
           .where({ id: Number(nameOrId) })
           .first()
       : await db('nivaro_external_apis').where({ name: nameOrId }).first()
 
-  if (!row) throw new Error(`External API not found: ${nameOrId}`)
-  if (!row.enabled) throw new Error(`External API is disabled: ${row.name}`)
+  if (!stored) throw new Error(`External API not found: ${nameOrId}`)
+  if (!stored.enabled) throw new Error(`External API is disabled: ${stored.name}`)
+  // #89 — this instance's base_url / credentials / headers, when it has any.
+  const row = resolveInstanceRow(stored)
 
   let epId: number | undefined
   let epMethod: string | undefined
@@ -422,6 +521,50 @@ export async function callExternalApi(
   const extraQuery = { ...epQuery, ...(options.query ?? {}) }
   const extraHeaders = { ...epHeaders, ...(options.headers ?? {}) }
   const timeoutMs = options.timeoutMs ?? 10_000
+
+  // #66 — mock mode on this instance: answer from the canned rules, never
+  // touch the network. Logged like a real call so the health pages show it,
+  // with the mock marker in the path.
+  const mock = mockConfigFor(row)
+  if (mock) {
+    const mockPath = path ? (path.startsWith('/') ? path : `/${path}`) : '/'
+    const picked = pickMockRule(mock, method, mockPath)
+    const t0 = Date.now()
+    if (picked.delay_ms > 0)
+      await new Promise((r) => setTimeout(r, Math.min(10_000, picked.delay_ms)))
+    const durationMs = Date.now() - t0
+    logOutbound({
+      api_id: row.id,
+      api_name: row.name,
+      method,
+      path: `${mockPath} [mock]`,
+      status: picked.status,
+      duration_ms: durationMs,
+      error: picked.status >= 400 ? 'mocked failure' : null
+    })
+    if (options._log) {
+      await writeApiCallLog({
+        api_id: row.id,
+        endpoint_id: epId ?? null,
+        triggered_by: options._log.triggeredBy ?? 'extension',
+        method,
+        url: `mock://${row.name}${mockPath}`,
+        request_headers: { ...extraHeaders },
+        request_body:
+          body === undefined ? null : typeof body === 'string' ? body : JSON.stringify(body),
+        response_status: picked.status,
+        response_body: picked.body == null ? null : JSON.stringify(picked.body),
+        duration_ms: durationMs,
+        user_id: options._log.userId ?? null
+      })
+    }
+    return {
+      status: picked.status,
+      headers: { 'x-nivaro-mock': '1' },
+      body: picked.body,
+      mock: true
+    }
+  }
 
   const cfg = parseJson<Record<string, unknown>>(row.auth_config)
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}

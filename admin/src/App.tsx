@@ -171,6 +171,9 @@ const IntegrationHealthPage = lazy(() =>
 const IntegrationEventsPage = lazy(() =>
   import('@/pages/IntegrationEvents').then((m) => ({ default: m.IntegrationEventsPage }))
 )
+const InboundMappingsPage = lazy(() =>
+  import('@/pages/InboundMappings').then((m) => ({ default: m.InboundMappingsPage }))
+)
 const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const Realtime = lazy(() => import('@/pages/Realtime'))
 
@@ -529,6 +532,7 @@ export default function App() {
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route path='integration-events' element={<IntegrationEventsPage />} />
+                  <Route path='inbound-mappings' element={<InboundMappingsPage />} />
                   <Route path='background-jobs' element={<BackgroundJobs />} />
                   <Route path='realtime' element={<Realtime />} />
                   <Route path='monitors' element={<MonitorsPage />} />

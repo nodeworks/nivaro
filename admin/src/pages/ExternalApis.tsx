@@ -132,7 +132,18 @@ export function ExternalApisPage() {
             <TableBody>
               {apis.map((a) => (
                 <TableRow key={a.id}>
-                  <TableCell className='font-medium text-slate-900'>{a.name}</TableCell>
+                  <TableCell className='font-medium text-slate-900'>
+                    {a.name}
+                    {(a as { mock_active?: boolean }).mock_active && (
+                      <span
+                        className='ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
+                        data-tip='Answering from mock rules on this instance'
+                        data-mock-badge={a.id}
+                      >
+                        mock
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className='font-mono text-[12px] text-slate-500 max-w-[280px] truncate'>
                     {a.base_url}
                   </TableCell>

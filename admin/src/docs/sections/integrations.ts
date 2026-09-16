@@ -227,6 +227,51 @@ GET  /api/comments/related?collection=&item=               // entries carry prov
       type: 'p',
       text: "`POST /api/webhooks/:id/test` accepts `{ delivery_id }` (resend a stored delivery's body) or `{ payload }` (any JSON); the response says `payload_source`: sample, delivery N or edited. `POST /api/webhooks/deliveries/:id/retry` accepts `{ payload }` too. The webhook editor lists recent deliveries with a Use-as-test-payload action that fills an editable payload box above the Test button."
     },
+    { type: 'h2', id: 'integration-events-mock', text: 'Mock mode per instance' },
+    {
+      type: 'p',
+      text: 'An external API row carries `mock_config` keyed by instance name (NIVARO_INSTANCE, else NODE_ENV): `{ "<instance>": { "enabled": true, "rules": [{ "method": "GET", "path": "/orders/*", "status": 200, "body": {…}, "delay_ms": 0 }], "fallback": { "status": 418, "body": {…} } } }`. While enabled on THIS instance, every `callExternalApi` answers from the first matching rule (exact path, or a prefix ending in `*`), then the fallback, else `200 {"mock": true}` — nothing leaves the process, the call still logs with a `[mock]` marker and the result carries `mock: true`. The API list shows a MOCK badge, the editor has a Mock mode card, and the readiness check `external-api-mock-mode` warns while any API is mocked here.'
+    },
+    { type: 'h2', id: 'integration-events-instances', text: 'Per-instance credentials and hosts' },
+    {
+      type: 'p',
+      text: '`instance_overrides` on the same row — `{ "<instance>": { "base_url", "auth_config": {…}, "headers": {…} } }` — is folded into the call for the current instance only (`resolveInstanceRow`), so staging and production share one API definition but reach different hosts with different secrets. Secrets are masked on read per instance and a masked value sent back keeps the stored one. The editor\'s “Per-instance credentials & host” card edits them; the Test call honours them too.'
+    },
+    { type: 'h2', id: 'integration-events-contracts', text: 'Endpoint contract tests' },
+    {
+      type: 'pre',
+      code: `// On an endpoint (Endpoints card → Contract): what a healthy answer looks like
+{
+  "expect_status": 200,              // number or [200, 204]; default 2xx
+  "expect_json": true,               // default
+  "expect_paths": [
+    { "path": "data", "type": "array" },
+    { "path": "meta.version", "equals": 2 }
+  ],
+  "allow_mutation": false,           // POST/PUT/PATCH endpoints run only when true
+  "timeout_ms": 15000
+}
+
+POST /api/external-apis/endpoints/:eid/contract/run   // one endpoint
+POST /api/external-apis/:id/contracts/run             // every contract on the API
+GET  /api/external-apis/contracts                     // targets
+// cron external-api-contracts 02:20 nightly (dry-run lists the targets); a failing
+// endpoint raises one deduped issue; readiness check external-api-contracts`
+    },
+    {
+      type: 'p',
+      text: 'The verdict is stamped on the endpoint (`contract_last_run`, `contract_last_ok`, `contract_last_detail`) and rendered as a pass / fail chip with a Run button on the endpoint row. Mock mode and instance overrides apply, so a contract can be exercised against mocked answers.'
+    },
+    { type: 'h2', id: 'integration-events-inbound', text: 'Inbound mappings' },
+    {
+      type: 'p',
+      text: "Monitoring → Inbound Mappings defines a key an integration POSTs its OWN payload shape to. The mapping's rules are the import-template header-rule format (trim / remap / expression / lookup / const; source = a key on the posted object) and its target is a collection; mode `create` always inserts, `upsert` matches on the listed mapped fields first. `POST /api/inbound/<key>` takes one object or an array (≤500) from any authenticated caller and writes through the items service AS THAT CALLER — permissions, validation, hooks, activity all apply. The reply lists per-entry `created | updated | rejected` with the mapped values and issues (207 when some entries were rejected, 422 when all were). The editor's “Try a payload” panel dry-runs the rules as currently edited."
+    },
+    { type: 'h2', id: 'integration-events-replay-inbound', text: 'Replaying an inbound request' },
+    {
+      type: 'p',
+      text: 'The request log keeps the JSON body of every inbound integration write (token or API-key caller, capped at 64 KB). Expanding such a row on API Analytics or the Integrations page shows the body with Replay and Edit & replay: `POST /api/api-analytics/requests/:id/replay { body? }` re-dispatches the same method and path in-process AS THE ADMIN who clicked (the original credential is never stored), tags the new request with `x-nivaro-replay-of`, and logs `api-request-replay`.'
+    },
     {
       type: 'h2',
       id: 'integration-events-flows',

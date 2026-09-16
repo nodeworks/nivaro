@@ -7,6 +7,7 @@ import {
   ChevronsUpDown,
   Download,
   FileJson,
+  Play,
   Plus,
   RefreshCw,
   Save,
@@ -458,6 +459,25 @@ export function ExternalApiEditPage() {
       </Card>
 
       {!isNew && data && <EndpointsCard apiId={data.id} />}
+      {!isNew && data && (
+        <MockModeCard
+          apiId={data.id}
+          data={
+            data as { mock_config?: Record<string, MockInstance> | null; current_instance?: string }
+          }
+        />
+      )}
+      {!isNew && data && (
+        <InstanceOverridesCard
+          apiId={data.id}
+          data={
+            data as {
+              instance_overrides?: Record<string, InstanceOverride> | null
+              current_instance?: string
+            }
+          }
+        />
+      )}
       {!isNew && data && <ConnectorCard apiId={data.id} apiName={data.name} />}
       {!isNew && data && <ApiCallLogsCard apiId={data.id} />}
       {!isNew && data && (
@@ -627,6 +647,7 @@ interface EndpointForm {
   default_body: string
   default_query: KVPair[]
   default_headers: KVPair[]
+  contract: string
 }
 
 const EMPTY_EP: EndpointForm = {
@@ -637,7 +658,8 @@ const EMPTY_EP: EndpointForm = {
   description: '',
   default_body: '',
   default_query: [],
-  default_headers: []
+  default_headers: [],
+  contract: ''
 }
 
 function epToForm(ep: ExternalApiEndpoint): EndpointForm {
@@ -652,7 +674,11 @@ function epToForm(ep: ExternalApiEndpoint): EndpointForm {
     default_headers: Object.entries(ep.default_headers ?? {}).map(([key, value]) => ({
       key,
       value
-    }))
+    })),
+    contract:
+      (ep as { contract?: unknown }).contract != null
+        ? JSON.stringify((ep as { contract?: unknown }).contract, null, 2)
+        : ''
   }
 }
 
@@ -677,7 +703,26 @@ function formToPayload(f: EndpointForm) {
     description: f.description || null,
     default_body: parsedBody,
     default_query: Object.keys(queryObj).length ? queryObj : null,
-    default_headers: Object.keys(headersObj).length ? headersObj : null
+    default_headers: Object.keys(headersObj).length ? headersObj : null,
+    // #74 — an invalid JSON contract is sent as null (the editor blocks Save on it).
+    contract: (() => {
+      if (!f.contract.trim()) return null
+      try {
+        return JSON.parse(f.contract) as unknown
+      } catch {
+        return null
+      }
+    })()
+  }
+}
+
+function contractValid(text: string): boolean {
+  if (!text.trim()) return true
+  try {
+    const v = JSON.parse(text)
+    return !!v && typeof v === 'object' && !Array.isArray(v)
+  } catch {
+    return false
   }
 }
 
@@ -853,6 +898,32 @@ function EndpointEditor({
         pairs={form.default_headers}
         onChange={(p) => set({ default_headers: p })}
       />
+      {/* #74 — contract: what a healthy answer looks like; the nightly cron
+          and the Run button judge the real response against it. */}
+      <div className='space-y-1' data-endpoint-contract>
+        <div className='flex items-center justify-between'>
+          <Label className='text-[11px]'>Contract (JSON) — leave blank for none</Label>
+          <span className='text-[10.5px] text-slate-400'>
+            expect_status · expect_json · expect_paths[{'{'}path, type, equals{'}'}] ·
+            allow_mutation
+          </span>
+        </div>
+        <Textarea
+          value={form.contract}
+          onChange={(e) => set({ contract: e.target.value })}
+          placeholder={
+            '{\n  "expect_status": 200,\n  "expect_paths": [{ "path": "data", "type": "array" }]\n}'
+          }
+          rows={4}
+          className={cn(
+            'font-mono text-[12px] resize-y',
+            !contractValid(form.contract) && 'border-red-400'
+          )}
+        />
+        {!contractValid(form.contract) && (
+          <p className='text-[11px] text-red-600'>Contract must be a JSON object.</p>
+        )}
+      </div>
       <div className='flex justify-end gap-2 pt-1'>
         <Button variant='ghost' size='sm' onClick={onCancel}>
           Cancel
@@ -860,7 +931,9 @@ function EndpointEditor({
         <Button
           size='sm'
           onClick={onSave}
-          disabled={isSaving || !form.name.trim() || !form.slug.trim()}
+          disabled={
+            isSaving || !form.name.trim() || !form.slug.trim() || !contractValid(form.contract)
+          }
         >
           {isSaving ? 'Saving…' : 'Save Endpoint'}
         </Button>
@@ -1100,6 +1173,347 @@ interface SchemaRecord {
   imported_at: string
 }
 
+function ContractChip({
+  ep,
+  onRun,
+  running
+}: {
+  ep: {
+    contract_last_ok?: boolean | null
+    contract_last_detail?: string | null
+    contract_last_run?: string | null
+  }
+  onRun: () => void
+  running: boolean
+}) {
+  const ok = ep.contract_last_ok
+  const tone =
+    ok == null
+      ? 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
+      : ok
+        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+        : 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400'
+  return (
+    <span
+      className='flex shrink-0 items-center gap-1'
+      data-contract-chip={ok == null ? 'never' : ok ? 'pass' : 'fail'}
+    >
+      <span
+        className={cn('rounded px-1.5 py-0.5 text-[10px] font-semibold', tone)}
+        data-tip={
+          ep.contract_last_detail
+            ? `${ep.contract_last_detail}${ep.contract_last_run ? ` · ${new Date(ep.contract_last_run).toLocaleString()}` : ''}`
+            : 'Contract never run'
+        }
+      >
+        {ok == null ? 'contract' : ok ? 'pass' : 'fail'}
+      </span>
+      <button
+        type='button'
+        onClick={onRun}
+        disabled={running}
+        className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40 dark:hover:bg-muted'
+        aria-label='Run contract'
+        data-run-contract
+      >
+        <Play className='h-3 w-3' />
+      </button>
+    </span>
+  )
+}
+
+// ─── #66 — Mock mode card ────────────────────────────────────────────────────
+type MockInstance = {
+  enabled?: boolean
+  rules?: Array<{
+    method?: string
+    path?: string
+    status: number
+    body?: unknown
+    delay_ms?: number
+  }>
+  fallback?: { status: number; body?: unknown }
+}
+function MockModeCard({
+  apiId,
+  data
+}: {
+  apiId: number
+  data: { mock_config?: Record<string, MockInstance> | null; current_instance?: string }
+}) {
+  const queryClient = useQueryClient()
+  const inst = data.current_instance ?? 'default'
+  const mine = data.mock_config?.[inst]
+  const [enabled, setEnabled] = useState(!!mine?.enabled)
+  const [rulesText, setRulesText] = useState(JSON.stringify(mine?.rules ?? [], null, 2))
+  const [fallbackText, setFallbackText] = useState(
+    mine?.fallback ? JSON.stringify(mine.fallback, null, 2) : ''
+  )
+  useEffect(() => {
+    setEnabled(!!mine?.enabled)
+    setRulesText(JSON.stringify(mine?.rules ?? [], null, 2))
+    setFallbackText(mine?.fallback ? JSON.stringify(mine.fallback, null, 2) : '')
+  }, [mine])
+  const parse = (t: string) => {
+    try {
+      return { ok: true as const, v: t.trim() ? (JSON.parse(t) as unknown) : undefined }
+    } catch {
+      return { ok: false as const, v: undefined }
+    }
+  }
+  const rules = parse(rulesText)
+  const fallback = parse(fallbackText)
+  const rulesOk = rules.ok && (rules.v === undefined || Array.isArray(rules.v))
+  const valid = rulesOk && fallback.ok
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch(`/external-apis/${apiId}`, {
+        mock_config: {
+          ...(data.mock_config ?? {}),
+          [inst]: { enabled, rules: rules.v ?? [], fallback: fallback.v }
+        }
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['external-api', String(apiId)] })
+      queryClient.invalidateQueries({ queryKey: ['external-apis'] })
+      toast.success(enabled ? `Mock mode ON for ${inst}` : `Mock mode off for ${inst}`)
+    },
+    onError: (err: { response?: { data?: { error?: string } } }) =>
+      toast.error(err.response?.data?.error ?? 'Failed to save mock config')
+  })
+  const otherInstances = Object.entries(data.mock_config ?? {})
+    .filter(([k, v]) => k !== inst && v?.enabled)
+    .map(([k]) => k)
+  return (
+    <Card className='mt-5 p-6' data-mock-card>
+      <div className='flex items-start justify-between gap-3'>
+        <div>
+          <Label>Mock mode</Label>
+          <p className='text-[12px] text-slate-400'>
+            While on, every call to this API from <span className='font-mono'>{inst}</span> is
+            answered from the rules below — nothing leaves the process. Stored per instance, so
+            production keeps its real endpoint.
+          </p>
+          {otherInstances.length > 0 && (
+            <p className='mt-1 text-[11px] text-amber-700'>
+              Also mocked on: {otherInstances.join(', ')}
+            </p>
+          )}
+        </div>
+        <label className='flex items-center gap-2 text-[12px] text-slate-600'>
+          <Switch checked={enabled} onCheckedChange={setEnabled} data-mock-switch />
+          {enabled ? 'On' : 'Off'}
+        </label>
+      </div>
+      <div className='mt-3 grid gap-3 lg:grid-cols-[1fr_260px]'>
+        <div>
+          <Label className='text-[11px]'>
+            Rules — first match answers ({'{'}method?, path? (prefix with *), status, body?,
+            delay_ms?{'}'})
+          </Label>
+          <Textarea
+            value={rulesText}
+            onChange={(e) => setRulesText(e.target.value)}
+            rows={7}
+            className={cn('mt-1 font-mono text-[12px]', !rulesOk && 'border-red-400')}
+            data-mock-rules
+          />
+        </div>
+        <div>
+          <Label className='text-[11px]'>
+            Fallback ({'{'}status, body{'}'}) — else 200 {'{'}"mock": true{'}'}
+          </Label>
+          <Textarea
+            value={fallbackText}
+            onChange={(e) => setFallbackText(e.target.value)}
+            rows={7}
+            className={cn('mt-1 font-mono text-[12px]', !fallback.ok && 'border-red-400')}
+          />
+        </div>
+      </div>
+      <div className='mt-3 flex justify-end'>
+        <Button
+          size='sm'
+          disabled={!valid || save.isPending}
+          onClick={() => save.mutate()}
+          data-mock-save
+        >
+          {save.isPending ? 'Saving…' : 'Save mock settings'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+// ─── #89 — Per-instance overrides card ──────────────────────────────────────
+type InstanceOverride = {
+  base_url?: string
+  auth_config?: Record<string, unknown>
+  headers?: Record<string, string>
+}
+type OverrideDraft = { base_url: string; auth: KVPair[]; headers: KVPair[] }
+function InstanceOverridesCard({
+  apiId,
+  data
+}: {
+  apiId: number
+  data: { instance_overrides?: Record<string, InstanceOverride> | null; current_instance?: string }
+}) {
+  const queryClient = useQueryClient()
+  const [drafts, setDrafts] = useState<Record<string, OverrideDraft>>({})
+  const [newKey, setNewKey] = useState('')
+  useEffect(() => {
+    const next: Record<string, OverrideDraft> = {}
+    for (const [k, v] of Object.entries(data.instance_overrides ?? {})) {
+      next[k] = {
+        base_url: v?.base_url ?? '',
+        auth: Object.entries(v?.auth_config ?? {}).map(([key, value]) => ({
+          key,
+          value: String(value ?? '')
+        })),
+        headers: Object.entries(v?.headers ?? {}).map(([key, value]) => ({
+          key,
+          value: String(value ?? '')
+        }))
+      }
+    }
+    setDrafts(next)
+  }, [data.instance_overrides])
+  const save = useMutation({
+    mutationFn: () => {
+      const body: Record<string, InstanceOverride> = {}
+      for (const [k, d] of Object.entries(drafts)) {
+        const auth: Record<string, unknown> = {}
+        for (const p of d.auth) if (p.key.trim()) auth[p.key.trim()] = p.value
+        const headers: Record<string, string> = {}
+        for (const p of d.headers) if (p.key.trim()) headers[p.key.trim()] = p.value
+        body[k] = {
+          base_url: d.base_url.trim() || undefined,
+          auth_config: Object.keys(auth).length ? auth : undefined,
+          headers: Object.keys(headers).length ? headers : undefined
+        }
+      }
+      return api.patch(`/external-apis/${apiId}`, {
+        instance_overrides: Object.keys(body).length ? body : null
+      })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['external-api', String(apiId)] })
+      toast.success('Instance overrides saved')
+    },
+    onError: (err: { response?: { data?: { error?: string } } }) =>
+      toast.error(err.response?.data?.error ?? 'Failed to save overrides')
+  })
+  const keys = Object.keys(drafts)
+  return (
+    <Card className='mt-5 p-6' data-instance-overrides-card>
+      <Label>Per-instance credentials & host</Label>
+      <p className='text-[12px] text-slate-400'>
+        One API row, different targets per instance: an entry keyed by the instance name
+        (NIVARO_INSTANCE, else NODE_ENV) overrides the base URL, auth fields and headers there. This
+        instance is <span className='font-mono'>{data.current_instance}</span>. Masked secrets left
+        as-is are kept.
+      </p>
+      <div className='mt-3 space-y-3'>
+        {keys.length === 0 && (
+          <p className='text-[12px] text-slate-400'>
+            No overrides — every instance uses the settings above.
+          </p>
+        )}
+        {keys.map((k) => (
+          <div
+            key={k}
+            className={cn(
+              'rounded-md border p-3',
+              k === data.current_instance
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/5'
+                : 'border-slate-200 dark:border-border'
+            )}
+            data-instance-override={k}
+          >
+            <div className='flex items-center gap-2'>
+              <span className='font-mono text-[12px] font-semibold text-slate-700 dark:text-foreground'>
+                {k}
+              </span>
+              {k === data.current_instance && (
+                <span className='rounded bg-nvr-cyan/15 px-1.5 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                  this instance
+                </span>
+              )}
+              <button
+                type='button'
+                className='ml-auto text-[11px] text-red-500 hover:underline'
+                onClick={() =>
+                  setDrafts((d) => {
+                    const n = { ...d }
+                    delete n[k]
+                    return n
+                  })
+                }
+              >
+                Remove
+              </button>
+            </div>
+            <div className='mt-2 space-y-2'>
+              <div>
+                <Label className='text-[11px]'>Base URL (blank = inherit)</Label>
+                <Input
+                  value={drafts[k].base_url}
+                  onChange={(e) =>
+                    setDrafts((d) => ({ ...d, [k]: { ...d[k], base_url: e.target.value } }))
+                  }
+                  className='h-8 font-mono text-[12px]'
+                  placeholder='https://api.example.com/v1'
+                />
+              </div>
+              <InlineKVEditor
+                label='Auth config overrides (token, client_secret, …)'
+                pairs={drafts[k].auth}
+                onChange={(p) => setDrafts((d) => ({ ...d, [k]: { ...d[k], auth: p } }))}
+              />
+              <InlineKVEditor
+                label='Header overrides'
+                pairs={drafts[k].headers}
+                onChange={(p) => setDrafts((d) => ({ ...d, [k]: { ...d[k], headers: p } }))}
+              />
+            </div>
+          </div>
+        ))}
+        <div className='flex items-center gap-2'>
+          <Input
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value.replace(/[^A-Za-z0-9_.-]/g, ''))}
+            placeholder={data.current_instance ?? 'production'}
+            className='h-8 w-48 font-mono text-[12px]'
+            data-instance-new-key
+          />
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8'
+            disabled={!newKey.trim() || !!drafts[newKey.trim()]}
+            onClick={() => {
+              setDrafts((d) => ({ ...d, [newKey.trim()]: { base_url: '', auth: [], headers: [] } }))
+              setNewKey('')
+            }}
+          >
+            <Plus className='mr-1 h-3.5 w-3.5' /> Add instance
+          </Button>
+          <span className='ml-auto' />
+          <Button
+            size='sm'
+            disabled={save.isPending}
+            onClick={() => save.mutate()}
+            data-instance-save
+          >
+            {save.isPending ? 'Saving…' : 'Save overrides'}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 function EndpointsCard({ apiId }: { apiId: number }) {
   const queryClient = useQueryClient()
   const [expandedId, setExpandedId] = useState<number | 'new' | null>(null)
@@ -1179,6 +1593,43 @@ function EndpointsCard({ apiId }: { apiId: number }) {
     onError: () => toast.error('Failed to delete endpoint')
   })
 
+  // #74 — contract runs (one endpoint, or every contract on the API).
+  const runOne = useMutation({
+    mutationFn: (eid: number) =>
+      api
+        .post<{ data: { ok: boolean; detail: string } }>(
+          `/external-apis/endpoints/${eid}/contract/run`
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      invalidate()
+      ;(d.ok ? toast.success : toast.error)(d.ok ? 'Contract passed' : 'Contract failed', {
+        description: d.detail,
+        duration: 8000
+      })
+    },
+    onError: (err: { response?: { data?: { error?: string } } }) =>
+      toast.error(err.response?.data?.error ?? 'Contract run failed')
+  })
+  const runAll = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { results: Array<{ ok: boolean }>; failed: number } }>(
+          `/external-apis/${apiId}/contracts/run`
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      invalidate()
+      ;(d.failed ? toast.error : toast.success)(
+        `${d.results.length} contract${d.results.length === 1 ? '' : 's'} run · ${d.failed} failing`
+      )
+    },
+    onError: () => toast.error('Contract run failed')
+  })
+  const contractCount = endpoints.filter(
+    (e) => (e as { contract?: unknown }).contract != null
+  ).length
+
   function openNew() {
     setEditForms((f) => ({ ...f, new: EMPTY_EP }))
     setExpandedId('new')
@@ -1215,6 +1666,21 @@ function EndpointsCard({ apiId }: { apiId: number }) {
           )}
         </div>
         <div className='flex items-center gap-2'>
+          {contractCount > 0 && (
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => runAll.mutate()}
+              disabled={runAll.isPending}
+              className='gap-1.5'
+              data-run-all-contracts
+            >
+              <Play className='h-3.5 w-3.5' />
+              {runAll.isPending
+                ? 'Running…'
+                : `Run ${contractCount} contract${contractCount === 1 ? '' : 's'}`}
+            </Button>
+          )}
           <Button
             variant='outline'
             size='sm'
@@ -1308,6 +1774,19 @@ function EndpointsCard({ apiId }: { apiId: number }) {
                   {ep.path || '/'}
                 </span>
                 <span className='truncate text-[12px] text-slate-500 max-w-[180px]'>{ep.name}</span>
+                {(ep as { contract?: unknown }).contract != null && (
+                  <ContractChip
+                    ep={
+                      ep as ExternalApiEndpoint & {
+                        contract_last_ok?: boolean | null
+                        contract_last_detail?: string | null
+                        contract_last_run?: string | null
+                      }
+                    }
+                    onRun={() => runOne.mutate(ep.id)}
+                    running={runOne.isPending && runOne.variables === ep.id}
+                  />
+                )}
                 <div className='flex items-center gap-1 shrink-0'>
                   <Button
                     variant='ghost'

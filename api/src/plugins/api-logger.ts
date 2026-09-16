@@ -14,7 +14,31 @@ interface ApiLogRow {
   ip: string | null
   user_agent: string | null
   error: string | null
+  request_body: string | null
   created_at: Date
+}
+
+// #67 — keep the JSON body of an inbound INTEGRATION write (token / api-key
+// caller, not a person's browser session) so a rejected push can be replayed
+// from the request log. Capped; multipart and non-JSON bodies are skipped.
+const REQUEST_BODY_CAP = 64 * 1024
+function captureRequestBody(req: {
+  method: string
+  authMethod?: string
+  body?: unknown
+  headers: Record<string, unknown>
+}): string | null {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return null
+  if (req.authMethod !== 'token' && req.authMethod !== 'api_key') return null
+  const ct = String(req.headers['content-type'] ?? '')
+  if (!ct.includes('json')) return null
+  if (req.body == null) return null
+  try {
+    const str = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+    return str.length > REQUEST_BODY_CAP ? `${str.slice(0, REQUEST_BODY_CAP)}…` : str
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -147,6 +171,14 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       ip: clientIp(req as unknown as { headers: Record<string, unknown>; ip: string }),
       user_agent: typeof ua === 'string' ? ua.slice(0, 300) : null,
       error: (req as unknown as { __nvrErr?: string }).__nvrErr ?? null,
+      request_body: captureRequestBody(
+        req as unknown as {
+          method: string
+          authMethod?: string
+          body?: unknown
+          headers: Record<string, unknown>
+        }
+      ),
       created_at: new Date()
     })
 

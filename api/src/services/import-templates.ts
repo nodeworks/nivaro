@@ -384,7 +384,7 @@ async function resolveRuleLookup(
   return { matchMap, rowScoped }
 }
 
-async function runHeaderPhase(
+export async function runHeaderPhase(
   headerMap: ImportHeaderRule[],
   headerRow: Record<string, unknown>,
   issues: ImportIssue[],

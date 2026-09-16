@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 
 const LATENCY_SAMPLE_CAP = 50000
 
@@ -254,6 +255,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         'l.ip',
         'l.user_agent',
         'l.error',
+        'l.request_body',
         'l.created_at',
         'u.first_name',
         'u.last_name',
@@ -282,6 +284,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         ip: r.ip,
         user_agent: r.user_agent,
         error: r.error,
+        request_body: r.request_body ?? null,
         created_at: r.created_at
       })),
       total: Number(totalRow?.c ?? 0),
@@ -289,6 +292,77 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       limit
     })
   })
+
+  // #67 — replay an inbound request from the log: same method + path, the
+  // stored body (or an edited one), dispatched in-process AS THE ADMIN who
+  // clicked (the caller's credential is never stored). The new request logs
+  // normally and carries x-nivaro-replay-of so the two rows can be paired.
+  app.post<{ Params: { id: string }; Body: { body?: unknown } }>(
+    '/requests/:id/replay',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = (await db('nivaro_api_logs')
+        .where({ id: Number(req.params.id) })
+        .first()) as
+        | { id: number; method: string; path: string; request_body: string | null }
+        | undefined
+      if (!row) return reply.code(404).send({ error: 'Request not found' })
+      if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(row.method))
+        return reply.code(400).send({ error: 'Only write requests can be replayed' })
+      if (!row.path.startsWith('/api/') && row.path !== '/graphql' && row.path !== '/files')
+        return reply.code(400).send({ error: 'Path is not an API route' })
+      const hasEdited = req.body && 'body' in req.body
+      let payload: unknown
+      if (hasEdited) payload = req.body.body
+      else if (row.request_body) {
+        if (row.request_body.endsWith('…'))
+          return reply
+            .code(400)
+            .send({ error: 'Stored body was truncated — supply the body to replay' })
+        try {
+          payload = JSON.parse(row.request_body)
+        } catch {
+          return reply.code(400).send({ error: 'Stored body is not valid JSON' })
+        }
+      } else return reply.code(400).send({ error: 'No request body was stored for this request' })
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+        'x-nivaro-replay-of': String(row.id)
+      }
+      const auth = req.headers.authorization
+      if (typeof auth === 'string') headers.authorization = auth
+      const cookie = req.headers.cookie
+      if (typeof cookie === 'string') headers.cookie = cookie
+      const t0 = Date.now()
+      const res = await app.inject({
+        method: row.method as 'POST',
+        url: row.path,
+        headers,
+        payload: JSON.stringify(payload)
+      })
+      let body: unknown = res.body
+      try {
+        body = JSON.parse(res.body)
+      } catch {
+        /* text */
+      }
+      await logActivity({
+        action: 'api-request-replay',
+        user: req.user?.id,
+        req,
+        comment: `${row.method} ${row.path} (log #${row.id}) → ${res.statusCode}${hasEdited ? ' · edited body' : ''}`
+      })
+      return reply.send({
+        data: {
+          status: res.statusCode,
+          ok: res.statusCode < 400,
+          duration_ms: Date.now() - t0,
+          body: typeof body === 'string' ? body.slice(0, 64 * 1024) : body,
+          replay_of: Number(row.id)
+        }
+      })
+    }
+  )
 
   // GET /api-analytics/callers?hours=24 — inbound integrations roll-up: one
   // row per non-session caller (static-token user or named API key): calls,

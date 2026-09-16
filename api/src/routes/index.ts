@@ -84,6 +84,7 @@ import { healthRoutes } from './health.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
+import { inboundMappingsRoutes, inboundRoutes } from './inbound-mappings.js'
 import { indexAdvisorRoutes } from './index-advisor.js'
 import { integrationContractRoutes } from './integration-contracts.js'
 import { integrationEventsRoutes } from './integration-events.js'
@@ -257,6 +258,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(configDiffRoutes)
   await app.register(environmentRoutes, { prefix: '/environments' })
   await app.register(integrationEventsRoutes, { prefix: '/integration-events' })
+  await app.register(inboundMappingsRoutes, { prefix: '/inbound-mappings' })
+  await app.register(inboundRoutes, { prefix: '/inbound' })
   await app.register(lineageRoutes, { prefix: '/lineage' })
   await app.register(readinessRoutes, { prefix: '/readiness' })
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })

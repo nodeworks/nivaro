@@ -1,8 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { AlertCircle, ChevronDown, ChevronRight, KeyRound, RotateCw, Search, X } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
 
@@ -34,6 +34,8 @@ export interface ApiLogRow {
   ip: string | null
   user_agent: string | null
   error: string | null
+  /** #67 — stored JSON body of an inbound integration write (token / API-key caller). */
+  request_body?: string | null
   created_at: string
 }
 
@@ -411,6 +413,7 @@ export function ApiRequestLog({
                               {prettyError(r.error)}
                             </pre>
                           )}
+                          {r.request_body && <ReplayBlock row={r} />}
                         </td>
                       </tr>
                     )}
@@ -533,6 +536,125 @@ function Segment({
  * writes, named API keys — who called, how often, what failed, and the exact
  * response body the caller got back.
  */
+// #67 — the stored body of an inbound write + replay it (as the admin who
+// clicks, in-process) either verbatim or after editing.
+function ReplayBlock({ row }: { row: ApiLogRow }) {
+  const client = useNivaroClient()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(() => {
+    try {
+      return JSON.stringify(JSON.parse(row.request_body ?? ''), null, 2)
+    } catch {
+      return row.request_body ?? ''
+    }
+  })
+  const [armed, setArmed] = useState(false)
+  const [result, setResult] = useState<null | {
+    status: number
+    ok: boolean
+    duration_ms: number
+    body: unknown
+  }>(null)
+  const parsed = (() => {
+    try {
+      return { ok: true as const, value: JSON.parse(text) as unknown }
+    } catch {
+      return { ok: false as const, value: undefined }
+    }
+  })()
+  const replay = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { status: number; ok: boolean; duration_ms: number; body: unknown } }>(
+        post(`/api-analytics/requests/${row.id}/replay`, editing ? { body: parsed.value } : {})
+      ),
+    onSuccess: (res) => {
+      setArmed(false)
+      setResult(res.data)
+    },
+    onError: (err) => {
+      setArmed(false)
+      const msg = (err as { response?: { error?: string }; message?: string })?.response?.error
+      setResult({
+        status: 0,
+        ok: false,
+        duration_ms: 0,
+        body: msg ?? (err as Error)?.message ?? 'Replay failed'
+      })
+    }
+  })
+  const truncated = (row.request_body ?? '').endsWith('…')
+  return (
+    <div className='mt-2' data-request-replay={row.id}>
+      <div className='flex items-center gap-2'>
+        <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+          Request body
+        </span>
+        {truncated && (
+          <span className='text-[10.5px] text-amber-600'>truncated — edit to replay</span>
+        )}
+        <button
+          type='button'
+          onClick={() => setEditing((e) => !e)}
+          className='ml-auto rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] text-slate-600 hover:bg-muted dark:border-border'
+        >
+          {editing ? 'Cancel edit' : 'Edit & replay'}
+        </button>
+        <button
+          type='button'
+          data-request-replay-btn
+          disabled={replay.isPending || (editing ? !parsed.ok : truncated)}
+          onClick={() => (armed ? replay.mutate() : setArmed(true))}
+          onBlur={() => setArmed(false)}
+          className={cn(
+            'rounded px-2 py-0.5 text-[10.5px] font-medium transition-colors disabled:opacity-40',
+            armed
+              ? 'bg-sky-600 text-white'
+              : 'border border-sky-200 text-sky-700 hover:bg-sky-50 dark:border-sky-900/40 dark:text-sky-300 dark:hover:bg-sky-900/20'
+          )}
+        >
+          {replay.isPending
+            ? 'Replaying…'
+            : armed
+              ? `Send ${row.method} ${row.path}?`
+              : editing
+                ? 'Replay edited'
+                : 'Replay'}
+        </button>
+      </div>
+      {editing ? (
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={8}
+          spellCheck={false}
+          className={cn(
+            'mt-1 w-full rounded-md border bg-white p-2 font-mono text-[11px] leading-snug dark:bg-background',
+            parsed.ok ? 'border-slate-200 dark:border-border' : 'border-red-400'
+          )}
+        />
+      ) : (
+        <pre className='mt-1 max-h-48 overflow-auto rounded-md border border-slate-200 bg-white p-2 font-mono text-[11px] leading-snug text-slate-700 dark:border-border dark:bg-background dark:text-foreground'>
+          {text}
+        </pre>
+      )}
+      {result && (
+        <div
+          className='mt-1.5 rounded-md border border-slate-200 p-2 text-[11px] dark:border-border'
+          data-request-replay-result={result.status}
+        >
+          <span className={cn('font-semibold', result.ok ? 'text-emerald-700' : 'text-red-700')}>
+            {result.status || 'error'}
+          </span>
+          <span className='ml-2 text-slate-400'>{result.duration_ms}ms · replayed as you</span>
+          <pre className='mt-1 max-h-40 overflow-auto font-mono text-[11px] text-slate-700 dark:text-foreground'>
+            {typeof result.body === 'string' ? result.body : JSON.stringify(result.body, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function InboundCallersView({ hours: initialHours = 24 }: { hours?: number }) {
   const client = useNivaroClient()
   const [hours, setHours] = useState<number>(initialHours)
