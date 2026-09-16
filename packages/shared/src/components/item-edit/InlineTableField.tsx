@@ -185,6 +185,7 @@ import {
   rowFromCandidate,
   useRowMatches
 } from './RowMatchPanel'
+import { RowWatchButton } from './RowWatchButton'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -428,6 +429,17 @@ function hashString(v: string): number {
  * the previous behaviour for every formula already configured — an unset
  * `allocated_total` still reads as 0, not as nothing.
  */
+/** A short human handle for one grid row — the watch subscription's label
+ *  ("line 3", "2026"); the server names the row properly when it notifies. */
+function rowLabelOf(row: Record<string, unknown>): string | null {
+  if (row.line_number != null && row.line_number !== '') return `line ${row.line_number}`
+  for (const k of ['year', 'name', 'title', 'label', 'number']) {
+    const v = row[k]
+    if (v != null && v !== '' && typeof v !== 'object') return String(v).slice(0, 60)
+  }
+  return null
+}
+
 export function evalClientFormula(formula: string, row: Record<string, unknown>): number | null {
   return evaluateNumeric(formula, row)
 }
@@ -8121,6 +8133,13 @@ export function InlineTableField({
                                     >
                                       <History className='h-3 w-3' />
                                     </button>
+                                  )}
+                                  {id != null && !String(id).startsWith('pending') && (
+                                    <RowWatchButton
+                                      collection={relatedCollection}
+                                      rowId={String(id)}
+                                      rowLabel={rowLabelOf(row)}
+                                    />
                                   )}
                                   {!readOnly && (
                                     <button

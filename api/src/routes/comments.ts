@@ -64,20 +64,38 @@ function amountChange(previous: unknown, next: unknown, impact: unknown): string
 }
 
 /**
- * Comment strings written by MACHINERY, not people: the legacy import stamped
- * every row it carried across, the reforecast proc marks its own writes, and
- * the forecast-revision converter tags absorbed rows. They are provenance, and
- * putting them in a notes thread buries the handful of real notes under
- * hundreds of identical markers.
+ * Comment strings written by MACHINERY, not people — a sync script's
+ * provenance tag, a proc's marker — are not notes: putting them in the thread
+ * buries the handful of real notes under hundreds of identical markers. WHICH
+ * strings those are belongs to whoever writes them, so extensions declare
+ * theirs (`ctx.notes.registerMachineMarkers`, #10); the one marker core itself
+ * writes is the import stamp, which the thread renders as its own source.
  */
-const MACHINE_COMMENT_EXACT = new Set(['legacy-import', 'reforecast', 'legacy-state-sync'])
-const MACHINE_COMMENT_PREFIXES = ['forecast-import:', 'invoice-decision:']
-
 function isHumanNote(text: string | null | undefined): boolean {
   const t = String(text ?? '').trim()
   if (t === '') return false
-  if (MACHINE_COMMENT_EXACT.has(t.toLowerCase())) return false
-  return !MACHINE_COMMENT_PREFIXES.some((p) => t.toLowerCase().startsWith(p))
+  if (parseImportStamp(t)) return false
+  return !relatedNoteRegistry.isMachineComment(t)
+}
+
+/** `import:<label>:<file uuid>` (a file-driven import) or
+ *  `import:<label>:run-<id>` (a staged-import run) — the stamp every import
+ *  write carries as its change reason. */
+function parseImportStamp(
+  comment: string | null | undefined
+): { label: string; file_id: string | null; run_id: number | null } | null {
+  const t = String(comment ?? '').trim()
+  if (!/^import:/i.test(t)) return null
+  const rest = t.slice('import:'.length)
+  const cut = rest.lastIndexOf(':')
+  const label = (cut >= 0 ? rest.slice(0, cut) : rest).trim() || 'a file'
+  const ref = cut >= 0 ? rest.slice(cut + 1).trim() : ''
+  const run = /^run-(\d+)$/i.exec(ref)
+  return {
+    label,
+    file_id: run || !ref ? null : ref,
+    run_id: run ? Number(run[1]) : null
+  }
 }
 
 /** Addendum reasons are rich text; the thread shows plain prose. */
@@ -358,7 +376,7 @@ export async function commentsRoutes(app: FastifyInstance) {
       const CAP = 200
       type Entry = {
         id: string
-        source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external'
+        source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external' | 'import'
         label: string
         text: string
         user: string | null
@@ -371,6 +389,15 @@ export async function commentsRoutes(app: FastifyInstance) {
         provider?: string
         replayable?: boolean
         status?: 'ok' | 'error' | 'info' | null
+        /** Import entries (#60): the run or file behind the write. */
+        import?: {
+          label: string
+          file_id: string | null
+          file_name: string | null
+          run_id: number | null
+          rows: number
+          action: 'create' | 'update'
+        }
       }
 
       const instances = (await db('nivaro_workflow_instances')
@@ -668,6 +695,156 @@ export async function commentsRoutes(app: FastifyInstance) {
         // Same posture: a broken child table never takes the thread down.
       }
 
+      // Import history (#60): which import runs touched this record. Every
+      // import write carries `import:<label>:<file|run>` as its change reason —
+      // on the record itself (a file-driven prefill, a service-mode staged
+      // run) and on the child rows an import template created. The child
+      // scan is bounded to the collections the record's import templates
+      // actually target, and folds one run's rows into a single entry.
+      const importEntries: Entry[] = []
+      try {
+        type Stamped = {
+          id: number
+          user: string | null
+          timestamp: string | Date
+          comment: string
+          action: string
+          collection: string
+        }
+        const stamped: Stamped[] = ownReasons
+          .filter((a) => parseImportStamp(String(a.comment ?? '')))
+          .map((a) => ({
+            id: Number(a.id),
+            user: (a.user as string) ?? null,
+            timestamp: a.timestamp as string,
+            comment: String(a.comment),
+            action: String(a.action ?? ''),
+            collection
+          }))
+        const templates = (await db('nivaro_import_templates')
+          .where({ collection })
+          .whereNotNull('line_map')
+          .select('line_map')
+          .catch(() => [])) as Array<{ line_map: unknown }>
+        const lineTargets = new Set<string>()
+        for (const t of templates) {
+          try {
+            const lm = typeof t.line_map === 'string' ? JSON.parse(t.line_map) : t.line_map
+            const tf = (lm as { target_field?: string } | null)?.target_field
+            if (tf) lineTargets.add(tf)
+          } catch {
+            /* a broken template never breaks the thread */
+          }
+        }
+        if (lineTargets.size > 0) {
+          const rels = (await db('nivaro_relations')
+            .where({ one_collection: collection })
+            .whereIn('one_field', [...lineTargets])
+            .whereNotNull('many_collection')
+            .select('many_collection', 'many_field')) as Array<{
+            many_collection: string
+            many_field: string
+          }>
+          for (const rel of rels) {
+            const childIds = (await db(rel.many_collection)
+              .where(rel.many_field, item)
+              .limit(2000)
+              .select('id')
+              .catch(() => [])) as Array<{ id: unknown }>
+            if (childIds.length === 0) continue
+            const rows = (await db('nivaro_activity')
+              .where({ collection: rel.many_collection })
+              .whereIn(
+                'item',
+                childIds.map((r) => String(r.id))
+              )
+              .where('comment', 'like', 'import:%')
+              .orderBy('timestamp', 'desc')
+              .limit(500)
+              .select('id', 'user', 'timestamp', 'comment', 'action')
+              .catch(() => [])) as Array<Record<string, unknown>>
+            for (const r of rows)
+              stamped.push({
+                id: Number(r.id),
+                user: (r.user as string) ?? null,
+                timestamp: r.timestamp as string,
+                comment: String(r.comment),
+                action: String(r.action ?? ''),
+                collection: rel.many_collection
+              })
+          }
+        }
+        if (stamped.length > 0) {
+          // One entry per (stamp, collection, create|update): "Imported 12
+          // lines via Bid Import", not twelve identical lines.
+          const groups = new Map<string, Stamped[]>()
+          for (const s of stamped) {
+            const action = /update/i.test(s.action) ? 'update' : 'create'
+            const key = `${s.comment.toLowerCase()}|${s.collection}|${action}`
+            groups.set(key, [...(groups.get(key) ?? []), s])
+          }
+          const fileIds = [
+            ...new Set(
+              [...groups.values()]
+                .map((g) => parseImportStamp(g[0].comment)?.file_id)
+                .filter((v): v is string => !!v)
+            )
+          ]
+          const fileNames = new Map<string, string>()
+          if (fileIds.length > 0) {
+            const files = (await db('nivaro_files')
+              .whereIn('id', fileIds)
+              .select('id', 'title', 'filename_download')
+              .catch(() => [])) as Array<Record<string, unknown>>
+            for (const f of files)
+              fileNames.set(
+                String(f.id).toUpperCase(),
+                String(f.title || f.filename_download || '').trim()
+              )
+          }
+          for (const g of groups.values()) {
+            const stamp = parseImportStamp(g[0].comment)
+            if (!stamp) continue
+            const action = /update/i.test(g[0].action) ? 'update' : 'create'
+            const onSelf = g[0].collection === collection
+            const n = g.length
+            const what = onSelf
+              ? action === 'create'
+                ? 'Created by import'
+                : 'Updated by import'
+              : `${action === 'create' ? 'Imported' : 'Updated'} ${n} ${titleCase(g[0].collection).toLowerCase()}${n === 1 ? ' row' : ' rows'}`
+            const fileName = stamp.file_id
+              ? (fileNames.get(stamp.file_id.toUpperCase()) ?? null)
+              : null
+            const newest = g.reduce((a, b) =>
+              new Date(a.timestamp).getTime() >= new Date(b.timestamp).getTime() ? a : b
+            )
+            importEntries.push({
+              id: `import:${g[0].collection}:${newest.id}`,
+              source: 'import',
+              label: 'Import',
+              text: `${what} via ${stamp.label}`,
+              user: newest.user,
+              created_at: newest.timestamp,
+              context:
+                [fileName, stamp.run_id != null ? `Run #${stamp.run_id}` : null]
+                  .filter(Boolean)
+                  .join(' · ') || null,
+              import: {
+                label: stamp.label,
+                file_id: stamp.file_id,
+                file_name: fileName,
+                run_id: stamp.run_id,
+                rows: n,
+                action
+              }
+            })
+          }
+        }
+      } catch {
+        /* import history must never take the thread down */
+      }
+
       // Extension-provided history (an integration's shipment/sync events).
       // These are MACHINE events by design, so they bypass the human-note filter
       // that drops importer stamps and transition breadcrumbs.
@@ -769,7 +946,7 @@ export async function commentsRoutes(app: FastifyInstance) {
           context: (n.context as string) ?? null
         }))
       ].filter((e) => isHumanNote(e.text))
-      entries.push(...externalEntries)
+      entries.push(...externalEntries, ...importEntries)
 
       // Saving a child with a reason can also stamp the parent with the same
       // text (an edit that changed nothing on the parent row still records the

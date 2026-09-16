@@ -95,6 +95,11 @@ export const notificationSubscriptionsGuide: DocSection = {
       type: 'p',
       text: 'Every record page has a bell button in the header. Click it to watch that specific record — choose "State changes only" (notify when the record moves to a new workflow state) or "All changes" (every edit, deletion, and state change). The bell fills in when you are subscribed; open it again to switch modes or unsubscribe. Record subscriptions are ordinary notification subscriptions scoped to the record id, so they also appear on the Notification Subscriptions page.'
     },
+    { type: 'h3', text: 'Watching one line' },
+    {
+      type: 'p',
+      text: 'Every saved row in a record\'s grid has its own bell (beside Row history). Watching a line — one forecast year, one PO line — notifies you only when that row changes, and the notification names the row and the record it belongs to ("workflow line items CM26-79811 · Line 4: 2 changes by …"). It is an ordinary subscription on the child collection scoped to the row id, listed on the Notification Subscriptions page like any other.'
+    },
     { type: 'h3', text: 'Creating a subscription' },
     {
       type: 'p',

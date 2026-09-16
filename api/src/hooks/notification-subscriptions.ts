@@ -56,6 +56,41 @@ async function friendlyRecordLabel(collection: string, item: string): Promise<st
   return `#${item}`
 }
 
+/** The record's friendly label, or — for a row that belongs to a parent
+ *  record (a line, a forecast year) — "<child> <row label> on <parent>". */
+async function friendlyRowLabel(
+  collection: string,
+  item: string,
+  row: Record<string, unknown> | null
+): Promise<string> {
+  const own = await friendlyRecordLabel(collection, item)
+  try {
+    const rels = await parentRelationsOf(collection)
+    if (rels.length === 0) return own
+    // The coalescer's flush hands over `{id}` only — read the FKs off the row.
+    let src: Record<string, unknown> | null = row
+    if (!src || !rels.some((r) => src?.[r.fk] != null)) {
+      src =
+        ((await db(collection)
+          .where('id', item)
+          .first(...rels.map((r) => r.fk))
+          .catch(() => null)) as Record<string, unknown> | null) ?? null
+    }
+    for (const rel of rels) {
+      const parentId = src?.[rel.fk]
+      if (parentId == null || parentId === '') continue
+      const parent = await friendlyRecordLabel(rel.parent, String(parentId))
+      const childLabel = collection.replace(/_/g, ' ')
+      // A child whose own label already names the parent ("CM26-79811 ·
+      // Line 4") needs no "on CM26-79811" after it.
+      return own.includes(parent) ? `${childLabel} ${own}` : `${childLabel} ${own} on ${parent}`
+    }
+  } catch {
+    /* the row's own label is still right */
+  }
+  return own
+}
+
 /** Child collection → parent M2O relations, so a write to a line rolls up to
  *  the parent record's watchers. 60s cache; relations change in Data Model. */
 const parentRelCache = new Map<
@@ -284,19 +319,24 @@ async function fireSubscriptionNotifications(
       }
 
       // Record watches speak in the record's friendly label ("CM26-79811"),
-      // never the internal id or the label captured at subscribe time.
-      const friendly = recordScoped ? await friendlyRecordLabel(collection, item) : null
+      // never the internal id or the label captured at subscribe time. A
+      // watch on a CHILD row (#11 — one forecast year, one PO line) names the
+      // row AND the record it belongs to: "forecasts 2026 on CM26-79811".
+      const friendly = recordScoped ? await friendlyRowLabel(collection, item, data) : null
       const collectionLabel = collection.replace(/_/g, ' ')
       const label = friendly ? `Watching ${friendly}` : sub.label || `${collection} ${eventType}`
       const childLabel = viaChild ? viaChild.collection.replace(/_/g, ' ') : null
-      const childRef = viaChild ? (viaChild.label ? `${childLabel} ${viaChild.label}` : `${childLabel} row`) : null
-      const childWhat =
-        viaChild?.changes?.length
-          ? ` — ${viaChild.changes
-              .slice(0, 3)
-              .map((c) => `${c.label}: ${c.old ? `${c.old} → ` : ''}${c.new}`)
-              .join(', ')}${viaChild.changes.length > 3 ? ', …' : ''}`
-          : ''
+      const childRef = viaChild
+        ? viaChild.label
+          ? `${childLabel} ${viaChild.label}`
+          : `${childLabel} row`
+        : null
+      const childWhat = viaChild?.changes?.length
+        ? ` — ${viaChild.changes
+            .slice(0, 3)
+            .map((c) => `${c.label}: ${c.old ? `${c.old} → ` : ''}${c.new}`)
+            .join(', ')}${viaChild.changes.length > 3 ? ', …' : ''}`
+        : ''
       const recordRef = friendly ? friendly : `item ${item} in ${collection}`
       const bundleWhat = bundle
         ? ` — ${bundle.changes

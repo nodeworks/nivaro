@@ -340,7 +340,7 @@ function MentionTextarea({
  *  the transition, change or addendum that captured it. */
 interface RelatedNote {
   id: string
-  source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external'
+  source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external' | 'import'
   label: string
   text: string
   context: string | null
@@ -355,6 +355,34 @@ interface RelatedNote {
   provider?: string | null
   replayable?: boolean
   status?: 'ok' | 'error' | 'info' | null
+  /** Import entries (#60): the file or run behind the write. */
+  import?: {
+    label: string
+    file_id: string | null
+    file_name: string | null
+    run_id: number | null
+    rows: number
+    action: 'create' | 'update'
+  } | null
+}
+
+/** #3 — who wrote the entry, for the thread's filter chips. */
+type NoteKind = 'people' | 'system' | 'integration'
+function noteKindOf(entry: { kind: 'comment' } | { kind: 'related'; note: RelatedNote }): NoteKind {
+  if (entry.kind === 'comment') return 'people'
+  switch (entry.note.source) {
+    case 'note':
+      return 'people'
+    case 'external':
+      return 'integration'
+    default:
+      return 'system'
+  }
+}
+const NOTE_KIND_LABELS: Record<NoteKind, string> = {
+  people: 'People',
+  system: 'System',
+  integration: 'Integration'
 }
 
 /**
@@ -425,7 +453,11 @@ function RecordedNote({ note }: { note: RelatedNote }) {
         ? 'border-amber-200 bg-amber-50/60 text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-400'
         : note.source === 'external'
           ? 'border-sky-200 bg-sky-50/70 text-sky-700 dark:border-sky-900/40 dark:bg-sky-900/10 dark:text-sky-300'
-          : 'border-slate-200 bg-slate-50/80 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
+          : note.source === 'import'
+            ? 'border-emerald-200 bg-emerald-50/70 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/10 dark:text-emerald-300'
+            : 'border-slate-200 bg-slate-50/80 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
+  // An import entry's context is the source file (downloadable) or the run.
+  const importFile = note.source === 'import' && note.import?.file_id ? note.import : null
   return (
     <div className='flex gap-3' data-recorded-note={note.source}>
       <div className='mt-1 h-8 w-8 shrink-0' aria-hidden />
@@ -449,6 +481,17 @@ function RecordedNote({ note }: { note: RelatedNote }) {
               >
                 {note.context}
               </button>
+            ) : importFile ? (
+              <a
+                href={`/api/files/${importFile.file_id}?download=1`}
+                target='_blank'
+                rel='noreferrer'
+                onClick={(e) => e.stopPropagation()}
+                className='truncate text-[11px] text-nvr-navy underline decoration-dotted underline-offset-2 dark:text-nvr-cyan'
+                data-note-import-file={importFile.file_id ?? undefined}
+              >
+                {note.context}
+              </a>
             ) : (
               <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
             ))}
@@ -636,6 +679,37 @@ export function CommentPanel({
     const rel = related.map((r) => ({ kind: 'related' as const, at: r.created_at, note: r }))
     return [...own, ...rel].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
   }, [comments, related])
+
+  // #3 / #22 — People / System / Integration chips with counts, and a search
+  // over text, author, label and context. Both narrow the SAME thread; the
+  // counts always describe the whole thread so a hidden bucket still reads.
+  const [kindOff, setKindOff] = useState<Set<NoteKind>>(() => new Set())
+  const [noteQuery, setNoteQuery] = useState('')
+  const kindCounts = useMemo(() => {
+    const c: Record<NoteKind, number> = { people: 0, system: 0, integration: 0 }
+    for (const e of threadEntries) c[noteKindOf(e)]++
+    return c
+  }, [threadEntries])
+  const visibleEntries = useMemo(() => {
+    const q = noteQuery.trim().toLowerCase()
+    return threadEntries.filter((e) => {
+      if (kindOff.has(noteKindOf(e))) return false
+      if (!q) return true
+      const hay =
+        e.kind === 'comment'
+          ? `${e.comment.text} ${displayName(e.comment.user)}`
+          : `${e.note.text} ${e.note.user_name ?? ''} ${e.note.label} ${e.note.context ?? ''} ${e.note.provider ?? ''}`
+      return hay.toLowerCase().includes(q)
+    })
+  }, [threadEntries, kindOff, noteQuery])
+  const toggleKind = (k: NoteKind) =>
+    setKindOff((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
+  const filtering = kindOff.size > 0 || noteQuery.trim() !== ''
 
   const create = useMutation({
     mutationFn: (text: string) => client.request(post('/comments', { collection, item, text })),
@@ -836,6 +910,52 @@ export function CommentPanel({
                 </p>
               )}
               <Separator className='my-4' />
+              {threadEntries.length > 0 && (
+                <div className='mb-3 flex flex-wrap items-center gap-1.5' data-notes-filters>
+                  {(['people', 'system', 'integration'] as NoteKind[]).map((k) => {
+                    const on = !kindOff.has(k)
+                    const n = kindCounts[k]
+                    return (
+                      <button
+                        key={k}
+                        type='button'
+                        onClick={() => toggleKind(k)}
+                        aria-pressed={on}
+                        data-notes-filter={k}
+                        disabled={n === 0 && on}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-px text-[11px] font-medium transition-colors ${
+                          on
+                            ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                            : 'border-slate-200 text-slate-400 line-through decoration-slate-300 dark:border-border'
+                        } disabled:opacity-50`}
+                        title={
+                          k === 'people'
+                            ? 'Comments and notes people wrote'
+                            : k === 'system'
+                              ? 'State changes, change reasons, addendums and imports'
+                              : 'Events an integration recorded'
+                        }
+                      >
+                        {NOTE_KIND_LABELS[k]}
+                        <span className='tabular-nums text-[10px] opacity-70'>{n}</span>
+                      </button>
+                    )
+                  })}
+                  <input
+                    value={noteQuery}
+                    onChange={(e) => setNoteQuery(e.target.value)}
+                    placeholder='Search notes…'
+                    aria-label='Search notes'
+                    data-notes-search
+                    className='ml-auto h-6 w-[150px] rounded-md border border-slate-200 bg-background px-2 text-[11.5px] dark:border-border'
+                  />
+                  {filtering && (
+                    <span className='text-[10.5px] tabular-nums text-slate-400' data-notes-shown>
+                      {visibleEntries.length} of {threadEntries.length}
+                    </span>
+                  )}
+                </div>
+              )}
               {isLoading ? (
                 <div className='space-y-4'>
                   {(['a', 'b'] as const).map((k) => (
@@ -854,9 +974,13 @@ export function CommentPanel({
                 </p>
               ) : threadEntries.length === 0 ? (
                 <p className='py-6 text-center text-[12px] text-slate-400'>No notes yet.</p>
+              ) : visibleEntries.length === 0 ? (
+                <p className='py-6 text-center text-[12px] text-slate-400'>
+                  No notes match — clear the search or turn a filter back on.
+                </p>
               ) : (
                 <div className='nvr-stagger-direct space-y-4'>
-                  {threadEntries.map((entry) => {
+                  {visibleEntries.map((entry) => {
                     if (entry.kind === 'related') {
                       return (
                         <div key={entry.note.id} className='nvr-section-enter'>

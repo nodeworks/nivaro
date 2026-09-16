@@ -44,7 +44,11 @@ import {
   type NotificationSourceProvider,
   notificationSourceRegistry
 } from './notification-sources.js'
-import { type RelatedNoteProvider, relatedNoteRegistry } from './related-notes.js'
+import {
+  type MachineMarkerSet,
+  type RelatedNoteProvider,
+  relatedNoteRegistry
+} from './related-notes.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
@@ -164,6 +168,10 @@ export interface ExtensionContext {
    *  change reasons. */
   notes: {
     registerSource(provider: RelatedNoteProvider): void
+    /** #10 — declare the comment strings this extension's machinery writes
+     *  (sync provenance tags, proc markers) so the Notes thread drops them
+     *  and row history renders them as provenance, not as someone's note. */
+    registerMachineMarkers(set: MachineMarkerSet): void
   }
   /** Register custom dashboard widget types shown in the dashboard builder. */
   dashboardWidgets: {
@@ -742,6 +750,14 @@ async function loadExtension(
           note('notes')
           own('note_sources', `${provider.id} · ${provider.collection}`)
           relatedNoteRegistry.register(provider)
+        },
+        registerMachineMarkers: (set) => {
+          note('notes')
+          own(
+            'note_markers',
+            [...(set.exact ?? []), ...(set.prefixes ?? []).map((p) => `${p}…`)].join(', ')
+          )
+          relatedNoteRegistry.registerMachineMarkers(extId, set)
         }
       },
       dashboardWidgets: {
@@ -1239,7 +1255,10 @@ export async function loadCloudExtensions(
         notificationSources: {
           register: (provider) => notificationSourceRegistry.register(provider)
         },
-        notes: { registerSource: (provider) => relatedNoteRegistry.register(provider) },
+        notes: {
+          registerSource: (provider) => relatedNoteRegistry.register(provider),
+          registerMachineMarkers: (set) => relatedNoteRegistry.registerMachineMarkers(extId, set)
+        },
         dashboardWidgets: { register: (def) => dashboardWidgetRegistry.register(def) },
         storage: {
           register: (name, adapter) => storageAdapterRegistry.register(name, adapter),

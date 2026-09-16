@@ -195,6 +195,7 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
       definition,
       buffer,
       createdBy: next.created_by ? String(next.created_by) : null,
+      runId: Number(next.id),
       onProgress: async (stage, data) => {
         if (stage === 'row_count') {
           await db('nivaro_import_queue')

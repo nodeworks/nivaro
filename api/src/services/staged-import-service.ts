@@ -79,7 +79,7 @@ export interface ServiceImportSampleChange {
 }
 
 /** What a dry run would do, with enough rows to explain itself. */
- export interface ServiceImportSamples {
+export interface ServiceImportSamples {
   /** First file row per natural key that would be created (payload). */
   creates: Array<{ key: string; values: Record<string, unknown> }>
   /** Existing rows that would change, field by field. */
@@ -239,6 +239,9 @@ export interface RunServiceImportOptions {
   dryRun?: boolean
   /** Sample rows kept per bucket on a dry run (default 25). */
   sampleLimit?: number
+  /** Change reason stamped on every create/update (#60 — the record's Notes
+   *  thread lists the runs that touched it): `import:<label>:run-<id>`. */
+  stamp?: string | null
 }
 
 export async function runServiceImport({
@@ -247,11 +250,17 @@ export async function runServiceImport({
   createdBy,
   onProgress,
   dryRun = false,
-  sampleLimit = 25
+  sampleLimit = 25,
+  stamp = null
 }: RunServiceImportOptions): Promise<ServiceImportSummary> {
   const user = await loadUser(createdBy)
   const skipped: Record<string, number> = {}
-  const samples: ServiceImportSamples = { creates: [], updates: [], skipped_rows: [], would_create_lookups: [] }
+  const samples: ServiceImportSamples = {
+    creates: [],
+    updates: [],
+    skipped_rows: [],
+    would_create_lookups: []
+  }
   const skip = (reason: string, row?: number, key?: string | null) => {
     skipped[reason] = (skipped[reason] ?? 0) + 1
     if (dryRun && row != null && samples.skipped_rows.length < sampleLimit)
@@ -269,13 +278,26 @@ export async function runServiceImport({
       if (v) values.add(v)
     }
     const map = await resolveLookup(cc.lookup, values)
-    if (dryRun && cc.lookup.on_missing === 'create' && cc.lookup.match_field && !cc.lookup.match_label) {
+    if (
+      dryRun &&
+      cc.lookup.on_missing === 'create' &&
+      cc.lookup.match_field &&
+      !cc.lookup.match_label
+    ) {
       const missing = [...values].filter((v) => !map.has(v.toLowerCase()))
       if (missing.length)
-        samples.would_create_lookups.push({ column: col, collection: cc.lookup.collection, values: missing.slice(0, sampleLimit) })
+        samples.would_create_lookups.push({
+          column: col,
+          collection: cc.lookup.collection,
+          values: missing.slice(0, sampleLimit)
+        })
       // Pretend they exist so the rows classify as creates rather than drops.
       for (const v of missing) map.set(v.toLowerCase(), `(new ${cc.lookup.collection})`)
-    } else if (cc.lookup.on_missing === 'create' && cc.lookup.match_field && !cc.lookup.match_label) {
+    } else if (
+      cc.lookup.on_missing === 'create' &&
+      cc.lookup.match_field &&
+      !cc.lookup.match_label
+    ) {
       // Stub-create unmatched values through the items service so the rows
       // are revisioned/attributed like any other write.
       let stubbed = 0
@@ -357,7 +379,12 @@ export async function runServiceImport({
         }
       }
     }
-    if (drop) skip(drop, rowNo, config.match_by.length ? config.match_by.map((f) => String(out[f] ?? '')).join('|') : null)
+    if (drop)
+      skip(
+        drop,
+        rowNo,
+        config.match_by.length ? config.match_by.map((f) => String(out[f] ?? '')).join('|') : null
+      )
     else {
       payloads.push(out)
       rowIndexOf.set(out, rowNo)
@@ -377,7 +404,12 @@ export async function runServiceImport({
     for (const p of payloads) {
       const k = keyOf(p)
       // Last file row per key wins — the EARLIER row is the one dropped.
-      if (byKey.has(k)) skip('duplicate key in file (a later row wins)', rowIndexOf.get(byKey.get(k) as Record<string, unknown>), k)
+      if (byKey.has(k))
+        skip(
+          'duplicate key in file (a later row wins)',
+          rowIndexOf.get(byKey.get(k) as Record<string, unknown>),
+          k
+        )
       byKey.set(k, p)
     }
   }
@@ -412,14 +444,20 @@ export async function runServiceImport({
     const existing = existingByKey.get(k)
     try {
       if (!existing && config.update_only) {
-        skip(`no existing ${config.collection} match (update-only import)`, rowIndexOf.get(payload), k)
+        skip(
+          `no existing ${config.collection} match (update-only import)`,
+          rowIndexOf.get(payload),
+          k
+        )
         continue
       }
       if (!existing) {
         const body = { ...payload }
         if (config.timestamps?.create) body[config.timestamps.create] = now
+        if (stamp) body._change_reason = stamp
         if (dryRun) {
-          if (samples.creates.length < sampleLimit) samples.creates.push({ key: k, values: payload })
+          if (samples.creates.length < sampleLimit)
+            samples.creates.push({ key: k, values: payload })
         } else {
           await createOne(user, config.collection, body, undefined, undefined, {
             skipRollupRecalc: false
@@ -437,9 +475,18 @@ export async function runServiceImport({
         } else {
           if (dryRun) {
             if (samples.updates.length < sampleLimit)
-              samples.updates.push({ key: k, id: existing.id, changes: Object.keys(patch).map((f) => ({ field: f, from: existing[f], to: payload[f] })) })
+              samples.updates.push({
+                key: k,
+                id: existing.id,
+                changes: Object.keys(patch).map((f) => ({
+                  field: f,
+                  from: existing[f],
+                  to: payload[f]
+                }))
+              })
           } else {
             if (config.timestamps?.update) patch[config.timestamps.update] = now
+            if (stamp) patch._change_reason = stamp
             await updateOne(user, config.collection, String(existing.id), patch)
           }
           updated++

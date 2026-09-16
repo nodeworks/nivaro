@@ -103,14 +103,17 @@ const MACHINE_PREFIXES: Array<[string, string]> = [
 
 export function parseImportStamp(
   comment: string | null | undefined
-): { template: string; fileId: string | null } | null {
+): { template: string; fileId: string | null; runId: number | null } | null {
   const t = String(comment ?? '').trim()
   if (!/^import:/i.test(t)) return null
   const rest = t.slice('import:'.length)
   const cut = rest.lastIndexOf(':')
   const template = (cut >= 0 ? rest.slice(0, cut) : rest).trim() || 'a file'
-  const fileId = cut >= 0 ? rest.slice(cut + 1).trim() : ''
-  return { template, fileId: fileId || null }
+  const ref = cut >= 0 ? rest.slice(cut + 1).trim() : ''
+  // A staged-import run stamps `run-<queue id>` where a file-driven import
+  // stamps the file uuid — never treat a run id as a download link.
+  const run = /^run-(\d+)$/i.exec(ref)
+  return { template, fileId: run || !ref ? null : ref, runId: run ? Number(run[1]) : null }
 }
 
 function provenanceOf(comment: string | null | undefined): {

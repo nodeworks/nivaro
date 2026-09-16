@@ -54,8 +54,59 @@ export interface RelatedNoteProvider {
   replay?(entryId: string, opts: { userId: string | null }): Promise<{ detail: string }>
 }
 
+/**
+ * #10 — machine-comment markers. Comment strings written by MACHINERY (an
+ * import stamp, a sync script's provenance tag, a proc's marker) are not
+ * notes: the thread drops them, the row history renders them as provenance.
+ * Which strings those are is a property of whoever writes them, so the
+ * writers register them; core knows none by itself.
+ */
+export interface MachineMarkerSet {
+  /** Whole-comment matches, case-insensitive ("legacy-import"). */
+  exact?: string[]
+  /** Prefix matches, case-insensitive ("forecast-import:"). */
+  prefixes?: string[]
+}
+
 class RelatedNoteRegistry {
   private providers = new Map<string, RelatedNoteProvider>()
+  private markers = new Map<string, MachineMarkerSet>()
+
+  /** Declare comment strings an extension's machinery writes (replaces the
+   *  owner's previous declaration). */
+  registerMachineMarkers(owner: string, set: MachineMarkerSet): void {
+    this.markers.set(owner, {
+      exact: (set.exact ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean),
+      prefixes: (set.prefixes ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean)
+    })
+  }
+
+  unregisterMachineMarkers(owner: string): void {
+    this.markers.delete(owner)
+  }
+
+  /** Is this comment a registered machine marker (never a human note)? */
+  isMachineComment(text: string | null | undefined): boolean {
+    const t = String(text ?? '')
+      .trim()
+      .toLowerCase()
+    if (t === '') return false
+    for (const set of this.markers.values()) {
+      if (set.exact?.includes(t)) return true
+      if (set.prefixes?.some((p) => t.startsWith(p))) return true
+    }
+    return false
+  }
+
+  /** Every declared marker, by owner — the registry page and the client's
+   *  provenance renderer read this. */
+  describeMarkers(): Array<{ owner: string; exact: string[]; prefixes: string[] }> {
+    return [...this.markers.entries()].map(([owner, s]) => ({
+      owner,
+      exact: s.exact ?? [],
+      prefixes: s.prefixes ?? []
+    }))
+  }
 
   register(provider: RelatedNoteProvider): void {
     if (this.providers.has(provider.id)) {

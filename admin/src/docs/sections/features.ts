@@ -322,6 +322,21 @@ export const userComments: DocSection = {
     {
       type: 'p',
       text: 'Authors can edit or delete their own comments. Admins can edit or delete any comment.'
+    },
+    { type: 'h3', text: 'Finding a note: filters and search' },
+    {
+      type: 'p',
+      text: 'The Notes thread mixes what people wrote with what the system recorded. Three chips above the thread — People (comments and notes), System (state changes, change reasons, addendums, imports) and Integration (events an integration recorded) — carry counts and switch a bucket off; the search box narrows by text, author, badge or context. The counts always describe the whole thread, and the strip reports "n of m" while a filter is active.'
+    },
+    { type: 'h3', text: 'Import history' },
+    {
+      type: 'p',
+      text: 'Every write an import makes carries `import:<name>:<file or run>` as its change reason, so the thread lists the imports that touched the record: a file-driven import links its source file, a staged run names the run number, and lines an import template created fold into one entry per run ("Imported 12 workflow line items rows via Bid Import").'
+    },
+    { type: 'h3', text: 'Machine markers' },
+    {
+      type: 'p',
+      text: "Comment strings written by machinery — a sync script's provenance tag, a stored procedure's marker — are never notes. Extensions declare theirs with `ctx.notes.registerMachineMarkers({ exact, prefixes })`; the thread drops matching comments and row history renders them as provenance. Core declares none itself."
     }
   ]
 }

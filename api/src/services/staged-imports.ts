@@ -516,13 +516,17 @@ export interface RunImportOptions {
   /** Queuing user — service-mode writes run as them (RBAC applies). */
   createdBy?: string | null
   onProgress?: ImportProgress
+  /** The nivaro_import_queue row — service-mode writes carry it as their
+   *  change reason so a record's Notes thread names the run (#60). */
+  runId?: number | null
 }
 
 export async function runStagedImport({
   definition,
   buffer,
   createdBy,
-  onProgress
+  onProgress,
+  runId = null
 }: RunImportOptions): Promise<{ rowCount: number; durationSeconds: number; summary?: string }> {
   const began = Date.now()
 
@@ -574,7 +578,8 @@ export async function runStagedImport({
       config: cfg,
       rows,
       createdBy: createdBy ?? null,
-      onProgress: (written, total) => onProgress?.('importing', { written, total })
+      onProgress: (written, total) => onProgress?.('importing', { written, total }),
+      stamp: runId != null ? `import:${definition.label || definition.key}:run-${runId}` : null
     })
     if (summary.failed > 0 && summary.created + summary.updated === 0) {
       // Nothing landed — surface as a failed run, not a quiet "completed".
