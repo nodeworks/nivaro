@@ -391,6 +391,20 @@ export function FilesPage() {
     onError: () => toast.error('Verification failed')
   })
 
+  // #38 — bulk purge of the unreferenced files (unused scope), capped per call.
+  const [confirmPurge, setConfirmPurge] = useState(false)
+  const purgeOrphans = useMutation({
+    mutationFn: () =>
+      api
+        .delete<{ data: { deleted: number; failed: number; remaining: number } }>('/files/usage/orphans', { params: { limit: 200 } })
+        .then((r) => r.data.data),
+    onSuccess: (r) => {
+      toast.success(`${r.deleted} unused file(s) deleted${r.failed ? `, ${r.failed} failed` : ''}${r.remaining ? ` — ${r.remaining} more remain` : ''}`)
+      setConfirmPurge(false)
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+    },
+    onError: () => toast.error('Purge failed')
+  })
   const deleteFile = useMutation({
     mutationFn: (id: string) => api.delete(`/files/${id}`),
     onSuccess: () => {
@@ -458,6 +472,33 @@ export function FilesPage() {
                 </button>
               ))}
             </div>
+            {scope === 'unused' && (data?.total ?? 0) > 0 && (
+              confirmPurge ? (
+                <span className='flex items-center gap-1' data-files-purge-confirm>
+                  <button
+                    type='button'
+                    disabled={purgeOrphans.isPending}
+                    onClick={() => purgeOrphans.mutate()}
+                    className='h-7 rounded-md bg-red-600 px-2.5 text-[11px] font-medium text-white hover:bg-red-700 disabled:opacity-50'
+                  >
+                    {purgeOrphans.isPending ? 'Deleting…' : `Delete ${Math.min(200, data?.total ?? 0)} unused now`}
+                  </button>
+                  <button type='button' onClick={() => setConfirmPurge(false)} className='h-7 rounded-md px-2 text-[11px] text-slate-500 hover:text-slate-800'>
+                    Keep
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type='button'
+                  onClick={() => setConfirmPurge(true)}
+                  data-files-purge
+                  className='h-7 rounded-md border border-red-200 px-2.5 text-[11px] font-medium text-red-700 hover:bg-red-50'
+                  title='Delete every file no record references, 200 per click'
+                >
+                  Delete all unused ({(data?.total ?? 0).toLocaleString()})
+                </button>
+              )
+            )}
             {/* View toggle */}
             <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
               <button

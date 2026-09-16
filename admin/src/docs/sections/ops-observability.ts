@@ -104,7 +104,11 @@ export const opsConsoleDocs: DocSection = {
         'Overrides persist in settings.cron_overrides and are hydrated before extensions register, so an override binds to an extension job on every replica after a restart — no deploy needed.',
         'Pause keeps the job registered but its ticks return immediately (settings.paused_crons); Resume is instant.',
         'API: GET /api/cron (effective + default expression, override metadata), GET /api/cron/preview?expression=, PATCH /api/cron/:id {expression | null, note}, POST /api/cron/:id/revert, /pause, /resume, /run. Every change is activity-logged (cron-override, cron-revert, cron-pause, cron-resume, cron-run-now).',
-        'Flows have the same enable/disable from the Flows list (the Power action on a row) — an inactive flow keeps its config and its version history; the editor’s Versions panel reverts config.'
+        'Flows have the same enable/disable from the Flows list (the Power action on a row) — an inactive flow keeps its config and its version history; the editor’s Versions panel reverts config.',
+        'Dry run (#32) — a job that registered a dry-run handler shows a "Dry run" button: it reports what a tick would do with nothing written (the rollup drift sweep lists stale rows without raising an issue; the miss detector lists missed windows; the query warmers list the queries they would run). API: POST /api/cron/:id/dry-run.',
+        'Run after (#54) — the per-row select chains a job after another one: its own schedule goes dormant (ticks are no-ops, the expression stays registered as the revert target) and it runs right after the chosen job completes, in registration order when several chain on one parent. Cycles are refused. Persisted in settings.cron_chains and hydrated at boot before any schedule registers. API: PATCH /api/cron/:id {after: id | null}.',
+        'Miss detector (#81) — cron-miss-detector runs every 30 minutes: for each job not paused or chained it derives the previous expected fire time from the schedule and, when no run has been recorded since (past a grace of 10% of the period, five minutes minimum, and never for a window before this process booted), raises one deduped issue naming the window.',
+        'Heavy jobs yield (#75) — a job marked heavy waits while the connection pool is hot (80% checked out or acquires queued), in five-second steps for up to ten minutes, before taking its serialized turn; interactive requests win the morning rush.'
       ]
     },
     { type: 'h2', id: 'ops-console-logs', text: 'Log tail and log alert rules' },
@@ -112,6 +116,7 @@ export const opsConsoleDocs: DocSection = {
       type: 'ul',
       items: [
         'Log tail — the last 2,000 log lines from this replica, held in memory (nothing is persisted), auto-refreshing every 10 seconds with level filters and a plain-text search. It captures structured logger output; anything printed with bare console.log goes to stdout only and will not appear here.',
+        'Search the tail with a regular expression (the .* toggle, case-insensitive; an invalid pattern falls back to a plain substring match) and bound it with since / until — an ISO datetime, epoch milliseconds, or the relative forms now-15m, now-2h, now-1d (#82).',
         'Log alert rules — a rule is a name plus a regular expression (optionally with a minimum level). When a log line matches, an issue is raised in the Issue Log; a 5-minute per-rule cooldown keeps a noisy line from raising the same issue every second. Rules apply as lines arrive, on every replica.',
         'Keep patterns simple: patterns longer than 200 characters, or ones using nested quantifiers (the shapes that can hang a regex engine), are accepted but quietly never match — if a rule seems inert, shorten and simplify its pattern.',
         'Silent failures — a counter panel for deliberate catch-and-continue sites in the code, showing how often each has fired since this process started. A site firing 50 times in an hour raises an issue on its own.'
@@ -125,6 +130,11 @@ export const opsConsoleDocs: DocSection = {
         'Clock & DST — measures the clock skew between the API and the database (flagged red past 5 seconds) and lists scheduled jobs whose hour falls in the 0–3 AM band that daylight-saving transitions can skip or repeat.',
         'Environment knobs — every configuration variable the process was started with, plus the documented raw-env switches. Values are masked two ways: any key whose name suggests a secret (secret, token, pass, key, credential, signing) shows as dots, and any value shaped like a credential-bearing URL has its password segment replaced — so connection strings are safe even under innocent key names.'
       ]
+    },
+    { type: 'h2', id: 'ops-console-migrations', text: 'Migrations card' },
+    {
+      type: 'p',
+      text: 'The Ops Console lists what this build carries versus the migration ledger: pending migrations with their source (so the DDL a restart will run can be read first) and the newest applied ones with timestamps. Pending is normally empty — boot applies migrations — so a non-empty list means a restart is about to change the schema, or a replica is serving mid-deploy. API: GET /api/ops-runtime/migrations (#68).'
     },
     { type: 'h2', id: 'ops-console-maintenance', text: 'Maintenance windows' },
     {

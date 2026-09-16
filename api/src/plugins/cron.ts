@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import { startJobRun } from '../services/job-runs.js'
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
 export interface CronEntry {
   id: string
   /** The EFFECTIVE schedule (override when one is set). */
@@ -21,6 +23,11 @@ export interface CronEntry {
   description?: string
   /** #198 — a paused cron's ticks return immediately. */
   paused?: boolean
+  /** #32 — the job registered a dry-run handler (report, no writes). */
+  supports_dry_run?: boolean
+  /** #54 — chained: runs right after this job completes instead of on its
+   *  own schedule (the schedule stays registered as the revert target). */
+  after?: string | null
 }
 
 type CronFn = () => void | Promise<void>
@@ -30,6 +37,7 @@ interface InternalEntry extends CronEntry {
   job: Cron
   catchUpHours?: number
   scheduleOpts?: ScheduleOpts
+  dryRun?: () => Promise<unknown>
 }
 
 export interface ScheduleOpts {
@@ -40,6 +48,9 @@ export interface ScheduleOpts {
   idempotent?: 'safe' | 'unsafe' | 'unknown'
   /** Plain-language purpose, shown on the Background Jobs page. */
   description?: string
+  /** #32 — what a tick WOULD do, with nothing written: returns a report
+   *  (string or JSON) the Background Jobs page shows. Optional. */
+  dryRun?: () => Promise<unknown>
 }
 
 /** Throws with croner's own message when the expression is not valid. */
@@ -68,6 +79,35 @@ function raiseCronIssue(message: string, severity: 'medium' | 'high'): void {
       trackError({ source: 'server', route: 'cron/watchdog', message, severity })
     )
     .catch(() => {})
+}
+
+/** #75 — the knex pool's occupancy; null when the driver exposes no pool. */
+async function poolOccupancy(): Promise<{ used: number; max: number; pending: number } | null> {
+  try {
+    const { db } = await import('../db/index.js')
+    const pool = (db.client as { pool?: { numUsed: () => number; numPendingAcquires: () => number; max?: number } }).pool
+    if (!pool) return null
+    return { used: pool.numUsed(), max: pool.max ?? 10, pending: pool.numPendingAcquires() }
+  } catch {
+    return null
+  }
+}
+
+const HOT_POOL_RATIO = 0.8
+const YIELD_STEP_MS = 5_000
+const YIELD_MAX_MS = 10 * 60_000
+
+/** Wait while the pool is hot (≥ 80% checked out, or acquires queued) —
+ *  bounded, so a permanently busy instance still runs its heavy jobs. */
+async function waitForPoolHeadroom(): Promise<void> {
+  const started = Date.now()
+  while (Date.now() - started < YIELD_MAX_MS) {
+    const p = await poolOccupancy()
+    if (!p) return
+    const hot = p.pending > 0 || p.used / Math.max(1, p.max) >= HOT_POOL_RATIO
+    if (!hot) return
+    await sleep(YIELD_STEP_MS)
+  }
 }
 
 export class CronManager {
@@ -154,9 +194,84 @@ export class CronManager {
   }
   private runSerialized(heavy: boolean, work: () => Promise<void>): Promise<void> {
     if (!heavy) return work()
-    const next = this.heavyChain.then(work, work)
+    // #75 — a heavy job yields to interactive traffic: while the connection
+    // pool is hot it waits (5s steps, 10 min cap) before taking its turn.
+    const yielding = async () => {
+      await waitForPoolHeadroom()
+      await work()
+    }
+    const next = this.heavyChain.then(yielding, yielding)
     this.heavyChain = next.catch(() => {})
     return next
+  }
+
+  // #54 — chains: childId → the job it runs after. Hydrated from
+  // settings.cron_chains at boot (before schedules register) and edited live.
+  private chains = new Map<string, string>()
+  setChains(map: Record<string, string>): void {
+    this.chains = new Map(Object.entries(map).filter(([k, v]) => k && v && k !== v))
+  }
+  getAfter(id: string): string | null {
+    return this.chains.get(id) ?? null
+  }
+  /** Chain `id` after `afterId` (null = unchain). Refuses cycles. */
+  setAfter(id: string, afterId: string | null): void {
+    if (!afterId) {
+      this.chains.delete(id)
+      return
+    }
+    if (afterId === id) throw new Error('A job cannot run after itself')
+    let cur: string | undefined = afterId
+    const seen = new Set<string>([id])
+    while (cur) {
+      if (seen.has(cur)) throw new Error(`Chaining ${id} after ${afterId} would loop`)
+      seen.add(cur)
+      cur = this.chains.get(cur)
+    }
+    this.chains.set(id, afterId)
+  }
+  /** Jobs chained after `id`, in registration order. */
+  chainedAfter(id: string): string[] {
+    return [...this.entries.keys()].filter((k) => this.chains.get(k) === id)
+  }
+  private triggerChained(id: string): void {
+    const kids = this.chainedAfter(id)
+    if (kids.length === 0) return
+    void (async () => {
+      for (const kid of kids) {
+        try {
+          await this.runNow(kid, null)
+        } catch (err) {
+          console.error({ err, cronId: kid, after: id }, 'Chained cron job error')
+        }
+      }
+    })()
+  }
+
+  /** #32 — run a job's dry-run handler; null when it has none. */
+  async dryRun(id: string): Promise<{ supported: boolean; report: unknown }> {
+    const e = this.entries.get(id)
+    if (!e?.dryRun) return { supported: false, report: null }
+    return { supported: true, report: await e.dryRun() }
+  }
+
+  /** #81 — when the schedule last SHOULD have fired (null for one-shot or
+   *  unparseable expressions). Derived from the next two runs' spacing, so an
+   *  irregular expression reads as its nearest regular period. */
+  expectedPreviousRun(id: string, now = new Date()): Date | null {
+    const e = this.entries.get(id)
+    if (!e) return null
+    try {
+      const probe = new Cron(e.expression)
+      const n1 = probe.nextRun(now)
+      const n2 = n1 ? probe.nextRun(n1) : null
+      if (!n1 || !n2) return null
+      const period = n2.getTime() - n1.getTime()
+      if (period <= 0) return null
+      return new Date(n1.getTime() - period)
+    } catch {
+      return null
+    }
   }
 
   schedule(id: string, expression: string, fn: CronFn, opts?: ScheduleOpts): void {
@@ -186,6 +301,9 @@ export class CronManager {
         // Paused (#198): the schedule stays registered (so resume needs no
         // deploy) but ticks return without running or recording anything.
         if (this.pausedIds.has(id)) return
+        // Chained (#54): this job runs after another one completes, not on
+        // its own clock — the tick is a no-op while the chain stands.
+        if (this.chains.has(id)) return
         // Every tick lands in nivaro_job_runs (best-effort) so the Background
         // Jobs console and per-extension health read one source of truth.
         await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
@@ -200,6 +318,7 @@ export class CronManager {
           try {
             await fn()
             await run.complete()
+            this.triggerChained(id)
           } catch (err) {
             console.error({ err, cronId: id }, 'Cron job error')
             await run.fail(err)
@@ -224,12 +343,19 @@ export class CronManager {
       heavy: opts?.heavy,
       idempotent: opts?.idempotent ?? 'unknown',
       description: opts?.description,
+      dryRun: opts?.dryRun,
       job,
       get nextRun() {
         return job.nextRun() ?? null
       },
       get paused() {
         return self.pausedIds.has(id)
+      },
+      get supports_dry_run() {
+        return !!self.entries.get(id)?.dryRun
+      },
+      get after() {
+        return self.chains.get(id) ?? null
       }
     })
   }
@@ -250,6 +376,7 @@ export class CronManager {
     try {
       await entry.fn()
       await run.complete()
+      this.triggerChained(id)
     } catch (err) {
       await run.fail(err)
       throw err
@@ -337,7 +464,11 @@ export class CronManager {
         heavy,
         idempotent,
         description,
-        paused: this.pausedIds.has(id)
+        paused: this.pausedIds.has(id),
+        // list() rebuilds entries — every annotate()/option field must be
+        // copied here or the registry silently drops it (the first cron bug).
+        supports_dry_run: !!this.entries.get(id)?.dryRun,
+        after: this.chains.get(id) ?? null
       })
     )
   }

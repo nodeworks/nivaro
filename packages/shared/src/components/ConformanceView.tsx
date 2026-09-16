@@ -98,6 +98,85 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
 /** Extension rules arrive as kebab ids ('forecast-missing') — read them as words. */
 const ruleFallback = (rule: string) => rule.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
 
+
+/** #37 — route one finding to a person as a task on the record. */
+function AssignFinding({ findingId }: { findingId: number }) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<string | null>(null)
+  const users = useQuery({
+    queryKey: ['conformance-assign-users', q],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string }> }>(
+          get(`/users?search=${encodeURIComponent(q)}&limit=8`)
+        )
+        .then((r) => r.data),
+    enabled: open && q.trim().length >= 2,
+    staleTime: 30_000
+  })
+  const assign = async (u: { id: string; first_name: string | null; last_name: string | null; email: string }) => {
+    setBusy(true)
+    try {
+      await client.request(post(`/config-conformance/findings/${findingId}/assign`, { user_id: u.id }))
+      setDone([u.first_name, u.last_name].filter(Boolean).join(' ') || u.email)
+      setOpen(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (done)
+    return (
+      <span className='text-[11px] text-emerald-700 dark:text-emerald-400' data-finding-assigned>
+        → {done}
+      </span>
+    )
+  return (
+    <span className='relative inline-block'>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        data-finding-assign={findingId}
+        className='rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
+        title='Assign this finding to someone as a task on the record'
+      >
+        Assign…
+      </button>
+      {open && (
+        <div className='absolute right-0 top-7 z-30 w-64 rounded-md border border-slate-200 bg-white p-2 text-left shadow-md dark:border-border dark:bg-card' data-finding-assign-panel>
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder='Type a name…'
+            className='h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-background'
+          />
+          <ul className='mt-1 max-h-48 overflow-y-auto'>
+            {(users.data ?? []).map((u) => (
+              <li key={u.id}>
+                <button
+                  type='button'
+                  disabled={busy}
+                  onClick={() => void assign(u)}
+                  className='w-full rounded px-2 py-1 text-left text-[12px] hover:bg-muted disabled:opacity-50'
+                >
+                  {[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+                  <span className='ml-1 text-[10.5px] text-slate-400'>{u.email}</span>
+                </button>
+              </li>
+            ))}
+            {open && q.trim().length >= 2 && users.data && users.data.length === 0 && (
+              <li className='px-2 py-1 text-[11.5px] text-slate-400'>No one matches</li>
+            )}
+          </ul>
+        </div>
+      )}
+    </span>
+  )
+}
+
 export function ConformanceView({ className }: { className?: string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -687,6 +766,9 @@ function RunDetail({
                   </td>
                   <td className='px-2 py-1.5 text-slate-600 dark:text-muted-foreground'>
                     {f.message}
+                  </td>
+                  <td className='w-[120px] px-2 py-1.5 text-right'>
+                    <AssignFinding findingId={f.id} />
                   </td>
                 </tr>
               ))}

@@ -512,6 +512,55 @@ async function rederiveGridLines(
 export async function configConformanceRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
+  // #37 — route ONE finding to a person as a task on the record (+ a
+  // notification), from the sweep page. Same shape the record banner's
+  // 'notify' proposal writes, minus the owner resolution: the admin picks.
+  app.post<{ Params: { id: string }; Body: { user_id?: string; note?: string } }>(
+    '/findings/:id/assign',
+    async (req, reply) => {
+      const finding = (await db('nivaro_conformance_findings as f')
+        .join('nivaro_conformance_runs as r', 'r.id', 'f.run')
+        .where('f.id', Number(req.params.id))
+        .first('f.id', 'f.item_id', 'f.item_label', 'f.field', 'f.rule', 'f.message', 'r.collection')) as
+        | { id: number; item_id: string; item_label: string | null; field: string | null; rule: string; message: string | null; collection: string }
+        | undefined
+      if (!finding) return reply.code(404).send({ error: 'Finding not found' })
+      const userId = String(req.body?.user_id ?? '').trim()
+      if (!userId) return reply.code(400).send({ error: 'user_id is required' })
+      const assignee = (await db('nivaro_users').where('id', userId).first('id', 'status')) as { id: string; status: string | null } | undefined
+      if (!assignee || assignee.status === 'suspended') return reply.code(400).send({ error: 'That user cannot take a task' })
+      const title = `Data integrity: ${finding.message ?? `${finding.field ?? ''} (${finding.rule})`}`.slice(0, 500)
+      const note = String(req.body?.note ?? '').trim()
+      await db('nivaro_tasks').insert({
+        collection: finding.collection,
+        item: String(finding.item_id),
+        title,
+        description: `${note ? `${note}\n\n` : ''}Raised from the Data Integrity sweep by ${[req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ') || req.user?.email}. Rule: ${finding.rule}${finding.field ? ` · Field: ${finding.field}` : ''}.`,
+        assignee: userId,
+        created_by: req.user?.id ?? null,
+        status: 'open'
+      })
+      const { notifyUser } = await import('../services/notification-channels.js')
+      await notifyUser(app, userId, {
+        subject: 'A data-integrity issue was assigned to you',
+        category: 'workflow',
+        message: title,
+        collection: finding.collection,
+        item: String(finding.item_id),
+        sender: req.user?.id ?? null
+      }).catch(() => {})
+      await logActivity({
+        action: 'integrity-assign',
+        user: req.user?.id,
+        collection: finding.collection,
+        item: String(finding.item_id),
+        comment: `${finding.rule}${finding.field ? ` ${finding.field}` : ''} → ${userId}`,
+        req
+      })
+      return { data: { assigned: true } }
+    }
+  )
+
   // ── Nightly schedules ─────────────────────────────────────────────────────
   /** Validation-rule change impact: how many existing records would NEWLY
    *  fail if this field's rules became the proposed set. Same evaluator the

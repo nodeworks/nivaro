@@ -35,6 +35,31 @@ async function writeOverrides(map: Record<string, OverrideRow>): Promise<void> {
     .update({ cron_overrides: Object.keys(map).length ? JSON.stringify(map) : null })
 }
 
+async function readChains(): Promise<Record<string, string>> {
+  const { db } = await import('../db/index.js')
+  const row = (await db('nivaro_settings').orderBy('id', 'asc').first('cron_chains')) as
+    | { cron_chains?: string | null }
+    | undefined
+  if (!row?.cron_chains) return {}
+  try {
+    const parsed = JSON.parse(row.cron_chains)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+async function writeChains(map: Record<string, string>): Promise<void> {
+  const { db } = await import('../db/index.js')
+  const row = (await db('nivaro_settings').orderBy('id', 'asc').first('id')) as
+    | { id: number }
+    | undefined
+  if (!row) return
+  await db('nivaro_settings')
+    .where({ id: row.id })
+    .update({ cron_chains: Object.keys(map).length ? JSON.stringify(map) : null })
+}
+
 // ─── Cron administration ─────────────────────────────────────────────────────
 // Scheduled jobs (core + extension-registered) were previously only observable
 // from the process itself. These routes let an admin see what is scheduled and
@@ -71,7 +96,24 @@ export async function cronRoutes(app: FastifyInstance) {
   // on this replica and persists in settings.cron_overrides, which every
   // replica hydrates at boot before extensions register — so the override
   // binds regardless of which code registered the job.
-  app.patch<{ Params: { id: string }; Body: { expression?: string | null; note?: string | null } }>(
+  // #32 — a job's dry-run handler: the report of what a tick would do.
+  app.post<{ Params: { id: string } }>('/:id/dry-run', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params
+    if (!app.cron.list().some((j) => j.id === id)) {
+      return reply.code(404).send({ error: 'No scheduled job with that id' })
+    }
+    const t0 = Date.now()
+    try {
+      const r = await app.cron.dryRun(id)
+      if (!r.supported) return reply.code(400).send({ error: 'This job has no dry-run handler' })
+      await logActivity({ action: 'cron-dry-run', user: req.user?.id, req, comment: id })
+      return { data: { report: r.report, duration_ms: Date.now() - t0 } }
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : 'Dry run failed' })
+    }
+  })
+
+  app.patch<{ Params: { id: string }; Body: { expression?: string | null; note?: string | null; after?: string | null } }>(
     '/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
@@ -79,6 +121,25 @@ export async function cronRoutes(app: FastifyInstance) {
       const entry = app.cron.list().find((j) => j.id === id)
       if (!entry) return reply.code(404).send({ error: 'No scheduled job with that id' })
       const body = req.body ?? {}
+      // #54 — chaining is its own edit: `after` present = set/clear the chain
+      // and stop; the schedule stays registered as the revert target.
+      if ('after' in body) {
+        const after = body.after == null || String(body.after).trim() === '' ? null : String(body.after).trim()
+        if (after && !app.cron.list().some((j) => j.id === after)) {
+          return reply.code(400).send({ error: `No scheduled job named "${after}"` })
+        }
+        try {
+          app.cron.setAfter(id, after)
+        } catch (err) {
+          return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad chain' })
+        }
+        const chains = await readChains()
+        if (after) chains[id] = after
+        else delete chains[id]
+        await writeChains(chains)
+        await logActivity({ action: 'cron-chain', user: req.user?.id, req, comment: after ? `${id} runs after ${after}` : `${id} unchained` })
+        return { data: app.cron.list().find((j) => j.id === id) }
+      }
       const expression = body.expression == null ? null : String(body.expression).trim()
       const map = await readOverrides()
       if (expression === null || expression === '' || expression === entry.defaultExpression) {

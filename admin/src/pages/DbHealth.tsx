@@ -317,6 +317,76 @@ function PlanViewer({ xml }: { xml: string }) {
   )
 }
 
+
+/** #91 — memory by key prefix: a bounded SCAN + sampled MEMORY USAGE,
+ *  extrapolated per prefix. Loaded on demand — it walks the keyspace. */
+function RedisMemoryByPrefix() {
+  const [armed, setArmed] = useState(false)
+  const q = useQuery({
+    queryKey: ['ops', '/ops-db/redis/memory'],
+    queryFn: () =>
+      api
+        .get<{
+          data?: {
+            used_memory_human: string | null
+            used_memory_peak_human: string | null
+            mem_fragmentation_ratio: string | null
+            scanned: number
+            truncated: boolean
+            prefixes: Array<{ prefix: string; keys: number; sampled: number; avg_bytes: number; est_bytes: number }>
+          }
+          unavailable?: string
+        }>('/ops-db/redis/memory')
+        .then((r) => r.data),
+    enabled: armed,
+    staleTime: 60_000
+  })
+  const fmtBytes = (n: number) => (n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`)
+  return (
+    <div className='mt-3 border-t border-slate-100 pt-3 dark:border-border' data-redis-memory>
+      {!armed ? (
+        <button
+          type='button'
+          onClick={() => setArmed(true)}
+          className='rounded-md border border-slate-200 px-2.5 py-1 text-[11.5px] text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-border dark:text-muted-foreground'
+        >
+          Scan memory by key prefix
+        </button>
+      ) : q.data?.unavailable ? (
+        <Unavailable reason={q.data.unavailable} />
+      ) : q.data?.data ? (
+        <div className='space-y-1.5 text-[12px]'>
+          <p className='text-slate-500 dark:text-muted-foreground'>
+            {q.data.data.scanned.toLocaleString()} keys scanned{q.data.data.truncated ? ' (capped — estimates cover the sample)' : ''} · peak {q.data.data.used_memory_peak_human ?? '—'} · fragmentation {q.data.data.mem_fragmentation_ratio ?? '—'}
+          </p>
+          <table className='w-full text-[11.5px] tabular-nums'>
+            <thead>
+              <tr className='text-left text-[10px] uppercase tracking-wide text-slate-400'>
+                <th className='py-0.5 pr-2 font-semibold'>Prefix</th>
+                <th className='py-0.5 pr-2 text-right font-semibold'>Keys</th>
+                <th className='py-0.5 pr-2 text-right font-semibold'>Avg</th>
+                <th className='py-0.5 text-right font-semibold'>Est. total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.data.prefixes.map((p) => (
+                <tr key={p.prefix} className='border-t border-slate-100 dark:border-border/60' data-redis-prefix={p.prefix}>
+                  <td className='py-0.5 pr-2 font-mono'>{p.prefix}</td>
+                  <td className='py-0.5 pr-2 text-right'>{p.keys.toLocaleString()}</td>
+                  <td className='py-0.5 pr-2 text-right text-slate-500'>{p.sampled ? fmtBytes(p.avg_bytes) : '—'}</td>
+                  <td className='py-0.5 text-right font-medium'>{p.sampled ? fmtBytes(p.est_bytes) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <Skeleton className='h-10 w-full' />
+      )}
+    </div>
+  )
+}
+
 export function DbHealthPage() {
   const qc = useQueryClient()
   const runtime = useOps<Record<string, unknown>>('/ops-runtime/runtime')
@@ -670,7 +740,7 @@ export function DbHealthPage() {
               )}
             </Panel>
 
-            <Panel title='Redis' sub='Memory, keyspace, slowlog (#298)'>
+            <Panel title='Redis' sub='Memory, keyspace, slowlog (#298) · memory by key prefix on demand (#91)'>
               {redis.data?.unavailable ? (
                 <Unavailable reason={redis.data.unavailable} />
               ) : redis.data?.data ? (
@@ -695,6 +765,7 @@ export function DbHealthPage() {
               ) : (
                 <Skeleton className='h-10 w-full' />
               )}
+              <RedisMemoryByPrefix />
             </Panel>
           </div>
 

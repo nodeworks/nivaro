@@ -25,6 +25,8 @@ interface CronEntry {
   heavy?: boolean
   idempotent?: 'safe' | 'unsafe' | 'unknown'
   description?: string | null
+  supports_dry_run?: boolean
+  after?: string | null
   errors_7d: number
   last: {
     status: string
@@ -233,6 +235,32 @@ export default function BackgroundJobs() {
       toast.error('Could not update the schedule')
     }
   }
+  // #32 — dry run: the job's own report of what a tick would do, shown inline.
+  const [dryRunning, setDryRunning] = useState<string | null>(null)
+  const [dryReport, setDryReport] = useState<{ id: string; report: unknown; ms: number } | null>(null)
+  const dryRun = async (id: string) => {
+    setDryRunning(id)
+    try {
+      const r = await api.post<{ data: { report: unknown; duration_ms: number } }>(`/cron/${id}/dry-run`)
+      setDryReport({ id, report: r.data.data.report, ms: r.data.data.duration_ms })
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Dry run failed'
+      toast.error(msg, { duration: 8000 })
+    } finally {
+      setDryRunning(null)
+    }
+  }
+  // #54 — chain a job after another one: its own ticks become no-ops.
+  const setAfter = async (id: string, after: string | null) => {
+    try {
+      await api.patch(`/cron/${id}`, { after })
+      toast.success(after ? `${id} now runs after ${after}` : `${id} back on its own schedule`)
+      void registry.refetch()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Could not chain'
+      toast.error(msg)
+    }
+  }
   const runNow = async (id: string) => {
     setRunning(id)
     try {
@@ -300,6 +328,15 @@ export default function BackgroundJobs() {
               </p>
             </td>
             <td className='py-1.5 pr-3 font-mono text-[11px] text-slate-400'>
+              {c.after && editing !== c.id && (
+                <span
+                  className='mb-1 block rounded bg-violet-500/10 px-1.5 py-px font-sans text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300'
+                  title={`Chained — runs right after ${c.after} completes; its own schedule is dormant`}
+                  data-cron-after={c.after}
+                >
+                  after {c.after}
+                </span>
+              )}
               {editing === c.id ? (
                 <span className='flex flex-col gap-1'>
                   <span className='flex items-center gap-1'>
@@ -438,6 +475,35 @@ export default function BackgroundJobs() {
                 >
                   {c.paused ? 'Enable' : 'Disable'}
                 </button>
+                {c.supports_dry_run && (
+                  <button
+                    type='button'
+                    disabled={dryRunning === c.id}
+                    onClick={() => dryRun(c.id)}
+                    data-cron-dry-run={c.id}
+                    className='inline-flex h-6 items-center rounded-md border border-slate-200 px-2 text-[11px] leading-none text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-50 dark:border-border dark:text-muted-foreground'
+                    title='Dry run — the job reports what a tick would do, writing nothing'
+                  >
+                    {dryRunning === c.id ? 'Dry run…' : 'Dry run'}
+                  </button>
+                )}
+                <select
+                  value={c.after ?? ''}
+                  onChange={(e) => setAfter(c.id, e.target.value || null)}
+                  aria-label={`Run ${c.id} after another job`}
+                  title='Run after — this job runs right after the chosen job completes instead of on its own schedule'
+                  data-cron-chain={c.id}
+                  className='h-6 max-w-[150px] rounded-md border border-slate-200 bg-white px-1 text-[11px] text-slate-600 dark:border-border dark:bg-background dark:text-muted-foreground'
+                >
+                  <option value=''>on schedule</option>
+                  {list
+                    .filter((o) => o.id !== c.id)
+                    .map((o) => (
+                      <option key={o.id} value={o.id}>
+                        after {o.id}
+                      </option>
+                    ))}
+                </select>
                 {c.overridden && editing !== c.id && (
                   <button
                     type='button'
@@ -454,6 +520,24 @@ export default function BackgroundJobs() {
         ))}
       </tbody>
     </table>
+  )
+  const dryReportPanel = dryReport && (
+    <div
+      data-cron-dry-run-report={dryReport.id}
+      className='mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-[12px] dark:border-border dark:bg-muted/40'
+    >
+      <div className='mb-1.5 flex items-center justify-between'>
+        <span className='font-medium text-slate-800 dark:text-foreground'>
+          Dry run of <code className='font-mono text-[11px]'>{dryReport.id}</code> · {fmtDur(dryReport.ms)} · nothing written
+        </span>
+        <button type='button' onClick={() => setDryReport(null)} className='text-[11px] text-slate-500 hover:text-slate-800 dark:text-muted-foreground'>
+          Close
+        </button>
+      </div>
+      <pre className='max-h-72 overflow-auto whitespace-pre-wrap rounded bg-white p-2 font-mono text-[11px] text-slate-700 dark:bg-background dark:text-slate-200'>
+        {typeof dryReport.report === 'string' ? dryReport.report : JSON.stringify(dryReport.report, null, 2)}
+      </pre>
+    </div>
   )
 
   return (
@@ -527,6 +611,7 @@ export default function BackgroundJobs() {
         <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
           <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>Core jobs</p>
           <div className='mt-2 overflow-x-auto'>{cronTable(cronGroups.core)}</div>
+          {dryReportPanel}
           {[...cronGroups.byExt.entries()].map(([ext, list]) => (
             <div key={ext} className='mt-4'>
               <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>

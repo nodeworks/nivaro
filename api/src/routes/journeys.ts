@@ -18,6 +18,14 @@ interface JourneyRow {
 }
 
 export async function journeyRoutes(app: FastifyInstance) {
+  // #42 — live "who else is here": the page-presence pings admin pages send
+  // (page:at), filtered to one path. The caller is excluded client-side.
+  app.get<{ Querystring: { path?: string } }>('/here', { preHandler: requireAdmin }, async (req, reply) => {
+    const path = String(req.query.path ?? '').slice(0, 200)
+    if (!/^\/(?!\/)[A-Za-z0-9/_\-?=&.%~]*$/.test(path)) return reply.code(400).send({ error: 'Bad path' })
+    const { usersOnPath } = await import('../plugins/socketio.js')
+    return { data: usersOnPath(path) }
+  })
   // GET /journeys/user/:id?date=YYYY-MM-DD  (defaults to today)
   app.get<{ Params: { id: string }; Querystring: { date?: string } }>(
     '/user/:id',

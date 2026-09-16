@@ -7,6 +7,11 @@
  * as an undescribed job on the page, which is the cue to add it.
  */
 export const CRON_DESCRIPTIONS: Record<string, string> = {
+  // ── Scheduler self-checks ──
+  'cron-miss-detector':
+    'Every 30 minutes — compares each registered job\'s expected previous fire time (from its schedule) with nivaro_job_runs; a job with no run since then, past a grace of 10% of its period (5 min minimum), raises one deduped issue naming the missed window. Paused and chained jobs are exempt. Dry run lists the misses without raising.',
+  'query-cache-warmers':
+    'Daily 06:00 — pre-runs every custom query flagged "warm daily" with its default parameters so the first report page of the morning hits a warm Redis result. Dry run lists which queries would run.',
   // ── Delivery & notifications ──
   'daily-action-digest':
     'Hourly at :45 — sends the "daily action summary" email to users whose delivery hour matches: deferred emails, the notification digest for Daily/Weekly subscriptions (weekly on Mondays), records waiting on them, invoices to review. Flushes nivaro_deferred_emails, advances last_digest_at.',

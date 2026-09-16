@@ -6,6 +6,12 @@ import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { canSeeRoom } from '../services/chat.js'
 import { can } from '../services/permissions.js'
+
+let pagePresenceReader: ((path: string) => Array<{ id: string; name: string; since: number }>) | null = null
+/** Users whose latest page ping is `path` (this replica's sockets). */
+export function usersOnPath(path: string): Array<{ id: string; name: string; since: number }> {
+  return pagePresenceReader ? pagePresenceReader(path) : []
+}
 import type { User } from '../types.js'
 
 declare module 'fastify' {
@@ -124,6 +130,16 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
   function presenceSnapshot() {
     return [...pagePresence.values()]
+  }
+  // #42 — who else is on this admin page right now (per replica).
+  pagePresenceReader = (path: string) => {
+    const seen = new Map<string, { id: string; name: string; since: number }>()
+    for (const p of pagePresence.values()) {
+      if (p.path !== path) continue
+      const cur = seen.get(p.user.id)
+      if (!cur || p.since < cur.since) seen.set(p.user.id, { ...p.user, since: p.since })
+    }
+    return [...seen.values()]
   }
 
   // Journey trail — last persisted journey row per socket, so the next ping

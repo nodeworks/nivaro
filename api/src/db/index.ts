@@ -6,7 +6,7 @@ import { getTenantDb } from './tenant-context.js'
 
 const cloudMode = !!process.env.CLOUD_META_DB_URL
 
-const migrationsDir = new URL('./migrations', import.meta.url).pathname
+export const migrationsDir = new URL('./migrations', import.meta.url).pathname
 
 // Custom source so .js compiled files are tracked with .ts names, keeping
 // the migration table consistent whether running via tsx (dev) or node (prod).

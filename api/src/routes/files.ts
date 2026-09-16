@@ -263,6 +263,32 @@ export async function filesRoutes(app: FastifyInstance) {
     return reply.send(result)
   })
 
+  // #38 — bulk-delete the unreferenced files (orphans), admin only, capped per
+  // call so a huge backlog is worked through in visible chunks.
+  app.delete('/usage/orphans', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as { limit?: string }
+    const limit = Math.min(500, Math.max(1, Number(q.limit ?? 200) || 200))
+    const { data } = await findOrphanFiles({ limit, offset: 0 })
+    let deleted = 0
+    let failed = 0
+    for (const f of data) {
+      try {
+        await deleteFile(String(f.id))
+        deleted++
+      } catch {
+        failed++
+      }
+    }
+    await logActivity({
+      action: 'files-orphans-purge',
+      user: req.user?.id,
+      collection: 'nivaro_files',
+      comment: `${deleted} unreferenced file(s) deleted${failed ? `, ${failed} failed` : ''}`,
+      req
+    })
+    return reply.send({ data: { deleted, failed, remaining: Math.max(0, (await findOrphanFiles({ limit: 1 })).total) } })
+  })
+
   app.get('/:id/meta', async (req, reply) => {
     const { id } = req.params as { id: string }
     const file = await getFile(id)

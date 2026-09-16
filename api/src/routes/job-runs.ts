@@ -117,6 +117,8 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
           heavy: c.heavy ?? false,
           idempotent: c.idempotent ?? 'unknown',
           description: c.description ?? null,
+          supports_dry_run: c.supports_dry_run ?? false,
+          after: c.after ?? null,
           last: strip(latestByJob.get(`cron:${c.id}`)),
           errors_7d: errByJob.get(`cron:${c.id}`) ?? 0
         })),

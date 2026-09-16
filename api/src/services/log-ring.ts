@@ -107,12 +107,32 @@ export function pushLog(level: number, msg: string): void {
   }
 }
 
-export function readLog(opts: { level?: number; q?: string; limit?: number }): LogLine[] {
+export function readLog(opts: {
+  level?: number
+  q?: string
+  limit?: number
+  /** Treat `q` as a case-insensitive regular expression (#82). An invalid
+   *  pattern falls back to a plain substring match rather than matching nothing. */
+  regex?: boolean
+  /** Time window, ms since epoch (inclusive). */
+  since?: number
+  until?: number
+}): LogLine[] {
   let out = ring
   if (opts.level) out = out.filter((l) => l.level >= (opts.level ?? 0))
+  if (opts.since != null) out = out.filter((l) => l.ts >= (opts.since as number))
+  if (opts.until != null) out = out.filter((l) => l.ts <= (opts.until as number))
   if (opts.q) {
+    let re: RegExp | null = null
+    if (opts.regex) {
+      try {
+        re = new RegExp(opts.q, 'i')
+      } catch {
+        re = null
+      }
+    }
     const q = opts.q.toLowerCase()
-    out = out.filter((l) => l.msg.toLowerCase().includes(q))
+    out = re ? out.filter((l) => (re as RegExp).test(l.msg)) : out.filter((l) => l.msg.toLowerCase().includes(q))
   }
   return out.slice(-(opts.limit ?? 300))
 }

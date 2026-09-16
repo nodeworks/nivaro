@@ -914,6 +914,10 @@ export const dataIntegrityGuide: DocSection = {
       type: 'p',
       text: 'Data Integrity (Monitoring → Data Integrity, `/data-integrity`) answers "which records would fail their own form today". Pick a collection and run its checks over the newest records; every finding names the record, the field, and what is wrong in plain language. A nightly schedule can re-run a collection and notify you when the count rises.'
     },
+    {
+      type: 'p',
+      text: 'Every finding row on a run carries "Assign…": pick a person and the finding becomes an open task on the record (title "Data integrity: <message>") with an in-app notification; the sweep page is where an admin triages a whole run, so routing lives there as well as on the record banner (#37). API: POST /api/config-conformance/findings/:id/assign {user_id}.'
+    },
     { type: 'h3', text: 'What it checks' },
     {
       type: 'table',

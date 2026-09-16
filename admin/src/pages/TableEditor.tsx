@@ -152,6 +152,7 @@ import {
   type RelationType,
   schemaApi
 } from '@/lib/schema-api'
+import { PagePresence } from '@/components/page-presence'
 import { cn, formatRelative, resolveCollectionIcon, titleCase } from '@/lib/utils'
 import { TreeSection } from '@/pages/DataModel'
 import { FieldRulesSection } from '@/pages/FieldRulesSection'
@@ -25018,6 +25019,8 @@ export function TableEditorPage() {
                 registered
               </Badge>
             )}
+            {/* #42 — who else is on this editor right now */}
+            <PagePresence />
           </div>
 
           <div className='flex items-center gap-2'>

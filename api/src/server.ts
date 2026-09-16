@@ -276,6 +276,16 @@ export async function buildServer() {
   } catch {
     /* column mid-migration or unparseable — no overrides */
   }
+  // #54 — chains hydrate the same way: a chained job's own ticks are no-ops
+  // and it runs right after its parent completes.
+  try {
+    const row = (await db('nivaro_settings').orderBy('id', 'asc').first('cron_chains')) as
+      | { cron_chains?: string | null }
+      | undefined
+    if (row?.cron_chains) app.cron.setChains(JSON.parse(row.cron_chains) as Record<string, string>)
+  } catch {
+    /* column mid-migration or unparseable — no chains */
+  }
   if (!process.env.CLOUD_META_DB_URL) {
     registerFileCleanup(app.cron)
     // digest-daily/weekly crons retired 2026-09-10 — the notification digest
@@ -1080,6 +1090,71 @@ export async function buildServer() {
         }
       })
 
+      // #81 — a job that skipped its expected window raises an issue.
+      const missedCrons = async () => {
+        const jobs = app.cron.list().filter((j) => !j.paused && !j.after)
+        const latest = (await db('nivaro_job_runs')
+          .where('kind', 'cron')
+          .groupBy('job_id')
+          .select('job_id', db.raw('MAX(started_at) as last_at'))) as Array<{ job_id: string; last_at: unknown }>
+        const lastBy = new Map(latest.map((r) => [r.job_id, r.last_at ? new Date(r.last_at as string).getTime() : 0]))
+        const now = Date.now()
+        const out: Array<{ id: string; expected_at: string; last_run_at: string | null; grace_min: number }> = []
+        for (const j of jobs) {
+          const expected = app.cron.expectedPreviousRun(j.id)
+          if (!expected) continue
+          const next = j.nextRun ? new Date(j.nextRun).getTime() : null
+          const period = next ? next - expected.getTime() : 0
+          const grace = Math.max(5 * 60_000, Math.round(period * 0.1))
+          if (expected.getTime() + grace > now) continue // still inside its window
+          if (expected.getTime() < bootAt) continue // expected before this process existed
+          const last = lastBy.get(j.id) ?? 0
+          if (last >= expected.getTime() - 60_000) continue
+          out.push({ id: j.id, expected_at: expected.toISOString(), last_run_at: last ? new Date(last).toISOString() : null, grace_min: Math.round(grace / 60_000) })
+        }
+        return out
+      }
+      const bootAt = Date.now()
+      app.cron.schedule('cron-miss-detector', '*/30 * * * *', async () => {
+        const { trackError } = await import('./services/error-tracking.js')
+        for (const m of await missedCrons()) {
+          await trackError({
+            source: 'server',
+            route: 'cron/miss',
+            message: `Cron "${m.id}" missed its expected run at ${m.expected_at}${m.last_run_at ? ` (last ran ${m.last_run_at})` : ' (never recorded)'}`,
+            severity: 'medium'
+          })
+        }
+      }, { dryRun: missedCrons })
+
+      // #41 — pre-run the heavy custom queries flagged warm_daily.
+      const warmTargets = async () =>
+        (await db('nivaro_custom_queries').where({ enabled: true, warm_daily: true }).select('slug', 'name', 'cache_ttl')) as Array<{ slug: string; name: string; cache_ttl: number }>
+      app.cron.schedule('query-cache-warmers', '0 6 * * *', async () => {
+        const { runCustomQueryBySlug } = await import('./services/custom-query-exec.js')
+        for (const q of await warmTargets()) {
+          const t0 = Date.now()
+          try {
+            const rows = await runCustomQueryBySlug(q.slug, {})
+            if (q.cache_ttl > 0 && app.redis) {
+              // Same key the execute route reads for a default-param call.
+              const { buildFinalParams } = await import('./services/custom-query-exec.js')
+              const row = (await db('nivaro_custom_queries').where({ slug: q.slug }).first('params')) as { params: string | null } | undefined
+              let defs: Array<{ name: string; type: string; required?: boolean; default?: unknown }> = []
+              try { defs = row?.params ? JSON.parse(row.params) : [] } catch { defs = [] }
+              const finalParams = buildFinalParams(defs as never, {})
+              await app.redis.setex(`cq:${q.slug}:${JSON.stringify(finalParams)}`, q.cache_ttl, JSON.stringify(rows))
+            }
+            app.log.info({ slug: q.slug, rows: rows.length, ms: Date.now() - t0 }, 'query warmed')
+          } catch (err) {
+            app.log.warn({ err, slug: q.slug }, 'query warmer failed')
+          }
+        }
+      }, {
+        heavy: true,
+        dryRun: async () => ({ would_run: (await warmTargets()).map((q) => `${q.name} (${q.slug})`) })
+      })
+
       // Dead-file-link sweep: stat every stored file against the storage
       // provider (oldest verification first) and stamp nivaro_files.missing_at,
       // so file chips and the Files page render dead links honestly.
@@ -1242,6 +1317,12 @@ export async function buildServer() {
           app.log.warn(
             `rollup drift: ${report.drifted_rows} stale rows across ${report.fields.length} field(s)`
           )
+        }
+      }, {
+        // #32 — the same sweep, reported instead of raised.
+        dryRun: async () => {
+          const { detectRollupDrift } = await import('./services/rollup-drift.js')
+          return await detectRollupDrift()
         }
       })
 

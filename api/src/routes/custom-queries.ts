@@ -9,6 +9,7 @@ import {
 } from '../services/custom-query-exec.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { markSpan } from '../services/request-trace.js'
 import { getUserScopes, listScopeDimensions } from '../services/user-scopes.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -23,6 +24,8 @@ interface CustomQueryRow {
   cache_ttl: number
   enabled: boolean
   access: string
+  /** #41 — pre-run daily at 06:00 with default params (query-cache-warmers). */
+  warm_daily?: boolean
   created_at: Date
   updated_at: Date
 }
@@ -56,6 +59,7 @@ function serialize(row: CustomQueryRow) {
     cache_ttl: row.cache_ttl,
     enabled: !!row.enabled,
     access: row.access,
+    warm_daily: !!row.warm_daily,
     scope_params: (row as { scope_params?: string | null }).scope_params ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at
@@ -164,6 +168,65 @@ export async function bustCustomQueryCache(
   })
 }
 
+// ─── Plan XML → operator table (shared by /explain and the slow-plan capture) ──
+export function parsePlanXml(xml: string) {
+  // Flatten RelOp nodes into an operator table — full XML rides along for
+  // anyone who wants to paste it into SSMS/Plan Explorer.
+  const ops: Array<{ op: string; object: string | null; est_rows: number; cost: number }> = []
+  const relOpRe = /<RelOp\b([^>]*)>/g
+  let m: RegExpExecArray | null = relOpRe.exec(xml)
+  const attr = (attrs: string, name: string) => attrs.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? null
+  while (m) {
+    const attrs = m[1]
+    // The nearest following <Object …> names the table/index this operator touches.
+    const rest = xml.slice(m.index, m.index + 2000)
+    const obj = rest.match(/<Object\b([^>]*)\/>/)
+    const table = obj ? attr(obj[1], 'Table') : null
+    const index = obj ? attr(obj[1], 'Index') : null
+    ops.push({
+      op: attr(attrs, 'PhysicalOp') ?? 'Unknown',
+      object: table
+        ? `${table.replace(/[\[\]]/g, '')}${index ? ` (${index.replace(/[\[\]]/g, '')})` : ''}`
+        : null,
+      est_rows: Math.round(Number(attr(attrs, 'EstimateRows') ?? 0)),
+      cost: Number(attr(attrs, 'EstimatedTotalSubtreeCost') ?? 0)
+    })
+    m = relOpRe.exec(xml)
+  }
+  const missing: string[] = []
+  const miRe = /<MissingIndex\b([^>]*)>([\s\S]*?)<\/MissingIndex>/g
+  let mi: RegExpExecArray | null = miRe.exec(xml)
+  while (mi) {
+    const tbl = attr(mi[1], 'Table')?.replace(/[\[\]]/g, '')
+    const cols = Array.from(mi[2].matchAll(/Name="\[([^\]]+)\]"/g)).map((c) => c[1])
+    if (tbl) missing.push(`${tbl}: ${cols.join(', ')}`)
+    mi = miRe.exec(xml)
+  }
+  return { operators: ops, missing_indexes: missing, plan_xml: xml }
+}
+
+// #90 — plans captured for SLOW runs of a saved query (per replica, in
+// memory): when a slug execute takes longer than SLOW_PLAN_MS the plan is
+// fetched right after, so the editor can show WHY without re-running it.
+const SLOW_PLAN_MS = Number(process.env.CUSTOM_QUERY_SLOW_PLAN_MS ?? 5000)
+const capturedPlans = new Map<number, { at: number; duration_ms: number; params: Record<string, unknown>; plan: ReturnType<typeof parsePlanXml> }>()
+const capturing = new Set<number>()
+function captureSlowPlan(id: number, sqlText: string, params: Record<string, unknown>, durationMs: number): void {
+  if (capturing.has(id)) return
+  capturing.add(id)
+  void explainSqlPlan(sqlText, params)
+    .then((xml) => {
+      if (!xml) return
+      capturedPlans.set(id, { at: Date.now(), duration_ms: durationMs, params, plan: parsePlanXml(xml) })
+      markSpan('custom-query:plan-captured', durationMs, `query ${id}`)
+    })
+    .catch(() => {})
+    .finally(() => capturing.delete(id))
+}
+export function capturedPlanFor(id: number) {
+  return capturedPlans.get(id) ?? null
+}
+
 export async function customQueriesRoutes(app: FastifyInstance) {
   // ── Admin CRUD ──────────────────────────────────────────────────────────
 
@@ -190,6 +253,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       cache_ttl?: number
       enabled?: boolean
       access?: string
+      warm_daily?: boolean
       scope_params?: Record<string, unknown> | string | null
     }
   }>('/', { preHandler: requireAdmin }, async (req, reply) => {
@@ -208,6 +272,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         cache_ttl: body.cache_ttl ?? 0,
         enabled: body.enabled ?? true,
         access: body.access ?? 'authenticated',
+        warm_daily: body.warm_daily ?? false,
         scope_params:
           body.scope_params == null
             ? null
@@ -247,6 +312,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       cache_ttl: number
       enabled: boolean
       access: string
+      warm_daily: boolean
       scope_params: Record<string, unknown> | string | null
     }>
   }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
@@ -260,6 +326,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     const patch: Record<string, unknown> = { updated_at: new Date() }
 
     if (body.name !== undefined) patch.name = body.name
+    if (body.warm_daily !== undefined) patch.warm_daily = !!body.warm_daily
     if (body.description !== undefined) patch.description = body.description
     if (body.slug !== undefined) patch.slug = body.slug
     if (body.sql_text !== undefined) patch.sql_text = body.sql_text
@@ -370,6 +437,14 @@ export async function customQueriesRoutes(app: FastifyInstance) {
    * statement is NOT executed; SQL Server returns the plan it WOULD use. The
    * response carries a flat operator summary plus the raw plan XML.
    */
+  // #90 — the plan captured for this query's last SLOW run on this replica.
+  app.get<{ Params: { id: string } }>('/:id/last-plan', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
+    const cap = capturedPlanFor(id)
+    return { data: cap ? { captured_at: new Date(cap.at).toISOString(), duration_ms: cap.duration_ms, params: cap.params, ...cap.plan } : null, threshold_ms: SLOW_PLAN_MS }
+  })
+
   app.post<{
     Body: { sql_text?: string; params?: ParamDef[]; values?: Record<string, unknown> }
   }>('/explain', { preHandler: requireAdmin }, async (req, reply) => {
@@ -386,51 +461,13 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     try {
       const xml = await explainSqlPlan(sqlText, finalParams)
       if (!xml) return reply.code(400).send({ error: 'SQL Server returned no plan' })
-      // Flatten RelOp nodes into an operator table — full XML rides along for
-      // anyone who wants to paste it into SSMS/Plan Explorer.
-      const ops: Array<{
-        op: string
-        object: string | null
-        est_rows: number
-        cost: number
-      }> = []
-      const relOpRe = /<RelOp\b([^>]*)>/g
-      let m: RegExpExecArray | null = relOpRe.exec(xml)
-      const attr = (attrs: string, name: string) =>
-        attrs.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? null
-      while (m) {
-        const attrs = m[1]
-        // The nearest following <Object …> names the table/index this operator touches.
-        const rest = xml.slice(m.index, m.index + 2000)
-        const obj = rest.match(/<Object\b([^>]*)\/>/)
-        const table = obj ? attr(obj[1], 'Table') : null
-        const index = obj ? attr(obj[1], 'Index') : null
-        ops.push({
-          op: attr(attrs, 'PhysicalOp') ?? 'Unknown',
-          object: table
-            ? `${table.replace(/[\[\]]/g, '')}${index ? ` (${index.replace(/[\[\]]/g, '')})` : ''}`
-            : null,
-          est_rows: Math.round(Number(attr(attrs, 'EstimateRows') ?? 0)),
-          cost: Number(attr(attrs, 'EstimatedTotalSubtreeCost') ?? 0)
-        })
-        m = relOpRe.exec(xml)
-      }
-      const missing: string[] = []
-      const miRe = /<MissingIndex\b([^>]*)>([\s\S]*?)<\/MissingIndex>/g
-      let mi: RegExpExecArray | null = miRe.exec(xml)
-      while (mi) {
-        const tbl = attr(mi[1], 'Table')?.replace(/[\[\]]/g, '')
-        const cols = Array.from(mi[2].matchAll(/Name="\[([^\]]+)\]"/g)).map((c) => c[1])
-        if (tbl) missing.push(`${tbl}: ${cols.join(', ')}`)
-        mi = miRe.exec(xml)
-      }
       await logActivity({
         action: 'custom-query-explain',
         user: req.user?.id,
         comment: sqlText.slice(0, 300),
         req
       })
-      return { data: { operators: ops, missing_indexes: missing, plan_xml: xml } }
+      return { data: parsePlanXml(xml) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return reply.code(400).send({ error: msg.slice(0, 800) })
@@ -627,6 +664,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       }
 
       let rows: unknown[]
+      const execStarted = Date.now()
       try {
         // Literal-substitution + raw tedious batch — see services/custom-query-exec.ts
         rows = await execCustomQuerySql(query.sql_text, finalParams)
@@ -634,6 +672,10 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         const message = err instanceof Error ? err.message : 'Query execution failed'
         return reply.code(400).send({ error: message })
       }
+      // #90 — a slow run captures its plan right after (fire-and-forget), so
+      // the editor can explain it without re-running the query.
+      const execMs = Date.now() - execStarted
+      if (execMs >= SLOW_PLAN_MS) captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
 
       // Cache the result.
       if (query.cache_ttl > 0 && app.redis) {

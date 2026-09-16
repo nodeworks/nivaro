@@ -24,12 +24,25 @@ function maskEnvValue(key: string, value: string): string {
   return value.slice(0, 200)
 }
 
+/** '2026-09-16T01:00' | epoch ms | 'now-15m' — undefined when unparseable. */
+function parseWhen(v: string): number | undefined {
+  const s = String(v).trim()
+  if (/^\d{10,}$/.test(s)) return Number(s)
+  const rel = s.match(/^now-(\d+)([smhd])$/)
+  if (rel) {
+    const mult = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[rel[2] as 's' | 'm' | 'h' | 'd']
+    return Date.now() - Number(rel[1]) * mult
+  }
+  const t = Date.parse(s)
+  return Number.isFinite(t) ? t : undefined
+}
+
 export async function opsLogsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
   // #156 — tail the in-process log ring (per replica; pino lines only —
   // console.* from crons goes to stdout, not the ring).
-  app.get<{ Querystring: { level?: string; q?: string; limit?: string } }>(
+  app.get<{ Querystring: { level?: string; q?: string; limit?: string; regex?: string; since?: string; until?: string } }>(
     '/tail',
     async (req, reply) => {
       const levelMap: Record<string, number> = { debug: 20, info: 30, warn: 40, error: 50 }
@@ -37,6 +50,10 @@ export async function opsLogsRoutes(app: FastifyInstance) {
         data: readLog({
           level: levelMap[String(req.query.level ?? '')] ?? undefined,
           q: req.query.q || undefined,
+          // #82 — regex + time window over the ring ('now-15m' relative forms accepted).
+          regex: req.query.regex === '1' || req.query.regex === 'true',
+          since: req.query.since ? parseWhen(req.query.since) : undefined,
+          until: req.query.until ? parseWhen(req.query.until) : undefined,
           limit: Math.min(1000, Number(req.query.limit) || 300)
         })
       })

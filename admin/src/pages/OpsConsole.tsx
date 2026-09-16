@@ -44,12 +44,23 @@ export function OpsConsolePage() {
   const qc = useQueryClient()
   const [logLevel, setLogLevel] = useState('')
   const [logQ, setLogQ] = useState('')
+  // #82 — regex + time window over the ring ('now-15m' style or a datetime).
+  const [logRegex, setLogRegex] = useState(false)
+  const [logSince, setLogSince] = useState('')
+  const [logUntil, setLogUntil] = useState('')
   const { data: tail } = useQuery({
-    queryKey: ['ops-log-tail', logLevel, logQ],
+    queryKey: ['ops-log-tail', logLevel, logQ, logRegex, logSince, logUntil],
     queryFn: () =>
       api
         .get<{ data: Array<{ ts: number; level: number; msg: string }> }>('/ops-logs/tail', {
-          params: { level: logLevel || undefined, q: logQ || undefined, limit: 300 }
+          params: {
+            level: logLevel || undefined,
+            q: logQ || undefined,
+            regex: logRegex ? '1' : undefined,
+            since: logSince || undefined,
+            until: logUntil || undefined,
+            limit: 300
+          }
         })
         .then((r) => r.data.data),
     refetchInterval: 10_000
@@ -62,6 +73,16 @@ export function OpsConsolePage() {
         .then((r) => r.data.data),
     staleTime: 30_000
   })
+  // #68 — migrations this build carries vs the ledger.
+  const { data: migrations } = useQuery({
+    queryKey: ['ops-migrations'],
+    queryFn: () =>
+      api
+        .get<{ data?: { pending: Array<{ name: string; source: string | null }>; applied: Array<{ name: string; migration_time: string }>; completed_count: number; carried_by_build: number }; unavailable?: string }>('/ops-runtime/migrations')
+        .then((r) => r.data),
+    refetchInterval: 60_000
+  })
+  const [openMigration, setOpenMigration] = useState<string | null>(null)
   const { data: env } = useQuery({
     queryKey: ['ops-env'],
     queryFn: () =>
@@ -213,7 +234,19 @@ export function OpsConsolePage() {
                     {l || 'all'}
                   </button>
                 ))}
-                <Input value={logQ} onChange={(e) => setLogQ(e.target.value)} placeholder='Search…' className='h-7 w-44 text-[12px]' />
+                <Input value={logQ} onChange={(e) => setLogQ(e.target.value)} placeholder={logRegex ? 'Regex…' : 'Search…'} className='h-7 w-44 font-mono text-[12px]' data-ops-log-q />
+                <button
+                  type='button'
+                  onClick={() => setLogRegex((v) => !v)}
+                  aria-pressed={logRegex}
+                  data-ops-log-regex
+                  className={`rounded-md px-2 py-1 font-mono text-[11px] ${logRegex ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-accent'}`}
+                  title='Treat the search as a case-insensitive regular expression'
+                >
+                  .*
+                </button>
+                <Input value={logSince} onChange={(e) => setLogSince(e.target.value)} placeholder='since: now-15m' className='h-7 w-32 font-mono text-[11px]' title='ISO datetime, epoch ms, or now-15m / now-2h / now-1d' data-ops-log-since />
+                <Input value={logUntil} onChange={(e) => setLogUntil(e.target.value)} placeholder='until' className='h-7 w-28 font-mono text-[11px]' title='ISO datetime, epoch ms, or now-5m' data-ops-log-until />
               </div>
             }
           >
@@ -479,6 +512,48 @@ export function OpsConsolePage() {
             </div>
           </Card>
 
+          <Card
+            title='Migrations'
+            sub='What this build carries vs the ledger — a pending entry means the next restart changes the schema (#68)'
+          >
+            {migrations?.unavailable ? (
+              <p className='text-[12px] text-slate-500'>{migrations.unavailable}</p>
+            ) : migrations?.data ? (
+              <div className='space-y-2 text-[12px]' data-ops-migrations>
+                <p className='text-slate-600 dark:text-muted-foreground'>
+                  <b className='tabular-nums text-slate-900 dark:text-foreground'>{migrations.data.carried_by_build}</b> migration files in this build ·{' '}
+                  <b className='tabular-nums text-slate-900 dark:text-foreground'>{migrations.data.completed_count}</b> applied ·{' '}
+                  <b className={`tabular-nums ${migrations.data.pending.length ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-400'}`}>{migrations.data.pending.length}</b> pending
+                </p>
+                {migrations.data.pending.map((m) => (
+                  <div key={m.name} className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-950/30' data-ops-migration-pending={m.name}>
+                    <div className='flex items-center justify-between'>
+                      <code className='font-mono text-[11px] text-amber-900 dark:text-amber-200'>{m.name}</code>
+                      {m.source && (
+                        <button type='button' onClick={() => setOpenMigration((v) => (v === m.name ? null : m.name))} className='text-[11px] text-amber-800 underline decoration-dotted dark:text-amber-300'>
+                          {openMigration === m.name ? 'Hide source' : 'Show source'}
+                        </button>
+                      )}
+                    </div>
+                    {openMigration === m.name && m.source && (
+                      <pre className='mt-2 max-h-72 overflow-auto rounded bg-[#0f172a] p-2 font-mono text-[10.5px] leading-relaxed text-slate-200'>{m.source}</pre>
+                    )}
+                  </div>
+                ))}
+                <details className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+                  <summary className='cursor-pointer'>Last {migrations.data.applied.length} applied</summary>
+                  <ul className='mt-1 space-y-0.5'>
+                    {migrations.data.applied.map((a) => (
+                      <li key={a.name} className='flex justify-between gap-3'>
+                        <code className='font-mono text-[11px]'>{a.name}</code>
+                        <span className='shrink-0 text-slate-400'>{a.migration_time ? new Date(a.migration_time).toLocaleString() : ''}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </div>
+            ) : null}
+          </Card>
           <Card
             title='Environment knobs'
             sub='Which env vars this process sees — secrets masked (#157)'

@@ -40,6 +40,7 @@ type QueryForm = {
   access: 'admin' | 'authenticated'
   cache_ttl: number
   enabled: boolean
+  warm_daily: boolean
   params: ParamDef[]
   scope_params: string
 }
@@ -53,6 +54,7 @@ type CustomQuery = {
   access: 'admin' | 'authenticated'
   cache_ttl: number
   enabled: boolean
+  warm_daily?: boolean
   params: ParamDef[] | null
   scope_params: string | null
 }
@@ -81,6 +83,7 @@ export function CustomQueryEditPage() {
     sql_text: '',
     access: 'authenticated',
     cache_ttl: 0,
+    warm_daily: false,
     enabled: true,
     params: [],
     scope_params: ''
@@ -155,6 +158,7 @@ export function CustomQueryEditPage() {
         sql_text: data.sql_text ?? '',
         access: data.access ?? 'authenticated',
         cache_ttl: data.cache_ttl ?? 0,
+        warm_daily: !!data.warm_daily,
         enabled: data.enabled ?? true,
         params: data.params ?? [],
         scope_params: data.scope_params ?? ''
@@ -288,6 +292,7 @@ export function CustomQueryEditPage() {
       sql_text: form.sql_text,
       access: form.access,
       cache_ttl: form.cache_ttl,
+      warm_daily: form.warm_daily,
       scope_params: form.scope_params.trim() ? form.scope_params.trim() : null,
       enabled: form.enabled,
       params: form.params
@@ -505,6 +510,14 @@ export function CustomQueryEditPage() {
                         setForm((p) => ({ ...p, cache_ttl: Number(e.target.value) || 0 }))
                       }
                     />
+                    <label className='mt-1.5 flex items-center gap-2 text-[12px] text-slate-600' data-cq-warm>
+                      <Switch
+                        checked={form.warm_daily}
+                        onCheckedChange={(v) => setForm((p) => ({ ...p, warm_daily: !!v }))}
+                        aria-label='Warm the cache daily at 06:00'
+                      />
+                      Warm daily at 06:00 with default parameters (#41)
+                    </label>
                   </div>
                 </div>
 
@@ -699,6 +712,31 @@ export function CustomQueryEditPage() {
                     >
                       {explain.isPending ? 'Planning…' : 'Explain plan'}
                     </Button>
+                    {!isNew && (
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        className='h-7 text-[11.5px]'
+                        data-cq-last-plan
+                        title='The plan captured the last time a saved run of this query was slow (this replica)'
+                        onClick={() => {
+                          void api
+                            .get<{ data: (PlanData & { captured_at: string; duration_ms: number }) | null; threshold_ms: number }>(`/custom-queries/${id}/last-plan`)
+                            .then((r) => {
+                              if (!r.data.data) {
+                                toast.message(`No slow run captured yet — plans are kept for runs over ${Math.round(r.data.threshold_ms / 1000)}s`)
+                                return
+                              }
+                              setPlan(r.data.data)
+                              toast.success(`Plan from a ${(r.data.data.duration_ms / 1000).toFixed(1)}s run at ${new Date(r.data.data.captured_at).toLocaleTimeString()}`)
+                            })
+                            .catch(() => toast.error('Could not load the captured plan'))
+                        }}
+                      >
+                        Last slow plan
+                      </Button>
+                    )}
                     <Button
                       onClick={() => testExecute.mutate()}
                       disabled={testExecute.isPending}

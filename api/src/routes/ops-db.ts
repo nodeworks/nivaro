@@ -480,6 +480,76 @@ export async function opsDbRoutes(app: FastifyInstance) {
     }
   })
 
+  // #91 — Redis memory by key prefix: SCAN a bounded sample of the keyspace,
+  // group by the first ':' segment, MEMORY USAGE a few keys per prefix and
+  // extrapolate. An estimate, labelled as one — the point is "which prefix
+  // grew", not bytes to the byte.
+  app.get('/redis/memory', async (_req, reply) => {
+    try {
+      const redis = (
+        app as unknown as {
+          redis?: {
+            info: (section?: string) => Promise<string>
+            scan: (...args: Array<string | number>) => Promise<[string, string[]]>
+            memory: (cmd: string, key: string) => Promise<number | null>
+          }
+        }
+      ).redis
+      if (!redis) return reply.send({ unavailable: 'Redis is not connected' })
+      const info = await redis.info('memory')
+      const pick = (key: string) => info.match(new RegExp(`^${key}:(.+)$`, 'm'))?.[1]?.trim() ?? null
+      const MAX_KEYS = 20_000
+      const groups = new Map<string, { count: number; samples: string[] }>()
+      let cursor = '0'
+      let scanned = 0
+      do {
+        const [next, keys] = await redis.scan(cursor, 'COUNT', 1000)
+        cursor = next
+        for (const k of keys) {
+          scanned++
+          const idx = k.indexOf(':')
+          const prefix = idx > 0 ? k.slice(0, idx) : k
+          const g = groups.get(prefix) ?? { count: 0, samples: [] }
+          g.count++
+          if (g.samples.length < 8) g.samples.push(k)
+          groups.set(prefix, g)
+        }
+      } while (cursor !== '0' && scanned < MAX_KEYS)
+      const rows: Array<{ prefix: string; keys: number; sampled: number; avg_bytes: number; est_bytes: number }> = []
+      for (const [prefix, g] of groups) {
+        let total = 0
+        let n = 0
+        for (const k of g.samples) {
+          try {
+            const b = await redis.memory('USAGE', k)
+            if (typeof b === 'number') {
+              total += b
+              n++
+            }
+          } catch {
+            /* MEMORY USAGE unavailable on this server */
+          }
+        }
+        const avg = n ? total / n : 0
+        rows.push({ prefix, keys: g.count, sampled: n, avg_bytes: Math.round(avg), est_bytes: Math.round(avg * g.count) })
+      }
+      rows.sort((a, b) => b.est_bytes - a.est_bytes)
+      return reply.send({
+        data: {
+          used_memory: Number(pick('used_memory') ?? 0),
+          used_memory_human: pick('used_memory_human'),
+          used_memory_peak_human: pick('used_memory_peak_human'),
+          mem_fragmentation_ratio: pick('mem_fragmentation_ratio'),
+          scanned,
+          truncated: scanned >= MAX_KEYS,
+          prefixes: rows.slice(0, 40)
+        }
+      })
+    } catch (err) {
+      return reply.send({ unavailable: err instanceof Error ? err.message : 'Redis scan failed' })
+    }
+  })
+
   // #291/#155 — storage snapshots + a linear runway projection.
   app.get('/storage', async (_req, reply) => {
     const snapshots = (await db('nivaro_storage_snapshots')

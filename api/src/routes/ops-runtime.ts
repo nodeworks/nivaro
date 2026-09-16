@@ -293,6 +293,38 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
 
   // #312 — per-environment expected database name; a mismatch is the
   // staging-pointed-at-dev incident waiting to repeat.
+  // #68 — the migrations THIS build carries vs the ledger: anything pending
+  // (with its source, so an operator reads the DDL before a restart runs it)
+  // and the newest applied ones. Pending is normally empty — boot applies
+  // migrations — so a non-empty list means a restart is about to change the
+  // schema, or a replica is serving mid-deploy.
+  app.get('/migrations', async (_req, reply) => {
+    try {
+      const { db, migrationsDir } = await import('../db/index.js')
+      const { readFile, readdir } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const [completed, pending] = (await db.migrate.list()) as [Array<{ name: string } | string>, Array<{ file: string } | string>]
+      const nameOf = (m: { name?: string; file?: string } | string) => (typeof m === 'string' ? m : (m.name ?? m.file ?? ''))
+      const files = await readdir(migrationsDir).catch(() => [] as string[])
+      const sourceFor = async (name: string) => {
+        const base = name.replace(/\.(ts|js)$/, '')
+        const f = files.find((x) => x.replace(/\.(ts|js)$/, '') === base)
+        if (!f) return null
+        const text = await readFile(join(migrationsDir, f), 'utf8').catch(() => null)
+        return text ? text.slice(0, 20_000) : null
+      }
+      const pendingOut: Array<{ name: string; source: string | null }> = []
+      for (const m of pending) {
+        const name = nameOf(m)
+        pendingOut.push({ name, source: await sourceFor(name) })
+      }
+      const applied = (await db('nivaro_migrations').orderBy('id', 'desc').limit(12).select('name', 'migration_time')) as Array<{ name: string; migration_time: unknown }>
+      return reply.send({ data: { pending: pendingOut, applied, completed_count: completed.length, carried_by_build: files.filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts')).length } })
+    } catch (err) {
+      return reply.send({ unavailable: err instanceof Error ? err.message : 'Migration listing failed' })
+    }
+  })
+
   app.get('/db-identity', async (_req, reply) => {
     const expected = process.env.NIVARO_EXPECTED_DB?.trim() || null
     return reply.send({

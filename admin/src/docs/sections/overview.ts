@@ -293,6 +293,10 @@ export const userFiles: DocSection = {
       text: 'The file manager lets you upload, browse, and delete files. Uploaded files are stored on local disk and metadata is tracked in `nivaro_files`.'
     },
     {
+      type: 'p',
+      text: 'The Unused scope lists files no record references (every foreign key into nivaro_files is checked live). "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).'
+    },
+    {
       type: 'table',
       head: ['Endpoint', 'Description'],
       rows: [
