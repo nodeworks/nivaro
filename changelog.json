@@ -1,10 +1,130 @@
 {
-  "generated_at": "2026-09-15T23:12:56.699Z",
+  "generated_at": "2026-09-16T16:42:19.543Z",
   "releases": [
+    {
+      "version": "0.1.297",
+      "tag": "v0.1.297",
+      "date": "2026-09-16T12:42:09-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "instance keys come from the Environments registry",
+              "hash": "a638169c"
+            },
+            {
+              "section": "Added",
+              "scope": "dx",
+              "text": "contrast audit page, release-notes link from the update banner, golden-path e2e recorder, per-user accent palette, nivaro types CLI",
+              "hash": "c15c3ad2"
+            },
+            {
+              "section": "Added",
+              "scope": "reports",
+              "text": "explain the trend from the rows behind it, only-if-changed subscriptions, scope change gained/lost samples",
+              "hash": "eaa542cd"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "recently viewed rail, saved-view dashboard widgets with per-widget refresh, owner load report, SLA presets, open selected in tabs",
+              "hash": "1bc3db1e"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "fulfilment column with hover events, send-back column, over-ship row flags, back-to-queue breadcrumb",
+              "hash": "6705cffd"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "why-me on every row, bundle change preview, read receipts for sent messages, quiet-hour override per category",
+              "hash": "b351bfd7"
+            },
+            {
+              "section": "Added",
+              "scope": "notes",
+              "text": "thread filters and search, machine-marker registry, import history in the thread, line-level watch",
+              "hash": "3d5c231f"
+            },
+            {
+              "section": "Added",
+              "scope": "form",
+              "text": "server-side drafts, section locks per role, remote row-change ghosts in grids, shared cell cursors",
+              "hash": "638a418f"
+            },
+            {
+              "section": "Added",
+              "scope": "form",
+              "text": "bulk-action dry run, header chip thresholds, raw-edit diff marks, computed-figure explainer, last-changed marks in Summary, layout preview with a record",
+              "hash": "0d78842c"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "mock mode per instance, per-instance credentials, endpoint contract tests, inbound mappings, inbound request replay",
+              "hash": "6d39c1b6"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "event feed + replay, per-integration header chips, field-watch trigger, inline retries, payload search, webhook replay with payload, flow version diff",
+              "hash": "9312df89"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "settings validate/apply/history, production expectations, registry page, cross-env compare, staged builds",
+              "hash": "f2423ce1"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "cron dry runs, chaining and miss detection; log search; redis memory by prefix; migrations card; query warmers and slow-plan capture; orphan purge; finding → task; page presence",
+              "hash": "cca26702"
+            },
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "dry-run preview for service-mode imports; synthetic record generator",
+              "hash": "6a9bd848"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "comparison series grows extra lines, proposals, closed-month lock, reconcile and spread shapes; extension integrity checks",
+              "hash": "7be7fa2e"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "tables",
+              "text": "cell-copy button no longer paints over tight cells; fulfilment hover card portals and wraps",
+              "hash": "5fdf5203"
+            },
+            {
+              "section": "Fixed",
+              "scope": "table-editor",
+              "text": "refuse a layout save until the per-field maps are seeded",
+              "hash": "e29e11cf"
+            }
+          ]
+        }
+      ],
+      "count": 17
+    },
     {
       "version": "0.1.296",
       "tag": "v0.1.296",
-      "date": "2026-09-15T19:12:47-04:00",
+      "date": "2026-09-15T19:12:56-04:00",
       "sections": [
         {
           "label": "Added",
