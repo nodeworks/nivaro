@@ -4,7 +4,6 @@ import {
   deleteReportAlert,
   deleteReportFilterPreset,
   executeCustomQuery,
-  explainReportTrend,
   listReportAlerts,
   listReportFilterPresets,
   type ReportAlert,
@@ -3364,8 +3363,24 @@ const WidgetCard = memo(function WidgetCard({
                 setExplainBusy(true)
                 if (explainsTrend) {
                   client
+                    // Built as a raw command rather than the SDK's
+                    // `explainReportTrend` so a headless host pinned to an
+                    // older @nivaro/sdk still bundles (the SDK export landed
+                    // after 0.1.10, and a missing named export fails the
+                    // host's rollup build outright).
                     .request(
-                      explainReportTrend(reportId, widget.id, {
+                      post<{
+                        data: {
+                          explanation: string
+                          movers: Array<{
+                            label: string
+                            from: number | null
+                            to: number | null
+                            delta: number | null
+                            pct: number | null
+                          }> | null
+                        }
+                      }>(`/report-studio/${reportId}/widgets/${widget.id}/explain-trend`, {
                         date_range: dateRange,
                         entity_filters: entityFilters
                       })
