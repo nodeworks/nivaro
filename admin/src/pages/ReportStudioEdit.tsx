@@ -1,13 +1,16 @@
+import { createNivaro } from '@nivaro/sdk'
+import { NivaroProvider, QueryWidgetBody } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookmarkPlus,
+import {
+  Activity,
   ArrowLeft,
   BarChart3,
   Bell,
   BellRing,
+  BookmarkPlus,
   Check,
   ChevronsUpDown,
   Copy,
-  Activity,
   Download,
   Eye,
   Globe,
@@ -28,7 +31,6 @@ import { BookmarkPlus,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import {
   Bar,
   BarChart,
@@ -57,10 +59,8 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { QueryWidgetBody } from '@nivaro/shared'
-import { createNivaro } from '@nivaro/sdk'
-import { NivaroProvider } from '@nivaro/shared'
 import { api } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
@@ -71,8 +71,28 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils'
  * No Save button: edits debounce-persist automatically.
  */
 
-
-type WidgetType = 'kpi' | 'kpi_group' | 'bar' | 'line' | 'donut' | 'table' | 'divider' | 'query' | 'queue' | 'calc' | 'movers' | 'heatmap' | 'waterfall' | 'narrative' | 'pareto' | 'stats' | 'scatter' | 'hot_records' | 'metric' | 'pivot' | 'ai_insight'
+type WidgetType =
+  | 'kpi'
+  | 'kpi_group'
+  | 'bar'
+  | 'line'
+  | 'donut'
+  | 'table'
+  | 'divider'
+  | 'query'
+  | 'queue'
+  | 'calc'
+  | 'movers'
+  | 'heatmap'
+  | 'waterfall'
+  | 'narrative'
+  | 'pareto'
+  | 'stats'
+  | 'scatter'
+  | 'hot_records'
+  | 'metric'
+  | 'pivot'
+  | 'ai_insight'
 
 // ─── Prebuilt widget catalog ──────────────────────────────────────────────────
 // Data-driven presets (nivaro_report_widget_presets — a deployment seeds its
@@ -126,13 +146,18 @@ function WidgetCatalogDialog({
         `${p.name} ${p.description ?? ''}`.toLowerCase().includes(q.trim().toLowerCase()))
   )
   return (
-    <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4' onClick={onClose}>
+    <div
+      className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4'
+      onClick={onClose}
+    >
       <div
         className='flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-border dark:bg-card'
         onClick={(e) => e.stopPropagation()}
       >
         <div className='border-b border-slate-100 px-4 py-3 dark:border-border'>
-          <p className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>Add widgets</p>
+          <p className='text-[14px] font-semibold text-slate-800 dark:text-foreground'>
+            Add widgets
+          </p>
           <input
             autoFocus
             value={q}
@@ -176,7 +201,9 @@ function WidgetCatalogDialog({
                 }}
                 className='rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-left transition-colors hover:border-nvr-cyan hover:bg-[#f0fbfe] dark:border-border dark:bg-background dark:hover:bg-[#0b2530]'
               >
-                <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>{p.name}</p>
+                <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
+                  {p.name}
+                </p>
                 <p className='mt-0.5 line-clamp-2 text-[11.5px] leading-4 text-slate-500 dark:text-slate-400'>
                   {p.description}
                 </p>
@@ -261,7 +288,20 @@ interface Widget {
 
 // Category-axis ticks for date-heavy charts (mirrors shared ReportView):
 // '2026-07' → "Jul '26", full dates → 'Jul 4'; dense axes thin to ~12 labels.
-const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTH_ABBR = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
+]
 const compactCatTick = (v: unknown): string => {
   const raw = String(v ?? '')
   const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?/.exec(raw)
@@ -695,7 +735,11 @@ function WidgetBody({
     return (
       <NivaroProvider client={nivaroClient}>
         <div className='flex h-full min-h-0 flex-col'>
-          <QueryWidgetBody cfg={qc as never} dateRange={toSharedRange(dateRange ?? null)} entityFilters={entityFilters} />
+          <QueryWidgetBody
+            cfg={qc as never}
+            dateRange={toSharedRange(dateRange ?? null)}
+            entityFilters={entityFilters}
+          />
         </div>
       </NivaroProvider>
     )
@@ -758,7 +802,10 @@ function WidgetBody({
                   <tr>
                     <th className='sticky left-0 top-0 z-[2] bg-white dark:bg-card' />
                     {pv.cols.map((c) => (
-                      <th key={c} className='sticky top-0 z-[1] whitespace-nowrap bg-white px-1.5 pb-1 text-right font-medium text-slate-400 dark:bg-card'>
+                      <th
+                        key={c}
+                        className='sticky top-0 z-[1] whitespace-nowrap bg-white px-1.5 pb-1 text-right font-medium text-slate-400 dark:bg-card'
+                      >
                         {c}
                       </th>
                     ))}
@@ -776,7 +823,10 @@ function WidgetBody({
                       {pv.cols.map((c) => {
                         const v = pv.cells[r]?.[c]
                         return (
-                          <td key={c} className='px-1.5 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-300'>
+                          <td
+                            key={c}
+                            className='px-1.5 py-0.5 text-right tabular-nums text-slate-700 dark:text-slate-300'
+                          >
                             {v == null ? '' : fmtValue(v, widget.config?.format)}
                           </td>
                         )
@@ -793,7 +843,10 @@ function WidgetBody({
                       Total
                     </td>
                     {pv.cols.map((c) => (
-                      <td key={c} className='px-1.5 py-0.5 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-200'>
+                      <td
+                        key={c}
+                        className='px-1.5 py-0.5 text-right font-semibold tabular-nums text-slate-800 dark:text-slate-200'
+                      >
                         {fmtValue(pv.col_totals[c] ?? 0, widget.config?.format)}
                       </td>
                     ))}
@@ -806,13 +859,15 @@ function WidgetBody({
             </div>
             {(pv.truncated_rows > 0 || pv.truncated_cols > 0) && (
               <p className='mt-1 shrink-0 px-1 text-[10px] text-amber-600 dark:text-amber-400'>
-                Showing the {pv.rows.length}×{pv.cols.length} largest groups — totals cover the visible cells only.
+                Showing the {pv.rows.length}×{pv.cols.length} largest groups — totals cover the
+                visible cells only.
               </p>
             )}
           </div>
         )
     } else if (widget.type === 'heatmap') {
-      const cells = ((data as { cells?: Array<{ dim: string; dim2: string; value: number }> }).cells ?? [])
+      const cells =
+        (data as { cells?: Array<{ dim: string; dim2: string; value: number }> }).cells ?? []
       const rowsD = [...new Set(cells.map((c) => c.dim))]
       const colsD = [...new Set(cells.map((c) => c.dim2))]
       const maxV = Math.max(1, ...cells.map((c) => c.value))
@@ -826,7 +881,12 @@ function WidgetBody({
                 <tr>
                   <th />
                   {colsD.map((c) => (
-                    <th key={c} className='max-w-[80px] truncate px-1 pb-1 text-left font-medium text-slate-400'>{c}</th>
+                    <th
+                      key={c}
+                      className='max-w-[80px] truncate px-1 pb-1 text-left font-medium text-slate-400'
+                    >
+                      {c}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -842,7 +902,9 @@ function WidgetBody({
                           <div
                             className='flex h-6 items-center justify-center rounded text-[9.5px] tabular-nums'
                             style={{
-                              backgroundColor: cell ? `rgba(0,165,204,${0.08 + pct * 0.85})` : 'transparent',
+                              backgroundColor: cell
+                                ? `rgba(0,165,204,${0.08 + pct * 0.85})`
+                                : 'transparent',
                               color: pct > 0.55 ? '#fff' : undefined
                             }}
                           >
@@ -858,21 +920,37 @@ function WidgetBody({
           </div>
         )
     } else if (widget.type === 'waterfall') {
-      const wf = (data as { waterfall?: { start: number; end: number; steps: Array<{ dim: string; delta: number }> } }).waterfall
+      const wf = (
+        data as {
+          waterfall?: { start: number; end: number; steps: Array<{ dim: string; delta: number }> }
+        }
+      ).waterfall
       body = !wf ? (
         <p className='px-1 text-[12px] text-slate-400'>No data.</p>
       ) : (
         <div className='flex h-full flex-col justify-center gap-0.5 overflow-y-auto px-1 text-[11px]'>
-          <div className='flex justify-between text-slate-500'><span>Previous</span><span className='tabular-nums'>{wf.start.toLocaleString()}</span></div>
+          <div className='flex justify-between text-slate-500'>
+            <span>Previous</span>
+            <span className='tabular-nums'>{wf.start.toLocaleString()}</span>
+          </div>
           {wf.steps.map((st) => (
             <div key={st.dim} className='flex justify-between'>
               <span className='truncate text-slate-600 dark:text-slate-300'>{st.dim}</span>
-              <span className={cn('tabular-nums font-medium', st.delta >= 0 ? 'text-emerald-600' : 'text-red-500')}>
-                {st.delta >= 0 ? '+' : ''}{st.delta.toLocaleString()}
+              <span
+                className={cn(
+                  'tabular-nums font-medium',
+                  st.delta >= 0 ? 'text-emerald-600' : 'text-red-500'
+                )}
+              >
+                {st.delta >= 0 ? '+' : ''}
+                {st.delta.toLocaleString()}
               </span>
             </div>
           ))}
-          <div className='flex justify-between border-t border-slate-200 pt-0.5 font-semibold text-slate-800 dark:border-border dark:text-slate-200'><span>Current</span><span className='tabular-nums'>{wf.end.toLocaleString()}</span></div>
+          <div className='flex justify-between border-t border-slate-200 pt-0.5 font-semibold text-slate-800 dark:border-border dark:text-slate-200'>
+            <span>Current</span>
+            <span className='tabular-nums'>{wf.end.toLocaleString()}</span>
+          </div>
         </div>
       )
     } else if (widget.type === 'movers') {
@@ -890,7 +968,9 @@ function WidgetBody({
           <div className='h-full space-y-0.5 overflow-y-auto px-1'>
             {rows.map((r) => (
               <div key={r.dim} className='flex items-center gap-2 text-[11.5px]'>
-                <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>{r.dim}</span>
+                <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>
+                  {r.dim}
+                </span>
                 <span className='tabular-nums text-slate-400'>
                   {r.previous.toLocaleString()} → {r.current.toLocaleString()}
                 </span>
@@ -1051,7 +1131,17 @@ function WidgetBody({
                       <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
+                  <Tooltip
+                    contentStyle={{
+                      fontSize: 12,
+                      backgroundColor: '#0f172a',
+                      border: '1px solid #334155',
+                      borderRadius: 8,
+                      color: '#f1f5f9'
+                    }}
+                    labelStyle={{ color: '#f1f5f9' }}
+                    itemStyle={{ color: '#e2e8f0' }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
               <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
@@ -1088,7 +1178,17 @@ function WidgetBody({
                 {...catAxisProps(series.length)}
               />
               <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
-              <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
+              <Tooltip
+                contentStyle={{
+                  fontSize: 12,
+                  backgroundColor: '#0f172a',
+                  border: '1px solid #334155',
+                  borderRadius: 8,
+                  color: '#f1f5f9'
+                }}
+                labelStyle={{ color: '#f1f5f9' }}
+                itemStyle={{ color: '#e2e8f0' }}
+              />
               {widget.config?.compare && (
                 <Line
                   type='monotone'
@@ -1135,7 +1235,17 @@ function WidgetBody({
                   <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
                 </>
               )}
-              <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
+              <Tooltip
+                contentStyle={{
+                  fontSize: 12,
+                  backgroundColor: '#0f172a',
+                  border: '1px solid #334155',
+                  borderRadius: 8,
+                  color: '#f1f5f9'
+                }}
+                labelStyle={{ color: '#f1f5f9' }}
+                itemStyle={{ color: '#e2e8f0' }}
+              />
               {widget.config?.compare && (
                 <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
               )}
@@ -1195,8 +1305,8 @@ function AdvancedConfigEditor({
         <>
           <p className='text-[10.5px] text-slate-400'>
             Extra keys: thresholds [{'{'}gte,color{'}'}], footnote, rolling_avg (buckets),
-            drill_levels [fields], refresh_secs, suppress_zero, grand_total,
-            dimension.ranges [{'{'}to,label{'}'}], metric_key, x_field/y_field, hot_days
+            drill_levels [fields], refresh_secs, suppress_zero, grand_total, dimension.ranges [{'{'}
+            to,label{'}'}], metric_key, x_field/y_field, hot_days
           </p>
           <textarea
             value={text}
@@ -1353,7 +1463,9 @@ function ConfigSheet({
 
           {widget.type === 'narrative' && (
             <div className='space-y-1.5'>
-              <Label className='text-[11.5px]'>Text ({'{{token}}'} substitutes widget values)</Label>
+              <Label className='text-[11.5px]'>
+                Text ({'{{token}}'} substitutes widget values)
+              </Label>
               <textarea
                 value={((cfg as Record<string, unknown>).text as string) ?? ''}
                 onChange={(e) => setCfg({ text: e.target.value } as never)}
@@ -1381,445 +1493,472 @@ function ConfigSheet({
                 className='w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
               />
               <p className='text-[10.5px] text-slate-400'>
-                Summarizes the report's other widgets in plain language. Regenerates once a day,
-                or on the widget's refresh button.
+                Summarizes the report's other widgets in plain language. Regenerates once a day, or
+                on the widget's refresh button.
               </p>
             </div>
           )}
 
-          {widget.type !== 'divider' && widget.type !== 'kpi_group' && widget.type !== 'query' && widget.type !== 'calc' && widget.type !== 'narrative' && widget.type !== 'ai_insight' && (
-            <>
-              <div className='space-y-1.5'>
-                <Label className='text-[11.5px]'>Collection</Label>
-                <Combo
-                  value={widget.collection}
-                  options={collectionOpts}
-                  placeholder='Pick a collection'
-                  onChange={(v) =>
-                    set({
-                      collection: v,
-                      config: {
-                        ...cfg,
-                        metric: { aggregate: 'count' },
-                        dimension: null,
-                        filters: [],
-                        columns: []
-                      }
-                    })
-                  }
-                />
-              </div>
-
-              {widget.type !== 'table' && (
+          {widget.type !== 'divider' &&
+            widget.type !== 'kpi_group' &&
+            widget.type !== 'query' &&
+            widget.type !== 'calc' &&
+            widget.type !== 'narrative' &&
+            widget.type !== 'ai_insight' && (
+              <>
                 <div className='space-y-1.5'>
-                  <Label className='text-[11.5px]'>Metric</Label>
-                  <div className='flex flex-wrap gap-1'>
-                    {(['count', 'sum', 'avg', 'min', 'max'] as const).map((a) => (
-                      <button
-                        key={a}
-                        type='button'
-                        onClick={() =>
-                          setCfg({ metric: { aggregate: a, field: cfg.metric?.field } })
-                        }
-                        className={cn(
-                          'rounded-full border px-2.5 py-0.5 text-[11.5px]',
-                          aggregate === a
-                            ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                            : 'border-slate-200 text-slate-400 dark:border-border'
-                        )}
-                      >
-                        {a}
-                      </button>
-                    ))}
-                  </div>
-                  {aggregate !== 'count' && (
-                    <Combo
-                      value={cfg.metric?.field}
-                      options={numericOpts}
-                      placeholder='Numeric field'
-                      onChange={(v) => setCfg({ metric: { aggregate, field: v ?? undefined } })}
-                    />
-                  )}
-                </div>
-              )}
-
-              {isChart && (
-                <div className='space-y-1.5'>
-                  <Label className='text-[11.5px]'>Group by</Label>
+                  <Label className='text-[11.5px]'>Collection</Label>
                   <Combo
-                    value={cfg.dimension?.field}
-                    options={fieldOpts}
-                    placeholder='Dimension field'
+                    value={widget.collection}
+                    options={collectionOpts}
+                    placeholder='Pick a collection'
                     onChange={(v) =>
-                      setCfg({ dimension: v ? { field: v, bucket: cfg.dimension?.bucket } : null })
+                      set({
+                        collection: v,
+                        config: {
+                          ...cfg,
+                          metric: { aggregate: 'count' },
+                          dimension: null,
+                          filters: [],
+                          columns: []
+                        }
+                      })
                     }
                   />
-                  <div className='flex gap-1'>
-                    {([undefined, 'day', 'week', 'month'] as const).map((b) => (
-                      <button
-                        key={b ?? 'none'}
-                        type='button'
-                        onClick={() =>
-                          cfg.dimension &&
-                          setCfg({ dimension: { field: cfg.dimension.field, bucket: b } })
-                        }
-                        className={cn(
-                          'rounded-full border px-2 py-0.5 text-[11px]',
-                          (cfg.dimension?.bucket ?? undefined) === b
-                            ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                            : 'border-slate-200 text-slate-400 dark:border-border'
-                        )}
-                      >
-                        {b ?? 'values'}
-                      </button>
-                    ))}
-                  </div>
                 </div>
-              )}
 
-              {widget.type === 'pivot' &&
-                (['row_dim', 'col_dim'] as const).map((k) => {
-                  const d = cfg[k]
-                  return (
-                    <div key={k} className='space-y-1.5'>
-                      <Label className='text-[11.5px]'>
-                        {k === 'row_dim' ? 'Rows (dimension)' : 'Columns (dimension)'}
-                      </Label>
-                      <Combo
-                        value={d?.field}
-                        options={fieldOpts}
-                        placeholder='Dimension field'
-                        onChange={(v) =>
-                          setCfg({ [k]: v ? { field: v, bucket: d?.bucket } : null } as never)
-                        }
-                      />
-                      {d?.field && (
-                        <div className='flex gap-1'>
-                          {([undefined, 'day', 'week', 'month'] as const).map((b) => (
-                            <button
-                              key={b ?? 'none'}
-                              type='button'
-                              onClick={() => setCfg({ [k]: { field: d.field, bucket: b } } as never)}
-                              className={cn(
-                                'rounded-full border px-2 py-0.5 text-[11px]',
-                                (d.bucket ?? undefined) === b
-                                  ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                                  : 'border-slate-200 text-slate-400 dark:border-border'
-                              )}
-                            >
-                              {b ?? 'values'}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-
-              {widget.type === 'bar' && (
-                <div className='flex items-center gap-2'>
-                  <Label className='text-[11.5px]'>Horizontal bars</Label>
-                  <Switch
-                    checked={cfg.orientation === 'horizontal'}
-                    onCheckedChange={(v) => setCfg({ orientation: v ? 'horizontal' : 'vertical' })}
-                  />
-                </div>
-              )}
-
-              {widget.type === 'table' && (
-                <div className='space-y-1.5'>
-                  <Label className='text-[11.5px]'>Columns</Label>
-                  <div className='flex flex-wrap gap-1'>
-                    {fieldOpts.slice(0, 40).map((f) => {
-                      const active = (cfg.columns ?? []).includes(f.id)
-                      return (
+                {widget.type !== 'table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11.5px]'>Metric</Label>
+                    <div className='flex flex-wrap gap-1'>
+                      {(['count', 'sum', 'avg', 'min', 'max'] as const).map((a) => (
                         <button
-                          key={f.id}
+                          key={a}
                           type='button'
                           onClick={() =>
-                            setCfg({
-                              columns: active
-                                ? (cfg.columns ?? []).filter((c) => c !== f.id)
-                                : [...(cfg.columns ?? []), f.id]
-                            })
+                            setCfg({ metric: { aggregate: a, field: cfg.metric?.field } })
                           }
                           className={cn(
-                            'rounded-full border px-2 py-0.5 text-[10.5px]',
-                            active
+                            'rounded-full border px-2.5 py-0.5 text-[11.5px]',
+                            aggregate === a
                               ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
                               : 'border-slate-200 text-slate-400 dark:border-border'
                           )}
                         >
-                          {f.label}
+                          {a}
                         </button>
-                      )
-                    })}
-                  </div>
-                  <div className='flex items-center gap-2'>
-                    <Label className='text-[11px] text-slate-400'>Sort</Label>
-                    <Input
-                      value={cfg.sort ?? ''}
-                      onChange={(e) => setCfg({ sort: e.target.value })}
-                      placeholder='-created_at'
-                      className='h-7 w-36 text-[12px]'
-                    />
-                    <Label className='text-[11px] text-slate-400'>Limit</Label>
-                    <Input
-                      type='number'
-                      value={cfg.limit ?? 10}
-                      onChange={(e) => setCfg({ limit: Number(e.target.value) || 10 })}
-                      className='h-7 w-16 text-[12px]'
-                    />
-                  </div>
-                  <div className='space-y-1'>
-                    <Label className='text-[11.5px]'>Highlight rules (JSON)</Label>
-                    <FormatRulesEditor
-                      value={(cfg as Record<string, unknown>).format_rules}
-                      onChange={(rules) => setCfg({ format_rules: rules } as never)}
-                    />
-                    <p className='text-[10.5px] text-slate-400'>
-                      {`[{"field":"amount","op":"gt","value":50000,"color":"red","scope":"cell"}] — ops gt/gte/lt/lte/eq, colors red/amber/green/blue, scope cell or row.`}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {(widget.type === 'bar' || widget.type === 'donut' || widget.type === 'movers') && (
-                <div className='flex items-center gap-2'>
-                  <Label className='text-[11.5px]'>{widget.type === 'movers' ? 'Movers each way' : 'Top N'}</Label>
-                  <Input
-                    type='number'
-                    value={cfg.limit ?? 12}
-                    onChange={(e) => setCfg({ limit: Number(e.target.value) || 12 })}
-                    className='h-7 w-16 text-[12px]'
-                  />
-                  <span className='text-[10.5px] text-slate-400'>groups (max 50)</span>
-                </div>
-              )}
-
-              {(widget.type === 'bar' || widget.type === 'line') && (
-                <div className='space-y-1.5'>
-                  <Label className='text-[11.5px]'>Second metric (right axis)</Label>
-                  <div className='flex items-center gap-1.5'>
-                    <select
-                      value={(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate ?? ''}
-                      onChange={(e) => {
-                        const agg = e.target.value
-                        if (!agg) {
-                          setCfg({ metric2: undefined } as never)
-                          return
-                        }
-                        const m2 = (cfg as { metric2?: { field?: string; label?: string } }).metric2
-                        setCfg({
-                          metric2: { aggregate: agg, field: m2?.field, label: m2?.label }
-                        } as never)
-                      }}
-                      className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-                    >
-                      <option value=''>None</option>
-                      <option value='count'>Count</option>
-                      <option value='sum'>Sum</option>
-                      <option value='avg'>Avg</option>
-                      <option value='min'>Min</option>
-                      <option value='max'>Max</option>
-                    </select>
-                    {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate &&
-                      (cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate !== 'count' && (
-                        <select
-                          value={(cfg as { metric2?: { field?: string } }).metric2?.field ?? ''}
-                          onChange={(e) => {
-                            const m2 = (cfg as { metric2?: { aggregate?: string; label?: string } }).metric2
-                            setCfg({
-                              metric2: { aggregate: m2?.aggregate ?? 'sum', field: e.target.value || undefined, label: m2?.label }
-                            } as never)
-                          }}
-                          className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-                        >
-                          <option value=''>Pick a field…</option>
-                          {numericOpts.map((f) => (
-                            <option key={f.id} value={f.id}>
-                              {f.label}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate && (
-                      <Input
-                        value={(cfg as { metric2?: { label?: string } }).metric2?.label ?? ''}
-                        onChange={(e) => {
-                          const m2 = (cfg as { metric2?: { aggregate?: string; field?: string } }).metric2
-                          setCfg({
-                            metric2: { aggregate: m2?.aggregate ?? 'sum', field: m2?.field, label: e.target.value || undefined }
-                          } as never)
-                        }}
-                        placeholder='Label'
-                        className='h-7 w-24 text-[12px]'
-                      />
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className='space-y-1.5'>
-                <Label className='text-[11.5px]'>Date field (for the report date range)</Label>
-                <Combo
-                  value={cfg.date_field}
-                  options={dateOpts}
-                  placeholder='(none — ignores date range)'
-                  onChange={(v) => setCfg({ date_field: v })}
-                  allowEmpty
-                />
-              </div>
-
-              {widget.type !== 'table' && (
-                <div className='space-y-1.5'>
-                  <Label className='text-[11.5px]'>Compare</Label>
-                  <div className='flex gap-1'>
-                    {(
-                      [
-                        [null, 'off'],
-                        ['previous_period', 'vs prev period'],
-                        ['previous_year', 'vs prev year']
-                      ] as const
-                    ).map(([v, label]) => (
-                      <button
-                        key={label}
-                        type='button'
-                        onClick={() => setCfg({ compare: v })}
-                        className={cn(
-                          'rounded-full border px-2 py-0.5 text-[11px]',
-                          (cfg.compare ?? null) === v
-                            ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
-                            : 'border-slate-200 text-slate-400 dark:border-border'
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className='text-[10.5px] text-slate-400'>
-                    Needs a date field and an active date range.
-                  </p>
-                </div>
-              )}
-
-              <div className='space-y-1.5'>
-                <div className='flex items-center justify-between'>
-                  <Label className='text-[11.5px]'>Filters</Label>
-                  <Button
-                    size='sm'
-                    variant='ghost'
-                    className='h-6 px-1.5 text-[11px]'
-                    onClick={() =>
-                      setCfg({
-                        filters: [...(cfg.filters ?? []), { field: '', op: 'eq', value: '' }]
-                      })
-                    }
-                  >
-                    <Plus className='mr-1 h-3 w-3' /> Add
-                  </Button>
-                </div>
-                {(cfg.filters ?? []).map((f, i) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: positional editing
-                  <div key={i} className='flex items-center gap-1'>
-                    <div className='w-32 shrink-0'>
-                      <Combo
-                        value={f.field}
-                        options={fieldOpts}
-                        placeholder='field'
-                        onChange={(v) => {
-                          const next = [...(cfg.filters ?? [])]
-                          next[i] = { ...next[i], field: v ?? '' }
-                          setCfg({ filters: next })
-                        }}
-                      />
-                    </div>
-                    <select
-                      value={f.op}
-                      onChange={(e) => {
-                        const next = [...(cfg.filters ?? [])]
-                        next[i] = { ...next[i], op: e.target.value }
-                        setCfg({ filters: next })
-                      }}
-                      className='h-8 rounded-md border border-slate-200 bg-white px-1 text-[11.5px] dark:border-border dark:bg-card'
-                    >
-                      {FILTER_OPS.map((op) => (
-                        <option key={op} value={op}>
-                          {op}
-                        </option>
                       ))}
-                    </select>
-                    {!['null', 'nnull'].includes(f.op) && (
-                      <Input
-                        value={String(f.value ?? '')}
-                        onChange={(e) => {
-                          const next = [...(cfg.filters ?? [])]
-                          next[i] = { ...next[i], value: e.target.value }
-                          setCfg({ filters: next })
-                        }}
-                        className='h-8 flex-1 text-[12px]'
-                        placeholder='value'
+                    </div>
+                    {aggregate !== 'count' && (
+                      <Combo
+                        value={cfg.metric?.field}
+                        options={numericOpts}
+                        placeholder='Numeric field'
+                        onChange={(v) => setCfg({ metric: { aggregate, field: v ?? undefined } })}
                       />
                     )}
-                    <button
-                      type='button'
-                      className='p-1 text-slate-300 hover:text-red-500'
-                      onClick={() =>
-                        setCfg({ filters: (cfg.filters ?? []).filter((_, j) => j !== i) })
-                      }
-                    >
-                      <Trash2 className='h-3.5 w-3.5' />
-                    </button>
                   </div>
-                ))}
-              </div>
+                )}
 
-              {(widget.type as string) !== 'kpi_group' && (
-                <div className='space-y-1.5'>
-                  <Label className='text-[11.5px]'>Format</Label>
-                  <div className='flex items-center gap-2'>
-                    <Input
-                      value={cfg.format?.prefix ?? ''}
-                      onChange={(e) =>
-                        setCfg({ format: { ...cfg.format, prefix: e.target.value } })
-                      }
-                      placeholder='$'
-                      className='h-7 w-14 text-[12px]'
-                    />
-                    <Input
-                      value={cfg.format?.suffix ?? ''}
-                      onChange={(e) =>
-                        setCfg({ format: { ...cfg.format, suffix: e.target.value } })
-                      }
-                      placeholder='%'
-                      className='h-7 w-14 text-[12px]'
-                    />
-                    <Input
-                      type='number'
-                      value={cfg.format?.decimals ?? ''}
-                      onChange={(e) =>
+                {isChart && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11.5px]'>Group by</Label>
+                    <Combo
+                      value={cfg.dimension?.field}
+                      options={fieldOpts}
+                      placeholder='Dimension field'
+                      onChange={(v) =>
                         setCfg({
-                          format: {
-                            ...cfg.format,
-                            decimals: e.target.value === '' ? undefined : Number(e.target.value)
-                          }
+                          dimension: v ? { field: v, bucket: cfg.dimension?.bucket } : null
                         })
                       }
-                      placeholder='decimals'
-                      className='h-7 w-20 text-[12px]'
+                    />
+                    <div className='flex gap-1'>
+                      {([undefined, 'day', 'week', 'month'] as const).map((b) => (
+                        <button
+                          key={b ?? 'none'}
+                          type='button'
+                          onClick={() =>
+                            cfg.dimension &&
+                            setCfg({ dimension: { field: cfg.dimension.field, bucket: b } })
+                          }
+                          className={cn(
+                            'rounded-full border px-2 py-0.5 text-[11px]',
+                            (cfg.dimension?.bucket ?? undefined) === b
+                              ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                              : 'border-slate-200 text-slate-400 dark:border-border'
+                          )}
+                        >
+                          {b ?? 'values'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {widget.type === 'pivot' &&
+                  (['row_dim', 'col_dim'] as const).map((k) => {
+                    const d = cfg[k]
+                    return (
+                      <div key={k} className='space-y-1.5'>
+                        <Label className='text-[11.5px]'>
+                          {k === 'row_dim' ? 'Rows (dimension)' : 'Columns (dimension)'}
+                        </Label>
+                        <Combo
+                          value={d?.field}
+                          options={fieldOpts}
+                          placeholder='Dimension field'
+                          onChange={(v) =>
+                            setCfg({ [k]: v ? { field: v, bucket: d?.bucket } : null } as never)
+                          }
+                        />
+                        {d?.field && (
+                          <div className='flex gap-1'>
+                            {([undefined, 'day', 'week', 'month'] as const).map((b) => (
+                              <button
+                                key={b ?? 'none'}
+                                type='button'
+                                onClick={() =>
+                                  setCfg({ [k]: { field: d.field, bucket: b } } as never)
+                                }
+                                className={cn(
+                                  'rounded-full border px-2 py-0.5 text-[11px]',
+                                  (d.bucket ?? undefined) === b
+                                    ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                                    : 'border-slate-200 text-slate-400 dark:border-border'
+                                )}
+                              >
+                                {b ?? 'values'}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+
+                {widget.type === 'bar' && (
+                  <div className='flex items-center gap-2'>
+                    <Label className='text-[11.5px]'>Horizontal bars</Label>
+                    <Switch
+                      checked={cfg.orientation === 'horizontal'}
+                      onCheckedChange={(v) =>
+                        setCfg({ orientation: v ? 'horizontal' : 'vertical' })
+                      }
                     />
                   </div>
+                )}
+
+                {widget.type === 'table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11.5px]'>Columns</Label>
+                    <div className='flex flex-wrap gap-1'>
+                      {fieldOpts.slice(0, 40).map((f) => {
+                        const active = (cfg.columns ?? []).includes(f.id)
+                        return (
+                          <button
+                            key={f.id}
+                            type='button'
+                            onClick={() =>
+                              setCfg({
+                                columns: active
+                                  ? (cfg.columns ?? []).filter((c) => c !== f.id)
+                                  : [...(cfg.columns ?? []), f.id]
+                              })
+                            }
+                            className={cn(
+                              'rounded-full border px-2 py-0.5 text-[10.5px]',
+                              active
+                                ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                                : 'border-slate-200 text-slate-400 dark:border-border'
+                            )}
+                          >
+                            {f.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <div className='flex items-center gap-2'>
+                      <Label className='text-[11px] text-slate-400'>Sort</Label>
+                      <Input
+                        value={cfg.sort ?? ''}
+                        onChange={(e) => setCfg({ sort: e.target.value })}
+                        placeholder='-created_at'
+                        className='h-7 w-36 text-[12px]'
+                      />
+                      <Label className='text-[11px] text-slate-400'>Limit</Label>
+                      <Input
+                        type='number'
+                        value={cfg.limit ?? 10}
+                        onChange={(e) => setCfg({ limit: Number(e.target.value) || 10 })}
+                        className='h-7 w-16 text-[12px]'
+                      />
+                    </div>
+                    <div className='space-y-1'>
+                      <Label className='text-[11.5px]'>Highlight rules (JSON)</Label>
+                      <FormatRulesEditor
+                        value={(cfg as Record<string, unknown>).format_rules}
+                        onChange={(rules) => setCfg({ format_rules: rules } as never)}
+                      />
+                      <p className='text-[10.5px] text-slate-400'>
+                        {`[{"field":"amount","op":"gt","value":50000,"color":"red","scope":"cell"}] — ops gt/gte/lt/lte/eq, colors red/amber/green/blue, scope cell or row.`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {(widget.type === 'bar' || widget.type === 'donut' || widget.type === 'movers') && (
+                  <div className='flex items-center gap-2'>
+                    <Label className='text-[11.5px]'>
+                      {widget.type === 'movers' ? 'Movers each way' : 'Top N'}
+                    </Label>
+                    <Input
+                      type='number'
+                      value={cfg.limit ?? 12}
+                      onChange={(e) => setCfg({ limit: Number(e.target.value) || 12 })}
+                      className='h-7 w-16 text-[12px]'
+                    />
+                    <span className='text-[10.5px] text-slate-400'>groups (max 50)</span>
+                  </div>
+                )}
+
+                {(widget.type === 'bar' || widget.type === 'line') && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11.5px]'>Second metric (right axis)</Label>
+                    <div className='flex items-center gap-1.5'>
+                      <select
+                        value={
+                          (cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate ?? ''
+                        }
+                        onChange={(e) => {
+                          const agg = e.target.value
+                          if (!agg) {
+                            setCfg({ metric2: undefined } as never)
+                            return
+                          }
+                          const m2 = (cfg as { metric2?: { field?: string; label?: string } })
+                            .metric2
+                          setCfg({
+                            metric2: { aggregate: agg, field: m2?.field, label: m2?.label }
+                          } as never)
+                        }}
+                        className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                      >
+                        <option value=''>None</option>
+                        <option value='count'>Count</option>
+                        <option value='sum'>Sum</option>
+                        <option value='avg'>Avg</option>
+                        <option value='min'>Min</option>
+                        <option value='max'>Max</option>
+                      </select>
+                      {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate &&
+                        (cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate !==
+                          'count' && (
+                          <select
+                            value={(cfg as { metric2?: { field?: string } }).metric2?.field ?? ''}
+                            onChange={(e) => {
+                              const m2 = (
+                                cfg as { metric2?: { aggregate?: string; label?: string } }
+                              ).metric2
+                              setCfg({
+                                metric2: {
+                                  aggregate: m2?.aggregate ?? 'sum',
+                                  field: e.target.value || undefined,
+                                  label: m2?.label
+                                }
+                              } as never)
+                            }}
+                            className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                          >
+                            <option value=''>Pick a field…</option>
+                            {numericOpts.map((f) => (
+                              <option key={f.id} value={f.id}>
+                                {f.label}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate && (
+                        <Input
+                          value={(cfg as { metric2?: { label?: string } }).metric2?.label ?? ''}
+                          onChange={(e) => {
+                            const m2 = (cfg as { metric2?: { aggregate?: string; field?: string } })
+                              .metric2
+                            setCfg({
+                              metric2: {
+                                aggregate: m2?.aggregate ?? 'sum',
+                                field: m2?.field,
+                                label: e.target.value || undefined
+                              }
+                            } as never)
+                          }}
+                          placeholder='Label'
+                          className='h-7 w-24 text-[12px]'
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className='space-y-1.5'>
+                  <Label className='text-[11.5px]'>Date field (for the report date range)</Label>
+                  <Combo
+                    value={cfg.date_field}
+                    options={dateOpts}
+                    placeholder='(none — ignores date range)'
+                    onChange={(v) => setCfg({ date_field: v })}
+                    allowEmpty
+                  />
                 </div>
-              )}
-            </>
-          )}
+
+                {widget.type !== 'table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11.5px]'>Compare</Label>
+                    <div className='flex gap-1'>
+                      {(
+                        [
+                          [null, 'off'],
+                          ['previous_period', 'vs prev period'],
+                          ['previous_year', 'vs prev year']
+                        ] as const
+                      ).map(([v, label]) => (
+                        <button
+                          key={label}
+                          type='button'
+                          onClick={() => setCfg({ compare: v })}
+                          className={cn(
+                            'rounded-full border px-2 py-0.5 text-[11px]',
+                            (cfg.compare ?? null) === v
+                              ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                              : 'border-slate-200 text-slate-400 dark:border-border'
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className='text-[10.5px] text-slate-400'>
+                      Needs a date field and an active date range.
+                    </p>
+                  </div>
+                )}
+
+                <div className='space-y-1.5'>
+                  <div className='flex items-center justify-between'>
+                    <Label className='text-[11.5px]'>Filters</Label>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-6 px-1.5 text-[11px]'
+                      onClick={() =>
+                        setCfg({
+                          filters: [...(cfg.filters ?? []), { field: '', op: 'eq', value: '' }]
+                        })
+                      }
+                    >
+                      <Plus className='mr-1 h-3 w-3' /> Add
+                    </Button>
+                  </div>
+                  {(cfg.filters ?? []).map((f, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: positional editing
+                    <div key={i} className='flex items-center gap-1'>
+                      <div className='w-32 shrink-0'>
+                        <Combo
+                          value={f.field}
+                          options={fieldOpts}
+                          placeholder='field'
+                          onChange={(v) => {
+                            const next = [...(cfg.filters ?? [])]
+                            next[i] = { ...next[i], field: v ?? '' }
+                            setCfg({ filters: next })
+                          }}
+                        />
+                      </div>
+                      <select
+                        value={f.op}
+                        onChange={(e) => {
+                          const next = [...(cfg.filters ?? [])]
+                          next[i] = { ...next[i], op: e.target.value }
+                          setCfg({ filters: next })
+                        }}
+                        className='h-8 rounded-md border border-slate-200 bg-white px-1 text-[11.5px] dark:border-border dark:bg-card'
+                      >
+                        {FILTER_OPS.map((op) => (
+                          <option key={op} value={op}>
+                            {op}
+                          </option>
+                        ))}
+                      </select>
+                      {!['null', 'nnull'].includes(f.op) && (
+                        <Input
+                          value={String(f.value ?? '')}
+                          onChange={(e) => {
+                            const next = [...(cfg.filters ?? [])]
+                            next[i] = { ...next[i], value: e.target.value }
+                            setCfg({ filters: next })
+                          }}
+                          className='h-8 flex-1 text-[12px]'
+                          placeholder='value'
+                        />
+                      )}
+                      <button
+                        type='button'
+                        className='p-1 text-slate-300 hover:text-red-500'
+                        onClick={() =>
+                          setCfg({ filters: (cfg.filters ?? []).filter((_, j) => j !== i) })
+                        }
+                      >
+                        <Trash2 className='h-3.5 w-3.5' />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {(widget.type as string) !== 'kpi_group' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11.5px]'>Format</Label>
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        value={cfg.format?.prefix ?? ''}
+                        onChange={(e) =>
+                          setCfg({ format: { ...cfg.format, prefix: e.target.value } })
+                        }
+                        placeholder='$'
+                        className='h-7 w-14 text-[12px]'
+                      />
+                      <Input
+                        value={cfg.format?.suffix ?? ''}
+                        onChange={(e) =>
+                          setCfg({ format: { ...cfg.format, suffix: e.target.value } })
+                        }
+                        placeholder='%'
+                        className='h-7 w-14 text-[12px]'
+                      />
+                      <Input
+                        type='number'
+                        value={cfg.format?.decimals ?? ''}
+                        onChange={(e) =>
+                          setCfg({
+                            format: {
+                              ...cfg.format,
+                              decimals: e.target.value === '' ? undefined : Number(e.target.value)
+                            }
+                          })
+                        }
+                        placeholder='decimals'
+                        className='h-7 w-20 text-[12px]'
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
 
           {/* Advanced config — the long tail of widget options (thresholds,
               footnotes, rolling averages, drill hierarchies, per-widget
               refresh, table options, range buckets, metric_key, scatter axes)
               edits as raw JSON merged over the structured fields above. */}
           <AdvancedConfigEditor cfg={cfg} onCommit={(next) => set({ config: next })} />
-
         </div>
       </SheetContent>
     </Sheet>
@@ -2122,7 +2261,9 @@ function MetricRow({
       <div className='flex items-center gap-1.5'>
         <Input
           value={metric.format?.prefix ?? ''}
-          onChange={(e) => onChange({ ...metric, format: { ...metric.format, prefix: e.target.value } })}
+          onChange={(e) =>
+            onChange({ ...metric, format: { ...metric.format, prefix: e.target.value } })
+          }
           placeholder='$'
           className='h-6 w-10 text-[11px]'
         />
@@ -2197,7 +2338,10 @@ const FilterExtrasBar = memo(function FilterExtrasBar({
   filterBar: NonNullable<GlobalFilters['filter_bar']>
   appliedRange: GlobalFilters['date_range']
   appliedFilters: EntityFilter[]
-  onApply: (d: { date_range?: GlobalFilters['date_range']; entity_filters?: EntityFilter[] }) => void
+  onApply: (d: {
+    date_range?: GlobalFilters['date_range']
+    entity_filters?: EntityFilter[]
+  }) => void
 }) {
   const queryClient = useQueryClient()
   const [prompt, setPrompt] = useState('')
@@ -2389,9 +2533,7 @@ function AlertsSheet({
   const { data: alerts = [] } = useQuery({
     queryKey: ['rs-alerts', reportId],
     queryFn: () =>
-      api
-        .get<{ data: ReportAlert[] }>(`/report-studio/${reportId}/alerts`)
-        .then((r) => r.data.data)
+      api.get<{ data: ReportAlert[] }>(`/report-studio/${reportId}/alerts`).then((r) => r.data.data)
   })
   const { data: log = [] } = useQuery({
     queryKey: ['rs-alert-log', reportId],
@@ -2452,7 +2594,9 @@ function AlertsSheet({
     <div key={i} className='flex items-center gap-1.5'>
       <select
         value={c.field}
-        onChange={(e) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, field: e.target.value } : x)))}
+        onChange={(e) =>
+          setConds((cs) => cs.map((x, j) => (j === i ? { ...x, field: e.target.value } : x)))
+        }
         className='h-8 max-w-[180px] rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
       >
         {alertFieldOptionsFor(widgets.find((w) => w.id === widgetId)).map((o) => (
@@ -2463,7 +2607,9 @@ function AlertsSheet({
       </select>
       <select
         value={c.op}
-        onChange={(e) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, op: e.target.value } : x)))}
+        onChange={(e) =>
+          setConds((cs) => cs.map((x, j) => (j === i ? { ...x, op: e.target.value } : x)))
+        }
         className='h-8 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
       >
         {['gt', 'gte', 'lt', 'lte', 'eq'].map((o) => (
@@ -2475,7 +2621,9 @@ function AlertsSheet({
       <Input
         type='number'
         value={c.value}
-        onChange={(e) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+        onChange={(e) =>
+          setConds((cs) => cs.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
+        }
         placeholder='threshold'
         className='h-8 flex-1 text-[12px]'
       />
@@ -2501,8 +2649,8 @@ function AlertsSheet({
           </SheetTitle>
         </SheetHeader>
         <p className='mt-1 text-[11.5px] text-slate-400'>
-          Checked hourly. Fires once when all conditions hold, resolves when back in range.
-          Charts alert on their series total; tables on row count.
+          Checked hourly. Fires once when all conditions hold, resolves when back in range. Charts
+          alert on their series total; tables on row count.
         </p>
 
         {alertable.length === 0 ? (
@@ -2570,7 +2718,10 @@ function AlertsSheet({
 
         <div className='mt-4 space-y-1.5'>
           {alerts.map((a) => (
-            <div key={a.id} className='rounded-lg border border-slate-200 px-3 py-2 dark:border-border'>
+            <div
+              key={a.id}
+              className='rounded-lg border border-slate-200 px-3 py-2 dark:border-border'
+            >
               <div className='flex items-center gap-2'>
                 <div className='min-w-0 flex-1'>
                   <p className='truncate text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
@@ -2583,7 +2734,8 @@ function AlertsSheet({
                   </p>
                   <p className='truncate text-[10.5px] text-slate-400'>
                     on “{widgetTitle(a.widget)}”
-                    {a.filters && a.filters.length > 0 &&
+                    {a.filters &&
+                      a.filters.length > 0 &&
                       ` · scoped: ${a.filters.map((f) => (f.labels ?? f.values).join('/')).join(', ')}`}
                     {' · Last fired: '}
                     {a.last_fired ? formatRelative(a.last_fired) : 'never'}
@@ -2591,7 +2743,9 @@ function AlertsSheet({
                 </div>
                 <Switch
                   checked={a.is_active}
-                  onCheckedChange={() => patchAlert.mutate({ id: a.id, body: { is_active: !a.is_active } })}
+                  onCheckedChange={() =>
+                    patchAlert.mutate({ id: a.id, body: { is_active: !a.is_active } })
+                  }
                 />
                 <button
                   type='button'
@@ -2605,14 +2759,18 @@ function AlertsSheet({
                 <label className='flex items-center gap-1 text-[10.5px] text-slate-400'>
                   <Switch
                     checked={(a as { delivery_email?: boolean }).delivery_email !== false}
-                    onCheckedChange={(v) => patchAlert.mutate({ id: a.id, body: { delivery_email: v } })}
+                    onCheckedChange={(v) =>
+                      patchAlert.mutate({ id: a.id, body: { delivery_email: v } })
+                    }
                   />
                   Email
                 </label>
                 <label className='flex items-center gap-1 text-[10.5px] text-slate-400'>
                   <Switch
                     checked={(a as { delivery_inapp?: boolean }).delivery_inapp !== false}
-                    onCheckedChange={(v) => patchAlert.mutate({ id: a.id, body: { delivery_inapp: v } })}
+                    onCheckedChange={(v) =>
+                      patchAlert.mutate({ id: a.id, body: { delivery_inapp: v } })
+                    }
                   />
                   In-app
                 </label>
@@ -2648,7 +2806,9 @@ function AlertsSheet({
                 <span className='shrink-0 text-slate-400'>
                   {new Date(l.fired_at).toLocaleString()}
                 </span>
-                <span className={`shrink-0 ${l.status === 'firing' ? 'text-red-500' : 'text-emerald-500'}`}>
+                <span
+                  className={`shrink-0 ${l.status === 'firing' ? 'text-red-500' : 'text-emerald-500'}`}
+                >
                   {l.status}
                 </span>
               </div>
@@ -2743,7 +2903,11 @@ function SubscribePopover({ reportId }: { reportId: string }) {
                 <Switch
                   checked={sub.delivery_email !== false}
                   onCheckedChange={(v) =>
-                    save.mutate({ cadence: sub.cadence, delivery_email: v, delivery_inapp: sub.delivery_inapp !== false })
+                    save.mutate({
+                      cadence: sub.cadence,
+                      delivery_email: v,
+                      delivery_inapp: sub.delivery_inapp !== false
+                    })
                   }
                 />
                 Email
@@ -2752,7 +2916,11 @@ function SubscribePopover({ reportId }: { reportId: string }) {
                 <Switch
                   checked={sub.delivery_inapp !== false}
                   onCheckedChange={(v) =>
-                    save.mutate({ cadence: sub.cadence, delivery_email: sub.delivery_email !== false, delivery_inapp: v })
+                    save.mutate({
+                      cadence: sub.cadence,
+                      delivery_email: sub.delivery_email !== false,
+                      delivery_inapp: v
+                    })
                   }
                 />
                 In-app
@@ -2772,6 +2940,31 @@ function SubscribePopover({ reportId }: { reportId: string }) {
                 PDF
               </label>
             </div>
+            <label
+              className='mt-2 flex items-center gap-1.5 border-t border-slate-100 pt-2 text-[11px] text-slate-500 dark:border-border'
+              data-sub-only-if-changed
+            >
+              <Switch
+                checked={(sub as { only_if_changed?: boolean }).only_if_changed === true}
+                onCheckedChange={(v) =>
+                  save.mutate({
+                    cadence: sub.cadence,
+                    delivery_email: sub.delivery_email !== false,
+                    delivery_inapp: sub.delivery_inapp !== false,
+                    only_if_changed: v
+                  } as never)
+                }
+              />
+              <span>
+                Only when something changed
+                <span className='block text-[10.5px] text-slate-400'>
+                  Skips the send when every number matches the last digest
+                  {(sub as { last_skipped_at?: string | null }).last_skipped_at
+                    ? ` · last skipped ${new Date(String((sub as { last_skipped_at?: string }).last_skipped_at)).toLocaleDateString()}`
+                    : ''}
+                </span>
+              </span>
+            </label>
             <div className='mt-2 border-t border-slate-100 pt-2 dark:border-border'>
               <p className='text-[11px] text-slate-500'>Also post to a chat room</p>
               <select
@@ -2822,7 +3015,11 @@ function HealthCheckPanel({
   entityFilters: EntityFilter[]
   reportId: string
 }) {
-  const [results, setResults] = useState<Array<{ title: string; status: string; ms: number }> | null>(null)
+  const [results, setResults] = useState<Array<{
+    title: string
+    status: string
+    ms: number
+  }> | null>(null)
   const [running, setRunning] = useState(false)
   const run = async () => {
     setRunning(true)
@@ -2858,8 +3055,9 @@ function HealthCheckPanel({
       } catch (err) {
         out.push({
           title: w.title || w.type,
-          status:
-            ((err as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'error').slice(0, 60),
+          status: (
+            (err as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'error'
+          ).slice(0, 60),
           ms: Math.round(performance.now() - t0)
         })
       }
@@ -2875,7 +3073,9 @@ function HealthCheckPanel({
         Runs every widget and flags errors, empty results, and anything over 5s.
       </p>
       <Button size='sm' className='mt-2 h-7 w-full text-[11.5px]' disabled={running} onClick={run}>
-        {running ? `Checking… ${results?.length ?? 0}/${widgets.filter((w) => w.type !== 'divider').length}` : 'Run check'}
+        {running
+          ? `Checking… ${results?.length ?? 0}/${widgets.filter((w) => w.type !== 'divider').length}`
+          : 'Run check'}
       </Button>
       {results && !running && (
         <p className='mt-2 text-[11.5px] text-slate-500'>
@@ -2890,10 +3090,18 @@ function HealthCheckPanel({
             <span
               className={cn(
                 'h-1.5 w-1.5 shrink-0 rounded-full',
-                r.status === 'ok' ? (r.ms > 5000 ? 'bg-amber-400' : 'bg-emerald-400') : r.status === 'empty' ? 'bg-amber-400' : 'bg-red-400'
+                r.status === 'ok'
+                  ? r.ms > 5000
+                    ? 'bg-amber-400'
+                    : 'bg-emerald-400'
+                  : r.status === 'empty'
+                    ? 'bg-amber-400'
+                    : 'bg-red-400'
               )}
             />
-            <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>{r.title}</span>
+            <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>
+              {r.title}
+            </span>
             <span className='shrink-0 tabular-nums text-slate-400'>{r.ms}ms</span>
             {r.status !== 'ok' && (
               <span className='max-w-[110px] shrink-0 truncate text-red-400'>{r.status}</span>
@@ -2921,7 +3129,9 @@ function CalcConfigEditor({
   refsOnly?: boolean
 }) {
   const refs = cfg.refs ?? {}
-  const candidates = widgets.filter((w) => w.id !== selfId && w.type !== 'divider' && w.type !== 'calc')
+  const candidates = widgets.filter(
+    (w) => w.id !== selfId && w.type !== 'divider' && w.type !== 'calc'
+  )
   const tokens = Object.keys(refs)
   const nextToken = () => {
     for (const c of 'abcdefgh') if (!tokens.includes(c)) return c
@@ -2930,18 +3140,18 @@ function CalcConfigEditor({
   return (
     <div className='space-y-2'>
       {!refsOnly && (
-      <div className='space-y-1'>
-        <Label className='text-[11.5px]'>Formula</Label>
-        <Input
-          value={cfg.formula ?? ''}
-          onChange={(e) => onChange({ formula: e.target.value })}
-          placeholder='{{a}} / {{b}}'
-          className='h-8 font-mono text-[12.5px]'
-        />
-        <p className='text-[10.5px] text-slate-400'>
-          Arithmetic over the tokens below — each token is another widget's value.
-        </p>
-      </div>
+        <div className='space-y-1'>
+          <Label className='text-[11.5px]'>Formula</Label>
+          <Input
+            value={cfg.formula ?? ''}
+            onChange={(e) => onChange({ formula: e.target.value })}
+            placeholder='{{a}} / {{b}}'
+            className='h-8 font-mono text-[12.5px]'
+          />
+          <p className='text-[10.5px] text-slate-400'>
+            Arithmetic over the tokens below — each token is another widget's value.
+          </p>
+        </div>
       )}
       <div className='space-y-1'>
         <Label className='text-[11.5px]'>Tokens</Label>
@@ -2988,7 +3198,9 @@ function CalcConfigEditor({
         <Label className='text-[11px] text-slate-400'>Prefix</Label>
         <Input
           value={cfg.format?.prefix ?? ''}
-          onChange={(e) => onChange({ format: { ...cfg.format, prefix: e.target.value || undefined } })}
+          onChange={(e) =>
+            onChange({ format: { ...cfg.format, prefix: e.target.value || undefined } })
+          }
           className='h-7 w-14 text-[12px]'
         />
         <Label className='text-[11px] text-slate-400'>Decimals</Label>
@@ -2997,7 +3209,10 @@ function CalcConfigEditor({
           value={cfg.format?.decimals ?? ''}
           onChange={(e) =>
             onChange({
-              format: { ...cfg.format, decimals: e.target.value === '' ? undefined : Number(e.target.value) }
+              format: {
+                ...cfg.format,
+                decimals: e.target.value === '' ? undefined : Number(e.target.value)
+              }
             })
           }
           className='h-7 w-14 text-[12px]'
@@ -3097,8 +3312,8 @@ function VersionsPopover({ reportId, onRestored }: { reportId: string; onRestore
           Version history
         </p>
         <p className='px-1 pb-1.5 text-[11px] text-slate-400'>
-          A snapshot is captured before every save — restore rolls the whole
-          report (widgets included) back.
+          A snapshot is captured before every save — restore rolls the whole report (widgets
+          included) back.
         </p>
         <div className='max-h-72 space-y-1 overflow-y-auto'>
           {versions.length === 0 && (
@@ -3322,9 +3537,7 @@ export function ReportStudioEditPage() {
           })
           .then((r) => {
             const map = new Map((r.data.data ?? []).map((row) => [String(row.id), row[vf]]))
-            return ids
-              .map((v) => map.get(String(v)))
-              .filter((v): v is string | number => v != null)
+            return ids.map((v) => map.get(String(v))).filter((v): v is string | number => v != null)
           })
           .catch(() => [])
       }
@@ -3427,7 +3640,11 @@ export function ReportStudioEditPage() {
   // RGL-style: pin the active item at its target cell, push colliding items
   // down, compact everything else up.
   const layoutWithPinned = useCallback(
-    (list: Widget[], id: string, target: { x: number; y: number; w: number; h: number }): Widget[] => {
+    (
+      list: Widget[],
+      id: string,
+      target: { x: number; y: number; w: number; h: number }
+    ): Widget[] => {
       const pinned = { ...(list.find((w) => w.id === id) as Widget), ...target }
       const others = list.filter((w) => w.id !== id).sort((a, b) => a.y - b.y || a.x - b.x)
       const placed: Array<{ x: number; y: number; w: number; h: number }> = [
@@ -3436,7 +3653,8 @@ export function ReportStudioEditPage() {
       const out: Widget[] = [pinned]
       for (const w of others) {
         let y = Math.max(0, w.y)
-        while (y > 0 && !placed.some((pl) => overlaps({ x: w.x, y: y - 1, w: w.w, h: w.h }, pl))) y--
+        while (y > 0 && !placed.some((pl) => overlaps({ x: w.x, y: y - 1, w: w.w, h: w.h }, pl)))
+          y--
         while (placed.some((pl) => overlaps({ x: w.x, y, w: w.w, h: w.h }, pl))) y++
         placed.push({ x: w.x, y, w: w.w, h: w.h })
         out.push({ ...w, y })
@@ -3493,7 +3711,11 @@ export function ReportStudioEditPage() {
       const target = e.target as HTMLElement
       const card = target.closest<HTMLElement>('[data-wid]')
       if (!card) return
-      const mode = target.closest('.rs-resize') ? 'resize' : target.closest('.rs-drag') ? 'drag' : null
+      const mode = target.closest('.rs-resize')
+        ? 'resize'
+        : target.closest('.rs-drag')
+          ? 'drag'
+          : null
       if (!mode) return
       if (colUnit <= 0) return
       const id = card.dataset.wid as string
@@ -3631,7 +3853,10 @@ export function ReportStudioEditPage() {
         type: p.widget_type,
         title: p.name,
         collection: null,
-        config: (p.config ?? (p.widget_type === 'query' ? { query: { slug: '', display: 'table' } } : {})) as Widget['config'],
+        config: (p.config ??
+          (p.widget_type === 'query'
+            ? { query: { slug: '', display: 'table' } }
+            : {})) as Widget['config'],
         x: 0,
         y: maxY,
         w: Math.min(12, Math.max(2, p.w)),
@@ -3679,7 +3904,12 @@ export function ReportStudioEditPage() {
                       : { metric: { aggregate: 'count' } },
         x: 0,
         y: maxY,
-        w: type === 'kpi' || type === 'calc' ? 3 : type === 'divider' || type === 'kpi_group' ? 12 : 6,
+        w:
+          type === 'kpi' || type === 'calc'
+            ? 3
+            : type === 'divider' || type === 'kpi_group'
+              ? 12
+              : 6,
         h:
           type === 'kpi' || type === 'calc'
             ? 2
@@ -3833,7 +4063,12 @@ export function ReportStudioEditPage() {
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className='w-80 p-3' align='end'>
-                  <HealthCheckPanel widgets={widgets} dateRange={dateRange} entityFilters={entityFilters} reportId={report.id} />
+                  <HealthCheckPanel
+                    widgets={widgets}
+                    dateRange={dateRange}
+                    entityFilters={entityFilters}
+                    reportId={report.id}
+                  />
                 </PopoverContent>
               </Popover>
             )}
@@ -3852,7 +4087,12 @@ export function ReportStudioEditPage() {
               </select>
             )}
             <SubscribePopover reportId={report.id} />
-            <Button size='sm' variant='outline' className='gap-1.5' onClick={() => setAlertsFor(null)}>
+            <Button
+              size='sm'
+              variant='outline'
+              className='gap-1.5'
+              onClick={() => setAlertsFor(null)}
+            >
               <Bell className='h-3.5 w-3.5' /> Alerts
             </Button>
             {report.editable && (
@@ -3866,7 +4106,12 @@ export function ReportStudioEditPage() {
                   <Globe className={cn('h-3.5 w-3.5', report.is_shared && 'text-nvr-cyan')} />
                   {report.is_shared ? 'Shared' : 'Share'}
                 </Button>
-                <Button size='sm' variant='outline' className='gap-1.5' onClick={() => clone.mutate()}>
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='gap-1.5'
+                  onClick={() => clone.mutate()}
+                >
                   <Copy className='h-3.5 w-3.5' /> Clone
                 </Button>
                 <Button
@@ -3876,7 +4121,10 @@ export function ReportStudioEditPage() {
                   disabled={resetCache.isPending}
                   onClick={() => resetCache.mutate()}
                 >
-                  <RefreshCw className={cn('h-3.5 w-3.5', resetCache.isPending && 'animate-spin')} /> Reset cache
+                  <RefreshCw
+                    className={cn('h-3.5 w-3.5', resetCache.isPending && 'animate-spin')}
+                  />{' '}
+                  Reset cache
                 </Button>
                 <Button size='sm' variant='outline' className='gap-1.5' onClick={exportJson}>
                   <Download className='h-3.5 w-3.5' /> Export
@@ -3894,7 +4142,11 @@ export function ReportStudioEditPage() {
                   variant='outline'
                   className='gap-1.5 text-slate-400 hover:border-red-200 hover:text-red-500'
                   onClick={() => {
-                    if (window.confirm(`Delete report “${report.name}”? Widgets, subscriptions and alerts go with it.`)) {
+                    if (
+                      window.confirm(
+                        `Delete report “${report.name}”? Widgets, subscriptions and alerts go with it.`
+                      )
+                    ) {
                       void api.delete(`/report-studio/${report.id}`).then(() => {
                         toast.success('Report deleted')
                         navigate('/report-studio')
@@ -3963,7 +4215,11 @@ export function ReportStudioEditPage() {
                   patchReport.mutate({
                     global_filters: {
                       ...gf,
-                      date_range: { preset: 'custom', start: e.target.value, end: gf.date_range?.end }
+                      date_range: {
+                        preset: 'custom',
+                        start: e.target.value,
+                        end: gf.date_range?.end
+                      }
                     }
                   })
                 }
@@ -3977,7 +4233,11 @@ export function ReportStudioEditPage() {
                   patchReport.mutate({
                     global_filters: {
                       ...gf,
-                      date_range: { preset: 'custom', start: gf.date_range?.start, end: e.target.value }
+                      date_range: {
+                        preset: 'custom',
+                        start: gf.date_range?.start,
+                        end: e.target.value
+                      }
                     }
                   })
                 }
@@ -4030,7 +4290,6 @@ export function ReportStudioEditPage() {
               <X className='h-3 w-3' /> Clear
             </button>
           )}
-
         </div>
 
         <FilterExtrasBar
@@ -4083,7 +4342,7 @@ export function ReportStudioEditPage() {
           </div>
         ) : (
           <>
-          <style>{`
+            <style>{`
             .rs-resize {
               position: absolute; right: 0; bottom: 0; width: 22px; height: 22px;
               cursor: nwse-resize; z-index: 3;
@@ -4098,164 +4357,170 @@ export function ReportStudioEditPage() {
             }
             .rs-resize:hover::after { border-color: #00ceff; }
           `}</style>
-          <div
-            ref={setCanvasEl}
-            className='relative'
-            style={{ height: canvasH || undefined }}
-            onPointerDown={onCanvasPointerDown}
-          >
             <div
-              ref={ghostElRef}
-              className='pointer-events-none absolute rounded-lg border border-dashed border-[#00ceff] bg-[#00ceff1a]'
-              style={{ display: 'none' }}
-            />
-            {widgets.map((w) => (
+              ref={setCanvasEl}
+              className='relative'
+              style={{ height: canvasH || undefined }}
+              onPointerDown={onCanvasPointerDown}
+            >
               <div
-                key={w.id}
-                data-wid={w.id}
-                style={cardStyle(w)}
-                className={cn(
-                  'group/widget overflow-hidden',
-                  w.type === 'divider'
-                    ? 'flex items-end'
-                    : 'rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
-                )}
-              >
-                {w.type === 'divider' ? (
-                  <div className='flex w-full items-center gap-2 border-b border-slate-200 pb-1 dark:border-border'>
-                    <span
-                      className={cn(
-                        'flex min-w-0 flex-1 items-center gap-2',
-                        editMode && 'rs-drag cursor-grab active:cursor-grabbing'
-                      )}
-                    >
-                      {editMode && <GripVertical className='h-3.5 w-3.5 text-slate-300' />}
-                      <h3 className='text-[13px] font-semibold text-slate-700 dark:text-slate-200'>
-                        {w.title}
-                      </h3>
-                    </span>
-                    {editMode && (
-                      <span className='ml-auto flex gap-0.5 opacity-0 transition-opacity group-hover/widget:opacity-100'>
-                        <button
-                          type='button'
-                          className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
-                          onClick={() => setConfiguring(w.id)}
-                        >
-                          <Settings2 className='h-3.5 w-3.5' />
-                        </button>
-                        <button
-                          type='button'
-                          className='rounded p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500'
-                          onClick={() => setWidgets((p) => p.filter((x) => x.id !== w.id))}
-                        >
-                          <Trash2 className='h-3.5 w-3.5' />
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div className='flex h-full flex-col p-3'>
-                    <div className='mb-1.5 flex items-center gap-1.5'>
+                ref={ghostElRef}
+                className='pointer-events-none absolute rounded-lg border border-dashed border-[#00ceff] bg-[#00ceff1a]'
+                style={{ display: 'none' }}
+              />
+              {widgets.map((w) => (
+                <div
+                  key={w.id}
+                  data-wid={w.id}
+                  style={cardStyle(w)}
+                  className={cn(
+                    'group/widget overflow-hidden',
+                    w.type === 'divider'
+                      ? 'flex items-end'
+                      : 'rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+                  )}
+                >
+                  {w.type === 'divider' ? (
+                    <div className='flex w-full items-center gap-2 border-b border-slate-200 pb-1 dark:border-border'>
                       <span
                         className={cn(
-                          'flex min-w-0 flex-1 items-center gap-1.5',
+                          'flex min-w-0 flex-1 items-center gap-2',
                           editMode && 'rs-drag cursor-grab active:cursor-grabbing'
                         )}
                       >
-                        {editMode && (
-                          <GripVertical className='h-3.5 w-3.5 shrink-0 text-slate-300' />
-                        )}
-                        <p className='truncate text-[11.5px] font-medium uppercase tracking-wide text-slate-400'>
+                        {editMode && <GripVertical className='h-3.5 w-3.5 text-slate-300' />}
+                        <h3 className='text-[13px] font-semibold text-slate-700 dark:text-slate-200'>
                           {w.title}
-                        </p>
+                        </h3>
                       </span>
-                      <span className='ml-auto flex shrink-0 gap-0.5'>
-                        <button
-                          type='button'
-                          title='Alert on this widget'
-                          className='rounded p-0.5 text-slate-300 hover:bg-slate-100 hover:text-amber-500 dark:text-slate-600 dark:hover:bg-muted'
-                          onClick={() => setAlertsFor(w.id)}
-                        >
-                          <Bell className='h-3.5 w-3.5' />
-                        </button>
-                        <span className='flex gap-0.5 opacity-0 transition-opacity group-hover/widget:opacity-100'>
-                        {editMode && (
-                          <>
-                            <button
-                              type='button'
-                              className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
-                              onClick={() => setConfiguring(w.id)}
-                            >
-                              <Settings2 className='h-3.5 w-3.5' />
-                            </button>
-                            <button
-                              type='button'
-                              title='Duplicate widget'
-                              className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
-                              onClick={() =>
-                                setWidgets((p) => {
-                                  const maxY = Math.max(0, ...p.map((x) => x.y + x.h))
-                                  return [
-                                    ...p,
-                                    {
-                                      ...w,
-                                      id: crypto.randomUUID(),
-                                      title: `${w.title} (copy)`,
-                                      y: maxY,
-                                      sort: p.length
-                                    }
-                                  ]
-                                })
-                              }
-                            >
-                              <Copy className='h-3.5 w-3.5' />
-                            </button>
-                            <button
-                              type='button'
-                              title='Save to widget catalog — reusable in any report AND on dashboards (Prebuilt tab)'
-                              className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-[#00a5cc] dark:hover:bg-muted'
-                              onClick={() => {
-                                void api
-                                  .post('/report-studio/widget-presets', {
-                                    name: `${w.title || w.type} (${new Date().toISOString().slice(0, 10)})`,
-                                    category: 'Custom',
-                                    description: `Saved from a report on ${new Date().toLocaleDateString()}`,
-                                    widget_type: w.type,
-                                    config: { ...w.config, collection: w.collection },
-                                    w: w.w,
-                                    h: w.h
-                                  })
-                                  .then(() => toast.success('Saved to the widget catalog'))
-                                  .catch((e) =>
-                                    toast.error(
-                                      e?.response?.data?.error ?? 'Only admins can save catalog presets'
-                                    )
-                                  )
-                              }}
-                            >
-                              <BookmarkPlus className='h-3.5 w-3.5' />
-                            </button>
-                            <button
-                              type='button'
-                              className='rounded p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500'
-                              onClick={() => setWidgets((p) => p.filter((x) => x.id !== w.id))}
-                            >
-                              <Trash2 className='h-3.5 w-3.5' />
-                            </button>
-                          </>
-                        )}
+                      {editMode && (
+                        <span className='ml-auto flex gap-0.5 opacity-0 transition-opacity group-hover/widget:opacity-100'>
+                          <button
+                            type='button'
+                            className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+                            onClick={() => setConfiguring(w.id)}
+                          >
+                            <Settings2 className='h-3.5 w-3.5' />
+                          </button>
+                          <button
+                            type='button'
+                            className='rounded p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500'
+                            onClick={() => setWidgets((p) => p.filter((x) => x.id !== w.id))}
+                          >
+                            <Trash2 className='h-3.5 w-3.5' />
+                          </button>
                         </span>
-                      </span>
+                      )}
                     </div>
-                    <div className='min-h-0 flex-1'>
-                      <WidgetBody widget={w} dateRange={dateRange} entityFilters={entityFilters} reportId={report.id} />
+                  ) : (
+                    <div className='flex h-full flex-col p-3'>
+                      <div className='mb-1.5 flex items-center gap-1.5'>
+                        <span
+                          className={cn(
+                            'flex min-w-0 flex-1 items-center gap-1.5',
+                            editMode && 'rs-drag cursor-grab active:cursor-grabbing'
+                          )}
+                        >
+                          {editMode && (
+                            <GripVertical className='h-3.5 w-3.5 shrink-0 text-slate-300' />
+                          )}
+                          <p className='truncate text-[11.5px] font-medium uppercase tracking-wide text-slate-400'>
+                            {w.title}
+                          </p>
+                        </span>
+                        <span className='ml-auto flex shrink-0 gap-0.5'>
+                          <button
+                            type='button'
+                            title='Alert on this widget'
+                            className='rounded p-0.5 text-slate-300 hover:bg-slate-100 hover:text-amber-500 dark:text-slate-600 dark:hover:bg-muted'
+                            onClick={() => setAlertsFor(w.id)}
+                          >
+                            <Bell className='h-3.5 w-3.5' />
+                          </button>
+                          <span className='flex gap-0.5 opacity-0 transition-opacity group-hover/widget:opacity-100'>
+                            {editMode && (
+                              <>
+                                <button
+                                  type='button'
+                                  className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+                                  onClick={() => setConfiguring(w.id)}
+                                >
+                                  <Settings2 className='h-3.5 w-3.5' />
+                                </button>
+                                <button
+                                  type='button'
+                                  title='Duplicate widget'
+                                  className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+                                  onClick={() =>
+                                    setWidgets((p) => {
+                                      const maxY = Math.max(0, ...p.map((x) => x.y + x.h))
+                                      return [
+                                        ...p,
+                                        {
+                                          ...w,
+                                          id: crypto.randomUUID(),
+                                          title: `${w.title} (copy)`,
+                                          y: maxY,
+                                          sort: p.length
+                                        }
+                                      ]
+                                    })
+                                  }
+                                >
+                                  <Copy className='h-3.5 w-3.5' />
+                                </button>
+                                <button
+                                  type='button'
+                                  title='Save to widget catalog — reusable in any report AND on dashboards (Prebuilt tab)'
+                                  className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-[#00a5cc] dark:hover:bg-muted'
+                                  onClick={() => {
+                                    void api
+                                      .post('/report-studio/widget-presets', {
+                                        name: `${w.title || w.type} (${new Date().toISOString().slice(0, 10)})`,
+                                        category: 'Custom',
+                                        description: `Saved from a report on ${new Date().toLocaleDateString()}`,
+                                        widget_type: w.type,
+                                        config: { ...w.config, collection: w.collection },
+                                        w: w.w,
+                                        h: w.h
+                                      })
+                                      .then(() => toast.success('Saved to the widget catalog'))
+                                      .catch((e) =>
+                                        toast.error(
+                                          e?.response?.data?.error ??
+                                            'Only admins can save catalog presets'
+                                        )
+                                      )
+                                  }}
+                                >
+                                  <BookmarkPlus className='h-3.5 w-3.5' />
+                                </button>
+                                <button
+                                  type='button'
+                                  className='rounded p-0.5 text-slate-400 hover:bg-red-50 hover:text-red-500'
+                                  onClick={() => setWidgets((p) => p.filter((x) => x.id !== w.id))}
+                                >
+                                  <Trash2 className='h-3.5 w-3.5' />
+                                </button>
+                              </>
+                            )}
+                          </span>
+                        </span>
+                      </div>
+                      <div className='min-h-0 flex-1'>
+                        <WidgetBody
+                          widget={w}
+                          dateRange={dateRange}
+                          entityFilters={entityFilters}
+                          reportId={report.id}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
-                {editMode && w.type !== 'divider' && <span className='rs-resize' />}
-              </div>
-            ))}
-          </div>
+                  )}
+                  {editMode && w.type !== 'divider' && <span className='rs-resize' />}
+                </div>
+              ))}
+            </div>
           </>
         )}
       </div>
@@ -4346,7 +4611,6 @@ function AddFilterField({
     </Popover>
   )
 }
-
 
 // ─── Queue stat widget config (#380) ─────────────────────────────────────────
 function QueueStatConfigEditor({

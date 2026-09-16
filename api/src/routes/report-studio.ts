@@ -595,6 +595,7 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     const bodyRoom = (req.body as { deliver_room?: string | null }).deliver_room
     const bodyPdf = (req.body as { attach_pdf?: boolean }).attach_pdf
     const bodyTeams = (req.body as { deliver_teams?: boolean }).deliver_teams
+    const bodyOnlyChanged = (req.body as { only_if_changed?: boolean }).only_if_changed
     const values = {
       cadence,
       delivery_email: req.body.delivery_email !== false,
@@ -604,6 +605,12 @@ export async function reportStudioRoutes(app: FastifyInstance) {
         : {}),
       ...(bodyPdf !== undefined ? { attach_pdf: !!bodyPdf } : {}),
       ...(bodyTeams !== undefined ? { deliver_teams: !!bodyTeams } : {}),
+      // #70: deliver only when the numbers moved since the last send. Turning
+      // it on clears the stored hash so the NEXT run always delivers once and
+      // establishes the baseline.
+      ...(bodyOnlyChanged !== undefined
+        ? { only_if_changed: !!bodyOnlyChanged, last_snapshot_hash: null }
+        : {}),
       // Widget-level subscription (#381): scope the digest to one widget.
       // UNIQUE(report,user) means this REPLACES any whole-report subscription
       // — the UI says so. Explicit null clears back to whole-report.
@@ -1638,6 +1645,76 @@ Entity filter fields MUST be among: ${fieldList.join(', ') || '(none available �
       return reply.send({ data: { deleted: true } })
     }
   )
+
+  // ── Explain the trend (#51) — an AI sentence grounded in the series + rows ─
+
+  app.post<{
+    Params: { id: string; widgetId: string }
+    Body: { date_range?: DateRange | null; entity_filters?: EntityFilter[] }
+  }>('/:id/widgets/:widgetId/explain-trend', { preHandler: requireAuth }, async (req, reply) => {
+    const report = await loadReport(req.params.id)
+    if (!report) return reply.code(404).send({ error: 'Report not found' })
+    if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const widget = (await db('nivaro_report_widgets')
+      .where({ id: req.params.widgetId, report: report.id })
+      .first()) as WidgetRow | undefined
+    if (!widget) return reply.code(404).send({ error: 'Widget not found' })
+    const { buildTrendContext, explainTrend } = await import('../services/report-trend.js')
+    try {
+      const cfg = parseJson<WidgetQueryConfig>(widget.config)
+      const ctx = await buildTrendContext(
+        req.user!,
+        report.id,
+        { id: widget.id, type: widget.type, collection: widget.collection, config: cfg },
+        req.body?.date_range ??
+          parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ??
+          null,
+        Array.isArray(req.body?.entity_filters) ? req.body.entity_filters : []
+      )
+      const describe = [
+        widget.type,
+        cfg?.metric
+          ? `${cfg.metric.aggregate}${cfg.metric.field ? ` of ${cfg.metric.field}` : ''}`
+          : 'count',
+        cfg?.dimension?.field
+          ? `by ${cfg.dimension.field}${cfg.dimension.bucket ? ` (${cfg.dimension.bucket})` : ''}`
+          : '',
+        cfg?.compare ? `vs ${cfg.compare.replace('_', ' ')}` : ''
+      ]
+        .filter(Boolean)
+        .join(' · ')
+      const explanation = await explainTrend(ctx, widget.title || widget.type, describe)
+      if (explanation === null) {
+        return reply.code(503).send({ error: 'AI is not configured', data: { context: ctx } })
+      }
+      await logActivity({
+        action: 'ai-explain-trend',
+        collection: 'nivaro_report_defs',
+        item: report.id,
+        user: req.user?.id,
+        req,
+        comment: widget.title || widget.type
+      })
+      return reply.send({
+        data: {
+          explanation,
+          kind: ctx.kind,
+          movers: ctx.movers,
+          windows: ctx.windows.map((w) => ({
+            key: w.key,
+            label: w.label,
+            value: w.value,
+            rows: w.rows.map((r) => ({ id: r.id, label: r.label }))
+          }))
+        }
+      })
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode ?? 500
+      return reply
+        .code(status)
+        .send({ error: err instanceof Error ? err.message : 'Explain failed' })
+    }
+  })
 
   // ── Automatic drill for query widgets — infer the record behind a row ──────
 

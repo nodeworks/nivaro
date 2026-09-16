@@ -6,8 +6,8 @@ import {
   bustScopeDimensionCache,
   bustScopePathCache,
   bustUserScopeCache,
-  describeUserScopes,
   describeHops,
+  describeUserScopes,
   listScopeDimensions,
   scopeHopsFor
 } from '../services/user-scopes.js'
@@ -279,8 +279,18 @@ export async function userScopesRoutes(app: FastifyInstance) {
       seenTables.add(c.table_name.toLowerCase())
       ordered.push(c)
     }
-    const impact: Array<{ collection: string; total: number; current: number; proposed: number }> =
-      []
+    type Sample = Array<{ id: string; label: string }>
+    const impact: Array<{
+      collection: string
+      total: number
+      current: number
+      proposed: number
+      gained: number
+      lost: number
+      gained_sample: Sample
+      lost_sample: Sample
+    }> = []
+    const { getLabels } = await import('../services/queues.js')
     for (const c of ordered) {
       if (impact.length >= 5) break
       if (!registered.has(c.table_name.toLowerCase())) continue
@@ -293,12 +303,67 @@ export async function userScopesRoutes(app: FastifyInstance) {
         const row = (await q.first()) as { n?: number } | undefined
         return Number(row?.n ?? 0)
       }
+      // #56 gained / lost: rows visible under ONE allowance and not the other.
+      // An empty allowance means "everything", so a change to or from empty
+      // has exactly one side. Counted exactly, sampled newest-first (5) with
+      // display labels so the admin can recognise what moves.
+      const diffQuery = (inside: Array<string | number>, outside: Array<string | number>) => {
+        const q = db(c.table_name)
+        if (inside.length > 0) q.where((qb) => applyScopeHops(qb, c.table_name, hops, inside))
+        if (outside.length > 0) q.whereNot((qb) => applyScopeHops(qb, c.table_name, hops, outside))
+        return q
+      }
+      const diffSide = async (
+        inside: Array<string | number>,
+        outside: Array<string | number>
+      ): Promise<{ count: number; sample: Sample }> => {
+        // nothing can be gained by widening to "everything" that was already
+        // visible, and nothing lost by narrowing from "everything"… except the
+        // rows outside the new set — which is the (inside=[], outside=P) call.
+        if (inside.length === 0 && outside.length === 0) return { count: 0, sample: [] }
+        const cnt = (await diffQuery(inside, outside).count({ n: '*' }).first()) as
+          | { n?: number }
+          | undefined
+        const count = Number(cnt?.n ?? 0)
+        if (count === 0) return { count, sample: [] }
+        const rows = (await diffQuery(inside, outside)
+          .select('id')
+          .orderBy('id', 'desc')
+          .limit(5)) as Array<{ id: unknown }>
+        const ids = rows.map((r) => String(r.id))
+        const labels = await getLabels(new Map([[c.table_name, new Set(ids)]])).catch(
+          () => ({}) as Record<string, string>
+        )
+        return {
+          count,
+          sample: ids.map((id) => ({ id, label: labels[`${c.table_name}:${id}`] ?? `#${id}` }))
+        }
+      }
       try {
+        const currentCount = await countWith(current)
+        const proposedCount = await countWith(proposed)
+        // gained = proposed-visible ∖ current-visible; lost = the reverse.
+        const gainedSide =
+          proposed.length === 0 && current.length > 0
+            ? await diffSide([], current)
+            : proposed.length > 0 && current.length === 0
+              ? { count: 0, sample: [] }
+              : await diffSide(proposed, current)
+        const lostSide =
+          current.length === 0 && proposed.length > 0
+            ? await diffSide([], proposed)
+            : current.length > 0 && proposed.length === 0
+              ? { count: 0, sample: [] }
+              : await diffSide(current, proposed)
         impact.push({
           collection: c.table_name,
           total: Number(c.rows),
-          current: await countWith(current),
-          proposed: await countWith(proposed)
+          current: currentCount,
+          proposed: proposedCount,
+          gained: gainedSide.count,
+          lost: lostSide.count,
+          gained_sample: gainedSide.sample,
+          lost_sample: lostSide.sample
         })
       } catch {
         // a collection whose hops fail to compile is skipped, not fatal

@@ -1,25 +1,26 @@
 import {
+  aiReportFilters,
+  createReportAlert,
+  deleteReportAlert,
+  deleteReportFilterPreset,
+  executeCustomQuery,
+  explainReportTrend,
+  listReportAlerts,
+  listReportFilterPresets,
+  type ReportAlert,
+  type ReportAlertLogEntry,
   type ReportColumnFormat,
   type ReportDateRange,
   type ReportDef,
   type ReportEntityFilter,
+  type ReportFilterPreset,
   type ReportQueryColumn,
   type ReportQueryWidgetConfig,
   type ReportWidget,
   type ReportWidgetData,
-  type ReportAlert,
-  type ReportAlertLogEntry,
-  type ReportFilterPreset,
-  aiReportFilters,
-  deleteReportFilterPreset,
-  createReportAlert,
-  deleteReportAlert,
-  executeCustomQuery,
-  listReportAlerts,
   readItems,
   readReport,
   readReportAlertLog,
-  listReportFilterPresets,
   readReportFilterOptions,
   readReportWidgetData,
   resolveReportAlert,
@@ -27,7 +28,24 @@ import {
   toggleReportAlert
 } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Camera, Check, ChevronsUpDown, Download, Info, Plus, RefreshCw, Sigma, Sparkles, StickyNote, Table as TableIcon, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react'
+import {
+  Bell,
+  Camera,
+  Check,
+  ChevronsUpDown,
+  Download,
+  Info,
+  Plus,
+  RefreshCw,
+  Sigma,
+  Sparkles,
+  StickyNote,
+  Table as TableIcon,
+  Trash2,
+  TrendingDown,
+  TrendingUp,
+  X
+} from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Area,
@@ -42,8 +60,8 @@ import {
   Pie,
   PieChart,
   ReferenceLine,
-  Scatter,
   ResponsiveContainer,
+  Scatter,
   Tooltip,
   XAxis,
   YAxis
@@ -90,14 +108,30 @@ async function copyChartImage(container: HTMLElement | null, title: string): Pro
 
 // Compact axis ticks — 8-digit dollar values overflow the tight chart margins.
 const compactTick = (v: number) =>
-  Math.abs(v) >= 1e9 ? `${(v / 1e9).toFixed(1).replace(/\.0$/, '')}B`
-  : Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(1).replace(/\.0$/, '')}M`
-  : Math.abs(v) >= 1e3 ? `${(v / 1e3).toFixed(1).replace(/\.0$/, '')}k`
-  : String(v)
+  Math.abs(v) >= 1e9
+    ? `${(v / 1e9).toFixed(1).replace(/\.0$/, '')}B`
+    : Math.abs(v) >= 1e6
+      ? `${(v / 1e6).toFixed(1).replace(/\.0$/, '')}M`
+      : Math.abs(v) >= 1e3
+        ? `${(v / 1e3).toFixed(1).replace(/\.0$/, '')}k`
+        : String(v)
 
 // Category-axis ticks for date-heavy charts: '2026-07' → "Jul '26", full dates
 // → 'Jul 4'; long plain labels ellipsize. Tooltips keep the raw value.
-const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTH_ABBR = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec'
+]
 const compactCatTick = (v: unknown): string => {
   const raw = String(v ?? '')
   const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?/.exec(raw)
@@ -114,17 +148,18 @@ const catAxisProps = (count: number) => ({
   tickFormatter: compactCatTick,
   minTickGap: 4
 })
-import {
-  type DrilldownTarget,
-  useDrilldown,
-  useNivaroClient,
-  useOverlayState
-} from '../context'
-import { effectiveScopeSeedIds, matchScopeDimension, translateScopeValues, useMyScopes } from '../lib/use-my-scopes'
+
+import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
-import { AddWidgetBar, WidgetConfigSheet, WidgetEditBar } from './ReportEditMode'
+import {
+  effectiveScopeSeedIds,
+  matchScopeDimension,
+  translateScopeValues,
+  useMyScopes
+} from '../lib/use-my-scopes'
 import { cn } from '../lib/utils'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
+import { AddWidgetBar, WidgetConfigSheet, WidgetEditBar } from './ReportEditMode'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
@@ -508,7 +543,14 @@ function TreeWidget({
           .slice(0, 3)
           .map((f) => ({ field: f, label: f }))
   const nodes = useMemo(
-    () => (tc ? buildTree(rows, tc, seriesDefs.map((sd) => sd.field)) : []),
+    () =>
+      tc
+        ? buildTree(
+            rows,
+            tc,
+            seriesDefs.map((sd) => sd.field)
+          )
+        : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, tc]
   )
@@ -532,8 +574,7 @@ function TreeWidget({
   }, [nodes, seeded])
 
   const thresholds = tc?.thresholds ?? DEFAULT_TREE_THRESHOLDS
-  const colorFor = (pct: number) =>
-    thresholds.find((t) => pct >= t.gte)?.color ?? '#10b981'
+  const colorFor = (pct: number) => thresholds.find((t) => pct >= t.gte)?.color ?? '#10b981'
 
   const renderNode = (n: TreeNode): React.ReactNode => {
     const isLeaf = n.children.length === 0
@@ -572,7 +613,10 @@ function TreeWidget({
           <div className='flex items-center gap-1.5'>
             {!isLeaf ? (
               <ChevronsUpDown
-                className={cn('h-3 w-3 shrink-0 text-slate-400 transition-transform', open && 'rotate-180')}
+                className={cn(
+                  'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+                  open && 'rotate-180'
+                )}
               />
             ) : (
               <span className='w-3 shrink-0' />
@@ -589,7 +633,10 @@ function TreeWidget({
                   ? 'text-[12px] font-semibold text-slate-800 dark:text-slate-100'
                   : n.depth === 1
                     ? 'text-[11.5px] font-medium text-slate-700 dark:text-slate-200'
-                    : cn('text-[11px] text-slate-600 dark:text-slate-300', clickable && 'group-hover/tn:underline')
+                    : cn(
+                        'text-[11px] text-slate-600 dark:text-slate-300',
+                        clickable && 'group-hover/tn:underline'
+                      )
               )}
             >
               {n.label}
@@ -631,9 +678,10 @@ function TreeWidget({
     )
   }
 
-  if (!tc || nodes.length === 0)
-    return <p className='px-1 text-[12px] text-slate-400'>No data.</p>
-  return <div className='min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1'>{nodes.map(renderNode)}</div>
+  if (!tc || nodes.length === 0) return <p className='px-1 text-[12px] text-slate-400'>No data.</p>
+  return (
+    <div className='min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1'>{nodes.map(renderNode)}</div>
+  )
 }
 
 /** Automatic drill for query rows — the server infers which record a row's
@@ -677,7 +725,10 @@ export function QueryWidgetBody({
   const drillRow = useAutoDrill(onDrill)
   const [tableSearch, setTableSearch] = useState('')
   const [tablePage, setTablePage] = useState(0)
-  const [segRows, setSegRows] = useState<{ label: string; rows: Array<Record<string, unknown>> } | null>(null)
+  const [segRows, setSegRows] = useState<{
+    label: string
+    rows: Array<Record<string, unknown>>
+  } | null>(null)
   const params = resolveQueryParams(cfg, dateRange, entityFilters)
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['nivaro-report-query', cfg.slug, params],
@@ -743,7 +794,8 @@ export function QueryWidgetBody({
     const tiles = cfg.x_field
       ? rows.map((r, i) => ({
           label: String(r[cfg.x_field as string] ?? ''),
-          value: r[cfg.series?.[0]?.field ?? columns.find((c) => c.field !== cfg.x_field)?.field ?? ''],
+          value:
+            r[cfg.series?.[0]?.field ?? columns.find((c) => c.field !== cfg.x_field)?.field ?? ''],
           color: cfg.series?.[0]?.color ?? CHART_COLORS[i % CHART_COLORS.length],
           format: cfg.value_format
         }))
@@ -784,100 +836,123 @@ export function QueryWidgetBody({
     const numericCols = columns.filter((c) => NUMERIC_FORMATS.has(c.format ?? ''))
     const q = tableSearch.trim().toLowerCase()
     const searched = q
-      ? rows.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)))
+      ? rows.filter((r) =>
+          Object.values(r).some((v) =>
+            String(v ?? '')
+              .toLowerCase()
+              .includes(q)
+          )
+        )
       : rows
     const PAGE = 12
     const pages = Math.max(1, Math.ceil(searched.length / PAGE))
     const page = Math.min(tablePage, pages - 1)
-    const visible = searched.length > PAGE ? searched.slice(page * PAGE, page * PAGE + PAGE) : searched
+    const visible =
+      searched.length > PAGE ? searched.slice(page * PAGE, page * PAGE + PAGE) : searched
     return (
       <div className='flex min-h-0 flex-1 flex-col'>
-      {rows.length > PAGE && (
-        <div className='mb-1 flex items-center gap-2'>
-          <input
-            value={tableSearch}
-            onChange={(e) => {
-              setTableSearch(e.target.value)
-              setTablePage(0)
-            }}
-            placeholder='Search rows…'
-            className='h-6 w-40 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card dark:text-slate-200'
-          />
-          {pages > 1 && (
-            <span className='ml-auto flex items-center gap-1 text-[10.5px] text-slate-400'>
-              <button type='button' disabled={page <= 0} onClick={() => setTablePage(page - 1)} className='rounded px-1 disabled:opacity-30'>←</button>
-              {page + 1}/{pages}
-              <button type='button' disabled={page >= pages - 1} onClick={() => setTablePage(page + 1)} className='rounded px-1 disabled:opacity-30'>→</button>
-            </span>
-          )}
-        </div>
-      )}
-      <div className='min-h-0 flex-1 overflow-auto'>
-        <table className='w-full text-[11.5px]'>
-          <thead className='sticky top-0 z-[1] bg-white dark:bg-card'>
-            <tr>
-              {columns.map((c) => (
-                <th
-                  key={c.field}
-                  className={cn(
-                    'whitespace-nowrap border-b border-slate-100 px-1.5 py-1 text-left font-medium text-slate-400 dark:border-border',
-                    NUMERIC_FORMATS.has(c.format ?? '') && 'text-right'
-                  )}
+        {rows.length > PAGE && (
+          <div className='mb-1 flex items-center gap-2'>
+            <input
+              value={tableSearch}
+              onChange={(e) => {
+                setTableSearch(e.target.value)
+                setTablePage(0)
+              }}
+              placeholder='Search rows…'
+              className='h-6 w-40 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card dark:text-slate-200'
+            />
+            {pages > 1 && (
+              <span className='ml-auto flex items-center gap-1 text-[10.5px] text-slate-400'>
+                <button
+                  type='button'
+                  disabled={page <= 0}
+                  onClick={() => setTablePage(page - 1)}
+                  className='rounded px-1 disabled:opacity-30'
                 >
-                  {c.label ?? c.field}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((r, i) => (
-              <tr
-                key={i}
-                className={onDrill ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/60' : undefined}
-                onClick={() => void drillRow(r)}
-                title={onDrill ? 'Open the record behind this row' : undefined}
-              >
-                {columns.map((c) => (
-                  <td
-                    key={c.field}
-                    className={cn(
-                      'max-w-[220px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-700 dark:border-border/40 dark:text-slate-300',
-                      NUMERIC_FORMATS.has(c.format ?? '') && 'text-right tabular-nums'
-                    )}
-                  >
-                    {fmtCell(r[c.field], c.format, c.decimals)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-          {cfg.totals && numericCols.length > 0 && (
-            <tfoot className='sticky bottom-0 bg-white dark:bg-card'>
+                  ←
+                </button>
+                {page + 1}/{pages}
+                <button
+                  type='button'
+                  disabled={page >= pages - 1}
+                  onClick={() => setTablePage(page + 1)}
+                  className='rounded px-1 disabled:opacity-30'
+                >
+                  →
+                </button>
+              </span>
+            )}
+          </div>
+        )}
+        <div className='min-h-0 flex-1 overflow-auto'>
+          <table className='w-full text-[11.5px]'>
+            <thead className='sticky top-0 z-[1] bg-white dark:bg-card'>
               <tr>
-                {columns.map((c, i) => (
-                  <td
+                {columns.map((c) => (
+                  <th
                     key={c.field}
                     className={cn(
-                      'border-t border-slate-200 px-1.5 py-1 font-semibold text-slate-800 dark:border-border dark:text-slate-200',
-                      NUMERIC_FORMATS.has(c.format ?? '') && 'text-right tabular-nums'
+                      'whitespace-nowrap border-b border-slate-100 px-1.5 py-1 text-left font-medium text-slate-400 dark:border-border',
+                      NUMERIC_FORMATS.has(c.format ?? '') && 'text-right'
                     )}
                   >
-                    {i === 0 && !NUMERIC_FORMATS.has(c.format ?? '')
-                      ? 'Total'
-                      : NUMERIC_FORMATS.has(c.format ?? '')
-                        ? fmtCell(
-                            rows.reduce((a, r) => a + (Number(r[c.field]) || 0), 0),
-                            c.format,
-                            c.decimals
-                          )
-                        : ''}
-                  </td>
+                    {c.label ?? c.field}
+                  </th>
                 ))}
               </tr>
-            </tfoot>
-          )}
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {visible.map((r, i) => (
+                <tr
+                  key={i}
+                  className={
+                    onDrill ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/60' : undefined
+                  }
+                  onClick={() => void drillRow(r)}
+                  title={onDrill ? 'Open the record behind this row' : undefined}
+                >
+                  {columns.map((c) => (
+                    <td
+                      key={c.field}
+                      className={cn(
+                        'max-w-[220px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-700 dark:border-border/40 dark:text-slate-300',
+                        NUMERIC_FORMATS.has(c.format ?? '') && 'text-right tabular-nums'
+                      )}
+                    >
+                      {fmtCell(r[c.field], c.format, c.decimals)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+            {cfg.totals && numericCols.length > 0 && (
+              <tfoot className='sticky bottom-0 bg-white dark:bg-card'>
+                <tr>
+                  {columns.map((c, i) => (
+                    <td
+                      key={c.field}
+                      className={cn(
+                        'border-t border-slate-200 px-1.5 py-1 font-semibold text-slate-800 dark:border-border dark:text-slate-200',
+                        NUMERIC_FORMATS.has(c.format ?? '') && 'text-right tabular-nums'
+                      )}
+                    >
+                      {i === 0 && !NUMERIC_FORMATS.has(c.format ?? '')
+                        ? 'Total'
+                        : NUMERIC_FORMATS.has(c.format ?? '')
+                          ? fmtCell(
+                              rows.reduce((a, r) => a + (Number(r[c.field]) || 0), 0),
+                              c.format,
+                              c.decimals
+                            )
+                          : ''}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
       </div>
     )
   }
@@ -923,8 +998,14 @@ export function QueryWidgetBody({
           <p className='min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
             {segRows.label}
           </p>
-          <span className='text-[11.5px] text-slate-400'>{segRows.rows.length} rows — click one to open its record</span>
-          <button type='button' onClick={() => setSegRows(null)} className='rounded p-1 text-slate-400 hover:text-slate-600'>
+          <span className='text-[11.5px] text-slate-400'>
+            {segRows.rows.length} rows — click one to open its record
+          </span>
+          <button
+            type='button'
+            onClick={() => setSegRows(null)}
+            className='rounded p-1 text-slate-400 hover:text-slate-600'
+          >
             <X className='h-4 w-4' />
           </button>
         </div>
@@ -932,11 +1013,16 @@ export function QueryWidgetBody({
           <table className='w-full text-[11px]'>
             <thead>
               <tr>
-                {Object.keys(segRows.rows[0] ?? {}).slice(0, 7).map((c) => (
-                  <th key={c} className='border-b border-slate-100 px-1.5 py-1 text-left font-medium text-slate-400 dark:border-border'>
-                    {c}
-                  </th>
-                ))}
+                {Object.keys(segRows.rows[0] ?? {})
+                  .slice(0, 7)
+                  .map((c) => (
+                    <th
+                      key={c}
+                      className='border-b border-slate-100 px-1.5 py-1 text-left font-medium text-slate-400 dark:border-border'
+                    >
+                      {c}
+                    </th>
+                  ))}
               </tr>
             </thead>
             <tbody>
@@ -949,11 +1035,16 @@ export function QueryWidgetBody({
                     void drillRow(r)
                   }}
                 >
-                  {Object.keys(segRows.rows[0] ?? {}).slice(0, 7).map((c) => (
-                    <td key={c} className='max-w-[160px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-600 dark:border-border/40 dark:text-slate-300'>
-                      {String(r[c] ?? '')}
-                    </td>
-                  ))}
+                  {Object.keys(segRows.rows[0] ?? {})
+                    .slice(0, 7)
+                    .map((c) => (
+                      <td
+                        key={c}
+                        className='max-w-[160px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-600 dark:border-border/40 dark:text-slate-300'
+                      >
+                        {String(r[c] ?? '')}
+                      </td>
+                    ))}
                 </tr>
               ))}
             </tbody>
@@ -990,7 +1081,18 @@ export function QueryWidgetBody({
                   <Cell key={s.dim} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} formatter={(v) => tipFmt(v as number)} />
+              <Tooltip
+                contentStyle={{
+                  fontSize: 12,
+                  backgroundColor: '#0f172a',
+                  border: '1px solid #334155',
+                  borderRadius: 8,
+                  color: '#f1f5f9'
+                }}
+                labelStyle={{ color: '#f1f5f9' }}
+                itemStyle={{ color: '#e2e8f0' }}
+                formatter={(v) => tipFmt(v as number)}
+              />
             </PieChart>
           </ResponsiveContainer>
           <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
@@ -1029,7 +1131,18 @@ export function QueryWidgetBody({
               {...catAxisProps(chartRows.length)}
             />
             <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
-            <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} formatter={(v) => tipFmt(v as number)} />
+            <Tooltip
+              contentStyle={{
+                fontSize: 12,
+                backgroundColor: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                color: '#f1f5f9'
+              }}
+              labelStyle={{ color: '#f1f5f9' }}
+              itemStyle={{ color: '#e2e8f0' }}
+              formatter={(v) => tipFmt(v as number)}
+            />
             {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
             {series.map((s, i) => (
               <Area
@@ -1063,12 +1176,7 @@ export function QueryWidgetBody({
         >
           {horizontal ? (
             <>
-              <XAxis
-                type='number'
-                tick={{ fontSize: 10 }}
-                stroke='#94a3b8'
-                tickFormatter={vFmt}
-              />
+              <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} />
               <YAxis
                 type='category'
                 dataKey={xField}
@@ -1088,15 +1196,26 @@ export function QueryWidgetBody({
               <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={vFmt} width={48} />
             </>
           )}
-          <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} formatter={(v) => tipFmt(v as number)} />
+          <Tooltip
+            contentStyle={{
+              fontSize: 12,
+              backgroundColor: '#0f172a',
+              border: '1px solid #334155',
+              borderRadius: 8,
+              color: '#f1f5f9'
+            }}
+            labelStyle={{ color: '#f1f5f9' }}
+            itemStyle={{ color: '#e2e8f0' }}
+            formatter={(v) => tipFmt(v as number)}
+          />
           {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
           {series.map((s, i) => (
             <Bar
-                className={onDrill ? 'cursor-pointer' : undefined}
-                onClick={(entry: { payload?: Record<string, unknown> } | undefined) => {
-                  const d = entry?.payload?.[xField]
-                  if (d != null) openSegment(String(d))
-                }}
+              className={onDrill ? 'cursor-pointer' : undefined}
+              onClick={(entry: { payload?: Record<string, unknown> } | undefined) => {
+                const d = entry?.payload?.[xField]
+                if (d != null) openSegment(String(d))
+              }}
               key={s.field}
               dataKey={s.field}
               name={s.label ?? s.field}
@@ -1175,7 +1294,12 @@ function condSummary(c: { field: string; op: string; value: number }, opts: Aler
   return `${agg}${label} ${OP_GLYPH[c.op] ?? c.op} ${c.value.toLocaleString()}`
 }
 
-type DraftCond = { field: string; agg: (typeof AGGS)[number]; op: (typeof ALERT_OPS)[number]; value: string }
+type DraftCond = {
+  field: string
+  agg: (typeof AGGS)[number]
+  op: (typeof ALERT_OPS)[number]
+  value: string
+}
 
 function AlertLogList({ reportId, alert }: { reportId: string; alert: ReportAlert }) {
   const client = useNivaroClient()
@@ -1259,7 +1383,8 @@ export function AlertBell({
     staleTime: 30_000
   })
   const mine = alerts.filter((a) => a.widget === widget.id)
-  const invalidate = () => void qc.invalidateQueries({ queryKey: ['nivaro-report-alerts', reportId] })
+  const invalidate = () =>
+    void qc.invalidateQueries({ queryKey: ['nivaro-report-alerts', reportId] })
 
   const toConditions = () =>
     conds
@@ -1311,9 +1436,7 @@ export function AlertBell({
           title='Alerts on this widget'
           className={cn(
             'rounded p-0.5',
-            anyFiring
-              ? 'text-amber-500'
-              : 'text-slate-300 hover:text-amber-500 dark:text-slate-600'
+            anyFiring ? 'text-amber-500' : 'text-slate-300 hover:text-amber-500 dark:text-slate-600'
           )}
         >
           <Bell className='h-3 w-3' />
@@ -1327,7 +1450,10 @@ export function AlertBell({
         {mine.length > 0 && (
           <div className='mb-2 space-y-1.5'>
             {mine.map((a) => (
-              <div key={a.id} className='rounded-md border border-slate-100 px-2 py-1.5 dark:border-border/60'>
+              <div
+                key={a.id}
+                className='rounded-md border border-slate-100 px-2 py-1.5 dark:border-border/60'
+              >
                 <div className='flex items-center gap-1.5 text-[11.5px]'>
                   <span
                     className={cn(
@@ -1362,7 +1488,8 @@ export function AlertBell({
                 </div>
                 <p className='mt-0.5 truncate pl-3 text-[10.5px] text-slate-400'>
                   {(a.conditions ?? []).map((c) => condSummary(c, fieldOpts)).join(' & ')}
-                  {a.filters && a.filters.length > 0 &&
+                  {a.filters &&
+                    a.filters.length > 0 &&
                     ` · scoped: ${a.filters.map((f) => (f.labels ?? f.values).join('/')).join(', ')}`}
                   {' · '}
                   {a.delivery_email ? 'In-app + Email' : 'In-app'}
@@ -1422,7 +1549,9 @@ export function AlertBell({
                 <input
                   value={c.value}
                   onChange={(e) =>
-                    setConds((p) => p.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
+                    setConds((p) =>
+                      p.map((x, j) => (j === i ? { ...x, value: e.target.value } : x))
+                    )
                   }
                   placeholder='0'
                   inputMode='decimal'
@@ -1443,7 +1572,9 @@ export function AlertBell({
           <button
             type='button'
             className='text-[10.5px] text-slate-400 hover:text-nvr-navy dark:hover:text-nvr-cyan'
-            onClick={() => setConds((p) => [...p, { field: 'value', agg: 'sum', op: 'gt', value: '' }])}
+            onClick={() =>
+              setConds((p) => [...p, { field: 'value', agg: 'sum', op: 'gt', value: '' }])
+            }
           >
             + condition (all must match)
           </button>
@@ -1508,8 +1639,16 @@ export function AlertBell({
 // ── Drill-through / explain / dictionary helpers ─────────────────────────────
 
 const FILTER_OP_MAP: Record<string, string> = {
-  eq: '_eq', neq: '_neq', gt: '_gt', gte: '_gte', lt: '_lt', lte: '_lte',
-  in: '_in', contains: '_contains', null: '_null', nnull: '_nnull'
+  eq: '_eq',
+  neq: '_neq',
+  gt: '_gt',
+  gte: '_gte',
+  lt: '_lt',
+  lte: '_lte',
+  in: '_in',
+  contains: '_contains',
+  null: '_null',
+  nnull: '_nnull'
 }
 
 type DrillCond = { path: string[]; op: string; value: unknown }
@@ -1533,7 +1672,11 @@ function widgetDrillConditions(
   for (const ef of entityFilters) {
     if (ef.values?.length) conds.push({ path: [ef.field], op: '_in', value: ef.values })
   }
-  const dateField = (cfg.date_field as string) || ((cfg.dimension as { bucket?: string; field?: string })?.bucket ? (cfg.dimension as { field?: string }).field : null)
+  const dateField =
+    (cfg.date_field as string) ||
+    ((cfg.dimension as { bucket?: string; field?: string })?.bucket
+      ? (cfg.dimension as { field?: string }).field
+      : null)
   const range = resolveRangeDates(dateRange)
   if (range && dateField) {
     conds.push({ path: [dateField], op: '_gte', value: range.start })
@@ -1551,7 +1694,11 @@ function widgetDrillConditions(
         const [y, m] = key.split('-').map(Number)
         const last = new Date(y, m, 0).getDate()
         conds.push({ path: [dim.field], op: '_gte', value: `${key}-01` })
-        conds.push({ path: [dim.field], op: '_lte', value: `${key}-${String(last).padStart(2, '0')}T23:59:59` })
+        conds.push({
+          path: [dim.field],
+          op: '_lte',
+          value: `${key}-${String(last).padStart(2, '0')}T23:59:59`
+        })
       }
     } else if (dimRaw === null) {
       conds.push({ path: [dim.field], op: '_null', value: true })
@@ -1596,12 +1743,21 @@ function clientWidgetMetric(data: ReportWidgetData | undefined): number | null {
 }
 
 /** Download a widget's underlying rows/series as CSV. */
-function downloadWidgetCsv(widget: ReportWidget, data: ReportWidgetData | undefined, extraRows?: Array<Record<string, unknown>>) {
+function downloadWidgetCsv(
+  widget: ReportWidget,
+  data: ReportWidgetData | undefined,
+  extraRows?: Array<Record<string, unknown>>
+) {
   const rows: Array<Record<string, unknown>> = extraRows ? [...extraRows] : []
   if (rows.length === 0 && data?.rows?.length) rows.push(...data.rows)
   if (rows.length === 0 && data?.series?.length) {
     for (const sv of data.series) {
-      rows.push({ dim: sv.dim, value: sv.value, ...(sv.prev != null ? { previous: sv.prev } : {}), ...(sv.value2 != null ? { value2: sv.value2 } : {}) })
+      rows.push({
+        dim: sv.dim,
+        value: sv.value,
+        ...(sv.prev != null ? { previous: sv.prev } : {}),
+        ...(sv.value2 != null ? { value2: sv.value2 } : {})
+      })
     }
   }
   if (rows.length === 0 && data?.tiles?.length) {
@@ -1614,7 +1770,9 @@ function downloadWidgetCsv(widget: ReportWidget, data: ReportWidgetData | undefi
     const t = String(v ?? '')
     return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
   }
-  const csv = [cols.join(','), ...rows.map((r) => cols.map((c) => escCsv(r[c])).join(','))].join('\n')
+  const csv = [cols.join(','), ...rows.map((r) => cols.map((c) => escCsv(r[c])).join(','))].join(
+    '\n'
+  )
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
@@ -1661,11 +1819,21 @@ function WidgetRecordsModal({
   })
   const rows = data?.data ?? []
   const label = (r: Record<string, unknown>) => {
-    for (const k of ['title', 'name', 'label', 'subject', 'workflow_id', 'project_id', 'description']) {
+    for (const k of [
+      'title',
+      'name',
+      'label',
+      'subject',
+      'workflow_id',
+      'project_id',
+      'description'
+    ]) {
       const v = r[k]
       if (typeof v === 'string' && v.trim()) return v.slice(0, 90)
     }
-    const firstStr = Object.entries(r).find(([k, v]) => k !== 'id' && typeof v === 'string' && v.trim())
+    const firstStr = Object.entries(r).find(
+      ([k, v]) => k !== 'id' && typeof v === 'string' && v.trim()
+    )
     return firstStr ? String(firstStr[1]).slice(0, 90) : `#${r.id}`
   }
   return (
@@ -1682,7 +1850,9 @@ function WidgetRecordsModal({
             {title}
           </p>
           <span className='text-[11.5px] tabular-nums text-slate-400'>
-            {data ? `${rows.length}${(data.total ?? 0) > rows.length ? ` of ${data.total.toLocaleString()}` : ''} records` : ''}
+            {data
+              ? `${rows.length}${(data.total ?? 0) > rows.length ? ` of ${data.total.toLocaleString()}` : ''} records`
+              : ''}
           </span>
           {crossFilter && (
             <button
@@ -1694,7 +1864,11 @@ function WidgetRecordsModal({
               Filter report
             </button>
           )}
-          <button type='button' onClick={onClose} className='rounded p-1 text-slate-400 hover:text-slate-600'>
+          <button
+            type='button'
+            onClick={onClose}
+            className='rounded p-1 text-slate-400 hover:text-slate-600'
+          >
             <X className='h-4 w-4' />
           </button>
         </div>
@@ -1720,12 +1894,30 @@ function WidgetRecordsModal({
 }
 
 /** Table-widget conditional formatting: value rules → cell/row tints. */
-type FormatRule = { field: string; op: 'gt' | 'gte' | 'lt' | 'lte' | 'eq'; value: number; color: string; scope?: 'cell' | 'row' }
+type FormatRule = {
+  field: string
+  op: 'gt' | 'gte' | 'lt' | 'lte' | 'eq'
+  value: number
+  color: string
+  scope?: 'cell' | 'row'
+}
 const RULE_TINTS: Record<string, { cell: string; row: string }> = {
-  red: { cell: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300', row: 'bg-red-50/70 dark:bg-red-500/10' },
-  amber: { cell: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300', row: 'bg-amber-50/70 dark:bg-amber-500/10' },
-  green: { cell: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300', row: 'bg-emerald-50/70 dark:bg-emerald-500/10' },
-  blue: { cell: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300', row: 'bg-sky-50/70 dark:bg-sky-500/10' }
+  red: {
+    cell: 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
+    row: 'bg-red-50/70 dark:bg-red-500/10'
+  },
+  amber: {
+    cell: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+    row: 'bg-amber-50/70 dark:bg-amber-500/10'
+  },
+  green: {
+    cell: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+    row: 'bg-emerald-50/70 dark:bg-emerald-500/10'
+  },
+  blue: {
+    cell: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
+    row: 'bg-sky-50/70 dark:bg-sky-500/10'
+  }
 }
 function ruleMatches(rule: FormatRule, v: unknown): boolean {
   const n = Number(v)
@@ -1792,6 +1984,19 @@ const WidgetCard = memo(function WidgetCard({
   const [explainOpen, setExplainOpen] = useState(false)
   const [explainText, setExplainText] = useState<string | null>(null)
   const [explainBusy, setExplainBusy] = useState(false)
+  // Explain the trend (#51): chart widgets go through the server route that
+  // grounds the sentence in the series + the rows behind the move; the
+  // movers it names render as chips under the text.
+  const [explainMovers, setExplainMovers] = useState<Array<{
+    label: string
+    from: number | null
+    to: number | null
+    delta: number | null
+    pct: number | null
+  }> | null>(null)
+  const explainsTrend =
+    ['bar', 'line', 'donut', 'pareto', 'area'].includes(widget.type) ||
+    (widget.type === 'kpi' && !!(widget.config?.compare || widget.config?.sparkline))
   // AI insight (#690): Refresh regenerates server-side (cache-busting flag).
   const queryCache = useQueryClient()
   const [aiBusy, setAiBusy] = useState(false)
@@ -1814,7 +2019,13 @@ const WidgetCard = memo(function WidgetCard({
     }
     setAiBusy(false)
   }
-  const { data: baseData, isLoading, error, refetch, isFetching } = useQuery<ReportWidgetData>({
+  const {
+    data: baseData,
+    isLoading,
+    error,
+    refetch,
+    isFetching
+  } = useQuery<ReportWidgetData>({
     queryKey: ['nivaro-report-widget', reportId, widget.id, dateRange, entityFilters],
     queryFn: () =>
       client
@@ -1942,10 +2153,12 @@ const WidgetCard = memo(function WidgetCard({
           <p
             className={cn(
               'text-[28px] font-semibold leading-none tracking-tight text-slate-900 dark:text-foreground',
-              widget.collection && 'cursor-pointer decoration-dotted underline-offset-4 hover:underline',
+              widget.collection &&
+                'cursor-pointer decoration-dotted underline-offset-4 hover:underline',
               // KPI threshold colors (#211): first matching gte-descending rule wins.
               (() => {
-                const th = (widget.config as { thresholds?: Array<{ gte: number; color: string }> })?.thresholds
+                const th = (widget.config as { thresholds?: Array<{ gte: number; color: string }> })
+                  ?.thresholds
                 if (!th?.length || data.value == null) return null
                 const hit = [...th]
                   .filter((t) => Number.isFinite(t.gte))
@@ -1986,7 +2199,13 @@ const WidgetCard = memo(function WidgetCard({
           <div className='flex min-h-0 flex-1 flex-col justify-center'>
             {body}
             <svg viewBox='0 0 100 30' preserveAspectRatio='none' className='mt-1.5 h-7 w-full'>
-              <polyline points={pts} fill='none' stroke='#00ceff' strokeWidth='2' vectorEffect='non-scaling-stroke' />
+              <polyline
+                points={pts}
+                fill='none'
+                stroke='#00ceff'
+                strokeWidth='2'
+                vectorEffect='non-scaling-stroke'
+              />
             </svg>
           </div>
         )
@@ -2002,7 +2221,10 @@ const WidgetCard = memo(function WidgetCard({
             <div
               key={t.label}
               className='flex flex-col justify-center rounded-md border border-slate-100 px-3 py-2 dark:border-border/60'
-              style={{ borderTopColor: t.color ?? CHART_COLORS[i % CHART_COLORS.length], borderTopWidth: 2 }}
+              style={{
+                borderTopColor: t.color ?? CHART_COLORS[i % CHART_COLORS.length],
+                borderTopWidth: 2
+              }}
             >
               <p className='truncate text-[10.5px] uppercase tracking-wide text-slate-400'>
                 {t.label}
@@ -2047,7 +2269,10 @@ const WidgetCard = memo(function WidgetCard({
                 <tr>
                   <th />
                   {colsD.map((c) => (
-                    <th key={c} className='max-w-[80px] truncate px-1 pb-1 text-left font-medium text-slate-400'>
+                    <th
+                      key={c}
+                      className='max-w-[80px] truncate px-1 pb-1 text-left font-medium text-slate-400'
+                    >
                       {c}
                     </th>
                   ))}
@@ -2056,17 +2281,23 @@ const WidgetCard = memo(function WidgetCard({
               <tbody>
                 {rowsD.map((r) => (
                   <tr key={r}>
-                    <td className='max-w-[110px] truncate pr-1.5 text-slate-500 dark:text-slate-400'>{r}</td>
+                    <td className='max-w-[110px] truncate pr-1.5 text-slate-500 dark:text-slate-400'>
+                      {r}
+                    </td>
                     {colsD.map((c) => {
                       const cell = cellOf(r, c)
                       const pct = cell ? cell.value / maxV : 0
                       return (
                         <td key={c} className='p-0.5'>
                           <div
-                            data-tip={cell ? `${r} × ${c}: ${cell.value.toLocaleString()}` : undefined}
+                            data-tip={
+                              cell ? `${r} × ${c}: ${cell.value.toLocaleString()}` : undefined
+                            }
                             className='flex h-6 items-center justify-center rounded text-[9.5px] tabular-nums'
                             style={{
-                              backgroundColor: cell ? `rgba(0, 165, 204, ${0.08 + pct * 0.85})` : 'transparent',
+                              backgroundColor: cell
+                                ? `rgba(0, 165, 204, ${0.08 + pct * 0.85})`
+                                : 'transparent',
                               color: pct > 0.55 ? '#fff' : undefined,
                               border: cell ? undefined : '1px dashed rgba(148,163,184,0.25)'
                             }}
@@ -2194,11 +2425,21 @@ const WidgetCard = memo(function WidgetCard({
         <p className='px-1 text-[12px] text-slate-400'>No data.</p>
       ) : (
         (() => {
-          const points: Array<{ label: string; from: number; to: number; kind: 'total' | 'up' | 'down' }> = []
+          const points: Array<{
+            label: string
+            from: number
+            to: number
+            kind: 'total' | 'up' | 'down'
+          }> = []
           points.push({ label: 'Previous', from: 0, to: wf.start, kind: 'total' })
           let run = wf.start
           for (const st of wf.steps) {
-            points.push({ label: st.dim, from: run, to: run + st.delta, kind: st.delta >= 0 ? 'up' : 'down' })
+            points.push({
+              label: st.dim,
+              from: run,
+              to: run + st.delta,
+              kind: st.delta >= 0 ? 'up' : 'down'
+            })
             run += st.delta
           }
           points.push({ label: 'Current', from: 0, to: wf.end, kind: 'total' })
@@ -2209,7 +2450,10 @@ const WidgetCard = memo(function WidgetCard({
                 const top = (Math.max(pt.from, pt.to) / maxTop) * 100
                 const height = (Math.abs(pt.to - pt.from) / maxTop) * 100
                 return (
-                  <div key={i} className='relative flex h-full min-w-[46px] flex-1 flex-col justify-end'>
+                  <div
+                    key={i}
+                    className='relative flex h-full min-w-[46px] flex-1 flex-col justify-end'
+                  >
                     <div style={{ height: `${Math.max(top, 0.5)}%` }} className='relative w-full'>
                       <div
                         data-tip={`${pt.label}: ${(pt.to - pt.from).toLocaleString()}`}
@@ -2217,7 +2461,11 @@ const WidgetCard = memo(function WidgetCard({
                         style={{
                           height: `${Math.max((height / Math.max(top, 0.001)) * 100, 2)}%`,
                           backgroundColor:
-                            pt.kind === 'total' ? '#172940' : pt.kind === 'up' ? '#10b981' : '#ef4444'
+                            pt.kind === 'total'
+                              ? '#172940'
+                              : pt.kind === 'up'
+                                ? '#10b981'
+                                : '#ef4444'
                         }}
                       />
                     </div>
@@ -2240,7 +2488,10 @@ const WidgetCard = memo(function WidgetCard({
         ) : (
           <div className='grid min-h-0 flex-1 grid-cols-2 content-start gap-x-4 gap-y-1.5 overflow-auto px-1'>
             {rows.map((r) => (
-              <div key={r.stat} className='flex items-baseline justify-between border-b border-slate-100 pb-1 dark:border-border/50'>
+              <div
+                key={r.stat}
+                className='flex items-baseline justify-between border-b border-slate-100 pb-1 dark:border-border/50'
+              >
                 <span className='text-[11px] text-slate-500'>{r.stat}</span>
                 <span className='text-[13px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'>
                   {r.value == null ? '—' : fmt(r.value, format)}
@@ -2263,7 +2514,8 @@ const WidgetCard = memo(function WidgetCard({
                 key={r.id}
                 type='button'
                 onClick={() =>
-                  widget.collection && onDrill?.({ collection: widget.collection, itemId: String(r.id), title: r.label })
+                  widget.collection &&
+                  onDrill?.({ collection: widget.collection, itemId: String(r.id), title: r.label })
                 }
                 className='group flex w-full items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-muted'
               >
@@ -2276,7 +2528,9 @@ const WidgetCard = memo(function WidgetCard({
                     style={{ width: `${(r.views / maxViews) * 100}%` }}
                   />
                 </span>
-                <span className='w-8 text-right text-[11px] tabular-nums text-slate-400'>{r.views}</span>
+                <span className='w-8 text-right text-[11px] tabular-nums text-slate-400'>
+                  {r.views}
+                </span>
               </button>
             ))}
           </div>
@@ -2308,11 +2562,32 @@ const WidgetCard = memo(function WidgetCard({
               <div className='min-h-0 flex-1'>
                 <ResponsiveContainer width='100%' height='100%'>
                   <ComposedChart data={pts} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
-                    <XAxis dataKey='x' type='number' tick={{ fontSize: 10 }} tickFormatter={compactTick} domain={['dataMin', 'dataMax']} />
+                    <XAxis
+                      dataKey='x'
+                      type='number'
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={compactTick}
+                      domain={['dataMin', 'dataMax']}
+                    />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={compactTick} />
-                    <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} />
+                    <Tooltip
+                      contentStyle={{
+                        fontSize: 12,
+                        backgroundColor: '#0f172a',
+                        border: '1px solid #334155',
+                        borderRadius: 8,
+                        color: '#f1f5f9'
+                      }}
+                    />
                     <Scatter data={pts} dataKey='y' fill='#00a5cc' opacity={0.7} />
-                    <Line data={trend} dataKey='y' stroke='#f59e0b' strokeWidth={2} dot={false} isAnimationActive={false} />
+                    <Line
+                      data={trend}
+                      dataKey='y'
+                      stroke='#f59e0b'
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -2329,12 +2604,46 @@ const WidgetCard = memo(function WidgetCard({
           <div className='min-h-0 flex-1'>
             <ResponsiveContainer width='100%' height='100%'>
               <ComposedChart data={series} margin={{ top: 6, right: 4, left: -10, bottom: 0 }}>
-                <XAxis dataKey='dim' tick={{ fontSize: 10 }} interval={0} angle={-20} textAnchor='end' height={42} />
+                <XAxis
+                  dataKey='dim'
+                  tick={{ fontSize: 10 }}
+                  interval={0}
+                  angle={-20}
+                  textAnchor='end'
+                  height={42}
+                />
                 <YAxis yAxisId='v' tick={{ fontSize: 10 }} tickFormatter={compactTick} />
-                <YAxis yAxisId='pct' orientation='right' domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={(v: number) => `${v}%`} />
-                <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} />
-                <Bar yAxisId='v' dataKey='value' fill='#00a5cc' radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                <Line yAxisId='pct' dataKey='cum_pct' stroke='#f59e0b' strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
+                <YAxis
+                  yAxisId='pct'
+                  orientation='right'
+                  domain={[0, 100]}
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={(v: number) => `${v}%`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    fontSize: 12,
+                    backgroundColor: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: 8,
+                    color: '#f1f5f9'
+                  }}
+                />
+                <Bar
+                  yAxisId='v'
+                  dataKey='value'
+                  fill='#00a5cc'
+                  radius={[3, 3, 0, 0]}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId='pct'
+                  dataKey='cum_pct'
+                  stroke='#f59e0b'
+                  strokeWidth={2}
+                  dot={{ r: 2 }}
+                  isAnimationActive={false}
+                />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -2346,7 +2655,9 @@ const WidgetCard = memo(function WidgetCard({
           <p className='text-[26px] font-bold tabular-nums text-slate-900 dark:text-slate-50'>
             {data.value == null ? '—' : fmt(data.value, format)}
           </p>
-          <p className='text-[11px] text-slate-400'>{String((widget.config as { metric_key?: string })?.metric_key ?? '')}</p>
+          <p className='text-[11px] text-slate-400'>
+            {String((widget.config as { metric_key?: string })?.metric_key ?? '')}
+          </p>
         </div>
       )
     } else if (widget.type === 'movers') {
@@ -2401,7 +2712,8 @@ const WidgetCard = memo(function WidgetCard({
             : []
       const cols = colDefs.map((c) => c.field)
       const defFor = (f: string) => colDefs.find((c) => c.field === f)
-      const rules = ((widget.config as Record<string, unknown> | null)?.format_rules ?? []) as FormatRule[]
+      const rules = ((widget.config as Record<string, unknown> | null)?.format_rules ??
+        []) as FormatRule[]
       const rowTint = (r: Record<string, unknown>) => {
         for (const rule of rules) {
           if ((rule.scope ?? 'cell') === 'row' && ruleMatches(rule, r[rule.field])) {
@@ -2430,104 +2742,138 @@ const WidgetCard = memo(function WidgetCard({
           )
         : rows
       const searched = q
-        ? preFiltered.filter((r) => Object.values(r).some((v) => String(v ?? '').toLowerCase().includes(q)))
+        ? preFiltered.filter((r) =>
+            Object.values(r).some((v) =>
+              String(v ?? '')
+                .toLowerCase()
+                .includes(q)
+            )
+          )
         : preFiltered
       const PAGE = 12
       const pages = Math.max(1, Math.ceil(searched.length / PAGE))
       const page = Math.min(tablePage, pages - 1)
-      const visibleRows = searched.length > PAGE ? searched.slice(page * PAGE, page * PAGE + PAGE) : searched
+      const visibleRows =
+        searched.length > PAGE ? searched.slice(page * PAGE, page * PAGE + PAGE) : searched
       body =
         rows.length === 0 ? (
           <p className='px-1 text-[12px] text-slate-400'>No rows.</p>
         ) : (
           <div className='flex min-h-0 flex-1 flex-col'>
-          {rows.length > PAGE && (
-            <div className='mb-1 flex items-center gap-2'>
-              <input
-                value={tableSearch}
-                onChange={(e) => {
-                  setTableSearch(e.target.value)
-                  setTablePage(0)
-                }}
-                placeholder='Search rows…'
-                className='h-6 w-40 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card dark:text-slate-200'
-              />
-              {pages > 1 && (
-                <span className='ml-auto flex items-center gap-1 text-[10.5px] text-slate-400'>
-                  <button type='button' disabled={page <= 0} onClick={() => setTablePage(page - 1)} className='rounded px-1 disabled:opacity-30'>←</button>
-                  {page + 1}/{pages}
-                  <button type='button' disabled={page >= pages - 1} onClick={() => setTablePage(page + 1)} className='rounded px-1 disabled:opacity-30'>→</button>
-                </span>
-              )}
-            </div>
-          )}
-          <div className='min-h-0 flex-1 overflow-auto'>
-            <table className='w-full text-[11.5px]'>
-              <thead className='sticky top-0 bg-white dark:bg-card'>
-                <tr>
-                  {cols.map((c) => (
-                    <th
-                      key={c}
-                      className='border-b border-slate-100 px-1.5 py-1 text-left font-medium text-slate-400 dark:border-border'
+            {rows.length > PAGE && (
+              <div className='mb-1 flex items-center gap-2'>
+                <input
+                  value={tableSearch}
+                  onChange={(e) => {
+                    setTableSearch(e.target.value)
+                    setTablePage(0)
+                  }}
+                  placeholder='Search rows…'
+                  className='h-6 w-40 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-card dark:text-slate-200'
+                />
+                {pages > 1 && (
+                  <span className='ml-auto flex items-center gap-1 text-[10.5px] text-slate-400'>
+                    <button
+                      type='button'
+                      disabled={page <= 0}
+                      onClick={() => setTablePage(page - 1)}
+                      className='rounded px-1 disabled:opacity-30'
                     >
-                      {defFor(c)?.label ?? c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((r) => (
-                  <tr
-                    key={String(r.id)}
-                    className={cn(
-                      rowTint(r),
-                      widget.collection && r.id != null && 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/60'
-                    )}
-                    onClick={() => {
-                      if (widget.collection && r.id != null)
-                        onDrill?.({ collection: widget.collection, itemId: String(r.id) })
-                    }}
-                  >
+                      ←
+                    </button>
+                    {page + 1}/{pages}
+                    <button
+                      type='button'
+                      disabled={page >= pages - 1}
+                      onClick={() => setTablePage(page + 1)}
+                      className='rounded px-1 disabled:opacity-30'
+                    >
+                      →
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
+            <div className='min-h-0 flex-1 overflow-auto'>
+              <table className='w-full text-[11.5px]'>
+                <thead className='sticky top-0 bg-white dark:bg-card'>
+                  <tr>
                     {cols.map((c) => (
-                      <td
+                      <th
                         key={c}
-                        className={cn(
-                          'max-w-[180px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-700 dark:border-border/40 dark:text-slate-300',
-                          (typeof r[c] === 'number' || NUMERIC_FORMATS.has(defFor(c)?.format ?? '')) &&
-                            'text-right tabular-nums',
-                          cellTint(r, c)
-                        )}
+                        className='border-b border-slate-100 px-1.5 py-1 text-left font-medium text-slate-400 dark:border-border'
                       >
-                        {defFor(c)?.format ? fmtCell(r[c], defFor(c)?.format, defFor(c)?.decimals) : String(r[c] ?? '')}
-                      </td>
+                        {defFor(c)?.label ?? c}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-              {tblOpts?.grand_total && searched.length > 1 && (
-                <tfoot>
-                  <tr className='border-t border-slate-200 font-semibold dark:border-border'>
-                    {cols.map((c, i) => {
-                      const nums = searched.map((r) => Number(r[c])).filter((v) => Number.isFinite(v))
-                      const isNum = nums.length > searched.length / 2
-                      const total = nums.reduce((a, v) => a + v, 0)
-                      return (
-                        <td key={c} className={cn('px-1.5 py-1 text-slate-800 dark:text-slate-100', isNum && 'text-right tabular-nums')}>
-                          {i === 0 && !isNum
-                            ? 'Total'
-                            : isNum
-                              ? defFor(c)?.format
-                                ? fmtCell(total, defFor(c)?.format, defFor(c)?.decimals)
-                                : total.toLocaleString()
-                              : ''}
+                </thead>
+                <tbody>
+                  {visibleRows.map((r) => (
+                    <tr
+                      key={String(r.id)}
+                      className={cn(
+                        rowTint(r),
+                        widget.collection &&
+                          r.id != null &&
+                          'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted/60'
+                      )}
+                      onClick={() => {
+                        if (widget.collection && r.id != null)
+                          onDrill?.({ collection: widget.collection, itemId: String(r.id) })
+                      }}
+                    >
+                      {cols.map((c) => (
+                        <td
+                          key={c}
+                          className={cn(
+                            'max-w-[180px] truncate border-b border-slate-50 px-1.5 py-1 text-slate-700 dark:border-border/40 dark:text-slate-300',
+                            (typeof r[c] === 'number' ||
+                              NUMERIC_FORMATS.has(defFor(c)?.format ?? '')) &&
+                              'text-right tabular-nums',
+                            cellTint(r, c)
+                          )}
+                        >
+                          {defFor(c)?.format
+                            ? fmtCell(r[c], defFor(c)?.format, defFor(c)?.decimals)
+                            : String(r[c] ?? '')}
                         </td>
-                      )
-                    })}
-                  </tr>
-                </tfoot>
-              )}
-            </table>
-          </div>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+                {tblOpts?.grand_total && searched.length > 1 && (
+                  <tfoot>
+                    <tr className='border-t border-slate-200 font-semibold dark:border-border'>
+                      {cols.map((c, i) => {
+                        const nums = searched
+                          .map((r) => Number(r[c]))
+                          .filter((v) => Number.isFinite(v))
+                        const isNum = nums.length > searched.length / 2
+                        const total = nums.reduce((a, v) => a + v, 0)
+                        return (
+                          <td
+                            key={c}
+                            className={cn(
+                              'px-1.5 py-1 text-slate-800 dark:text-slate-100',
+                              isNum && 'text-right tabular-nums'
+                            )}
+                          >
+                            {i === 0 && !isNum
+                              ? 'Total'
+                              : isNum
+                                ? defFor(c)?.format
+                                  ? fmtCell(total, defFor(c)?.format, defFor(c)?.decimals)
+                                  : total.toLocaleString()
+                                : ''}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
           </div>
         )
     } else {
@@ -2571,7 +2917,9 @@ const WidgetCard = memo(function WidgetCard({
         const mean = vals.reduce((a, b) => a + b, 0) / vals.length
         const std = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length)
         if (std === 0) return new Set<string>()
-        return new Set(series.filter((sv) => Math.abs(sv.value - mean) > 2 * std).map((sv) => sv.dim))
+        return new Set(
+          series.filter((sv) => Math.abs(sv.value - mean) > 2 * std).map((sv) => sv.dim)
+        )
       })()
       const anchorNotes = (annotations ?? []).filter(
         (a) => a.anchor_date && series.some((sv) => sv.dim === a.anchor_date)
@@ -2593,7 +2941,9 @@ const WidgetCard = memo(function WidgetCard({
                     paddingAngle={2}
                     strokeWidth={0}
                     className={widget.collection ? 'cursor-pointer' : undefined}
-                    onClick={(entry: { payload?: { dim?: string; raw?: unknown; other?: boolean } }) => {
+                    onClick={(entry: {
+                      payload?: { dim?: string; raw?: unknown; other?: boolean }
+                    }) => {
                       if (!widget.collection) return
                       const seg = entry?.payload
                       if (seg?.other) return
@@ -2612,9 +2962,15 @@ const WidgetCard = memo(function WidgetCard({
                           return
                         }
                       }
-                      const dimField = (widget.config?.dimension as { field?: string } | undefined)?.field
+                      const dimField = (widget.config?.dimension as { field?: string } | undefined)
+                        ?.field
                       setRecordsFor({
-                        conditions: widgetDrillConditions(widget, entityFilters, dateRange, seg?.raw ?? seg?.dim),
+                        conditions: widgetDrillConditions(
+                          widget,
+                          entityFilters,
+                          dateRange,
+                          seg?.raw ?? seg?.dim
+                        ),
                         title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
                         dimField,
                         dimRaw: seg?.raw ?? seg?.dim,
@@ -2629,7 +2985,17 @@ const WidgetCard = memo(function WidgetCard({
                       />
                     ))}
                   </Pie>
-                  <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
+                  <Tooltip
+                    contentStyle={{
+                      fontSize: 12,
+                      backgroundColor: '#0f172a',
+                      border: '1px solid #334155',
+                      borderRadius: 8,
+                      color: '#f1f5f9'
+                    }}
+                    labelStyle={{ color: '#f1f5f9' }}
+                    itemStyle={{ color: '#e2e8f0' }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
               <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
@@ -2659,14 +3025,22 @@ const WidgetCard = memo(function WidgetCard({
         body = (
           <div className='min-h-[110px] flex-1'>
             <ResponsiveContainer width='100%' height='100%'>
-              <ComposedChart data={series} margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}>
+              <ComposedChart
+                data={series}
+                margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}
+              >
                 <XAxis
                   dataKey='dim'
                   tick={{ fontSize: 10 }}
                   stroke='#94a3b8'
                   {...catAxisProps(series.length)}
                 />
-                <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={compactTick} width={44} />
+                <YAxis
+                  tick={{ fontSize: 10 }}
+                  stroke='#94a3b8'
+                  tickFormatter={compactTick}
+                  width={44}
+                />
                 {hasValue2 && (
                   <YAxis
                     yAxisId='right'
@@ -2686,7 +3060,17 @@ const WidgetCard = memo(function WidgetCard({
                     label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
                   />
                 ))}
-                <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
+                <Tooltip
+                  contentStyle={{
+                    fontSize: 12,
+                    backgroundColor: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: 8,
+                    color: '#f1f5f9'
+                  }}
+                  labelStyle={{ color: '#f1f5f9' }}
+                  itemStyle={{ color: '#e2e8f0' }}
+                />
                 {hasBand && (
                   <Area
                     type='monotone'
@@ -2786,7 +3170,12 @@ const WidgetCard = memo(function WidgetCard({
                       stroke='#94a3b8'
                       {...catAxisProps(series.length)}
                     />
-                    <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' tickFormatter={compactTick} width={44} />
+                    <YAxis
+                      tick={{ fontSize: 10 }}
+                      stroke='#94a3b8'
+                      tickFormatter={compactTick}
+                      width={44}
+                    />
                     {hasValue2 && (
                       <YAxis
                         yAxisId='right'
@@ -2809,7 +3198,17 @@ const WidgetCard = memo(function WidgetCard({
                       label={{ value: '✎', position: 'top', fontSize: 11, fill: '#f59e0b' }}
                     />
                   ))}
-                <Tooltip contentStyle={{ fontSize: 12, backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#f1f5f9' }} labelStyle={{ color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
+                <Tooltip
+                  contentStyle={{
+                    fontSize: 12,
+                    backgroundColor: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: 8,
+                    color: '#f1f5f9'
+                  }}
+                  labelStyle={{ color: '#f1f5f9' }}
+                  itemStyle={{ color: '#e2e8f0' }}
+                />
                 {widget.config?.compare && (
                   <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />
                 )}
@@ -2818,13 +3217,24 @@ const WidgetCard = memo(function WidgetCard({
                   fill='#00ceff'
                   radius={[3, 3, 0, 0]}
                   className={widget.collection ? 'cursor-pointer' : undefined}
-                  onClick={(entry: { payload?: { dim?: string; raw?: unknown; other?: boolean } } | undefined) => {
+                  onClick={(
+                    entry:
+                      | { payload?: { dim?: string; raw?: unknown; other?: boolean } }
+                      | undefined
+                  ) => {
                     if (!widget.collection) return
                     const seg = entry?.payload
                     if (seg?.other) return
-                    const dimField = (widget.config?.dimension as { field?: string; bucket?: string } | undefined)
+                    const dimField = widget.config?.dimension as
+                      | { field?: string; bucket?: string }
+                      | undefined
                     setRecordsFor({
-                      conditions: widgetDrillConditions(widget, entityFilters, dateRange, seg?.raw ?? seg?.dim),
+                      conditions: widgetDrillConditions(
+                        widget,
+                        entityFilters,
+                        dateRange,
+                        seg?.raw ?? seg?.dim
+                      ),
                       title: `${widget.title || widget.collection} — ${seg?.dim ?? ''}`,
                       dimField: dimField?.bucket ? undefined : dimField?.field,
                       dimRaw: seg?.raw ?? seg?.dim,
@@ -2864,7 +3274,8 @@ const WidgetCard = memo(function WidgetCard({
           {snapshot.value == null ? '—' : fmt(snapshot.value, format)}
         </p>
         <p className='text-[10.5px] text-slate-400'>
-          As of {snapshot.name}{snapshot.value == null ? ' — no metric stored for this widget' : ''}
+          As of {snapshot.name}
+          {snapshot.value == null ? ' — no metric stored for this widget' : ''}
         </p>
       </div>
     )
@@ -2876,7 +3287,8 @@ const WidgetCard = memo(function WidgetCard({
     >
       <div className='mb-1.5 flex items-center gap-1.5'>
         {(() => {
-          const link = (widget.config as { link_report?: { report_id?: string } } | null)?.link_report
+          const link = (widget.config as { link_report?: { report_id?: string } } | null)
+            ?.link_report
           if (link?.report_id && reportUrl) {
             return (
               <a
@@ -2915,13 +3327,18 @@ const WidgetCard = memo(function WidgetCard({
             <button
               type='button'
               title={asTable ? 'Back to the chart' : 'View as table (#383)'}
-              className={cn('rounded p-0.5', asTable ? 'text-[#00a5cc]' : 'text-slate-300 hover:text-[#00a5cc]')}
+              className={cn(
+                'rounded p-0.5',
+                asTable ? 'text-[#00a5cc]' : 'text-slate-300 hover:text-[#00a5cc]'
+              )}
               onClick={() => setAsTable((v) => !v)}
             >
               <TableIcon className='h-3 w-3' />
             </button>
           )}
-          {['bar', 'line', 'donut', 'pareto', 'scatter', 'heatmap', 'waterfall'].includes(widget.type) && (
+          {['bar', 'line', 'donut', 'pareto', 'scatter', 'heatmap', 'waterfall'].includes(
+            widget.type
+          ) && (
             <button
               type='button'
               title='Copy chart as image'
@@ -2931,10 +3348,11 @@ const WidgetCard = memo(function WidgetCard({
               <Camera className='h-3 w-3' />
             </button>
           )}
-          {(
+          {
             <button
               type='button'
-              title='Explain this number'
+              title={explainsTrend ? 'Explain the trend' : 'Explain this number'}
+              data-explain-trend={explainsTrend ? '1' : undefined}
               className='rounded p-0.5 text-slate-300 hover:text-[#00a5cc]'
               onClick={() => {
                 if (explainOpen) {
@@ -2944,6 +3362,30 @@ const WidgetCard = memo(function WidgetCard({
                 setExplainOpen(true)
                 if (explainText || explainBusy) return
                 setExplainBusy(true)
+                if (explainsTrend) {
+                  client
+                    .request(
+                      explainReportTrend(reportId, widget.id, {
+                        date_range: dateRange,
+                        entity_filters: entityFilters
+                      })
+                    )
+                    .then((r) => {
+                      setExplainText(r.data.explanation || 'No explanation available.')
+                      setExplainMovers(r.data.movers ?? null)
+                    })
+                    .catch((err: { status?: number; message?: string }) =>
+                      setExplainText(
+                        err?.status === 503
+                          ? 'AI is not configured on this instance.'
+                          : err?.status === 400
+                            ? (err.message ?? 'Not enough data to describe a trend.')
+                            : 'AI is not configured or unavailable.'
+                      )
+                    )
+                    .finally(() => setExplainBusy(false))
+                  return
+                }
                 // Query widgets resolve their data inside QueryWidgetBody — fetch
                 // the server-resolved equivalent so the AI has real numbers.
                 const dataP: Promise<ReportWidgetData | undefined> = data
@@ -2993,7 +3435,7 @@ const WidgetCard = memo(function WidgetCard({
             >
               <Sparkles className='h-3 w-3' />
             </button>
-          )}
+          }
           {(widget.config?.dimension as { bucket?: string } | undefined)?.bucket && (
             <button
               type='button'
@@ -3013,7 +3455,9 @@ const WidgetCard = memo(function WidgetCard({
               title='Notes on this widget'
               className={cn(
                 'relative rounded p-0.5',
-                (annotations?.length ?? 0) > 0 ? 'text-amber-500' : 'text-slate-300 hover:text-slate-500'
+                (annotations?.length ?? 0) > 0
+                  ? 'text-amber-500'
+                  : 'text-slate-300 hover:text-slate-500'
               )}
               onClick={() => setNotesOpen((v) => !v)}
             >
@@ -3042,9 +3486,16 @@ const WidgetCard = memo(function WidgetCard({
       {notesOpen && (
         <div className='mb-1.5 space-y-1 rounded-md border border-amber-200 bg-amber-50/60 p-2 dark:border-amber-500/30 dark:bg-amber-500/10'>
           {(annotations ?? []).map((a) => (
-            <div key={a.id} className='group/note flex items-start gap-1.5 text-[11px] text-slate-600 dark:text-slate-300'>
+            <div
+              key={a.id}
+              className='group/note flex items-start gap-1.5 text-[11px] text-slate-600 dark:text-slate-300'
+            >
               <span className='min-w-0 flex-1'>
-                {a.anchor_date && <span className='font-semibold text-amber-600 dark:text-amber-400'>{a.anchor_date} — </span>}
+                {a.anchor_date && (
+                  <span className='font-semibold text-amber-600 dark:text-amber-400'>
+                    {a.anchor_date} —{' '}
+                  </span>
+                )}
                 {a.note}
                 <span className='ml-1 text-[10px] text-slate-400'>{a.created_by_name ?? ''}</span>
               </span>
@@ -3093,7 +3544,7 @@ const WidgetCard = memo(function WidgetCard({
           )}
         </div>
       )}
-      {snapshot && (
+      {snapshot &&
         (() => {
           const cur = clientWidgetMetric(data)
           const prev = snapshot.value
@@ -3114,16 +3565,60 @@ const WidgetCard = memo(function WidgetCard({
               </span>
             </p>
           )
-        })()
-      )}
+        })()}
       {explainOpen && (
-        <div className='mb-1.5 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+        <div
+          className='mb-1.5 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'
+          data-explain-panel={explainsTrend ? 'trend' : 'number'}
+        >
           {explainBusy ? 'Thinking…' : explainText}
+          {!explainBusy && explainMovers && explainMovers.length > 0 && (
+            <div className='mt-1.5 flex flex-wrap gap-1' data-explain-movers>
+              {explainMovers.slice(0, 4).map((m) => (
+                <span
+                  key={m.label}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10.5px] tabular-nums',
+                    m.delta == null
+                      ? 'border-slate-200 text-slate-500 dark:border-border dark:text-slate-400'
+                      : m.delta >= 0
+                        ? 'border-emerald-200 text-emerald-700 dark:border-emerald-500/30 dark:text-emerald-300'
+                        : 'border-red-200 text-red-700 dark:border-red-500/30 dark:text-red-300'
+                  )}
+                  data-explain-mover={m.label}
+                >
+                  {m.delta != null &&
+                    (m.delta >= 0 ? (
+                      <TrendingUp className='h-3 w-3' />
+                    ) : (
+                      <TrendingDown className='h-3 w-3' />
+                    ))}
+                  <span className='font-medium'>{m.label}</span>
+                  {m.delta != null ? (
+                    <span>
+                      {m.delta >= 0 ? '+' : ''}
+                      {Number(m.delta).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                      {m.pct != null ? ` (${m.pct >= 0 ? '+' : ''}${m.pct}%)` : ''}
+                    </span>
+                  ) : m.to != null ? (
+                    <span>
+                      {Number(m.to).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                      {m.pct != null ? ` · ${m.pct}%` : ''}
+                    </span>
+                  ) : null}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {drillPath.length > 0 && (
         <div className='mb-1 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-500'>
-          <button type='button' onClick={() => setDrillPath([])} className='rounded px-1 hover:bg-muted'>
+          <button
+            type='button'
+            onClick={() => setDrillPath([])}
+            className='rounded px-1 hover:bg-muted'
+          >
             ⌂ All
           </button>
           {drillPath.map((d, i) => (
@@ -3153,7 +3648,9 @@ const WidgetCard = memo(function WidgetCard({
               <tbody>
                 {(data.series ?? []).map((sv) => (
                   <tr key={sv.dim} className='border-b border-slate-50 dark:border-border/40'>
-                    <td className='max-w-[220px] truncate px-1.5 py-1 text-slate-700 dark:text-slate-300'>{sv.dim}</td>
+                    <td className='max-w-[220px] truncate px-1.5 py-1 text-slate-700 dark:text-slate-300'>
+                      {sv.dim}
+                    </td>
                     <td className='px-1.5 py-1 text-right tabular-nums text-slate-800 dark:text-slate-100'>
                       {fmt(sv.value, format)}
                     </td>
@@ -3383,9 +3880,9 @@ export function ReportView({
     queryKey: ['nvr-report-firing', reportId],
     queryFn: () =>
       client
-        .request<{ data: Array<{ alert_id: string; name: string; widget: string; since: string }> }>(
-          get(`/report-studio/${reportId}/firing`)
-        )
+        .request<{
+          data: Array<{ alert_id: string; name: string; widget: string; since: string }>
+        }>(get(`/report-studio/${reportId}/firing`))
         .then((r) => r.data ?? [])
         .catch(() => []),
     staleTime: 60_000,
@@ -3442,7 +3939,8 @@ export function ReportView({
 
   const { data: report, isLoading } = useQuery<ReportDef>({
     queryKey: ['nivaro-report', reportId],
-    queryFn: () => client.request(readReport(reportId)).then((r) => (r as { data: ReportDef }).data),
+    queryFn: () =>
+      client.request(readReport(reportId)).then((r) => (r as { data: ReportDef }).data),
     staleTime: 30_000
   })
 
@@ -3532,7 +4030,10 @@ export function ReportView({
     setLocalRange(null)
     setDraftRange(undefined)
   }
-  const applyPreset = (p: { date_range: ReportDateRange | null; entity_filters: ReportEntityFilter[] }) => {
+  const applyPreset = (p: {
+    date_range: ReportDateRange | null
+    entity_filters: ReportEntityFilter[]
+  }) => {
     setDraftFilters(p.entity_filters)
     setEntityFilters(p.entity_filters)
     setLocalRange(p.date_range)
@@ -3545,7 +4046,11 @@ export function ReportView({
     setAiError(null)
     try {
       const res = await client.request(
-        aiReportFilters(reportId, prompt, filterBar.map((f) => ({ field: f.field, label: f.label })))
+        aiReportFilters(
+          reportId,
+          prompt,
+          filterBar.map((f) => ({ field: f.field, label: f.label }))
+        )
       )
       const ef: ReportEntityFilter[] = (res.data.entity_filters ?? [])
         .filter((f) => filterBar.some((b) => b.field === f.field) && f.values?.length > 0)
@@ -3566,9 +4071,7 @@ export function ReportView({
   }
 
   if (isLoading || !scopeGateOpen) {
-    return (
-      <div className={cn('p-6 text-[13px] text-slate-400', className)}>Loading report…</div>
-    )
+    return <div className={cn('p-6 text-[13px] text-slate-400', className)}>Loading report…</div>
   }
   if (!report) {
     return <div className={cn('p-6 text-[13px] text-slate-400', className)}>Report not found.</div>
@@ -3908,20 +4411,22 @@ export function ReportView({
       ) : (
         <div
           className='grid gap-3'
-          style={{ gridTemplateColumns: 'repeat(12, minmax(0, 1fr))', gridAutoRows: editMode ? undefined : '72px' }}
+          style={{
+            gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
+            gridAutoRows: editMode ? undefined : '72px'
+          }}
         >
-          {orderedForEdit(editMode && draftWidgets ? draftWidgets : widgets)
-            .map((w) => (
-              <div
-                key={w.id}
-                style={{
-                  gridColumn: compare
-                    ? `1 / -1`
-                    : `${Math.max(1, (w.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, w.w || 4))}`,
-                  gridRow: editMode ? undefined : undefined
-                }}
-                className={editMode || compare ? '' : 'contents'}
-              >
+          {orderedForEdit(editMode && draftWidgets ? draftWidgets : widgets).map((w) => (
+            <div
+              key={w.id}
+              style={{
+                gridColumn: compare
+                  ? `1 / -1`
+                  : `${Math.max(1, (w.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, w.w || 4))}`,
+                gridRow: editMode ? undefined : undefined
+              }}
+              className={editMode || compare ? '' : 'contents'}
+            >
               {compare && !editMode && w.type !== 'divider' ? (
                 <div className='grid grid-cols-2 gap-3'>
                   {[compare.a, compare.b].map((val, side) => (
@@ -3945,49 +4450,51 @@ export function ReportView({
                   ))}
                 </div>
               ) : (
-              <>
-              {editMode && (
-                <WidgetEditBar
-                  widget={w}
-                  onConfigure={() => setConfiguring(w.id)}
-                  onDelete={() => setDraftWidgets((prev) => (prev ?? []).filter((x) => x.id !== w.id))}
-                  onResize={(dw, dh) =>
-                    patchWidget({
-                      ...w,
-                      w: Math.min(12, Math.max(2, (w.w || 4) + dw)),
-                      h: Math.min(8, Math.max(1, (w.h || 2) + dh))
-                    })
-                  }
-                  onMove={(dir) => moveWidget(w.id, dir)}
-                />
+                <>
+                  {editMode && (
+                    <WidgetEditBar
+                      widget={w}
+                      onConfigure={() => setConfiguring(w.id)}
+                      onDelete={() =>
+                        setDraftWidgets((prev) => (prev ?? []).filter((x) => x.id !== w.id))
+                      }
+                      onResize={(dw, dh) =>
+                        patchWidget({
+                          ...w,
+                          w: Math.min(12, Math.max(2, (w.w || 4) + dw)),
+                          h: Math.min(8, Math.max(1, (w.h || 2) + dh))
+                        })
+                      }
+                      onMove={(dir) => moveWidget(w.id, dir)}
+                    />
+                  )}
+                  <WidgetCard
+                    reportId={reportId}
+                    widget={w}
+                    dateRange={effectiveRange}
+                    entityFilters={entityFilters}
+                    refetchInterval={refetchInterval}
+                    filterBar={filterBar}
+                    onDrill={openDrill}
+                    snapshot={
+                      snapDetail && snapDetail.data[w.id] !== undefined
+                        ? { name: snapDetail.name, value: snapDetail.data[w.id]?.value ?? null }
+                        : null
+                    }
+                    asOf={asOf}
+                    annotations={allAnnotations.filter((a) => a.widget === w.id)}
+                    onAddAnnotation={(widgetId, note, anchorDate) =>
+                      addNote.mutate({ widget: widgetId, note, anchor_date: anchorDate })
+                    }
+                    onDeleteAnnotation={(annId) => deleteNote.mutate(annId)}
+                    onCrossFilter={applyCrossFilter}
+                    reportUrl={reportUrl}
+                    currentFilters={entityFilters}
+                  />
+                </>
               )}
-              <WidgetCard
-                reportId={reportId}
-                widget={w}
-                dateRange={effectiveRange}
-                entityFilters={entityFilters}
-                refetchInterval={refetchInterval}
-                filterBar={filterBar}
-                onDrill={openDrill}
-                snapshot={
-                  snapDetail && snapDetail.data[w.id] !== undefined
-                    ? { name: snapDetail.name, value: snapDetail.data[w.id]?.value ?? null }
-                    : null
-                }
-                asOf={asOf}
-                annotations={allAnnotations.filter((a) => a.widget === w.id)}
-                onAddAnnotation={(widgetId, note, anchorDate) =>
-                  addNote.mutate({ widget: widgetId, note, anchor_date: anchorDate })
-                }
-                onDeleteAnnotation={(annId) => deleteNote.mutate(annId)}
-                onCrossFilter={applyCrossFilter}
-                reportUrl={reportUrl}
-                currentFilters={entityFilters}
-              />
-              </>
-              )}
-              </div>
-            ))}
+            </div>
+          ))}
         </div>
       )}
       {editMode && configuring && draftWidgets?.some((w) => w.id === configuring) && (

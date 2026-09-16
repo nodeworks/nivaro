@@ -446,6 +446,10 @@ export const securityUserScopes: DocSection = {
       type: 'p',
       text: 'User Scopes give each user per-dimension DEFAULT filter values (seed their filter UIs) and RESTRICTED values (server-enforced row scoping — the user can only see rows matching the picked values). A scope dimension names a target collection (e.g. a "Zone" dimension targeting `divisions`); how it filters every other business collection is auto-resolved from the relations graph — including junction-table hops — so new collections are covered the moment a relation to the target exists.'
     },
+    {
+      type: 'p',
+      text: 'Editing a user\'s RESTRICTED values on their admin page stages the change behind an impact preview: for the biggest collections that route to the dimension it shows how many records are visible now vs after the change, and — because a wrong pick is a quiet total denial — how many records would be GAINED and LOST, naming the newest five of each by their display label. Nothing is written until Apply.'
+    },
     { type: 'h3', text: 'Dimensions' },
     {
       type: 'ul',

@@ -252,6 +252,8 @@ export const reportStudioDocs: DocSection = {
       type: 'ul',
       items: [
         'Subscribe for a daily (07:00) or weekly (Monday) email — the report renders fresh, server-side, as you, into a mail-safe HTML digest with KPIs, bars and tables, plus an in-app notification.',
+        "Only when something changed: a subscription can skip the send when every number matches the last delivered digest (the fingerprint covers each widget's value, row count and every series point — never the HTML, so a relabel is not a change). Turning it on delivers once to establish the baseline; the popover shows when a send was last skipped.",
+        'Explain the trend: the sparkle on any chart (or a KPI with a compare window or sparkline) asks the AI why the series moved. The sentence is grounded in the resolved series and a sample of the rows behind the two points that moved — read as you, so the sample never shows a record your own drill-through would not — and the movers it names render as +/− chips under the text.',
         'Alerts watch a KPI or table widget: conditions on its value or row count (gt/gte/lt/lte/eq, AND), checked hourly. An alert fires ONCE when crossed and resolves when back in range — the open firing entry is the cooldown, so it never re-spams.',
         'Delivery per alert: in-app, email, or both. Toggle or delete any time; a firing badge shows live status.'
       ]
@@ -277,7 +279,12 @@ export const auditLevelDocs: DocSection = {
       head: ['Level', 'Activity entry', 'Revision snapshot', 'Use for'],
       rows: [
         ['all (default)', 'Yes', 'Yes', 'Normal records — full history and time-travel restore'],
-        ['activity', 'Yes', 'No', 'Chatty but audit-relevant writes (chat messages, log-style rows)'],
+        [
+          'activity',
+          'Yes',
+          'No',
+          'Chatty but audit-relevant writes (chat messages, log-style rows)'
+        ],
         ['(empty)', 'No', 'No', 'Ephemeral state — presence, read markers, heartbeats']
       ]
     },

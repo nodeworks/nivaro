@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
@@ -231,7 +232,7 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
 export async function runReportSubscriptions(
   app: FastifyInstance,
   cadence: 'daily' | 'weekly'
-): Promise<{ sent: number }> {
+): Promise<{ sent: number; skipped: number }> {
   const subs = (await db('nivaro_report_subscriptions').where({ cadence })) as Array<{
     id: number
     report: string
@@ -242,8 +243,11 @@ export async function runReportSubscriptions(
     attach_pdf: boolean
     deliver_teams: boolean
     widget_id: string | null
+    only_if_changed: boolean | null
+    last_snapshot_hash: string | null
   }>
   let sent = 0
+  let skipped = 0
   for (const sub of subs) {
     try {
       const user = await loadUser(sub.user)
@@ -281,6 +285,23 @@ export async function runReportSubscriptions(
             data: { error: err instanceof Error ? err.message : 'failed' }
           })
         }
+      }
+
+      // #70 only-if-changed: hash the delivered numbers; an unchanged report
+      // is skipped (stamped, never sent) until something actually moves. The
+      // hash covers every derived metric + series point, not the HTML — a
+      // relabel or a re-sorted table must not read as a change.
+      const snapshotHash = snapshotHashOf(resolved)
+      if (
+        (sub.only_if_changed === true || (sub.only_if_changed as unknown) === 1) &&
+        sub.last_snapshot_hash &&
+        sub.last_snapshot_hash === snapshotHash
+      ) {
+        await db('nivaro_report_subscriptions')
+          .where({ id: sub.id })
+          .update({ last_skipped_at: new Date() })
+        skipped++
+        continue
       }
 
       if (sub.delivery_email && user.email) {
@@ -353,13 +374,41 @@ export async function runReportSubscriptions(
       }
       await db('nivaro_report_subscriptions')
         .where({ id: sub.id })
-        .update({ last_sent_at: new Date() })
+        .update({ last_sent_at: new Date(), last_snapshot_hash: snapshotHash })
       sent++
     } catch (err) {
       app.log.warn({ err, sub: sub.id }, '[report-studio] subscription delivery failed')
     }
   }
-  return { sent }
+  return { sent, skipped }
+}
+
+/**
+ * Stable fingerprint of what a digest would SAY: per widget the derived
+ * value + row count + every series/tile/cell number, in widget order.
+ * Errors count as their message so a broken widget that starts working is
+ * a change.
+ */
+export function snapshotHashOf(
+  resolved: Array<{ widget: { id: string; type: string }; data: WidgetData | { error: string } }>
+): string {
+  const parts = resolved.map((r) => {
+    if ('error' in r.data) return [r.widget.id, 'error', r.data.error]
+    const d = r.data
+    return [
+      r.widget.id,
+      r.widget.type,
+      deriveAlertMetric('value', d),
+      deriveAlertMetric('row_count', d),
+      (d.series ?? []).map((s) => [s.dim, s.value, s.prev ?? null]),
+      (d.tiles ?? []).map((t) => [t.label, t.value ?? null]),
+      (d.cells ?? []).map((c) => [c.dim, c.dim2, c.value]),
+      d.waterfall ? [d.waterfall.start, d.waterfall.end] : null,
+      d.narrative ?? null,
+      d.pivot ? d.pivot.grand_total : null
+    ]
+  })
+  return createHash('sha1').update(JSON.stringify(parts)).digest('hex')
 }
 
 /** Compact per-widget summary lines posted into a chat room on cadence. */

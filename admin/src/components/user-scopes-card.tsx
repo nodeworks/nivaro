@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
 import { ShieldAlert, SlidersHorizontal } from 'lucide-react'
+import { useState } from 'react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -103,7 +103,9 @@ function ValuePills({
 
   const sel = new Set(selected.map(String))
   const toggle = (id: string | number) =>
-    onToggle(sel.has(String(id)) ? selected.filter((v) => String(v) !== String(id)) : [...selected, id])
+    onToggle(
+      sel.has(String(id)) ? selected.filter((v) => String(v) !== String(id)) : [...selected, id]
+    )
   const onCls =
     accent === 'amber'
       ? 'border-amber-400 bg-amber-50 font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
@@ -121,7 +123,9 @@ function ValuePills({
               onClick={() => toggle(o.id)}
               className={cn(
                 'rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors',
-                on ? onCls : 'border-slate-200 text-slate-400 hover:border-slate-300 dark:border-border'
+                on
+                  ? onCls
+                  : 'border-slate-200 text-slate-400 hover:border-slate-300 dark:border-border'
               )}
             >
               {o.label}
@@ -173,7 +177,9 @@ function ValuePills({
                 onClick={() => toggle(m.id)}
                 className={cn(
                   'flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[12px] hover:bg-slate-50 dark:hover:bg-muted',
-                  on ? 'font-medium text-nvr-navy dark:text-nvr-cyan' : 'text-slate-600 dark:text-slate-300'
+                  on
+                    ? 'font-medium text-nvr-navy dark:text-nvr-cyan'
+                    : 'text-slate-600 dark:text-slate-300'
                 )}
               >
                 <span className='truncate'>{m.label}</span>
@@ -199,8 +205,11 @@ export function UserScopesCard({ userId }: { userId: string }) {
     queryFn: () => api.get<{ data: ScopesInfo }>(`/user-scopes/${userId}`).then((r) => r.data.data)
   })
   const save = useMutation({
-    mutationFn: (body: { dimension: string; mode: 'default' | 'restrict'; values: Array<string | number> }) =>
-      api.put(`/user-scopes/${userId}`, body),
+    mutationFn: (body: {
+      dimension: string
+      mode: 'default' | 'restrict'
+      values: Array<string | number>
+    }) => api.put(`/user-scopes/${userId}`, body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['user-scopes', userId] })
   })
 
@@ -212,7 +221,16 @@ export function UserScopesCard({ userId }: { userId: string }) {
     dimension: string
     values: Array<string | number>
     loading: boolean
-    impact: Array<{ collection: string; total: number; current: number; proposed: number }> | null
+    impact: Array<{
+      collection: string
+      total: number
+      current: number
+      proposed: number
+      gained?: number
+      lost?: number
+      gained_sample?: Array<{ id: string; label: string }>
+      lost_sample?: Array<{ id: string; label: string }>
+    }> | null
   } | null>(null)
   const stageRestrict = async (dimension: string, values: Array<string | number>) => {
     setPending({ dimension, values, loading: true, impact: null })
@@ -263,7 +281,9 @@ export function UserScopesCard({ userId }: { userId: string }) {
                 <ValuePills
                   dimension={d}
                   selected={
-                    pending?.dimension === d.name ? pending.values : (scopes.restricted[d.name] ?? [])
+                    pending?.dimension === d.name
+                      ? pending.values
+                      : (scopes.restricted[d.name] ?? [])
                   }
                   accent='amber'
                   onToggle={(values) => void stageRestrict(d.name, values)}
@@ -275,16 +295,53 @@ export function UserScopesCard({ userId }: { userId: string }) {
                     ) : (
                       <>
                         {(pending.impact ?? []).map((i) => (
-                          <p key={i.collection}>
-                            <span className='font-mono'>{i.collection}</span>:{' '}
-                            {i.current.toLocaleString()} → {i.proposed.toLocaleString()} of{' '}
-                            {i.total.toLocaleString()} visible
-                            {i.proposed === 0 && (
-                              <span className='ml-1 font-semibold text-red-600 dark:text-red-400'>
-                                (sees nothing)
-                              </span>
+                          <div key={i.collection} data-scope-impact-row={i.collection}>
+                            <p>
+                              <span className='font-mono'>{i.collection}</span>:{' '}
+                              {i.current.toLocaleString()} → {i.proposed.toLocaleString()} of{' '}
+                              {i.total.toLocaleString()} visible
+                              {i.proposed === 0 && (
+                                <span className='ml-1 font-semibold text-red-600 dark:text-red-400'>
+                                  (sees nothing)
+                                </span>
+                              )}
+                            </p>
+                            {/* #56: what actually moves — the sample names the
+                                newest records gained and lost so a wrong pick is
+                                recognisable before it is saved. */}
+                            {((i.gained ?? 0) > 0 || (i.lost ?? 0) > 0) && (
+                              <div className='ml-3 mt-0.5 space-y-0.5 text-[11px]'>
+                                {(i.gained ?? 0) > 0 && (
+                                  <p data-scope-impact-gained={i.gained}>
+                                    <span className='font-semibold text-emerald-700 dark:text-emerald-300'>
+                                      +{(i.gained ?? 0).toLocaleString()} gained
+                                    </span>
+                                    {(i.gained_sample?.length ?? 0) > 0 && (
+                                      <span className='text-amber-900/80 dark:text-amber-200/80'>
+                                        {' '}
+                                        · {i.gained_sample!.map((r) => r.label).join(', ')}
+                                        {(i.gained ?? 0) > i.gained_sample!.length ? ' …' : ''}
+                                      </span>
+                                    )}
+                                  </p>
+                                )}
+                                {(i.lost ?? 0) > 0 && (
+                                  <p data-scope-impact-lost={i.lost}>
+                                    <span className='font-semibold text-red-700 dark:text-red-300'>
+                                      −{(i.lost ?? 0).toLocaleString()} lost
+                                    </span>
+                                    {(i.lost_sample?.length ?? 0) > 0 && (
+                                      <span className='text-amber-900/80 dark:text-amber-200/80'>
+                                        {' '}
+                                        · {i.lost_sample!.map((r) => r.label).join(', ')}
+                                        {(i.lost ?? 0) > i.lost_sample!.length ? ' …' : ''}
+                                      </span>
+                                    )}
+                                  </p>
+                                )}
+                              </div>
                             )}
-                          </p>
+                          </div>
                         ))}
                         {(pending.impact?.length ?? 0) === 0 && (
                           <p>Impact preview unavailable — apply with care.</p>
@@ -294,7 +351,11 @@ export function UserScopesCard({ userId }: { userId: string }) {
                             type='button'
                             className='rounded bg-amber-600 px-2 py-0.5 text-[11px] font-medium text-white'
                             onClick={() => {
-                              save.mutate({ dimension: d.name, mode: 'restrict', values: pending.values })
+                              save.mutate({
+                                dimension: d.name,
+                                mode: 'restrict',
+                                values: pending.values
+                              })
                               setPending(null)
                             }}
                           >

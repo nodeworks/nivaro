@@ -188,7 +188,7 @@ export async function isRegisteredBusinessCollection(name: string): Promise<bool
   return !!row
 }
 
-function applyFilters(
+export function applyFilters(
   q: ReturnType<typeof db>,
   filters: WidgetFilter[] | undefined,
   valid: Set<string>

@@ -528,14 +528,19 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         }
         updates.collection = collection ?? null
       }
-      if (field !== undefined) {
+      {
+        // Validate the EFFECTIVE field against the EFFECTIVE type — a
+        // saved_view widget stores a view id in `field`, so a PATCH that only
+        // flips the type away from saved_view must not let that id reach the
+        // aggregate SQL unchecked.
         const collForField = (updates.collection as string | null | undefined) ?? widget.collection
         const effType = (updates.type as string | undefined) ?? widget.type
-        if (field && collForField && effType !== 'saved_view') {
-          const validField = await resolveField(collForField, field)
+        const effField = field !== undefined ? field : widget.field
+        if (effField && collForField && effType !== 'saved_view') {
+          const validField = await resolveField(collForField, effField)
           if (!validField) return reply.code(400).send({ error: 'Unknown field' })
         }
-        updates.field = field ?? null
+        if (field !== undefined) updates.field = field ?? null
       }
       if (filters !== undefined) updates.filters = toJsonStr(filters)
       if (col !== undefined) updates.col = col

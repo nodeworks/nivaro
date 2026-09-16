@@ -1062,6 +1062,10 @@ export interface ReportSubscription {
   cadence: 'daily' | 'weekly'
   delivery_email: boolean
   delivery_inapp: boolean
+  /** #70: deliver only when the report's numbers moved since the last send. */
+  only_if_changed?: boolean
+  last_sent_at?: string | null
+  last_skipped_at?: string | null
 }
 
 export function readReportSubscription(id: UUID): Command<{ data: ReportSubscription | null }> {
@@ -1071,9 +1075,50 @@ export function readReportSubscription(id: UUID): Command<{ data: ReportSubscrip
 /** Subscribe/update (body) or unsubscribe (null). */
 export function setReportSubscription(
   id: UUID,
-  body: { cadence: 'daily' | 'weekly'; delivery_email?: boolean; delivery_inapp?: boolean } | null
+  body: {
+    cadence: 'daily' | 'weekly'
+    delivery_email?: boolean
+    delivery_inapp?: boolean
+    only_if_changed?: boolean
+  } | null
 ): Command<{ data: ReportSubscription | null }> {
   return cmd('PUT', `/report-studio/${id}/subscription`, undefined, body)
+}
+
+/**
+ * Explain the trend (#51): an AI sentence on why a widget's series moved,
+ * grounded in the resolved series + a sample of the rows behind the move
+ * (read as the caller). 503 when AI is not configured.
+ */
+export function explainReportTrend(
+  id: UUID,
+  widgetId: UUID,
+  body?: { date_range?: ReportDateRange | null; entity_filters?: ReportEntityFilter[] }
+): Command<{
+  data: {
+    explanation: string
+    kind: 'buckets' | 'compare' | 'contributors'
+    movers: Array<{
+      label: string
+      from: number | null
+      to: number | null
+      delta: number | null
+      pct: number | null
+    }>
+    windows: Array<{
+      key: string
+      label: string
+      value: number | null
+      rows: Array<{ id: unknown; label: string }>
+    }>
+  }
+}> {
+  return cmd(
+    'POST',
+    `/report-studio/${id}/widgets/${widgetId}/explain-trend`,
+    undefined,
+    body ?? {}
+  )
 }
 
 /**
