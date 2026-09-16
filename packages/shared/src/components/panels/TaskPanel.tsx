@@ -174,10 +174,22 @@ export function TaskPanel({
     enabled: !!collection && !!item && item !== 'new'
   })
 
+  // Only the columns the picker and the assignee chips read (the full
+  // projection was 110 KB per record open), and only once there is an
+  // assignee to name or a picker to fill — a record with no tasks costs nothing.
   const { data: users = [] } = useQuery<User[]>({
-    queryKey: ['users', 'combobox'],
+    queryKey: ['users', 'combobox', 'lean'],
     queryFn: () =>
-      client.request<{ data: User[] }>(get('/users', { limit: 200 })).then((r) => r.data)
+      client
+        .request<{ data: User[] }>(
+          get('/users', {
+            limit: 200,
+            fields: 'id,first_name,last_name,email,is_out_of_office,ooo_end,delegate_id'
+          })
+        )
+        .then((r) => r.data),
+    enabled: adding || tasks.some((t) => !!t.assignee),
+    staleTime: 5 * 60_000
   })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks', collection, item] })

@@ -1352,7 +1352,9 @@ export function ItemEditForm({
         )
         .then((r) => r.data)
         .catch(() => ({ latest: null })),
-    enabled: !isNew && !!itemId,
+    // Only a SAVE compares against it — a record nobody edits never needs the
+    // read (a scan of the record's history on every open, on every tab).
+    enabled: !isNew && !!itemId && isDirty,
     staleTime: 60_000
   })
 

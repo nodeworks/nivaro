@@ -131,6 +131,7 @@ import {
   useReimportHandler
 } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { useOptionalRealtime } from '../../lib/realtime'
@@ -2188,6 +2189,9 @@ export function InlineTableField({
     staleTime: 30_000
   })
 
+  // Cell marks decorate rows that already render — the read waits for the
+  // grid's own rows and the form's reads to settle first.
+  const provenanceSettled = useAfterIdle(2000)
   // Who last changed each cell — deltas only, one small map per grid. Keyed
   // on the rows query's freshness so a save refreshes it without every
   // write site having to remember to.
@@ -2209,7 +2213,7 @@ export function InlineTableField({
           })
         )
         .then((r) => ({ data: r.data ?? {}, created: r.created ?? {} })),
-    enabled: !!showRowRevisions && !isNew && rawRows.length > 0,
+    enabled: provenanceSettled && !!showRowRevisions && !isNew && rawRows.length > 0,
     staleTime: 60_000,
     placeholderData: (prev) => prev
   })

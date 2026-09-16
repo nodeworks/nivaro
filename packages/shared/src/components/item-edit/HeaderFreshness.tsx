@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { useAfterIdle } from '../../lib/defer'
 import { formatDateTime, formatRelative } from '../../lib/utils'
 
 /**
@@ -14,6 +15,8 @@ type Touch = { at: string; who: string; via: 'import' | 'integration' | 'system'
 export function useFieldTouches(collection: string, itemId: string, fields: string[]) {
   const client = useNivaroClient()
   const key = [...fields].sort().join(',')
+  // Decoration, not content: wait for the form's own reads to land first.
+  const settled = useAfterIdle(1500)
   return useQuery<Record<string, Touch>>({
     queryKey: ['field-touch', collection, itemId, key],
     queryFn: () =>
@@ -22,7 +25,7 @@ export function useFieldTouches(collection: string, itemId: string, fields: stri
           get('/revisions/field-touch', { collection, item: itemId, fields: key })
         )
         .then((r) => r.data ?? {}),
-    enabled: !!itemId && itemId !== 'new' && fields.length > 0,
+    enabled: settled && !!itemId && itemId !== 'new' && fields.length > 0,
     staleTime: 60_000
   })
 }

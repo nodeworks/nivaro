@@ -89,7 +89,7 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
   : knex({
       client: config.DB_CLIENT,
       connection: buildConnection(config.DB_HOST, writePort),
-      pool: { min: 2, max: 25 },
+      pool: { min: 2, max: config.DB_POOL_MAX },
       // disableMigrationsListValidation: the ledger can name migration files a
       // DIFFERENT deployment created (local dev + staging share one DB, and dev
       // auto-runs new migrations the moment tsx watch restarts). Without the
@@ -174,7 +174,7 @@ export const dbRead: Database = config.DB_READ_HOST
         config.DB_READ_HOST,
         config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
       ),
-      pool: { min: 2, max: 25 },
+      pool: { min: 2, max: config.DB_POOL_MAX },
       migrations: {
         migrationSource,
         tableName: 'nivaro_migrations'

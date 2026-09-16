@@ -220,9 +220,13 @@ export async function listUsers(
     directory?: boolean
     /** Management surfaces only — pickers must never see suspended users. */
     includeSuspended?: boolean
+    /** Column subset (intersected with the caller's projection; id always
+     *  rides). A banner that needs three columns of 500 users should not
+     *  pull 300 KB of the full projection. */
+    fields?: string[]
   } = {}
 ) {
-  const { limit = 25, offset = 0, search, sort, filter, directory, includeSuspended } = opts
+  const { limit = 25, offset = 0, search, sort, filter, directory, includeSuspended, fields } = opts
 
   // Suspended users are excluded by default so every dropdown reading this
   // endpoint inherits the filter (same pattern as is_redacted). Existing
@@ -278,9 +282,12 @@ export async function listUsers(
   // Directory rows also SELECT preferences — but only to derive `timezone`
   // (#175 local-time chips); the raw blob is stripped before the response so
   // the withheld column still never leaves the server.
-  const listQ = db<User>('nivaro_users').select(
-    directory ? [...DIRECTORY_USER_COLS, 'preferences'] : USER_COLS
-  )
+  const projection: readonly string[] = directory ? DIRECTORY_USER_COLS : USER_COLS
+  const narrowed =
+    fields && fields.length > 0
+      ? ['id', ...projection.filter((c) => c !== 'id' && fields.includes(c))]
+      : [...projection]
+  const listQ = db<User>('nivaro_users').select(directory ? [...narrowed, 'preferences'] : narrowed)
   applyHiddenAccountFilter(listQ)
   applySuspendedFilter(listQ)
   // Directory callers get search + sort only: an arbitrary caller-supplied

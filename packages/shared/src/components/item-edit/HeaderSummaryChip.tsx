@@ -52,34 +52,34 @@ interface Summary {
 export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }: Props) {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  // Any grid write on this record (rows query success) refreshes the figure.
-  const [tick, setTick] = useState(0)
+  // A grid WRITE on this record refreshes the figure: a rows query of this
+  // record REFETCHING (dataUpdateCount > 1 — its first load is not a write,
+  // and another record's tab landing rows is not this record). The old tick
+  // rode the query key and minted a fresh cache entry per grid load.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const unsub = qc.getQueryCache().subscribe((ev) => {
       if (ev.type !== 'updated' || ev.action?.type !== 'success') return
-      const head = ev.query.queryKey?.[0]
+      const key = ev.query.queryKey
+      const head = key?.[0]
       if (typeof head !== 'string' || (!head.startsWith('o2m-rows') && !head.startsWith('nested')))
         return
+      if (ev.query.state.dataUpdateCount <= 1) return
+      if (head.startsWith('o2m-rows') && String(key[3]) !== String(itemId)) return
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => setTick((n) => n + 1), 400)
+      timer = setTimeout(
+        () => void qc.invalidateQueries({ queryKey: ['child-summary', collection, itemId] }),
+        400
+      )
     })
     return () => {
       unsub()
       if (timer) clearTimeout(timer)
     }
-  }, [qc])
+  }, [qc, collection, itemId])
 
   const { data, isLoading } = useQuery<Summary>({
-    queryKey: [
-      'child-summary',
-      collection,
-      itemId,
-      field,
-      config.formula,
-      config.positive_only,
-      tick
-    ],
+    queryKey: ['child-summary', collection, itemId, field, config.formula, config.positive_only],
     queryFn: () =>
       client
         .request<{ data: Summary }>(

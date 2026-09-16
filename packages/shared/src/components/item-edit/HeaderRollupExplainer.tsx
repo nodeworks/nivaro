@@ -1,5 +1,6 @@
 import { Sigma } from 'lucide-react'
 import { useState } from 'react'
+import { useAfterIdle } from '../../lib/defer'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { lineageSummary, useFieldLineage } from './FieldRow'
@@ -22,7 +23,8 @@ export function HeaderRollupExplainer({
   noun?: string
 }) {
   const [open, setOpen] = useState(false)
-  const { data, isLoading } = useFieldLineage(collection, itemId, field, true)
+  const settled = useAfterIdle(1500)
+  const { data, isLoading } = useFieldLineage(collection, itemId, field, settled)
   const summary = lineageSummary(data, noun)
   const num = (v: unknown): string =>
     v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })

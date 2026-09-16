@@ -1,9 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, BellRing } from 'lucide-react'
 import type React from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
-import { del, get, post } from '../../lib/commands'
+import { del, post } from '../../lib/commands'
+import { MY_SUBSCRIPTIONS_KEY, useRecordSubscriptions } from './use-my-subscriptions'
 
 /**
  * #11 — watch ONE grid row (a forecast year, a PO line) from the row's own
@@ -12,15 +13,6 @@ import { del, get, post } from '../../lib/commands'
  * record-scoped path fires on exactly that row's diffs — and names the row
  * and the record it belongs to ("forecasts 2026 on CM26-79811").
  */
-interface SubRow {
-  id: number
-  collection: string | null
-  event_type: string
-  filter_field: string | null
-  filter_value: string | null
-  filters?: Array<{ field: string; op: string; value: unknown }> | null
-}
-
 export function RowWatchButton({
   collection,
   rowId,
@@ -33,24 +25,8 @@ export function RowWatchButton({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  // Same key shape as the record bell so a change on either side refreshes both.
-  const key = ['record-subscriptions', collection, rowId]
-  const { data: subs = [] } = useQuery<SubRow[]>({
-    queryKey: key,
-    queryFn: async () => {
-      const rows = await client
-        .request<{ data: SubRow[] }>(get('/notification-subscriptions'))
-        .then((r) => r.data ?? [])
-      return rows.filter((s) => {
-        if (s.collection !== collection) return false
-        if (s.filter_field === 'id' && String(s.filter_value) === String(rowId)) return true
-        return (s.filters ?? []).some(
-          (f) => f.field === 'id' && f.op === 'eq' && String(f.value) === String(rowId)
-        )
-      })
-    },
-    staleTime: 30_000
-  })
+  // One shared list read for every row + the record bell — narrowed here.
+  const { data: subs = [] } = useRecordSubscriptions(collection, String(rowId))
   const watched = subs.length > 0
   const label = `Watching ${collection.replace(/_/g, ' ')} ${rowLabel || `#${rowId}`}`.slice(0, 255)
   const toggle = useMutation({
@@ -71,8 +47,7 @@ export function RowWatchButton({
       return true
     },
     onSuccess: (now) => {
-      void qc.invalidateQueries({ queryKey: key })
-      void qc.invalidateQueries({ queryKey: ['notification-subscriptions'] })
+      void qc.invalidateQueries({ queryKey: MY_SUBSCRIPTIONS_KEY })
       toast.success(
         now ? 'Watching this line — its changes will notify you' : 'Stopped watching this line'
       )

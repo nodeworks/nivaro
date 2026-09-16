@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   AlertCircle,
@@ -63,7 +64,6 @@ import {
   XCircle,
   Zap
 } from 'lucide-react'
-import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useDrilldown } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
@@ -1034,6 +1034,9 @@ export function WidgetSlot({
   // Bumped by review_list's onRefetch after a group PATCH settles — included
   // (undebounced) in the render effect's deps to force an immediate refetch.
   const [refetchTick, setRefetchTick] = useState(0)
+  // The host record's id, for scoping the cache subscription below to its
+  // own grids (assigned after inputs resolve — the effect reads the ref).
+  const hostRecordIdRef = useRef<string | number | null>(null)
   // First-load marker: input-driven render refetches keep stale values on
   // screen instead of flashing the skeleton.
   const hasRenderDataRef = useRef(false)
@@ -1053,7 +1056,8 @@ export function WidgetSlot({
     let timer: ReturnType<typeof setTimeout> | null = null
     const unsub = qc.getQueryCache().subscribe((ev) => {
       if (ev.type !== 'updated' || ev.action?.type !== 'success') return
-      const head = ev.query.queryKey?.[0]
+      const key = ev.query.queryKey
+      const head = key?.[0]
       if (typeof head !== 'string') return
       if (
         !head.startsWith('o2m-rows') &&
@@ -1062,6 +1066,13 @@ export function WidgetSlot({
         head !== 'm2m-items'
       )
         return
+      // Only a REFETCH (a write settled) — a grid's first load is not a
+      // change, and on a page holding several records only this record's
+      // grids count; the first cut re-rendered every widget 5–7× per open.
+      if (ev.query.state.dataUpdateCount <= 1) return
+      if (head.startsWith('o2m-rows') && hostRecordIdRef.current != null) {
+        if (String(key[3]) !== String(hostRecordIdRef.current)) return
+      }
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => setRefetchTick((n) => n + 1), 400)
     })
@@ -1180,6 +1191,7 @@ export function WidgetSlot({
     const hostId = itemDraft.id
     if (hostId != null && hostId !== '') inputs.record_id = hostId
   }
+  hostRecordIdRef.current = (itemDraft.id as string | number | undefined) ?? null
   const inputsKey = JSON.stringify(inputs) + (itemCollection ?? '') + rollupStagedKey
   // Every scalar draft field feeds inputs, so inputsKey changes per keystroke
   // while editing the parent form — debounce so render refetches settle.

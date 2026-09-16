@@ -232,6 +232,13 @@ function normalizeCommentMode(v: unknown): 'none' | 'optional' | 'required' {
   return m === 'optional' || m === 'required' ? m : 'none'
 }
 
+/** The record panel's view of a transition — everything but the server-only
+ *  post-transition action configs. */
+function stripTransitionActions<T extends { actions?: unknown }>(t: T): Omit<T, 'actions'> {
+  const { actions: _actions, ...rest } = t
+  return rest
+}
+
 function formatTransition(t: WorkflowTransition) {
   return {
     ...t,
@@ -1919,8 +1926,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           current_state_obj: currentStateObj ? formatState(currentStateObj) : null
         },
         states: states.map(formatState),
-        available_transitions: availableTransitions,
-        all_transitions: transitions.map(formatTransition),
+        // `actions` (erp_submit payload templates, create_record configs) run
+        // ONLY on the server after a transition lands; the panel never reads
+        // them, and on a template with dozens of integration pushes they were
+        // 70 KB of a 90 KB response fetched on every record open.
+        available_transitions: availableTransitions.map(stripTransitionActions),
+        all_transitions: transitions.map((t) => stripTransitionActions(formatTransition(t))),
         history,
         binding: effectiveBinding
       }

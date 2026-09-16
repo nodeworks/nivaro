@@ -24,6 +24,9 @@ const schema = z.object({
   DB_HOST: requiredStr(),
   // Optional — per-client default applied in db/index.ts (mssql 1433, pg 5432, mysql2 3306)
   DB_PORT: z.coerce.number().optional(),
+  // Connection pool ceiling per replica. A record page fans out ~100
+  // concurrent reads; past this many they queue on the pool.
+  DB_POOL_MAX: z.coerce.number().int().min(2).max(200).default(25),
   DB_DATABASE: requiredStr(),
   DB_USER: requiredStr(),
   DB_PASSWORD: requiredStr(),

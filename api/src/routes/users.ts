@@ -21,6 +21,7 @@ export async function usersRoutes(app: FastifyInstance) {
       sort?: string
       filter?: string
       include_suspended?: string
+      fields?: string
     }
     let filter: Record<string, unknown> = {}
     if (q.filter) {
@@ -39,7 +40,13 @@ export async function usersRoutes(app: FastifyInstance) {
       filter,
       directory: !req.isAdmin,
       // Admin management surfaces (Users page) opt back in; pickers never do.
-      includeSuspended: req.isAdmin && q.include_suspended === 'true'
+      includeSuspended: req.isAdmin && q.include_suspended === 'true',
+      fields: q.fields
+        ? q.fields
+            .split(',')
+            .map((f) => f.trim())
+            .filter((f) => /^[a-z_]+$/.test(f))
+        : undefined
     })
     return reply.send(result)
   })

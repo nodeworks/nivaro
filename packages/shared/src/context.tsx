@@ -2,7 +2,7 @@ import type { NivaroClient } from '@nivaro/sdk'
 import { QueryClient, QueryClientContext, QueryClientProvider } from '@tanstack/react-query'
 import type React from 'react'
 import type { ReactNode } from 'react'
-import { createContext, useCallback, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 
 // ─── Grid flush registry ───────────────────────────────────────────────────
 
@@ -16,6 +16,8 @@ export const GridFlushContext = createContext<GridFlushContextValue | null>(null
 export function useGridFlush(): GridFlushContextValue | null {
   return useContext(GridFlushContext)
 }
+
+import { isCoalesced, withGetCoalescing } from './lib/request-gate'
 
 // ─── Nivaro client context ─────────────────────────────────────────────────
 
@@ -43,8 +45,17 @@ export function NivaroProvider({
       })
   )
 
+  // Identical GETs fired at the same moment share one HTTP request (a record
+  // page asks for the same collection metadata from a dozen components under
+  // a dozen query keys). A wrapped client passed twice stays wrapped once.
+  const coalesced = useMemo(
+    () => (isCoalesced(client) ? client : withGetCoalescing(client)),
+    [client]
+  )
   const inner = (
-    <NivaroFormContext.Provider value={{ client }}>{children}</NivaroFormContext.Provider>
+    <NivaroFormContext.Provider value={{ client: coalesced }}>
+      {children}
+    </NivaroFormContext.Provider>
   )
   if (ambientQueryClient) return inner
   return <QueryClientProvider client={ownQueryClient}>{inner}</QueryClientProvider>

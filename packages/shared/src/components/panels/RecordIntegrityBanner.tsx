@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useAfterIdle } from '../../lib/defer'
 import { cn, formatRelative } from '../../lib/utils'
 
 /**
@@ -55,9 +56,12 @@ export function useRecordIntegrity(collection: string, itemId: string, enabled =
         .catch(() => ({ enabled: false, findings: [] }) as never),
     staleTime: 5 * 60_000
   })
+  // The stored row paints first; the live re-check is a second read that can
+  // wait until the record's own fetches have landed.
+  const settled = useAfterIdle(2000)
   const { data: live, isFetching: checking } = useQuery<IntegrityResult>({
     queryKey: ['record-integrity', collection, itemId, 'live'],
-    enabled,
+    enabled: enabled && settled,
     queryFn: () =>
       client
         .request<{ data: never }>(

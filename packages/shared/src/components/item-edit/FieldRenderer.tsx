@@ -882,7 +882,10 @@ export function FieldRenderer({
             uploadTemplate={uploadTemplate}
             rowMatchPanel={rowMatchPanel}
             lineSla={(opts.line_sla ?? null) as { enabled?: boolean; field?: string } | null}
-            editorMode={opts.editor_mode === 'split' ? 'split' : undefined}
+            // Resolved here from the field's own options — an undefined value
+            // made the grid fetch the PARENT's whole field config (100 KB+)
+            // just to read this one key.
+            editorMode={opts.editor_mode === 'split' ? 'split' : 'drawer'}
             rowLints={(Array.isArray(opts.row_lints) ? opts.row_lints : null) as RowLint[] | null}
             stats={
               (Array.isArray(opts.stats) ? opts.stats : null) as

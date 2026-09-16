@@ -350,6 +350,10 @@ export async function revisionsRoutes(app: FastifyInstance) {
         .whereIn('a.item', chunk)
         .whereNotNull('r.delta')
         .orderBy('r.id', 'desc')
+        // Newest first and bounded: the mark is "who changed this recently".
+        // A row with years of machine revisions (a forecast reforecast
+        // nightly) would otherwise pull thousands of deltas per grid open.
+        .limit(600)
         .select(
           'a.item as item_id',
           'a.timestamp',

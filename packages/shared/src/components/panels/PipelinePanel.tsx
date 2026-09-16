@@ -1378,7 +1378,11 @@ function PipelinePanelInner({
     }
     setPendingTransition(txId)
   }
-  const queryKey = ['pipeline-instance', collection, item, asRole ?? null]
+  // Same key as every other instance read on the page when no role preview is
+  // active — three panels (header buttons, slot, summary strip) share one fetch.
+  const queryKey = asRole
+    ? ['pipeline-instance', collection, item, asRole]
+    : ['pipeline-instance', collection, item]
   const { data, isLoading } = useQuery<PipelinePanelData>({
     queryKey,
     queryFn: () =>

@@ -117,6 +117,7 @@ export {
   chatAvatarColor,
   chatInitials,
   choiceLabel,
+  createGatedClient,
   createLeaderSocket,
   DataTable,
   DefinitionsPanel,
@@ -164,6 +165,7 @@ export {
   formatStatusExpiry,
   formatValue,
   formulaConstant,
+  type GatedClient,
   GridFlushContext,
   getApiUpdate,
   getFieldInterface,
@@ -308,6 +310,7 @@ export {
   UserAvatar,
   UserChip,
   UserRosterCluster,
+  useAfterIdle,
   useApiFetchConfig,
   useApiUpdate,
   useAvailableBulkActions,
@@ -356,7 +359,8 @@ export {
   useUserSearch,
   validateExpression,
   WidgetSlot,
-  WorkflowPanel
+  WorkflowPanel,
+  withGetCoalescing
 } from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'

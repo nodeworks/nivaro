@@ -261,6 +261,7 @@ export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export * from './lib/catalog-item-open'
 export * from './lib/commands'
+export { useAfterIdle } from './lib/defer'
 export {
   deleteDraft,
   draftHasContent,
@@ -306,6 +307,7 @@ export {
   RealtimeContext,
   useOptionalRealtime
 } from './lib/realtime'
+export { createGatedClient, type GatedClient, withGetCoalescing } from './lib/request-gate'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, startRum } from './lib/rum'
 export * from './lib/summary-mode'

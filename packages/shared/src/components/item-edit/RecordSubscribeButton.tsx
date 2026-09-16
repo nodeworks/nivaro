@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '../ui/dialog'
+import { MY_SUBSCRIPTIONS_KEY, useRecordSubscriptions } from './use-my-subscriptions'
 
 interface SubRow {
   id: number
@@ -99,22 +100,7 @@ export function RecordSubscribeButton({
     }
   })
 
-  const { data: subs = [], isLoading } = useQuery<SubRow[]>({
-    queryKey: ['record-subscriptions', collection, itemId],
-    queryFn: async () => {
-      const rows = await client
-        .request<{ data: SubRow[] }>(get('/notification-subscriptions'))
-        .then((r) => r.data ?? [])
-      return rows.filter((s) => {
-        if (s.collection !== collection) return false
-        if (s.filter_field === 'id' && String(s.filter_value) === String(itemId)) return true
-        return (s.filters ?? []).some(
-          (f) => f.field === 'id' && f.op === 'eq' && String(f.value) === String(itemId)
-        )
-      })
-    },
-    staleTime: 30_000
-  })
+  const { data: subs = [], isLoading } = useRecordSubscriptions(collection, String(itemId))
 
   const subscribed = subs.length > 0
   const currentMode: SubscribeMode = subs.some((s) => s.event_type !== 'workflow_transition')
@@ -166,7 +152,7 @@ export function RecordSubscribeButton({
       }
     },
     onSuccess: (_d, next) => {
-      void qc.invalidateQueries({ queryKey: ['record-subscriptions', collection, itemId] })
+      void qc.invalidateQueries({ queryKey: MY_SUBSCRIPTIONS_KEY })
       toast.success(
         next === 'off'
           ? 'Unsubscribed from this record'
