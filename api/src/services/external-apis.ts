@@ -460,18 +460,53 @@ export async function callExternalApi(
   let res: Response | null = null
   let fetchError: string | null = null
 
-  try {
-    res = await fetch(url.toString(), init)
-  } catch (err) {
-    fetchError =
-      err instanceof Error
-        ? err.name === 'AbortError'
-          ? `Timed out after ${timeoutMs}ms`
-          : err.message
-        : String(err)
-  } finally {
-    clearTimeout(timer)
+  // #65 — inline retries per the API's retry_policy: transient failures only
+  // (network/timeout, 5xx, optionally 429), bounded, short backoff. A 4xx is
+  // the caller's problem and never retried.
+  const policy = parseJson<{
+    inline_retries?: number
+    inline_backoff_ms?: number
+    retry_on?: string[]
+  }>((row as { retry_policy?: string | null }).retry_policy ?? null)
+  const inlineRetries = Math.min(3, Math.max(0, Number(policy?.inline_retries ?? 0) || 0))
+  const inlineBackoff = Math.min(
+    10_000,
+    Math.max(100, Number(policy?.inline_backoff_ms ?? 500) || 500)
+  )
+  const retryOn = new Set(policy?.retry_on ?? ['network', '5xx'])
+  const transient = (r: Response | null, err: string | null): boolean => {
+    if (err) return retryOn.has('network')
+    if (!r) return false
+    if (r.status === 429) return retryOn.has('429')
+    return r.status >= 500 && retryOn.has('5xx')
   }
+  let attempts = 0
+  let retried = 0
+  for (;;) {
+    attempts += 1
+    const ctl = attempts === 1 ? controller : new AbortController()
+    const t = attempts === 1 ? timer : setTimeout(() => ctl.abort(), timeoutMs)
+    init.signal = ctl.signal
+    res = null
+    fetchError = null
+    try {
+      res = await fetch(url.toString(), init)
+    } catch (err) {
+      fetchError =
+        err instanceof Error
+          ? err.name === 'AbortError'
+            ? `Timed out after ${timeoutMs}ms`
+            : err.message
+          : String(err)
+    } finally {
+      clearTimeout(t)
+    }
+    if (attempts > inlineRetries || !transient(res, fetchError)) break
+    retried += 1
+    await new Promise((r) => setTimeout(r, inlineBackoff * attempts))
+  }
+  if (retried > 0 && fetchError)
+    fetchError = `${fetchError} (after ${retried} retr${retried === 1 ? 'y' : 'ies'})`
 
   const durationMs = Date.now() - startMs
 

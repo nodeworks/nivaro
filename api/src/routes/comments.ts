@@ -367,6 +367,10 @@ export async function commentsRoutes(app: FastifyInstance) {
         link?: { collection: string; item_id: string }
         comment_id?: string
         reactions?: Array<{ emoji: string; count: number; mine: boolean }>
+        /** External entries: which provider wrote it, and whether it can be replayed (#29). */
+        provider?: string
+        replayable?: boolean
+        status?: 'ok' | 'error' | 'info' | null
       }
 
       const instances = (await db('nivaro_workflow_instances')
@@ -677,7 +681,10 @@ export async function commentsRoutes(app: FastifyInstance) {
         user: e.user ?? null,
         created_at: e.created_at,
         context: e.context ?? null,
-        link: e.link
+        link: e.link,
+        provider: e.provider,
+        replayable: e.replayable === true,
+        status: e.status ?? null
       }))
 
       const entries: Entry[] = [

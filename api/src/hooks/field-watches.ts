@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { emitTrigger } from '../flows/registry.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { hooks } from './registry.js'
 
@@ -49,6 +50,27 @@ export function registerFieldWatchHooks() {
 
       // Only fire if value actually changed
       if (JSON.stringify(oldVal) === JSON.stringify(newVal)) continue
+
+      // #86 — a watched field change is a flow event too, subscribers or not.
+      try {
+        emitTrigger(
+          'field-watch',
+          {
+            collection,
+            item: String(item),
+            field,
+            watch_id: watch.id,
+            watch_name: watch.name ?? null,
+            old: oldVal ?? null,
+            new: newVal ?? null,
+            user_id: ctx.user?.id ?? null
+          },
+          console as unknown as Parameters<typeof emitTrigger>[2],
+          ctx.user?.id ?? undefined
+        )
+      } catch {
+        /* trigger emission is best-effort */
+      }
 
       // Get subscribers for this watch
       const subs = (await db('nivaro_field_watch_subscribers as s')

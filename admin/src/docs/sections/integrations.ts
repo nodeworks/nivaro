@@ -168,3 +168,73 @@ GET /api/cross-triggers`
     }
   ]
 }
+
+export const integrationsEvents: DocSection = {
+  id: 'integration-events',
+  label: 'Integration Events & Replay',
+  content: [
+    { type: 'h1', id: 'integration-events', text: 'Integration Events & Replay' },
+    {
+      type: 'p',
+      text: "Every integration that registers a notes source (`ctx.notes.registerSource`) can also answer two more questions: what happened lately across every record, and can this event be re-applied. The Integration Events page (Monitoring → Integration Events) lists the newest events from every source with a status dot (ok / error / info), the record they belong to, and a Replay action where the source offers one. The same Replay sits on the record's Notes thread beside each replayable external entry."
+    },
+    {
+      type: 'pre',
+      code: `// Extension side — list + replay are optional on a notes source
+ctx.notes.registerSource({
+  id: 'my-ext:orders',
+  collection: 'orders',
+  label: 'Order API',
+  load: async (itemId) => [...],                 // per-record thread entries
+  list: async ({ limit, status }) => [...],      // newest events across records
+  replay: async (entryId, { userId }) => ({ detail: 'Re-applied shipment 123' })
+})
+
+// Routes
+GET  /api/integration-events?provider=&status=&limit=     // admin feed
+POST /api/integration-events/:provider/replay { entry_id } // admin, or update rights on the source collection
+GET  /api/comments/related?collection=&item=               // entries carry provider, replayable, status`
+    },
+    {
+      type: 'note',
+      text: 'Replay means whatever the source says it means — the server only checks access, calls the provider, and logs `integration-event-replay` (or `-failed`) on the record. Requests that were pushed OUT are typically not replayable; events that arrived are.'
+    },
+    {
+      type: 'h2',
+      id: 'integration-events-header',
+      text: 'Per-integration status in the record header'
+    },
+    {
+      type: 'p',
+      text: "A record that has been pushed to up to three integrations shows one chip per integration in its header — the LATEST push's status for that record (green accepted, blue pending, red failed) with the time and error on hover. More than three fold back into the External requests count."
+    },
+    { type: 'h2', id: 'integration-events-search', text: 'Searching submission payloads' },
+    {
+      type: 'p',
+      text: "ERP Submissions gained a payload search: `GET /api/erp-submissions/search?q=&status=&external_api=&collection=&days=` looks through the stored payload, response, last error and external reference of the last 90 days (LIKE, admin only) and says where each hit matched. Clicking a hit loads that record's history."
+    },
+    { type: 'h2', id: 'integration-events-retry', text: 'Inline retries on external APIs' },
+    {
+      type: 'p',
+      text: "An external API's `retry_policy` now carries `inline_retries` (0–3), `inline_backoff_ms` (100–10000, doubles per attempt) and `retry_on` (any of network, 5xx, 429). Transient failures are retried INSIDE `callExternalApi` before the call reports failure; the scheduled `max_attempts` / `backoff_minutes` pair remains the slow path for ERP pushes and is optional. GET returns the policy parsed."
+    },
+    {
+      type: 'h2',
+      id: 'integration-events-webhooks',
+      text: 'Webhook test and replay with a payload'
+    },
+    {
+      type: 'p',
+      text: "`POST /api/webhooks/:id/test` accepts `{ delivery_id }` (resend a stored delivery's body) or `{ payload }` (any JSON); the response says `payload_source`: sample, delivery N or edited. `POST /api/webhooks/deliveries/:id/retry` accepts `{ payload }` too. The webhook editor lists recent deliveries with a Use-as-test-payload action that fills an editable payload box above the Test button."
+    },
+    {
+      type: 'h2',
+      id: 'integration-events-flows',
+      text: 'Flow version diff and the field-watch trigger'
+    },
+    {
+      type: 'p',
+      text: "`GET /api/flows/:id/versions/:version/diff?against=current|N` returns the flow-level field changes plus added / removed / changed operations between two definitions; the flow editor's Versions card has a Diff button per version. Saving a flow whose definition matches the latest version mints no new version. Flows can also trigger on `field-watch` — fired whenever a watched field changes through the items service, with collection, item, field, watch_name, old and new in the payload."
+    }
+  ]
+}

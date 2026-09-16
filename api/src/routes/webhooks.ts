@@ -196,6 +196,11 @@ export async function webhooksRoutes(app: FastifyInstance) {
 
   // Delete
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
+    // Deliveries FK the webhook (NO ACTION) — a webhook that has fired once
+    // could never be deleted before this cleared its log first.
+    await db('nivaro_webhook_deliveries')
+      .where({ webhook: Number(req.params.id) })
+      .delete()
     const deleted = await db('nivaro_webhooks')
       .where({ id: Number(req.params.id) })
       .delete()
@@ -218,11 +223,33 @@ export async function webhooksRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'Not found' })
 
     const collections = parseJson<string[]>(row.collections) ?? []
-    const payload = {
+    // #33 — test with a REAL payload: a captured delivery's request body
+    // (delivery_id) or an edited body the admin pasted (payload). Without
+    // either, the sample stub as before.
+    const body = (req.body ?? {}) as { delivery_id?: number | string; payload?: unknown }
+    let payload: unknown = {
       event: 'test',
       collection: collections[0] ?? 'test',
       item: null,
       data: {}
+    }
+    let payloadSource = 'sample'
+    if (body.delivery_id != null && body.delivery_id !== '') {
+      const delivery = (await db('nivaro_webhook_deliveries')
+        .where({ id: Number(body.delivery_id), webhook: row.id })
+        .first()) as DeliveryRow | undefined
+      if (!delivery?.request_body)
+        return reply.code(404).send({ error: 'That delivery has no stored request body' })
+      try {
+        payload = JSON.parse(delivery.request_body)
+      } catch {
+        payload = delivery.request_body
+      }
+      payloadSource = `delivery ${delivery.id}`
+    } else if (body.payload !== undefined) {
+      payload =
+        typeof body.payload === 'string' ? (parseJson(body.payload) ?? body.payload) : body.payload
+      payloadSource = 'edited'
     }
 
     const method = (row.method ?? 'POST').toUpperCase()
@@ -239,7 +266,7 @@ export async function webhooksRoutes(app: FastifyInstance) {
 
       const init: RequestInit = { method, headers, signal: controller.signal, redirect: 'manual' }
       if (method !== 'GET' && method !== 'HEAD') {
-        init.body = JSON.stringify(payload)
+        init.body = typeof payload === 'string' ? payload : JSON.stringify(payload)
       }
 
       let res: Response
@@ -276,9 +303,9 @@ export async function webhooksRoutes(app: FastifyInstance) {
         item: req.params.id,
         user: req.user?.id,
         req,
-        comment: 'test'
+        comment: `test (${payloadSource})`
       })
-      return { data: { status: res.status, ok: res.ok, body } }
+      return { data: { status: res.status, ok: res.ok, body, payload_source: payloadSource } }
     } catch (err) {
       const message =
         err instanceof Error
@@ -335,14 +362,22 @@ export async function webhooksRoutes(app: FastifyInstance) {
         | WebhookRow
         | undefined
       if (!webhook) return reply.code(404).send({ error: 'Webhook no longer exists' })
-      if (!delivery.request_body) {
+      // #55 — replay with an EDITED payload: the body overrides the stored one
+      // (re-signed like any dispatch); absent = the stored body as-is.
+      const edited = (req.body ?? {}) as { payload?: unknown }
+      let bodyToSend: string | null = delivery.request_body
+      if (edited.payload !== undefined && edited.payload !== null && edited.payload !== '') {
+        bodyToSend =
+          typeof edited.payload === 'string' ? edited.payload : JSON.stringify(edited.payload)
+      }
+      if (!bodyToSend) {
         return reply.code(400).send({ error: 'Delivery has no stored request body to retry' })
       }
 
       const result = await dispatchWebhook(
         webhook,
         delivery.event,
-        delivery.request_body, // raw string — dispatched as-is, re-signed
+        bodyToSend, // raw string — dispatched as-is, re-signed
         delivery.attempt + 1
       )
 
@@ -352,7 +387,7 @@ export async function webhooksRoutes(app: FastifyInstance) {
         item: String(webhook.id),
         user: req.user?.id,
         req,
-        comment: `retry delivery ${delivery.id}`
+        comment: `retry delivery ${delivery.id}${edited.payload !== undefined ? ' (edited payload)' : ''}`
       })
 
       return { data: result }

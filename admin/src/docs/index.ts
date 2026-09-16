@@ -11,7 +11,6 @@ export * from './sections/command-center.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
 export * from './sections/detail-sheets.js'
-export * from './sections/summary-mode.js'
 export * from './sections/devex.js'
 export * from './sections/extensions-system.js'
 export * from './sections/features.js'
@@ -36,6 +35,7 @@ export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
 export * from './sections/security.js'
 export * from './sections/storage.js'
+export * from './sections/summary-mode.js'
 export * from './sections/team-throughput.js'
 export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
@@ -120,7 +120,6 @@ import {
   trashDocs
 } from './sections/data-safety.js'
 import { detailSheets } from './sections/detail-sheets.js'
-import { summaryMode } from './sections/summary-mode.js'
 import {
   devexCdcStream,
   devexCodegen,
@@ -202,6 +201,7 @@ import {
   integrationsConnector,
   integrationsCrossTriggers,
   integrationsErp,
+  integrationsEvents,
   integrationsParallelBranches,
   integrationsSyncJobs
 } from './sections/integrations.js'
@@ -369,6 +369,7 @@ import {
   storagePdfTemplates,
   storageProviders
 } from './sections/storage.js'
+import { summaryMode } from './sections/summary-mode.js'
 import { teamThroughputGuide } from './sections/team-throughput.js'
 import {
   orgChartView,
@@ -716,6 +717,7 @@ export const navSections: NavGroup[] = [
     label: 'Integration & Sync',
     items: [
       integrationsErp,
+      integrationsEvents,
       integrationsSyncJobs,
       integrationsConnector,
       integrationsParallelBranches,

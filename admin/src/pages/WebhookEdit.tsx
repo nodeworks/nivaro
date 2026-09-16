@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, RefreshCw, Trash2, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,6 +18,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, type Collection } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -34,6 +34,18 @@ type WebhookForm = {
   headers: HeaderPair[]
   secret: string
   enabled: boolean
+}
+
+type WebhookDelivery = {
+  id: number
+  event: string
+  status_code: number | null
+  request_body: string | null
+  response_body: string | null
+  latency_ms: number | null
+  success: boolean
+  attempt: number
+  created_at: string
 }
 
 type Webhook = {
@@ -126,8 +138,35 @@ export function WebhookEditPage() {
     onError: () => toast.error('Failed to save webhook')
   })
 
+  // #86 — a test can replay a stored delivery's payload, or any edited JSON.
+  const [testPayload, setTestPayload] = useState('')
+  const [payloadFrom, setPayloadFrom] = useState<number | null>(null)
+  const parsedTestPayload = (() => {
+    if (!testPayload.trim()) return { ok: true as const, value: undefined }
+    try {
+      return { ok: true as const, value: JSON.parse(testPayload) as unknown }
+    } catch {
+      return { ok: false as const, value: undefined }
+    }
+  })()
+  const deliveries = useQuery({
+    queryKey: ['webhook-deliveries', id],
+    queryFn: () =>
+      api
+        .get<{ data: WebhookDelivery[]; total: number }>(`/webhooks/${id}/deliveries`, {
+          params: { limit: 10 }
+        })
+        .then((r) => r.data),
+    enabled: !isNew
+  })
   const testWebhook = useMutation({
-    mutationFn: () => api.post(`/webhooks/${id}/test`).then((r) => r.data),
+    mutationFn: () =>
+      api
+        .post(
+          `/webhooks/${id}/test`,
+          parsedTestPayload.value !== undefined ? { payload: parsedTestPayload.value } : {}
+        )
+        .then((r) => r.data),
     onSuccess: (res) => {
       setTestResult(JSON.stringify(res, null, 2))
       toast.success('Test request sent')
@@ -466,17 +505,117 @@ export function WebhookEditPage() {
                   </div>
                   <Button
                     onClick={() => testWebhook.mutate()}
-                    disabled={testWebhook.isPending}
+                    disabled={testWebhook.isPending || !parsedTestPayload.ok}
                     className='gap-2'
+                    data-webhook-test
                   >
                     <Zap className='h-3.5 w-3.5' />
-                    {testWebhook.isPending ? 'Sending…' : 'Test'}
+                    {testWebhook.isPending
+                      ? 'Sending…'
+                      : testPayload.trim()
+                        ? 'Send this payload'
+                        : 'Test'}
                   </Button>
                 </div>
+                <div className='mt-3'>
+                  <Label className='text-[11px] text-slate-500'>
+                    Payload{' '}
+                    {payloadFrom
+                      ? `(from delivery #${payloadFrom} — edit freely)`
+                      : '(blank = sample)'}
+                  </Label>
+                  <textarea
+                    value={testPayload}
+                    onChange={(e) => {
+                      setTestPayload(e.target.value)
+                      if (payloadFrom && !e.target.value.trim()) setPayloadFrom(null)
+                    }}
+                    rows={testPayload ? 8 : 2}
+                    spellCheck={false}
+                    data-webhook-test-payload
+                    placeholder='{"event": "…", "data": {…}} — leave blank to send the built-in sample'
+                    className={cn(
+                      'mt-1 w-full rounded-md border bg-white px-2.5 py-2 font-mono text-[11.5px] dark:bg-background',
+                      parsedTestPayload.ok
+                        ? 'border-slate-200 dark:border-border'
+                        : 'border-red-400'
+                    )}
+                  />
+                  {!parsedTestPayload.ok && (
+                    <p className='mt-1 text-[11px] text-red-600'>Not valid JSON.</p>
+                  )}
+                </div>
                 {testResult && (
-                  <pre className='mt-4 max-h-64 overflow-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-100'>
+                  <pre className='mt-4 max-h-64 overflow-auto rounded-lg bg-[#0f172a] p-3 font-mono text-[11px] text-slate-100'>
                     {testResult}
                   </pre>
+                )}
+              </div>
+            )}
+
+            {/* Recent deliveries (#86): pick one to replay, as-is or edited */}
+            {!isNew && (
+              <div
+                className='rounded-xl border border-slate-200 bg-white p-6'
+                data-webhook-deliveries
+              >
+                <div className='flex items-center justify-between'>
+                  <div>
+                    <h2 className='text-[13px] font-semibold text-slate-900'>Recent deliveries</h2>
+                    <p className='mt-0.5 text-[11px] text-slate-400'>
+                      Replay a real payload through the test button, edited or not.
+                      {deliveries.data ? ` ${deliveries.data.total} on record.` : ''}
+                    </p>
+                  </div>
+                </div>
+                {deliveries.isLoading ? (
+                  <Skeleton className='mt-3 h-8 rounded' />
+                ) : (deliveries.data?.data ?? []).length === 0 ? (
+                  <p className='mt-3 text-[12px] text-slate-400'>No deliveries yet.</p>
+                ) : (
+                  <div className='mt-3 divide-y divide-slate-100'>
+                    {(deliveries.data?.data ?? []).map((d) => (
+                      <div
+                        key={d.id}
+                        className='flex flex-wrap items-center gap-2 py-1.5 text-[12px]'
+                        data-webhook-delivery={d.id}
+                      >
+                        <span
+                          className={cn(
+                            'h-2 w-2 rounded-full',
+                            d.success ? 'bg-emerald-500' : 'bg-red-500'
+                          )}
+                        />
+                        <span className='font-mono text-slate-700'>#{d.id}</span>
+                        <span className='text-slate-600'>{d.event}</span>
+                        <span className='text-slate-400'>
+                          {d.status_code ?? '—'} · {d.latency_ms ?? '—'}ms · attempt {d.attempt}
+                        </span>
+                        <span className='ml-auto text-[11px] text-slate-400'>
+                          {new Date(d.created_at).toLocaleString()}
+                        </span>
+                        <button
+                          type='button'
+                          data-webhook-use-payload={d.id}
+                          disabled={!d.request_body}
+                          onClick={() => {
+                            let body = d.request_body ?? ''
+                            try {
+                              body = JSON.stringify(JSON.parse(body), null, 2)
+                            } catch {
+                              /* raw */
+                            }
+                            setTestPayload(body)
+                            setPayloadFrom(d.id)
+                            setTestResult(null)
+                          }}
+                          className='rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] text-slate-600 hover:bg-slate-50 disabled:opacity-40'
+                        >
+                          Use as test payload
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}

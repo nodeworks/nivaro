@@ -212,6 +212,64 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
   })
 
   // Submission history for an item (latest first)
+  // #80 — payload archive search: "where did this REQ id go". Text LIKE over
+  // the stored payload/response/error/external_ref, admin-only (the bodies
+  // carry other records' data). Static path — registered BEFORE /:c/:i.
+  app.get('/search', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as {
+      q?: string
+      status?: string
+      external_api?: string
+      collection?: string
+      days?: string
+      limit?: string
+    }
+    const term = String(q.q ?? '').trim()
+    if (term.length < 2) return reply.code(400).send({ error: 'q must be at least 2 characters' })
+    const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
+    const days = Math.min(365, Math.max(1, Number(q.days) || 90))
+    const like = `%${term.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+    let query = db('nivaro_erp_submissions as s')
+      .leftJoin('nivaro_external_apis as a', 'a.id', 's.external_api')
+      .where('s.created_at', '>=', new Date(Date.now() - days * 86_400_000))
+      .andWhere((b) => {
+        b.where('s.payload', 'like', like)
+          .orWhere('s.response', 'like', like)
+          .orWhere('s.last_error', 'like', like)
+          .orWhere('s.external_ref', 'like', like)
+          .orWhere('s.item', 'like', like)
+      })
+    if (q.status && ERP_STATUSES.has(q.status as ErpStatus))
+      query = query.andWhere('s.status', q.status)
+    if (q.external_api) query = query.andWhere('s.external_api', Number(q.external_api))
+    if (q.collection && /^[A-Za-z_][A-Za-z0-9_]*$/.test(q.collection))
+      query = query.andWhere('s.collection', q.collection)
+    const rows = (await query
+      .orderBy('s.created_at', 'desc')
+      .orderBy('s.id', 'desc')
+      .limit(limit)
+      .select('s.*', 'a.name as external_api_name')) as Array<
+      ErpSubmissionRow & { external_api_name: string | null }
+    >
+    // Where the term sits — payload / response / error — so the row says why it matched.
+    const lower = term.toLowerCase()
+    const data = rows.map((r) => {
+      const matched: string[] = []
+      if ((r.payload ?? '').toLowerCase().includes(lower)) matched.push('payload')
+      if ((r.response ?? '').toLowerCase().includes(lower)) matched.push('response')
+      if ((r.last_error ?? '').toLowerCase().includes(lower)) matched.push('error')
+      if ((r.external_ref ?? '').toLowerCase().includes(lower)) matched.push('external_ref')
+      if (
+        String(r.item ?? '')
+          .toLowerCase()
+          .includes(lower)
+      )
+        matched.push('item')
+      return { ...serialize(r), external_api_name: r.external_api_name ?? null, matched }
+    })
+    return reply.send({ data, limit, days })
+  })
+
   app.get<{ Params: { collection: string; item: string } }>(
     '/:collection/:item',
     { preHandler: authenticate },

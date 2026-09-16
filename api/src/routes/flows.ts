@@ -138,15 +138,19 @@ async function snapshotFlowVersion(
         reject: op.reject
       }))
     }
-    const maxRow = await db('nivaro_flow_versions')
+    const serialized = JSON.stringify(definition)
+    const latest = (await db<FlowVersion>('nivaro_flow_versions')
       .where({ flow: flowId })
-      .max('version as max')
-      .first()
-    const nextVersion = Number((maxRow as { max: number | null } | undefined)?.max ?? 0) + 1
+      .orderBy('version', 'desc')
+      .first()) as FlowVersion | undefined
+    // Byte-identical to the newest version = nothing to record (the template
+    // versions do the same) — a diff between two equal versions is noise.
+    if (latest && latest.definition === serialized) return latest.version
+    const nextVersion = Number(latest?.version ?? 0) + 1
     await db('nivaro_flow_versions').insert({
       flow: flowId,
       version: nextVersion,
-      definition: JSON.stringify(definition),
+      definition: serialized,
       created_by: userId ?? null,
       created_at: new Date()
     })
@@ -154,6 +158,99 @@ async function snapshotFlowVersion(
   } catch (err) {
     log.warn({ err, flowId }, 'Failed to snapshot flow version')
     return null
+  }
+}
+
+// ── #87 — version diff (mirrors services/workflow-template-versions diffSnapshots)
+type FieldChange = { field: string; from: unknown; to: unknown }
+type OpDiffRow = Record<string, unknown> & { id: string }
+export interface FlowVersionDiff {
+  flow: FieldChange[]
+  operations: {
+    added: OpDiffRow[]
+    removed: OpDiffRow[]
+    changed: Array<{ id: string; label: string; fields: FieldChange[] }>
+  }
+}
+const OP_DIFF_IGNORE = new Set(['flow', 'position_x', 'position_y'])
+function parseJsonish(v: unknown): unknown {
+  if (typeof v !== 'string') return v
+  try {
+    return JSON.parse(v)
+  } catch {
+    return v
+  }
+}
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(parseJsonish(a) ?? null) === JSON.stringify(parseJsonish(b) ?? null)
+}
+export function diffFlowDefinitions(
+  from: FlowVersionDefinition,
+  to: FlowVersionDefinition
+): FlowVersionDiff {
+  const flow: FieldChange[] = []
+  const keys = new Set([...Object.keys(from.flow ?? {}), ...Object.keys(to.flow ?? {})])
+  for (const k of keys) {
+    const a = (from.flow as Record<string, unknown>)[k]
+    const b = (to.flow as Record<string, unknown>)[k]
+    if (!sameValue(a, b))
+      flow.push({ field: k, from: parseJsonish(a) ?? null, to: parseJsonish(b) ?? null })
+  }
+  const byId = (ops: FlowVersionDefinition['operations']) =>
+    new Map(ops.map((o) => [String(o.id), o as unknown as OpDiffRow]))
+  const A = byId(from.operations ?? [])
+  const B = byId(to.operations ?? [])
+  const added: OpDiffRow[] = []
+  const removed: OpDiffRow[] = []
+  const changed: FlowVersionDiff['operations']['changed'] = []
+  for (const [id, row] of B) if (!A.has(id)) added.push(row)
+  for (const [id, row] of A) if (!B.has(id)) removed.push(row)
+  for (const [id, a] of A) {
+    const b = B.get(id)
+    if (!b) continue
+    const fields: FieldChange[] = []
+    const fk = new Set([...Object.keys(a), ...Object.keys(b)])
+    for (const k of fk) {
+      if (OP_DIFF_IGNORE.has(k)) continue
+      if (!sameValue(a[k], b[k]))
+        fields.push({ field: k, from: parseJsonish(a[k]) ?? null, to: parseJsonish(b[k]) ?? null })
+    }
+    if (fields.length > 0) {
+      changed.push({ id, label: String(b.name ?? b.key ?? b.type ?? id), fields })
+    }
+  }
+  return { flow, operations: { added, removed, changed } }
+}
+
+/** The LIVE definition in the same shape the snapshots use. */
+async function readCurrentFlowDefinition(flowId: string): Promise<FlowVersionDefinition | null> {
+  const flow = await db<Flow>('nivaro_flows').where({ id: flowId }).first()
+  if (!flow) return null
+  const operations = await db<FlowOperation>('nivaro_flow_operations')
+    .where({ flow: flowId })
+    .orderBy('position_y')
+    .orderBy('position_x')
+  return {
+    flow: {
+      name: flow.name,
+      description: flow.description,
+      status: flow.status,
+      trigger: flow.trigger,
+      trigger_options: flow.trigger_options,
+      accountability: flow.accountability
+    },
+    operations: operations.map((op) => ({
+      id: op.id,
+      flow: op.flow,
+      name: op.name,
+      key: op.key,
+      type: op.type,
+      position_x: op.position_x,
+      position_y: op.position_y,
+      options: op.options,
+      resolve: op.resolve,
+      reject: op.reject
+    }))
   }
 }
 
@@ -922,6 +1019,43 @@ export async function flowsRoutes(app: FastifyInstance) {
         created_at: row.created_at,
         definition
       }
+    })
+  })
+
+  // #87 — what changed between a version and the current flow (or another version).
+  app.get('/:id/versions/:version/diff', async (req, reply) => {
+    const { id, version } = req.params as { id: string; version: string }
+    const against = (req.query as { against?: string }).against
+    const row = await db<FlowVersion>('nivaro_flow_versions')
+      .where({ flow: id, version: Number(version) })
+      .first()
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    let from: FlowVersionDefinition
+    try {
+      from = JSON.parse(row.definition) as FlowVersionDefinition
+    } catch {
+      return reply.code(400).send({ error: 'Stored version is corrupt' })
+    }
+    let to: FlowVersionDefinition | null
+    let toLabel: string
+    if (!against || against === 'current') {
+      to = await readCurrentFlowDefinition(id)
+      toLabel = 'current'
+    } else {
+      const other = await db<FlowVersion>('nivaro_flow_versions')
+        .where({ flow: id, version: Number(against) })
+        .first()
+      if (!other) return reply.code(404).send({ error: 'Comparison version not found' })
+      try {
+        to = JSON.parse(other.definition) as FlowVersionDefinition
+      } catch {
+        return reply.code(400).send({ error: 'Comparison version is corrupt' })
+      }
+      toLabel = `v${other.version}`
+    }
+    if (!to) return reply.code(404).send({ error: 'Flow not found' })
+    return reply.send({
+      data: { from_version: row.version, to: toLabel, diff: diffFlowDefinitions(from, to) }
     })
   })
 

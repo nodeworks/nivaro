@@ -351,6 +351,10 @@ interface RelatedNote {
   /** Line comments are real comments — reactable from the thread too. */
   comment_id?: string | null
   reactions?: Array<{ emoji: string; count: number; mine: boolean }> | null
+  /** External entries: the integration source that wrote it + whether it can be re-applied. */
+  provider?: string | null
+  replayable?: boolean
+  status?: 'ok' | 'error' | 'info' | null
 }
 
 /**
@@ -373,6 +377,29 @@ function RecordedNote({ note }: { note: RelatedNote }) {
       queryClient.invalidateQueries({ queryKey: ['row-comment-counts'] })
     },
     onError: () => toast.error('Failed to react')
+  })
+  // #29 — re-apply an integration event from its stored form (the provider
+  // decides what that means; the server logs the outcome either way).
+  const [replayArmed, setReplayArmed] = useState(false)
+  const replay = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { detail: string } }>(
+        post(`/integration-events/${encodeURIComponent(note.provider ?? '')}/replay`, {
+          entry_id: note.id.replace(/^external:/, '')
+        })
+      ),
+    onSuccess: (res) => {
+      setReplayArmed(false)
+      toast.success('Event replayed', {
+        description: (res as { data?: { detail?: string } })?.data?.detail
+      })
+      queryClient.invalidateQueries({ queryKey: ['comments-related'] })
+    },
+    onError: (err) => {
+      setReplayArmed(false)
+      const msg = (err as { response?: { error?: string }; message?: string })?.response?.error
+      toast.error(msg ?? (err as Error)?.message ?? 'Replay failed', { duration: 8000 })
+    }
   })
   // "Bring me to the line": scroll + flash the grid row when it is on the
   // page; otherwise open the line record in the drill sheet (row on another
@@ -426,6 +453,28 @@ function RecordedNote({ note }: { note: RelatedNote }) {
               <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
             ))}
           <span className='text-[11px] text-slate-400'>{formatRelative(note.created_at)}</span>
+          {note.source === 'external' && note.status === 'error' && (
+            <span className='rounded bg-red-50 px-1 text-[10px] font-medium text-red-700 dark:bg-red-500/10 dark:text-red-400'>
+              error
+            </span>
+          )}
+          {note.source === 'external' && note.replayable && note.provider && (
+            <button
+              type='button'
+              onClick={() => (replayArmed ? replay.mutate() : setReplayArmed(true))}
+              onBlur={() => setReplayArmed(false)}
+              disabled={replay.isPending}
+              data-note-replay={note.id}
+              className={`ml-auto rounded px-1.5 py-px text-[10.5px] font-medium transition-colors ${
+                replayArmed
+                  ? 'bg-sky-600 text-white'
+                  : 'text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-900/20'
+              }`}
+              data-tip='Re-apply this event from its stored payload'
+            >
+              {replay.isPending ? 'Replaying…' : replayArmed ? 'Replay this event?' : 'Replay'}
+            </button>
+          )}
         </div>
         <p className='mt-1 whitespace-pre-wrap break-words text-[13px] leading-snug text-slate-600 dark:text-slate-300'>
           <AutolinkedText text={note.text} />

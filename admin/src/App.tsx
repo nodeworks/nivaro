@@ -168,6 +168,9 @@ const CoverageGapsPage = lazy(() =>
 const IntegrationHealthPage = lazy(() =>
   import('@/pages/IntegrationHealth').then((m) => ({ default: m.IntegrationHealthPage }))
 )
+const IntegrationEventsPage = lazy(() =>
+  import('@/pages/IntegrationEvents').then((m) => ({ default: m.IntegrationEventsPage }))
+)
 const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const Realtime = lazy(() => import('@/pages/Realtime'))
 
@@ -525,6 +528,7 @@ export default function App() {
                   <Route path='delegation' element={<DelegationConsole />} />
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
+                  <Route path='integration-events' element={<IntegrationEventsPage />} />
                   <Route path='background-jobs' element={<BackgroundJobs />} />
                   <Route path='realtime' element={<Realtime />} />
                   <Route path='monitors' element={<MonitorsPage />} />

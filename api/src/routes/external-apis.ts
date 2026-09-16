@@ -20,6 +20,8 @@ interface ExternalApiRow {
   enabled: boolean
   integration_type: string | null
   integration_config: string | null
+  retry_policy?: string | null
+  outbound_contract?: string | null
   created_at: Date
   updated_at: Date
 }
@@ -146,6 +148,10 @@ function serializeForRead(row: ExternalApiRow) {
     enabled: !!row.enabled,
     integration_type: row.integration_type ?? null,
     integration_config: parseJson(row.integration_config),
+    // #65 — the retry policy was PATCHable but never read back, so the editor
+    // always showed it empty.
+    retry_policy: parseJson(row.retry_policy) ?? null,
+    outbound_contract: parseJson(row.outbound_contract) ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -379,7 +385,13 @@ export async function externalApisRoutes(app: FastifyInstance) {
       enabled: boolean
       integration_type: string | null
       integration_config: unknown
-      retry_policy: { max_attempts?: number; backoff_minutes?: number } | null
+      retry_policy: {
+        max_attempts?: number
+        backoff_minutes?: number
+        inline_retries?: number
+        inline_backoff_ms?: number
+        retry_on?: string[]
+      } | null
     }>
   }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id)
@@ -396,14 +408,47 @@ export async function externalApisRoutes(app: FastifyInstance) {
       // #469 — {max_attempts 1-10, backoff_minutes >= 1}; null disables.
       if (body.retry_policy === null) patch.retry_policy = null
       else {
-        const max = Number(body.retry_policy.max_attempts)
-        const back = Number(body.retry_policy.backoff_minutes)
-        if (!Number.isFinite(max) || max < 1 || max > 10 || !Number.isFinite(back) || back < 1) {
+        // The scheduled pair is optional as a PAIR (an inline-only policy is
+        // valid); when either half is given, both must be, and be sane.
+        const hasScheduled =
+          body.retry_policy.max_attempts != null || body.retry_policy.backoff_minutes != null
+        const max = hasScheduled ? Number(body.retry_policy.max_attempts) : undefined
+        const back = hasScheduled ? Number(body.retry_policy.backoff_minutes) : undefined
+        if (
+          hasScheduled &&
+          (!Number.isFinite(max) ||
+            (max as number) < 1 ||
+            (max as number) > 10 ||
+            !Number.isFinite(back) ||
+            (back as number) < 1)
+        ) {
           return reply
             .code(400)
             .send({ error: 'retry_policy needs max_attempts 1-10 and backoff_minutes >= 1' })
         }
-        patch.retry_policy = JSON.stringify({ max_attempts: max, backoff_minutes: back })
+        // #65 — inline retries: transient failures (network / timeout / 5xx by
+        // default) are re-attempted INSIDE callExternalApi, bounded to 3 with a
+        // short backoff; the sweep-level policy above stays the slow path.
+        const inline = Number(body.retry_policy.inline_retries ?? 0)
+        const inlineBackoff = Number(body.retry_policy.inline_backoff_ms ?? 500)
+        if (!Number.isInteger(inline) || inline < 0 || inline > 3) {
+          return reply.code(400).send({ error: 'inline_retries must be 0–3' })
+        }
+        if (!Number.isFinite(inlineBackoff) || inlineBackoff < 100 || inlineBackoff > 10_000) {
+          return reply.code(400).send({ error: 'inline_backoff_ms must be 100–10000' })
+        }
+        const retryOn = Array.isArray(body.retry_policy.retry_on)
+          ? body.retry_policy.retry_on.filter((x) => ['network', '5xx', '429'].includes(String(x)))
+          : ['network', '5xx']
+        patch.retry_policy =
+          !hasScheduled && inline === 0
+            ? null
+            : JSON.stringify({
+                ...(hasScheduled ? { max_attempts: max, backoff_minutes: back } : {}),
+                inline_retries: inline,
+                inline_backoff_ms: inlineBackoff,
+                retry_on: retryOn
+              })
       }
     }
     if (body.base_url !== undefined) patch.base_url = body.base_url

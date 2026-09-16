@@ -408,6 +408,24 @@ export function ErpSubmissionsPage() {
     setApplied({ collection, item: itemId.trim() })
   }
 
+  // #80 — payload search: find every submission whose payload / response /
+  // error / external ref carries a term, across all records.
+  const [searchTerm, setSearchTerm] = useState('')
+  const [searchStatus, setSearchStatus] = useState('')
+  const [searchApplied, setSearchApplied] = useState<{ q: string; status: string } | null>(null)
+  const search = useQuery({
+    queryKey: ['erp-submissions-search', searchApplied?.q, searchApplied?.status],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<ErpSubmission & { external_api_name: string | null; matched: string[] }>
+        }>('/erp-submissions/search', {
+          params: { q: searchApplied!.q, status: searchApplied!.status || undefined, limit: 100 }
+        })
+        .then((r) => r.data.data),
+    enabled: !!searchApplied
+  })
+
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       {/* Page header */}
@@ -451,6 +469,112 @@ export function ErpSubmissionsPage() {
             <Search className='mr-1.5 h-3.5 w-3.5' />
             Load history
           </Button>
+        </form>
+
+        {/* Payload search (#80) */}
+        <form
+          data-erp-search
+          className='mb-4 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-border dark:bg-card'
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (searchTerm.trim().length >= 2)
+              setSearchApplied({ q: searchTerm.trim(), status: searchStatus })
+          }}
+        >
+          <div className='min-w-[240px] flex-1'>
+            <Label className='mb-1 block text-[11px] text-slate-500'>
+              Search payloads, responses and errors
+            </Label>
+            <Input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder='order number, SKU, error text…'
+              className='h-8 font-mono text-[12.5px]'
+            />
+          </div>
+          <div>
+            <Label className='mb-1 block text-[11px] text-slate-500'>Status</Label>
+            <select
+              value={searchStatus}
+              onChange={(e) => setSearchStatus(e.target.value)}
+              className='h-8 rounded-md border border-slate-200 bg-white px-2 text-[12.5px] dark:border-border dark:bg-background'
+              aria-label='Status'
+            >
+              <option value=''>Any</option>
+              {['submitted', 'pending', 'accepted', 'rejected', 'failed'].map((st) => (
+                <option key={st} value={st}>
+                  {titleCase(st)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button
+            type='submit'
+            size='sm'
+            variant='outline'
+            className='h-8'
+            disabled={searchTerm.trim().length < 2}
+          >
+            <Search className='mr-1.5 h-3.5 w-3.5' />
+            Search
+          </Button>
+          {searchApplied && (
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              className='h-8'
+              onClick={() => {
+                setSearchApplied(null)
+                setSearchTerm('')
+              }}
+            >
+              Clear
+            </Button>
+          )}
+          {searchApplied && (
+            <div className='w-full' data-erp-search-results>
+              {search.isLoading ? (
+                <Skeleton className='mt-2 h-8 rounded' />
+              ) : (search.data ?? []).length === 0 ? (
+                <p className='mt-2 text-[12px] text-slate-400'>
+                  Nothing in the last 90 days mentions “{searchApplied.q}”.
+                </p>
+              ) : (
+                <div className='mt-2 divide-y divide-slate-100 dark:divide-border'>
+                  {(search.data ?? []).map((row) => (
+                    <button
+                      type='button'
+                      key={row.id}
+                      data-erp-search-row={row.id}
+                      onClick={() => {
+                        setCollection(row.collection)
+                        setItemId(row.item)
+                        setApplied({ collection: row.collection, item: row.item })
+                      }}
+                      className='flex w-full flex-wrap items-center gap-2 py-1.5 text-left text-[12px] hover:bg-slate-50 dark:hover:bg-muted/40'
+                    >
+                      <Badge variant='outline' className='h-5 px-1.5 text-[10px]'>
+                        {titleCase(row.status)}
+                      </Badge>
+                      <span className='font-mono text-slate-700 dark:text-foreground'>
+                        {row.collection}/{row.item}
+                      </span>
+                      {row.external_api_name && (
+                        <span className='text-slate-500'>· {row.external_api_name}</span>
+                      )}
+                      <span className='text-slate-400'>
+                        matched in {row.matched.join(', ') || 'row'}
+                      </span>
+                      <span className='ml-auto text-[11px] text-slate-400'>
+                        {formatRelative(row.created_at)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </form>
 
         {/* Results */}

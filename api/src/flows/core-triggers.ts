@@ -18,6 +18,15 @@ export function registerCoreTriggers(): void {
     fields: []
   })
   registerTrigger({
+    type: 'field-watch',
+    label: 'Watched Field Changed',
+    description:
+      'Fires when a field with an active field watch changes value (through the items service). ' +
+      'Payload: collection, item, field, watch_id, watch_name, old, new, user_id. ' +
+      'Filter with a Condition operation (e.g. collection eq orders, field eq amount).',
+    fields: []
+  })
+  registerTrigger({
     type: 'staged-import-completed',
     label: 'Staged Import Completed',
     description:

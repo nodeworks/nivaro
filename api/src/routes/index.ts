@@ -86,6 +86,7 @@ import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
 import { indexAdvisorRoutes } from './index-advisor.js'
 import { integrationContractRoutes } from './integration-contracts.js'
+import { integrationEventsRoutes } from './integration-events.js'
 import { integrationHealthRoutes } from './integration-health.js'
 import { issuesRoutes } from './issues.js'
 import { itemActionsRoutes } from './item-actions.js'
@@ -255,6 +256,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(traceRoutes)
   await app.register(configDiffRoutes)
   await app.register(environmentRoutes, { prefix: '/environments' })
+  await app.register(integrationEventsRoutes, { prefix: '/integration-events' })
   await app.register(lineageRoutes, { prefix: '/lineage' })
   await app.register(readinessRoutes, { prefix: '/readiness' })
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })

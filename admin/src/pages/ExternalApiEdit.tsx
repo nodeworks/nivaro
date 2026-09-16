@@ -15,7 +15,6 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -42,6 +41,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { PluginSlot } from '@/extensions/slots'
 import { api, type ExternalApiCallLog, type ExternalApiEndpoint } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 import type { ExternalApi } from './ExternalApis'
 
@@ -66,6 +66,9 @@ interface FormState {
   integration_type: string
   retry_max: string
   retry_backoff: string
+  inline_retries: string
+  inline_backoff_ms: string
+  retry_on: string[]
 }
 
 const EMPTY: FormState = {
@@ -78,7 +81,10 @@ const EMPTY: FormState = {
   enabled: true,
   integration_type: '',
   retry_max: '',
-  retry_backoff: ''
+  retry_backoff: '',
+  inline_retries: '',
+  inline_backoff_ms: '',
+  retry_on: ['network', '5xx', '429']
 }
 
 export function ExternalApiEditPage() {
@@ -111,14 +117,34 @@ export function ExternalApiEditPage() {
         integration_type: data.integration_type ?? '',
         ...(() => {
           try {
-            const rp = (data as { retry_policy?: string | null }).retry_policy
-            const parsed = rp ? (JSON.parse(rp) as { max_attempts?: number; backoff_minutes?: number }) : null
+            const rp = (data as { retry_policy?: string | Record<string, unknown> | null })
+              .retry_policy
+            const parsed = (typeof rp === 'string' ? JSON.parse(rp) : rp) as {
+              max_attempts?: number
+              backoff_minutes?: number
+              inline_retries?: number
+              inline_backoff_ms?: number
+              retry_on?: string[]
+            } | null
             return {
               retry_max: parsed?.max_attempts != null ? String(parsed.max_attempts) : '',
-              retry_backoff: parsed?.backoff_minutes != null ? String(parsed.backoff_minutes) : ''
+              retry_backoff: parsed?.backoff_minutes != null ? String(parsed.backoff_minutes) : '',
+              inline_retries: parsed?.inline_retries ? String(parsed.inline_retries) : '',
+              inline_backoff_ms:
+                parsed?.inline_backoff_ms != null ? String(parsed.inline_backoff_ms) : '',
+              retry_on:
+                Array.isArray(parsed?.retry_on) && parsed.retry_on.length
+                  ? parsed.retry_on
+                  : ['network', '5xx', '429']
             }
           } catch {
-            return { retry_max: '', retry_backoff: '' }
+            return {
+              retry_max: '',
+              retry_backoff: '',
+              inline_retries: '',
+              inline_backoff_ms: '',
+              retry_on: ['network', '5xx', '429']
+            }
           }
         })()
       })
@@ -136,8 +162,16 @@ export function ExternalApiEditPage() {
         base_url: form.base_url,
         // Auto-retry (#469): both set = policy on; either blank = off.
         retry_policy:
-          form.retry_max.trim() && form.retry_backoff.trim()
-            ? { max_attempts: Number(form.retry_max), backoff_minutes: Number(form.retry_backoff) }
+          (form.retry_max.trim() && form.retry_backoff.trim()) || Number(form.inline_retries) > 0
+            ? {
+                max_attempts: form.retry_max.trim() ? Number(form.retry_max) : undefined,
+                backoff_minutes: form.retry_backoff.trim() ? Number(form.retry_backoff) : undefined,
+                inline_retries: Number(form.inline_retries) || 0,
+                inline_backoff_ms: form.inline_backoff_ms.trim()
+                  ? Number(form.inline_backoff_ms)
+                  : 500,
+                retry_on: form.retry_on
+              }
             : null,
         description: form.description || null,
         auth_type: form.auth_type,
@@ -279,6 +313,60 @@ export function ExternalApiEditPage() {
                 placeholder='off'
               />
             </label>
+          </div>
+          {/* #88 — inline retries: transient failures (network, 5xx, 429) are
+              retried inside the same call before the request is reported failed. */}
+          <div className='mt-3 border-t border-slate-100 pt-3' data-inline-retry>
+            <Label>Inline retries for transient failures</Label>
+            <p className='mb-2 text-[12px] text-slate-400'>
+              Retried inside the same call, before the request reports failure. 0 = off.
+            </p>
+            <div className='flex flex-wrap items-center gap-3'>
+              <label className='flex items-center gap-1.5 text-[12px] text-slate-500'>
+                Retries
+                <Input
+                  type='number'
+                  min={0}
+                  max={3}
+                  value={form.inline_retries}
+                  onChange={(e) => setForm((f) => ({ ...f, inline_retries: e.target.value }))}
+                  className='h-8 w-16 text-[12.5px]'
+                  placeholder='0'
+                />
+              </label>
+              <label className='flex items-center gap-1.5 text-[12px] text-slate-500'>
+                Backoff (ms)
+                <Input
+                  type='number'
+                  min={100}
+                  max={10000}
+                  step={100}
+                  value={form.inline_backoff_ms}
+                  onChange={(e) => setForm((f) => ({ ...f, inline_backoff_ms: e.target.value }))}
+                  className='h-8 w-24 text-[12.5px]'
+                  placeholder='500'
+                />
+              </label>
+              <div className='flex items-center gap-2 text-[12px] text-slate-500'>
+                Retry on
+                {(['network', '5xx', '429'] as const).map((k) => (
+                  <label key={k} className='flex items-center gap-1'>
+                    <Checkbox
+                      checked={form.retry_on.includes(k)}
+                      onCheckedChange={(v) =>
+                        setForm((f) => ({
+                          ...f,
+                          retry_on: v
+                            ? [...new Set([...f.retry_on, k])]
+                            : f.retry_on.filter((x) => x !== k)
+                        }))
+                      }
+                    />
+                    {k}
+                  </label>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </Card>
@@ -1032,9 +1120,7 @@ function EndpointsCard({ apiId }: { apiId: number }) {
   const { data: schemas } = useQuery<SchemaRecord[]>({
     queryKey: ['external-api-schemas', apiId],
     queryFn: () =>
-      api
-        .get<{ data: SchemaRecord[] }>(`/external-apis/${apiId}/schemas`)
-        .then((r) => r.data.data),
+      api.get<{ data: SchemaRecord[] }>(`/external-apis/${apiId}/schemas`).then((r) => r.data.data),
     staleTime: 30_000
   })
 
@@ -1158,9 +1244,7 @@ function EndpointsCard({ apiId }: { apiId: number }) {
             <span className='text-[12px] font-medium text-slate-600 dark:text-slate-400'>
               Import from OpenAPI / Swagger spec
             </span>
-            <span className='ml-auto text-[11px] text-slate-400'>
-              JSON or YAML
-            </span>
+            <span className='ml-auto text-[11px] text-slate-400'>JSON or YAML</span>
           </div>
           <Textarea
             value={specText}

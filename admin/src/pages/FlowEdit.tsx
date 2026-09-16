@@ -3627,9 +3627,173 @@ function FlowTesterSection({ flowId, trigger }: { flowId: string; trigger: strin
   )
 }
 
+type FlowFieldChange = { field: string; from: unknown; to: unknown }
+type FlowVersionDiff = {
+  flow: FlowFieldChange[]
+  operations: {
+    added: Array<Record<string, unknown>>
+    removed: Array<Record<string, unknown>>
+    changed: Array<{ id: string; label: string; fields: FlowFieldChange[] }>
+  }
+}
+function diffValue(v: unknown): string {
+  if (v == null || v === '') return '∅'
+  if (typeof v === 'object') {
+    const j = JSON.stringify(v)
+    return j.length > 120 ? `${j.slice(0, 117)}…` : j
+  }
+  const str = String(v)
+  return str.length > 120 ? `${str.slice(0, 117)}…` : str
+}
+// #87 — what changed between a version and the live flow (or another version).
+function FlowVersionDiffPanel({
+  flowId,
+  version,
+  versions,
+  onClose
+}: {
+  flowId: string
+  version: number
+  versions: FlowVersionRow[]
+  onClose: () => void
+}) {
+  const [against, setAgainst] = useState<string>('current')
+  const { data, isLoading } = useQuery({
+    queryKey: ['flow-version-diff', flowId, version, against],
+    queryFn: () =>
+      api
+        .get<{ data: { from_version: number; to: string; diff: FlowVersionDiff } }>(
+          `/flows/${flowId}/versions/${version}/diff`,
+          { params: { against } }
+        )
+        .then((r) => r.data.data)
+  })
+  const diff = data?.diff
+  const total = diff
+    ? diff.flow.length +
+      diff.operations.added.length +
+      diff.operations.removed.length +
+      diff.operations.changed.length
+    : 0
+  const opLabel = (o: Record<string, unknown>) =>
+    String(o.name ?? o.key ?? o.type ?? o.id ?? 'operation')
+  return (
+    <div
+      data-flow-version-diff={version}
+      className='mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11.5px] dark:border-border dark:bg-muted/40'
+    >
+      <div className='flex items-center gap-2'>
+        <span className='font-semibold text-slate-700 dark:text-foreground'>v{version} →</span>
+        <select
+          value={against}
+          onChange={(e) => setAgainst(e.target.value)}
+          className='h-6 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+          aria-label='Compare against'
+        >
+          <option value='current'>Current flow</option>
+          {versions
+            .filter((v) => v.version !== version)
+            .map((v) => (
+              <option key={v.version} value={String(v.version)}>
+                v{v.version}
+              </option>
+            ))}
+        </select>
+        {diff && (
+          <span className='text-slate-400'>
+            {total === 0 ? 'no differences' : `${total} difference${total === 1 ? '' : 's'}`}
+          </span>
+        )}
+        <button
+          type='button'
+          onClick={onClose}
+          className='ml-auto rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted'
+          aria-label='Close diff'
+        >
+          <X className='h-3.5 w-3.5' />
+        </button>
+      </div>
+      {isLoading ? (
+        <Skeleton className='mt-2 h-10 rounded' />
+      ) : !diff ? null : total === 0 ? (
+        <p className='mt-2 text-slate-400'>These two definitions are identical.</p>
+      ) : (
+        <div className='mt-2 space-y-2'>
+          {diff.flow.length > 0 && (
+            <div>
+              <div className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                Flow
+              </div>
+              {diff.flow.map((c) => (
+                <div
+                  key={c.field}
+                  className='flex flex-wrap items-baseline gap-1.5 py-0.5'
+                  data-diff-field={c.field}
+                >
+                  <span className='font-mono text-slate-600 dark:text-slate-300'>{c.field}</span>
+                  <span className='text-red-600/80 line-through dark:text-red-400/80'>
+                    {diffValue(c.from)}
+                  </span>
+                  <span className='text-emerald-700 dark:text-emerald-400'>{diffValue(c.to)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {diff.operations.added.map((o) => (
+            <div
+              key={`a${String(o.id)}`}
+              className='flex items-center gap-1.5'
+              data-diff-op='added'
+            >
+              <span className='rounded bg-emerald-50 px-1 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'>
+                added
+              </span>
+              <span className='text-slate-700 dark:text-foreground'>{opLabel(o)}</span>
+              <span className='text-slate-400'>{String(o.type ?? '')}</span>
+            </div>
+          ))}
+          {diff.operations.removed.map((o) => (
+            <div
+              key={`r${String(o.id)}`}
+              className='flex items-center gap-1.5'
+              data-diff-op='removed'
+            >
+              <span className='rounded bg-red-50 px-1 text-[10px] font-semibold text-red-700 dark:bg-red-500/10 dark:text-red-400'>
+                removed
+              </span>
+              <span className='text-slate-700 dark:text-foreground'>{opLabel(o)}</span>
+              <span className='text-slate-400'>{String(o.type ?? '')}</span>
+            </div>
+          ))}
+          {diff.operations.changed.map((c) => (
+            <div key={`c${c.id}`} data-diff-op='changed'>
+              <div className='flex items-center gap-1.5'>
+                <span className='rounded bg-amber-50 px-1 text-[10px] font-semibold text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
+                  changed
+                </span>
+                <span className='text-slate-700 dark:text-foreground'>{c.label}</span>
+              </div>
+              {c.fields.map((f) => (
+                <div key={f.field} className='ml-4 flex flex-wrap items-baseline gap-1.5 py-0.5'>
+                  <span className='font-mono text-slate-600 dark:text-slate-300'>{f.field}</span>
+                  <span className='text-red-600/80 line-through dark:text-red-400/80'>
+                    {diffValue(f.from)}
+                  </span>
+                  <span className='text-emerald-700 dark:text-emerald-400'>{diffValue(f.to)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FlowVersionsSection({ flowId }: { flowId: string }) {
   const queryClient = useQueryClient()
   const [confirmVersion, setConfirmVersion] = useState<number | null>(null)
+  const [diffVersion, setDiffVersion] = useState<number | null>(null)
 
   const { data: versions, isLoading } = useQuery({
     queryKey: ['flow-versions', flowId],
@@ -3709,15 +3873,33 @@ function FlowVersionsSection({ flowId }: { flowId: string }) {
                     </Button>
                   </>
                 ) : (
-                  <button
-                    type='button'
-                    onClick={() => setConfirmVersion(v.version)}
-                    className='rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-muted'
-                  >
-                    Restore
-                  </button>
+                  <>
+                    <button
+                      type='button'
+                      data-flow-version-diff-btn={v.version}
+                      onClick={() => setDiffVersion(diffVersion === v.version ? null : v.version)}
+                      className={`rounded px-1.5 py-0.5 text-[10.5px] transition-colors hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-muted ${diffVersion === v.version ? 'text-slate-700 dark:text-foreground' : 'text-slate-400'}`}
+                    >
+                      Diff
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => setConfirmVersion(v.version)}
+                      className='rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-muted'
+                    >
+                      Restore
+                    </button>
+                  </>
                 )}
               </div>
+              {diffVersion === v.version && (
+                <FlowVersionDiffPanel
+                  flowId={flowId}
+                  version={v.version}
+                  versions={versions}
+                  onClose={() => setDiffVersion(null)}
+                />
+              )}
             </div>
           ))}
         </div>

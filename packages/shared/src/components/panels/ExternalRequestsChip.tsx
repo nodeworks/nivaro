@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Loader2, RefreshCw, Satellite } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -92,14 +92,20 @@ function RequestRow({
             {sub.external_ref}
           </span>
         )}
-        <span className='shrink-0 text-[11px] text-slate-400' title={new Date(sub.updated_at).toLocaleString()}>
+        <span
+          className='shrink-0 text-[11px] text-slate-400'
+          title={new Date(sub.updated_at).toLocaleString()}
+        >
           {formatRelative(sub.updated_at)}
         </span>
         {sub.attempts > 1 && (
           <span className='shrink-0 text-[10.5px] text-slate-400'>×{sub.attempts}</span>
         )}
         <ChevronDown
-          className={cn('h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform', open && 'rotate-180')}
+          className={cn(
+            'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform',
+            open && 'rotate-180'
+          )}
         />
       </button>
       {open && (
@@ -108,7 +114,10 @@ function RequestRow({
             <span>Sent: {new Date(sub.created_at).toLocaleString()}</span>
             <span>Last update: {new Date(sub.updated_at).toLocaleString()}</span>
             <span>Attempts: {sub.attempts}</span>
-            <span>API: {sub.external_api_name ?? (sub.external_api != null ? `#${sub.external_api}` : '—')}</span>
+            <span>
+              API:{' '}
+              {sub.external_api_name ?? (sub.external_api != null ? `#${sub.external_api}` : '—')}
+            </span>
           </div>
           {sub.last_error && (
             <p className='rounded bg-red-50 px-2 py-1.5 text-[11.5px] text-red-700 dark:bg-red-500/10 dark:text-red-400'>
@@ -117,21 +126,33 @@ function RequestRow({
           )}
           {payload && (
             <div>
-              <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>Request payload</p>
-              <pre className='max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[10.5px] leading-relaxed text-slate-700 dark:bg-black/20 dark:text-slate-300'>{payload}</pre>
+              <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                Request payload
+              </p>
+              <pre className='max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[10.5px] leading-relaxed text-slate-700 dark:bg-black/20 dark:text-slate-300'>
+                {payload}
+              </pre>
             </div>
           )}
           <div>
-            <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>Response</p>
+            <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+              Response
+            </p>
             {response ? (
-              <pre className='max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[10.5px] leading-relaxed text-slate-700 dark:bg-black/20 dark:text-slate-300'>{response}</pre>
+              <pre className='max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[10.5px] leading-relaxed text-slate-700 dark:bg-black/20 dark:text-slate-300'>
+                {response}
+              </pre>
             ) : (
               <p className='text-[11.5px] italic text-slate-400'>No response body stored</p>
             )}
           </div>
           {sub.status === 'failed' && (
             <Button size='sm' variant='outline' disabled={retrying} onClick={() => onRetry(sub.id)}>
-              {retrying ? <Loader2 className='h-3 w-3 animate-spin' /> : <RefreshCw className='h-3 w-3' />}
+              {retrying ? (
+                <Loader2 className='h-3 w-3 animate-spin' />
+              ) : (
+                <RefreshCw className='h-3 w-3' />
+              )}
               <span className='ml-1.5'>Retry</span>
             </Button>
           )}
@@ -187,6 +208,19 @@ export function ExternalRequestsChip({
   const ok = subs.filter((s) => s.status === 'accepted').length
   const failed = subs.filter((s) => s.status === 'failed').length
   const pending = subs.length - ok - failed
+  // #30 — one pill per integration: the LATEST push's status for this record
+  // (rows arrive newest first), so a header reads "MWF ✓ · Fusion ✕" at a glance.
+  const perIntegration = new Map<string, ErpSubmission>()
+  for (const s of subs) {
+    const key = s.external_api_name ?? (s.external_api != null ? `#${s.external_api}` : 'External')
+    if (!perIntegration.has(key)) perIntegration.set(key, s)
+  }
+  const tone = (status: string) =>
+    status === 'accepted'
+      ? 'bg-emerald-500'
+      : status === 'failed' || status === 'rejected'
+        ? 'bg-red-500'
+        : 'bg-sky-500'
 
   return (
     <>
@@ -198,15 +232,38 @@ export function ExternalRequestsChip({
         title='External requests sent for this record'
       >
         <Satellite className='h-3.5 w-3.5 text-nvr-cyan' />
-        External requests
-        {ok > 0 && (
-          <span className='rounded bg-emerald-50 px-1 text-[10.5px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'>{ok}</span>
-        )}
-        {pending > 0 && (
-          <span className='rounded bg-sky-50 px-1 text-[10.5px] font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-400'>{pending}</span>
-        )}
-        {failed > 0 && (
-          <span className='rounded bg-red-50 px-1 text-[10.5px] font-semibold text-red-700 dark:bg-red-500/10 dark:text-red-400'>{failed}</span>
+        {perIntegration.size <= 3 ? (
+          [...perIntegration.entries()].map(([name, s]) => (
+            <span
+              key={name}
+              className='inline-flex items-center gap-1'
+              data-integration-chip={name}
+              data-integration-status={s.status}
+              data-tip={`${name} · ${s.status} · ${formatRelative(s.updated_at ?? s.created_at)}${s.last_error ? ` — ${s.last_error.slice(0, 120)}` : ''}`}
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', tone(s.status))} />
+              {name}
+            </span>
+          ))
+        ) : (
+          <>
+            External requests
+            {ok > 0 && (
+              <span className='rounded bg-emerald-50 px-1 text-[10.5px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'>
+                {ok}
+              </span>
+            )}
+            {pending > 0 && (
+              <span className='rounded bg-sky-50 px-1 text-[10.5px] font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-400'>
+                {pending}
+              </span>
+            )}
+            {failed > 0 && (
+              <span className='rounded bg-red-50 px-1 text-[10.5px] font-semibold text-red-700 dark:bg-red-500/10 dark:text-red-400'>
+                {failed}
+              </span>
+            )}
+          </>
         )}
       </button>
       {open && (
@@ -223,7 +280,12 @@ export function ExternalRequestsChip({
             </DialogHeader>
             <DialogBody className='max-h-[65vh] space-y-2 overflow-y-auto'>
               {subs.map((s) => (
-                <RequestRow key={s.id} sub={s} onRetry={(id) => retry.mutate(id)} retrying={retry.isPending} />
+                <RequestRow
+                  key={s.id}
+                  sub={s}
+                  onRetry={(id) => retry.mutate(id)}
+                  retrying={retry.isPending}
+                />
               ))}
             </DialogBody>
           </DialogContent>
