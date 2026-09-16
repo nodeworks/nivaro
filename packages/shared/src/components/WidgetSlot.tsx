@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   AlertCircle,
@@ -65,8 +65,9 @@ import {
   Zap
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useApiFetchConfig, useDrilldown } from '../context'
+import { useApiFetchConfig, useDrilldown, useOptionalNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
+import { get, post } from '../lib/commands'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { Button } from './ui/button'
@@ -1209,35 +1210,43 @@ export function WidgetSlot({
 
   // Widget DEFINITION — depends only on the widget id. Kept separate from the
   // render fetch so parent-form edits never re-load the definition (which is
-  // what used to flash the whole slot back to its skeleton).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fetchCfg/buildHeaders are recreated per render but stable in content; keying on them would refire every render
+  // what used to flash the whole slot back to its skeleton). It is a shared
+  // react-query read: the same widget sits in several slots (header band, a
+  // section, another open record tab), and a raw fetch per slot pulled the
+  // identical definition eight times on one record page. Through the ambient
+  // client it also rides the host's request gate; a slot without a provider
+  // keeps the raw fetch.
+  const client = useOptionalNivaroClient()
+  const defQuery = useQuery({
+    queryKey: ['nvr-widget-def', widgetId],
+    enabled: ready,
+    staleTime: 60_000,
+    retry: false,
+    queryFn: async () => {
+      if (client) {
+        const res = await client.request(get<{ data: WidgetDef }>(`/widgets-internal/${widgetId}`))
+        return res.data
+      }
+      const defRes = await fetch(`${apiBase}/widgets-internal/${widgetId}`, {
+        credentials: fetchCfg.credentials,
+        headers: buildHeaders()
+      })
+      if (!defRes.ok) throw new Error('Widget not found')
+      return ((await defRes.json()) as { data: WidgetDef }).data
+    }
+  })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: onWidgetType is a host callback, called once per definition
   useEffect(() => {
     if (!ready) return
-    let cancelled = false
-    setDefLoading(true)
-    setError(null)
-    ;(async () => {
-      try {
-        const defRes = await fetch(`${apiBase}/widgets-internal/${widgetId}`, {
-          credentials: fetchCfg.credentials,
-          headers: buildHeaders()
-        })
-        if (cancelled) return
-        if (!defRes.ok) throw new Error('Widget not found')
-        const defJson = (await defRes.json()) as { data: WidgetDef }
-        if (!cancelled) {
-          setWidget(defJson.data)
-          setDefLoading(false)
-          onWidgetType?.(defJson.data.widget_type)
-        }
-      } catch (e) {
-        if (!cancelled) setError(String(e))
-      }
-    })()
-    return () => {
-      cancelled = true
+    if (defQuery.data) {
+      setWidget(defQuery.data)
+      setDefLoading(false)
+      setError(null)
+      onWidgetType?.(defQuery.data.widget_type)
+    } else if (defQuery.error) {
+      setError('Widget not found')
     }
-  }, [widgetId, apiBase, ready])
+  }, [ready, defQuery.data, defQuery.error])
 
   // Render data — refetches when the (debounced) inputs change. Stale values
   // stay on screen during a refetch; the skeleton only shows on first load.
@@ -1266,20 +1275,30 @@ export function WidgetSlot({
     }
     ;(async () => {
       try {
-        const renderRes = await fetch(`${apiBase}/widgets-internal/${widgetId}/render`, {
-          method: 'POST',
-          credentials: fetchCfg.credentials,
-          headers: buildHeaders(),
-          body: JSON.stringify({
-            inputs: rollupStaged ? { ...inputs, staged: rollupStaged } : inputs,
-            draft: itemDraft,
-            bindings: inputBindings,
-            item_collection: itemCollection
+        const body = {
+          inputs: rollupStaged ? { ...inputs, staged: rollupStaged } : inputs,
+          draft: itemDraft,
+          bindings: inputBindings,
+          item_collection: itemCollection
+        }
+        // Through the client when there is one so the host's request gate
+        // holds a hidden tab's render (the costliest call on a record page).
+        let renderJson: { data: Record<string, unknown> }
+        if (client) {
+          renderJson = await client.request(
+            post<{ data: Record<string, unknown> }>(`/widgets-internal/${widgetId}/render`, body)
+          )
+        } else {
+          const renderRes = await fetch(`${apiBase}/widgets-internal/${widgetId}/render`, {
+            method: 'POST',
+            credentials: fetchCfg.credentials,
+            headers: buildHeaders(),
+            body: JSON.stringify(body)
           })
-        })
+          if (!renderRes.ok) throw new Error('Render failed')
+          renderJson = (await renderRes.json()) as { data: Record<string, unknown> }
+        }
         if (cancelled) return
-        if (!renderRes.ok) throw new Error('Render failed')
-        const renderJson = (await renderRes.json()) as { data: Record<string, unknown> }
         if (!cancelled) {
           hasRenderDataRef.current = true
           setRenderData(renderJson.data)
