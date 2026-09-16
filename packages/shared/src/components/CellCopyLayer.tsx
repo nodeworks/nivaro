@@ -50,7 +50,21 @@ export function CellCopyLayer() {
         return
       }
       const r = td.getBoundingClientRect()
-      setTarget({ x: r.right - 24, y: r.top + (r.height - 20) / 2, text })
+      // The button hugs the cell's right edge — but a cell whose content
+      // already reaches that edge (a pill in a tight column) would have the
+      // button PAINT OVER its last characters. Measure where the content
+      // ends; when there is no room beside it, sit just past the content
+      // if the cell allows, else skip the button rather than hide text.
+      const range = document.createRange()
+      range.selectNodeContents(td)
+      const contentRight = range.getBoundingClientRect().right || r.right - 24
+      const preferred = r.right - 24
+      const x = contentRight + 4 <= preferred ? preferred : contentRight + 4
+      if (x + 20 > r.right + 2) {
+        setTarget((t) => (t ? null : t))
+        return
+      }
+      setTarget({ x, y: r.top + (r.height - 20) / 2, text })
       setCopied(false)
     }
     const clear = () => setTarget(null)
@@ -86,11 +100,7 @@ export function CellCopyLayer() {
         })
       }}
     >
-      {copied ? (
-        <Check className='h-3 w-3 text-emerald-500' />
-      ) : (
-        <Copy className='h-3 w-3' />
-      )}
+      {copied ? <Check className='h-3 w-3 text-emerald-500' /> : <Copy className='h-3 w-3' />}
     </button>,
     document.body
   )

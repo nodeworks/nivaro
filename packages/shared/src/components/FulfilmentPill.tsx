@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { type CSSProperties, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { cn, formatRelative } from '../lib/utils'
@@ -60,6 +61,47 @@ export function FulfilmentPill({
 }) {
   const client = useNivaroClient()
   const [hover, setHover] = useState(false)
+  const rootRef = useRef<HTMLButtonElement>(null)
+  // The card used to be `absolute` inside the pill, so the table's overflow
+  // wrapper clipped it and its 280px lines truncated. Portal it out — into
+  // the hosting [role=dialog] inside a sheet (the RelationCombobox precedent),
+  // else document.body — and flip upward near the viewport bottom.
+  const [cardStyle, setCardStyle] = useState<CSSProperties | null>(null)
+  const [portalEl, setPortalEl] = useState<HTMLElement | null>(null)
+  const showCard = hover && !!figures && figures.status !== 'none'
+  useLayoutEffect(() => {
+    if (!showCard) {
+      setCardStyle(null)
+      return
+    }
+    const update = () => {
+      const anchor = rootRef.current
+      if (!anchor) return
+      const r = anchor.getBoundingClientRect()
+      const container = (anchor.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
+      setPortalEl(container)
+      const flipUp = window.innerHeight - r.bottom < 220 && r.top > window.innerHeight - r.bottom
+      const x = Math.max(8, Math.min(r.left, window.innerWidth - 328))
+      const y = flipUp ? r.top - 4 : r.bottom + 4
+      const common: CSSProperties = {
+        zIndex: 120,
+        ...(flipUp ? { transform: 'translateY(-100%)' } : {})
+      }
+      if (container === document.body)
+        setCardStyle({ position: 'fixed', left: x, top: y, ...common })
+      else {
+        const c = container.getBoundingClientRect()
+        setCardStyle({ position: 'absolute', left: x - c.left, top: y - c.top, ...common })
+      }
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [showCard])
   const { data: events } = useQuery({
     queryKey: ['fulfilment-events', collection, itemId],
     queryFn: () =>
@@ -98,6 +140,7 @@ export function FulfilmentPill({
   const word = status === 'complete' ? 'Shipped' : status === 'partial' ? 'Partial' : 'Not shipped'
   return (
     <button
+      ref={rootRef}
       type='button'
       className={cn('relative inline-flex cursor-default', className)}
       onMouseEnter={() => setHover(true)}
@@ -123,35 +166,44 @@ export function FulfilmentPill({
         {requested > 0 ? `${fmt(shipped)} / ${fmt(requested)}` : word}
         {requested > 0 && <span className='opacity-70'>· {word}</span>}
       </span>
-      {hover && status !== 'none' && (
-        <span
-          className='absolute left-0 top-full z-30 mt-1 w-[280px] rounded-md border border-slate-200 bg-white p-2 text-left text-[11px] shadow-lg dark:border-border dark:bg-popover'
-          data-fulfilment-events
-        >
-          <span className='block text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-            {label ? `${label} · ` : ''}latest events
-          </span>
-          {!events ? (
-            <span className='mt-1 block text-slate-400'>Loading…</span>
-          ) : events.length === 0 ? (
-            <span className='mt-1 block text-slate-400'>No events recorded yet.</span>
-          ) : (
-            <ul className='mt-1 space-y-1'>
-              {events.map((e) => (
-                <li key={e.id} className='leading-snug'>
-                  <span className='font-medium text-slate-700 dark:text-slate-200'>
-                    {e.context ?? e.label}
-                  </span>
-                  <span className='text-slate-400'> · {formatRelative(e.created_at)}</span>
-                  <span className='block truncate text-slate-500 dark:text-slate-400'>
-                    {e.text}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </span>
-      )}
+      {showCard &&
+        cardStyle &&
+        portalEl &&
+        createPortal(
+          <span
+            role='tooltip'
+            style={cardStyle}
+            className='block w-[320px] rounded-md border border-slate-200 bg-white p-2 text-left text-[11px] shadow-lg dark:border-border dark:bg-popover'
+            data-fulfilment-events
+            data-no-copy
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+          >
+            <span className='block text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+              {label ? `${label} · ` : ''}latest events
+            </span>
+            {!events ? (
+              <span className='mt-1 block text-slate-400'>Loading…</span>
+            ) : events.length === 0 ? (
+              <span className='mt-1 block text-slate-400'>No events recorded yet.</span>
+            ) : (
+              <ul className='mt-1 space-y-1'>
+                {events.map((e) => (
+                  <li key={e.id} className='leading-snug'>
+                    <span className='font-medium text-slate-700 dark:text-slate-200'>
+                      {e.context ?? e.label}
+                    </span>
+                    <span className='text-slate-400'> · {formatRelative(e.created_at)}</span>
+                    <span className='line-clamp-2 block whitespace-normal text-slate-500 dark:text-slate-400'>
+                      {e.text}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </span>,
+          portalEl
+        )}
     </button>
   )
 }
