@@ -66,6 +66,12 @@ export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLig
 export { FirstLoginChecklist } from './components/FirstLoginChecklist'
 export type { FormulaEditorProps, FormulaField } from './components/FormulaEditor'
 export { FormulaEditor } from './components/FormulaEditor'
+export {
+  FULFILMENT_FILTER_OPTIONS,
+  type FulfilmentFigures,
+  FulfilmentPill,
+  fulfilmentFigures
+} from './components/FulfilmentPill'
 export { HScrollProxy } from './components/HScrollProxy'
 export type {
   HeaderWidgetInfo,
@@ -112,6 +118,13 @@ export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { UserChip, UserRosterCluster } from './components/item-edit/GroupSection'
 export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'
 export { InlineTableField } from './components/item-edit/InlineTableField'
+export {
+  QUEUE_RETURN_KEY,
+  QueueReturnChip,
+  type QueueReturnStash,
+  readQueueReturn,
+  writeQueueReturn
+} from './components/item-edit/QueueReturnChip'
 export type { QuickPickerProps } from './components/item-edit/QuickPicker'
 export { QuickPicker, useQuickPickerStepDefs } from './components/item-edit/QuickPicker'
 export type { QuickPickerDialogProps } from './components/item-edit/QuickPickerDialog'

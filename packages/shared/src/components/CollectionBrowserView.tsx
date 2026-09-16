@@ -60,6 +60,7 @@ import {
   useBuiltinGate
 } from './bulk/BulkActionButtons'
 import { CellCopyLayer } from './CellCopyLayer'
+import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
@@ -111,6 +112,15 @@ export interface CollectionBrowserConfig {
   /** Default sort (#395), e.g. '-created' — applied when the viewer hasn't
    *  picked a sort, a view, or an initialSort prop. */
   default_sort?: string
+  /** #7 — shipped / requested figures (plain columns, typically stored
+   *  rollups over the record's lines) → a "Shipped n / m" column with a
+   *  status filter; `remaining_field` lets "Shipped" filter server-side. */
+  fulfilment?: {
+    shipped_field: string
+    requested_field: string
+    remaining_field?: string | null
+    label?: string | null
+  } | null
   /** Export filename template (#412): {{collection}} / {{view}} / {{date}}. */
   export_filename?: string
   /** Registry bulk actions (keys) the bar shows; null/absent = every active
@@ -1718,6 +1728,7 @@ type ColFilterVal =
   | { kind: 'bool'; value: 'true' | 'false' }
   | { kind: 'date'; value: string }
   | { kind: 'state'; value: string[] }
+  | { kind: 'fulfilment'; value: 'none' | 'partial' | 'complete' }
 
 // ─── FilterBar (admin components/filter-bar.tsx port) ─────────────────────────
 
@@ -3849,6 +3860,9 @@ export function CollectionBrowserView({
   // Per-collection browser settings (nivaro_collections.browser_config) —
   // editable via PATCH /collections/:collection {browser_config: {...}}.
   const bc = meta?.browser_config ?? {}
+  // #7 — fulfilment column + filter when the collection declares the fields.
+  const bcFulfilment =
+    bc.fulfilment?.shipped_field && bc.fulfilment?.requested_field ? bc.fulfilment : null
   // Default sort (#395): one-shot seed once meta lands, only when nothing
   // else has claimed the sort (view application and user clicks both win).
   const defaultSortSeededRef = useRef(false)
@@ -4157,7 +4171,27 @@ export function CollectionBrowserView({
       if (f.kind === 'in' && f.value.length) conds.push({ path: [key], op: '_in', value: f.value })
       else if (f.kind === 'state' && f.value.length)
         conds.push({ path: ['$state'], op: '_in', value: f.value })
-      else if (f.kind === 'text' && f.value.trim())
+      else if (f.kind === 'fulfilment' && bcFulfilment) {
+        // #7 — none: nothing shipped; partial: shipped but remaining > 0;
+        // complete: shipped and nothing remaining (needs remaining_field —
+        // a column-vs-column compare has no filter op).
+        const sf = bcFulfilment.shipped_field
+        const rf = bcFulfilment.remaining_field ?? null
+        if (f.value === 'none')
+          (conds as unknown[]).push({
+            or: [
+              { path: [sf], op: '_null', value: true },
+              { path: [sf], op: '_lte', value: 0 }
+            ]
+          })
+        else if (f.value === 'partial') {
+          conds.push({ path: [sf], op: '_gt', value: 0 })
+          if (rf) conds.push({ path: [rf], op: '_gt', value: 0 })
+        } else if (f.value === 'complete') {
+          conds.push({ path: [sf], op: '_gt', value: 0 })
+          if (rf) conds.push({ path: [rf], op: '_lte', value: 0 })
+        }
+      } else if (f.kind === 'text' && f.value.trim())
         conds.push({ path: f.path, op: '_contains', value: f.value.trim() })
       else if (f.kind === 'num' && f.value !== '' && !Number.isNaN(Number(f.value)))
         conds.push({ path: [key], op: f.op, value: Number(f.value) })
@@ -4832,7 +4866,7 @@ export function CollectionBrowserView({
       }),
       // Synthetic columns (State/Owners/Actions) persist pins as pin-only
       // entries; applyView drops them from the display-column list.
-      ...['__state__', '__owners__', '__addendums__', '__actions__']
+      ...['__state__', '__owners__', '__addendums__', '__fulfilment__', '__actions__']
         .filter((k) => effectivePins[k])
         .map((k) => ({ key: k, pin: effectivePins[k] }))
     ]
@@ -5157,7 +5191,10 @@ export function CollectionBrowserView({
   // ── Pinned-column layout ───────────────────────────────────────────────────
   // Left-pinned columns render first (checkbox always hard-left), right-pinned
   // last; sticky offsets come from live header-cell width measurement.
-  type CbvColDesc = { key: string; kind: 'data' | 'state' | 'owners' | 'addendums' | 'actions' }
+  type CbvColDesc = {
+    key: string
+    kind: 'data' | 'state' | 'owners' | 'addendums' | 'fulfilment' | 'actions'
+  }
   const baseColDescs: CbvColDesc[] = [
     ...effectiveColumns.map((k) => ({ key: k, kind: 'data' as const })),
     ...(hasPipeline
@@ -5167,6 +5204,7 @@ export function CollectionBrowserView({
         ]
       : []),
     ...(addendumsEnabled ? [{ key: '__addendums__', kind: 'addendums' as const }] : []),
+    ...(bcFulfilment ? [{ key: '__fulfilment__', kind: 'fulfilment' as const }] : []),
     ...(enableActions ? [{ key: '__actions__', kind: 'actions' as const }] : [])
   ]
   const orderedCols: CbvColDesc[] = [
@@ -6716,7 +6754,11 @@ export function CollectionBrowserView({
                               ? 'Owners'
                               : col.kind === 'addendums'
                                 ? 'Addendums'
-                                : ''
+                                : col.kind === 'fulfilment'
+                                  ? bcFulfilment?.label
+                                    ? `${bcFulfilment.label} shipped`
+                                    : 'Shipped'
+                                  : ''
                         return (
                           <th
                             key={key}
@@ -6804,6 +6846,34 @@ export function CollectionBrowserView({
                                   setColFilter(
                                     '__state__',
                                     vals.length ? { kind: 'state', value: vals.map(String) } : null
+                                  )
+                                }
+                              />
+                            </th>
+                          )
+                        }
+                        if (col.kind === 'fulfilment') {
+                          const cur = colFilters.__fulfilment__
+                          return (
+                            <th key={key} style={pinStyle(key)} className={baseTh}>
+                              <SimpleSelectXs
+                                ariaLabel='Shipped filter'
+                                value={cur?.kind === 'fulfilment' ? cur.value : ''}
+                                options={[
+                                  { value: '', label: 'All' },
+                                  ...FULFILMENT_FILTER_OPTIONS.filter(
+                                    (o) => o.value !== 'complete' || !!bcFulfilment?.remaining_field
+                                  )
+                                ]}
+                                onChange={(v: string) =>
+                                  setColFilter(
+                                    '__fulfilment__',
+                                    v
+                                      ? {
+                                          kind: 'fulfilment',
+                                          value: v as 'none' | 'partial' | 'complete'
+                                        }
+                                      : null
                                   )
                                 }
                               />
@@ -7071,6 +7141,26 @@ export function CollectionBrowserView({
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
                                   <AddendumSummaryPill summary={a} />
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'fulfilment' && bcFulfilment) {
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <FulfilmentPill
+                                    collection={collection}
+                                    itemId={String(id)}
+                                    figures={fulfilmentFigures(
+                                      row[bcFulfilment.shipped_field],
+                                      row[bcFulfilment.requested_field]
+                                    )}
+                                    label={bcFulfilment.label}
+                                  />
                                 </td>
                               )
                             }

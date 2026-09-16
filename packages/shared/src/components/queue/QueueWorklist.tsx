@@ -62,6 +62,7 @@ import {
   formatDate,
   formatDateTime,
   formatNumber,
+  formatRelative,
   humanHours,
   titleCase
 } from '../../lib/utils'
@@ -76,7 +77,9 @@ import {
   filterValueDisplay
 } from '../DataTable'
 import { EmptyState } from '../EmptyState'
+import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { TickerNumber } from '../TickerNumber'
@@ -144,7 +147,47 @@ export interface QueueItemRow {
     latest_status: string | null
     cost_impact: number | null
   } | null
+  /** #7 — shipped / requested when the source collection declares fulfilment fields. */
+  fulfilment?: {
+    shipped: number
+    requested: number
+    status: 'none' | 'partial' | 'complete'
+  } | null
+  /** #85 — send-backs on the record's instance: count + the last one's reason. */
+  send_backs?: {
+    count: number
+    last_reason: string | null
+    last_at: string | null
+    last_from: string | null
+    last_to: string | null
+  } | null
   url: string
+}
+
+/** #85 — "↩ 2 · <last reason>" — how many times the record bounced back. */
+function SendBackPill({ summary }: { summary: QueueItemRow['send_backs'] }) {
+  if (summary === undefined) return <span className='text-slate-300'>—</span>
+  if (!summary || summary.count === 0) return <span className='text-slate-300'>0</span>
+  const edge = [summary.last_from, summary.last_to].filter(Boolean).join(' → ')
+  const tip = [
+    edge ? `Last: ${edge}` : null,
+    summary.last_at ? formatRelative(summary.last_at) : null,
+    summary.last_reason ? `“${summary.last_reason}”` : 'no reason given'
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <span
+      className='inline-flex max-w-[260px] items-center gap-1.5 truncate rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/10 dark:text-rose-300'
+      data-tip={tip}
+      data-send-backs={summary.count}
+    >
+      <span className='tabular-nums'>↩ {summary.count}</span>
+      {summary.last_reason && (
+        <span className='truncate font-normal opacity-80'>· {summary.last_reason}</span>
+      )}
+    </span>
+  )
 }
 
 interface QueueStats {
@@ -1056,6 +1099,11 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   }, [columnPrefs])
 
   const items = data?.data ?? []
+  // Server-declared per collection: the resolver sets `fulfilment` only when
+  // the source collection declares fulfilment fields (#7), and `send_backs`
+  // only for records with a workflow instance (#85).
+  const fulfilmentEnabled = items.some((i) => i.fulfilment !== undefined)
+  const sendBacksEnabled = items.some((i) => i.send_backs !== undefined)
   const stats = data?.stats
   const filteredStats = data?.filtered_stats ?? null
 
@@ -1301,12 +1349,25 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // Item edit-page opener with the queue's configured layout pinned. Goes
   // through useItemNavigation so an embedding host's itemUrl/openItem
   // overrides apply (the admin default is the /collections/:col/:id shape).
-  const openItemPage = (row: QueueItemRow) =>
+  const openItemPage = (row: QueueItemRow) => {
+    // #50 — remember where the queue was so the record's "Back to <queue>"
+    // chip returns here with the same filters, page and scroll position.
+    if (queue) {
+      writeQueueReturn({
+        queue_id: queueId,
+        name: queue.name,
+        path: `${window.location.pathname}${window.location.search}`,
+        at: Date.now(),
+        scroll: scrollRef.current?.scrollTop ?? 0,
+        state: { scope, page, sort, filters: filterValues, group_by: groupBy, view }
+      })
+    }
     itemNav.open({
       collection: row.collection,
       itemId: row.item_id,
       layoutSlug: displayConfig?.item_layout ?? null
     })
+  }
 
   // Row context menu (#43, queues): right-click a table row for its actions.
   const [rowCtxMenu, setRowCtxMenu] = useState<{ x: number; y: number; row: QueueItemRow } | null>(
@@ -1483,6 +1544,31 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     }
     setDisplayReady(true)
   }, [queue, columnPrefs, views, displayReady])
+
+  // #50 — coming back from a record via its "Back to <queue>" chip: re-apply
+  // the stashed filters / page / sort AFTER the default view landed, then
+  // scroll to where the person was once the rows are back.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const pendingScrollRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!displayReady) return
+    const stash = readQueueReturn()
+    if (!stash?.restore || stash.queue_id !== queueId) return
+    writeQueueReturn({ ...stash, restore: false })
+    const s = stash.state ?? {}
+    if (s.scope) setScope(s.scope as Scope)
+    if (s.filters) setFilterValues({ ...seededFiltersRef.current, ...s.filters })
+    if (s.sort != null) setSort(s.sort)
+    setGroupBy(s.group_by ?? null)
+    if (s.view) setView(s.view as 'table' | 'kanban' | 'workload')
+    if (s.page) setPage(s.page)
+    pendingScrollRef.current = stash.scroll ?? 0
+  }, [displayReady, queueId])
+  useEffect(() => {
+    if (pendingScrollRef.current == null || items.length === 0 || !scrollRef.current) return
+    scrollRef.current.scrollTop = pendingScrollRef.current
+    pendingScrollRef.current = null
+  }, [items])
 
   const { isAdmin } = useItemEditAuth()
   const canManageQueueDefault = isAdmin || (queue?.owner != null && queue.owner === userId)
@@ -1754,6 +1840,32 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             render: (row: QueueItemRow) => <QueueAddendumPill summary={row.addendums} />
           } satisfies Column<QueueItemRow>
         ]
+      : []),
+    ...(fulfilmentEnabled
+      ? [
+          {
+            key: 'fulfilment',
+            header: aliasFor('fulfilment', 'Shipped'),
+            sortable: true,
+            render: (row: QueueItemRow) => (
+              <FulfilmentPill
+                collection={row.collection}
+                itemId={row.item_id}
+                figures={row.fulfilment ?? null}
+              />
+            )
+          } satisfies Column<QueueItemRow>
+        ]
+      : []),
+    ...(sendBacksEnabled
+      ? [
+          {
+            key: 'send_backs',
+            header: aliasFor('send_backs', 'Sent back'),
+            sortable: true,
+            render: (row: QueueItemRow) => <SendBackPill summary={row.send_backs} />
+          } satisfies Column<QueueItemRow>
+        ]
       : [])
   ]
 
@@ -1913,6 +2025,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     'sla_status',
     'at_risk',
     ...(addendumsEnabled ? ['addendums'] : []),
+    ...(fulfilmentEnabled ? ['fulfilment'] : []),
+    ...(sendBacksEnabled ? ['send_backs'] : []),
     ...extraFieldKeys.map((f) => `extra.${f}`)
   ]
 
@@ -1921,6 +2035,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     'state',
     'owners',
     ...(addendumsEnabled ? ['addendums'] : []),
+    ...(fulfilmentEnabled ? ['fulfilment'] : []),
     'aging_hours',
     'sla_status',
     'at_risk',
@@ -1939,6 +2054,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // auto-visible whenever a source collection opted into addendums. Toggling
   // it off in Customize Columns still works for the session.
   if (addendumsEnabled && !hiddenByUser.has('addendums')) effectiveVisible.add('addendums')
+  // Same rule for the fulfilment column (#7): configured per collection,
+  // informational, auto-visible until the viewer hides it.
+  if (fulfilmentEnabled && !hiddenByUser.has('fulfilment')) effectiveVisible.add('fulfilment')
 
   // Render order of the middle (toggleable) columns follows visible_columns'
   // actual array order (the viewer's saved drag-reorder), falling back to
@@ -2191,6 +2309,30 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
             options: [
               { label: 'Active addendum', value: 'active' },
               { label: 'No active addendum', value: 'none' }
+            ]
+          }
+        ]
+      : []),
+    ...(fulfilmentEnabled
+      ? [
+          {
+            key: 'fulfilment',
+            placeholder: 'Shipped',
+            type: 'select' as const,
+            options: FULFILMENT_FILTER_OPTIONS
+          }
+        ]
+      : []),
+    ...(sendBacksEnabled
+      ? [
+          {
+            key: 'send_backs',
+            placeholder: 'Sent back',
+            type: 'select' as const,
+            options: [
+              { label: 'Sent back at least once', value: 'any' },
+              { label: 'Sent back 2+ times', value: '2' },
+              { label: 'Never sent back', value: 'none' }
             ]
           }
         ]
@@ -3040,7 +3182,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
         </div>
       </div>
 
-      <div className='flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-6'>
+      <div ref={scrollRef} className='flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-6'>
         {view === 'table' ? (
           <>
             {!filtersOpen && activeFilterCount > 0 && (

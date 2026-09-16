@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom'
 import { useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
 import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open'
 import { del, get, patch, post } from '../../lib/commands'
+import { evaluateBoolean } from '../../lib/expression'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { applyDisplayTemplate } from './helpers'
@@ -90,6 +91,10 @@ export interface CatalogModeConfig {
     show_when?: Record<string, unknown>
     label?: string
   }
+  /** #19 — per-row lints judged on the CHILD row's own values: `when` is a
+   *  boolean expression over the row ('{{shipped_qty}} > {{quantity}}');
+   *  a true result flags the Summary row amber with `label` on hover. */
+  row_flags?: Array<{ label: string; when: string }>
   /** Flag Summary rows that rode the parent record's LATEST external submission
    *  when it failed (nivaro_erp_submissions): rows are matched against the
    *  stored payload's `products[]` identifiers (cifaNumber/productNumber). The
@@ -621,6 +626,23 @@ export function CatalogPickerField({
     const available = raw === undefined || raw === null || raw === '' ? 0 : Number(raw)
     if (Number.isNaN(available)) return null
     return qty > available ? { available, qty } : null
+  }
+  // row_flags (#19): boolean expressions over the child row's own values —
+  // "shipped more than requested" and the like. Missing tokens read as 0.
+  const rowFlagsFor = (row: Record<string, unknown>): string[] => {
+    const flags = config.row_flags ?? []
+    if (flags.length === 0) return []
+    const out: string[] = []
+    for (const f of flags) {
+      if (!f?.when || !f.label) continue
+      try {
+        const expr = f.when.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}/g, '$1')
+        if (evaluateBoolean(expr, row)) out.push(f.label)
+      } catch {
+        /* a broken flag never breaks the grid */
+      }
+    }
+    return out
   }
   const qtyWarningLabel = config.qty_warning
     ? (config.qty_warning.label ??
@@ -1233,239 +1255,171 @@ export function CatalogPickerField({
           table of what was picked (with its totals) renders. */}
       {!readOnly && (
         <>
-      <div className='rounded-lg border border-slate-200 text-[12px] dark:border-border'>
-        <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2 dark:border-border'>
-          <Search className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder='Search catalog…'
-            className='w-full bg-transparent text-[12px] outline-none placeholder:text-slate-400'
-          />
-          <span className='shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'>
-            {pickedCount} picked
-          </span>
-        </div>
-
-        {hasExtraCols && (
-          // Sticky: the catalog list is tall and the page scroller carries it —
-          // without this the labels scroll away and favorites/section rows
-          // read as headerless columns. Opaque bg (not the /60 tint) so rows
-          // never bleed through while pinned.
-          <div
-            ref={stickyHeaderRefCb}
-            className='sticky top-0 z-[5] flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted'
-          >
-            {config.favorites && <span className='w-[18px] shrink-0' />}
-            <span className='w-36 shrink-0'>Item</span>
-            {displayCols.map((c) => (
-              <span
-                key={c.field}
-                className={c.format ? 'w-20 shrink-0 text-right' : 'min-w-0 flex-1'}
-              >
-                {c.label ?? titleCase(c.field.split('.')[0])}
+          <div className='rounded-lg border border-slate-200 text-[12px] dark:border-border'>
+            <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-2 dark:border-border'>
+              <Search className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder='Search catalog…'
+                className='w-full bg-transparent text-[12px] outline-none placeholder:text-slate-400'
+              />
+              <span className='shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'>
+                {pickedCount} picked
               </span>
-            ))}
-            {relatedCols.map((rc) => (
-              <span key={rc.key} className='w-20 shrink-0 text-right'>
-                {rc.label ?? titleCase(rc.key)}
-              </span>
-            ))}
-            <span className='w-20 shrink-0 text-right'>Qty</span>
-          </div>
-        )}
-
-        {search.trim().length > 0 && fullMatches.length === 0 && fullSearchFetching && (
-          <div className='flex items-center justify-center gap-2 border-b border-slate-100 px-3 py-3 text-slate-400 dark:border-border/50'>
-            <Loader2 className='h-3.5 w-3.5 animate-spin' /> Searching the catalog…
-          </div>
-        )}
-        {search.trim().length > 0 && fullMatches.length === 0 && !fullSearchFetching && (
-          <p className='px-3 py-4 text-center text-slate-400'>No CIFAs match "{search.trim()}"</p>
-        )}
-        {search.trim().length > 0 && fullMatches.length > 0 && (
-          <Fragment>
-            <div className='flex w-full items-center gap-1.5 border-b border-t border-slate-200 bg-sky-50/70 px-2 py-1.5 dark:border-border dark:bg-sky-900/10'>
-              <Search className='h-3 w-3 shrink-0 text-sky-500' />
-              <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-                Search results
-              </span>
-              <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                {fullMatches.length}
-              </span>
-              <span className='text-[10px] text-slate-400'>
-                across the entire catalog — enter a quantity to add
-              </span>
-              {fullSearchFetching && (
-                <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-              )}
             </div>
-            {fullMatches.map((r, i) => {
-              const id = String(r.id)
-              const qty = currentQty(id)
-              return (
-                <div
-                  key={id}
-                  className={cn(
-                    'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
-                    i % 2 === 0 ? 'bg-white dark:bg-background' : 'bg-slate-50/50 dark:bg-muted/30',
-                    (qty ?? 0) > 0 && 'bg-[#00ceff0d]'
-                  )}
-                >
-                  {starButton(id)}
-                  {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
-                  {colCells(id, r)}
-                  {savingIds.has(id) && (
-                    <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-                  )}
-                  {qtyInput(id, r)}
-                </div>
-              )
-            })}
-          </Fragment>
-        )}
 
-        {missingParents.length > 0 && !search.trim() && (
-          <p className='px-3 py-6 text-center text-slate-400'>
-            Search the full catalog above, or select{' '}
-            {missingParents.map((f) => parentDraftCtx?.fieldLabels?.[f] ?? titleCase(f)).join(', ')}{' '}
-            to browse by category
-          </p>
-        )}
-        {missingParents.length === 0 && catalogLoading && (
-          <div className='flex items-center justify-center gap-2 py-6 text-slate-400'>
-            <Loader2 className='h-4 w-4 animate-spin' /> Loading catalog…
-          </div>
-        )}
-        {missingParents.length === 0 && !catalogLoading && sections.length === 0 && (
-          <p className='px-3 py-6 text-center text-slate-400'>No catalog items</p>
-        )}
+            {hasExtraCols && (
+              // Sticky: the catalog list is tall and the page scroller carries it —
+              // without this the labels scroll away and favorites/section rows
+              // read as headerless columns. Opaque bg (not the /60 tint) so rows
+              // never bleed through while pinned.
+              <div
+                ref={stickyHeaderRefCb}
+                className='sticky top-0 z-[5] flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted'
+              >
+                {config.favorites && <span className='w-[18px] shrink-0' />}
+                <span className='w-36 shrink-0'>Item</span>
+                {displayCols.map((c) => (
+                  <span
+                    key={c.field}
+                    className={c.format ? 'w-20 shrink-0 text-right' : 'min-w-0 flex-1'}
+                  >
+                    {c.label ?? titleCase(c.field.split('.')[0])}
+                  </span>
+                ))}
+                {relatedCols.map((rc) => (
+                  <span key={rc.key} className='w-20 shrink-0 text-right'>
+                    {rc.label ?? titleCase(rc.key)}
+                  </span>
+                ))}
+                <span className='w-20 shrink-0 text-right'>Qty</span>
+              </div>
+            )}
 
-        {config.favorites && (
-          <Fragment>
-            <div className='flex w-full items-center gap-1.5 border-b border-slate-200 bg-amber-50/70 px-2 py-1 dark:border-border dark:bg-amber-900/10'>
-              <button
-                type='button'
-                onClick={() =>
-                  setCollapsed((p) => {
-                    const n = new Set(p)
-                    if (n.has('__favorites__')) n.delete('__favorites__')
-                    else n.add('__favorites__')
-                    return n
-                  })
-                }
-                className='flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left'
-              >
-                <ChevronRight
-                  className={cn(
-                    'h-3 w-3 shrink-0 text-slate-400 transition-transform',
-                    !collapsed.has('__favorites__') && 'rotate-90'
-                  )}
-                />
-                <Star className='h-3 w-3 shrink-0 fill-amber-400 text-amber-400' />
-                <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-                  Favorites
-                </span>
-                <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                  {pinnedRowsData.length}
-                </span>
-              </button>
-              <button
-                ref={favMgrAnchorRef}
-                type='button'
-                onClick={() => setFavMgrOpen(true)}
-                className='shrink-0 rounded border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-50 dark:border-amber-400/30 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-400/10'
-              >
-                Manage
-              </button>
-            </div>
-            {!collapsed.has('__favorites__') && pinnedRowsData.length === 0 && (
-              <p className='border-b border-slate-100 px-3 py-2 text-center text-[11px] text-slate-400 dark:border-border/50'>
-                No favorites yet — Manage lets you search the full catalog and star items.
+            {search.trim().length > 0 && fullMatches.length === 0 && fullSearchFetching && (
+              <div className='flex items-center justify-center gap-2 border-b border-slate-100 px-3 py-3 text-slate-400 dark:border-border/50'>
+                <Loader2 className='h-3.5 w-3.5 animate-spin' /> Searching the catalog…
+              </div>
+            )}
+            {search.trim().length > 0 && fullMatches.length === 0 && !fullSearchFetching && (
+              <p className='px-3 py-4 text-center text-slate-400'>
+                No CIFAs match "{search.trim()}"
               </p>
             )}
-            {!collapsed.has('__favorites__') &&
-              pinnedRowsData.map((r, i) => {
-                const id = String(r.id)
-                const qty = currentQty(id)
-                const shortfall = qtyShortfall(id)
-                return (
-                  <div
-                    key={id}
-                    className={cn(
-                      'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
-                      i % 2 === 0
-                        ? 'bg-white dark:bg-background'
-                        : 'bg-slate-50/50 dark:bg-muted/30',
-                      (qty ?? 0) > 0 && 'bg-[#00ceff0d]',
-                      shortfall && 'bg-amber-50 dark:bg-amber-900/15'
-                    )}
-                  >
-                    {starButton(id)}
-                    {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
-                    {colCells(id, r)}
-                    {shortfall && (
-                      <AlertTriangle
-                        className='h-3.5 w-3.5 shrink-0 text-amber-500'
-                        aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
-                      />
-                    )}
-                    {savingIds.has(id) && (
-                      <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-                    )}
-                    {qtyInput(id, r)}
-                  </div>
-                )
-              })}
-          </Fragment>
-        )}
-
-        {missingParents.length === 0 &&
-          sections.map((s) => {
-            const isCollapsed = collapsed.has(s.name)
-            const pickedInSection = s.items.reduce(
-              (n, it) => n + ((currentQty(it.id) ?? 0) > 0 ? 1 : 0),
-              0
-            )
-            return (
-              <Fragment key={s.name}>
-                <button
-                  type='button'
-                  onClick={() =>
-                    setCollapsed((p) => {
-                      const n = new Set(p)
-                      if (n.has(s.name)) n.delete(s.name)
-                      else n.add(s.name)
-                      return n
-                    })
-                  }
-                  className='flex w-full items-center gap-1.5 border-b border-slate-200 bg-slate-100/80 px-2 py-1.5 text-left dark:border-border dark:bg-muted'
-                >
-                  <ChevronRight
-                    className={cn(
-                      'h-3 w-3 shrink-0 text-slate-400 transition-transform',
-                      !isCollapsed && 'rotate-90'
-                    )}
-                  />
+            {search.trim().length > 0 && fullMatches.length > 0 && (
+              <Fragment>
+                <div className='flex w-full items-center gap-1.5 border-b border-t border-slate-200 bg-sky-50/70 px-2 py-1.5 dark:border-border dark:bg-sky-900/10'>
+                  <Search className='h-3 w-3 shrink-0 text-sky-500' />
                   <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-                    {s.name}
+                    Search results
                   </span>
                   <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                    {s.items.length}
+                    {fullMatches.length}
                   </span>
-                  {pickedInSection > 0 && (
-                    <span className='rounded bg-[#00ceff1a] px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
-                      {pickedInSection} picked
-                    </span>
+                  <span className='text-[10px] text-slate-400'>
+                    across the entire catalog — enter a quantity to add
+                  </span>
+                  {fullSearchFetching && (
+                    <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
                   )}
-                </button>
-                {!isCollapsed &&
-                  s.items.map((it, i) => {
-                    const qty = currentQty(it.id)
-                    const shortfall = qtyShortfall(it.id)
+                </div>
+                {fullMatches.map((r, i) => {
+                  const id = String(r.id)
+                  const qty = currentQty(id)
+                  return (
+                    <div
+                      key={id}
+                      className={cn(
+                        'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                        i % 2 === 0
+                          ? 'bg-white dark:bg-background'
+                          : 'bg-slate-50/50 dark:bg-muted/30',
+                        (qty ?? 0) > 0 && 'bg-[#00ceff0d]'
+                      )}
+                    >
+                      {starButton(id)}
+                      {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
+                      {colCells(id, r)}
+                      {savingIds.has(id) && (
+                        <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+                      )}
+                      {qtyInput(id, r)}
+                    </div>
+                  )
+                })}
+              </Fragment>
+            )}
+
+            {missingParents.length > 0 && !search.trim() && (
+              <p className='px-3 py-6 text-center text-slate-400'>
+                Search the full catalog above, or select{' '}
+                {missingParents
+                  .map((f) => parentDraftCtx?.fieldLabels?.[f] ?? titleCase(f))
+                  .join(', ')}{' '}
+                to browse by category
+              </p>
+            )}
+            {missingParents.length === 0 && catalogLoading && (
+              <div className='flex items-center justify-center gap-2 py-6 text-slate-400'>
+                <Loader2 className='h-4 w-4 animate-spin' /> Loading catalog…
+              </div>
+            )}
+            {missingParents.length === 0 && !catalogLoading && sections.length === 0 && (
+              <p className='px-3 py-6 text-center text-slate-400'>No catalog items</p>
+            )}
+
+            {config.favorites && (
+              <Fragment>
+                <div className='flex w-full items-center gap-1.5 border-b border-slate-200 bg-amber-50/70 px-2 py-1 dark:border-border dark:bg-amber-900/10'>
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setCollapsed((p) => {
+                        const n = new Set(p)
+                        if (n.has('__favorites__')) n.delete('__favorites__')
+                        else n.add('__favorites__')
+                        return n
+                      })
+                    }
+                    className='flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left'
+                  >
+                    <ChevronRight
+                      className={cn(
+                        'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+                        !collapsed.has('__favorites__') && 'rotate-90'
+                      )}
+                    />
+                    <Star className='h-3 w-3 shrink-0 fill-amber-400 text-amber-400' />
+                    <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                      Favorites
+                    </span>
+                    <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                      {pinnedRowsData.length}
+                    </span>
+                  </button>
+                  <button
+                    ref={favMgrAnchorRef}
+                    type='button'
+                    onClick={() => setFavMgrOpen(true)}
+                    className='shrink-0 rounded border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-50 dark:border-amber-400/30 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-400/10'
+                  >
+                    Manage
+                  </button>
+                </div>
+                {!collapsed.has('__favorites__') && pinnedRowsData.length === 0 && (
+                  <p className='border-b border-slate-100 px-3 py-2 text-center text-[11px] text-slate-400 dark:border-border/50'>
+                    No favorites yet — Manage lets you search the full catalog and star items.
+                  </p>
+                )}
+                {!collapsed.has('__favorites__') &&
+                  pinnedRowsData.map((r, i) => {
+                    const id = String(r.id)
+                    const qty = currentQty(id)
+                    const shortfall = qtyShortfall(id)
                     return (
                       <div
-                        key={it.id}
+                        key={id}
                         className={cn(
                           'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
                           i % 2 === 0
@@ -1475,43 +1429,116 @@ export function CatalogPickerField({
                           shortfall && 'bg-amber-50 dark:bg-amber-900/15'
                         )}
                       >
-                        {starButton(it.id)}
-                        {itemLabel(it.id, it.label, itemLabelCls)}
-                        {colCells(it.id, it.row)}
+                        {starButton(id)}
+                        {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
+                        {colCells(id, r)}
                         {shortfall && (
                           <AlertTriangle
                             className='h-3.5 w-3.5 shrink-0 text-amber-500'
                             aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
                           />
                         )}
-                        {savingIds.has(it.id) && (
+                        {savingIds.has(id) && (
                           <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
                         )}
-                        {qtyInput(it.id, it.row)}
+                        {qtyInput(id, r)}
                       </div>
                     )
                   })}
               </Fragment>
-            )
-          })}
-      </div>
+            )}
 
-      {/* ── Attribute-driven builders (fiber jumpers, attenuator pads, …) ────── */}
-      {(config.builders ?? [])
-        .filter((b) => matchesShowWhen(b.show_when, parentDraft))
-        .map((b) => (
-          <BuilderCard
-            key={b.label}
-            builder={b}
-            defaultItemField={config.item_field}
-            catalogCol={catalogCol}
-            catalogFields={catalogFields}
-            tmpl={tmpl}
-            qtyInput={qtyInput}
-            currentQty={currentQty}
-          />
-        ))}
+            {missingParents.length === 0 &&
+              sections.map((s) => {
+                const isCollapsed = collapsed.has(s.name)
+                const pickedInSection = s.items.reduce(
+                  (n, it) => n + ((currentQty(it.id) ?? 0) > 0 ? 1 : 0),
+                  0
+                )
+                return (
+                  <Fragment key={s.name}>
+                    <button
+                      type='button'
+                      onClick={() =>
+                        setCollapsed((p) => {
+                          const n = new Set(p)
+                          if (n.has(s.name)) n.delete(s.name)
+                          else n.add(s.name)
+                          return n
+                        })
+                      }
+                      className='flex w-full items-center gap-1.5 border-b border-slate-200 bg-slate-100/80 px-2 py-1.5 text-left dark:border-border dark:bg-muted'
+                    >
+                      <ChevronRight
+                        className={cn(
+                          'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+                          !isCollapsed && 'rotate-90'
+                        )}
+                      />
+                      <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                        {s.name}
+                      </span>
+                      <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
+                        {s.items.length}
+                      </span>
+                      {pickedInSection > 0 && (
+                        <span className='rounded bg-[#00ceff1a] px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+                          {pickedInSection} picked
+                        </span>
+                      )}
+                    </button>
+                    {!isCollapsed &&
+                      s.items.map((it, i) => {
+                        const qty = currentQty(it.id)
+                        const shortfall = qtyShortfall(it.id)
+                        return (
+                          <div
+                            key={it.id}
+                            className={cn(
+                              'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                              i % 2 === 0
+                                ? 'bg-white dark:bg-background'
+                                : 'bg-slate-50/50 dark:bg-muted/30',
+                              (qty ?? 0) > 0 && 'bg-[#00ceff0d]',
+                              shortfall && 'bg-amber-50 dark:bg-amber-900/15'
+                            )}
+                          >
+                            {starButton(it.id)}
+                            {itemLabel(it.id, it.label, itemLabelCls)}
+                            {colCells(it.id, it.row)}
+                            {shortfall && (
+                              <AlertTriangle
+                                className='h-3.5 w-3.5 shrink-0 text-amber-500'
+                                aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
+                              />
+                            )}
+                            {savingIds.has(it.id) && (
+                              <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+                            )}
+                            {qtyInput(it.id, it.row)}
+                          </div>
+                        )
+                      })}
+                  </Fragment>
+                )
+              })}
+          </div>
 
+          {/* ── Attribute-driven builders (fiber jumpers, attenuator pads, …) ────── */}
+          {(config.builders ?? [])
+            .filter((b) => matchesShowWhen(b.show_when, parentDraft))
+            .map((b) => (
+              <BuilderCard
+                key={b.label}
+                builder={b}
+                defaultItemField={config.item_field}
+                catalogCol={catalogCol}
+                catalogFields={catalogFields}
+                tmpl={tmpl}
+                qtyInput={qtyInput}
+                currentQty={currentQty}
+              />
+            ))}
         </>
       )}
       {/* ── Summary of everything picked + arbitrary add ─────────────────────── */}
@@ -1748,6 +1775,16 @@ export function CatalogPickerField({
                             </span>
                           ))}
                           {fulfilmentChip(e.row)}
+                          {rowFlagsFor(e.row).map((f) => (
+                            <span
+                              key={f}
+                              className='inline-flex items-center gap-1 whitespace-nowrap rounded bg-amber-50 px-1.5 py-px text-[10.5px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'
+                              data-catalog-row-flag={f}
+                            >
+                              <AlertTriangle className='h-3 w-3' />
+                              {f}
+                            </span>
+                          ))}
                           {summaryFields.map((sf) => {
                             const v = summaryFieldValue(sf, e)
                             return (

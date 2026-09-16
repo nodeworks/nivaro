@@ -679,6 +679,34 @@ POST /api/search/semantic/reindex
   ]
 }
 
+export const adminUxListSignals: DocSection = {
+  id: 'list-signals',
+  label: 'Fulfilment, Send-backs & Back to Queue',
+  content: [
+    { type: 'h1', id: 'list-signals', text: 'Fulfilment, Send-backs & Back to Queue' },
+    { type: 'h2', id: 'list-signals-fulfilment', text: 'Shipped n / m on lists' },
+    {
+      type: 'p',
+      text: 'A collection whose records get fulfilled in parts (a request the warehouse ships line by line) declares its figures once, in `browser_config.fulfilment`: `{shipped_field, requested_field, remaining_field?, label?}` — plain columns, typically stored rollups over the record\'s lines. The collection browser and every queue over that collection then show a "Shipped n / m" pill per record (Not shipped / Partial / Shipped) with a matching filter. Hovering the pill shows the last three events an integration recorded on the record — the same entries the Notes thread lists. `remaining_field` is what lets the browser filter "Shipped" server-side; queues judge the status in memory.'
+    },
+    { type: 'h2', id: 'list-signals-send-backs', text: 'Sent back' },
+    {
+      type: 'p',
+      text: 'Queues over a workflow-bound collection can show a Sent-back column: how many times the record moved backwards on its pipeline and the reason given the last time, with the edge and when on hover. Filter by "at least once", "2+ times" or "never", sort by count. Add it from Customize Columns; it lives on the live path, so a materialized queue live-resolves when it is filtered or sorted.'
+    },
+    { type: 'h2', id: 'list-signals-back', text: 'Back to the queue' },
+    {
+      type: 'p',
+      text: 'Opening a record from a queue remembers where the queue was — scope, filters, sort, page, grouping and scroll position. The record shows a "Back to <queue>" chip above its content; it returns to the same URL and the worklist re-applies that state and scrolls back to the row. The memory lasts six hours and is per browser tab session.'
+    },
+    { type: 'h2', id: 'list-signals-row-flags', text: 'Row flags on a catalog picker' },
+    {
+      type: 'p',
+      text: 'A catalog-picker grid may declare `catalog_mode.row_flags: [{label, when}]` — `when` is a boolean expression over the child row (`{{shipped_qty}} > {{quantity}}`). A row the expression matches carries the label as an amber flag in the Summary table. Pair it with an extension-registered Data Integrity check when the sweep should report the same fact across records.'
+    }
+  ]
+}
+
 export const adminUxFormCollaboration: DocSection = {
   id: 'form-collaboration',
   label: 'Form Collaboration & Drafts',

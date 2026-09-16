@@ -47,6 +47,11 @@ export function requiresLiveResolveFallback(
   // The cache stores at_risk + colour, never WHICH rule matched — a filter on
   // a specific highlight rule needs the live evaluator.
   if (_filters && (_filters as Record<string, unknown>).at_risk_rule) return true
+  // Fulfilment figures (#7) and send-back counts (#85) are live-only reads —
+  // neither rides the cache, so a filter or sort on them live-resolves.
+  if (_filters && (_filters as Record<string, unknown>).fulfilment) return true
+  if (_filters && (_filters as Record<string, unknown>).send_backs) return true
+  if (sortKey === 'fulfilment' || sortKey === 'send_backs') return true
   // Only an owners sort still live-resolves (it would need SQL string
   // aggregation across the owners M2M). priority sorts and sla_status/
   // aging_hours filters are served from the cache via a narrow scan +

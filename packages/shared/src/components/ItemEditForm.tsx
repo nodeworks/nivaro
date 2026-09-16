@@ -130,6 +130,7 @@ import {
   type StagedRelationsCtx,
   type StagedRelOps
 } from './item-edit/O2MStagingContext'
+import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
@@ -9909,6 +9910,7 @@ export function ItemEditForm({
                                     )}
                                     onScroll={summaryEnabled ? condenseOnScroll : undefined}
                                   >
+                                    {!isNew && <QueueReturnChip />}
                                     {extraTopContent}
                                     {showValidationSummary && validationSummaryItems.length > 0 && (
                                       <ValidationSummary

@@ -47,6 +47,7 @@ import {
   adminUxFormCollaboration,
   adminUxGlobalSearch,
   adminUxImportFromUrl,
+  adminUxListSignals,
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
@@ -752,6 +753,7 @@ export const navSections: NavGroup[] = [
       adminUxGlobalSearch,
       adminUxSavedViews,
       adminUxFormCollaboration,
+      adminUxListSignals,
       adminUxImportFromUrl,
       adminUxAiMapping,
       adminUxAiQuery,

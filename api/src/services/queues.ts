@@ -18,6 +18,7 @@ import {
 import { getCollection, getRelations } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
+import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
 import { can } from './permissions.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
@@ -27,6 +28,7 @@ import {
   loadAddendums
 } from './pipeline-subject.js'
 import { span } from './request-trace.js'
+import { sendBackBatch } from './send-backs.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -412,6 +414,22 @@ export interface QueueItem {
   } | null
   /** Set when `state`/`owners` come from an in-flight addendum's instance. */
   via_addendum?: { id: string; title: string | null } | null
+  /** #7 — shipped / requested figures when the source collection declares
+   *  `browser_config.fulfilment`. Live path only; a filter on it live-resolves. */
+  fulfilment?: {
+    shipped: number
+    requested: number
+    status: 'none' | 'partial' | 'complete'
+  } | null
+  /** #85 — send-backs on the record's instance (count + the last one's
+   *  reason and edge). Live path only. */
+  send_backs?: {
+    count: number
+    last_reason: string | null
+    last_at: string | Date | null
+    last_from: string | null
+    last_to: string | null
+  } | null
   url: string
 }
 
@@ -596,6 +614,23 @@ export function applyColumnFilters(
         if (value === 'none' && active > 0) return false
         continue
       }
+      // #7 — fulfilment status (none | partial | complete; comma list allowed).
+      if (key === 'fulfilment') {
+        const wanted = (Array.isArray(value) ? value : String(value).split(',')).map((v) =>
+          String(v).trim()
+        )
+        const status = item.fulfilment?.status ?? 'none'
+        if (!wanted.includes(status)) return false
+        continue
+      }
+      // #85 — 'any' = bounced back at least once; 'none' = never; a number = at least N.
+      if (key === 'send_backs') {
+        const n = item.send_backs?.count ?? 0
+        if (value === 'any' && n === 0) return false
+        else if (value === 'none' && n > 0) return false
+        else if (/^\d+$/.test(String(value)) && n < Number(value)) return false
+        continue
+      }
       if (key === 'collection' && !matchesAny(value, (v) => item.collection === v)) return false
       else if (key === 'state' && !matchesAny(value, (v) => item.state === v)) return false
       else if (key === 'sla_status' && item.sla_status !== value) return false
@@ -664,6 +699,13 @@ function sortValue(
   if (key === 'aging_hours') return item.aging_hours
   if (key === 'sla_status') return item.sla_status ? (SLA_SEVERITY[item.sla_status] ?? null) : null
   if (key === 'at_risk') return item.at_risk ? 1 : 0
+  if (key === 'send_backs') return item.send_backs?.count ?? 0
+  if (key === 'fulfilment')
+    return item.fulfilment
+      ? item.fulfilment.requested > 0
+        ? item.fulfilment.shipped / item.fulfilment.requested
+        : 0
+      : null
   if (key === 'priority') return computePriorityScore(item, weights)
   if (key.startsWith('extra.')) {
     const v = item.extra?.[key.slice('extra.'.length)]
@@ -1888,6 +1930,16 @@ export async function resolveCollectionSource(
   const addendumMapPromise = addendumsEnabled
     ? span('queue:addendums', () => addendumSummaryBatch(sourceCollection, ids))
     : Promise.resolve(new Map<string, AddendumSummary>())
+  // #7 — fulfilment figures when the collection declares them; #85 — send-back
+  // counts per instance. Both live-only (never in the materialized cache),
+  // both one batched read, both independent of the branches below.
+  const fulfilmentPromise = (async () => {
+    const cfg = await fulfilmentConfigFor(sourceCollection)
+    return cfg ? fulfilmentBatch(sourceCollection, ids, cfg) : null
+  })()
+  const sendBackPromise = span('queue:send-backs', () =>
+    sendBackBatch([...new Set(ownerRequests.map((r) => r.instanceId).filter(Boolean))])
+  )
   const [labels, ownersByItem, atRiskMap, extraResolved] = await Promise.all([
     span('queue:labels', () =>
       source.label_template
@@ -1967,6 +2019,9 @@ export async function resolveCollectionSource(
     )
   ])
   const addendumMap = await addendumMapPromise
+  const fulfilmentMap = await fulfilmentPromise.catch(() => null)
+  const sendBackMap = await sendBackPromise.catch(() => new Map())
+  const instanceByItem = new Map(ownerRequests.map((r) => [r.key, r.instanceId]))
 
   // Predictive risk: compare current time-in-state to the historical P80 for
   // that state (services/predictive-sla.ts). Non-fatal: prediction failures
@@ -2013,6 +2068,23 @@ export async function resolveCollectionSource(
           latest_status: a.latest?.status ?? null,
           cost_impact: a.latest?.cost_impact ?? null
         }
+      })(),
+      fulfilment: fulfilmentMap
+        ? (fulfilmentMap.get(id) ?? { shipped: 0, requested: 0, status: 'none' as const })
+        : undefined,
+      send_backs: (() => {
+        const inst = instanceByItem.get(id)
+        if (!inst) return undefined
+        const s = sendBackMap.get(inst)
+        return s
+          ? {
+              count: s.count,
+              last_reason: s.last_reason,
+              last_at: s.last_at,
+              last_from: s.last_from,
+              last_to: s.last_to
+            }
+          : null
       })(),
       extra: extraResolved.extraById.get(id) ?? {},
       extra_ids: extraResolved.extraIdsById.get(id) ?? {},
