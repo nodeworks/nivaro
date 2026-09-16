@@ -299,6 +299,8 @@ const ApiAnalyticsPage = lazy(() =>
   import('@/pages/ApiAnalytics').then((m) => ({ default: m.ApiAnalyticsPage }))
 )
 const ChangelogPage = lazy(() => import('@/pages/Changelog'))
+const ContrastAuditPage = lazy(() => import('@/pages/ContrastAudit'))
+const E2eRecorderPage = lazy(() => import('@/pages/E2eRecorder'))
 const HealthDashboardPage = lazy(() =>
   import('@/pages/HealthDashboard').then((m) => ({ default: m.HealthDashboardPage }))
 )
@@ -617,6 +619,8 @@ export default function App() {
                   <Route path='feature-flags' element={<FeatureFlagsPage />} />
                   <Route path='command' element={<CommandCenterPage />} />
                   <Route path='changelog' element={<ChangelogPage />} />
+                  <Route path='contrast-audit' element={<ContrastAuditPage />} />
+                  <Route path='e2e-recorder' element={<E2eRecorderPage />} />
                   <Route
                     path='data-quality'
                     element={<Navigate to='/data-integrity?tab=quality' replace />}

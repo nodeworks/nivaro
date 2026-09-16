@@ -34,6 +34,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
 import { playNotificationSound } from '../lib/notification-sound'
+import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
 import { RelationCombobox } from './item-edit/RelationCombobox'
@@ -2642,6 +2643,23 @@ export function DisplayPrefsCard() {
     }
   })
   const nf = (prefs?.number_format ?? {}) as { locale?: string; compact?: boolean }
+  // Accent (#83): the instance's approved palette, brand first. GET /settings
+  // is readable by every authenticated user (the sidebar reads it too).
+  const { data: accents = [BRAND_ACCENT, ...DEFAULT_THEME_ACCENTS] } = useQuery({
+    queryKey: ['nvr-theme-accents'],
+    queryFn: () =>
+      client
+        .request<{ data: { theme_accents?: unknown; project_color?: string | null } }>(
+          get('/settings')
+        )
+        .then((r) => [
+          { ...BRAND_ACCENT, color: r.data?.project_color ?? null },
+          ...parseThemeAccents(r.data?.theme_accents)
+        ])
+        .catch(() => [BRAND_ACCENT, ...DEFAULT_THEME_ACCENTS]),
+    staleTime: 5 * 60_000
+  })
+  const accentPick = typeof prefs?.theme_accent === 'string' ? prefs.theme_accent : 'brand'
   return (
     <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
@@ -2693,6 +2711,32 @@ export function DisplayPrefsCard() {
             ]}
           />
         </label>
+        <div className='flex items-center gap-1.5' data-theme-accent-picker>
+          Accent
+          <span className='flex items-center gap-1'>
+            {accents.map((a) => {
+              const on = (a.key === 'brand' && accentPick === 'brand') || a.key === accentPick
+              return (
+                <button
+                  key={a.key}
+                  type='button'
+                  title={a.label}
+                  aria-label={`Accent ${a.label}`}
+                  aria-pressed={on}
+                  data-theme-accent={a.key}
+                  onClick={() => save.mutate({ theme_accent: a.key === 'brand' ? null : a.key })}
+                  className={cn(
+                    'h-5 w-5 rounded-full border-2 transition-transform',
+                    on
+                      ? 'scale-110 border-slate-800 dark:border-slate-100'
+                      : 'border-transparent hover:scale-105'
+                  )}
+                  style={{ background: a.color ?? 'var(--nvr-cyan)' }}
+                />
+              )
+            })}
+          </span>
+        </div>
         <label className='flex items-center gap-1.5'>
           Text size
           <SimpleSelectXs

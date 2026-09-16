@@ -12,8 +12,12 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "bin": {
+    "nivaro": "./bin/nivaro.mjs"
+  },
   "files": [
     "dist",
+    "bin",
     "README.md"
   ],
   "keywords": [

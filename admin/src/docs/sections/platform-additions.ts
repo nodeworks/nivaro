@@ -66,7 +66,7 @@ export const recordToolkit: DocSection = {
         [
           'Pretty URLs',
           '/collections/:c/s/:value + /api/items/:c/by-slug/:value',
-          'Both resolve through the collection\'s URL alias (Data Model → Settings → URL alias) — case-insensitive, multi-field, lowest-id on duplicates. The briefly-separate slug field folded into aliases; legacy slug configs still resolve with a one-click migrate.'
+          "Both resolve through the collection's URL alias (Data Model → Settings → URL alias) — case-insensitive, multi-field, lowest-id on duplicates. The briefly-separate slug field folded into aliases; legacy slug configs still resolve with a one-click migrate."
         ],
         [
           'Custom empty states',
@@ -193,7 +193,7 @@ export const adminOpsAdditions: DocSection = {
         [
           'Theme studio',
           'Settings → Appearance',
-          'Corner-radius presets and font pairing applied live; accent color stays under Project.'
+          'Corner-radius presets and font pairing applied live; the instance accent stays under Project. Appearance also declares up to six approved accents; each user picks one on Profile → Display → Accent (or "Brand"), and the admin re-points the accent tokens to it — the pick beats the workspace colour and the project colour.'
         ],
         [
           'Test data generator',

@@ -359,6 +359,24 @@ export async function usersRoutes(app: FastifyInstance) {
         .slice(0, 30)
       patch.nav_favorites = clean
     }
+    if ('theme_accent' in body) {
+      // #83 — one of the instance's approved accents, or null/'brand' for the
+      // instance colour. Validated against the live palette so a stale key
+      // (an accent the admin removed) cannot be saved.
+      const raw = body.theme_accent
+      if (raw == null || raw === '' || raw === 'brand') {
+        patch.theme_accent = null
+      } else {
+        const { listThemeAccents } = await import('../services/theme-accents.js')
+        const allowed = (await listThemeAccents()).map((a) => a.key)
+        if (typeof raw !== 'string' || !allowed.includes(raw)) {
+          return reply
+            .code(400)
+            .send({ error: `theme_accent must be one of: ${allowed.join(', ')}` })
+        }
+        patch.theme_accent = raw
+      }
+    }
     if ('notification_sound' in body) {
       // #684 — client-side chirp when an in-app notification lands.
       if (!['off', 'subtle', 'chime'].includes(String(body.notification_sound))) {

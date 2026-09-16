@@ -126,6 +126,7 @@ import {
   devexCdcStream,
   devexCodegen,
   devexDeadLetters,
+  devexDevTooling,
   devexEnvSync,
   devexFlowVersioning,
   devexMarketplace,
@@ -692,6 +693,7 @@ export const navSections: NavGroup[] = [
     label: 'Developer Experience',
     items: [
       devexCodegen,
+      devexDevTooling,
       devexOpenApi,
       devexWebhookDeliveries,
       devexWebhookSigning,

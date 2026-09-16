@@ -99,7 +99,9 @@ const allowedSettingsKeys = [
   'ai_disabled_features',
   // Theme studio (#662)
   'theme_radius',
-  'theme_font'
+  'theme_font',
+  // Approved accent palette users may pick from (#83)
+  'theme_accents'
 ]
 
 export async function settingsRoutes(app: FastifyInstance) {
@@ -148,6 +150,19 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { clearSlaZoneCache } = await import('../services/sla-zones.js')
       reply.raw.once('finish', () => clearSlaZoneCache())
+    }
+
+    // Approved accent palette (#83): strict shape, stored as JSON text.
+    if ('theme_accents' in patch) {
+      const { validateThemeAccents } = await import('../services/theme-accents.js')
+      const err = validateThemeAccents(patch.theme_accents)
+      if (err) return reply.code(400).send({ error: err })
+      patch.theme_accents =
+        patch.theme_accents == null || patch.theme_accents === ''
+          ? null
+          : typeof patch.theme_accents === 'string'
+            ? patch.theme_accents
+            : JSON.stringify(patch.theme_accents)
     }
 
     // Preserve secrets if masked value re-submitted

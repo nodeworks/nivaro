@@ -1,6 +1,11 @@
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import type { FastifyInstance } from 'fastify'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { EXTENSIONS_DIR } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import { getRelations, listCollections } from '../services/collections.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
 
@@ -467,6 +472,81 @@ function generateBruno(collections: CMSCollection[], projectName: string): Recor
 
 export async function devToolsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
+
+  // ── Golden-path e2e recorder (#73) — save a recorded Playwright spec ───────
+  // The recorder runs in the admin; this is only the "put it in the extension
+  // tests dir" half. Writing into the source tree is a DEV-MACHINE action: a
+  // deployed image has no extension sources (efp-ops is volume-mounted
+  // compiled), so anywhere but NODE_ENV=development answers 403 and the page
+  // offers the download instead.
+  const SAFE_EXT = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/
+  const SAFE_SPEC = /^[a-z0-9][a-z0-9-]{0,79}$/
+  const specTargets = () => {
+    const out: Array<{ extension: string; dir: string; specs: string[] }> = []
+    if (!existsSync(EXTENSIONS_DIR)) return out
+    for (const name of readdirSync(EXTENSIONS_DIR)) {
+      if (!SAFE_EXT.test(name)) continue
+      const dir = join(EXTENSIONS_DIR, name)
+      try {
+        if (!statSync(dir).isDirectory()) continue
+      } catch {
+        continue
+      }
+      const e2e = join(dir, 'tests', 'e2e')
+      const specs = existsSync(e2e) ? readdirSync(e2e).filter((f) => /\.spec\.ts$/.test(f)) : []
+      out.push({ extension: name, dir: e2e, specs })
+    }
+    return out
+  }
+  app.get('/e2e-specs/targets', async () => ({
+    data: { writable: config.NODE_ENV === 'development', targets: specTargets() }
+  }))
+  app.post<{
+    Body: { extension?: string; name?: string; body?: string; overwrite?: boolean }
+  }>('/e2e-specs', async (req, reply) => {
+    if (config.NODE_ENV !== 'development') {
+      return reply.code(403).send({
+        error:
+          'Saving into the extension tree only works on a development machine — download the spec instead'
+      })
+    }
+    const ext = String(req.body?.extension ?? '')
+    const name = String(req.body?.name ?? '')
+    const body = String(req.body?.body ?? '')
+    if (!SAFE_EXT.test(ext)) return reply.code(400).send({ error: 'Unknown extension' })
+    if (!SAFE_SPEC.test(name)) {
+      return reply.code(400).send({ error: 'Spec name must be a short lowercase slug' })
+    }
+    if (!body.trim() || body.length > 200_000) {
+      return reply.code(400).send({ error: 'Spec body is empty or too large' })
+    }
+    const target = specTargets().find((t) => t.extension === ext)
+    if (!target) return reply.code(404).send({ error: 'Extension not found on disk' })
+    const dir = resolve(target.dir)
+    if (!dir.startsWith(resolve(EXTENSIONS_DIR))) {
+      return reply.code(400).send({ error: 'Refusing to write outside the extensions tree' })
+    }
+    const file = join(dir, `${name}.spec.ts`)
+    if (existsSync(file) && req.body?.overwrite !== true) {
+      return reply
+        .code(409)
+        .send({ error: `${name}.spec.ts already exists — pick another name or overwrite` })
+    }
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(file, body, 'utf8')
+    await logActivity({
+      action: 'e2e-spec-save',
+      user: req.user?.id,
+      req,
+      comment: `${ext}/tests/e2e/${name}.spec.ts (${body.length} chars)`
+    })
+    return reply.send({
+      data: {
+        path: `api/extensions/${ext}/tests/e2e/${name}.spec.ts`,
+        run: `npx playwright test -c api/extensions/${ext}/tests/playwright.config.ts ${name}.spec.ts`
+      }
+    })
+  })
 
   app.get('/types.ts', async (_req, reply) => {
     const { collections, fieldsByCollection, relations, projectName } = await loadSchema()

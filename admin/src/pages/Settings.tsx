@@ -1,3 +1,4 @@
+import { DEFAULT_THEME_ACCENTS, parseThemeAccents, type ThemeAccent } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BrainCircuit,
@@ -1411,6 +1412,8 @@ export function SettingsPage() {
   // Theme studio (#662)
   const [themeRadius, setThemeRadius] = useState<string>('')
   const [themeFont, setThemeFont] = useState<string>('')
+  // Approved accent palette (#83): what users may pick on their profile.
+  const [themeAccents, setThemeAccents] = useState<ThemeAccent[]>(DEFAULT_THEME_ACCENTS)
   const [defaultLanguage, setDefaultLanguage] = useState('en-US')
   const [availableLocales, setAvailableLocales] = useState<string[]>(['en'])
   const [newLocale, setNewLocale] = useState('')
@@ -1487,6 +1490,7 @@ export function SettingsPage() {
     }
     setThemeRadius((settings as { theme_radius?: string | null }).theme_radius ?? '')
     setThemeFont((settings as { theme_font?: string | null }).theme_font ?? '')
+    setThemeAccents(parseThemeAccents((settings as { theme_accents?: unknown }).theme_accents))
     setDefaultLanguage(settings.default_language ?? 'en-US')
     setAvailableLocales(toLocaleArray((settings as Record<string, unknown>).available_locales))
     setTeamsWebhook(settings.teams_webhook_url ?? '')
@@ -1587,7 +1591,10 @@ export function SettingsPage() {
     mutation.mutate(
       {
         theme_radius: themeRadius || null,
-        theme_font: themeFont || null
+        theme_font: themeFont || null,
+        theme_accents: JSON.stringify(
+          themeAccents.filter((a) => /^#[0-9a-fA-F]{6}$/.test(a.color ?? '') && a.key)
+        )
       } as unknown as Partial<CMSSettings>,
       {
         onSuccess: () =>
@@ -2122,6 +2129,90 @@ export function SettingsPage() {
                           </span>
                         </button>
                       ))}
+                    </div>
+                  </Field>
+                  <Field
+                    label='Accent choices'
+                    hint='Up to six accents users may pick on their profile (Display → Accent). "Brand" (the project colour) is always offered.'
+                  >
+                    <div className='space-y-2' data-theme-accents>
+                      {themeAccents.map((a, idx) => (
+                        <div key={a.key || idx} className='flex flex-wrap items-center gap-2'>
+                          <input
+                            type='color'
+                            value={a.color ?? '#00ceff'}
+                            onChange={(e) =>
+                              setThemeAccents((list) =>
+                                list.map((x, i) =>
+                                  i === idx ? { ...x, color: e.target.value } : x
+                                )
+                              )
+                            }
+                            aria-label={`Accent ${idx + 1} colour`}
+                            className='h-8 w-10 cursor-pointer rounded border border-slate-200 bg-white p-0.5 dark:border-border dark:bg-card'
+                          />
+                          <Input
+                            value={a.label}
+                            onChange={(e) =>
+                              setThemeAccents((list) =>
+                                list.map((x, i) =>
+                                  i === idx ? { ...x, label: e.target.value } : x
+                                )
+                              )
+                            }
+                            placeholder='Label'
+                            className='h-8 w-36'
+                            aria-label={`Accent ${idx + 1} label`}
+                          />
+                          <Input
+                            value={a.key}
+                            onChange={(e) =>
+                              setThemeAccents((list) =>
+                                list.map((x, i) =>
+                                  i === idx
+                                    ? {
+                                        ...x,
+                                        key: e.target.value
+                                          .toLowerCase()
+                                          .replace(/[^a-z0-9_-]/g, '')
+                                      }
+                                    : x
+                                )
+                              )
+                            }
+                            placeholder='key'
+                            className='h-8 w-28 font-mono text-[11.5px]'
+                            aria-label={`Accent ${idx + 1} key`}
+                          />
+                          <button
+                            type='button'
+                            onClick={() =>
+                              setThemeAccents((list) => list.filter((_, i) => i !== idx))
+                            }
+                            className='text-[11.5px] text-slate-400 hover:text-red-500'
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                      {themeAccents.length < 6 && (
+                        <button
+                          type='button'
+                          onClick={() =>
+                            setThemeAccents((list) => [
+                              ...list,
+                              {
+                                key: `accent-${list.length + 1}`,
+                                label: 'New accent',
+                                color: '#00ceff'
+                              }
+                            ])
+                          }
+                          className='text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+                        >
+                          + Add accent
+                        </button>
+                      )}
                     </div>
                   </Field>
                   <p className='text-[11.5px] text-slate-400 dark:text-muted-foreground'>

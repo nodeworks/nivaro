@@ -81,9 +81,15 @@ function cssPath(el: HTMLElement): string {
   return parts.join(' > ')
 }
 
-export function runContrastAudit(): Offender[] {
+export type ContrastOffender = Offender
+
+/**
+ * Scan `root` (default: the whole page) for text under WCAG contrast. A
+ * scoped root lets the audit page measure one themed showcase at a time.
+ */
+export function runContrastAudit(root: ParentNode = document.body): Offender[] {
   const offenders: Offender[] = []
-  const els = document.querySelectorAll<HTMLElement>('body *')
+  const els = root.querySelectorAll<HTMLElement>('*')
   let scanned = 0
   for (const el of els) {
     if (scanned > 4000 || offenders.length >= 80) break

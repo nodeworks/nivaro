@@ -16,13 +16,22 @@ export const devexCodegen: DocSection = {
     },
     {
       type: 'pre',
-      code: `# Download and save types
+      code: `# The SDK ships a CLI — no curl, no copy-paste
+npx nivaro types --url https://nivaro.example.com --token <admin token> --out src/nivaro-types.d.ts
+npx nivaro types --typed-client --out src/nivaro-client.ts   # + createTypedNivaro() wrapper
+# NIVARO_URL / NIVARO_TOKEN are read when the flags are omitted
+
+# Or download the endpoint directly
 curl -H "Authorization: Bearer <token>" \\
   https://nivaro.example.com/api/dev-tools/types.ts > src/nivaro-types.ts
 
 # Or via SDK
 const typesTs = await nivaro.request(getTypes());
 console.log(typesTs);  // raw TypeScript code`
+    },
+    {
+      type: 'note',
+      text: 'The `nivaro` CLI is installed with `@nivaro/sdk` (its `bin`). `nivaro types` exits 0 when the file was written, 1 on usage errors, 2 when the request failed — wire it into a `postinstall` or a pre-commit step and the types can never drift from the instance.'
     },
     {
       type: 'h3',
@@ -146,7 +155,7 @@ cms.request(getBrunoCollection())`
     {
       type: 'h3',
       id: 'openapi-content',
-      text: 'What\'s Included'
+      text: "What's Included"
     },
     {
       type: 'ul',
@@ -273,7 +282,7 @@ export const devexWebhookDeliveries: DocSection = {
       "max_attempts": 3,
       "sent_at": "2026-06-15T10:30:45Z",
       "payload": { ... full mutation ... },
-      "response_body": "{ \"status\": \"ok\" }"
+      "response_body": "{ "status": "ok" }"
     },
     {
       "id": "delivery-457",
@@ -444,8 +453,16 @@ export const devexRequestSigning: DocSection = {
       type: 'table',
       head: ['Auth Type', 'What Is Signed', 'Typical Use'],
       rows: [
-        ['hmac', 'HTTP method + path + body (HMAC-SHA256)', 'Partner APIs with request signing requirements'],
-        ['aws_sigv4', 'Canonical AWS request format', 'AWS services (SigV4) and S3-compatible storage'],
+        [
+          'hmac',
+          'HTTP method + path + body (HMAC-SHA256)',
+          'Partner APIs with request signing requirements'
+        ],
+        [
+          'aws_sigv4',
+          'Canonical AWS request format',
+          'AWS services (SigV4) and S3-compatible storage'
+        ],
         ['bearer', 'None (standard OAuth)', 'OAuth2 endpoints'],
         ['api_key', 'None (appended as header/query)', 'Simple API key authentication']
       ]
@@ -622,7 +639,7 @@ X-RateLimit-Reset: 1718000460
     },
     {
       type: 'note',
-      text: 'The rate limiter is per-principal (per user or per API key), not global. Each client has its own counter, so one user\'s burst does not affect another.'
+      text: "The rate limiter is per-principal (per user or per API key), not global. Each client has its own counter, so one user's burst does not affect another."
     }
   ]
 }
@@ -1076,7 +1093,7 @@ export const devexSchemaMigrations: DocSection = {
     { type: 'h1', id: 'live-schema-migrations', text: 'Live Schema Migrations' },
     {
       type: 'p',
-      text: 'Perform schema migrations live without downtime: change a field\'s column type, rename a field, or update computed field formulas. Previously required hand-written migrations; now available from the Data Model UI.'
+      text: "Perform schema migrations live without downtime: change a field's column type, rename a field, or update computed field formulas. Previously required hand-written migrations; now available from the Data Model UI."
     },
     {
       type: 'h3',
@@ -1419,6 +1436,41 @@ export const devexRevisionDiff: DocSection = {
     {
       type: 'note',
       text: 'Create revisions show the full new record snapshot. Delete revisions show the final state before deletion. Only update revisions support both delta and side-by-side modes.'
+    }
+  ]
+}
+
+export const devexDevTooling: DocSection = {
+  id: 'dev-tooling',
+  label: 'Recorder, Contrast Audit & Release Notes',
+  content: [
+    { type: 'h1', id: 'dev-tooling', text: 'Golden-path Recorder, Contrast Audit & Release Notes' },
+    { type: 'h2', id: 'dev-tooling-recorder', text: 'Golden-path e2e recorder' },
+    {
+      type: 'p',
+      text: 'Data Tools → E2E Recorder. Press Record, walk the path through the admin (the recorder follows you across routes — a red badge in the corner says it is still on), come back and review the steps: every click, typed value, Enter/Escape/Tab press, select change and navigation, each with the selector it captured. Add an assertion ("this selector contains that text"), then Copy, Download, or Save to extension — which writes `api/extensions/<ext>/tests/e2e/<name>.spec.ts` on a development machine (a deployed image has no extension sources, so the button is disabled there and the download stands).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Selector priority: `data-testid` and short `data-*` markers, then `#id`, then `[aria-label]`, then role + accessible name for buttons and links (rendered as `getByRole`), then a positional CSS path — a positional path in the spec is a hint that the element needs a stable hook.',
+        'Passwords are never captured; the spec signs in through `POST /api/auth/login/token` with `NIVARO_E2E_TOKEN`, and the origin comes from `NIVARO_E2E_ORIGIN`.',
+        'Consecutive typing into one field collapses into one `fill`; back-to-back navigations (a redirect chain) keep only the last `goto`.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `NIVARO_E2E_TOKEN=<static token> npx playwright test -c api/extensions/efp-ops/tests/playwright.config.ts golden-path.spec.ts`
+    },
+    { type: 'h2', id: 'dev-tooling-contrast', text: 'Contrast audit page' },
+    {
+      type: 'p',
+      text: 'Data Tools → Contrast Audit renders a fixed showcase of the shared and admin components in BOTH themes side by side and measures every text node against WCAG (4.5:1 body, 3:1 large), listing offenders with ratio, selector and the exact foreground/background it measured. Rerun it after any shared className change; "Audit this page" measures whatever page you are on instead (the same auditor the command palette exposes).'
+    },
+    { type: 'h2', id: 'dev-tooling-release-notes', text: 'What changed in this release' },
+    {
+      type: 'p',
+      text: 'When the API is redeployed under an open tab, the update banner offers "What changed since <version>" — a link to the Changelog page scoped to the releases between the version the tab loaded against and the one now being served (`/changelog?since=&to=`). The page leads with that window and marks each release in it "New since you loaded". The notes come from `changelog.json`, generated from the release tags at build time.'
     }
   ]
 }

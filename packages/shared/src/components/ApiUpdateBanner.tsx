@@ -1,8 +1,8 @@
 import { RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useOptionalNivaroClient } from '../context'
-import { get } from '../lib/commands'
 import { type ApiVersionInfo, startApiVersionWatch, useApiUpdate } from '../lib/api-version'
+import { get } from '../lib/commands'
 
 /**
  * "The API was redeployed since you loaded this page" bar.
@@ -30,10 +30,19 @@ export function ApiUpdateBanner({
   // embedded in, and the platform's own name means nothing to them. Hosts that
   // want to be specific pass appName.
   appName = 'The API',
-  fetchVersion
+  fetchVersion,
+  releaseNotesUrl
 }: {
   appName?: string
   fetchVersion?: () => Promise<ApiVersionInfo | null>
+  /**
+   * "What changed" link (#62): given the update notice (served version +
+   * the version this tab loaded against), return the release-notes URL —
+   * the admin passes `/changelog?since=<from>&to=<version>`. Null hides it.
+   * Rendered as a plain anchor on purpose: following it is a full navigation,
+   * which lands the reader on the NEW build's notes.
+   */
+  releaseNotesUrl?: (info: ApiVersionInfo) => string | null
 }) {
   const client = useOptionalNivaroClient()
   const update = useApiUpdate()
@@ -59,7 +68,8 @@ export function ApiUpdateBanner({
 
   if (!update) return null
 
-  const where = update.environment && update.environment !== 'production' ? ` (${update.environment})` : ''
+  const where =
+    update.environment && update.environment !== 'production' ? ` (${update.environment})` : ''
 
   return (
     <div
@@ -73,6 +83,18 @@ export function ApiUpdateBanner({
         {appName} was updated{where}.
       </span>
       <span className='text-[11.5px] opacity-70'>Reload to pick up the latest changes.</span>
+      {(() => {
+        const href = releaseNotesUrl?.(update) ?? null
+        return href ? (
+          <a
+            href={href}
+            className='text-[11.5px] font-semibold text-nvr-navy underline decoration-dotted underline-offset-2 hover:text-slate-900 dark:text-nvr-cyan dark:hover:text-slate-100'
+            data-nvr-api-update-notes
+          >
+            What changed{update.from ? ` since ${update.from}` : ''} →
+          </a>
+        ) : null
+      })()}
       <button
         type='button'
         disabled={reloading}

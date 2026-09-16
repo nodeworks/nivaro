@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, Package } from 'lucide-react'
+import { CheckCircle2, Package, Sparkles } from 'lucide-react'
+import { useSearchParams } from 'react-router'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 
 /**
  * What shipped, release by release.
@@ -36,7 +36,30 @@ const SECTION_TONE: Record<string, string> = {
   Other: 'bg-slate-50 text-slate-600 border-slate-200'
 }
 
+/** Numeric semver compare; anything unparseable sorts as 0. */
+function cmpVersion(a: string, b: string): number {
+  const pa = a
+    .replace(/^v/, '')
+    .split('.')
+    .map((n) => Number.parseInt(n, 10) || 0)
+  const pb = b
+    .replace(/^v/, '')
+    .split('.')
+    .map((n) => Number.parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+
 export default function Changelog() {
+  // "What changed in this release" (#62): the API-update banner links here
+  // with ?since=<the version this tab loaded against>&to=<served>, and the
+  // releases in that window lead the page under their own band.
+  const [params] = useSearchParams()
+  const since = params.get('since')
+  const to = params.get('to')
   const { data, isLoading } = useQuery({
     queryKey: ['changelog'],
     queryFn: () =>
@@ -50,6 +73,10 @@ export default function Changelog() {
 
   const releases = data?.releases ?? []
   const running = data?.running
+  const inWindow = (v: string) =>
+    !!since && cmpVersion(v, since) > 0 && (!to || cmpVersion(v, to) <= 0)
+  const fresh = since ? releases.filter((r) => inWindow(r.version)) : []
+  const freshCount = fresh.reduce((a, r) => a + (r.count ?? 0), 0)
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -60,7 +87,8 @@ export default function Changelog() {
           {running && (
             <>
               {' '}
-              This instance is running <span className='font-medium text-slate-700'>{running}</span>.
+              This instance is running <span className='font-medium text-slate-700'>{running}</span>
+              .
             </>
           )}
         </p>
@@ -77,15 +105,33 @@ export default function Changelog() {
         )}
 
         <div className='mx-auto max-w-3xl space-y-4'>
+          {since && (
+            <div
+              className='flex flex-wrap items-center gap-2 rounded-xl border border-nvr-cyan/40 bg-nvr-cyan/10 px-4 py-3 text-[12.5px] text-slate-800 dark:text-slate-100'
+              data-changelog-since={since}
+            >
+              <Sparkles className='h-4 w-4 text-nvr-cyan' />
+              <span className='font-semibold'>What changed since {since}</span>
+              {to && <span className='text-slate-500 dark:text-slate-400'>→ {to}</span>}
+              <span className='ml-auto text-[11.5px] text-slate-500 dark:text-slate-400'>
+                {fresh.length === 0
+                  ? 'No release notes recorded for that window yet'
+                  : `${fresh.length} release${fresh.length === 1 ? '' : 's'} · ${freshCount} change${freshCount === 1 ? '' : 's'}`}
+              </span>
+            </div>
+          )}
           {releases.map((r) => {
             const isRunning = running === r.version
+            const isFresh = inWindow(r.version)
             return (
               <section
                 key={r.tag}
                 className={cn(
                   'overflow-hidden rounded-xl border bg-white',
-                  isRunning ? 'border-nvr-cyan/50 ring-1 ring-nvr-cyan/20' : 'border-slate-200'
+                  isRunning ? 'border-nvr-cyan/50 ring-1 ring-nvr-cyan/20' : 'border-slate-200',
+                  isFresh && 'border-nvr-cyan/40 bg-nvr-cyan/[0.04]'
                 )}
+                data-changelog-fresh={isFresh ? '1' : undefined}
               >
                 <div className='flex items-center gap-2 border-b border-slate-100 px-4 py-2.5'>
                   <Package className='h-3.5 w-3.5 shrink-0 text-slate-400' />
@@ -94,6 +140,11 @@ export default function Changelog() {
                     <span className='inline-flex items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy'>
                       <CheckCircle2 className='h-3 w-3' />
                       Running here
+                    </span>
+                  )}
+                  {isFresh && !isRunning && (
+                    <span className='inline-flex items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy'>
+                      New since you loaded
                     </span>
                   )}
                   <span className='ml-auto text-[11px] text-slate-400'>
@@ -120,7 +171,10 @@ export default function Changelog() {
                       </span>
                       <ul className='mt-1.5 space-y-1'>
                         {s.entries.map((e, i) => (
-                          <li key={`${e.hash ?? i}`} className='flex gap-2 text-[12.5px] leading-snug'>
+                          <li
+                            key={`${e.hash ?? i}`}
+                            className='flex gap-2 text-[12.5px] leading-snug'
+                          >
                             <span className='mt-[7px] h-1 w-1 shrink-0 rounded-full bg-slate-300' />
                             <span className='text-slate-700'>
                               {e.scope && (

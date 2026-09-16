@@ -310,6 +310,13 @@ export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from '.
 export { rumRouteChange, startRum } from './lib/rum'
 export * from './lib/summary-mode'
 export {
+  BRAND_ACCENT,
+  DEFAULT_THEME_ACCENTS,
+  parseThemeAccents,
+  resolveAccentColor,
+  type ThemeAccent
+} from './lib/theme-accents'
+export {
   effectiveScopeSeedIds,
   matchScopeDimension,
   translateScopeValues,

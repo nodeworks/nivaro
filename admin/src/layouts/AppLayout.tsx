@@ -1,4 +1,6 @@
 import {
+  parseThemeAccents,
+  resolveAccentColor,
   rumRouteChange,
   setDisplayTimezone,
   setNumberFormat,
@@ -27,6 +29,7 @@ import {
   ClipboardList,
   Clock,
   Code2,
+  Contrast,
   Database,
   DatabaseZap,
   Eye,
@@ -90,14 +93,25 @@ import {
   Users,
   Users2,
   UserX,
+  Video,
   Webhook,
   Wifi,
   Workflow
 } from 'lucide-react'
-import { Component, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Component,
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
 import { toast } from 'sonner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
+import { getRecorderState, subscribeRecorder } from '@/lib/e2e-recorder'
 import { preloadRoute } from '@/lib/preload-routes'
 import { adminRealtime } from '@/lib/socket'
 import { applyThemeSettings } from '@/lib/theme-settings'
@@ -353,6 +367,8 @@ export const navCategories: NavCategory[] = [
         section: 'Data Tools'
       },
       { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog', section: 'Data Tools' },
+      { icon: Contrast, label: 'Contrast Audit', to: '/contrast-audit', section: 'Data Tools' },
+      { icon: Video, label: 'E2E Recorder', to: '/e2e-recorder', section: 'Data Tools' },
       { icon: ListOrdered, label: 'ID Sequences', to: '/sequences', section: 'Data Tools' },
       { icon: Mail, label: 'Mail Templates', to: '/mail-templates', section: 'Data Tools' },
       { icon: MailCheck, label: 'Mail Log', to: '/mail-log', section: 'Data Tools' },
@@ -772,14 +788,22 @@ export function AppLayout() {
     queryFn: () => api.get<{ data: Workspace[] }>('/workspaces').then((r) => r.data.data),
     staleTime: 5 * 60_000
   })
+  const { user: authUserForTheme } = useAuth()
   const workspaceColor = (() => {
     const ws = themeWorkspaces.find((w) => w.id === user?.current_workspace)
     const c = (ws as { color?: string | null } | undefined)?.color
     return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : null
   })()
 
+  // Per-user accent (#83): an explicit pick from the instance's approved
+  // palette beats the workspace colour and the project colour — the person
+  // chose it. Unset/'brand' falls through to the instance chain.
+  const accentPick = resolveAccentColor(
+    (authUserForTheme?.preferences as { theme_accent?: unknown } | undefined)?.theme_accent,
+    parseThemeAccents((settings as { theme_accents?: unknown } | undefined)?.theme_accents)
+  )
   useEffect(() => {
-    const color = workspaceColor ?? settings?.project_color ?? '#00ceff'
+    const color = accentPick ?? workspaceColor ?? settings?.project_color ?? '#00ceff'
     const el = document.documentElement
     el.style.setProperty('--nvr-cyan', color)
     el.style.setProperty('--nvr-cyan-dark', color)
@@ -793,7 +817,7 @@ export function AppLayout() {
     }
     // Theme studio (#662): radius + font follow the same settings effect.
     applyThemeSettings(settings as Record<string, unknown> | undefined)
-  }, [settings?.project_color, workspaceColor, settings])
+  }, [settings?.project_color, workspaceColor, settings, accentPick])
 
   useEffect(() => {
     // Following a favorite keeps you in Favorites. The panel otherwise jumps
@@ -929,7 +953,13 @@ export function AppLayout() {
         <div className='flex h-screen flex-col overflow-hidden bg-secondary'>
           {/* API redeploy notice — clears itself once this tab reloads onto the
             new build (see the shared api-version watcher). */}
-          <ApiUpdateBanner appName='Nivaro' />
+          <ApiUpdateBanner
+            appName='Nivaro'
+            releaseNotesUrl={(u) =>
+              `/changelog?since=${encodeURIComponent(u.from ?? '')}&to=${encodeURIComponent(u.version)}`
+            }
+          />
+          <RecorderBadge />
           <SessionExpiryWatcher />
           <OfflineBanner />
           <DbOutageBanner />
@@ -1393,4 +1423,25 @@ function SessionExpiryWatcher() {
     }
   }, [])
   return null
+}
+
+/**
+ * Golden-path recorder badge (#73): while a recording is on, a fixed pill
+ * says so on every route and links back to the recorder — the recorder lives
+ * in a module-level singleton, so leaving its page does not stop it.
+ */
+function RecorderBadge() {
+  const rec = useSyncExternalStore(subscribeRecorder, getRecorderState, getRecorderState)
+  if (!rec.recording) return null
+  return (
+    <Link
+      to='/e2e-recorder'
+      className='fixed bottom-4 right-4 z-[120] inline-flex items-center gap-2 rounded-full border border-red-200 bg-white px-3 py-1.5 text-[11.5px] font-medium text-red-600 shadow-lg hover:bg-red-50 dark:border-red-500/30 dark:bg-card dark:text-red-300'
+      data-e2e-recorder
+      data-e2e-badge={rec.steps.length}
+    >
+      <span className='h-2 w-2 animate-pulse rounded-full bg-red-500' />
+      Recording · {rec.steps.length} step{rec.steps.length === 1 ? '' : 's'}
+    </Link>
+  )
 }

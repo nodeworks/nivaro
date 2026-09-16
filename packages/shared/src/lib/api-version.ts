@@ -25,6 +25,8 @@ const POLL_MS = 60_000
 export interface ApiVersionInfo {
   version: string
   environment?: string
+  /** The version this tab loaded against — set on an update notice only. */
+  from?: string | null
 }
 
 type Fetcher = () => Promise<ApiVersionInfo | null>
@@ -65,7 +67,8 @@ export async function checkApiVersion(): Promise<void> {
     // new and old build on consecutive polls, and a flickering banner is worse
     // than a sticky one. A rollback counts too: the served build still is not
     // the one running here, so reloading is still the right move.
-    if (served !== baseline) emit({ version: served, environment: info?.environment })
+    if (served !== baseline)
+      emit({ version: served, environment: info?.environment, from: baseline })
   } catch {
     // ignored — see above
   } finally {
