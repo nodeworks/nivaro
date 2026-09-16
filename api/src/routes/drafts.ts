@@ -31,12 +31,14 @@ export async function draftsRoutes(app: FastifyInstance) {
       const row = (await db('nivaro_drafts')
         .where({ user: req.user!.id, collection: req.params.collection, item_key: req.params.item })
         .first('payload', 'saved_at')) as { payload: string; saved_at: Date } | undefined
-      if (!row) return reply.code(404).send({ error: 'No draft' })
+      // "No draft yet" is the normal case on every record open — answer it
+      // with an empty body rather than a 404 the browser console shouts about.
+      if (!row) return { data: null }
       let payload: unknown = null
       try {
         payload = JSON.parse(row.payload)
       } catch {
-        return reply.code(404).send({ error: 'No draft' })
+        return { data: null }
       }
       return { data: { payload, saved_at: row.saved_at } }
     }
