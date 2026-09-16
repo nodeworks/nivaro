@@ -5,6 +5,7 @@ import { logActivity } from './activity.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
 import { ensureAutoWatch } from './auto-watch.js'
+import { latestPeopleComment } from './latest-comment.js'
 import { buildRecordCard } from './mail-record-card.js'
 import { resolveStateOwners } from './pipeline-engine.js'
 import {
@@ -447,7 +448,7 @@ async function buildTransitionEventPayload(args: {
   // up, and what changed since the record entered the state it just left.
   // Best-effort — a transition never fails because an email block could not
   // be assembled.
-  const [recordCard, approvalChain, brief, actor] = await Promise.all([
+  const [recordCard, approvalChain, brief, actor, latestComment] = await Promise.all([
     buildRecordCard(subject.collection, subject.itemId).catch(() => null),
     buildApprovalChain(instance.id, {
       asOfStateId: newStateObj?.id ?? null,
@@ -461,7 +462,10 @@ async function buildTransitionEventPayload(args: {
           .catch(() => undefined) as Promise<
           { first_name: string | null; last_name: string | null; email: string } | undefined
         >)
-      : Promise.resolve(undefined)
+      : Promise.resolve(undefined),
+    // The newest people comment on the subject record — the emails end with
+    // it so a reader gets the latest human context without opening the record.
+    latestPeopleComment(subject.collection, subject.itemId).catch(() => null)
   ])
   const actorName = actor
     ? [actor.first_name, actor.last_name].filter(Boolean).join(' ') || actor.email
@@ -470,6 +474,7 @@ async function buildTransitionEventPayload(args: {
     record_card: recordCard,
     approval_chain: approvalChain,
     brief,
+    latest_comment: latestComment,
     actor_name: actorName,
     actor_email: actor?.email ?? null,
     collection: instance.collection,

@@ -4,7 +4,8 @@
 Workflow / IR transition. Context = the `workflow-transition` trigger payload
 (services/workflow-transitions.ts buildTransitionEventPayload): record_card,
 approval_chain, brief, transition_label, from_state, to_state, comment,
-actor_name, owners, record_url, friendly_id.
+actor_name, owners, record_url, friendly_id, latest_comment (newest people
+comment on the record — nivaro_comments or a child notes table — rendered last).
 {%- endcomment -%}
 <p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#0284a8;">{{ transition_label }}</p>
 <h1 style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:21px;font-weight:700;line-height:1.3;color:#172940;">{{ friendly_id }} is now {{ to_state.label }}</h1>
@@ -37,5 +38,16 @@ actor_name, owners, record_url, friendly_id.
   {%- if brief.comments > 0 %}{{ brief.comments }} note(s) added.{% endif -%}
   {%- if brief.addendums.count > 0 %} {{ brief.addendums.count }} addendum(s){% if brief.addendums.cost_impact != 0 %}, cost impact {{ brief.addendums.cost_impact | round: 2 }}{% endif %}.{% endif -%}
 </p>
+{%- endif -%}
+{%- comment -%}
+The newest thing a person wrote on the record (nivaro_comments or a child
+note table), last so the reader leaves with the latest human context. Skipped
+when it is the very comment quoted above.
+{%- endcomment -%}
+{%- if latest_comment and latest_comment.text != '' and latest_comment.text != comment -%}
+<p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#7a90a6;">Latest comment</p>
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
+  <tr><td style="padding:12px 16px;background-color:#f4f7fa;border:1px solid #dde3ea;border-radius:8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.55;color:#334155;white-space:pre-wrap;">{{ latest_comment.text }}<br><span style="display:inline-block;margin-top:8px;font-size:12px;color:#7a90a6;">&mdash; {% if latest_comment.author_name %}{{ latest_comment.author_name }}{% else %}Unknown author{% endif %}{% if latest_comment.at %} &middot; {{ latest_comment.at | date: '%b %-d, %Y at %-I:%M %p' }}{% endif %}</span></td></tr>
+</table>
 {%- endif -%}
 {% endblock %}
