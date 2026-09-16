@@ -1,10 +1,69 @@
 {
-  "generated_at": "2026-09-16T16:42:19.543Z",
+  "generated_at": "2026-09-16T20:42:30.903Z",
   "releases": [
+    {
+      "version": "0.1.298",
+      "tag": "v0.1.298",
+      "date": "2026-09-16T16:42:20-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "mail",
+              "text": "workflow and IR transition emails end with the record's latest people comment",
+              "hash": "6f8f098e"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "carry-forward link keeps its shape, flat child grids scroll, the changes tray shows labels",
+              "hash": "2af56512"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "the request gate closes at construction, queues read-like POSTs, and releases on dispose",
+              "hash": "5178f2a5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "drafts",
+              "text": "a record with no server draft answers 200 {data:null}, not 404",
+              "hash": "d80a25d5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "reports",
+              "text": "explain-the-trend calls the route directly instead of importing an unpublished SDK export",
+              "hash": "e6498936"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "record",
+              "text": "fewer, cheaper requests per record open — history indexes, coalesced GETs, gated hidden tabs, deferred decoration reads",
+              "hash": "5b6d9bfb"
+            }
+          ]
+        }
+      ],
+      "count": 6
+    },
     {
       "version": "0.1.297",
       "tag": "v0.1.297",
-      "date": "2026-09-16T12:42:09-04:00",
+      "date": "2026-09-16T12:42:19-04:00",
       "sections": [
         {
           "label": "Added",
