@@ -5,6 +5,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseAutoIdPattern, validateAutoIdPattern } from '../services/auto-ids.js'
 import { clearMetadataCache } from '../services/collections.js'
+import { deleteSyntheticBatch, describeSyntheticPlan, generateSynthetic, listSyntheticBatches } from '../services/synthetic-records.js'
 import { chunkArray } from '../services/db-batch.js'
 import {
   bustRollupContributorCache,
@@ -1281,6 +1282,51 @@ export async function dataModelRoutes(app: FastifyInstance) {
   })
 
   // ─── GET /:table/fields/:field/auto-id-seed — current + suggested seed ────
+
+  // ── Synthetic records (#72): test rows from the collection's own metadata ──
+  app.get('/:table/synthetic', async (req, reply) => {
+    const { table } = req.params as { table: string }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_|^directus_/i.test(table))
+      return reply.code(400).send({ error: 'Business collections only' })
+    const [plan, batches] = await Promise.all([describeSyntheticPlan(table), listSyntheticBatches(table)])
+    return { data: { plan, batches } }
+  })
+  app.post('/:table/synthetic', async (req, reply) => {
+    const { table } = req.params as { table: string }
+    const body = (req.body ?? {}) as { count?: number }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_|^directus_/i.test(table))
+      return reply.code(400).send({ error: 'Business collections only' })
+    const count = Number(body.count ?? 10)
+    if (!Number.isFinite(count) || count < 1 || count > 200)
+      return reply.code(400).send({ error: 'count must be between 1 and 200' })
+    try {
+      const result = await generateSynthetic(req.user!, table, count, req)
+      await logActivity({
+        action: 'synthetic-generate',
+        user: req.user?.id,
+        collection: table,
+        comment: `batch ${result.batch}: ${result.created} of ${result.requested} created${result.failed.length ? `, ${result.failed.length} failed` : ''}`,
+        req
+      })
+      return { data: result }
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message })
+    }
+  })
+  app.delete('/:table/synthetic/:batch', async (req, reply) => {
+    const { table, batch } = req.params as { table: string; batch: string }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || !/^[a-f0-9]{8}$/.test(batch))
+      return reply.code(400).send({ error: 'Bad collection or batch' })
+    const r = await deleteSyntheticBatch(req.user!, table, batch, req)
+    await logActivity({
+      action: 'synthetic-delete',
+      user: req.user?.id,
+      collection: table,
+      comment: `batch ${batch}: ${r.deleted} deleted${r.failed ? `, ${r.failed} failed` : ''}${r.missing ? `, ${r.missing} already gone` : ''}`,
+      req
+    })
+    return { data: r }
+  })
 
   app.get('/:table/fields/:field/auto-id-seed', async (req, reply) => {
     const { table, field } = req.params as { table: string; field: string }

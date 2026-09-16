@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { parseServiceConfig, runServiceImport, type ServiceImportSummary } from '../services/staged-import-service.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFileBuffer } from '../services/files.js'
-import { parseServiceConfig } from '../services/staged-import-service.js'
 import {
   parseStagingColumns,
   parseValidationConfig,
@@ -14,6 +14,7 @@ import {
 import {
   getImportDefinition,
   listImportDefinitions,
+  mapRowsToDeclared,
   parseImportFile,
   parsePostRunFlows
 } from '../services/staged-imports.js'
@@ -726,6 +727,26 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       ? await validateStagedRows(definition, rows)
       : { errors: [], warnings: [], stats: {}, truncated: false }
 
+    // Service-mode definitions can say EXACTLY what a run would do — the same
+    // code path as the worker with nothing written: creates, field-level
+    // updates, unchanged, and every skipped row with the reason that dropped it.
+    let dryRun: ServiceImportSummary | null = null
+    if (definition?.processor === 'service') {
+      const cfg = parseServiceConfig(definition.service_config)
+      if (cfg) {
+        try {
+          dryRun = await runServiceImport({
+            config: cfg,
+            rows: mapRowsToDeclared(definition, rows),
+            createdBy: req.user?.id ?? null,
+            dryRun: true
+          })
+        } catch (err) {
+          dryRun = { created: 0, updated: 0, unchanged: 0, skipped: {}, failed: 1, log: `Dry run failed: ${(err as Error).message}` }
+        }
+      }
+    }
+
     return {
       data: {
         row_count: rows.length,
@@ -736,7 +757,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         staging_columns: stagingColumns,
         unknown_columns: stagingColumns ? columns.filter((c) => !stagingColumns.includes(c)) : [],
         missing_columns: stagingColumns ? stagingColumns.filter((c) => !columns.includes(c)) : [],
-        validation
+        validation,
+        dry_run: dryRun
       }
     }
   })

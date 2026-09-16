@@ -1630,6 +1630,11 @@ export const upsertKeysGuide: DocSection = {
         'Configure it in Data Model → the collection → Settings → "Natural key (upsert)".'
       ]
     },
+    { type: 'h3', id: 'synthetic-records', text: 'Synthetic records' },
+    {
+      type: 'p',
+      text: 'Data Model → the collection → Settings → "Synthetic records" generates up to 200 test rows from the collection\'s OWN metadata: an existing row for every M2O relation (active users for user links), one of the declared choices for select fields, integers and amounts inside the validation min/max, dates inside a min/max-days-from-today rule, and made-up strings shaped by the field name (emails at example.com, 555 phone numbers, SYN- codes, short paragraphs for rich text). Audit stamps, computed fields, auto-ids, aliases and read-only fields are left alone; the plan lists what gets filled and what is skipped and why. Rows are created through the items service — rules, auto-ids, hooks and revisions apply — and every row carries the change reason `synthetic:<batch>`, which is how a batch is listed and sent to the trash later. Routes: `GET/POST /data-model/:table/synthetic`, `DELETE /data-model/:table/synthetic/:batch` (admin).'
+    },
     {
       type: 'note',
       text: 'Example: `budgets` is keyed on (project, year). A partner integration that models every revised budget as a new record now lands as an in-place update with a revision snapshot, rather than a second row for the same year.'

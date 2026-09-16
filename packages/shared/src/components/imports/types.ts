@@ -108,6 +108,23 @@ export interface ImportPreview {
   missing_columns: string[]
   /** Pre-flight report — errors here block queueing server-side too. */
   validation?: ImportValidationReport
+  /** Service-mode definitions only: what a run would do, nothing written. */
+  dry_run?: ImportDryRun | null
+}
+
+export interface ImportDryRun {
+  created: number
+  updated: number
+  unchanged: number
+  skipped: Record<string, number>
+  failed: number
+  log: string
+  samples?: {
+    creates: Array<{ key: string; values: Record<string, unknown> }>
+    updates: Array<{ key: string; id: unknown; changes: Array<{ field: string; from: unknown; to: unknown }> }>
+    skipped_rows: Array<{ row: number; key: string | null; reason: string }>
+    would_create_lookups: Array<{ column: string; collection: string; values: string[] }>
+  }
 }
 
 /** Emitted by the worker on the `import:progress` socket event. */

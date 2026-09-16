@@ -72,12 +72,33 @@ export interface ServiceImportConfig {
   update_only?: boolean
 }
 
+export interface ServiceImportSampleChange {
+  field: string
+  from: unknown
+  to: unknown
+}
+
+/** What a dry run would do, with enough rows to explain itself. */
+ export interface ServiceImportSamples {
+  /** First file row per natural key that would be created (payload). */
+  creates: Array<{ key: string; values: Record<string, unknown> }>
+  /** Existing rows that would change, field by field. */
+  updates: Array<{ key: string; id: unknown; changes: ServiceImportSampleChange[] }>
+  /** Rows dropped before writing — the file row number (1-based, header
+   *  excluded), the natural key when it could be built, and the reason. */
+  skipped_rows: Array<{ row: number; key: string | null; reason: string }>
+  /** Lookup values with no match that a real run would stub-create. */
+  would_create_lookups: Array<{ column: string; collection: string; values: string[] }>
+}
+
 export interface ServiceImportSummary {
   created: number
   updated: number
   unchanged: number
   /** Rows dropped before writing, with per-reason counts. */
   skipped: Record<string, number>
+  /** Present on a dry run only. */
+  samples?: ServiceImportSamples
   failed: number
   log: string
 }
@@ -213,18 +234,28 @@ export interface RunServiceImportOptions {
   rows: Array<Record<string, string>>
   createdBy: string | null
   onProgress?: (written: number, total: number) => void | Promise<void>
+  /** Classify every row and diff against existing data, write NOTHING —
+   *  the Import Console's preview. Lookup stubs are reported, not created. */
+  dryRun?: boolean
+  /** Sample rows kept per bucket on a dry run (default 25). */
+  sampleLimit?: number
 }
 
 export async function runServiceImport({
   config,
   rows,
   createdBy,
-  onProgress
+  onProgress,
+  dryRun = false,
+  sampleLimit = 25
 }: RunServiceImportOptions): Promise<ServiceImportSummary> {
   const user = await loadUser(createdBy)
   const skipped: Record<string, number> = {}
-  const skip = (reason: string) => {
+  const samples: ServiceImportSamples = { creates: [], updates: [], skipped_rows: [], would_create_lookups: [] }
+  const skip = (reason: string, row?: number, key?: string | null) => {
     skipped[reason] = (skipped[reason] ?? 0) + 1
+    if (dryRun && row != null && samples.skipped_rows.length < sampleLimit)
+      samples.skipped_rows.push({ row, key: key ?? null, reason })
   }
 
   // ── lookups, one batched resolve per configured lookup column ─────────────
@@ -238,7 +269,13 @@ export async function runServiceImport({
       if (v) values.add(v)
     }
     const map = await resolveLookup(cc.lookup, values)
-    if (cc.lookup.on_missing === 'create' && cc.lookup.match_field && !cc.lookup.match_label) {
+    if (dryRun && cc.lookup.on_missing === 'create' && cc.lookup.match_field && !cc.lookup.match_label) {
+      const missing = [...values].filter((v) => !map.has(v.toLowerCase()))
+      if (missing.length)
+        samples.would_create_lookups.push({ column: col, collection: cc.lookup.collection, values: missing.slice(0, sampleLimit) })
+      // Pretend they exist so the rows classify as creates rather than drops.
+      for (const v of missing) map.set(v.toLowerCase(), `(new ${cc.lookup.collection})`)
+    } else if (cc.lookup.on_missing === 'create' && cc.lookup.match_field && !cc.lookup.match_label) {
       // Stub-create unmatched values through the items service so the rows
       // are revisioned/attributed like any other write.
       let stubbed = 0
@@ -269,7 +306,9 @@ export async function runServiceImport({
 
   // ── transform file rows → target payloads ─────────────────────────────────
   const payloads: Array<Record<string, unknown>> = []
-  for (const r of rows) {
+  const rowIndexOf = new Map<Record<string, unknown>, number>()
+  for (const [ri, r] of rows.entries()) {
+    const rowNo = ri + 1
     const out: Record<string, unknown> = {}
     let drop: string | null = null
     for (const [col, cc] of Object.entries(config.columns)) {
@@ -290,7 +329,7 @@ export async function runServiceImport({
           // means the create itself failed; both modes degrade to null.
           if (om) {
             out[cc.field] = null
-            skip(`no ${cc.lookup.collection} match for ${col} (left empty)`)
+            skip(`no ${cc.lookup.collection} match for ${col} (left empty)`, rowNo)
             continue
           }
           drop = `no ${cc.lookup.collection} match for ${col}`
@@ -318,8 +357,11 @@ export async function runServiceImport({
         }
       }
     }
-    if (drop) skip(drop)
-    else payloads.push(out)
+    if (drop) skip(drop, rowNo, config.match_by.length ? config.match_by.map((f) => String(out[f] ?? '')).join('|') : null)
+    else {
+      payloads.push(out)
+      rowIndexOf.set(out, rowNo)
+    }
   }
 
   // ── dedupe: last file row per natural key wins (the procs' ROW_NUMBER) ────
@@ -334,7 +376,8 @@ export async function runServiceImport({
   } else {
     for (const p of payloads) {
       const k = keyOf(p)
-      if (byKey.has(k)) skip('duplicate key in file')
+      // Last file row per key wins — the EARLIER row is the one dropped.
+      if (byKey.has(k)) skip('duplicate key in file (a later row wins)', rowIndexOf.get(byKey.get(k) as Record<string, unknown>), k)
       byKey.set(k, p)
     }
   }
@@ -369,15 +412,19 @@ export async function runServiceImport({
     const existing = existingByKey.get(k)
     try {
       if (!existing && config.update_only) {
-        skip(`no existing ${config.collection} match (update-only import)`)
+        skip(`no existing ${config.collection} match (update-only import)`, rowIndexOf.get(payload), k)
         continue
       }
       if (!existing) {
         const body = { ...payload }
         if (config.timestamps?.create) body[config.timestamps.create] = now
-        await createOne(user, config.collection, body, undefined, undefined, {
-          skipRollupRecalc: false
-        })
+        if (dryRun) {
+          if (samples.creates.length < sampleLimit) samples.creates.push({ key: k, values: payload })
+        } else {
+          await createOne(user, config.collection, body, undefined, undefined, {
+            skipRollupRecalc: false
+          })
+        }
         created++
       } else {
         const patch: Record<string, unknown> = {}
@@ -388,8 +435,13 @@ export async function runServiceImport({
         if (Object.keys(patch).length === 0) {
           unchanged++
         } else {
-          if (config.timestamps?.update) patch[config.timestamps.update] = now
-          await updateOne(user, config.collection, String(existing.id), patch)
+          if (dryRun) {
+            if (samples.updates.length < sampleLimit)
+              samples.updates.push({ key: k, id: existing.id, changes: Object.keys(patch).map((f) => ({ field: f, from: existing[f], to: payload[f] })) })
+          } else {
+            if (config.timestamps?.update) patch[config.timestamps.update] = now
+            await updateOne(user, config.collection, String(existing.id), patch)
+          }
           updated++
         }
       }
@@ -420,6 +472,7 @@ export async function runServiceImport({
     unchanged,
     skipped,
     failed,
-    log: [parts.join(', '), ...detail].join('\n')
+    log: [parts.join(', '), ...detail].join('\n'),
+    ...(dryRun ? { samples } : {})
   }
 }

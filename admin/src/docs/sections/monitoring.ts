@@ -148,6 +148,10 @@ export const dataImportGuide: DocSection = {
       text: "The New import dialog previews the file BEFORE queueing, using the worker's own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file's columns against the staging table, warning about columns the table does not have and columns it expects but the file omits."
     },
     {
+      type: 'p',
+      text: 'Service-mode definitions (rows written through the items service instead of a staging table + procedure) go one step further: the preview is a DRY RUN of the real importer — the same lookups, header mapping, natural-key dedupe and field diff, with nothing written — and reports what a run would do: how many rows would be created, how many existing rows would change (field by field, old → new), how many are unchanged, and every skipped row with the rule that dropped it ("row 12 · no cifa_items match for cifa", "row 40 · duplicate key in file (a later row wins)"). Lookup values a real run would stub-create are listed too. Click a count to see the rows behind it.'
+    },
+    {
       type: 'note',
       text: 'The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.'
     },

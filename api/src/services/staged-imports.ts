@@ -489,6 +489,27 @@ async function loadChunked(
   }
 }
 
+/** File rows → declared staging columns, the way the worker maps them: header
+ *  matching is punctuation-tolerant and only declared columns survive. No
+ *  declared schema = rows pass through untouched. */
+export function mapRowsToDeclared(
+  definition: ImportDefinition,
+  rows: Array<Record<string, string>>
+): Array<Record<string, string>> {
+  const declared = parseStagingColumns(definition.staging_columns)
+  if (!declared) return rows
+  const columns = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((c) => c !== 'id')
+  const { headerFor } = resolveHeaderMap(columns, declared)
+  return rows.map((r) => {
+    const o: Record<string, string> = {}
+    for (const col of declared) {
+      const h = headerFor.get(col.name)
+      o[col.name] = h ? (r[h] ?? '') : ''
+    }
+    return o
+  })
+}
+
 export interface RunImportOptions {
   definition: ImportDefinition
   buffer: Buffer

@@ -23,7 +23,7 @@ import {
   DialogTitle
 } from '../ui/dialog'
 import { Input } from '../ui/input'
-import { type ImportDefinition, type ImportPreview, definitionTitle } from './types'
+import { type ImportDefinition, type ImportDryRun, type ImportPreview, definitionTitle } from './types'
 
 /**
  * Upload transport.
@@ -426,7 +426,9 @@ export function NewImportDialog({
                         ))}
                       </div>
                     )}
-                    {previewData.validation &&
+                    {previewData.dry_run && <DryRunSummary run={previewData.dry_run} />}
+                    {!previewData.dry_run &&
+                      previewData.validation &&
                       (previewData.validation.stats.new_rows != null ||
                         previewData.validation.stats.existing_rows != null) && (
                         <p className='text-[12px] text-slate-600 dark:text-muted-foreground'>
@@ -588,5 +590,104 @@ export function NewImportDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+const fmtVal = (v: unknown) => (v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+
+/** What a service-mode run would do — the same code path as the worker with
+ *  nothing written. Every skipped row says which rule dropped it. */
+function DryRunSummary({ run }: { run: ImportDryRun }) {
+  const [open, setOpen] = useState<'skipped' | 'updates' | 'creates' | null>(null)
+  const skippedTotal = Object.values(run.skipped).reduce((a, b) => a + b, 0)
+  const s = run.samples
+  const toggle = (k: 'skipped' | 'updates' | 'creates') => setOpen((v) => (v === k ? null : k))
+  const chip = (k: 'skipped' | 'updates' | 'creates', n: number, label: string, cls: string) => (
+    <button
+      type='button'
+      data-import-dry-run-chip={k}
+      aria-pressed={open === k}
+      disabled={n === 0}
+      onClick={() => toggle(k)}
+      className={cn(
+        'rounded-full border px-2 py-px text-[11px] tabular-nums disabled:cursor-default',
+        open === k ? 'border-nvr-cyan bg-nvr-cyan/10' : 'border-transparent hover:bg-muted',
+        cls
+      )}
+    >
+      <b className='font-semibold'>{formatNumber(n)}</b> {label}
+    </button>
+  )
+  return (
+    <div data-import-dry-run className='space-y-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-border dark:bg-muted/40'>
+      <p className='text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+        Dry run — nothing written yet
+      </p>
+      {run.failed > 0 && run.created + run.updated + run.unchanged === 0 ? (
+        <p className='text-[11.5px] text-red-700 dark:text-red-300'>{run.log}</p>
+      ) : (
+        <div className='flex flex-wrap items-center gap-1'>
+          {chip('creates', run.created, 'would be created', 'text-emerald-700 dark:text-emerald-400')}
+          {chip('updates', run.updated, 'would change', 'text-sky-700 dark:text-sky-300')}
+          <span className='rounded-full px-2 py-px text-[11px] tabular-nums text-slate-600 dark:text-slate-300'>
+            <b className='font-semibold'>{formatNumber(run.unchanged)}</b> unchanged
+          </span>
+          {chip('skipped', skippedTotal, 'skipped', 'text-amber-700 dark:text-amber-300')}
+        </div>
+      )}
+      {open === 'skipped' && s && (
+        <ul data-import-dry-run-skipped className='max-h-40 space-y-0.5 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'>
+          {s.skipped_rows.map((r) => (
+            <li key={`${r.row}-${r.reason}`}>
+              <span className='font-mono text-[10.5px] text-slate-400'>row {r.row}</span>
+              {r.key && <span className='ml-1 font-mono text-[10.5px] text-slate-500'>{r.key}</span>}
+              <span className='ml-1.5'>{r.reason}</span>
+            </li>
+          ))}
+          {skippedTotal > s.skipped_rows.length && (
+            <li className='text-slate-400'>… {formatNumber(skippedTotal - s.skipped_rows.length)} more</li>
+          )}
+        </ul>
+      )}
+      {open === 'updates' && s && (
+        <ul data-import-dry-run-updates className='max-h-40 space-y-1 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'>
+          {s.updates.map((u) => (
+            <li key={u.key}>
+              <span className='font-mono text-[10.5px] text-slate-500'>{u.key}</span>
+              <span className='ml-1.5'>
+                {u.changes.map((c) => (
+                  <span key={c.field} className='mr-2'>
+                    {c.field}: <span className='text-slate-400 line-through'>{fmtVal(c.from)}</span> → {fmtVal(c.to)}
+                  </span>
+                ))}
+              </span>
+            </li>
+          ))}
+          {run.updated > s.updates.length && <li className='text-slate-400'>… {formatNumber(run.updated - s.updates.length)} more</li>}
+        </ul>
+      )}
+      {open === 'creates' && s && (
+        <ul data-import-dry-run-creates className='max-h-40 space-y-0.5 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'>
+          {s.creates.map((c) => (
+            <li key={c.key} className='truncate'>
+              <span className='font-mono text-[10.5px] text-slate-500'>{c.key}</span>
+              <span className='ml-1.5 text-slate-500'>
+                {Object.entries(c.values)
+                  .slice(0, 6)
+                  .map(([k, v]) => `${k}=${fmtVal(v)}`)
+                  .join(' · ')}
+              </span>
+            </li>
+          ))}
+          {run.created > s.creates.length && <li className='text-slate-400'>… {formatNumber(run.created - s.creates.length)} more</li>}
+        </ul>
+      )}
+      {s && s.would_create_lookups.length > 0 && (
+        <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+          New lookup rows a real run creates:{' '}
+          {s.would_create_lookups.map((l) => `${l.values.length} ${l.collection} from ${l.column}`).join(' · ')}
+        </p>
+      )}
+    </div>
   )
 }

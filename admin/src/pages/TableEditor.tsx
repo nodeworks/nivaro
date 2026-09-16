@@ -152,7 +152,7 @@ import {
   type RelationType,
   schemaApi
 } from '@/lib/schema-api'
-import { cn, resolveCollectionIcon, titleCase } from '@/lib/utils'
+import { cn, formatRelative, resolveCollectionIcon, titleCase } from '@/lib/utils'
 import { TreeSection } from '@/pages/DataModel'
 import { FieldRulesSection } from '@/pages/FieldRulesSection'
 import { ImportTemplatesSection } from '@/pages/ImportTemplatesSection'
@@ -4604,6 +4604,7 @@ function SettingsTab({
       <CustomActionsSection tableName={tableName} />
       <BulkActionsSection tableName={tableName} />
       <DeleteGuardSection tableName={tableName} />
+      <SyntheticRecordsSection tableName={tableName} />
       <UpsertKeysSection tableName={tableName} />
       <SnapshotsSection tableName={tableName} />
       <DependencyMapSection tableName={tableName} />
@@ -5660,6 +5661,163 @@ function UpsertKeysSection({ tableName }: { tableName: string }) {
             Save keys
           </Button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** Synthetic records (#72): test rows built from the collection's own field
+ *  metadata, written through the items service, traceable and deletable per
+ *  batch via the `synthetic:<batch>` change reason. */
+function SyntheticRecordsSection({ tableName }: { tableName: string }) {
+  const qc = useQueryClient()
+  const [count, setCount] = useState('10')
+  const [confirmBatch, setConfirmBatch] = useState<string | null>(null)
+  const [showPlan, setShowPlan] = useState(false)
+  const { data } = useQuery({
+    queryKey: ['synthetic-records', tableName],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            plan: {
+              fields: Array<{ field: string; strategy: string }>
+              skipped: Array<{ field: string; reason: string }>
+            }
+            batches: Array<{ batch: string; count: number; first_at: string | null; by: string | null }>
+          }
+        }>(`/data-model/${tableName}/synthetic`)
+        .then((r) => r.data.data),
+    enabled: !!tableName
+  })
+  const gen = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { batch: string; created: number; requested: number; failed: Array<{ index: number; error: string }> } }>(
+          `/data-model/${tableName}/synthetic`,
+          { count: Number(count) }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (r) => {
+      if (r.created === 0)
+        toast.error(`Nothing created — ${r.failed[0]?.error ?? 'every row failed'}`)
+      else
+        toast.success(
+          `Batch ${r.batch}: ${r.created} of ${r.requested} created${r.failed.length ? ` — first failure: ${r.failed[0].error}` : ''}`
+        )
+      qc.invalidateQueries({ queryKey: ['synthetic-records', tableName] })
+    },
+    onError: (e: Error & { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? e.message ?? 'Generate failed')
+  })
+  const del = useMutation({
+    mutationFn: (batch: string) =>
+      api
+        .delete<{ data: { deleted: number; failed: number; missing: number } }>(
+          `/data-model/${tableName}/synthetic/${batch}`
+        )
+        .then((r) => r.data.data),
+    onSuccess: (r) => {
+      toast.success(`${r.deleted} deleted to trash${r.failed ? `, ${r.failed} failed` : ''}`)
+      setConfirmBatch(null)
+      qc.invalidateQueries({ queryKey: ['synthetic-records', tableName] })
+    },
+    onError: (e: Error & { response?: { data?: { error?: string } } }) =>
+      toast.error(e.response?.data?.error ?? e.message ?? 'Delete failed')
+  })
+  const plan = data?.plan
+  return (
+    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white' data-synthetic-records>
+      <div className='border-b border-slate-100 px-4 py-3'>
+        <p className='text-[13px] font-semibold text-slate-800'>Synthetic records</p>
+        <p className='mt-0.5 text-[11.5px] text-slate-500'>
+          Test rows built from this collection&apos;s field types, choices, relations and
+          validation rules — written like any other record (rules, auto-ids and revisions apply),
+          each stamped with the change reason <code className='text-[10.5px]'>synthetic:&lt;batch&gt;</code>{' '}
+          so a whole batch can be sent to the trash later. For staging, not production data.
+        </p>
+      </div>
+      <div className='space-y-3 px-4 py-3'>
+        <div className='flex items-center gap-2'>
+          <Input
+            type='number'
+            min={1}
+            max={200}
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+            className='h-8 w-24 text-[12px]'
+            aria-label='How many records'
+          />
+          <Button
+            size='sm'
+            className='h-8 bg-nvr-cyan text-[12px] text-white'
+            disabled={gen.isPending || !plan || plan.fields.length === 0}
+            onClick={() => gen.mutate()}
+            data-synthetic-generate
+          >
+            {gen.isPending ? 'Generating…' : 'Generate'}
+          </Button>
+          {plan && (
+            <button
+              type='button'
+              onClick={() => setShowPlan((v) => !v)}
+              className='text-[11.5px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-800'
+            >
+              {plan.fields.length} fields filled · {plan.skipped.length} skipped
+            </button>
+          )}
+        </div>
+        {showPlan && plan && (
+          <div className='grid gap-x-4 gap-y-0.5 text-[11.5px] sm:grid-cols-2' data-synthetic-plan>
+            {plan.fields.map((f) => (
+              <p key={f.field} className='truncate text-slate-700'>
+                <code className='text-[10.5px]'>{f.field}</code>{' '}
+                <span className='text-slate-500'>{f.strategy}</span>
+              </p>
+            ))}
+            {plan.skipped.map((f) => (
+              <p key={f.field} className='truncate text-slate-400'>
+                <code className='text-[10.5px]'>{f.field}</code> <span>{f.reason}</span>
+              </p>
+            ))}
+          </div>
+        )}
+        {data && data.batches.length > 0 && (
+          <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
+            {data.batches.map((b) => (
+              <div key={b.batch} className='flex items-center gap-3 px-3 py-1.5 text-[12px]' data-synthetic-batch={b.batch}>
+                <code className='text-[11px] text-slate-700'>{b.batch}</code>
+                <span className='tabular-nums text-slate-600'>{b.count} rows</span>
+                <span className='text-slate-400'>
+                  {b.first_at ? formatRelative(b.first_at) : ''}
+                  {b.by ? ` · ${b.by}` : ''}
+                </span>
+                <span className='flex-1' />
+                {confirmBatch === b.batch ? (
+                  <>
+                    <Button
+                      size='sm'
+                      variant='destructive'
+                      className='h-6 text-[11px]'
+                      disabled={del.isPending}
+                      onClick={() => del.mutate(b.batch)}
+                      data-synthetic-delete-confirm
+                    >
+                      Send {b.count} to trash
+                    </Button>
+                    <Button size='sm' variant='ghost' className='h-6 text-[11px]' onClick={() => setConfirmBatch(null)}>
+                      Keep
+                    </Button>
+                  </>
+                ) : (
+                  <Button size='sm' variant='outline' className='h-6 text-[11px]' onClick={() => setConfirmBatch(b.batch)} data-synthetic-delete>
+                    Delete batch
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
