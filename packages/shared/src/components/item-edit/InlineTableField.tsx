@@ -15,6 +15,7 @@ import {
   SquarePen,
   X
 } from 'lucide-react'
+import type React from 'react'
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -137,6 +138,21 @@ import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
+import {
+  CompareCell,
+  type CompareProposal,
+  CompareProposalBanner,
+  type CompareSeriesConfig,
+  CompareStripChips,
+  compareColumnClosed,
+  compareColumnSum,
+  compareRowFor,
+  fmtMoney,
+  GridStatChip,
+  ReconcileAction,
+  resolveCompareEndpoint,
+  useCompareSeries
+} from './CompareSeries'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import { GridBulkEditDialog } from './GridBulkEditDialog'
 import {
@@ -155,21 +171,6 @@ import {
   useStagedRelations
 } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
-import {
-  CompareCell,
-  type CompareProposal,
-  CompareProposalBanner,
-  type CompareSeriesConfig,
-  CompareStripChips,
-  compareColumnClosed,
-  compareColumnSum,
-  compareRowFor,
-  fmtMoney,
-  GridStatChip,
-  ReconcileAction,
-  resolveCompareEndpoint,
-  useCompareSeries
-} from './CompareSeries'
 import { RowCommentButton, useRowCommentCounts } from './RowComments'
 import {
   parseImportStamp,
@@ -355,7 +356,12 @@ export type SpreadPreset = 'even' | 'front' | 'back' | 'shape'
 
 /** `amount` over `n` slots by shape, cent-rounded with the dust on the last
  *  slot. `shape` weights drive 'shape' (an all-zero shape falls back to even). */
-export function spreadAmounts(amount: number, n: number, preset: SpreadPreset, shape?: number[]): number[] {
+export function spreadAmounts(
+  amount: number,
+  n: number,
+  preset: SpreadPreset,
+  shape?: number[]
+): number[] {
   if (n <= 0) return []
   let w: number[]
   if (preset === 'front') w = Array.from({ length: n }, (_, i) => n - i)
@@ -1905,6 +1911,41 @@ export function InlineTableField({
   // now (window event — the record-presence hook relays it into the record
   // room as a `row:<collection>:<id>` focus, and marks the same row for
   // co-viewers). Pending/new rows have no shared identity yet.
+  // #69 — shared cursors: a cell wrapper is tagged `<collection>:<row>:<field>`
+  // and its focus/blur rides window `nvr:cell-editing` for the presence host
+  // to relay as a `cell:` field, which marks the same cell on co-editors'
+  // screens (admin use-record-presence + globals.css).
+  const cellKey = (rowId: string | undefined, field: string) =>
+    rowId && rowId !== 'new' && !rowId.startsWith('pending:')
+      ? `${relatedCollection}:${rowId}:${field}`
+      : undefined
+  const cellFocusRef = useRef<string | null>(null)
+  const emitCell = (cell: string | null, state: 'start' | 'end') => {
+    if (!cell || typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent('nvr:cell-editing', { detail: { cell, state } }))
+  }
+  const onCellFocusCapture = (e: React.FocusEvent) => {
+    const cell =
+      (e.target as HTMLElement | null)
+        ?.closest?.('[data-grid-cell]')
+        ?.getAttribute('data-grid-cell') ?? null
+    if (cell === cellFocusRef.current) return
+    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
+    cellFocusRef.current = cell
+    if (cell) emitCell(cell, 'start')
+  }
+  const onCellBlurCapture = (e: React.FocusEvent) => {
+    const next = (e.relatedTarget as HTMLElement | null)?.closest?.('[data-grid-cell]')
+    if (next) return
+    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
+    cellFocusRef.current = null
+  }
+  useEffect(
+    () => () => {
+      if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
+    },
+    []
+  )
   const lastEditingRowRef = useRef<string | null>(null)
   useEffect(() => {
     const id = editState?.rowId
@@ -2465,7 +2506,9 @@ export function InlineTableField({
   // view's proposed rows. A brand-new parent's staged rows have no id and
   // resolve nothing, which is why the query keys on the id list rather than
   // on `isNew`.
-  const pendingIdsKey = pendingRows.map((r) => String((r as Record<string, unknown>).id ?? '')).join(',')
+  const pendingIdsKey = pendingRows
+    .map((r) => String((r as Record<string, unknown>).id ?? ''))
+    .join(',')
   const resolvePathIds = useMemo(() => {
     const ids = new Set<string>()
     const add = (v: unknown) => {
@@ -2802,7 +2845,8 @@ export function InlineTableField({
     (path: string): unknown => {
       // An unset parent figure (a rollup with no rows yet) reads as 0, not
       // '—': "PO amount $0" is the honest strip for a workflow with no PO.
-      if (path.startsWith('$parent.')) return parentDraftForStats?.[path.slice('$parent.'.length)] ?? 0
+      if (path.startsWith('$parent.'))
+        return parentDraftForStats?.[path.slice('$parent.'.length)] ?? 0
       if (path.startsWith('$sum.')) {
         const col = path.slice('$sum.'.length)
         return rowsForRollup.reduce((a, r) => a + (Number(r[col]) || 0), 0)
@@ -2859,15 +2903,26 @@ export function InlineTableField({
       if (rowId.startsWith('pending:')) {
         const idx = Number(rowId.slice('pending:'.length))
         const cur = pendingRows[idx]
-        if (cur && staging) staging.updateRow(relatedCollection, manyField, idx, applyComputedFields({ ...cur, ...patchValues }))
+        if (cur && staging)
+          staging.updateRow(
+            relatedCollection,
+            manyField,
+            idx,
+            applyComputedFields({ ...cur, ...patchValues })
+          )
         return
       }
       if (isPendingMode && staging) {
-        staging.queueEdit(relatedCollection, manyField, rowId, { ...patchValues, _change_reason: reason })
+        staging.queueEdit(relatedCollection, manyField, rowId, {
+          ...patchValues,
+          _change_reason: reason
+        })
         return
       }
       try {
-        await client.request(patch(`/items/${relatedCollection}/${rowId}`, { ...patchValues, _change_reason: reason }))
+        await client.request(
+          patch(`/items/${relatedCollection}/${rowId}`, { ...patchValues, _change_reason: reason })
+        )
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } catch (err) {
         toast.error(`Could not save: ${(err as Error)?.message ?? 'unknown error'}`)
@@ -2944,11 +2999,24 @@ export function InlineTableField({
             withNextOrder(applyComputedFields({ [key]: pr.key, ...values, _change_reason: reason }))
           )
       }
-      toast.success(touched ? `${p.label}: staged on ${touched} ${touched === 1 ? 'row' : 'rows'} — save to keep it` : 'Nothing to apply — every suggested cell is already filled or closed')
+      toast.success(
+        touched
+          ? `${p.label}: staged on ${touched} ${touched === 1 ? 'row' : 'rows'} — save to keep it`
+          : 'Nothing to apply — every suggested cell is already filled or closed'
+      )
       dismissProposal(p, false)
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [compareData, rows, pendingRows, staging, relatedCollection, manyField, stageAdjust, dismissProposal]
+    [
+      compareData,
+      rows,
+      pendingRows,
+      staging,
+      relatedCollection,
+      manyField,
+      stageAdjust,
+      dismissProposal
+    ]
   )
   /** Grid-level spread: "Left to forecast" over every row's empty, open
    *  targets in row order (rows by the series key when one exists). */
@@ -2956,7 +3024,8 @@ export function InlineTableField({
     (preset: SpreadPreset) => {
       if (!spreadRemaining?.fields?.length) return
       const remaining = evaluateNumeric(spreadRemaining.remaining, resolveGridToken)
-      const amount = remaining == null || !Number.isFinite(remaining) ? 0 : Math.round(remaining * 100) / 100
+      const amount =
+        remaining == null || !Number.isFinite(remaining) ? 0 : Math.round(remaining * 100) / 100
       if (amount <= 0) return
       const onlyEmpty = spreadRemaining.only_empty !== false
       const isBlank = (v: unknown) => v == null || v === '' || Number(v) === 0
@@ -2976,7 +3045,8 @@ export function InlineTableField({
       for (const e of entries) {
         for (const f of spreadRemaining.fields) {
           if (onlyEmpty && !isBlank(e.row[f])) continue
-          if (compareData && compareColumnClosed(compareData, e.row[compareData.key_field], f)) continue
+          if (compareData && compareColumnClosed(compareData, e.row[compareData.key_field], f))
+            continue
           slots.push({ id: e.id, field: f })
           shape.push(0)
         }
@@ -2985,18 +3055,40 @@ export function InlineTableField({
         toast.message('Nothing to spread into — every target is filled or closed')
         return
       }
-      const amounts = spreadAmounts(amount, slots.length, preset === 'shape' ? 'even' : preset, shape)
+      const amounts = spreadAmounts(
+        amount,
+        slots.length,
+        preset === 'shape' ? 'even' : preset,
+        shape
+      )
       const perRow = new Map<string, Record<string, number>>()
       slots.forEach((s, i) => {
         const cur = perRow.get(s.id) ?? {}
         cur[s.field] = amounts[i]
         perRow.set(s.id, cur)
       })
-      for (const [id, values] of perRow) void stageAdjust(id, values, `${spreadRemaining.label ?? 'Spread remaining'} across ${perRow.size} rows`)
-      toast.success(`Spread ${fmtMoney(amount)} over ${slots.length} cells on ${perRow.size} ${perRow.size === 1 ? 'row' : 'rows'}`)
+      for (const [id, values] of perRow)
+        void stageAdjust(
+          id,
+          values,
+          `${spreadRemaining.label ?? 'Spread remaining'} across ${perRow.size} rows`
+        )
+      toast.success(
+        `Spread ${fmtMoney(amount)} over ${slots.length} cells on ${perRow.size} ${perRow.size === 1 ? 'row' : 'rows'}`
+      )
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [spreadRemaining, resolveGridToken, staging, relatedCollection, manyField, compareData, rows, pendingRows, stageAdjust]
+    [
+      spreadRemaining,
+      resolveGridToken,
+      staging,
+      relatedCollection,
+      manyField,
+      compareData,
+      rows,
+      pendingRows,
+      stageAdjust
+    ]
   )
 
   const reportLiveRows = liveRows?.report
@@ -3829,6 +3921,98 @@ export function InlineTableField({
   }
   // Who changed them, when the grid already knows (cell provenance is only
   // fetched for revision-enabled grids): the newest delta per changed row.
+  // #16 — someone else changed the row THIS editor has open: fields whose
+  // fresh value differs from the snapshot taken at open (own writes and the
+  // fields the user already set to the same value excluded).
+  const editBaseRef = useRef<{ rowId: string; snap: Record<string, unknown> } | null>(null)
+  const [remoteDismissed, setRemoteDismissed] = useState<Record<string, unknown>>({})
+  const remoteRowChanges = useMemo(() => {
+    const base = editBaseRef.current
+    const id = editState?.rowId
+    if (!base || !id || base.rowId !== id || id === 'new' || id.startsWith('pending:')) return []
+    const fresh = rawRows.find((r) => String(r.id) === id)
+    if (!fresh || wroteRecently(id, Date.now())) return []
+    const snap = snapshotRow(fresh)
+    const out: Array<{ field: string; label: string; theirs: unknown; was: unknown }> = []
+    for (const k of Object.keys(snap)) {
+      if (String(snap[k] ?? '') === String(base.snap[k] ?? '')) continue
+      if (String(remoteDismissed[k] ?? '\u0000') === String(snap[k] ?? '')) continue
+      if (String(editState?.draft[k] ?? '') === String(snap[k] ?? '')) continue
+      const col = cols.find((c) => c.field === k)
+      // A write-computed column follows its inputs (amount = price × qty);
+      // listing it would double the same change.
+      if (col?.computed_type === 'write' && col.computed_formula) continue
+      out.push({ field: k, label: col?.label || titleCase(k), theirs: snap[k], was: base.snap[k] })
+    }
+    return out
+    // biome-ignore lint/correctness/useExhaustiveDependencies: editState.draft is read for the "already equal" check; rawRows is the trigger
+  }, [rawRows, editState?.rowId, editState?.draft, remoteDismissed, snapshotRow, cols])
+  const renderRemoteRowStrip = (rowId: string | undefined) => {
+    if (!rowId || remoteRowChanges.length === 0 || editState?.rowId !== rowId) return null
+    const fmt = (v: unknown) => (v == null || v === '' ? '∅' : String(v).slice(0, 40))
+    const takeTheirs = (only?: string) => {
+      const next: Record<string, unknown> = { ...remoteDismissed }
+      // One batched draft write — setDraftField reads the draft from a ref,
+      // so two calls in a row would build the second from the stale first.
+      const patch: Record<string, unknown> = {}
+      for (const c of remoteRowChanges) {
+        if (only && c.field !== only) continue
+        patch[c.field] = c.theirs
+        next[c.field] = c.theirs
+        if (editBaseRef.current) editBaseRef.current.snap[c.field] = c.theirs
+      }
+      setDraftFields(patch)
+      setRemoteDismissed(next)
+    }
+    const keepMine = () => {
+      const next: Record<string, unknown> = { ...remoteDismissed }
+      for (const c of remoteRowChanges) {
+        next[c.field] = c.theirs
+        if (editBaseRef.current) editBaseRef.current.snap[c.field] = c.theirs
+      }
+      setRemoteDismissed(next)
+    }
+    return (
+      <div
+        data-row-remote-change=''
+        role='status'
+        className='mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-[11.5px] text-sky-900 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-100'
+      >
+        <span className='min-w-0 flex-1'>
+          Changed by others while you edit:{' '}
+          {remoteRowChanges.map((c, i) => (
+            <span key={c.field} data-row-remote-field={c.field}>
+              {i > 0 && ' · '}
+              <span className='font-medium'>{c.label}</span> {fmt(c.was)} → {fmt(c.theirs)}
+              <button
+                type='button'
+                onClick={() => takeTheirs(c.field)}
+                className='ml-1 rounded border border-sky-300 px-1 text-[10px] hover:bg-sky-100 dark:border-sky-500/40 dark:hover:bg-sky-500/15'
+              >
+                take
+              </button>
+            </span>
+          ))}
+        </span>
+        <button
+          type='button'
+          onClick={() => takeTheirs()}
+          data-row-remote-take
+          className='rounded-md bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-sky-700'
+        >
+          Take theirs
+        </button>
+        <button
+          type='button'
+          onClick={keepMine}
+          data-row-remote-keep
+          className='rounded-md border border-sky-300 px-2 py-0.5 text-[11px] font-medium hover:bg-sky-100 dark:border-sky-500/40 dark:hover:bg-sky-500/15'
+        >
+          Keep mine
+        </button>
+      </div>
+    )
+  }
   const sinceOpenedWho = useMemo(() => {
     if (!sinceOpened) return []
     const names = new Set<string>()
@@ -4650,6 +4834,9 @@ export function InlineTableField({
     }
     if (rowSoftLock) setRowSoftLock(null)
     const draft = applyComputedFields({ ...row })
+    // #16 — remember what the row held when its editor opened, so a write by
+    // someone else while it is open shows up as a per-field ghost.
+    editBaseRef.current = { rowId: id, snap: snapshotRow(row) }
     setEditState({ rowId: id, draft, locksPending: lockTargets.size > 0 })
     refreshRuleState(id, draft)
   }
@@ -5028,17 +5215,27 @@ export function InlineTableField({
               return a + (Number(applyComputedFields(merged as Record<string, unknown>)[col]) || 0)
             }, 0) +
           pendingRows.reduce(
-            (a, r, i) => (i === pendingIdx ? a : a + (Number(applyComputedFields(r as Record<string, unknown>)[col]) || 0)),
+            (a, r, i) =>
+              i === pendingIdx
+                ? a
+                : a + (Number(applyComputedFields(r as Record<string, unknown>)[col]) || 0),
             0
           )
         const storedThis = isSaved
           ? (() => {
-              const r = (rows ?? []).find((x) => String(x.id) === editState.rowId) as Record<string, unknown>
-              const merged = pendingEdits.has(editState.rowId) ? { ...r, ...pendingEdits.get(editState.rowId) } : r
+              const r = (rows ?? []).find((x) => String(x.id) === editState.rowId) as Record<
+                string,
+                unknown
+              >
+              const merged = pendingEdits.has(editState.rowId)
+                ? { ...r, ...pendingEdits.get(editState.rowId) }
+                : r
               return Number(applyComputedFields(merged)[col]) || 0
             })()
           : pendingIdx >= 0
-            ? Number(applyComputedFields(pendingRows[pendingIdx] as Record<string, unknown>)[col]) || 0
+            ? Number(
+                applyComputedFields(pendingRows[pendingIdx] as Record<string, unknown>)[col]
+              ) || 0
             : 0
         const before = others + storedThis
         const sum = others + (Number(draftComputed[col]) || 0)
@@ -6417,6 +6614,7 @@ export function InlineTableField({
           })()
         )
       })()}
+      {renderRemoteRowStrip(args.rowId)}
       <div
         className='grid items-start gap-x-4 gap-y-3'
         style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}
@@ -6450,6 +6648,7 @@ export function InlineTableField({
             return (
               <div
                 key={c.field}
+                data-grid-cell={cellKey(args.rowId, c.field)}
                 className={cn(
                   'flex min-w-0 flex-col gap-1',
                   isMissing &&
@@ -6512,7 +6711,9 @@ export function InlineTableField({
                   closedLockedCell(c.field, args.draft) ? (
                   <div
                     className='text-[12px] text-slate-500'
-                    data-compare-locked={closedLockedCell(c.field, args.draft) ? c.field : undefined}
+                    data-compare-locked={
+                      closedLockedCell(c.field, args.draft) ? c.field : undefined
+                    }
                     data-tip={
                       editState?.locks?.includes(c.field)
                         ? lockReasonText(c.field)
@@ -6747,7 +6948,12 @@ export function InlineTableField({
     // Advertises which child collection this grid holds, so the summary can
     // jump to it by collection rather than by field name (the two differ for
     // relations that never got an alias field on the layout).
-    <div className='space-y-1.5' data-o2m-collection={relatedCollection}>
+    <div
+      className='space-y-1.5'
+      data-o2m-collection={relatedCollection}
+      onFocusCapture={onCellFocusCapture}
+      onBlurCapture={onCellBlurCapture}
+    >
       <ChangeReasonDialog
         challenge={crChallenge?.challenge ?? null}
         onCancel={() => setCrChallenge(null)}
@@ -7291,7 +7497,11 @@ export function InlineTableField({
         </div>
       )}
       {!readOnly && visibleProposals.length > 0 && (
-        <CompareProposalBanner proposals={visibleProposals} onApply={applyProposal} onDismiss={(p) => dismissProposal(p, true)} />
+        <CompareProposalBanner
+          proposals={visibleProposals}
+          onApply={applyProposal}
+          onDismiss={(p) => dismissProposal(p, true)}
+        />
       )}
       {((gridStatValues && gridStatValues.length > 0) ||
         (compareSeries && !isNew && (compareData || compareLoading || compareError))) && (
@@ -7756,6 +7966,7 @@ export function InlineTableField({
                                           ? lockReasonText(c.field)
                                           : undefined
                                       }
+                                      data-grid-cell={inlineEdit ? cellKey(id, c.field) : undefined}
                                     >
                                       <FieldRenderer
                                         field={
@@ -7931,6 +8142,13 @@ export function InlineTableField({
                       <tr data-row-soft-lock-row=''>
                         <td colSpan={nestedColSpan} className='p-0'>
                           {renderRowSoftLockStrip(rowSoftLock, 'row')}
+                        </td>
+                      </tr>
+                    )}
+                    {isEditing && rowEditorMode === 'inline' && remoteRowChanges.length > 0 && (
+                      <tr data-row-remote-change-row=''>
+                        <td colSpan={nestedColSpan} className='px-2 pt-2'>
+                          {renderRemoteRowStrip(id)}
                         </td>
                       </tr>
                     )}
@@ -8341,7 +8559,9 @@ export function InlineTableField({
                           )}
                         >
                           {compareData.columns.includes(c.field) && (
-                            <div className='py-0.5 text-[12px] text-slate-300 dark:text-slate-600'>—</div>
+                            <div className='py-0.5 text-[12px] text-slate-300 dark:text-slate-600'>
+                              —
+                            </div>
                           )}
                           <CompareCell
                             data={compareData}
@@ -8615,7 +8835,9 @@ export function InlineTableField({
                                         compareData,
                                         isEditing ? editState!.draft : row
                                       )}
-                                      rowKey={(isEditing ? editState!.draft : row)[compareData.key_field]}
+                                      rowKey={
+                                        (isEditing ? editState!.draft : row)[compareData.key_field]
+                                      }
                                       column={c.field}
                                       planned={isEditing ? editState!.draft[c.field] : row[c.field]}
                                       columnLabel={compareLabelFor(c)}
@@ -9134,7 +9356,9 @@ function SpreadRemainingAction({
 }) {
   const onlyEmpty = config.only_empty !== false
   const isBlank = (v: unknown) => v == null || v === '' || Number(v) === 0
-  const closedSkipped = config.fields.filter((f) => closedFields?.has(f) && (!onlyEmpty || isBlank(draft[f]))).length
+  const closedSkipped = config.fields.filter(
+    (f) => closedFields?.has(f) && (!onlyEmpty || isBlank(draft[f]))
+  ).length
   const targets = config.fields.filter(
     (f) => !closedFields?.has(f) && (!onlyEmpty || isBlank(draft[f]))
   )
@@ -9186,14 +9410,20 @@ function SpreadRemainingAction({
         <span className='tabular-nums text-slate-500 dark:text-slate-400'>{fmt(amount)}</span>
       </button>
       {!reason && (
-        <SpreadPresetChips presets={presets} value={effectivePreset} onChange={setPreset} shapeLabel={shapeSource?.label} />
+        <SpreadPresetChips
+          presets={presets}
+          value={effectivePreset}
+          onChange={setPreset}
+          shapeLabel={shapeSource?.label}
+        />
       )}
       {!reason && (
         <span className='text-[11px] text-slate-400 dark:text-slate-500'>
           across {targets.length} empty {targets.length === 1 ? 'field' : 'fields'}
           {closedSkipped > 0 && (
             <span data-o2m-spread-skipped={closedSkipped}>
-              {' '}· {closedSkipped} closed {closedSkipped === 1 ? 'month' : 'months'} skipped
+              {' '}
+              · {closedSkipped} closed {closedSkipped === 1 ? 'month' : 'months'} skipped
             </span>
           )}
         </span>
@@ -9250,7 +9480,11 @@ function SpreadAcrossRowsButton(props: {
             {props.rowNoun} first.
           </div>
           <div className='mt-2'>
-            <SpreadPresetChips presets={presets} value={presets.includes(preset) ? preset : presets[0]} onChange={setPreset} />
+            <SpreadPresetChips
+              presets={presets}
+              value={presets.includes(preset) ? preset : presets[0]}
+              onChange={setPreset}
+            />
           </div>
           <div className='mt-2.5 flex justify-end gap-1.5'>
             <button

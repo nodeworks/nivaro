@@ -678,3 +678,39 @@ POST /api/search/semantic/reindex
     }
   ]
 }
+
+export const adminUxFormCollaboration: DocSection = {
+  id: 'form-collaboration',
+  label: 'Form Collaboration & Drafts',
+  content: [
+    { type: 'h1', id: 'form-collaboration', text: 'Form Collaboration & Drafts' },
+    {
+      type: 'p',
+      text: 'Four record-form behaviours for people working on the same records at the same time, or on the same record from two devices.'
+    },
+    { type: 'h2', id: 'form-collaboration-drafts', text: 'Unsaved drafts follow you' },
+    {
+      type: 'p',
+      text: 'While a form is dirty its unsaved draft (changed fields, staged lines, staged links) is stored in the browser AND mirrored to the server about a second after each change (`PUT /api/drafts/:collection/:item`, one row per user + collection + record, 256 KB cap). Opening the record elsewhere — another browser, another device — offers “Restore your unsaved changes”; the newer of the local and server copies wins. Saving, Discard, or the form going clean deletes both copies. `GET /api/drafts` lists your own drafts.'
+    },
+    { type: 'h2', id: 'form-collaboration-section-lock', text: 'Section locked for a role' },
+    {
+      type: 'p',
+      text: 'A layout section can be locked for specific roles (Table Editor → Layout → section ⚙ → “Locked for roles”, a sibling of “Hidden for roles”): those roles see every field in it read-only with the reason on the lock glyph, while the rest of the form stays editable. The server drops those fields from an update by a locked role (`nivaro_field_groups.locked_for_roles`); admins are exempt.'
+    },
+    {
+      type: 'h2',
+      id: 'form-collaboration-row-ghost',
+      text: 'Someone changed the line you are editing'
+    },
+    {
+      type: 'p',
+      text: 'When a grid row is open in its editor and another person saves a change to that same row, a strip above the fields lists each changed field as was → now, with Take theirs (per field or all) and Keep mine. Fields you already set to their value are not listed, nor are write-computed columns that merely follow their inputs.'
+    },
+    { type: 'h2', id: 'form-collaboration-cursors', text: 'Shared cursors in grids' },
+    {
+      type: 'p',
+      text: 'Beyond “Robert is editing this line”, the cell a colleague has focus in is outlined with their name — the grid announces `cell:<collection>:<row>:<field>` through the record-presence channel (window event `nvr:cell-editing`, relayed by the host as a `field:focus`), and the host marks the matching `[data-grid-cell]`.'
+    }
+  ]
+}

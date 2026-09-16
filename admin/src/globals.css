@@ -234,6 +234,31 @@
   outline-offset: 3px;
   border-radius: 6px;
 }
+/* …and a colleague's cursor sits in this grid cell (#69 shared cursors) */
+[data-grid-cell].nvr-remote-editing {
+  position: relative;
+  outline: 2px solid rgb(14 165 233 / 0.6);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+[data-grid-cell].nvr-remote-editing::after {
+  content: attr(data-remote-editor);
+  position: absolute;
+  right: 4px;
+  top: -9px;
+  z-index: 2;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 4px;
+  background: rgb(14 165 233);
+  color: white;
+  font-size: 9px;
+  line-height: 14px;
+  padding: 0 5px;
+  pointer-events: none;
+}
 /* …and a colleague has this grid row open in its editor */
 [data-o2m-row].nvr-remote-editing > td:first-child {
   position: relative;

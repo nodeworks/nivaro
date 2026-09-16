@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
+import { bustSectionLockCache } from '../services/section-locks.js'
 import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
 import { accessRequestRoutes } from './access-requests.js'
@@ -57,6 +58,7 @@ import { devToolsRoutes } from './dev-tools.js'
 import { directoryRoutes } from './directory.js'
 import { dossierRoutes } from './dossier.js'
 import { draftPublishRoutes } from './draft-publish.js'
+import { draftsRoutes } from './drafts.js'
 import { environmentRoutes } from './environments.js'
 import { erpSubmissionsRoutes } from './erp-submissions.js'
 import { eventsStreamRoutes } from './events-stream.js'
@@ -235,6 +237,7 @@ export async function registerRoutes(app: FastifyInstance) {
     if (req.method === 'GET' || reply.statusCode >= 400) return
     if (META_ROUTES.test(req.url)) {
       clearMetadataCache()
+      bustSectionLockCache()
       // Live integrity checks compile field/layout config per collection — same
       // staleness rules as the metadata caches they read from.
       void import('../services/config-conformance.js').then((m) => m.bustCompiledChecks())
@@ -260,6 +263,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(integrationEventsRoutes, { prefix: '/integration-events' })
   await app.register(inboundMappingsRoutes, { prefix: '/inbound-mappings' })
   await app.register(inboundRoutes, { prefix: '/inbound' })
+  await app.register(draftsRoutes, { prefix: '/drafts' })
   await app.register(lineageRoutes, { prefix: '/lineage' })
   await app.register(readinessRoutes, { prefix: '/readiness' })
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })

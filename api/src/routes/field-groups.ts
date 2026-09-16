@@ -47,6 +47,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
         'content_tone',
         'visible_when',
         'hidden_for_roles',
+        'locked_for_roles',
         'read_width'
       )
       .orderBy('sort', 'asc')
@@ -131,6 +132,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
       skip_if_filled: string | null
       visible_when?: string | null
       hidden_for_roles?: string | null
+      locked_for_roles?: string | null
       read_width?: string | null
     }>
 
@@ -164,6 +166,8 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if ('skip_if_filled' in body) patch.skip_if_filled = body.skip_if_filled ?? null
     if ('visible_when' in body) patch.visible_when = body.visible_when ?? null
     if ('hidden_for_roles' in body) patch.hidden_for_roles = body.hidden_for_roles ?? null
+    // #25 — section lock per role (JSON role ids); mirrors hidden_for_roles.
+    if ('locked_for_roles' in body) patch.locked_for_roles = body.locked_for_roles ?? null
 
     if (Object.keys(patch).length === 0)
       return reply.code(400).send({ error: 'No fields to update' })

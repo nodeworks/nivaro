@@ -44,6 +44,7 @@ export * from './sections/workflows-pipelines.js'
 import {
   adminUxAiMapping,
   adminUxAiQuery,
+  adminUxFormCollaboration,
   adminUxGlobalSearch,
   adminUxImportFromUrl,
   adminUxSavedViews,
@@ -750,6 +751,7 @@ export const navSections: NavGroup[] = [
       adminI18nDocs,
       adminUxGlobalSearch,
       adminUxSavedViews,
+      adminUxFormCollaboration,
       adminUxImportFromUrl,
       adminUxAiMapping,
       adminUxAiQuery,

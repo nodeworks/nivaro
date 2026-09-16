@@ -64,10 +64,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
       socket.emit('record:join', { collection, item })
     })
 
-    socket.on('record:viewers', (payload: { collection?: string | null; item?: string | null; viewers: Viewer[] }) => {
-      if (payload?.collection != null && payload?.item != null && (payload.collection !== collection || String(payload.item) !== String(item))) return
-      setViewers(payload.viewers ?? [])
-    })
+    socket.on(
+      'record:viewers',
+      (payload: { collection?: string | null; item?: string | null; viewers: Viewer[] }) => {
+        if (
+          payload?.collection != null &&
+          payload?.item != null &&
+          (payload.collection !== collection || String(payload.item) !== String(item))
+        )
+          return
+        setViewers(payload.viewers ?? [])
+      }
+    )
 
     // Upload presence relay (#282): this socket is the one actually inside
     // the record room, so it carries upload announcements both ways —
@@ -142,6 +150,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
         item
       })
     }
+    // #69 — cell-level cursors: an inline grid announces the cell its editor
+    // has focus in; relayed as `cell:<collection>:<row>:<field>`.
+    const onCellEditing = (e: Event) => {
+      const d = (e as CustomEvent).detail as { cell?: string; state?: string }
+      if (!d?.cell) return
+      socket.emit(d.state === 'end' ? 'field:blur' : 'field:focus', {
+        field: `cell:${d.cell}`,
+        collection,
+        item
+      })
+    }
+    window.addEventListener('nvr:cell-editing', onCellEditing)
     window.addEventListener('nvr:row-editing', onRowEditing)
     document.addEventListener('focusin', onFocusIn)
     document.addEventListener('focusout', onFocusOut)
@@ -150,6 +170,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
     return () => {
       window.removeEventListener('nvr:upload-state', onLocalUpload)
       disposed = true
+      window.removeEventListener('nvr:cell-editing', onCellEditing)
       window.removeEventListener('nvr:row-editing', onRowEditing)
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
@@ -169,7 +190,9 @@ export function useRecordPresence(collection: string | undefined, item: string |
       // `row:<collection>:<id>` marks a grid row; anything else a field wrapper.
       const el = field.startsWith('row:')
         ? document.querySelector<HTMLElement>(`[data-o2m-row="${CSS.escape(field.slice(4))}"]`)
-        : document.querySelector<HTMLElement>(`[data-field="${CSS.escape(field)}"]`)
+        : field.startsWith('cell:')
+          ? document.querySelector<HTMLElement>(`[data-grid-cell="${CSS.escape(field.slice(5))}"]`)
+          : document.querySelector<HTMLElement>(`[data-field="${CSS.escape(field)}"]`)
       if (el) {
         el.classList.add('nvr-remote-editing')
         const e = editing[field]

@@ -1687,12 +1687,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: result })
   })
 
-  // input_bindings arrives as an array from the editor but as the stored JSON
-  // STRING from a GET → PUT round trip; stringifying a string double-encodes it
-  // and the editor's parser then crashes on `.find`. Unwrap before storing.
+  // input_bindings / overrides arrive as objects from the editor but as the
+  // stored JSON STRING from a GET → PUT round trip; stringifying a string
+  // double-encodes it (every round trip stacks another layer), the editor's
+  // parser then crashes on `.find` and the form loses its grid overrides.
+  // Unwrap before storing, however deep the stack got.
   const serializeBindings = (v: unknown): string | null => {
     let cur = v
-    for (let i = 0; i < 4 && typeof cur === 'string'; i++) {
+    for (let i = 0; i < 12 && typeof cur === 'string'; i++) {
       try {
         cur = JSON.parse(cur)
       } catch {
@@ -1750,7 +1752,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             is_visible: a.is_visible === false ? 0 : 1,
             default_expanded: a.default_expanded === false ? 0 : 1,
             col_span: a.col_span ?? null,
-            overrides: a.overrides != null ? JSON.stringify(a.overrides) : null,
+            overrides: serializeBindings(a.overrides),
             show_row_revisions: a.show_row_revisions ? 1 : 0,
             allow_revision_restore: a.allow_revision_restore === false ? 0 : 1,
             lock_conditions: a.lock_conditions ?? null,

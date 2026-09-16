@@ -44,7 +44,7 @@ import {
   useItemNavigation,
   useNivaroClient
 } from '../context'
-import { del, get, patch, post } from '../lib/commands'
+import { del, get, patch, post, put } from '../lib/commands'
 import {
   deleteDraft,
   draftHasContent,
@@ -2299,9 +2299,28 @@ export function ItemEditForm({
     if (!isNew && !itemData) return
     if (recoveryCheckedKey === recoveryKey) return
     let cancelled = false
-    void loadDraft(recoveryKey).then((stored) => {
+    // #24 — the server copy (another device) competes with the local one; the
+    // newer wins. A server miss or error is just "no server draft".
+    const serverKey = isNew ? 'new' : String(itemId)
+    const serverDraft = authUserId
+      ? client
+          .request<{ data: { payload: StoredDraft; saved_at: string } }>(
+            get(`/drafts/${collection}/${serverKey}`)
+          )
+          .then((r) =>
+            r?.data?.payload && typeof r.data.payload === 'object' ? r.data.payload : null
+          )
+          .catch(() => null)
+      : Promise.resolve(null)
+    void Promise.all([loadDraft(recoveryKey), serverDraft]).then(([local, remote]) => {
       if (cancelled) return
       setRecoveryCheckedKey(recoveryKey)
+      const stored =
+        local && remote
+          ? String(remote.saved_at) > String(local.saved_at)
+            ? remote
+            : local
+          : (local ?? remote)
       if (!stored || !draftHasContent(stored)) {
         setRecovery({ state: 'none' })
         return
@@ -2332,6 +2351,10 @@ export function ItemEditForm({
     const t = setTimeout(() => {
       if (!isDirty) {
         void deleteDraft(recoveryKey)
+        if (authUserId)
+          void client
+            .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
+            .catch(() => {})
         return
       }
       const base = initialDataRef.current
@@ -2369,9 +2392,23 @@ export function ItemEditForm({
       }
       if (!draftHasContent(stored)) {
         void deleteDraft(recoveryKey)
+        if (authUserId)
+          void client
+            .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
+            .catch(() => {})
         return
       }
       void saveDraft(stored)
+      // #24 — mirror to the server so the draft follows the person.
+      if (authUserId)
+        void client
+          .request(
+            put(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`, {
+              payload: stored,
+              saved_at: stored.saved_at
+            })
+          )
+          .catch(() => {})
     }, 800)
     return () => clearTimeout(t)
   }, [
@@ -2420,8 +2457,12 @@ export function ItemEditForm({
   }, [])
   const discardDraft = useCallback(() => {
     void deleteDraft(recoveryKey)
+    if (authUserId)
+      void client
+        .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
+        .catch(() => {})
     setRecovery({ state: 'none' })
-  }, [recoveryKey])
+  }, [recoveryKey, authUserId, client, collection, isNew, itemId])
 
   // New records: stamp the resolved layout's default_values onto the draft,
   // once, filling only keys the draft doesn't already have a value for.
@@ -6484,10 +6525,40 @@ export function ItemEditForm({
   }
   // Role preview (#8): fields the previewed role may read but not update.
   if (viewAs.active) for (const f of viewAs.readonly) lockedFields.add(f)
+  // #25 — section-level locks: a group listing the viewer's role in
+  // locked_for_roles renders every field it holds read-only (admins exempt;
+  // the server drops those keys on update too).
+  const sectionLocked = new Map<string, string>()
+  {
+    const myRole = currentUserData?.role ? String(currentUserData.role).toUpperCase() : null
+    const isAdminRole = !!(currentUserData as { role_admin_access?: boolean } | null)
+      ?.role_admin_access
+    if (myRole && !isAdminRole) {
+      for (const g of groups) {
+        const raw = (g as { locked_for_roles?: string | null }).locked_for_roles
+        if (!raw) continue
+        try {
+          const roles = JSON.parse(raw) as string[]
+          if (!Array.isArray(roles) || !roles.some((r) => String(r).toUpperCase() === myRole))
+            continue
+        } catch {
+          continue
+        }
+        for (const a of assignments) {
+          if (a.group_key === g.key && !a.field.startsWith('__')) {
+            lockedFields.add(a.field)
+            sectionLocked.set(a.field, g.label || g.key)
+          }
+        }
+      }
+    }
+  }
 
   // Why is this input read-only? (#7) — one sentence per locked/readonly
   // field, rendered on the lock glyph + the input's hover tip.
   const lockReasons: Record<string, string> = {}
+  for (const [f, label] of sectionLocked)
+    lockReasons[f] = `The "${label}" section is locked for your role`
   {
     const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
     const currentStateKey = currentStateId

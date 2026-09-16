@@ -16789,6 +16789,37 @@ function SortableGroupCard({
                     />
                   </div>
                   <div>
+                    <Label className='mb-1 block text-[11px]'>Locked for roles</Label>
+                    <p className='mb-1.5 text-[10px] text-slate-400'>
+                      #25 — these roles see the section read-only while the rest of the form stays
+                      editable; the server drops their writes to it too (admins exempt)
+                    </p>
+                    <Input
+                      defaultValue={(() => {
+                        try {
+                          const p = JSON.parse(
+                            (group as { locked_for_roles?: string | null }).locked_for_roles ?? '[]'
+                          )
+                          return Array.isArray(p) ? p.join(', ') : ''
+                        } catch {
+                          return ''
+                        }
+                      })()}
+                      placeholder='role uuid, role uuid'
+                      className='h-7 font-mono text-[11px]'
+                      data-group-locked-roles
+                      onChange={(e) => {
+                        const list = e.target.value
+                          .split(',')
+                          .map((x) => x.trim())
+                          .filter(Boolean)
+                        onGroupSettings(group.id, {
+                          locked_for_roles: list.length ? JSON.stringify(list) : null
+                        } as never)
+                      }}
+                    />
+                  </div>
+                  <div>
                     <Label className='mb-1 block text-[11px]'>Collapsed summary fields</Label>
                     <p className='mb-1.5 text-[10px] text-slate-400'>Shown in the collapsed bar</p>
                     <div className='space-y-1.5 max-h-[220px] overflow-y-auto'>

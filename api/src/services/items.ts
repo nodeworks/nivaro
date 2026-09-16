@@ -38,6 +38,7 @@ import {
   applyRowRulesOnCreate,
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
+import { applySectionLocks } from './section-locks.js'
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
@@ -2905,6 +2906,13 @@ export async function updateOne(
       req?.isAdmin ?? false
     )
   )
+  // #25 — a layout section locked for the caller's role: its fields are
+  // read-only on the form and dropped here (admins exempt).
+  if (!req?.isAdmin) {
+    await span('section-locks', () =>
+      applySectionLocks(collection, ctx.payload, user.role ?? null, false)
+    )
+  }
   // Layout row rules flagged on_update re-derive their targets when the PATCH
   // changed one of their triggers (caller-sent targets still win).
   await span('row-rules:update', () =>
