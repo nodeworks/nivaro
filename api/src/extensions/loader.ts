@@ -25,10 +25,10 @@ import {
   registerExtensionEventHandler
 } from '../services/extension-events.js'
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
+import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
-import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
@@ -286,6 +286,13 @@ export interface Extension {
     description?: string
     default?: string
     secret?: boolean
+    /** #17 — what production is expected to hold; the readiness scorecard
+     *  warns when the live value differs. */
+    production_expect?: string
+    /** #13 — refuse a value with a message (null = fine). */
+    validate?: (value: string | number | boolean | null) => string | null | Promise<string | null>
+    /** #13 — applied the moment a value is saved (no restart, no cache wait). */
+    on_change?: (value: string | number | boolean | null) => void | Promise<void>
   }>
   /** Capability manifest (#660): freeform declared capabilities (e.g.
    *  'routes','cron','hooks','flows','item-actions'). The loader ALSO records
@@ -323,7 +330,7 @@ export interface ExtensionEntry {
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
-const EXTENSIONS_DIR = new URL('../../extensions', import.meta.url).pathname
+export const EXTENSIONS_DIR = new URL('../../extensions', import.meta.url).pathname
 const CONFIG_PATH = join(EXTENSIONS_DIR, '.config.json')
 
 // Cloud-internal extensions — loaded only when CLOUD_META_DB_URL is set.
@@ -358,6 +365,10 @@ export interface ExtensionSettingDecl {
   type: 'string' | 'number' | 'boolean' | 'secret'
   description?: string
   default?: string
+  production_expect?: string
+  /** The decl carries a validate and/or on_change handler (#13). */
+  has_validate?: boolean
+  has_on_change?: boolean
 }
 
 export const extensionSettingsDecls = new Map<string, NonNullable<Extension['settings']>>()
@@ -369,8 +380,23 @@ export function getExtensionSettingsSchema(extId: string): ExtensionSettingDecl[
     label: d.label,
     type: d.type === 'secret' || d.secret ? 'secret' : (d.type ?? 'string'),
     ...(d.description ? { description: d.description } : {}),
-    ...(d.default !== undefined ? { default: d.default } : {})
+    ...(d.default !== undefined ? { default: d.default } : {}),
+    ...(d.production_expect !== undefined ? { production_expect: d.production_expect } : {}),
+    has_validate: typeof d.validate === 'function',
+    has_on_change: typeof d.on_change === 'function'
   }))
+}
+
+/** #13 — the live handlers a setting declared (never serialized). */
+export function getSettingHandlers(
+  extId: string,
+  key: string
+): {
+  validate?: (value: string | number | boolean | null) => string | null | Promise<string | null>
+  on_change?: (value: string | number | boolean | null) => void | Promise<void>
+} {
+  const d = (extensionSettingsDecls.get(extId) ?? []).find((x) => x.key === key)
+  return { validate: d?.validate, on_change: d?.on_change }
 }
 
 type SettingValue = string | number | boolean | null
@@ -391,7 +417,7 @@ function parseSettingValue(raw: string | null, type: ExtensionSettingDecl['type'
   return raw
 }
 
-async function readExtensionSettings(extId: string): Promise<Record<string, SettingValue>> {
+export async function readExtensionSettings(extId: string): Promise<Record<string, SettingValue>> {
   const hit = settingsCache.get(extId)
   if (hit && Date.now() - hit.at < 30_000) return hit.values
   const { db } = await import('../db/index.js')
@@ -422,6 +448,30 @@ const observedCapabilities = new Map<string, Set<string>>()
 export function getObservedCapabilities(extId: string): string[] {
   return Array.from(observedCapabilities.get(extId) ?? []).sort()
 }
+/** #40 — what each extension registered, by kind, for the registry page.
+ *  Kept beside the observed-capability ledger: capabilities say WHICH ctx
+ *  members were touched, this says WHAT they were given. */
+const extensionRegistrations = new Map<string, Map<string, string[]>>()
+function recordRegistration(extId: string, kind: string, label: string): void {
+  let kinds = extensionRegistrations.get(extId)
+  if (!kinds) {
+    kinds = new Map()
+    extensionRegistrations.set(extId, kinds)
+  }
+  const list = kinds.get(kind) ?? []
+  if (!list.includes(label)) list.push(label)
+  kinds.set(kind, list)
+}
+export function getExtensionRegistrations(extId: string): Record<string, string[]> {
+  return Object.fromEntries(extensionRegistrations.get(extId) ?? [])
+}
+
+/** `<id>.next` / `<id>.prev` hold staged and previous builds (#76) — never
+ *  extensions of their own. */
+function isParkedBuildDir(name: string): boolean {
+  return name.endsWith('.next') || name.endsWith('.prev')
+}
+
 function noteCapability(extId: string, cap: string): void {
   const set = observedCapabilities.get(extId) ?? new Set<string>()
   set.add(cap)
@@ -566,6 +616,7 @@ async function loadExtension(
     // Capability manifest (#660): the ctx members register() touches are noted
     // as observed capabilities, compared against the declared list in the UI.
     const note = (cap: string) => noteCapability(extId, cap)
+    const own = (kind: string, label: string) => recordRegistration(extId, kind, label)
     // app.register → 'routes': a minimal Proxy intercepting ONLY `register`;
     // every other property passes through to the real instance untouched.
     const observedApp = new Proxy(ctx.app, {
@@ -597,6 +648,7 @@ async function loadExtension(
         },
         on: (eventType, fn) => {
           note('events')
+          own('event_handlers', eventType)
           registerExtensionEventHandler(extId, eventType, fn)
         }
       },
@@ -646,42 +698,70 @@ async function loadExtension(
       bulkActions: {
         register: (def) => {
           note('bulk-actions')
+          own('bulk_actions', `${def.id} · ${def.label}`)
           bulkActionRegistry.register(def)
         }
       },
       itemActions: {
         register: (def) => {
           note('item-actions')
+          own('item_actions', `${def.id} · ${def.label}`)
           itemActionRegistry.register(def)
         }
       },
       notificationChannels: {
         register: (def) => {
           note('notification-channels')
+          own(
+            'notification_channels',
+            String(
+              (def as { id?: string; key?: string }).id ??
+                (def as { key?: string }).key ??
+                'channel'
+            )
+          )
           notificationChannelRegistry.register(def)
         }
       },
       notificationSources: {
         register: (provider) => {
           note('notification-sources')
+          own(
+            'notification_sources',
+            String(
+              (provider as { id?: string; key?: string }).id ??
+                (provider as { key?: string }).key ??
+                'source'
+            )
+          )
           notificationSourceRegistry.register(provider)
         }
       },
       notes: {
         registerSource: (provider) => {
           note('notes')
+          own('note_sources', `${provider.id} · ${provider.collection}`)
           relatedNoteRegistry.register(provider)
         }
       },
       dashboardWidgets: {
         register: (def) => {
           note('dashboard-widgets')
+          own(
+            'dashboard_widgets',
+            String(
+              (def as { type?: string; id?: string }).type ??
+                (def as { id?: string }).id ??
+                'widget'
+            )
+          )
           dashboardWidgetRegistry.register(def)
         }
       },
       storage: {
         register: (name, adapter) => {
           note('storage')
+          own('storage_adapters', name)
           storageAdapterRegistry.register(name, adapter)
         },
         setActive: (name) => storageAdapterRegistry.setActive(name)
@@ -689,54 +769,95 @@ async function loadExtension(
       fieldTypes: {
         register: (def) => {
           note('field-types')
+          own(
+            'field_types',
+            String(
+              (def as { type?: string; id?: string }).type ??
+                (def as { id?: string }).id ??
+                'field type'
+            )
+          )
           fieldTypeRegistry.register(def)
         }
       },
       collectionViews: {
         register: (def) => {
           note('collection-views')
+          own(
+            'collection_views',
+            String(
+              (def as { id?: string; type?: string }).id ??
+                (def as { type?: string }).type ??
+                'view'
+            )
+          )
           collectionViewRegistry.register(def)
         }
       },
       importParsers: {
         register: (def) => {
           note('import-parsers')
+          own(
+            'import_parsers',
+            String(
+              (def as { id?: string; name?: string }).id ??
+                (def as { name?: string }).name ??
+                'parser'
+            )
+          )
           importParserRegistry.register(def)
         }
       },
       validators: {
         register: (def) => {
           note('validators')
+          own(
+            'validators',
+            String(
+              (def as { id?: string; type?: string }).id ??
+                (def as { type?: string }).type ??
+                'validator'
+            )
+          )
           validatorRegistry.register(def)
         }
       },
       digest: {
         registerSection: (fn) => {
           note('digest')
+          own(
+            'digest_sections',
+            fn.name ||
+              `section ${(extensionRegistrations.get(extId)?.get('digest_sections')?.length ?? 0) + 1}`
+          )
           registerDigestSection(fn)
         }
       },
       readiness: {
         registerCheck: (check) => {
           note('readiness')
+          own('readiness_checks', `${check.id} · ${check.label}`)
           registerReadinessCheck(check)
         }
       },
       integrity: {
         registerCheck: (check) => {
           note('integrity')
+          own('integrity_checks', `${check.id} · ${check.label}`)
           registerIntegrityCheck(check)
         }
       },
       links: {
         register: (reg) => {
           note('links')
+          own('portal_links', (reg as { base?: string }).base ?? 'routes')
           registerPortalLinks(reg)
         }
       },
       mail: {
         registerType: (def) => {
           note('mail')
+          own('mail_types', `${def.key} · ${def.label}`)
           registerMailType(def)
         },
         renderViaFlow: (flowName, payload) => renderViaFlow(flowName, payload),
@@ -745,10 +866,12 @@ async function loadExtension(
       flows: {
         registerOperation: (op) => {
           note('flows')
+          own('flow_operations', `${op.type}${op.label ? ` · ${op.label}` : ''}`)
           registerOp(op)
         },
         registerTrigger: (trigger) => {
           note('flows')
+          own('flow_triggers', `${trigger.type}${trigger.label ? ` · ${trigger.label}` : ''}`)
           registerTrigger(trigger)
         },
         emit: (triggerType, payload) => {
@@ -759,6 +882,7 @@ async function loadExtension(
       chatBot: {
         registerTool: (def) => {
           note('chat-bot')
+          own('chat_bot_tools', String((def as { name?: string }).name ?? 'tool'))
           void import('../services/chat-bot.js')
             .then(({ registerBotTool }) => registerBotTool(def))
             .catch(() => {})
@@ -882,6 +1006,7 @@ export async function loadExtensions(
     | 'validators'
   >
 ) {
+  registerExtensionSettingsReadiness()
   let entries: string[]
   try {
     entries = await readdir(EXTENSIONS_DIR)
@@ -892,7 +1017,7 @@ export async function loadExtensions(
 
   const config = readConfig()
   // Filter out hidden files/dirs (like .config.json itself)
-  const dirs = entries.filter((e) => !e.startsWith('.'))
+  const dirs = entries.filter((e) => !e.startsWith('.') && !isParkedBuildDir(e))
 
   // Dependencies (#426): pre-import every module to read `requires`, then
   // topologically order the load. A missing/failed dependency turns its
@@ -1020,7 +1145,7 @@ export async function loadCloudExtensions(
     return
   }
 
-  const dirs = entries.filter((e) => !e.startsWith('.'))
+  const dirs = entries.filter((e) => !e.startsWith('.') && !isParkedBuildDir(e))
 
   for (const entry of dirs) {
     const dirPath = join(CLOUD_EXTENSIONS_DIR, entry)
@@ -1270,7 +1395,7 @@ export async function scanNewExtensions(
   const loaded: string[] = []
 
   for (const entry of entries) {
-    if (entry.startsWith('.')) continue
+    if (entry.startsWith('.') || isParkedBuildDir(entry)) continue
     // Skip already registered extensions (by folder name match or id)
     const alreadyLoaded = [...extensionRegistry.values()].some(
       (e) => e.path === join(EXTENSIONS_DIR, entry)
@@ -1282,4 +1407,198 @@ export async function scanNewExtensions(
   }
 
   return loaded
+}
+
+// ── Readiness (#17) — declared settings vs their production expectation ─────
+// Registered once, runs over every loaded extension's declarations at check
+// time, so it needs no per-extension wiring.
+let settingsReadinessRegistered = false
+export function registerExtensionSettingsReadiness(): void {
+  if (settingsReadinessRegistered) return
+  settingsReadinessRegistered = true
+  registerReadinessCheck({
+    id: 'extension-settings-expectations',
+    label: 'Extension settings match their production expectations',
+    description:
+      'Every extension setting declared with production_expect holds that value on this instance.',
+    group: 'Configuration',
+    run: async () => {
+      const expected: Array<{ ext: string; key: string; label: string; expect: string }> = []
+      for (const [ext, decls] of extensionSettingsDecls) {
+        for (const d of decls) {
+          if (d.production_expect !== undefined) {
+            expected.push({ ext, key: d.key, label: d.label, expect: d.production_expect })
+          }
+        }
+      }
+      if (expected.length === 0) {
+        return { status: 'skip', detail: 'No extension declares a production expectation.' }
+      }
+      const blockers: string[] = []
+      for (const e of expected) {
+        const live = (await readExtensionSettings(e.ext))[e.key]
+        const liveStr = live == null ? '' : String(live)
+        if (liveStr !== e.expect) {
+          blockers.push(`${e.ext} · ${e.key} = "${liveStr}" (production expects "${e.expect}")`)
+        }
+      }
+      return blockers.length === 0
+        ? { status: 'pass', detail: `${expected.length} expectation(s) hold.` }
+        : {
+            status: 'warn',
+            detail: `${blockers.length} of ${expected.length} differ from production.`,
+            blockers
+          }
+    }
+  })
+}
+
+// ── Registry page (#40) — everything an extension registered, by kind ────────
+export async function describeExtensionRegistry(
+  extId: string,
+  cron: {
+    list(): Array<{
+      id: string
+      expression: string
+      extensionId?: string
+      nextRun: Date | null
+      paused?: boolean
+    }>
+  }
+): Promise<Record<string, unknown>> {
+  const { hooks } = await import('../hooks/registry.js')
+  return {
+    hooks: hooks.listForExtension(extId),
+    crons: cron
+      .list()
+      .filter((c) => c.extensionId === extId)
+      .map((c) => ({
+        id: c.id,
+        expression: c.expression,
+        next_run: c.nextRun,
+        paused: !!c.paused
+      })),
+    registrations: getExtensionRegistrations(extId),
+    settings: getExtensionSettingsSchema(extId).map((d) => ({
+      key: d.key,
+      label: d.label,
+      type: d.type,
+      has_validate: !!d.has_validate,
+      has_on_change: !!d.has_on_change,
+      production_expect: d.production_expect ?? null
+    })),
+    observed_capabilities: getObservedCapabilities(extId),
+    health_check: extensionHealthChecks.has(extId),
+    staged: await stagedBuildStatus(extId)
+  }
+}
+
+// ── Staged builds (#76, blue/green-lite) ─────────────────────────────────────
+// A build dropped at api/extensions/<id>.next is validated in place (its
+// entry module imports and exports the same id) and then SWAPPED with the
+// live directory; the previous build is kept at <id>.prev for rollback. The
+// running process keeps serving the OLD build until it restarts — hooks and
+// crons registered by a module cannot be torn down safely mid-flight — so
+// the switch is "validated now, live on the next restart", never a surprise.
+export interface StagedBuildStatus {
+  id: string
+  live_dir: string
+  live_entry: string | null
+  live_mtime: string | null
+  next_present: boolean
+  next_entry: string | null
+  next_mtime: string | null
+  prev_present: boolean
+  prev_mtime: string | null
+}
+
+async function dirMtime(dir: string): Promise<string | null> {
+  try {
+    const { stat } = await import('node:fs/promises')
+    const entry = await resolveIndexPath(dir)
+    if (!entry) return null
+    return (await stat(entry)).mtime.toISOString()
+  } catch {
+    return null
+  }
+}
+
+export async function stagedBuildStatus(id: string): Promise<StagedBuildStatus> {
+  const live = join(EXTENSIONS_DIR, id)
+  const next = `${live}.next`
+  const prev = `${live}.prev`
+  return {
+    id,
+    live_dir: live,
+    live_entry: await resolveIndexPath(live),
+    live_mtime: await dirMtime(live),
+    next_present: existsSync(next),
+    next_entry: existsSync(next) ? await resolveIndexPath(next) : null,
+    next_mtime: existsSync(next) ? await dirMtime(next) : null,
+    prev_present: existsSync(prev),
+    prev_mtime: existsSync(prev) ? await dirMtime(prev) : null
+  }
+}
+
+/** Import the staged entry in isolation and check it is the same extension. */
+export async function validateStagedBuild(id: string): Promise<{ ok: boolean; detail: string }> {
+  const next = join(EXTENSIONS_DIR, `${id}.next`)
+  const entry = await resolveIndexPath(next)
+  if (!entry) return { ok: false, detail: `No index.ts/index.js in ${id}.next` }
+  try {
+    const mod = (await import(`${entry}?staged=${Date.now()}`)) as {
+      default?: { id?: string; register?: unknown }
+    }
+    const ext = mod.default
+    if (!ext || typeof ext !== 'object')
+      return { ok: false, detail: 'The staged module has no default export' }
+    if (ext.id !== id)
+      return {
+        ok: false,
+        detail: `The staged module declares id "${String(ext.id)}", expected "${id}"`
+      }
+    if (typeof ext.register !== 'function')
+      return { ok: false, detail: 'The staged module has no register() function' }
+    return {
+      ok: true,
+      detail: `${entry.endsWith('.ts') ? 'index.ts' : 'index.js'} imports cleanly and declares "${id}"`
+    }
+  } catch (err) {
+    return { ok: false, detail: `Import failed: ${(err as Error).message}` }
+  }
+}
+
+export async function promoteStagedBuild(
+  id: string
+): Promise<{ promoted: boolean; detail: string }> {
+  const check = await validateStagedBuild(id)
+  if (!check.ok) return { promoted: false, detail: check.detail }
+  const { rename, rm } = await import('node:fs/promises')
+  const live = join(EXTENSIONS_DIR, id)
+  const next = `${live}.next`
+  const prev = `${live}.prev`
+  if (existsSync(prev)) await rm(prev, { recursive: true, force: true })
+  if (existsSync(live)) await rename(live, prev)
+  await rename(next, live)
+  return {
+    promoted: true,
+    detail: `${check.detail}; the previous build is kept at ${id}.prev. Restart the API to run it.`
+  }
+}
+
+export async function rollbackStagedBuild(
+  id: string
+): Promise<{ rolled_back: boolean; detail: string }> {
+  const { rename, rm } = await import('node:fs/promises')
+  const live = join(EXTENSIONS_DIR, id)
+  const prev = `${live}.prev`
+  const next = `${live}.next`
+  if (!existsSync(prev)) return { rolled_back: false, detail: `No previous build kept for ${id}` }
+  if (existsSync(next)) await rm(next, { recursive: true, force: true })
+  if (existsSync(live)) await rename(live, next)
+  await rename(prev, live)
+  return {
+    rolled_back: true,
+    detail: `Previous build restored; the promoted one is parked at ${id}.next. Restart the API to run it.`
+  }
 }

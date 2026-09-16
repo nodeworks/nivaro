@@ -141,6 +141,17 @@ function extractTarball(tarBuf: Buffer): Map<string, Buffer> {
   return files
 }
 
+/** The value a setting handler sees — typed like ctx.settings.get() returns it. */
+function typedSettingValue(
+  type: 'string' | 'number' | 'boolean' | 'secret',
+  value: string | null
+): string | number | boolean | null {
+  if (value == null) return null
+  if (type === 'number') return Number(value)
+  if (type === 'boolean') return value === 'true' || value === '1'
+  return value
+}
+
 export async function extensionsRoutes(app: FastifyInstance) {
   // Public — no auth required. The admin SPA loads this before auth context is available.
   app.get('/manifest', async (_req, reply) => {
@@ -166,19 +177,33 @@ export async function extensionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
   app.get('/', async (_req, reply) => {
-    const { getObservedCapabilities } = await import('../extensions/loader.js')
+    const { getObservedCapabilities, stagedBuildStatus } = await import('../extensions/loader.js')
     // Cloud extensions are internal — hidden from the tenant Extensions page
-    const data = Array.from(extensionRegistry.values())
-      .filter((e) => !e.cloud)
-      // Capability manifest (#660): declared list from the export beside the
-      // ctx members register() was actually observed touching.
-      .map((e) => ({
-        ...e,
-        capabilities: {
-          declared: e.declared_capabilities ?? [],
-          observed: getObservedCapabilities(e.id)
-        }
-      }))
+    const data = await Promise.all(
+      Array.from(extensionRegistry.values())
+        .filter((e) => !e.cloud)
+        // Capability manifest (#660): declared list from the export beside the
+        // ctx members register() was actually observed touching.
+        .map(async (e) => {
+          const staged = SAFE_EXT_NAME.test(e.id) ? await stagedBuildStatus(e.id) : null
+          return {
+            ...e,
+            capabilities: {
+              declared: e.declared_capabilities ?? [],
+              observed: getObservedCapabilities(e.id)
+            },
+            // #76 — a build parked at <id>.next / a previous build at <id>.prev
+            staged: staged
+              ? {
+                  next_present: staged.next_present,
+                  next_mtime: staged.next_mtime,
+                  prev_present: staged.prev_present,
+                  prev_mtime: staged.prev_mtime
+                }
+              : null
+          }
+        })
+    )
     return reply.send({ data })
   })
 
@@ -235,16 +260,22 @@ export async function extensionsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Extension declares no settings' })
     const rows = (await db('nivaro_extension_settings')
       .where({ extension_id: id })
-      .select('key', 'value')) as Array<{ key: string; value: string | null }>
-    const stored = new Map(rows.map((r) => [r.key, r.value]))
+      .select('key', 'value', 'updated_at')) as Array<{
+      key: string
+      value: string | null
+      updated_at: Date | string | null
+    }>
+    const stored = new Map(rows.map((r) => [r.key, r]))
     return reply.send({
       data: schema.map((d) => ({
         ...d,
         // Secrets never leave the server — the mask round-trips (PUT preserves it).
         value:
-          d.type === 'secret' && stored.get(d.key)
+          d.type === 'secret' && stored.get(d.key)?.value
             ? '••••••'
-            : (stored.get(d.key) ?? d.default ?? null)
+            : (stored.get(d.key)?.value ?? d.default ?? null),
+        // #13 — when the stored value last changed (null = still the default)
+        updated_at: stored.get(d.key)?.updated_at ?? null
       }))
     })
   })
@@ -258,7 +289,11 @@ export async function extensionsRoutes(app: FastifyInstance) {
     const schema = getExtensionSettingsSchema(id)
     if (schema.length === 0)
       return reply.code(404).send({ error: 'Extension declares no settings' })
+    const { getSettingHandlers } = await import('../extensions/loader.js')
     const declared = new Map(schema.map((d) => [d.key, d]))
+    // Normalize + validate EVERY key before writing any — a rejected value
+    // must not leave the other keys half-applied.
+    const writes: Array<{ key: string; value: string | null; decl: (typeof schema)[number] }> = []
     for (const [key, raw] of Object.entries(body?.values ?? {})) {
       const decl = declared.get(key)
       if (!decl) continue // undeclared keys are ignored, never stored
@@ -278,9 +313,33 @@ export async function extensionsRoutes(app: FastifyInstance) {
       } else {
         value = String(raw).slice(0, 4000)
       }
-      const existing = await db('nivaro_extension_settings')
+      // #13 — the declaration's own validator refuses a value with a message.
+      const { validate } = getSettingHandlers(id, key)
+      if (validate) {
+        let problem: string | null = null
+        try {
+          problem = await validate(typedSettingValue(decl.type, value))
+        } catch (err) {
+          problem = err instanceof Error ? err.message : String(err)
+        }
+        if (problem) {
+          return reply.code(400).send({
+            error: `"${decl.label}": ${problem}`,
+            field: key,
+            violations: [{ field: key, message: problem }]
+          })
+        }
+      }
+      writes.push({ key, value, decl })
+    }
+    const applied: string[] = []
+    const changed: Array<{ key: string; from: string | null; to: string | null }> = []
+    for (const { key, value, decl } of writes) {
+      const existing = (await db('nivaro_extension_settings')
         .where({ extension_id: id, key })
-        .first('id')
+        .first('id', 'value')) as { id: number; value: string | null } | undefined
+      const before = existing ? existing.value : null
+      if ((before ?? null) === (value ?? null)) continue
       if (existing) {
         await db('nivaro_extension_settings')
           .where({ id: existing.id })
@@ -293,15 +352,152 @@ export async function extensionsRoutes(app: FastifyInstance) {
           updated_at: new Date()
         })
       }
+      const mask = (v: string | null) => (v == null ? null : decl.type === 'secret' ? '••••••' : v)
+      changed.push({ key, from: mask(before), to: mask(value) })
     }
     bustExtensionSettingsCache(id)
+    // #13 — on_change handlers run AFTER the cache bust, so a handler that
+    // re-reads its own setting sees the new value.
+    const notes: string[] = []
+    for (const { key, value, decl } of writes) {
+      if (!changed.some((c) => c.key === key)) continue
+      const { on_change } = getSettingHandlers(id, key)
+      if (!on_change) continue
+      try {
+        await on_change(typedSettingValue(decl.type, value))
+        applied.push(key)
+      } catch (err) {
+        notes.push(
+          `${decl.label}: on_change failed — ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
+    }
+    // #4 — one activity row per changed key: `key: old → new`, secrets masked.
+    for (const c of changed) {
+      await logActivity({
+        action: 'extension-settings-update',
+        user: req.user?.id,
+        collection: 'extensions',
+        item: id,
+        comment: `${c.key}: ${c.from ?? '∅'} → ${c.to ?? '∅'}`,
+        req
+      })
+    }
+    return reply.send({
+      data: {
+        saved: true,
+        changed: changed.map((c) => c.key),
+        // The settings cache is busted above, so ctx.settings.get() reads the
+        // new value on its next call — in effect now, not "within ~30s".
+        in_effect_since: new Date().toISOString(),
+        applied,
+        notes
+      }
+    })
+  })
+
+  // ── Settings history (#4) — the per-key activity rows the PUT writes ─────
+  app.get('/:id/settings/history', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const limit = Math.min(200, Math.max(1, Number((req.query as { limit?: string }).limit) || 50))
+    const rows = (await db('nivaro_activity as a')
+      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+      .where({
+        'a.action': 'extension-settings-update',
+        'a.collection': 'extensions',
+        'a.item': id
+      })
+      .orderBy('a.id', 'desc')
+      .limit(limit)
+      .select(
+        'a.id',
+        'a.timestamp',
+        'a.comment',
+        'a.user',
+        'u.first_name',
+        'u.last_name',
+        'u.email'
+      )) as Array<{
+      id: number
+      timestamp: Date | string
+      comment: string | null
+      user: string | null
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    const data = rows.map((r) => {
+      const m = /^([^:]+): (.*) → (.*)$/s.exec(r.comment ?? '')
+      return {
+        id: r.id,
+        at: r.timestamp,
+        user_id: r.user,
+        user_name:
+          [r.first_name, r.last_name].filter(Boolean).join(' ') ||
+          r.email ||
+          (r.user ? 'Someone' : 'System'),
+        key: m ? m[1] : null,
+        from: m ? (m[2] === '∅' ? null : m[2]) : null,
+        to: m ? (m[3] === '∅' ? null : m[3]) : null,
+        comment: r.comment
+      }
+    })
+    return reply.send({ data })
+  })
+
+  // ── Registry page (#40) — what this extension registered ────────────────
+  app.get('/:id/registry', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    if (!extensionRegistry.has(id)) return reply.code(404).send({ error: 'Extension not found' })
+    const { describeExtensionRegistry } = await import('../extensions/loader.js')
+    return reply.send({ data: await describeExtensionRegistry(id, app.cron) })
+  })
+
+  // ── Staged builds (#76) — validate, promote, roll back <id>.next / .prev ──
+  app.get('/:id/staged', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
+    const { stagedBuildStatus, validateStagedBuild } = await import('../extensions/loader.js')
+    const status = await stagedBuildStatus(id)
+    const check = status.next_present ? await validateStagedBuild(id) : null
+    return reply.send({ data: { ...status, check } })
+  })
+
+  app.post('/:id/promote', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
+    const { promoteStagedBuild, stagedBuildStatus } = await import('../extensions/loader.js')
+    const before = await stagedBuildStatus(id)
+    if (!before.next_present)
+      return reply.code(404).send({ error: `No staged build at ${id}.next` })
+    const result = await promoteStagedBuild(id)
     await logActivity({
-      action: 'extension-settings-update',
+      action: result.promoted ? 'extension-promote' : 'extension-promote-refused',
       user: req.user?.id,
-      comment: id,
+      collection: 'extensions',
+      item: id,
+      comment: result.detail,
       req
     })
-    return reply.send({ data: { saved: true } })
+    if (!result.promoted) return reply.code(422).send({ error: result.detail })
+    return reply.send({ data: { ...result, restart_required: true } })
+  })
+
+  app.post('/:id/rollback', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
+    const { rollbackStagedBuild } = await import('../extensions/loader.js')
+    const result = await rollbackStagedBuild(id)
+    if (!result.rolled_back) return reply.code(404).send({ error: result.detail })
+    await logActivity({
+      action: 'extension-rollback',
+      user: req.user?.id,
+      collection: 'extensions',
+      item: id,
+      comment: result.detail,
+      req
+    })
+    return reply.send({ data: { ...result, restart_required: true } })
   })
 
   // ── Health probes (#262) ──────────────────────────────────────────────────

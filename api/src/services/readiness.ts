@@ -40,6 +40,21 @@ export function registerReadinessCheck(check: ReadinessCheck): void {
   registry.set(check.id, check)
 }
 
+/** #40 — the registered checks, without their handlers. */
+export function listReadinessChecks(): Array<{
+  id: string
+  label: string
+  group?: string
+  has_remediation: boolean
+}> {
+  return [...registry.values()].map((c) => ({
+    id: c.id,
+    label: c.label,
+    group: c.group,
+    has_remediation: !!c.remediation
+  }))
+}
+
 // ── Remediation jobs — in-memory, per-process (the scorecard is a live
 // admin surface, not durable history) ─────────────────────────────────────
 export interface RemediationJob {

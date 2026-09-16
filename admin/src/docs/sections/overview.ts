@@ -337,6 +337,38 @@ export const userExtensions: DocSection = {
     {
       type: 'p',
       text: 'Missing extensions (folder deleted but config entry remains) can be removed by clicking the trash icon on the amber card.'
+    },
+    { type: 'h2', id: 'extension-settings', text: 'Extension settings' },
+    {
+      type: 'p',
+      text: 'An extension declares admin-editable settings on its export (`settings: [{ key, label, type, default, description }]`) and reads them with `ctx.settings.get(key)`. Values live in the database, so they change without a redeploy, and a save is **in effect immediately** — the server busts the settings cache before it answers.'
+    },
+    {
+      type: 'p',
+      text: 'A declaration may also carry `validate(value)` (return a message to refuse the value — the settings sheet shows it on the field), `on_change(value)` (run the moment the value is saved, for an extension that caches its own configuration), and `production_expect` (the value production is expected to hold). The sheet notes under each key when it last changed, whether it validates or applies immediately, and whether it matches the production expectation.'
+    },
+    {
+      type: 'p',
+      text: 'Every changed key writes one activity row (`extension-settings-update`, `key: old → new`, secrets masked) — **Show change history** in the sheet lists them with who and when, and `GET /api/extensions/:id/settings/history` returns the same list.'
+    },
+    {
+      type: 'p',
+      text: 'The Go-Live Readiness scorecard carries a **Configuration › Extension settings match their production expectations** check: it warns, naming each key, while any setting with a `production_expect` holds a different value on this instance.'
+    },
+    { type: 'h2', id: 'extension-registry', text: 'Registry: what an extension registered' },
+    {
+      type: 'p',
+      text: 'The layers icon on an extension row opens its registry — every hook (timing, collection, action), cron (expression, next run), flow operation and trigger, mail type, readiness and integrity check, notes source, bulk and item action, digest section and other registration it made when it loaded, plus its declared settings and observed capabilities. `GET /api/extensions/:id/registry` returns the same.'
+    },
+    { type: 'h2', id: 'extension-staged-builds', text: 'Staged builds' },
+    {
+      type: 'p',
+      text: 'Drop a new build at `api/extensions/<id>.next` and the row shows **Staged build**. Promote validates the staged entry module (it must import cleanly and export the same `id`), swaps it into `api/extensions/<id>`, and keeps the previous build at `api/extensions/<id>.prev`; **Roll back** reverses the swap and parks the promoted build at `.next` again. The running process keeps serving the build it loaded — hooks and crons cannot be torn down mid-flight — so either action takes effect on the **next restart**. Parked `.next` / `.prev` folders are never loaded as extensions of their own. Both actions are activity-logged.'
+    },
+    { type: 'h2', id: 'extension-settings-compare', text: 'Settings across environments' },
+    {
+      type: 'p',
+      text: "Environments → **Extension settings across environments** lays one extension's settings side by side: this instance beside every registered API component, probed server-side with the component's own token (secrets compare as set / unset). Rows whose values differ are tinted; a value that departs from `production_expect` reads amber."
     }
   ]
 }

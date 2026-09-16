@@ -161,6 +161,7 @@ export default function Environments() {
         </aside>
 
         <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+          <SettingsComparePanel />
           {!selected ? (
             <div className='max-w-[560px]'>
               <Server className='h-8 w-8 text-slate-300' />
@@ -169,16 +170,208 @@ export default function Environments() {
               </h2>
               <p className='mt-1.5 text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
                 Each tier holds its deployable components — the API instance, the frontends
-                consuming it, supporting services. Every component gets a live probe and, with a
-                Git project configured, its pipelines, job breakdowns and deployments. Tokens are
-                stored server-side and never returned unmasked.
+                consuming it, supporting services. Every component gets a live probe and, with a Git
+                project configured, its pipelines, job breakdowns and deployments. Tokens are stored
+                server-side and never returned unmasked.
               </p>
             </div>
           ) : (
-            <EnvironmentDetail key={selected.id} env={selected} onChanged={() => void qc.invalidateQueries({ queryKey: ['environments'] })} onDeleted={() => setSelectedId(null)} />
+            <EnvironmentDetail
+              key={selected.id}
+              env={selected}
+              onChanged={() => void qc.invalidateQueries({ queryKey: ['environments'] })}
+              onDeleted={() => setSelectedId(null)}
+            />
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── #31 — one extension's settings across every API component ─────────────
+// Spans tiers, so it sits above the per-environment detail. The server probes
+// each API component with its own token; secrets read as set / unset.
+type CompareData = {
+  extension: string
+  keys: Array<{
+    key: string
+    label: string
+    type: string
+    default: string | null
+    production_expect: string | null
+    differs: boolean
+  }>
+  columns: Array<{
+    id: number | 'local'
+    name: string
+    environment: string | null
+    state: 'ok' | 'no-token' | 'unreachable' | 'no-settings'
+    note?: string
+    values: Record<string, string | null>
+  }>
+}
+
+function SettingsComparePanel() {
+  const [open, setOpen] = useState(false)
+  const [ext, setExt] = useState<string | null>(null)
+  const { data: extensions = [] } = useQuery<
+    Array<{ id: string; has_settings?: boolean; status: string }>
+  >({
+    queryKey: ['extensions'],
+    queryFn: () => api.get('/extensions').then((r) => r.data.data),
+    enabled: open
+  })
+  const withSettings = extensions.filter((e) => e.has_settings && e.status === 'loaded')
+  const active = ext ?? withSettings[0]?.id ?? null
+  const { data, isFetching, error } = useQuery<CompareData>({
+    queryKey: ['environments-settings-compare', active],
+    queryFn: () =>
+      api
+        .get<{ data: CompareData }>('/environments/settings-compare', {
+          params: { extension: active }
+        })
+        .then((r) => r.data.data),
+    enabled: open && !!active,
+    staleTime: 30_000,
+    retry: false
+  })
+  return (
+    <div
+      className='mb-5 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-env-settings-compare
+    >
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center gap-2 px-4 py-2.5 text-left'
+      >
+        {open ? (
+          <ChevronDown className='h-3.5 w-3.5 text-slate-400' />
+        ) : (
+          <ChevronRight className='h-3.5 w-3.5 text-slate-400' />
+        )}
+        <span className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+          Extension settings across environments
+        </span>
+        <span className='text-[11.5px] text-slate-400'>
+          this instance beside every registered API component
+        </span>
+      </button>
+      {open && (
+        <div className='border-t border-slate-100 px-4 py-3 dark:border-border'>
+          {withSettings.length === 0 ? (
+            <p className='text-[12px] text-slate-400'>No loaded extension declares settings.</p>
+          ) : (
+            <div className='mb-3 flex flex-wrap gap-1.5'>
+              {withSettings.map((e) => (
+                <button
+                  key={e.id}
+                  type='button'
+                  onClick={() => setExt(e.id)}
+                  className={cn(
+                    'rounded-full border px-2.5 py-0.5 font-mono text-[11px]',
+                    active === e.id
+                      ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                      : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:hover:bg-background/40'
+                  )}
+                  data-env-compare-ext={e.id}
+                >
+                  {e.id}
+                </button>
+              ))}
+            </div>
+          )}
+          {error && (
+            <p className='text-[12px] text-red-600'>
+              {(error as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+                'Could not compare'}
+            </p>
+          )}
+          {isFetching && !data && <p className='text-[12px] text-slate-400'>Probing components…</p>}
+          {data && (
+            <div className='overflow-x-auto'>
+              <table className='w-full text-[12px]' data-env-compare-table>
+                <thead>
+                  <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+                    <th className='py-1.5 pr-3 font-medium'>Setting</th>
+                    {data.columns.map((c) => (
+                      <th key={String(c.id)} className='py-1.5 pr-3 font-medium'>
+                        <span className='block normal-case tracking-normal text-slate-600 dark:text-slate-300'>
+                          {c.name}
+                        </span>
+                        <span className='block text-[10px] font-normal'>
+                          {c.environment ?? 'here'}
+                          {c.state !== 'ok' && (
+                            <span className='ml-1 text-amber-600' data-tip={c.note}>
+                              ·{' '}
+                              {c.state === 'no-token'
+                                ? 'no token'
+                                : c.state === 'no-settings'
+                                  ? 'not there'
+                                  : 'unreachable'}
+                            </span>
+                          )}
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className='tabular-nums'>
+                  {data.keys.map((k) => (
+                    <tr
+                      key={k.key}
+                      className={cn(
+                        'border-t border-slate-100 dark:border-border',
+                        k.differs && 'bg-amber-50/60 dark:bg-amber-400/10'
+                      )}
+                      data-env-compare-key={k.key}
+                      data-env-compare-differs={k.differs ? '1' : '0'}
+                    >
+                      <td className='py-1.5 pr-3'>
+                        <span className='block text-slate-700 dark:text-foreground'>{k.label}</span>
+                        <span className='block font-mono text-[10px] text-slate-400'>
+                          {k.key}
+                          {k.production_expect != null && ` · production "${k.production_expect}"`}
+                        </span>
+                      </td>
+                      {data.columns.map((c) => {
+                        const v = c.state === 'ok' ? (c.values[k.key] ?? null) : null
+                        const off =
+                          c.state === 'ok' &&
+                          k.production_expect != null &&
+                          k.type !== 'secret' &&
+                          (v ?? '') !== k.production_expect
+                        return (
+                          <td key={String(c.id)} className='py-1.5 pr-3 font-mono text-[11.5px]'>
+                            {c.state !== 'ok' ? (
+                              <span className='text-slate-300'>—</span>
+                            ) : v == null ? (
+                              <span className='text-slate-400'>
+                                {k.default != null ? `${k.default} (default)` : 'unset'}
+                              </span>
+                            ) : (
+                              <span
+                                className={cn(
+                                  off
+                                    ? 'text-amber-700 dark:text-amber-400'
+                                    : 'text-slate-700 dark:text-foreground'
+                                )}
+                              >
+                                {v}
+                              </span>
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -296,7 +489,11 @@ function ComponentCard({ component, onChanged }: { component: Component; onChang
   const [showConfig, setShowConfig] = useState(false)
   const Icon = KIND_ICON[component.kind] ?? Boxes
 
-  const { data: status, isFetching, refetch } = useQuery<CompStatus>({
+  const {
+    data: status,
+    isFetching,
+    refetch
+  } = useQuery<CompStatus>({
     queryKey: ['environment-comp-status', component.id],
     queryFn: () =>
       api
@@ -467,9 +664,9 @@ function CiPanel({ component }: { component: Component }) {
     queryKey: ['environment-comp-pipelines', component.id],
     queryFn: () =>
       api
-        .get<{ data: { configured: boolean; active?: boolean; error?: string; pipelines: Pipeline[] } }>(
-          `/environments/components/${component.id}/pipelines`
-        )
+        .get<{
+          data: { configured: boolean; active?: boolean; error?: string; pipelines: Pipeline[] }
+        }>(`/environments/components/${component.id}/pipelines`)
         .then((r) => r.data.data),
     refetchInterval: 5_000,
     retry: false
@@ -603,7 +800,11 @@ function PipelineRow({
   const active = ACTIVE_STATUSES.has(p.status)
   return (
     <div className='rounded-md transition-colors hover:bg-slate-50 dark:hover:bg-background/40'>
-      <button type='button' onClick={onToggle} className='flex w-full items-center gap-2.5 px-2 py-1.5 text-left'>
+      <button
+        type='button'
+        onClick={onToggle}
+        className='flex w-full items-center gap-2.5 px-2 py-1.5 text-left'
+      >
         {expanded ? (
           <ChevronDown className='h-3 w-3 shrink-0 text-slate-400' />
         ) : (
@@ -687,7 +888,9 @@ function JobList({
     return <p className='px-9 pb-2 text-[11.5px] text-slate-400'>Loading jobs…</p>
   }
   if (data?.error) {
-    return <p className='px-9 pb-2 text-[11.5px] text-amber-600 dark:text-amber-400'>{data.error}</p>
+    return (
+      <p className='px-9 pb-2 text-[11.5px] text-amber-600 dark:text-amber-400'>{data.error}</p>
+    )
   }
   if (!data || data.jobs.length === 0) {
     return <p className='px-9 pb-2 text-[11.5px] text-slate-400'>No jobs.</p>
@@ -729,7 +932,10 @@ function JobList({
               )}
             >
               <span
-                className={cn('h-1.5 w-1.5 rounded-full', PIPELINE_TONE[j.status] ?? 'bg-slate-300')}
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  PIPELINE_TONE[j.status] ?? 'bg-slate-300'
+                )}
               />
               {j.name}
               {j.duration != null && (
@@ -917,7 +1123,9 @@ function ComponentForm({
         </Field>
         <Field
           label='Probe path'
-          hint={isApi ? 'Blank = /api/version.' : 'Blank = /version.json (frontends) or / (services).'}
+          hint={
+            isApi ? 'Blank = /api/version.' : 'Blank = /version.json (frontends) or / (services).'
+          }
         >
           <Input
             value={draft.probe_path}
@@ -946,7 +1154,10 @@ function ComponentForm({
                 className='h-8 font-mono text-[12px]'
               />
             </Field>
-            <Field label='DB name (reference)' hint='Reference only — the live database always comes from the health probe.'>
+            <Field
+              label='DB name (reference)'
+              hint='Reference only — the live database always comes from the health probe.'
+            >
               <Input
                 value={draft.db_database}
                 onChange={(e) => setDraft((d) => ({ ...d, db_database: e.target.value }))}
@@ -1046,7 +1257,11 @@ function ComponentForm({
       </div>
 
       <div className='mt-4 flex items-center gap-3'>
-        <Button size='sm' disabled={!draft.name.trim() || save.isPending} onClick={() => save.mutate()}>
+        <Button
+          size='sm'
+          disabled={!draft.name.trim() || save.isPending}
+          onClick={() => save.mutate()}
+        >
           {save.isPending ? (
             <>
               <Loader2 className='h-3.5 w-3.5 animate-spin' /> Saving…

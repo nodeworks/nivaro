@@ -60,6 +60,35 @@ class HookRegistry {
     }
   }
 
+  /** #40 — what an extension registered, for the registry page. */
+  listForExtension(
+    extensionId: string
+  ): Array<{ timing: HookTiming; collection: string; action: string; disabled: boolean }> {
+    const out: Array<{
+      timing: HookTiming
+      collection: string
+      action: string
+      disabled: boolean
+    }> = []
+    for (const e of this.beforeHooks)
+      if (e.extensionId === extensionId)
+        out.push({
+          timing: 'before',
+          collection: e.collection,
+          action: e.action,
+          disabled: !!e.disabled
+        })
+    for (const e of this.afterHooks)
+      if (e.extensionId === extensionId)
+        out.push({
+          timing: 'after',
+          collection: e.collection,
+          action: e.action,
+          disabled: !!e.disabled
+        })
+    return out
+  }
+
   removeExtensionHooks(extensionId: string) {
     this.beforeHooks = this.beforeHooks.filter((e) => e.extensionId !== extensionId)
     this.afterHooks = this.afterHooks.filter((e) => e.extensionId !== extensionId)

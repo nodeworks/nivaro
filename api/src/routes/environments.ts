@@ -487,6 +487,113 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
 
   // ── CI: pipelines, jobs, deployments ──────────────────────────────────────
 
+  // ── #31 — one extension's settings across every API component ───────────
+  // Probes each API component's /api/extensions/:id/settings with ITS token
+  // (server-side, tokens never reach the browser) and lays the values side by
+  // side with this instance's own. Secrets compare as set / unset only.
+  app.get('/settings-compare', async (req, reply) => {
+    const ext = String((req.query as { extension?: string }).extension ?? '')
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(ext))
+      return reply.code(400).send({ error: 'extension is required' })
+    const { getExtensionSettingsSchema, readExtensionSettings } = await import(
+      '../extensions/loader.js'
+    )
+    const schema = getExtensionSettingsSchema(ext)
+    if (schema.length === 0)
+      return reply.code(404).send({ error: 'Extension declares no settings on this instance' })
+    const envs = (await db('nivaro_environments').orderBy('sort').orderBy('id')) as Array<{
+      id: number
+      name: string
+      color: string | null
+    }>
+    const comps = (
+      (await db('nivaro_environment_components')
+        .where('kind', 'api')
+        .orderBy('sort')
+        .orderBy('id')) as ComponentRow[]
+    ).filter((c) => !!c.base_url)
+    const local = await readExtensionSettings(ext)
+    const mask = (type: string, v: unknown) =>
+      v == null || v === '' ? null : type === 'secret' ? MASK : String(v)
+    const columns: Array<{
+      id: number | 'local'
+      name: string
+      environment: string | null
+      state: 'ok' | 'no-token' | 'unreachable' | 'no-settings'
+      note?: string
+      values: Record<string, string | null>
+    }> = [
+      {
+        id: 'local',
+        name: 'This instance',
+        environment: null,
+        state: 'ok',
+        values: Object.fromEntries(schema.map((d) => [d.key, mask(d.type, local[d.key])]))
+      }
+    ]
+    await Promise.all(
+      comps.map(async (c) => {
+        const env = envs.find((e) => e.id === c.environment)
+        const col = {
+          id: c.id,
+          name: c.name,
+          environment: env?.name ?? null,
+          state: 'ok' as 'ok' | 'no-token' | 'unreachable' | 'no-settings',
+          note: undefined as string | undefined,
+          values: {} as Record<string, string | null>
+        }
+        columns.push(col)
+        if (!c.api_token) {
+          col.state = 'no-token'
+          col.note = 'No API token on this component'
+          return
+        }
+        const base = c.base_url!.replace(/\/+$/, '')
+        try {
+          const res = await fetchJson(`${base}/api/extensions/${ext}/settings`, {
+            authorization: `Bearer ${c.api_token}`
+          })
+          if (res.status === 404) {
+            col.state = 'no-settings'
+            col.note = 'Extension not loaded there, or declares no settings'
+            return
+          }
+          if (!res.ok) {
+            col.state = 'unreachable'
+            col.note = `HTTP ${res.status}`
+            return
+          }
+          const rows = (res.body as { data?: Array<{ key: string; type: string; value: unknown }> })
+            ?.data
+          for (const d of schema) {
+            const r = rows?.find((x) => x.key === d.key)
+            // Effective value: a NULL there means "default" — compare what the
+            // extension actually sees, not whether a row was ever stored.
+            col.values[d.key] = r ? mask(d.type, r.value ?? d.default ?? null) : null
+          }
+        } catch (err) {
+          col.state = 'unreachable'
+          col.note = err instanceof Error ? err.message : String(err)
+        }
+      })
+    )
+    const keys = schema.map((d) => {
+      const seen = columns
+        .filter((c) => c.state === 'ok')
+        .map((c) => c.values[d.key] ?? mask(d.type, d.default ?? null))
+      const distinct = new Set(seen.map((v) => v ?? '∅'))
+      return {
+        key: d.key,
+        label: d.label,
+        type: d.type,
+        default: d.default ?? null,
+        production_expect: d.production_expect ?? null,
+        differs: distinct.size > 1
+      }
+    })
+    return reply.send({ data: { extension: ext, keys, columns } })
+  })
+
   app.get<{ Params: { cid: string } }>('/components/:cid/pipelines', async (req, reply) => {
     const row = await loadComponent(req.params.cid)
     if (!row) return reply.code(404).send({ error: 'Not found' })

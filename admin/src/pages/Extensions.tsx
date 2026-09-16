@@ -5,16 +5,19 @@ import {
   CheckCircle2,
   Download,
   Inbox,
+  Layers,
   Package,
   Puzzle,
   RefreshCw,
+  Rocket,
+  RotateCcw,
   ScrollText,
   Settings as SettingsIcon,
   Store,
   Trash2,
   XCircle
 } from 'lucide-react'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,7 +26,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 type Extension = {
   id: string
@@ -37,6 +40,13 @@ type Extension = {
   has_health_check?: boolean
   /** Capability manifest (#660): declared by the export vs observed by the loader. */
   capabilities?: { declared: string[]; observed: string[] }
+  /** #76 — a build parked at <id>.next / the previous build kept at <id>.prev */
+  staged?: {
+    next_present: boolean
+    next_mtime: string | null
+    prev_present: boolean
+    prev_mtime: string | null
+  } | null
 }
 
 type ExtensionEvent = {
@@ -477,6 +487,29 @@ export function ExtensionsPage() {
   // Settings sheet (#112), logs viewer (#427), probe results (#262).
   const [settingsFor, setSettingsFor] = useState<string | null>(null)
   const [logsFor, setLogsFor] = useState<string | null>(null)
+  const [registryFor, setRegistryFor] = useState<string | null>(null)
+  // #76 — two-click confirm for promote / roll back (no modal: the row is the confirm)
+  const [buildConfirm, setBuildConfirm] = useState<{
+    id: string
+    kind: 'promote' | 'rollback'
+  } | null>(null)
+  const buildMutation = useMutation({
+    mutationFn: ({ id, kind }: { id: string; kind: 'promote' | 'rollback' }) =>
+      api.post<{ data: { detail: string } }>(`/extensions/${id}/${kind}`).then((r) => r.data.data),
+    onSuccess: (data, vars) => {
+      toast.success(
+        `${vars.kind === 'promote' ? 'Promoted' : 'Rolled back'} ${vars.id} — restart the API to run it`,
+        { description: data.detail, duration: 10_000 }
+      )
+      setBuildConfirm(null)
+      void queryClient.invalidateQueries({ queryKey: ['extensions'] })
+    },
+    onError: (err) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Build action failed', { duration: 10_000 })
+      setBuildConfirm(null)
+    }
+  })
   const runProbe = (id: string) => {
     void api
       .get<{ data: { ok: boolean; note?: string } }>(`/extensions/${id}/health`)
@@ -817,6 +850,66 @@ export function ExtensionsPage() {
                           {ext.status === 'loaded' && (
                             <button
                               type='button'
+                              onClick={() => setRegistryFor(ext.id)}
+                              className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-nvr-navy dark:hover:bg-muted dark:hover:text-nvr-cyan'
+                              data-tip='What this extension registered'
+                              data-ext-registry={ext.id}
+                              aria-label={`Registry for ${ext.id}`}
+                            >
+                              <Layers className='h-3.5 w-3.5' />
+                            </button>
+                          )}
+                          {ext.staged?.next_present && (
+                            <button
+                              type='button'
+                              onClick={() =>
+                                buildConfirm?.id === ext.id && buildConfirm.kind === 'promote'
+                                  ? buildMutation.mutate({ id: ext.id, kind: 'promote' })
+                                  : setBuildConfirm({ id: ext.id, kind: 'promote' })
+                              }
+                              disabled={buildMutation.isPending}
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium',
+                                buildConfirm?.id === ext.id && buildConfirm.kind === 'promote'
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400'
+                              )}
+                              data-tip={`A build is staged at ${ext.id}.next${ext.staged.next_mtime ? ` (${formatRelative(ext.staged.next_mtime)})` : ''} — validate + swap it in; the current build is kept for roll back. Takes effect on the next restart.`}
+                              data-ext-promote={ext.id}
+                            >
+                              <Rocket className='h-3 w-3' />
+                              {buildConfirm?.id === ext.id && buildConfirm.kind === 'promote'
+                                ? 'Promote staged build?'
+                                : 'Staged build'}
+                            </button>
+                          )}
+                          {ext.staged?.prev_present && (
+                            <button
+                              type='button'
+                              onClick={() =>
+                                buildConfirm?.id === ext.id && buildConfirm.kind === 'rollback'
+                                  ? buildMutation.mutate({ id: ext.id, kind: 'rollback' })
+                                  : setBuildConfirm({ id: ext.id, kind: 'rollback' })
+                              }
+                              disabled={buildMutation.isPending}
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium',
+                                buildConfirm?.id === ext.id && buildConfirm.kind === 'rollback'
+                                  ? 'bg-amber-600 text-white'
+                                  : 'bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-400'
+                              )}
+                              data-tip={`The previous build is kept at ${ext.id}.prev${ext.staged.prev_mtime ? ` (${formatRelative(ext.staged.prev_mtime)})` : ''} — swap it back; the promoted one is parked at ${ext.id}.next. Takes effect on the next restart.`}
+                              data-ext-rollback={ext.id}
+                            >
+                              <RotateCcw className='h-3 w-3' />
+                              {buildConfirm?.id === ext.id && buildConfirm.kind === 'rollback'
+                                ? 'Roll back?'
+                                : 'Roll back'}
+                            </button>
+                          )}
+                          {ext.status === 'loaded' && (
+                            <button
+                              type='button'
                               onClick={() => setLogsFor(ext.id)}
                               className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-nvr-navy dark:hover:bg-muted dark:hover:text-nvr-cyan'
                               data-tip='Recent log lines'
@@ -869,6 +962,9 @@ export function ExtensionsPage() {
         <ExtensionSettingsSheet id={settingsFor} onClose={() => setSettingsFor(null)} />
       )}
       {logsFor && <ExtensionLogsSheet id={logsFor} onClose={() => setLogsFor(null)} />}
+      {registryFor && (
+        <ExtensionRegistrySheet id={registryFor} onClose={() => setRegistryFor(null)} />
+      )}
     </div>
   )
 }
@@ -881,6 +977,21 @@ type SettingDecl = {
   description?: string
   default?: string
   value: string | null
+  /** #13 — when the stored value last changed; null = still the default */
+  updated_at?: string | null
+  has_validate?: boolean
+  has_on_change?: boolean
+  production_expect?: string | null
+}
+
+type SettingHistoryRow = {
+  id: number
+  at: string
+  user_name: string
+  key: string | null
+  from: string | null
+  to: string | null
+  comment: string | null
 }
 
 function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => void }) {
@@ -891,16 +1002,41 @@ function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => vo
   })
   const [draft, setDraft] = useState<Record<string, string>>({})
   const effective = (d: SettingDecl) => draft[d.key] ?? (d.value == null ? '' : String(d.value))
+  const [showHistory, setShowHistory] = useState(false)
+  const { data: history = [], isLoading: historyLoading } = useQuery<SettingHistoryRow[]>({
+    queryKey: ['extension-settings-history', id],
+    queryFn: () => api.get(`/extensions/${id}/settings/history`).then((r) => r.data.data),
+    enabled: showHistory
+  })
   const save = useMutation({
-    mutationFn: () => api.put(`/extensions/${id}/settings`, { values: draft }),
-    onSuccess: () => {
-      toast.success('Settings saved — live within ~30s (settings cache)')
+    mutationFn: () =>
+      api
+        .put<{
+          data: { changed: string[]; in_effect_since: string; applied: string[]; notes: string[] }
+        }>(`/extensions/${id}/settings`, { values: draft })
+        .then((r) => r.data.data),
+    onSuccess: (data) => {
+      if (data.changed.length === 0) {
+        toast.message('Nothing changed')
+      } else {
+        // The server busts the settings cache before answering — the new
+        // value is what ctx.settings.get() returns from now on.
+        toast.success(`Settings saved — in effect now`, {
+          description:
+            data.applied.length > 0
+              ? `Applied immediately: ${data.applied.join(', ')}`
+              : `${data.changed.length} value${data.changed.length === 1 ? '' : 's'} changed`
+        })
+      }
+      for (const n of data.notes) toast.warning(n, { duration: 10_000 })
       void qc.invalidateQueries({ queryKey: ['extension-settings', id] })
+      void qc.invalidateQueries({ queryKey: ['extension-settings-history', id] })
       onClose()
     },
     onError: (err) => {
+      // #13 — a declaration's validator refused the value; the message names the field.
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
-      toast.error(msg ?? 'Save failed')
+      toast.error(msg ?? 'Save failed', { duration: 8000 })
     }
   })
   return (
@@ -933,6 +1069,7 @@ function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => vo
                     )}
                     <span className='mt-0.5 block font-mono text-[10px] text-slate-400'>
                       {d.key}
+                      <SettingMeta d={d} />
                     </span>
                   </div>
                   <Switch
@@ -964,6 +1101,7 @@ function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => vo
                   />
                   <span className='mt-0.5 block font-mono text-[10px] text-slate-400'>
                     {d.key}
+                    <SettingMeta d={d} />
                     {d.type === 'secret' && d.value === '••••••' && (
                       <span className='ml-1.5 text-slate-300'>
                         — leaving the mask keeps the stored value
@@ -973,6 +1111,44 @@ function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => vo
                 </label>
               )
             )}
+            <div className='border-t border-slate-100 pt-3 dark:border-border'>
+              <button
+                type='button'
+                onClick={() => setShowHistory((v) => !v)}
+                className='text-[11.5px] font-medium text-slate-500 hover:text-nvr-navy dark:text-muted-foreground dark:hover:text-nvr-cyan'
+                data-ext-settings-history
+              >
+                {showHistory ? 'Hide history' : 'Show change history'}
+              </button>
+              {showHistory && (
+                <ol className='mt-2 space-y-1.5' data-ext-settings-history-list>
+                  {historyLoading ? (
+                    <li className='text-[11.5px] text-slate-400'>Loading…</li>
+                  ) : (
+                    history.length === 0 && (
+                      <li className='text-[11.5px] text-slate-400' data-ext-settings-history-empty>
+                        No changes recorded yet.
+                      </li>
+                    )
+                  )}
+                  {history.map((h) => (
+                    <li key={h.id} className='text-[11.5px] leading-snug'>
+                      <span className='font-mono text-[10.5px] text-slate-500 dark:text-slate-300'>
+                        {h.key ?? '—'}
+                      </span>{' '}
+                      <span className='text-slate-400 line-through'>{h.from ?? '∅'}</span>{' '}
+                      <span className='text-slate-400'>→</span>{' '}
+                      <span className='font-medium text-slate-700 dark:text-foreground'>
+                        {h.to ?? '∅'}
+                      </span>
+                      <span className='ml-1.5 text-[10.5px] text-slate-400'>
+                        {h.user_name} · {formatRelative(h.at)}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
             <div className='flex justify-end gap-2 pt-2'>
               <Button size='sm' variant='outline' onClick={onClose}>
                 Cancel
@@ -985,6 +1161,219 @@ function ExtensionSettingsSheet({ id, onClose }: { id: string; onClose: () => vo
                 {save.isPending ? 'Saving…' : 'Save'}
               </Button>
             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** #13/#17 — under a setting's key: when it last changed, whether the
+ *  declaration validates / applies it live, and the production expectation. */
+function SettingMeta({ d }: { d: SettingDecl }) {
+  const bits: string[] = []
+  if (d.updated_at) bits.push(`changed ${formatRelative(d.updated_at)}`)
+  else bits.push('default')
+  if (d.has_on_change) bits.push('applies immediately')
+  else if (d.has_validate) bits.push('validated')
+  const mismatch =
+    d.production_expect != null &&
+    d.type !== 'secret' &&
+    String(d.value ?? '') !== d.production_expect
+  return (
+    <span
+      className='ml-1.5 font-sans text-slate-300 dark:text-muted-foreground/70'
+      data-setting-meta={d.key}
+    >
+      — {bits.join(' · ')}
+      {d.production_expect != null && (
+        <span
+          className={cn(mismatch ? 'text-amber-600 dark:text-amber-400' : '')}
+          data-setting-expect={mismatch ? 'differs' : 'ok'}
+        >
+          {' · '}
+          {mismatch ? `production expects "${d.production_expect}"` : 'matches production'}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// ─── Registry sheet (#40) — what an extension registered, by kind ────────────
+type RegistryData = {
+  hooks: Array<{ timing: string; collection: string; action: string; disabled: boolean }>
+  crons: Array<{ id: string; expression: string; next_run: string | null; paused: boolean }>
+  registrations: Record<string, string[]>
+  settings: Array<{
+    key: string
+    label: string
+    type: string
+    has_validate: boolean
+    has_on_change: boolean
+    production_expect: string | null
+  }>
+  observed_capabilities: string[]
+  health_check: boolean
+  staged: { next_present: boolean; prev_present: boolean; live_entry: string | null }
+}
+
+const REGISTRATION_LABELS: Record<string, string> = {
+  flow_operations: 'Flow operations',
+  flow_triggers: 'Flow triggers',
+  note_sources: 'Notes sources',
+  mail_types: 'Mail types',
+  readiness_checks: 'Readiness checks',
+  integrity_checks: 'Integrity checks',
+  bulk_actions: 'Bulk actions',
+  item_actions: 'Item actions',
+  event_handlers: 'Event handlers',
+  digest_sections: 'Digest sections',
+  dashboard_widgets: 'Dashboard widgets',
+  notification_channels: 'Notification channels',
+  notification_sources: 'Notification sources',
+  storage_adapters: 'Storage adapters',
+  field_types: 'Field types',
+  collection_views: 'Collection views',
+  import_parsers: 'Import parsers',
+  validators: 'Validators',
+  portal_links: 'Portal links',
+  chat_bot_tools: 'Chat bot tools'
+}
+
+function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data, isLoading } = useQuery<RegistryData>({
+    queryKey: ['extension-registry', id],
+    queryFn: () => api.get(`/extensions/${id}/registry`).then((r) => r.data.data)
+  })
+  const Section = ({
+    title,
+    count,
+    children
+  }: {
+    title: string
+    count: number
+    children: ReactNode
+  }) =>
+    count === 0 ? null : (
+      <section data-registry-section={title}>
+        <h3 className='flex items-baseline gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+          {title}
+          <span className='font-mono text-[10px] font-normal text-slate-400'>{count}</span>
+        </h3>
+        <ul className='mt-1 space-y-0.5'>{children}</ul>
+      </section>
+    )
+  const total = data
+    ? data.hooks.length +
+      data.crons.length +
+      Object.values(data.registrations).reduce((n, l) => n + l.length, 0) +
+      data.settings.length
+    : 0
+  return (
+    <div className='fixed inset-0 z-[120] flex justify-end bg-black/30' onClick={onClose}>
+      <div
+        className='h-full w-[440px] overflow-y-auto border-l border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
+        onClick={(e) => e.stopPropagation()}
+        data-ext-registry-sheet={id}
+      >
+        <h2 className='text-[14px] font-semibold'>
+          <code className='font-mono'>{id}</code> registry
+        </h2>
+        <p className='mt-0.5 text-[11.5px] text-muted-foreground'>
+          Everything this extension registered when it loaded — the surface it adds to this
+          instance.
+        </p>
+        {isLoading || !data ? (
+          <p className='mt-4 text-[12.5px] text-slate-400'>Loading…</p>
+        ) : total === 0 ? (
+          <p className='mt-4 text-[12.5px] text-slate-400'>
+            Nothing registered — the extension loaded but added no hooks, crons, operations or
+            settings.
+          </p>
+        ) : (
+          <div className='mt-4 space-y-4 text-[12px]'>
+            <Section title='Hooks' count={data.hooks.length}>
+              {data.hooks.map((h, i) => (
+                <li
+                  key={`${h.timing}-${h.collection}-${h.action}-${i}`}
+                  className='font-mono text-[11px] text-slate-700 dark:text-slate-200'
+                >
+                  <span className='text-slate-400'>{h.timing}</span> {h.collection}
+                  <span className='text-slate-400'>.</span>
+                  {h.action}
+                  {h.disabled && (
+                    <span className='ml-1.5 font-sans text-[10px] text-amber-600'>disabled</span>
+                  )}
+                </li>
+              ))}
+            </Section>
+            <Section title='Crons' count={data.crons.length}>
+              {data.crons.map((c) => (
+                <li key={c.id} className='flex items-baseline gap-2'>
+                  <span className='font-mono text-[11px] text-slate-700 dark:text-slate-200'>
+                    {c.id}
+                  </span>
+                  <span className='font-mono text-[10.5px] text-slate-400'>{c.expression}</span>
+                  {c.paused ? (
+                    <span className='text-[10px] text-amber-600'>paused</span>
+                  ) : c.next_run ? (
+                    <span className='text-[10px] text-slate-400'>
+                      next {formatRelative(c.next_run)}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </Section>
+            {Object.entries(data.registrations).map(([kind, items]) => (
+              <Section key={kind} title={REGISTRATION_LABELS[kind] ?? kind} count={items.length}>
+                {items.map((label) => (
+                  <li
+                    key={label}
+                    className='font-mono text-[11px] text-slate-700 dark:text-slate-200'
+                  >
+                    {label}
+                  </li>
+                ))}
+              </Section>
+            ))}
+            <Section title='Settings' count={data.settings.length}>
+              {data.settings.map((st) => (
+                <li key={st.key} className='flex flex-wrap items-baseline gap-x-2'>
+                  <span className='font-mono text-[11px] text-slate-700 dark:text-slate-200'>
+                    {st.key}
+                  </span>
+                  <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    {st.label}
+                  </span>
+                  <span className='text-[10px] text-slate-400'>
+                    {st.type}
+                    {st.has_validate ? ' · validated' : ''}
+                    {st.has_on_change ? ' · applies immediately' : ''}
+                    {st.production_expect != null ? ` · production "${st.production_expect}"` : ''}
+                  </span>
+                </li>
+              ))}
+            </Section>
+            <section>
+              <h3 className='text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+                Runtime
+              </h3>
+              <p className='mt-1 text-[11.5px] text-slate-600 dark:text-slate-300'>
+                Health check: {data.health_check ? 'declared' : 'none'} · Observed capabilities:{' '}
+                {data.observed_capabilities.length > 0
+                  ? data.observed_capabilities.join(', ')
+                  : 'none'}
+              </p>
+              <p className='mt-1 font-mono text-[10.5px] text-slate-400'>
+                {data.staged.live_entry ?? '—'}
+              </p>
+              {(data.staged.next_present || data.staged.prev_present) && (
+                <p className='mt-1 text-[11.5px] text-slate-600 dark:text-slate-300'>
+                  {data.staged.next_present ? `A staged build waits at ${id}.next. ` : ''}
+                  {data.staged.prev_present ? `The previous build is kept at ${id}.prev.` : ''}
+                </p>
+              )}
+            </section>
           </div>
         )}
       </div>
