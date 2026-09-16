@@ -20418,10 +20418,13 @@ function FieldGroupsTab({
   const hasLocalChangeRef = useRef(false)
   // Bumped on every local change — lets the save know whether newer edits arrived while in flight
   const changeSeqRef = useRef(0)
+  // True once the init effect has seeded every per-field map for the current layout.
+  const initSeededRef = useRef(false)
 
   // Reset dirty flag when layout changes so the init effect re-initialises with fresh server data
   useEffect(() => {
     hasLocalChangeRef.current = false
+    initSeededRef.current = false
     changeSeqRef.current++
   }, [layoutId])
 
@@ -20760,6 +20763,11 @@ function FieldGroupsTab({
     } else {
       setSubtitleConfig(null)
     }
+    // Every per-field map above is seeded now. Only from here may a save PUT
+    // the layout: a save built from empty maps (this effect threw partway, or
+    // never ran for this layout) writes NULL col_span / false flags onto every
+    // assignment — that wiped layout 2's widths once.
+    initSeededRef.current = true
   }, [groups, fieldConfig, allFields, ungroupedSortFromServer])
 
   // ── Mutations ──
@@ -20780,6 +20788,13 @@ function FieldGroupsTab({
   // Must be declared after invalidateFieldConfig to avoid TDZ error
   useEffect(() => {
     if (!layoutId || !hasLocalChangeRef.current) return
+    if (!initSeededRef.current) {
+      // The per-field maps never seeded for this layout — a PUT now would
+      // replace every assignment with NULL widths and cleared flags.
+      console.warn('[layout] save refused: layout state not seeded yet')
+      toast.error('Layout not fully loaded — reload before editing')
+      return
+    }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     const doSave = () => {
       const seq = changeSeqRef.current
