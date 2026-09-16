@@ -256,6 +256,7 @@ export {
   QuickPickerDialog,
   REACTION_EMOJI,
   RealtimeContext,
+  RecentRecordsRail,
   RecordChatActions,
   RecordDrilldownSheet,
   RecordGridEditor,

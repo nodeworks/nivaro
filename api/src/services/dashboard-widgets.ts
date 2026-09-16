@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
 
 /**
  * Widget data resolution shared by the authenticated dashboard routes and the
@@ -100,8 +101,81 @@ async function resolveCollection(name: string): Promise<boolean> {
 
 export async function computeWidgetData(
   widget: WidgetSpec,
-  extraFilters: WidgetFilter[] = []
+  extraFilters: WidgetFilter[] = [],
+  ctx: { user?: User | null } = {}
 ): Promise<{ data: unknown } | { error: string; status: number }> {
+  // #52 — a widget over a SAVED BROWSER VIEW: `field` holds the view id, the
+  // view's own filters compile exactly as the browser compiles them, and the
+  // read runs AS THE VIEWER through readItems (RBAC, row filters and user
+  // scopes bind — the number a person sees is the number they would get in
+  // the browser). `filters.sum_field` turns the count into a sum.
+  if (widget.type === 'saved_view') {
+    if (!widget.field) return { data: { value: null } }
+    if (!ctx.user) return { data: { value: null, reason: 'no viewer' } }
+    const view = (await db('nivaro_saved_views')
+      .where('id', Number(widget.field))
+      .first('id', 'name', 'collection', 'filters')
+      .catch(() => null)) as
+      | { id: number; name: string; collection: string; filters: unknown }
+      | null
+      | undefined
+    if (!view) return { error: 'Saved view not found', status: 404 }
+    const collection = String(view.collection)
+    if (!(await resolveCollection(collection))) return { error: 'Unknown collection', status: 400 }
+    let viewFilters: unknown = view.filters
+    if (typeof viewFilters === 'string') {
+      try {
+        viewFilters = JSON.parse(viewFilters)
+      } catch {
+        viewFilters = []
+      }
+    }
+    const { compileViewConditions } = await import('./view-subscriptions.js')
+    const conditions = compileViewConditions(
+      Array.isArray(viewFilters) ? (viewFilters as Parameters<typeof compileViewConditions>[0]) : []
+    )
+    let sumField: string | null = null
+    try {
+      const f =
+        typeof widget.filters === 'string' ? JSON.parse(widget.filters) : (widget.filters ?? null)
+      const candidate = (f as { sum_field?: unknown } | null)?.sum_field
+      if (typeof candidate === 'string' && candidate.trim()) {
+        const fieldSet = await registeredFieldSet(collection)
+        if (fieldSet.has(candidate.trim())) sumField = candidate.trim()
+      }
+    } catch {
+      sumField = null
+    }
+    const fakeReq = {
+      query: {
+        ...(conditions.length ? { conditions: JSON.stringify(conditions) } : {}),
+        ...(sumField ? { agg: sumField } : {})
+      }
+    } as never
+    try {
+      const { readItems } = await import('./items.js')
+      const res = (await readItems(
+        ctx.user,
+        collection,
+        { fields: ['id'], limit: 1, page: 1 },
+        fakeReq
+      )) as { total: number; aggregates?: Record<string, number> }
+      return {
+        data: {
+          value: sumField ? (res.aggregates?.[sumField] ?? null) : res.total,
+          total: res.total,
+          sum_field: sumField,
+          view: { id: view.id, name: view.name, collection }
+        }
+      }
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode
+      return {
+        error: status === 403 ? 'Forbidden' : 'Failed to read the view',
+        status: status ?? 500
+      }
+    }
+  }
   if (!widget.collection) return { data: null }
   if (!(await resolveCollection(widget.collection))) {
     return { error: 'Unknown collection', status: 400 }

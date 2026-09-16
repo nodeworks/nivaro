@@ -1,3 +1,10 @@
+import {
+  FirstLoginChecklist,
+  NavigationContext,
+  NivaroProvider,
+  RecentRecordsRail
+} from '@nivaro/react'
+import { createNivaro } from '@nivaro/sdk'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
@@ -15,10 +22,8 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, type CMSField, type Collection } from "@/lib/api"
+import { api, type CMSField, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { FirstLoginChecklist, NavigationContext, NivaroProvider } from '@nivaro/react'
-import { createNivaro } from '@nivaro/sdk'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { cn, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
 
@@ -49,23 +54,32 @@ const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
 const ITEM_LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
 
 function useActivityItemLabel(collection: string | null, item: string | null) {
-  const isSystem = !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
+  const isSystem =
+    !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
-    staleTime: 120_000, enabled: !isSystem && !!collection, retry: false
+    staleTime: 120_000,
+    enabled: !isSystem && !!collection,
+    retry: false
   })
   const displayTemplate: string | null = colMeta?.display_template ?? null
   const actualFields: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
-  const wantedFields = [...new Set(['id', ...extractTemplateFields(displayTemplate), ...ITEM_LABEL_FALLBACKS])]
+  const wantedFields = [
+    ...new Set(['id', ...extractTemplateFields(displayTemplate), ...ITEM_LABEL_FALLBACKS])
+  ]
   const safeFields = actualFields.length
     ? wantedFields.filter((f) => f === 'id' || actualFields.includes(f)).join(',')
     : null
   const { data: itemData } = useQuery({
     queryKey: ['activity-item-label', collection, item, safeFields],
     queryFn: () =>
-      api.get(`/items/${collection}/${item}`, { params: { fields: safeFields } }).then((r) => r.data.data),
-    staleTime: 120_000, enabled: !isSystem && !!safeFields && !!item, retry: false
+      api
+        .get(`/items/${collection}/${item}`, { params: { fields: safeFields } })
+        .then((r) => r.data.data),
+    staleTime: 120_000,
+    enabled: !isSystem && !!safeFields && !!item,
+    retry: false
   })
   const label = itemData ? renderDisplayTemplate(displayTemplate, itemData) : null
   return label && label !== item && label.trim() !== '' ? label : null
@@ -86,7 +100,9 @@ function ActivityItemRow({
   const colDisplay = (() => {
     const found = collections.find((c) => c.collection === entry.collection)
     if (found?.display_name) return found.display_name
-    return entry.collection ? titleCase(entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' ')) : 'System'
+    return entry.collection
+      ? titleCase(entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' '))
+      : 'System'
   })()
 
   return (
@@ -112,9 +128,7 @@ function ActivityItemRow({
           <p className='mt-0.5 truncate text-[11px] text-slate-500'>{entry.comment}</p>
         )}
       </div>
-      <span className='shrink-0 text-[11px] text-slate-400'>
-        {formatDateTime(entry.timestamp)}
-      </span>
+      <span className='shrink-0 text-[11px] text-slate-400'>{formatDateTime(entry.timestamp)}</span>
     </button>
   )
 }
@@ -249,6 +263,21 @@ function DashboardChecklistHost() {
   )
 }
 
+/** #43 — the records this person opened last, with state pills. Shares the
+ *  checklist's provider; item links use the admin route shape. */
+function RecentRail() {
+  const navigate = useNavigate()
+  return (
+    <NivaroProvider client={checklistClient}>
+      <NavigationContext.Provider value={{ navigate: (p: string) => navigate(p) }}>
+        <div className='mb-6'>
+          <RecentRecordsRail limit={8} />
+        </div>
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
+
 export function DashboardPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -317,7 +346,7 @@ export function DashboardPage() {
     import('socket.io-client')
       .then(({ io }) => {
         socket = io(window.location.origin, {
-          transports: ["websocket", "polling"],
+          transports: ['websocket', 'polling'],
           path: '/socket.io'
         }) as typeof socket
         socket?.on('connect', () => socket?.emit('presence:join', 'admin'))
@@ -478,6 +507,8 @@ export function DashboardPage() {
                 />
               </div>
             </div>
+
+            <RecentRail />
 
             {/* Recent activity feed */}
             <div>

@@ -36,14 +36,8 @@ import {
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from './ui/select'
 import { SimpleSelectXs } from './ui/SimpleSelect'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Switch } from './ui/switch'
 
 /**
@@ -227,11 +221,13 @@ function UserCombobox({
     enabled: open && search.trim().length > 0,
     staleTime: 60_000,
     queryFn: async () =>
-      ((await client.request(
-        get<{ data: CmsUser[] }>(
-          `/users?search=${encodeURIComponent(search.trim())}&limit=30&sort=first_name`
-        )
-      )) as { data: CmsUser[] }).data
+      (
+        (await client.request(
+          get<{ data: CmsUser[] }>(
+            `/users?search=${encodeURIComponent(search.trim())}&limit=30&sort=first_name`
+          )
+        )) as { data: CmsUser[] }
+      ).data
   })
   const sorted = useMemo(() => {
     const base = search.trim() && searched ? searched : users
@@ -291,7 +287,10 @@ function UserCombobox({
                   className='gap-2 text-[12px]'
                 >
                   <Check
-                    className={cn('h-3.5 w-3.5 shrink-0', value === s.value ? 'opacity-100' : 'opacity-0')}
+                    className={cn(
+                      'h-3.5 w-3.5 shrink-0',
+                      value === s.value ? 'opacity-100' : 'opacity-0'
+                    )}
                   />
                   <span className='font-medium'>{s.label}</span>
                 </CommandItem>
@@ -412,7 +411,8 @@ function SlaRuleForm({
     form.name.trim() !== '' &&
     form.duration_hours > 0
 
-  const warnAtHours = (form.duration_hours * Math.min(99, Math.max(1, form.warning_threshold_pct))) / 100
+  const warnAtHours =
+    (form.duration_hours * Math.min(99, Math.max(1, form.warning_threshold_pct))) / 100
 
   return (
     <div className='px-6 pb-6'>
@@ -521,6 +521,34 @@ function SlaRuleForm({
                   value={form.duration_hours}
                   onChange={(e) => set('duration_hours', Number(e.target.value))}
                 />
+                {/* #79 — presets: a business day is the 8 working hours the
+                    business-hours clock counts, so "3 business days" = 24h
+                    with business hours on; calendar presets switch it off. */}
+                <div className='flex flex-wrap gap-1 pt-1' data-sla-presets>
+                  {SLA_PRESETS.map((p) => {
+                    const active =
+                      form.duration_hours === p.hours && form.business_hours_only === p.business
+                    return (
+                      <button
+                        key={p.label}
+                        type='button'
+                        onClick={() => {
+                          set('duration_hours', p.hours)
+                          set('business_hours_only', p.business)
+                        }}
+                        data-sla-preset={p.label}
+                        aria-pressed={active}
+                        className={`rounded-full border px-2 py-px text-[11px] transition-colors ${
+                          active
+                            ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                            : 'border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
               <div className='space-y-1.5'>
                 <Label htmlFor='sla-warning-pct' className='whitespace-nowrap'>
@@ -613,8 +641,8 @@ function SlaRuleForm({
             <div>
               <p className='text-sm font-medium'>Escalation ladder</p>
               <p className='text-[11px] leading-relaxed text-muted-foreground'>
-                If nobody acknowledges the breach on the record, keep climbing: each tier fires
-                the given number of hours <i>past the breach</i>.
+                If nobody acknowledges the breach on the record, keep climbing: each tier fires the
+                given number of hours <i>past the breach</i>.
               </p>
             </div>
             {form.escalation_ladder.map((tier, idx) => (
@@ -778,23 +806,25 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
   }>({
     queryKey: ['sla-rule-records', rule.id],
     queryFn: async () =>
-      ((await client.request(get<{ data: never }>(`/sla/rules/${rule.id}/records`))) as {
-        data: {
-          total: number
-          counts?: { ok: number; warning: number; breached: number }
-          truncated?: boolean
-          records: Array<{
-            collection: string
-            item: string
-            label: string
-            status: 'ok' | 'warning' | 'breached'
-            elapsed_hours: number
-            remaining_hours: number
-            entered_at: string
-            timezone?: string | null
-          }>
+      (
+        (await client.request(get<{ data: never }>(`/sla/rules/${rule.id}/records`))) as {
+          data: {
+            total: number
+            counts?: { ok: number; warning: number; breached: number }
+            truncated?: boolean
+            records: Array<{
+              collection: string
+              item: string
+              label: string
+              status: 'ok' | 'warning' | 'breached'
+              elapsed_hours: number
+              remaining_hours: number
+              entered_at: string
+              timezone?: string | null
+            }>
+          }
         }
-      }).data
+      ).data
   })
 
   const STATUS_PILL: Record<string, string> = {
@@ -813,11 +843,7 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
 
   const toggleSort = (key: SortKey) =>
     setSort((prev) =>
-      prev?.key === key
-        ? prev.dir === 'asc'
-          ? { key, dir: 'desc' }
-          : null
-        : { key, dir: 'asc' }
+      prev?.key === key ? (prev.dir === 'asc' ? { key, dir: 'desc' } : null) : { key, dir: 'asc' }
     )
 
   const STATUS_RANK: Record<string, number> = { breached: 0, warning: 1, ok: 2 }
@@ -830,11 +856,15 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
     if (fStatus) rows = rows.filter((r) => r.status === fStatus)
     if (fElapsed.v !== '' && Number.isFinite(Number(fElapsed.v))) {
       const n = Number(fElapsed.v)
-      rows = rows.filter((r) => (fElapsed.op === 'gte' ? r.elapsed_hours >= n : r.elapsed_hours <= n))
+      rows = rows.filter((r) =>
+        fElapsed.op === 'gte' ? r.elapsed_hours >= n : r.elapsed_hours <= n
+      )
     }
     if (fLeft.v !== '' && Number.isFinite(Number(fLeft.v))) {
       const n = Number(fLeft.v)
-      rows = rows.filter((r) => (fLeft.op === 'gte' ? r.remaining_hours >= n : r.remaining_hours <= n))
+      rows = rows.filter((r) =>
+        fLeft.op === 'gte' ? r.remaining_hours >= n : r.remaining_hours <= n
+      )
     }
     if (fEntered) {
       const cutoff = new Date(`${fEntered}T00:00:00`)
@@ -855,8 +885,7 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
     // biome-ignore lint/correctness/useExhaustiveDependencies: STATUS_RANK is constant
   }, [data?.records, fRecord, fStatus, fElapsed, fLeft, fEntered, sort])
 
-  const sortGlyph = (key: SortKey) =>
-    sort?.key === key ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''
+  const sortGlyph = (key: SortKey) => (sort?.key === key ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : '')
   const filtered = visibleRows.length !== (data?.records.length ?? 0)
 
   const numFilter = (
@@ -897,11 +926,17 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
         <>
           <p className='mb-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
             {data.total} open record{data.total === 1 ? '' : 's'} in this state —{' '}
-            <span className='text-red-600 dark:text-red-400'>{data.counts?.breached ?? 0} breached</span>
+            <span className='text-red-600 dark:text-red-400'>
+              {data.counts?.breached ?? 0} breached
+            </span>
             {' · '}
-            <span className='text-amber-600 dark:text-amber-400'>{data.counts?.warning ?? 0} warning</span>
+            <span className='text-amber-600 dark:text-amber-400'>
+              {data.counts?.warning ?? 0} warning
+            </span>
             {' · '}
-            <span className='text-emerald-600 dark:text-emerald-400'>{data.counts?.ok ?? 0} on track</span>
+            <span className='text-emerald-600 dark:text-emerald-400'>
+              {data.counts?.ok ?? 0} on track
+            </span>
             {data.truncated ? ' (showing the worst 200)' : ''}
             {filtered ? ` — ${visibleRows.length} match the filters` : ''}
           </p>
@@ -910,27 +945,47 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
               <thead>
                 <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border'>
                   <th className='px-3 py-1.5 font-semibold'>
-                    <button type='button' onClick={() => toggleSort('label')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                    <button
+                      type='button'
+                      onClick={() => toggleSort('label')}
+                      className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'
+                    >
                       Record{sortGlyph('label')}
                     </button>
                   </th>
                   <th className='px-3 py-1.5 font-semibold'>
-                    <button type='button' onClick={() => toggleSort('status')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                    <button
+                      type='button'
+                      onClick={() => toggleSort('status')}
+                      className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'
+                    >
                       Status{sortGlyph('status')}
                     </button>
                   </th>
                   <th className='px-3 py-1.5 text-right font-semibold'>
-                    <button type='button' onClick={() => toggleSort('elapsed_hours')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                    <button
+                      type='button'
+                      onClick={() => toggleSort('elapsed_hours')}
+                      className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'
+                    >
                       In state{sortGlyph('elapsed_hours')}
                     </button>
                   </th>
                   <th className='px-3 py-1.5 text-right font-semibold'>
-                    <button type='button' onClick={() => toggleSort('remaining_hours')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                    <button
+                      type='button'
+                      onClick={() => toggleSort('remaining_hours')}
+                      className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'
+                    >
                       Time left{sortGlyph('remaining_hours')}
                     </button>
                   </th>
                   <th className='px-3 py-1.5 text-right font-semibold'>
-                    <button type='button' onClick={() => toggleSort('entered_at')} className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'>
+                    <button
+                      type='button'
+                      onClick={() => toggleSort('entered_at')}
+                      className='uppercase tracking-wide hover:text-slate-600 dark:hover:text-slate-200'
+                    >
                       Entered{sortGlyph('entered_at')}
                     </button>
                   </th>
@@ -958,8 +1013,12 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
                       className='w-[110px]'
                     />
                   </th>
-                  <th className='px-3 py-1.5 text-right font-normal'>{numFilter(fElapsed, setFElapsed, 'hours')}</th>
-                  <th className='px-3 py-1.5 text-right font-normal'>{numFilter(fLeft, setFLeft, 'hours')}</th>
+                  <th className='px-3 py-1.5 text-right font-normal'>
+                    {numFilter(fElapsed, setFElapsed, 'hours')}
+                  </th>
+                  <th className='px-3 py-1.5 text-right font-normal'>
+                    {numFilter(fLeft, setFLeft, 'hours')}
+                  </th>
                   <th className='px-3 py-1.5 text-right font-normal'>
                     <input
                       type='date'
@@ -1038,6 +1097,18 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
 
 // ─── List view ─────────────────────────────────────────────────────────────
 
+/** #79 — duration presets. A business day = the 8 working hours the
+ *  business-hours clock counts; calendar presets switch that clock off. */
+const SLA_PRESETS: Array<{ label: string; hours: number; business: boolean }> = [
+  { label: '4 business hours', hours: 4, business: true },
+  { label: '1 business day', hours: 8, business: true },
+  { label: '2 business days', hours: 16, business: true },
+  { label: '3 business days', hours: 24, business: true },
+  { label: '5 business days', hours: 40, business: true },
+  { label: '24 hours', hours: 24, business: false },
+  { label: '72 hours', hours: 72, business: false }
+]
+
 export function SlaRulesView() {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -1050,9 +1121,11 @@ export function SlaRulesView() {
   const { data: templates = [] } = useQuery<WorkflowTemplate[]>({
     queryKey: ['sla-templates'],
     queryFn: async () =>
-      ((await client.request(get<{ data: WorkflowTemplate[] }>('/pipelines'))) as {
-        data: WorkflowTemplate[]
-      }).data
+      (
+        (await client.request(get<{ data: WorkflowTemplate[] }>('/pipelines'))) as {
+          data: WorkflowTemplate[]
+        }
+      ).data
   })
   const { data: users = [] } = useQuery<CmsUser[]>({
     queryKey: ['sla-users'],
@@ -1075,10 +1148,7 @@ export function SlaRulesView() {
 
   // State labels/colors per template that actually has rules — feeds friendly
   // state names in the list instead of raw keys.
-  const templateIds = useMemo(
-    () => [...new Set(rules.map((r) => r.workflow_template))],
-    [rules]
-  )
+  const templateIds = useMemo(() => [...new Set(rules.map((r) => r.workflow_template))], [rules])
   const stateQueries = useQueries({
     queries: templateIds.map((tid) => ({
       queryKey: ['sla-template-states', tid],
@@ -1214,8 +1284,8 @@ export function SlaRulesView() {
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <p className='max-w-[72ch] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
           How long a record may sit in each workflow state before it's flagged. Records turn amber
-          at the warning point, red at breach — owners are notified, and breaches can escalate up
-          a ladder until someone acknowledges.
+          at the warning point, red at breach — owners are notified, and breaches can escalate up a
+          ladder until someone acknowledges.
         </p>
         <div className='flex items-center gap-3'>
           {rules.length > 0 && (
@@ -1252,7 +1322,10 @@ export function SlaRulesView() {
       ) : (
         <div className='space-y-5'>
           {groups.map(([tid, g]) => (
-            <section key={tid} className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+            <section
+              key={tid}
+              className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+            >
               <header className='flex items-center justify-between border-b border-slate-100 px-4 py-2.5 dark:border-border'>
                 <h2 className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
                   {g.name}
@@ -1264,9 +1337,7 @@ export function SlaRulesView() {
               <ul className='divide-y divide-slate-100 dark:divide-border'>
                 {g.rules.map((rule) => {
                   const meta = stateMeta.get(`${tid}:${rule.state_key}`)
-                  const ladder = Array.isArray(rule.escalation_ladder)
-                    ? rule.escalation_ladder
-                    : []
+                  const ladder = Array.isArray(rule.escalation_ladder) ? rule.escalation_ladder : []
                   const escUser = rule.escalation_user
                     ? users.find((u) => u.id.toUpperCase() === rule.escalation_user?.toUpperCase())
                     : null
@@ -1278,96 +1349,105 @@ export function SlaRulesView() {
                           !rule.is_active && 'opacity-55'
                         )}
                       >
-                      <div className='w-[220px] min-w-0 shrink-0'>
-                        <p className='flex items-center gap-1.5 truncate text-[13px] font-medium text-slate-800 dark:text-foreground'>
-                          {meta?.color && (
-                            <span
-                              className='h-2 w-2 shrink-0 rounded-full'
-                              style={{ backgroundColor: meta.color }}
-                            />
-                          )}
-                          {meta?.label ?? titleCase(rule.state_key.replace(/_/g, ' '))}
-                        </p>
-                        <p className='truncate text-[11.5px] text-slate-400'>{rule.name}</p>
-                      </div>
+                        <div className='w-[220px] min-w-0 shrink-0'>
+                          <p className='flex items-center gap-1.5 truncate text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                            {meta?.color && (
+                              <span
+                                className='h-2 w-2 shrink-0 rounded-full'
+                                style={{ backgroundColor: meta.color }}
+                              />
+                            )}
+                            {meta?.label ?? titleCase(rule.state_key.replace(/_/g, ' '))}
+                          </p>
+                          <p className='truncate text-[11.5px] text-slate-400'>{rule.name}</p>
+                        </div>
 
-                      <div className='w-[240px] shrink-0'>
-                        <SlaTimeline
-                          durationHours={rule.duration_hours}
-                          warningPct={rule.warning_threshold_pct}
-                          compact
-                        />
-                      </div>
+                        <div className='w-[240px] shrink-0'>
+                          <SlaTimeline
+                            durationHours={rule.duration_hours}
+                            warningPct={rule.warning_threshold_pct}
+                            compact
+                          />
+                        </div>
 
-                      <div className='flex min-w-0 flex-1 flex-wrap items-center gap-1.5'>
-                        <Badge variant='outline' className='whitespace-nowrap text-[10.5px] font-normal'>
-                          {rule.business_hours_only ? 'Business hours' : 'Calendar time'}
-                        </Badge>
-                        {(rule.notify_on_warning || rule.notify_on_breach) && (
-                          <Badge variant='outline' className='gap-1 whitespace-nowrap text-[10.5px] font-normal'>
-                            <Bell className='h-2.5 w-2.5' />
-                            {rule.notify_on_warning && rule.notify_on_breach
-                              ? 'Warn + breach'
-                              : rule.notify_on_warning
-                                ? 'Warn only'
-                                : 'Breach only'}
-                          </Badge>
-                        )}
-                        {escUser && (
-                          <Badge variant='outline' className='gap-1 whitespace-nowrap text-[10.5px] font-normal'>
-                            <ArrowUpRight className='h-2.5 w-2.5' />
-                            {userLabel(escUser)}
-                          </Badge>
-                        )}
-                        {ladder.length > 0 && (
+                        <div className='flex min-w-0 flex-1 flex-wrap items-center gap-1.5'>
                           <Badge
                             variant='outline'
                             className='whitespace-nowrap text-[10.5px] font-normal'
-                            title={ladder
-                              .map((t) => `+${t.after_hours}h → ${ladderTierLabel(t, users)}`)
-                              .join(' · ')}
                           >
-                            {ladder.length}-tier ladder
+                            {rule.business_hours_only ? 'Business hours' : 'Calendar time'}
                           </Badge>
-                        )}
-                      </div>
-
-                      <div className='flex shrink-0 items-center gap-1'>
-                        <Button
-                          variant='ghost'
-                          size='sm'
-                          className={cn(
-                            'h-7 gap-1 px-2 text-[11.5px]',
-                            previewId === rule.id
-                              ? 'text-nvr-cyan'
-                              : 'text-slate-500 dark:text-muted-foreground'
+                          {(rule.notify_on_warning || rule.notify_on_breach) && (
+                            <Badge
+                              variant='outline'
+                              className='gap-1 whitespace-nowrap text-[10.5px] font-normal'
+                            >
+                              <Bell className='h-2.5 w-2.5' />
+                              {rule.notify_on_warning && rule.notify_on_breach
+                                ? 'Warn + breach'
+                                : rule.notify_on_warning
+                                  ? 'Warn only'
+                                  : 'Breach only'}
+                            </Badge>
                           )}
-                          onClick={() => setPreviewId(previewId === rule.id ? null : rule.id)}
-                        >
-                          <Eye className='h-3.5 w-3.5' />
-                          Preview
-                        </Button>
-                        <Switch
-                          checked={rule.is_active}
-                          onCheckedChange={(v) => toggleMut.mutate({ id: rule.id, active: v })}
-                          aria-label={rule.is_active ? 'Pause rule' : 'Activate rule'}
-                        />
-                        <Button
-                          variant='ghost'
-                          size='icon'
-                          className='h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100'
-                          onClick={() => setEditing(rule)}
-                        >
-                          <Pencil className='h-3.5 w-3.5' />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon'
-                          className='h-7 w-7 text-destructive opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100'
-                          onClick={() => setDeleting(rule)}
-                        >
-                          <Trash2 className='h-3.5 w-3.5' />
-                        </Button>
+                          {escUser && (
+                            <Badge
+                              variant='outline'
+                              className='gap-1 whitespace-nowrap text-[10.5px] font-normal'
+                            >
+                              <ArrowUpRight className='h-2.5 w-2.5' />
+                              {userLabel(escUser)}
+                            </Badge>
+                          )}
+                          {ladder.length > 0 && (
+                            <Badge
+                              variant='outline'
+                              className='whitespace-nowrap text-[10.5px] font-normal'
+                              title={ladder
+                                .map((t) => `+${t.after_hours}h → ${ladderTierLabel(t, users)}`)
+                                .join(' · ')}
+                            >
+                              {ladder.length}-tier ladder
+                            </Badge>
+                          )}
+                        </div>
+
+                        <div className='flex shrink-0 items-center gap-1'>
+                          <Button
+                            variant='ghost'
+                            size='sm'
+                            className={cn(
+                              'h-7 gap-1 px-2 text-[11.5px]',
+                              previewId === rule.id
+                                ? 'text-nvr-cyan'
+                                : 'text-slate-500 dark:text-muted-foreground'
+                            )}
+                            onClick={() => setPreviewId(previewId === rule.id ? null : rule.id)}
+                          >
+                            <Eye className='h-3.5 w-3.5' />
+                            Preview
+                          </Button>
+                          <Switch
+                            checked={rule.is_active}
+                            onCheckedChange={(v) => toggleMut.mutate({ id: rule.id, active: v })}
+                            aria-label={rule.is_active ? 'Pause rule' : 'Activate rule'}
+                          />
+                          <Button
+                            variant='ghost'
+                            size='icon'
+                            className='h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100'
+                            onClick={() => setEditing(rule)}
+                          >
+                            <Pencil className='h-3.5 w-3.5' />
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            size='icon'
+                            className='h-7 w-7 text-destructive opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100'
+                            onClick={() => setDeleting(rule)}
+                          >
+                            <Trash2 className='h-3.5 w-3.5' />
+                          </Button>
                         </div>
                       </div>
                       {previewId === rule.id && <RulePreviewPanel rule={rule} />}
@@ -1381,7 +1461,10 @@ export function SlaRulesView() {
       )}
 
       <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent className='max-h-[92vh] overflow-y-auto' style={{ maxWidth: 'min(1100px, 96vw)' }}>
+        <DialogContent
+          className='max-h-[92vh] overflow-y-auto'
+          style={{ maxWidth: 'min(1100px, 96vw)' }}
+        >
           <DialogHeader>
             <DialogTitle>New SLA rule</DialogTitle>
           </DialogHeader>
@@ -1400,7 +1483,10 @@ export function SlaRulesView() {
       </Dialog>
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className='max-h-[92vh] overflow-y-auto' style={{ maxWidth: 'min(1100px, 96vw)' }}>
+        <DialogContent
+          className='max-h-[92vh] overflow-y-auto'
+          style={{ maxWidth: 'min(1100px, 96vw)' }}
+        >
           <DialogHeader>
             <DialogTitle>Edit SLA rule</DialogTitle>
           </DialogHeader>
@@ -1433,7 +1519,11 @@ export function SlaRulesView() {
             </p>
           </DialogBody>
           <DialogFooter className='px-6 pb-6'>
-            <Button variant='outline' onClick={() => setDeleting(null)} disabled={deleteMut.isPending}>
+            <Button
+              variant='outline'
+              onClick={() => setDeleting(null)}
+              disabled={deleteMut.isPending}
+            >
               Cancel
             </Button>
             <Button

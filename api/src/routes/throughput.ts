@@ -1,11 +1,22 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { getAiClient } from '../services/ai-client.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { getAiClient } from '../services/ai-client.js'
 import { aggregateThroughput, parseThroughputParams } from '../services/throughput.js'
 
 export async function throughputRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
+
+  // GET /reports/owner-load?collection= — open records per owner per state
+  // with SLA breach / warning counts (#71). Live, seconds, never persisted.
+  app.get<{ Querystring: { collection?: string } }>('/owner-load', async (req, reply) => {
+    const collection = String(req.query.collection ?? '').trim()
+    if (collection && (!/^[A-Za-z0-9_]+$/.test(collection) || /^nivaro_/i.test(collection)))
+      return reply.code(400).send({ error: 'Invalid collection' })
+    const { buildOwnerLoadReport } = await import('../services/owner-load.js')
+    const report = await buildOwnerLoadReport({ collection: collection || null })
+    return reply.send({ data: report })
+  })
 
   // GET /reports/throughput?collection=&from=&to=&bucket=&user=
   app.get('/throughput', async (req, reply) => {

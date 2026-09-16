@@ -699,6 +699,35 @@ export const adminUxListSignals: DocSection = {
       type: 'p',
       text: 'Opening a record from a queue remembers where the queue was — scope, filters, sort, page, grouping and scroll position. The record shows a "Back to <queue>" chip above its content; it returns to the same URL and the worklist re-applies that state and scrolls back to the row. The memory lasts six hours and is per browser tab session.'
     },
+    { type: 'h2', id: 'list-signals-open-tabs', text: 'Open in tabs' },
+    {
+      type: 'p',
+      text: 'Select two or more rows in the collection browser or a queue and "Open in tabs" opens each record in its own tab (up to 15). Browsers allow a burst of tabs from one click only when pop-ups are allowed for the site — otherwise the first opens and the toast says how many were blocked.'
+    },
+    { type: 'h2', id: 'list-signals-recent', text: 'Recently viewed' },
+    {
+      type: 'p',
+      text: 'The home page lists the records you opened last, with each one\'s current state, from the same per-user view watermarks the "since you last looked" recap uses (`GET /record-views/recent`). Collections you cannot read are skipped.'
+    },
+    { type: 'h2', id: 'list-signals-owner-load', text: 'Owner load' },
+    {
+      type: 'p',
+      text: "Team Throughput ends with Owner load: open records per owner right now, split by state, with how many are past or near their SLA. It is computed live over every open instance with the same owner resolver and SLA evaluator the queues use, so it always agrees with each person's worklist (`GET /reports/owner-load?collection=`)."
+    },
+    {
+      type: 'h2',
+      id: 'list-signals-saved-view-widget',
+      text: 'Dashboard widgets from a saved view'
+    },
+    {
+      type: 'p',
+      text: 'A dashboard widget of type "Saved view" counts — or, with a sum field, sums — exactly the rows a saved browser view shows. The view\'s filters compile the way the browser compiles them and the read runs as the viewer, so the number is the one that person would get in the browser. Every widget also takes its own refresh interval (15 s to hourly; default one minute).'
+    },
+    { type: 'h2', id: 'list-signals-sla-presets', text: 'SLA duration presets' },
+    {
+      type: 'p',
+      text: 'The SLA rule editor offers presets under the hours box — 4 business hours, 1 / 2 / 3 / 5 business days, 24 or 72 calendar hours. A business day is the eight working hours the business-hours clock counts, so a business preset also switches that clock on; a calendar preset switches it off.'
+    },
     { type: 'h2', id: 'list-signals-row-flags', text: 'Row flags on a catalog picker' },
     {
       type: 'p',

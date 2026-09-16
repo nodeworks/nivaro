@@ -31,6 +31,92 @@ const SESSION_GRACE_MS = 30 * 60 * 1000
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 export async function recordViewRoutes(app: FastifyInstance) {
+  /** #43 — the caller's recently viewed records, newest first, with the
+   *  record's friendly label and current pipeline state. The watermark table
+   *  already knows every record the person opened; this is a read of it
+   *  dressed for a rail. Collections the person cannot read are skipped. */
+  app.get<{ Querystring: { limit?: string } }>(
+    '/record-views/recent',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const userId = req.user!.id
+      const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 10))
+      const rows = (await db('nivaro_record_views')
+        .where({ user: userId })
+        .orderBy('last_viewed_at', 'desc')
+        .limit(limit * 2)
+        .select('collection', 'item_id', 'last_viewed_at')) as Array<{
+        collection: string
+        item_id: string
+        last_viewed_at: Date
+      }>
+      const visible: typeof rows = []
+      const readable = new Map<string, boolean>()
+      for (const r of rows) {
+        if (/^nivaro_/i.test(r.collection)) continue
+        let ok = readable.get(r.collection)
+        if (ok === undefined) {
+          ok = req.isAdmin || (await can(req.user!, 'read', r.collection).catch(() => false))
+          readable.set(r.collection, ok)
+        }
+        if (ok) visible.push(r)
+        if (visible.length >= limit) break
+      }
+      if (visible.length === 0) return reply.send({ data: [] })
+      const byCollection = new Map<string, Set<string>>()
+      for (const r of visible) {
+        const set = byCollection.get(r.collection) ?? new Set<string>()
+        set.add(String(r.item_id))
+        byCollection.set(r.collection, set)
+      }
+      let labels: Record<string, string> = {}
+      try {
+        const { getLabels } = await import('../services/queues.js')
+        labels = await getLabels(byCollection)
+      } catch {
+        labels = {}
+      }
+      const friendly = new Map<string, string>()
+      try {
+        const { resolveFriendlyId } = await import('../services/workflow-transitions.js')
+        for (const r of visible) {
+          const f = await resolveFriendlyId(r.collection, String(r.item_id)).catch(() => null)
+          if (f && f !== String(r.item_id)) friendly.set(`${r.collection}:${r.item_id}`, f)
+        }
+      } catch {
+        /* labels still answer */
+      }
+      const instances = (await db('nivaro_workflow_instances as wi')
+        .join('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+        .where((qb) => {
+          for (const [collection, ids] of byCollection)
+            void qb.orWhere((q2) =>
+              q2.where('wi.collection', collection).whereIn('wi.item', [...ids])
+            )
+        })
+        .select('wi.collection', 'wi.item', 's.key', 's.label', 's.color')
+        .catch(() => [])) as Array<Record<string, unknown>>
+      const stateByKey = new Map(
+        instances.map((i) => [
+          `${i.collection}:${i.item}`,
+          { key: i.key, label: i.label, color: i.color }
+        ])
+      )
+      return reply.send({
+        data: visible.map((r) => {
+          const k = `${r.collection}:${r.item_id}`
+          return {
+            collection: r.collection,
+            item_id: String(r.item_id),
+            label: friendly.get(k) ?? labels[k] ?? `#${r.item_id}`,
+            state: stateByKey.get(k) ?? null,
+            last_viewed_at: r.last_viewed_at
+          }
+        })
+      })
+    }
+  )
+
   // Dismissing the recap means "I have seen these changes": the diff baseline
   // collapses to now, so a refresh inside the session grace (which deliberately
   // keeps the baseline stable) no longer re-renders the same recap. Anything

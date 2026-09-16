@@ -642,7 +642,15 @@ export interface Dashboard {
 export interface DashboardWidget {
   id: string
   dashboard: string
-  type: 'count' | 'sum' | 'avg' | 'latest' | 'bar_chart' | 'line_chart' | 'report_preset'
+  type:
+    | 'count'
+    | 'sum'
+    | 'avg'
+    | 'latest'
+    | 'bar_chart'
+    | 'line_chart'
+    | 'report_preset'
+    | 'saved_view'
   title: string
   collection: string | null
   field: string | null
@@ -651,6 +659,8 @@ export interface DashboardWidget {
   row: number
   width: number
   height: number
+  /** #53 — per-widget refetch interval; null = the page default (60s). */
+  refresh_seconds?: number | null
 }
 
 export interface FieldGroup {

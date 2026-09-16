@@ -322,7 +322,171 @@ export function TeamThroughputPage() {
         </div>
         <StateFlowCard collection={collection || 'workflows'} />
         <SendbackThemesCard collection={collection || 'workflows'} />
+        <OwnerLoadCard collection={collection} />
       </div>
+    </div>
+  )
+}
+
+/** #71 — who is carrying how much RIGHT NOW: open records per owner, split
+ *  by state, with SLA breach / warning counts. Live over every open
+ *  instance (seconds), so the numbers agree with each person's worklist. */
+function OwnerLoadCard({ collection }: { collection: string }) {
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const { data, isLoading, isFetching, refetch } = useQuery({
+    queryKey: ['owner-load', collection],
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            open_instances: number
+            evaluated: number
+            truncated: boolean
+            unowned: number
+            rows: Array<{
+              user: string
+              name: string
+              email: string | null
+              status: string | null
+              is_out_of_office: boolean
+              total: number
+              sla_breached: number
+              sla_warning: number
+              by_state: Array<{ key: string; label: string; count: number }>
+              by_collection: Array<{ collection: string; count: number }>
+            }>
+          }
+        }>('/reports/owner-load', { params: collection ? { collection } : {} })
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const rows = data?.rows ?? []
+  const max = Math.max(1, ...rows.map((r) => r.total))
+  return (
+    <div
+      className='mt-6 rounded-xl border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'
+      data-owner-load
+    >
+      <div className='mb-3 flex flex-wrap items-baseline justify-between gap-2'>
+        <div>
+          <h2 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            Owner load
+          </h2>
+          <p className='text-[11.5px] text-muted-foreground'>
+            Open records per owner right now, by state, with how many are past or near their SLA.
+            {data
+              ? ` ${formatNumber(data.evaluated)} open records${data.truncated ? ' (newest evaluated — sample capped)' : ''} · ${formatNumber(data.unowned)} resolve no owner.`
+              : ''}
+          </p>
+        </div>
+        <button
+          type='button'
+          onClick={() => void refetch()}
+          disabled={isFetching}
+          className='h-7 rounded-md border border-slate-200 px-2 text-[11.5px] text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+        >
+          {isFetching ? 'Computing…' : 'Refresh'}
+        </button>
+      </div>
+      {isLoading ? (
+        <p className='text-[12px] text-muted-foreground'>Resolving owners across open records…</p>
+      ) : rows.length === 0 ? (
+        <p className='text-[12px] text-muted-foreground'>No open records resolve an owner.</p>
+      ) : (
+        <table className='w-full text-[12px]'>
+          <thead>
+            <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
+              <th className='py-1 font-semibold'>Owner</th>
+              <th className='py-1 text-right font-semibold'>Open</th>
+              <th className='py-1 pl-3 font-semibold'>Load</th>
+              <th className='py-1 text-right font-semibold'>Breached</th>
+              <th className='py-1 text-right font-semibold'>Warning</th>
+              <th className='py-1 pl-3 font-semibold'>Top states</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <Fragment key={r.user}>
+                <tr
+                  className='cursor-pointer border-t border-slate-100 hover:bg-slate-50/60 dark:border-border dark:hover:bg-muted/40'
+                  onClick={() => setExpanded(expanded === r.user ? null : r.user)}
+                  data-owner-load-row={r.user}
+                >
+                  <td className='py-1.5 text-slate-700 dark:text-foreground'>
+                    {r.name}
+                    {r.is_out_of_office && (
+                      <span className='ml-1.5 rounded bg-amber-50 px-1 text-[10px] font-medium text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'>
+                        out of office
+                      </span>
+                    )}
+                    {r.status && r.status !== 'active' && (
+                      <span className='ml-1.5 rounded bg-slate-100 px-1 text-[10px] text-slate-500 dark:bg-muted'>
+                        {r.status}
+                      </span>
+                    )}
+                  </td>
+                  <td className='py-1.5 text-right tabular-nums font-semibold text-slate-800 dark:text-slate-100'>
+                    {formatNumber(r.total)}
+                  </td>
+                  <td className='py-1.5 pl-3'>
+                    <div className='h-1.5 w-32 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'>
+                      <div
+                        className='h-full rounded-full bg-nvr-cyan'
+                        style={{ width: `${Math.round((r.total / max) * 100)}%` }}
+                      />
+                    </div>
+                  </td>
+                  <td
+                    className={cn(
+                      'py-1.5 text-right tabular-nums',
+                      r.sla_breached > 0
+                        ? 'font-semibold text-red-600 dark:text-red-400'
+                        : 'text-slate-400'
+                    )}
+                  >
+                    {formatNumber(r.sla_breached)}
+                  </td>
+                  <td
+                    className={cn(
+                      'py-1.5 text-right tabular-nums',
+                      r.sla_warning > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-slate-400'
+                    )}
+                  >
+                    {formatNumber(r.sla_warning)}
+                  </td>
+                  <td className='py-1.5 pl-3 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    {r.by_state
+                      .slice(0, 3)
+                      .map((s) => `${s.label} ${s.count}`)
+                      .join(' · ')}
+                    {r.by_state.length > 3 ? ` · +${r.by_state.length - 3}` : ''}
+                  </td>
+                </tr>
+                {expanded === r.user && (
+                  <tr className='border-t border-slate-100 bg-slate-50/50 dark:border-border dark:bg-muted/20'>
+                    <td
+                      colSpan={6}
+                      className='px-3 py-2 text-[11.5px] text-slate-600 dark:text-muted-foreground'
+                    >
+                      <span className='font-medium'>By state:</span>{' '}
+                      {r.by_state.map((s) => `${s.label} ${s.count}`).join(' · ')}
+                      {r.by_collection.length > 1 && (
+                        <>
+                          {' '}
+                          <span className='ml-2 font-medium'>By collection:</span>{' '}
+                          {r.by_collection
+                            .map((c) => `${c.collection.replace(/_/g, ' ')} ${c.count}`)
+                            .join(' · ')}
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }
@@ -338,9 +502,7 @@ function StateFlowCard({ collection }: { collection: string }) {
   }>({
     queryKey: ['state-flow', collection],
     queryFn: () =>
-      api
-        .get('/reports/state-flow', { params: { collection, days: 90 } })
-        .then((r) => r.data.data),
+      api.get('/reports/state-flow', { params: { collection, days: 90 } }).then((r) => r.data.data),
     enabled: !!collection,
     retry: false
   })
@@ -441,9 +603,13 @@ function SendbackThemesCard({ collection }: { collection: string }) {
     queryKey: ['sendback-themes', collection],
     queryFn: () =>
       api
-        .get<{ data: { themes: Array<{ theme: string; count: number; examples?: string[] }>; sample_size: number; note?: string } }>(
-          `/reports/sendback-themes?collection=${collection}&days=90`
-        )
+        .get<{
+          data: {
+            themes: Array<{ theme: string; count: number; examples?: string[] }>
+            sample_size: number
+            note?: string
+          }
+        }>(`/reports/sendback-themes?collection=${collection}&days=90`)
         .then((r) => r.data.data),
     enabled: open,
     staleTime: 30 * 60_000,
@@ -495,7 +661,10 @@ function SendbackThemesCard({ collection }: { collection: string }) {
                       </span>
                     </div>
                     {(t.examples ?? []).slice(0, 2).map((ex, i) => (
-                      <p key={i} className='ml-3 text-[11.5px] italic text-slate-500 dark:text-muted-foreground'>
+                      <p
+                        key={i}
+                        className='ml-3 text-[11.5px] italic text-slate-500 dark:text-muted-foreground'
+                      >
                         &ldquo;{ex}&rdquo;
                       </p>
                     ))}

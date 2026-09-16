@@ -53,6 +53,7 @@ import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
+import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
@@ -3424,6 +3425,31 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           onTransition={(state) => runBulk('Transition', (row) => performTransition(row, state))}
           onClear={() => setSelectedIds([])}
         >
+          {selectedIds.length >= 2 && (
+            <button
+              type='button'
+              onClick={() => {
+                const r = openInTabs(
+                  items
+                    .filter((x) => selectedIds.includes(rowId(x)) && x.collection !== 'tasks')
+                    .map((x) =>
+                      itemNav.urlFor({
+                        collection: x.collection,
+                        itemId: x.item_id,
+                        layoutSlug: displayConfig?.item_layout ?? null
+                      })
+                    )
+                )
+                if (r.blocked > 0 || r.capped > 0) toast.warning(openInTabsMessage(r))
+                else toast.success(openInTabsMessage(r))
+              }}
+              data-bulk-open-tabs
+              title={`Open the selected records in new tabs (up to ${OPEN_IN_TABS_CAP})`}
+              className='h-8 rounded-md border border-white/20 px-3 text-[12.5px] font-medium hover:bg-white/10 dark:border-border dark:hover:bg-muted'
+            >
+              Open in tabs
+            </button>
+          )}
           <BulkActionButtons
             targets={items
               .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')

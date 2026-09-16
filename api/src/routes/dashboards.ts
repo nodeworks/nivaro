@@ -36,6 +36,7 @@ interface WidgetRow {
   row: number
   width: number
   height: number
+  refresh_seconds?: number | null
   created_at: Date
 }
 
@@ -49,6 +50,7 @@ interface CreateWidgetBody {
   row?: number
   width?: number
   height?: number
+  refresh_seconds?: number | null
 }
 
 interface CreateDashboardBody {
@@ -75,6 +77,15 @@ interface UpdateWidgetBody {
   row?: number
   width?: number
   height?: number
+  /** #53 — per-widget refetch interval in seconds (10..86400); null = page default. */
+  refresh_seconds?: number | null
+}
+
+/** Clamp a refresh interval: NULL when absent/invalid, else 10s..1 day. */
+function normalizeRefresh(v: unknown): number | null {
+  const n = Number(v)
+  if (v == null || v === '' || !Number.isFinite(n)) return null
+  return Math.min(86_400, Math.max(10, Math.round(n)))
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -403,7 +414,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         col = 0,
         row = 0,
         width = 1,
-        height = 1
+        height = 1,
+        refresh_seconds
       } = req.body
 
       if (!type || !title?.trim()) {
@@ -419,7 +431,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         'latest',
         'bar_chart',
         'line_chart',
-        'report_preset'
+        'report_preset',
+        'saved_view'
       ]
       if (!VALID_TYPES.includes(type)) {
         return reply.code(400).send({ error: `type must be one of: ${VALID_TYPES.join(', ')}` })
@@ -431,8 +444,9 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         if (!valid) return reply.code(400).send({ error: 'Unknown collection' })
       }
 
-      // Validate field is registered (prevents SQL injection via column name in sum/avg queries)
-      if (field && collection) {
+      // Validate field is registered (prevents SQL injection via column name in sum/avg queries).
+      // A saved-view widget's `field` is the VIEW id, not a column (#52).
+      if (field && collection && type !== 'saved_view') {
         const validField = await resolveField(collection, field)
         if (!validField) return reply.code(400).send({ error: 'Unknown field' })
       }
@@ -450,6 +464,7 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         row,
         width,
         height,
+        refresh_seconds: normalizeRefresh(refresh_seconds),
         created_at: new Date()
       })
 
@@ -487,7 +502,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       }
 
       const updates: Record<string, unknown> = {}
-      const { type, title, collection, field, filters, col, row, width, height } = req.body
+      const { type, title, collection, field, filters, col, row, width, height, refresh_seconds } =
+        req.body
 
       if (type !== undefined) {
         const VALID_TYPES = [
@@ -497,7 +513,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           'latest',
           'bar_chart',
           'line_chart',
-          'report_preset'
+          'report_preset',
+          'saved_view'
         ]
         if (!VALID_TYPES.includes(type))
           return reply.code(400).send({ error: 'Invalid widget type' })
@@ -513,7 +530,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       }
       if (field !== undefined) {
         const collForField = (updates.collection as string | null | undefined) ?? widget.collection
-        if (field && collForField) {
+        const effType = (updates.type as string | undefined) ?? widget.type
+        if (field && collForField && effType !== 'saved_view') {
           const validField = await resolveField(collForField, field)
           if (!validField) return reply.code(400).send({ error: 'Unknown field' })
         }
@@ -524,6 +542,7 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       if (row !== undefined) updates.row = row
       if (width !== undefined) updates.width = width
       if (height !== undefined) updates.height = height
+      if (refresh_seconds !== undefined) updates.refresh_seconds = normalizeRefresh(refresh_seconds)
 
       await db('nivaro_dashboard_widgets').where('id', widget.id).update(updates)
       const updated = (await db('nivaro_dashboard_widgets')
@@ -591,7 +610,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       }
 
       const extraFilters = normalizeWidgetFilters(req.query.extra_filters)
-      const result = await computeWidgetData(widget, extraFilters)
+      // A saved-view widget reads AS THE VIEWER (RBAC/RLS/scopes bind).
+      const result = await computeWidgetData(widget, extraFilters, { user: req.user ?? null })
       if ('error' in result) return reply.code(result.status).send({ error: result.error })
       return { data: result.data }
     }

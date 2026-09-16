@@ -94,6 +94,61 @@ interface AddWidgetForm {
   row: number
   width: number
   height: number
+  /** #53 — '' = page default. */
+  refresh_seconds: string
+}
+
+/** #52 — pick one of the collection's saved browser views; the widget then
+ *  counts (or sums a field over) exactly the rows that view shows. */
+function SavedViewPicker({
+  collection,
+  value,
+  onPick
+}: {
+  collection: string
+  value: string
+  onPick: (id: string, name: string) => void
+}) {
+  const { data: views = [] } = useQuery({
+    queryKey: ['saved-views', collection],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; name: string; is_shared?: boolean }> }>('/saved-views', {
+          params: { collection }
+        })
+        .then((r) => r.data.data ?? []),
+    enabled: !!collection
+  })
+  return (
+    <div className='space-y-1.5'>
+      <Label htmlFor='w-view'>
+        Saved view <span className='text-red-500'>*</span>
+      </Label>
+      <Select
+        value={value || '__none__'}
+        onValueChange={(v) => {
+          const view = views.find((x) => String(x.id) === v)
+          if (view) onPick(String(view.id), view.name)
+        }}
+      >
+        <SelectTrigger id='w-view' data-widget-saved-view>
+          <SelectValue placeholder={collection ? 'Pick a view…' : 'Pick a collection first'} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value='__none__'>— Pick a view —</SelectItem>
+          {views.map((v) => (
+            <SelectItem key={v.id} value={String(v.id)}>
+              {v.name}
+              {v.is_shared ? ' · shared' : ''}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className='text-[11px] text-slate-400'>
+        The count follows the view's filters. Add a numeric field below to sum it instead.
+      </p>
+    </div>
+  )
 }
 
 // ─── Widget type config ───────────────────────────────────────────────────────
@@ -105,8 +160,19 @@ const TYPE_CONFIG: Record<WidgetType, { label: string; color: string }> = {
   latest: { label: 'Latest', color: 'bg-orange-50 text-orange-700 border-orange-200' },
   bar_chart: { label: 'Bar Chart', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
   line_chart: { label: 'Line Chart', color: 'bg-pink-50 text-pink-700 border-pink-200' },
-  report_preset: { label: 'Prebuilt', color: 'bg-amber-50 text-amber-700 border-amber-200' }
+  report_preset: { label: 'Prebuilt', color: 'bg-amber-50 text-amber-700 border-amber-200' },
+  saved_view: { label: 'Saved view', color: 'bg-sky-50 text-sky-700 border-sky-200' }
 }
+
+/** #53 — per-widget refresh choices (seconds). '' = page default (60s). */
+const REFRESH_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: 'Default (1 min)' },
+  { value: '15', label: 'Every 15 s' },
+  { value: '30', label: 'Every 30 s' },
+  { value: '300', label: 'Every 5 min' },
+  { value: '900', label: 'Every 15 min' },
+  { value: '3600', label: 'Hourly' }
+]
 
 // ─── Widget card ──────────────────────────────────────────────────────────────
 
@@ -131,7 +197,11 @@ function WidgetCard({
           params: globalFilters.length ? { extra_filters: filtersKey } : {}
         })
         .then((r) => r.data.data),
-    refetchInterval: 60_000
+    // #53 — the widget's own interval when it has one, else the page default.
+    refetchInterval:
+      widget.refresh_seconds && widget.refresh_seconds >= 10
+        ? widget.refresh_seconds * 1000
+        : 60_000
   })
 
   // Live dashboards (#264): a write to this widget's source collection
@@ -199,7 +269,10 @@ function WidgetCard({
             <Loader2 className='h-5 w-5 animate-spin text-slate-300' />
           ) : !data ? (
             <p className='text-[12px] text-slate-400'>No data</p>
-          ) : widget.type === 'count' || widget.type === 'sum' || widget.type === 'avg' ? (
+          ) : widget.type === 'count' ||
+            widget.type === 'sum' ||
+            widget.type === 'avg' ||
+            widget.type === 'saved_view' ? (
             <button
               type='button'
               onClick={() => onDrill(null)}
@@ -488,8 +561,12 @@ function AddWidgetSheet({
     col: 0,
     row: 0,
     width: 1,
-    height: 1
+    height: 1,
+    refresh_seconds: ''
   })
+  // #52 — a saved-view widget stores the view id in `field`; an optional sum
+  // field rides `filters.sum_field` so `field` keeps one meaning per type.
+  const [viewSumField, setViewSumField] = useState('')
 
   const { data: collectionsData } = useQuery({
     queryKey: ['collections'],
@@ -505,12 +582,17 @@ function AddWidgetSheet({
         .post(`/dashboards/${dashboardId}/widgets`, {
           ...body,
           collection: body.collection || null,
-          field: body.field || null
+          field: body.field || null,
+          refresh_seconds: body.refresh_seconds ? Number(body.refresh_seconds) : null,
+          ...(body.type === 'saved_view' && viewSumField.trim()
+            ? { filters: { sum_field: viewSumField.trim() } }
+            : {})
         })
         .then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
       onOpenChange(false)
+      setViewSumField('')
       setForm({
         title: '',
         type: 'count',
@@ -519,7 +601,8 @@ function AddWidgetSheet({
         col: 0,
         row: 0,
         width: 1,
-        height: 1
+        height: 1,
+        refresh_seconds: ''
       })
       toast.success('Widget added')
     },
@@ -571,6 +654,7 @@ function AddWidgetSheet({
                 <SelectItem value='bar_chart'>Bar Chart — last 30 days</SelectItem>
                 <SelectItem value='line_chart'>Line Chart — last 30 days</SelectItem>
                 <SelectItem value='report_preset'>Prebuilt — widget catalog</SelectItem>
+                <SelectItem value='saved_view'>Saved view — count or sum over a view</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -584,6 +668,26 @@ function AddWidgetSheet({
               }
             />
           )}
+
+          {/* Refresh interval (#53) */}
+          <div className='space-y-1.5'>
+            <Label htmlFor='w-refresh'>Refresh</Label>
+            <Select
+              value={form.refresh_seconds}
+              onValueChange={(v) => setForm((p) => ({ ...p, refresh_seconds: v }))}
+            >
+              <SelectTrigger id='w-refresh' data-widget-refresh>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {REFRESH_OPTIONS.map((o) => (
+                  <SelectItem key={o.value || 'default'} value={o.value || '__default__'}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           {/* Collection */}
           <div className='space-y-1.5'>
@@ -607,6 +711,26 @@ function AddWidgetSheet({
               </SelectContent>
             </Select>
           </div>
+
+          {/* Saved view (#52): field carries the view id, an optional sum field rides filters */}
+          {form.type === 'saved_view' && (
+            <>
+              <SavedViewPicker
+                collection={form.collection}
+                value={form.field}
+                onPick={(id, name) => setForm((p) => ({ ...p, field: id, title: p.title || name }))}
+              />
+              <div className='space-y-1.5'>
+                <Label htmlFor='w-view-sum'>Sum this field (optional)</Label>
+                <Input
+                  id='w-view-sum'
+                  value={viewSumField}
+                  onChange={(e) => setViewSumField(e.target.value)}
+                  placeholder='e.g. amount — leave empty for a count'
+                />
+              </div>
+            </>
+          )}
 
           {/* Field (sum / avg) */}
           {needsField && (

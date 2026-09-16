@@ -41,6 +41,7 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
+import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import {
@@ -3152,6 +3153,7 @@ function BulkBar({
   const auth = useItemEditAuth()
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const itemNav = useItemNavigation()
   const [mode, setMode] = useState<
     'actions' | 'update' | 'transition' | 'message' | 'confirm-delete' | 'merge'
   >('actions')
@@ -3325,6 +3327,23 @@ function BulkBar({
                 )}
               </span>
             ))}
+          {selectedIds.length >= 2 && (
+            <button
+              type='button'
+              onClick={() => {
+                const r = openInTabs(
+                  selectedIds.map((id) => itemNav.urlFor({ collection, itemId: String(id) }))
+                )
+                if (r.blocked > 0 || r.capped > 0) toast.warning(openInTabsMessage(r))
+                else toast.success(openInTabsMessage(r))
+              }}
+              data-bulk-open-tabs
+              title={`Open the selected records in new tabs (up to ${OPEN_IN_TABS_CAP})`}
+              className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
+            >
+              Open in tabs
+            </button>
+          )}
           {builtin('compare') && selectedIds.length >= 2 && selectedIds.length <= 3 && (
             <button
               type='button'

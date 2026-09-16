@@ -223,6 +223,7 @@ export { QueueKanbanBoard } from './components/queue/QueueKanbanBoard'
 export type { QueueRealtimeAdapter, QueueWorklistProps } from './components/queue/QueueWorklist'
 export { QueueWorklist } from './components/queue/QueueWorklist'
 export { QueueWorkloadView } from './components/queue/QueueWorkloadView'
+export { RecentRecordsRail } from './components/RecentRecordsRail'
 export { RecordDrilldownSheet } from './components/RecordDrilldownSheet'
 export type { RecordGridEditorConfig } from './components/RecordGridEditor'
 export { RecordGridEditor } from './components/RecordGridEditor'
@@ -297,6 +298,7 @@ export {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from './lib/notification-target'
+export { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from './lib/open-in-tabs'
 export * from './lib/queue-grouping'
 export {
   type CollectionUpdateEvent,
