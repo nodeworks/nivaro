@@ -18,6 +18,7 @@ import {
   type ProposalWrite,
   proposeFixes
 } from '../services/integrity-proposals.js'
+import { integrityCheckById } from '../services/integrity-checks.js'
 import { readOne, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import {
@@ -132,7 +133,8 @@ async function annotateFindings(
     legacy_fixable:
       (f.rule === 'cascade' && !!f.field && physical.has(f.field.toLowerCase())) ||
       (f.rule === 'display' && !!f.field && autoIds.has(f.field)) ||
-      (f.rule === 'row-rule' && !!f.field)
+      (f.rule === 'row-rule' && !!f.field) ||
+      !!integrityCheckById(f.rule)?.fix
   }))
 }
 
@@ -731,7 +733,7 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
       .filter((r) => IDENT.test(r.collection))
       .map((r) => {
         const s = summaries.get(r.collection)
-        if (!s || s.required + s.validation + s.cascade + s.row_rules === 0) return null
+        if (!s || s.required + s.validation + s.cascade + s.row_rules + s.external === 0) return null
         return { display_name: r.display_name, ...s }
       })
       .filter(Boolean)

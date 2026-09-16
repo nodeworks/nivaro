@@ -5566,7 +5566,10 @@ export function ItemEditForm({
       const changed = new Set<string>()
       const rows: Array<{ rowId: string; fields: string[] }> = []
       for (const [rowId, ch] of edits.entries()) {
-        const fields = Object.keys(ch).filter((k) => !k.startsWith('__'))
+        // A staged edit that already carries its own reason (a carry-forward,
+        // a reconcile, an applied proposal) needs no second justification.
+        if (typeof ch._change_reason === 'string' && ch._change_reason.trim()) continue
+        const fields = Object.keys(ch).filter((k) => !k.startsWith('__') && k !== '_change_reason')
         for (const k of fields) changed.add(k)
         if (fields.length) rows.push({ rowId: String(rowId), fields })
       }
@@ -6047,7 +6050,9 @@ export function ItemEditForm({
                     [mf]: savedId,
                     // The record's change reason covers the lines it stages
                     // (a new child row on an existing record).
-                    ...(changeReasonRef.current ? { _change_reason: changeReasonRef.current } : {})
+                    ...(changeReasonRef.current && !cleanData._change_reason
+                      ? { _change_reason: changeReasonRef.current }
+                      : {})
                   })
                 )
               } catch (err) {
@@ -6152,7 +6157,10 @@ export function ItemEditForm({
             )
             let rowPatchFailed = false
             if (Object.keys(cleanChanges).length > 0) {
-              if (changeReasonRef.current) cleanChanges._change_reason = changeReasonRef.current
+              // The row's own reason (prefilled by the action that staged it)
+              // beats the one collected for the save as a whole.
+              if (changeReasonRef.current && !cleanChanges._change_reason)
+                cleanChanges._change_reason = changeReasonRef.current
               await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch((err) => {
                 hasErr = true
                 rowPatchFailed = true

@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Lock } from 'lucide-react'
+import type React from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { NivaroClient } from '@nivaro/sdk'
 import { get } from '../../lib/commands'
 import { cn } from '../../lib/utils'
@@ -53,6 +55,26 @@ export interface CompareSeriesRow {
   details?: Record<string, CompareDetailRow[]>
 }
 
+/** An extra read-only line under the actual ('Committed' beside 'Actual'). */
+export interface CompareExtraSeries {
+  key: string
+  label: string
+  /** One sentence on how the figures were placed — shown on hover. */
+  hint?: string
+  rows: Array<{ key: string | number; values: Record<string, number> }>
+}
+
+/** Values the endpoint suggests for empty cells; the grid stages them only on
+ *  Apply, never over a filled cell or a closed column. */
+export interface CompareProposal {
+  id: string
+  label: string
+  reason: string
+  /** Stored as the change reason on every row the apply touches. */
+  change_reason?: string
+  rows: Array<{ key: string | number; values: Record<string, number> }>
+}
+
 export interface CompareSeriesData {
   label: string
   plan_label?: string
@@ -62,8 +84,64 @@ export interface CompareSeriesData {
   rows: CompareSeriesRow[]
   closed_through: string | null
   closed_rule?: string
+  /** Closed columns are refused by the writer unless set to the actual;
+   *  the grid shows them read-only (admins may still edit, with a reason). */
+  closed_locked?: boolean
+  closed_locked_message?: string
   status?: { key: string; label: string; tone: 'ok' | 'warn' | 'danger' | 'neutral'; reason?: string } | null
   figures?: Array<{ label: string; value: number; format?: 'currency' | 'number' }>
+  series?: CompareExtraSeries[]
+  proposals?: CompareProposal[]
+}
+
+/** The extra series' value for a (row, column), null when it has none. */
+export function extraSeriesValue(
+  s: CompareExtraSeries,
+  rowKey: unknown,
+  column: string
+): number | null {
+  const r = s.rows.find((x) => String(x.key) === String(rowKey))
+  const v = r?.values[column]
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+/** Sum of a closed month's plan − actual over every closed month of a row. */
+export function closedVariance(
+  data: CompareSeriesData,
+  cmpRow: CompareSeriesRow | null,
+  plannedRow: Record<string, unknown>
+): { diff: number; months: number } | null {
+  const rowKey = plannedRow[data.key_field]
+  let diff = 0
+  let months = 0
+  for (const c of data.columns) {
+    if (!isMonth(c) || !compareColumnClosed(data, rowKey, c)) continue
+    const planned = Number(plannedRow[c]) || 0
+    const actual = cmpRow?.values[c] ?? 0
+    if (planned === 0 && actual === 0) continue
+    months++
+    diff += actual - planned
+  }
+  return months ? { diff, months } : null
+}
+
+/** Open month columns of a row that come AFTER `column` — where a closed
+ *  month's unspent remainder can go. */
+export function openColumnsAfter(data: CompareSeriesData, rowKey: unknown, column: string): string[] {
+  const from = MONTHS.indexOf(column)
+  return data.columns.filter(
+    (c) => isMonth(c) && MONTHS.indexOf(c) > from && !compareColumnClosed(data, rowKey, c)
+  )
+}
+
+export function monthLabel(column: string): string {
+  const i = MONTHS.indexOf(column)
+  return i < 0 ? column : MONTH_SHORT[i]
+}
+
+export function monthLabelLong(column: string): string {
+  const i = MONTHS.indexOf(column)
+  return i < 0 ? column : column.charAt(0).toUpperCase() + column.slice(1)
 }
 
 const MONTHS = [
@@ -201,6 +279,198 @@ export function compareTone(
   return 'neutral'
 }
 
+/** What a reconcile does to a row: the closed column takes the actual and the
+ *  difference moves to (or comes out of) one open column. Pure. */
+export function reconcilePlan(args: {
+  data: CompareSeriesData
+  rowKey: unknown
+  column: string
+  plannedRow: Record<string, unknown>
+  actual: number
+  target: string | null
+}): { patch: Record<string, number>; moved: number; targetShort: number } {
+  const { column, plannedRow, actual, target } = args
+  const planned = Number(plannedRow[column]) || 0
+  const remainder = Math.round((planned - actual) * 100) / 100
+  const patch: Record<string, number> = { [column]: actual }
+  let moved = 0
+  let targetShort = 0
+  if (target && Math.abs(remainder) >= 0.005) {
+    const cur = Number(plannedRow[target]) || 0
+    // Unspent (planned > actual) moves forward; overspend comes out of the
+    // target, never below zero — what the target cannot cover is reported.
+    const next = Math.max(0, Math.round((cur + remainder) * 100) / 100)
+    moved = Math.round((next - cur) * 100) / 100
+    targetShort = Math.round((cur + remainder - next) * 100) / 100
+    patch[target] = next
+  }
+  return { patch, moved, targetShort }
+}
+
+/**
+ * "Set <month> to actual, move the remainder to <month>" — the one-click
+ * reconcile (display popover) and the carry-forward (row editor) share it.
+ * Stages nothing itself: `onApply` receives the patch and a prefilled reason.
+ */
+export function ReconcileAction(props: {
+  data: CompareSeriesData
+  rowKey: unknown
+  column: string
+  columnLabel: string
+  plannedRow: Record<string, unknown>
+  actual: number
+  onApply: (patch: Record<string, number>, reason: string) => void
+  /** 'link' inside the popover, 'button' in the row editor. */
+  variant?: 'link' | 'button'
+}) {
+  const { data, rowKey, column, columnLabel, plannedRow, actual, onApply, variant = 'link' } = props
+  const [open, setOpen] = useState(false)
+  const planned = Number(plannedRow[column]) || 0
+  const remainder = Math.round((planned - actual) * 100) / 100
+  const targets = useMemo(() => openColumnsAfter(data, rowKey, column), [data, rowKey, column])
+  const [target, setTarget] = useState<string | null>(null)
+  useEffect(() => {
+    if (open) setTarget(targets[0] ?? null)
+  }, [open, targets])
+  const plan = reconcilePlan({ data, rowKey, column, plannedRow, actual, target })
+  const defaultReason = () => {
+    const base = `Reconciled ${columnLabel} ${String(rowKey)} to invoiced (${fmtMoney(actual)})`
+    if (!target || Math.abs(plan.moved) < 0.005) return base
+    return remainder > 0
+      ? `${base} — moved ${fmtMoney(plan.moved)} to ${monthLabelLong(target)}`
+      : `${base} — took ${fmtMoney(-plan.moved)} from ${monthLabelLong(target)}`
+  }
+  const [reason, setReason] = useState('')
+  useEffect(() => {
+    if (open) setReason(defaultReason())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, target])
+  if (Math.abs(remainder) < 0.005) return null
+  const plan_ = planLabel(data).toLowerCase()
+  const apply = () => {
+    onApply(plan.patch, reason.trim() || defaultReason())
+    setOpen(false)
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-compare-reconcile={column}
+          data-tip=''
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className={cn(
+            variant === 'button'
+              ? 'inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background dark:text-slate-200 dark:hover:bg-white/5'
+              : 'text-[11px] font-medium text-nvr-cyan underline decoration-dotted underline-offset-2 hover:decoration-solid'
+          )}
+        >
+          {remainder > 0 ? 'Carry forward' : 'Reconcile'}
+          <span className='tabular-nums text-slate-500 dark:text-slate-400'>{fmtMoney(Math.abs(remainder))}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align='start'
+        sideOffset={6}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className='w-[360px] max-w-[calc(100vw-32px)] p-3 text-[12px]'
+        data-compare-reconcile-popover
+      >
+        <div className='font-semibold text-slate-800 dark:text-foreground'>
+          {remainder > 0 ? 'Carry the unspent remainder forward' : 'Reconcile to what was invoiced'}
+        </div>
+        <ol className='mt-2 space-y-1.5 text-slate-600 dark:text-slate-300'>
+          <li>
+            1. Set <b>{columnLabel}</b> {plan_} to the actual{' '}
+            <b className='tabular-nums'>{fmtMoney(actual)}</b>{' '}
+            <span className='text-slate-400'>(was {fmtMoney(planned)})</span>
+          </li>
+          <li>
+            2.{' '}
+            {targets.length === 0 ? (
+              <span>
+                No open month follows it on this row — the {fmtMoney(Math.abs(remainder))}{' '}
+                {remainder > 0 ? 'is dropped from the plan' : 'is left unplanned'}.
+              </span>
+            ) : (
+              <span className='inline-flex flex-wrap items-center gap-1'>
+                {remainder > 0 ? 'Move' : 'Take'} <b className='tabular-nums'>{fmtMoney(Math.abs(remainder))}</b>{' '}
+                {remainder > 0 ? 'to' : 'from'}
+                {targets.map((t) => (
+                  <button
+                    key={t}
+                    type='button'
+                    data-compare-reconcile-target={t}
+                    aria-pressed={target === t}
+                    onClick={() => setTarget(t)}
+                    className={cn(
+                      'rounded-full border px-2 py-px text-[11px]',
+                      target === t
+                        ? 'border-nvr-cyan bg-nvr-cyan/10 font-semibold text-slate-800 dark:text-slate-100'
+                        : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+                    )}
+                  >
+                    {monthLabel(t)}
+                  </button>
+                ))}
+                <button
+                  type='button'
+                  data-compare-reconcile-target='__none__'
+                  aria-pressed={target === null}
+                  onClick={() => setTarget(null)}
+                  className={cn(
+                    'rounded-full border px-2 py-px text-[11px]',
+                    target === null
+                      ? 'border-nvr-cyan bg-nvr-cyan/10 font-semibold text-slate-800 dark:text-slate-100'
+                      : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+                  )}
+                >
+                  nowhere
+                </button>
+              </span>
+            )}
+            {plan.targetShort > 0.005 && (
+              <span className={cn('block text-[11px]', TONE_TEXT.warn)}>
+                {monthLabelLong(target ?? '')} only holds {fmtMoney((Number(plannedRow[target ?? '']) || 0))} —{' '}
+                {fmtMoney(plan.targetShort)} stays unplanned.
+              </span>
+            )}
+          </li>
+        </ol>
+        <label className='mt-2.5 block text-[10.5px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+          Reason
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            data-compare-reconcile-reason
+            className='mt-1 h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] font-normal normal-case tracking-normal text-slate-800 dark:border-border dark:bg-background dark:text-slate-100'
+          />
+        </label>
+        <div className='mt-2.5 flex justify-end gap-1.5'>
+          <button
+            type='button'
+            onClick={() => setOpen(false)}
+            className='h-7 rounded-md px-2.5 text-[12px] text-slate-600 hover:bg-muted dark:text-slate-300'
+          >
+            Cancel
+          </button>
+          <button
+            type='button'
+            data-compare-reconcile-apply
+            onClick={apply}
+            className='h-7 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:opacity-90'
+          >
+            Stage this change
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 /** The second line under a cell: the actual, its delta, and the invoices behind it. */
 export function CompareCell(props: {
   data: CompareSeriesData
@@ -211,23 +481,82 @@ export function CompareCell(props: {
   /** Column label for the popover title ('September'). */
   columnLabel: string
   compact?: boolean
+  /** The whole planned row — needed for the closed-variance summary and the
+   *  reconcile action (both read sibling columns). */
+  plannedRow?: Record<string, unknown>
+  /** When the host can stage a change to this row, the popover offers the
+   *  one-click reconcile on a closed month that disagrees with its actual. */
+  onAdjust?: (patch: Record<string, number>, reason: string) => void
 }) {
-  const { data, row, rowKey, column, planned, columnLabel, compact } = props
+  const { data, row, rowKey, column, planned, columnLabel, compact, plannedRow, onAdjust } = props
   if (!data.columns.includes(column)) return null
   const actual = row?.values[column]
   const closed = compareColumnClosed(data, rowKey, column)
   const plannedN = Number(planned) || 0
+  const extra = (data.series ?? [])
+    .map((s) => ({ s, v: extraSeriesValue(s, rowKey, column) }))
+    .filter((x) => x.v != null && Math.abs(x.v as number) >= 0.005)
+  const extraLines = extra.length > 0 && (
+    <div className='flex flex-wrap items-baseline gap-x-1' data-compare-extra=''>
+      {extra.map(({ s, v }) => (
+        <span
+          key={s.key}
+          data-compare-series={s.key}
+          data-tip={s.hint}
+          className='flex items-baseline gap-1 text-[11px] leading-4 text-slate-500 dark:text-slate-400'
+        >
+          <span className='font-mono text-[9px] uppercase tracking-wide'>{s.label}</span>
+          <span className='tabular-nums'>{fmtMoney(v as number, compact)}</span>
+        </span>
+      ))}
+    </div>
+  )
+  const isLast = data.columns[data.columns.length - 1] === column && !isMonth(column)
+  const variance = isLast && plannedRow ? closedVariance(data, row, plannedRow) : null
+  const varianceLine = variance && (
+    <div
+      data-compare-variance={variance.diff > 0 ? 'over' : 'under'}
+      data-tip={`Closed months: ${planLabel(data).toLowerCase()} vs ${data.label.toLowerCase()} over ${variance.months} closed ${variance.months === 1 ? 'month' : 'months'}`}
+      className={cn(
+        'flex items-baseline gap-1 text-[11px] leading-4',
+        TONE_TEXT[Math.abs(variance.diff) < 0.005 ? 'ok' : 'warn']
+      )}
+    >
+      <span className='font-mono text-[9px] uppercase tracking-wide'>Closed Δ</span>
+      <span className='tabular-nums font-medium'>
+        {Math.abs(variance.diff) < 0.005 ? 'even' : `${variance.diff > 0 ? '+' : '−'}${fmtMoney(Math.abs(variance.diff), true)}`}
+      </span>
+      <span className='text-slate-400 dark:text-slate-500'>· {variance.months} mo</span>
+    </div>
+  )
   // No series row at all for this key: this row's key has nothing recorded
   // anywhere, say so once per cell quietly rather than pretending zero.
   if (!row || actual == null) {
+    // A closed month with a plan but NO actual still needs reconciling —
+    // the endpoint recorded nothing for it, so the actual is zero.
+    const reconcileEmpty =
+      closed && onAdjust && plannedRow && plannedN !== 0 ? (
+        <ReconcileAction
+          data={data}
+          rowKey={rowKey}
+          column={column}
+          columnLabel={columnLabel}
+          plannedRow={plannedRow}
+          actual={0}
+          onApply={onAdjust}
+        />
+      ) : null
     return (
       <div
         data-compare-cell={column}
         data-compare-empty=''
-        className='mt-0.5 flex items-baseline gap-1 text-[11px] leading-4 text-slate-400 dark:text-slate-500'
+        className='mt-0.5 flex flex-wrap items-baseline gap-x-1 text-[11px] leading-4 text-slate-400 dark:text-slate-500'
       >
         <span className='font-mono text-[9px] uppercase tracking-wide'>{data.label}</span>
         <span>—</span>
+        {reconcileEmpty}
+        {extraLines}
+        {varianceLine}
       </div>
     )
   }
@@ -235,11 +564,13 @@ export function CompareCell(props: {
   const tone = compareTone(plannedN, actual, closed)
   const diff = actual - plannedN
   const showDelta = Math.abs(diff) >= 0.005 && plannedN !== 0
+  const canReconcile = closed && !!onAdjust && !!plannedRow && Math.abs(diff) >= 0.005
+  const opensPopover = details.length > 0 || canReconcile
   const figure = (
     <span
       className={cn(
         'tabular-nums font-medium',
-        details.length > 0 &&
+        opensPopover &&
           'cursor-pointer underline decoration-dotted decoration-slate-300 underline-offset-2 hover:decoration-slate-500 dark:decoration-slate-600',
         'text-slate-700 dark:text-slate-200'
       )}
@@ -256,7 +587,7 @@ export function CompareCell(props: {
       <span className='font-mono text-[9px] uppercase tracking-wide text-slate-500 dark:text-slate-400'>
         {data.label}
       </span>
-      {details.length > 0 ? (
+      {opensPopover ? (
         <Popover>
           <PopoverTrigger asChild>
             <button
@@ -283,6 +614,19 @@ export function CompareCell(props: {
             planned={plannedN}
             closed={closed}
             rows={details}
+            reconcile={
+              canReconcile && plannedRow ? (
+                <ReconcileAction
+                  data={data}
+                  rowKey={rowKey}
+                  column={column}
+                  columnLabel={columnLabel}
+                  plannedRow={plannedRow}
+                  actual={actual}
+                  onApply={onAdjust!}
+                />
+              ) : null
+            }
           />
         </Popover>
       ) : (
@@ -304,6 +648,52 @@ export function CompareCell(props: {
           {fmtMoney(Math.abs(diff), true)}
         </span>
       )}
+      {extraLines}
+      {varianceLine}
+    </div>
+  )
+}
+
+/** Endpoint-suggested values for empty cells — Apply stages them, Dismiss
+ *  hides the suggestion in this browser. */
+export function CompareProposalBanner(props: {
+  proposals: CompareProposal[]
+  onApply: (p: CompareProposal) => void
+  onDismiss: (p: CompareProposal) => void
+}) {
+  if (props.proposals.length === 0) return null
+  return (
+    <div className='mb-2 space-y-1.5'>
+      {props.proposals.map((p) => (
+        <div
+          key={p.id}
+          data-compare-proposal={p.id}
+          className='flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-[12px] dark:border-sky-900/50 dark:bg-sky-950/30'
+        >
+          <div className='min-w-0 flex-1'>
+            <span className='font-semibold text-slate-800 dark:text-slate-100'>{p.label}</span>
+            <span className='ml-2 text-slate-600 dark:text-slate-300'>{p.reason}</span>
+          </div>
+          <div className='flex shrink-0 gap-1.5'>
+            <button
+              type='button'
+              data-compare-proposal-apply
+              onClick={() => props.onApply(p)}
+              className='h-7 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:opacity-90'
+            >
+              Apply
+            </button>
+            <button
+              type='button'
+              data-compare-proposal-dismiss
+              onClick={() => props.onDismiss(p)}
+              className='h-7 rounded-md px-2.5 text-[12px] text-slate-600 hover:bg-white/60 dark:text-slate-300 dark:hover:bg-white/5'
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -329,8 +719,9 @@ function CompareDetailsPopover(props: {
   planned: number
   closed: boolean
   rows: CompareDetailRow[]
+  reconcile?: React.ReactNode
 }) {
-  const { title, label, planLabel: plan, unit, actual, planned, closed, rows } = props
+  const { title, label, planLabel: plan, unit, actual, planned, closed, rows, reconcile } = props
   const diff = actual - planned
   return (
     <PopoverContent
@@ -372,6 +763,12 @@ function CompareDetailsPopover(props: {
           {rows.length} {unit}
         </span>
       </div>
+      {reconcile && (
+        <div className='flex items-center gap-2 border-b border-slate-200 px-3.5 py-2 text-[11px] text-slate-600 dark:border-border dark:text-slate-300'>
+          <span>This closed month disagrees with its {label.toLowerCase()}.</span>
+          {reconcile}
+        </div>
+      )}
       <ul className='max-h-72 overflow-y-auto py-1' data-compare-details-list>
         {rows.map((r) => (
           <li

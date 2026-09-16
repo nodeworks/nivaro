@@ -95,6 +95,9 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
   }
 }
 
+/** Extension rules arrive as kebab ids ('forecast-missing') — read them as words. */
+const ruleFallback = (rule: string) => rule.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
+
 export function ConformanceView({ className }: { className?: string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -552,7 +555,7 @@ function RunDetail({
               rule && rule !== r.rule && 'opacity-40'
             )}
           >
-            {RULE_META[r.rule]?.label ?? r.rule} {Number(r.c).toLocaleString()}
+            {RULE_META[r.rule]?.label ?? ruleFallback(r.rule)} {Number(r.c).toLocaleString()}
           </button>
         ))}
       </div>
@@ -634,7 +637,7 @@ function RunDetail({
                           RULE_META[f.rule]?.cls ?? 'bg-slate-500/10 text-slate-600'
                         )}
                       >
-                        {RULE_META[f.rule]?.label ?? f.rule}
+                        {RULE_META[f.rule]?.label ?? ruleFallback(f.rule)}
                       </span>
                       <span className='min-w-0 text-slate-600 dark:text-muted-foreground'>
                         {f.message}
@@ -679,7 +682,7 @@ function RunDetail({
                         RULE_META[f.rule]?.cls ?? 'bg-slate-500/10 text-slate-600'
                       )}
                     >
-                      {RULE_META[f.rule]?.label ?? f.rule}
+                      {RULE_META[f.rule]?.label ?? ruleFallback(f.rule)}
                     </span>
                   </td>
                   <td className='px-2 py-1.5 text-slate-600 dark:text-muted-foreground'>

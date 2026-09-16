@@ -1,3 +1,4 @@
+import { integrityCheckById } from './integrity-checks.js'
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
@@ -62,6 +63,7 @@ export type ProposalKind =
   | 'pick'
   | 'normalize'
   | 'notify'
+  | 'external'
   | 'ai'
 
 export interface Proposal {
@@ -1173,8 +1175,25 @@ export async function proposeFixes(
       case 'display':
         out = await displayProposals(collection, row, finding, meta)
         break
-      default:
-        out = []
+      default: {
+        // An extension-registered check with a fix: one action, no writes
+        // listed (the extension writes through the items API as the user).
+        const chk = integrityCheckById(finding.rule)
+        out =
+          chk?.fix && chk.collection === collection
+            ? [
+                {
+                  id: proposalId('external', [], `${chk.id}|${finding.field}`),
+                  kind: 'external',
+                  label: chk.fix_label ?? `Fix: ${chk.label}`,
+                  basis: finding.message ?? chk.label,
+                  confidence: 'high',
+                  writes: [],
+                  preview: []
+                }
+              ]
+            : []
+      }
     }
   } catch (err) {
     console.warn(`integrity proposals failed for ${collection}/${itemId} ${finding.rule}:`, err)
@@ -1364,6 +1383,29 @@ export async function applyProposal(
   req?: FastifyRequest
 ): Promise<ApplyResult> {
   const result: ApplyResult = { applied: 0, failed: [], undo: [], action: proposal.kind }
+  if (proposal.kind === 'external') {
+    const chk = integrityCheckById(finding.rule)
+    if (!chk?.fix) {
+      result.failed.push({ collection, item_id: String(itemId), error: 'That fix is no longer registered' })
+      return result
+    }
+    try {
+      const r = await chk.fix({ id: String(itemId), message: finding.message ?? null, user, req })
+      if (r.fixed) result.applied = 1
+      else result.failed.push({ collection, item_id: String(itemId), error: r.detail ?? 'Not fixed' })
+      await logActivity({
+        action: 'integrity-fix',
+        user: user.id,
+        collection,
+        item: String(itemId),
+        comment: `${chk.label}: ${r.detail ?? (r.fixed ? 'fixed' : 'not fixed')}`,
+        req
+      })
+    } catch (err) {
+      result.failed.push({ collection, item_id: String(itemId), error: (err as Error)?.message ?? String(err) })
+    }
+    return result
+  }
   if (proposal.kind === 'notify' && proposal.notify) {
     const title =
       `Data integrity: ${finding.message ?? `${finding.field} (${finding.rule})`}`.slice(0, 500)

@@ -28,6 +28,7 @@ import { type CallOptions, type CallResult, callExternalApi } from '../services/
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
+import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
@@ -198,6 +199,11 @@ export interface ExtensionContext {
   readiness: {
     /** Register a scored check on the go-live readiness scorecard. */
     registerCheck(check: import('../services/readiness.js').ReadinessCheck): void
+  }
+  integrity: {
+    /** Register a Data Integrity check the conformance sweep, the record
+     *  banner and the Fix button run alongside the built-in rules. */
+    registerCheck(check: import('../services/integrity-checks.js').IntegrityCheck): void
   }
   links: {
     /** Register the headless frontend's base URL + route map so email links
@@ -494,6 +500,7 @@ async function loadExtension(
     | 'chatBot'
     | 'digest'
     | 'readiness'
+    | 'integrity'
     | 'mail'
     | 'links'
     | 'bulkActions'
@@ -715,6 +722,12 @@ async function loadExtension(
           registerReadinessCheck(check)
         }
       },
+      integrity: {
+        registerCheck: (check) => {
+          note('integrity')
+          registerIntegrityCheck(check)
+        }
+      },
       links: {
         register: (reg) => {
           note('links')
@@ -853,6 +866,7 @@ export async function loadExtensions(
     | 'chatBot'
     | 'digest'
     | 'readiness'
+    | 'integrity'
     | 'mail'
     | 'links'
     | 'bulkActions'
@@ -993,6 +1007,7 @@ export async function loadCloudExtensions(
     | 'validators'
     | 'digest'
     | 'readiness'
+    | 'integrity'
     | 'mail'
     | 'links'
   >
@@ -1053,6 +1068,9 @@ export async function loadCloudExtensions(
         },
         readiness: {
           registerCheck: (check) => registerReadinessCheck(check)
+        },
+        integrity: {
+          registerCheck: (check) => registerIntegrityCheck(check)
         },
         links: {
           register: (reg) => registerPortalLinks(reg)
@@ -1236,6 +1254,7 @@ export async function scanNewExtensions(
     | 'validators'
     | 'digest'
     | 'readiness'
+    | 'integrity'
     | 'mail'
     | 'links'
   >

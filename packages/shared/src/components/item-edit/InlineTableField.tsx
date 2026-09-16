@@ -124,6 +124,7 @@ import { toast } from 'sonner'
 import {
   fieldDrilldownConfig,
   useDrilldown,
+  useItemEditAuth,
   useNivaroClient,
   useParentDraft,
   useReimportHandler
@@ -156,6 +157,8 @@ import {
 import { RelationCombobox } from './RelationCombobox'
 import {
   CompareCell,
+  type CompareProposal,
+  CompareProposalBanner,
   type CompareSeriesConfig,
   CompareStripChips,
   compareColumnClosed,
@@ -163,6 +166,7 @@ import {
   compareRowFor,
   fmtMoney,
   GridStatChip,
+  ReconcileAction,
   resolveCompareEndpoint,
   useCompareSeries
 } from './CompareSeries'
@@ -339,6 +343,40 @@ export interface GridSpreadConfig {
   /** Fill only empty/zero targets (default true); false = overwrite all. */
   only_empty?: boolean
   format?: 'currency' | 'number'
+  /** Shapes offered beside the button (default all: even, front-loaded,
+   *  back-loaded, and "like the previous row" when one exists). */
+  presets?: SpreadPreset[]
+  /** Also offer a grid-level spread over every row's empty targets
+   *  (default true). */
+  across_rows?: boolean
+}
+
+export type SpreadPreset = 'even' | 'front' | 'back' | 'shape'
+
+/** `amount` over `n` slots by shape, cent-rounded with the dust on the last
+ *  slot. `shape` weights drive 'shape' (an all-zero shape falls back to even). */
+export function spreadAmounts(amount: number, n: number, preset: SpreadPreset, shape?: number[]): number[] {
+  if (n <= 0) return []
+  let w: number[]
+  if (preset === 'front') w = Array.from({ length: n }, (_, i) => n - i)
+  else if (preset === 'back') w = Array.from({ length: n }, (_, i) => i + 1)
+  else if (preset === 'shape' && shape && shape.some((x) => x > 0))
+    w = shape.slice(0, n).map((x) => Math.max(0, x))
+  else w = Array.from({ length: n }, () => 1)
+  while (w.length < n) w.push(0)
+  const total = w.reduce((a, b) => a + b, 0) || 1
+  const out: number[] = []
+  let used = 0
+  for (let i = 0; i < n; i++) {
+    if (i === n - 1) {
+      out.push(Math.round((amount - used) * 100) / 100)
+    } else {
+      const v = Math.floor(((amount * w[i]) / total) * 100) / 100
+      out.push(v)
+      used += v
+    }
+  }
+  return out
 }
 
 export interface GridSumCapConfig {
@@ -2800,6 +2838,166 @@ export function InlineTableField({
     (c: { field: string; label?: string | null }) => c.label || titleCase(c.field),
     []
   )
+  const { isAdmin: viewerIsAdmin } = useItemEditAuth()
+  /** A closed column the endpoint marks locked is read-only for non-admins —
+   *  the writer refuses anything but the actual there (the reconcile actions
+   *  set exactly that, so they keep working). */
+  const closedLockedCell = useCallback(
+    (field: string, draft: Record<string, unknown>) =>
+      !!compareData?.closed_locked &&
+      !viewerIsAdmin &&
+      compareData.columns.includes(field) &&
+      compareColumnClosed(compareData, draft[compareData.key_field], field),
+    [compareData, viewerIsAdmin]
+  )
+  /** Stage (pending grid) or write (immediate grid) a patch to ONE row with a
+   *  change reason — the reconcile / carry-forward / proposal paths. Pending
+   *  rows are rewritten in place; the reason rides the row so the form's
+   *  change-reason preflight does not ask again for it. */
+  const stageAdjust = useCallback(
+    async (rowId: string, patchValues: Record<string, unknown>, reason: string) => {
+      if (rowId.startsWith('pending:')) {
+        const idx = Number(rowId.slice('pending:'.length))
+        const cur = pendingRows[idx]
+        if (cur && staging) staging.updateRow(relatedCollection, manyField, idx, applyComputedFields({ ...cur, ...patchValues }))
+        return
+      }
+      if (isPendingMode && staging) {
+        staging.queueEdit(relatedCollection, manyField, rowId, { ...patchValues, _change_reason: reason })
+        return
+      }
+      try {
+        await client.request(patch(`/items/${relatedCollection}/${rowId}`, { ...patchValues, _change_reason: reason }))
+        qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+      } catch (err) {
+        toast.error(`Could not save: ${(err as Error)?.message ?? 'unknown error'}`)
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pendingRows, staging, isPendingMode, relatedCollection, manyField, client, qc, parentId]
+  )
+  // Endpoint proposals (options.compare_series → data.proposals): dismissed
+  // per browser, per endpoint + proposal id.
+  const dismissKey = compareEndpoint ? `nvr_compare_dismiss:${compareEndpoint}` : null
+  const [dismissedProposals, setDismissedProposals] = useState<Set<string>>(() => {
+    try {
+      if (!dismissKey || typeof window === 'undefined') return new Set()
+      return new Set(JSON.parse(window.localStorage.getItem(dismissKey) ?? '[]') as string[])
+    } catch {
+      return new Set()
+    }
+  })
+  const visibleProposals = useMemo(
+    () => (compareData?.proposals ?? []).filter((p) => !dismissedProposals.has(p.id)),
+    [compareData?.proposals, dismissedProposals]
+  )
+  /** Dismiss = remembered in this browser; an APPLIED proposal only hides for
+   *  the session (a discarded save must bring it back on the next load). */
+  const dismissProposal = useCallback(
+    (p: CompareProposal, persist = true) => {
+      setDismissedProposals((prev) => {
+        const next = new Set(prev)
+        next.add(p.id)
+        try {
+          if (persist && dismissKey && typeof window !== 'undefined')
+            window.localStorage.setItem(dismissKey, JSON.stringify([...next]))
+        } catch {
+          /* private mode */
+        }
+        return next
+      })
+    },
+    [dismissKey]
+  )
+  /** Apply a proposal: empty, open cells only; a key with no grid row becomes
+   *  a staged new row. Filled cells and closed columns are never touched. */
+  const applyProposal = useCallback(
+    (p: CompareProposal) => {
+      if (!compareData) return
+      const key = compareData.key_field
+      const reason = p.change_reason ?? p.label
+      const isBlank = (v: unknown) => v == null || v === '' || Number(v) === 0
+      let touched = 0
+      const pendingEdits = staging?.getPendingEdits(relatedCollection, manyField) ?? new Map()
+      for (const pr of p.rows) {
+        const saved = rows.find((r) => String(r[key]) === String(pr.key))
+        const pendingIdx = pendingRows.findIndex((r) => String(r[key]) === String(pr.key))
+        const base = saved
+          ? { ...saved, ...(pendingEdits.get(String(saved.id)) ?? {}) }
+          : pendingIdx >= 0
+            ? pendingRows[pendingIdx]
+            : null
+        const values: Record<string, number> = {}
+        for (const [col, v] of Object.entries(pr.values)) {
+          if (compareColumnClosed(compareData, pr.key, col)) continue
+          if (base && !isBlank(base[col])) continue
+          values[col] = v
+        }
+        if (Object.keys(values).length === 0) continue
+        touched++
+        if (saved) void stageAdjust(String(saved.id), values, reason)
+        else if (pendingIdx >= 0) void stageAdjust(`pending:${pendingIdx}`, values, reason)
+        else if (staging)
+          staging.queueRow(
+            relatedCollection,
+            manyField,
+            withNextOrder(applyComputedFields({ [key]: pr.key, ...values, _change_reason: reason }))
+          )
+      }
+      toast.success(touched ? `${p.label}: staged on ${touched} ${touched === 1 ? 'row' : 'rows'} — save to keep it` : 'Nothing to apply — every suggested cell is already filled or closed')
+      dismissProposal(p, false)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [compareData, rows, pendingRows, staging, relatedCollection, manyField, stageAdjust, dismissProposal]
+  )
+  /** Grid-level spread: "Left to forecast" over every row's empty, open
+   *  targets in row order (rows by the series key when one exists). */
+  const spreadAcrossRows = useCallback(
+    (preset: SpreadPreset) => {
+      if (!spreadRemaining?.fields?.length) return
+      const remaining = evaluateNumeric(spreadRemaining.remaining, resolveGridToken)
+      const amount = remaining == null || !Number.isFinite(remaining) ? 0 : Math.round(remaining * 100) / 100
+      if (amount <= 0) return
+      const onlyEmpty = spreadRemaining.only_empty !== false
+      const isBlank = (v: unknown) => v == null || v === '' || Number(v) === 0
+      const pendingEdits = staging?.getPendingEdits(relatedCollection, manyField) ?? new Map()
+      const pendingDeletes = staging?.getPendingDeletes(relatedCollection, manyField) ?? new Set()
+      const key = compareData?.key_field
+      const entries: Array<{ id: string; row: Record<string, unknown> }> = []
+      for (const r of rows) {
+        const id = String(r.id)
+        if (pendingDeletes.has(id)) continue
+        entries.push({ id, row: { ...r, ...(pendingEdits.get(id) ?? {}) } })
+      }
+      pendingRows.forEach((r, i) => entries.push({ id: `pending:${i}`, row: r }))
+      if (key) entries.sort((a, b) => Number(a.row[key] ?? 0) - Number(b.row[key] ?? 0))
+      const slots: Array<{ id: string; field: string }> = []
+      const shape: number[] = []
+      for (const e of entries) {
+        for (const f of spreadRemaining.fields) {
+          if (onlyEmpty && !isBlank(e.row[f])) continue
+          if (compareData && compareColumnClosed(compareData, e.row[compareData.key_field], f)) continue
+          slots.push({ id: e.id, field: f })
+          shape.push(0)
+        }
+      }
+      if (slots.length === 0) {
+        toast.message('Nothing to spread into — every target is filled or closed')
+        return
+      }
+      const amounts = spreadAmounts(amount, slots.length, preset === 'shape' ? 'even' : preset, shape)
+      const perRow = new Map<string, Record<string, number>>()
+      slots.forEach((s, i) => {
+        const cur = perRow.get(s.id) ?? {}
+        cur[s.field] = amounts[i]
+        perRow.set(s.id, cur)
+      })
+      for (const [id, values] of perRow) void stageAdjust(id, values, `${spreadRemaining.label ?? 'Spread remaining'} across ${perRow.size} rows`)
+      toast.success(`Spread ${fmtMoney(amount)} over ${slots.length} cells on ${perRow.size} ${perRow.size === 1 ? 'row' : 'rows'}`)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [spreadRemaining, resolveGridToken, staging, relatedCollection, manyField, compareData, rows, pendingRows, stageAdjust]
+  )
 
   const reportLiveRows = liveRows?.report
   useEffect(() => {
@@ -4974,7 +5172,10 @@ export function InlineTableField({
           .filter((k) => typeof k === 'string' && k.length > 0 && k !== 'id')
         const writableKeys = new Set([
           ...displayCols.map((c) => c.field).filter((k) => !k.startsWith('__m2m_')),
-          ...ruleTargetKeys
+          ...ruleTargetKeys,
+          // A reason an editor action prefilled (carry-forward) rides the row:
+          // the server stores it on the activity row, never in a column.
+          '_change_reason'
         ])
         const rowPayload = Object.fromEntries(
           Object.entries(editState.draft).filter(([k]) => writableKeys.has(k))
@@ -6305,11 +6506,20 @@ export function InlineTableField({
                         args.draft[c.field]
                     )}
                   </div>
-                ) : displayOnlyIface || c.readonly || editState?.locks?.includes(c.field) ? (
+                ) : displayOnlyIface ||
+                  c.readonly ||
+                  editState?.locks?.includes(c.field) ||
+                  closedLockedCell(c.field, args.draft) ? (
                   <div
                     className='text-[12px] text-slate-500'
+                    data-compare-locked={closedLockedCell(c.field, args.draft) ? c.field : undefined}
                     data-tip={
-                      editState?.locks?.includes(c.field) ? lockReasonText(c.field) : undefined
+                      editState?.locks?.includes(c.field)
+                        ? lockReasonText(c.field)
+                        : closedLockedCell(c.field, args.draft)
+                          ? compareData?.closed_locked_message ||
+                            'This month is closed — only reconciling it to the actual is allowed'
+                          : undefined
                     }
                   >
                     {renderCell(c, args.draft[c.field], args.rowId)}
@@ -6363,10 +6573,28 @@ export function InlineTableField({
                         {closed && (
                           <span
                             className='inline-flex items-center gap-0.5 text-[10px] uppercase tracking-wide text-slate-400'
-                            data-tip={compareData.closed_rule}
+                            data-tip={
+                              compareData.closed_locked && viewerIsAdmin
+                                ? `${compareData.closed_rule ?? ''} A change here needs a reason.`.trim()
+                                : compareData.closed_rule
+                            }
                           >
                             <Lock className='h-2.5 w-2.5' aria-hidden='true' /> closed
                           </span>
+                        )}
+                        {closed && !readOnly && (
+                          <ReconcileAction
+                            data={compareData}
+                            rowKey={args.draft[compareData.key_field]}
+                            column={c.field}
+                            columnLabel={compareLabelFor(c)}
+                            plannedRow={args.draft}
+                            actual={actual ?? 0}
+                            variant='button'
+                            onApply={(patchValues, reason) =>
+                              setDraftFields({ ...patchValues, _change_reason: reason })
+                            }
+                          />
                         )}
                       </div>
                     )
@@ -6381,6 +6609,32 @@ export function InlineTableField({
           draft={args.draft}
           remaining={evaluateNumeric(spreadRemaining.remaining, resolveGridToken)}
           onApply={setDraftFields}
+          closedFields={
+            compareData
+              ? new Set(
+                  spreadRemaining.fields.filter((f) =>
+                    compareColumnClosed(compareData, args.draft[compareData.key_field], f)
+                  )
+                )
+              : undefined
+          }
+          shapeSource={(() => {
+            // "Like <previous key>": the grid row whose series key is one
+            // below this row's (the previous year), when it has any shape.
+            if (!compareData) return null
+            const k = Number(args.draft[compareData.key_field])
+            if (!Number.isFinite(k)) return null
+            const prev = rows.find((r) => Number(r[compareData.key_field]) === k - 1)
+            if (!prev) return null
+            const values: Record<string, number> = {}
+            let any = false
+            for (const f of spreadRemaining.fields) {
+              const v = Number(prev[f]) || 0
+              values[f] = v
+              if (v > 0) any = true
+            }
+            return any ? { label: `Like ${k - 1}`, values } : null
+          })()}
         />
       )}
       {rowMatchPanel &&
@@ -6680,6 +6934,17 @@ export function InlineTableField({
               apply values…
             </button>
           )}
+          {spreadRemaining &&
+            spreadRemaining.fields?.length > 0 &&
+            spreadRemaining.across_rows !== false &&
+            rows.length + pendingRows.length > 1 && (
+              <SpreadAcrossRowsButton
+                config={spreadRemaining}
+                remaining={evaluateNumeric(spreadRemaining.remaining, resolveGridToken)}
+                rowNoun={compareData ? titleCase(compareData.key_field).toLowerCase() : 'row'}
+                onApply={spreadAcrossRows}
+              />
+            )}
           {!!rowRules?.length && rows.length + pendingRows.length > 0 && (
             <button
               type='button'
@@ -7024,6 +7289,9 @@ export function InlineTableField({
           <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
           <div className='h-8 rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
         </div>
+      )}
+      {!readOnly && visibleProposals.length > 0 && (
+        <CompareProposalBanner proposals={visibleProposals} onApply={applyProposal} onDismiss={(p) => dismissProposal(p, true)} />
       )}
       {((gridStatValues && gridStatValues.length > 0) ||
         (compareSeries && !isNew && (compareData || compareLoading || compareError))) && (
@@ -7550,6 +7818,13 @@ export function InlineTableField({
                                           : displayRow[c.field]
                                       }
                                       columnLabel={compareLabelFor(c)}
+                                      plannedRow={displayRow}
+                                      onAdjust={
+                                        !readOnly && !isPendingDelete && row.id != null
+                                          ? (patchValues, reason) =>
+                                              void stageAdjust(String(row.id), patchValues, reason)
+                                          : undefined
+                                      }
                                     />
                                   )}
                                 </td>
@@ -8802,20 +9077,73 @@ export function InlineTableField({
  *  onto the row's empty target fields (cent-rounded, the last field takes the
  *  rounding dust). Disabled with the reason when there is nothing left or
  *  nowhere to put it. */
+const PRESET_LABEL: Record<SpreadPreset, string> = {
+  even: 'Evenly',
+  front: 'Front-loaded',
+  back: 'Back-loaded',
+  shape: 'Like previous'
+}
+
+/** The shape chips shared by the row action and the grid-level spread. */
+function SpreadPresetChips(props: {
+  presets: SpreadPreset[]
+  value: SpreadPreset
+  onChange: (p: SpreadPreset) => void
+  shapeLabel?: string | null
+}) {
+  if (props.presets.length < 2) return null
+  return (
+    <span className='inline-flex items-center gap-0.5' data-o2m-spread-presets>
+      {props.presets.map((p) => (
+        <button
+          key={p}
+          type='button'
+          data-o2m-spread-preset={p}
+          aria-pressed={props.value === p}
+          onClick={() => props.onChange(p)}
+          className={cn(
+            'rounded-full border px-2 py-px text-[10.5px]',
+            props.value === p
+              ? 'border-nvr-cyan bg-nvr-cyan/10 font-semibold text-slate-800 dark:text-slate-100'
+              : 'border-slate-200 text-slate-500 hover:bg-muted dark:border-border dark:text-slate-400'
+          )}
+        >
+          {p === 'shape' ? (props.shapeLabel ?? PRESET_LABEL.shape) : PRESET_LABEL[p]}
+        </button>
+      ))}
+    </span>
+  )
+}
+
 function SpreadRemainingAction({
   config,
   draft,
   remaining,
-  onApply
+  onApply,
+  closedFields,
+  shapeSource
 }: {
   config: GridSpreadConfig
   draft: Record<string, unknown>
   remaining: number | null
   onApply: (patch: Record<string, unknown>) => void
+  /** Targets the comparison series marks CLOSED — never spread into. */
+  closedFields?: Set<string>
+  /** "Like <previous row>": that row's values over the same fields. */
+  shapeSource?: { label: string; values: Record<string, number> } | null
 }) {
   const onlyEmpty = config.only_empty !== false
   const isBlank = (v: unknown) => v == null || v === '' || Number(v) === 0
-  const targets = onlyEmpty ? config.fields.filter((f) => isBlank(draft[f])) : config.fields
+  const closedSkipped = config.fields.filter((f) => closedFields?.has(f) && (!onlyEmpty || isBlank(draft[f]))).length
+  const targets = config.fields.filter(
+    (f) => !closedFields?.has(f) && (!onlyEmpty || isBlank(draft[f]))
+  )
+  const presets = useMemo<SpreadPreset[]>(() => {
+    const base = config.presets ?? ['even', 'front', 'back', 'shape']
+    return base.filter((p) => p !== 'shape' || !!shapeSource)
+  }, [config.presets, shapeSource])
+  const [preset, setPreset] = useState<SpreadPreset>('even')
+  const effectivePreset = presets.includes(preset) ? preset : (presets[0] ?? 'even')
   const amount =
     remaining == null || !Number.isFinite(remaining) ? 0 : Math.round(remaining * 100) / 100
   const fmt = (n: number) =>
@@ -8828,20 +9156,22 @@ function SpreadRemainingAction({
         ? `${fmt(-amount)} over — nothing to spread`
         : 'Nothing left to spread'
       : targets.length === 0
-        ? 'Every target field already holds a value'
+        ? closedSkipped > 0
+          ? 'Every open target field already holds a value'
+          : 'Every target field already holds a value'
         : null
   const apply = () => {
     if (reason) return
-    const n = targets.length
-    const per = Math.floor((amount / n) * 100) / 100
+    const shape = shapeSource ? targets.map((f) => shapeSource.values[f] ?? 0) : undefined
+    const amounts = spreadAmounts(amount, targets.length, effectivePreset, shape)
     const patch: Record<string, unknown> = {}
     targets.forEach((f, i) => {
-      patch[f] = i === n - 1 ? Math.round((amount - per * (n - 1)) * 100) / 100 : per
+      patch[f] = amounts[i]
     })
     onApply(patch)
   }
   return (
-    <div className='mt-2 flex items-center gap-2' data-o2m-spread>
+    <div className='mt-2 flex flex-wrap items-center gap-2' data-o2m-spread>
       <button
         type='button'
         onClick={apply}
@@ -8856,11 +9186,94 @@ function SpreadRemainingAction({
         <span className='tabular-nums text-slate-500 dark:text-slate-400'>{fmt(amount)}</span>
       </button>
       {!reason && (
+        <SpreadPresetChips presets={presets} value={effectivePreset} onChange={setPreset} shapeLabel={shapeSource?.label} />
+      )}
+      {!reason && (
         <span className='text-[11px] text-slate-400 dark:text-slate-500'>
           across {targets.length} empty {targets.length === 1 ? 'field' : 'fields'}
+          {closedSkipped > 0 && (
+            <span data-o2m-spread-skipped={closedSkipped}>
+              {' '}· {closedSkipped} closed {closedSkipped === 1 ? 'month' : 'months'} skipped
+            </span>
+          )}
         </span>
       )}
       {reason && <span className='text-[11px] text-slate-400 dark:text-slate-500'>{reason}</span>}
     </div>
+  )
+}
+
+/** Toolbar twin of the row action: the remaining amount over EVERY row's
+ *  empty, open targets in one go (the parent's "spread across years"). */
+function SpreadAcrossRowsButton(props: {
+  config: GridSpreadConfig
+  remaining: number | null
+  rowNoun: string
+  onApply: (preset: SpreadPreset) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [preset, setPreset] = useState<SpreadPreset>('even')
+  const amount =
+    props.remaining == null || !Number.isFinite(props.remaining)
+      ? 0
+      : Math.round(props.remaining * 100) / 100
+  const fmt = (n: number) =>
+    props.config.format === 'number'
+      ? n.toLocaleString(undefined, { maximumFractionDigits: 2 })
+      : n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+  if (amount <= 0) return null
+  const presets: SpreadPreset[] = (props.config.presets ?? ['even', 'front', 'back']).filter(
+    (p) => p !== 'shape'
+  )
+  return (
+    <span className='relative inline-flex items-center' data-o2m-spread-rows>
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'h-6 px-2.5 rounded border transition-colors',
+          open
+            ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+            : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
+        )}
+        data-tip={`Put the remaining ${fmt(amount)} onto every empty open month across all ${props.rowNoun}s at once`}
+      >
+        spread across {props.rowNoun}s…
+      </button>
+      {open && (
+        <div
+          className='absolute left-0 top-7 z-30 w-[300px] rounded-md border border-slate-200 bg-white p-2.5 text-[12px] shadow-md dark:border-border dark:bg-card'
+          data-o2m-spread-rows-panel
+        >
+          <div className='text-slate-700 dark:text-slate-200'>
+            Spread <b className='tabular-nums'>{fmt(amount)}</b> over every empty open month, oldest{' '}
+            {props.rowNoun} first.
+          </div>
+          <div className='mt-2'>
+            <SpreadPresetChips presets={presets} value={presets.includes(preset) ? preset : presets[0]} onChange={setPreset} />
+          </div>
+          <div className='mt-2.5 flex justify-end gap-1.5'>
+            <button
+              type='button'
+              onClick={() => setOpen(false)}
+              className='h-7 rounded-md px-2.5 text-[12px] text-slate-600 hover:bg-muted dark:text-slate-300'
+            >
+              Cancel
+            </button>
+            <button
+              type='button'
+              data-o2m-spread-rows-apply
+              onClick={() => {
+                props.onApply(presets.includes(preset) ? preset : presets[0])
+                setOpen(false)
+              }}
+              className='h-7 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white hover:opacity-90'
+            >
+              Stage the spread
+            </button>
+          </div>
+        </div>
+      )}
+    </span>
   )
 }

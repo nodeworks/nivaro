@@ -1,3 +1,4 @@
+import { type IntegrityCheck, integrityCheckCounts, integrityChecksFor } from './integrity-checks.js'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import { RowRuleLookupCache } from './field-rules.js'
@@ -92,6 +93,9 @@ interface CompiledChecks {
   /** Inline-grid row rules (task / labor price / line type autofill) judged
    *  against every SAVED child row of each record. */
   rowRules: RowRuleCheck[]
+  /** Extension-registered checks (services/integrity-checks.ts) — judged over
+   *  the batch's ids by the extension that owns the domain. */
+  external: IntegrityCheck[]
   /** Rules present in config but not evaluable by this sweep. */
   skipped: string[]
 }
@@ -269,6 +273,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     displayTokens: [],
     dateOffsets: [],
     rowRules: [],
+    external: [],
     skipped: []
   }
   const { layouts, visibleOn } = await layoutPresence(collection)
@@ -492,6 +497,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
       : null
     out.rowRules.push({ ...cfg, lineField, childFields })
   }
+  out.external = integrityChecksFor(collection)
   return out
 }
 
@@ -502,6 +508,8 @@ export interface CollectionCheckSummary {
   cascade: number
   /** Inline grids on the active layout carrying row rules. */
   row_rules: number
+  /** Extension-registered checks. */
+  external: number
   skipped: number
 }
 
@@ -569,7 +577,7 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
   const entry = (collection: string): CollectionCheckSummary => {
     let e = out.get(collection)
     if (!e) {
-      e = { collection, required: 0, validation: 0, cascade: 0, row_rules: 0, skipped: 0 }
+      e = { collection, required: 0, validation: 0, cascade: 0, row_rules: 0, external: 0, skipped: 0 }
       out.set(collection, e)
     }
     return e
@@ -613,6 +621,10 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
   for (const g of gridRows) {
     if (!IDENT.test(g.collection) || /^nivaro_|^directus_/i.test(g.collection)) continue
     entry(g.collection).row_rules++
+  }
+  for (const [collection, n] of integrityCheckCounts()) {
+    if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection)) continue
+    entry(collection).external += n
   }
   return out
 }
@@ -995,8 +1007,25 @@ async function evaluateRows(
       )
     ).flat()
 
-  const [m2m, cas, disp, rr] = await Promise.all([m2mRequired(), cascades(), display(), rowRules()])
-  return [...scalar, ...m2m, ...cas, ...disp, ...rr]
+  // ── extension checks: one batched call per check, findings anchored to
+  // the check's own field + rule id ─────────────────────────────────────
+  const external = async (): Promise<RecordFinding[]> =>
+    (
+      await Promise.all(
+        checks.external.map(async (chk) => {
+          try {
+            const found = await chk.run(rowIds.map((id) => String(id)))
+            return found.map((f) => ({ item_id: String(f.item_id), field: chk.field, rule: chk.id, message: f.message }))
+          } catch (err) {
+            console.warn(`conformance check ${chk.id} skipped for ${collection}:`, err)
+            return []
+          }
+        })
+      )
+    ).flat()
+
+  const [m2m, cas, disp, rr, ext] = await Promise.all([m2mRequired(), cascades(), display(), rowRules(), external()])
+  return [...scalar, ...m2m, ...cas, ...disp, ...rr, ...ext]
 }
 
 // compileChecks walks field config + layouts + relations (~120 reads, 6s
@@ -1070,7 +1099,8 @@ export async function hasChecks(collection: string): Promise<boolean> {
       checks.cascades.length +
       checks.displayTokens.length +
       checks.dateOffsets.length +
-      checks.rowRules.length >
+      checks.rowRules.length +
+      checks.external.length >
     0
   )
 }

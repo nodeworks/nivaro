@@ -1905,6 +1905,18 @@ export const contentOpsGridPresets: DocSection = {
       type: 'p',
       text: 'What renders, in both Edit and Summary mode: a second read-only line under every cell (the figure opens a popover listing the detail rows behind it — number, vendor, date, amount, tone and note), a signed delta in role colours where the two disagree (a closed month that disagrees is the reviewable case; an open month already over its plan is the alarming one; an open month still under plan stays quiet), closed months shaded, the verdict chip leading the figure strip with its reason on hover, a "Closed through" lock chip, the endpoint\'s figures as chips, an "Actual · closed" hint under each input in the row editor, a ghost row for any series key the grid has no row for ("No plan for this year"), and the series sum in the footer. An endpoint failure shows one quiet "unavailable" chip and leaves the grid alone.'
     },
+    {
+      type: 'p',
+      text: 'Optional keys the endpoint may add: `series` — extra read-only lines under the actual (`[{key, label, hint, rows: [{key, values}]}]`, e.g. a "Committed" line for money on order but not yet invoiced; no delta, the hint shows on hover); `closed_locked` + `closed_locked_message` — closed columns render read-only in the row editor for non-admins (the writer refuses anything but the actual there; admins may edit, with a reason); `proposals` — suggested values for EMPTY cells (`[{id, label, reason, change_reason, rows: [{key, values}]}]`) rendered as an Apply / Dismiss banner above the grid: Apply stages the values onto empty, open cells only (a key with no grid row becomes a staged new row) with `change_reason` on every touched row, Dismiss is remembered per browser, and an applied-then-discarded proposal comes back on the next load.'
+    },
+    {
+      type: 'p',
+      text: 'Reconcile and carry forward: on a CLOSED column whose plan disagrees with its actual, the actual\'s popover (and the "Actual · closed" hint in the row editor) offers a one-click reconcile — "set <month> to the actual, move the remainder to <open month>" with the target chosen from the row\'s later open months and a prefilled reason ("Reconciled March 2026 to invoiced ($x) — moved $y to November"). It stages the change on pending-mode grids (the reason rides the row, so the save does not ask again) and writes it on immediate ones. The last column (the sum) also carries a "Closed Δ" line: plan vs actual summed over the row\'s closed months.'
+    },
+    {
+      type: 'p',
+      text: 'Spread remaining (`options.spread_remaining`) grew shape presets — Evenly, Front-loaded, Back-loaded, and "Like <previous key>" when the grid row one key below holds values (`presets` narrows the list) — skips columns the comparison series marks closed (the hint says how many), and has a grid-level twin in the toolbar ("spread across <keys>…", `across_rows: false` to hide it) that puts the remaining amount over every row\'s empty open cells, oldest row first, staging or writing per the grid\'s save mode.'
+    },
     { type: 'h3', text: 'Row lints' },
     {
       type: 'p',
