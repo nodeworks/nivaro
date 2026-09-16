@@ -167,6 +167,42 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
     return { data: result }
   })
 
+  // #1/#18 — dry run: the same guards, already-there checks and transition
+  // matching as /run, nothing written. Feeds the bar's "5 of 10 would change".
+  app.post<{
+    Body: { collection?: string; key?: string; ids?: Array<string | number> }
+  }>('/bulk-actions/preview', { preHandler: [requireAuth] }, async (req, reply) => {
+    const collection = String(req.body?.collection ?? '').trim()
+    const key = String(req.body?.key ?? '').trim()
+    const ids = Array.isArray(req.body?.ids) ? req.body!.ids!.slice(0, 2000) : []
+    if (!collection || !key)
+      return reply.code(400).send({ error: 'collection and key are required' })
+    if (ids.length === 0) return reply.code(400).send({ error: 'ids are required' })
+    if (!req.isAdmin && !(await can(req.user as User, 'update', collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+    const row = await db('nivaro_bulk_actions')
+      .where({ collection, key, is_active: true })
+      .whereNot({ kind: 'builtin' })
+      .first()
+    if (!row) return reply.code(404).send({ error: 'Bulk action not found' })
+    const def = formatRow(row as Record<string, unknown>)
+    if (!accessAllows(def.access, req))
+      return reply.code(403).send({ error: 'You cannot run this action' })
+    try {
+      const result = await runDefinition(def, ids, null, req, { dryRun: true })
+      return {
+        data: {
+          would_change: result.succeeded,
+          skipped: result.skipped,
+          failed: result.failed,
+          outcomes: result.outcomes
+        }
+      }
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+
   // ── Built-ins (override state per collection) ─────────────────────────────
   app.get<{ Querystring: { collection?: string } }>(
     '/bulk-actions/builtins',

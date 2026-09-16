@@ -4,19 +4,19 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clipboard,
   Copy,
+  Eye,
   FileDown,
   Loader2,
+  PencilLine,
   Save,
   Trash2,
-  BookOpen,
-  Eye,
-  PencilLine,
   Wand2,
   Wrench,
   X
@@ -57,9 +57,9 @@ import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import { extSlotKey } from '../lib/layout-slots'
 import {
-  type SummaryModeRules,
   normalizeSummaryModeRules,
   resolveSummaryMode,
+  type SummaryModeRules,
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
@@ -83,9 +83,11 @@ import {
   ChangeReasonDialog,
   changeReasonChallenge
 } from './item-edit/ChangeReasonDialog'
+import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
 import { CloneDialog } from './item-edit/CloneDialog'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
 import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
+import { FieldAffordancesContext, type RemoteFieldChange } from './item-edit/FieldAffordances'
 import { FieldRow } from './item-edit/FieldRow'
 import {
   GroupSection,
@@ -98,10 +100,6 @@ import { HeaderFreshness } from './item-edit/HeaderFreshness'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
-import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
-import { FieldAffordancesContext, type RemoteFieldChange } from './item-edit/FieldAffordances'
-import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
-import { RecordReadView, type ReadViewLayout } from './RecordReadView'
 import {
   applyDisplayTemplate,
   type CascadeRule,
@@ -140,8 +138,10 @@ import { RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
+import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
+import { type ReadViewLayout, RecordReadView } from './RecordReadView'
 
 let formulaCtxHydrated = false
 
@@ -1235,7 +1235,8 @@ export function ItemEditForm({
   const [readMode, setReadModeRaw] = useState<boolean>(false)
   const setReadMode = (v: boolean) => setReadModeRaw(v)
   const summaryRules = useMemo(
-    () => (colMeta?.read_mode_toggle ? normalizeSummaryModeRules(colMeta.summary_mode_rules) : null),
+    () =>
+      colMeta?.read_mode_toggle ? normalizeSummaryModeRules(colMeta.summary_mode_rules) : null,
     [colMeta?.read_mode_toggle, colMeta?.summary_mode_rules]
   )
   // State (not just a ref) so the body can HOLD until the opening mode is
@@ -3483,11 +3484,7 @@ export function ItemEditForm({
   // only acquired once the opening mode has settled on Edit, released when
   // the person flips to Summary, re-acquired on the way back.
   const lockEnabled =
-    showLockBanner &&
-    !isNew &&
-    !!colMeta?.item_locking_enabled &&
-    summaryModeSettled &&
-    !readMode
+    showLockBanner && !isNew && !!colMeta?.item_locking_enabled && summaryModeSettled && !readMode
   const {
     lockHolder,
     acquired: lockAcquired,
@@ -3937,9 +3934,7 @@ export function ItemEditForm({
       seen.add(f.field)
       return true
     })
-    const roleVisible = viewAs.active
-      ? deduped.filter((f) => !viewAs.hidden.has(f.field))
-      : deduped
+    const roleVisible = viewAs.active ? deduped.filter((f) => !viewAs.hidden.has(f.field)) : deduped
     if (!assignedFieldSet) return roleVisible
     return roleVisible.filter(
       (f) => assignedFieldSet.has(f.field) || SYSTEM_FIELDS.has(f.field) || isSentinelKey(f.field)
@@ -5315,6 +5310,7 @@ export function ItemEditForm({
           let weight: string | undefined
           let displayAs: string | undefined
           let linkTemplate: string | undefined
+          let thresholds: Array<{ op: string; value: number; color: string }> | undefined
           try {
             const raw = (a as unknown as Record<string, unknown>).input_bindings
             const parsed: Array<{ key: string; binding_value: string }> =
@@ -5326,6 +5322,17 @@ export function ItemEditForm({
             displayAs = parsed.find((b) => b.key === '__display_as__')?.binding_value || undefined
             linkTemplate =
               parsed.find((b) => b.key === '__link_template__')?.binding_value || undefined
+            // #5 — threshold rules: [{op: lt|lte|gt|gte|eq, value, color}] —
+            // the first matching rule recolours the chip (Left to Forecast
+            // reads red below zero, amber under 10%…).
+            const thrRaw = parsed.find((b) => b.key === '__threshold__')?.binding_value
+            if (thrRaw) {
+              const t = JSON.parse(thrRaw)
+              if (Array.isArray(t))
+                thresholds = t.filter(
+                  (r) => r && typeof r === 'object' && typeof r.value === 'number' && r.color
+                )
+            }
           } catch {
             /* noop */
           }
@@ -5338,6 +5345,7 @@ export function ItemEditForm({
             weight,
             displayAs,
             linkTemplate,
+            thresholds,
             cmsField: meta ?? null
           }
         }),
@@ -5606,7 +5614,9 @@ export function ItemEditForm({
             const ctxFields = (cfg.context_fields ?? []).filter(Boolean)
             if (ctxFields.length && t.rows?.length) {
               const cached = qc
-                .getQueriesData<Array<Record<string, unknown>>>({ queryKey: ['o2m-rows', t.collection] })
+                .getQueriesData<Array<Record<string, unknown>>>({
+                  queryKey: ['o2m-rows', t.collection]
+                })
                 .flatMap(([, d]) => (Array.isArray(d) ? d : []))
               const ctxOf = (rowId: string) => {
                 const row = cached.find((r) => String(r.id) === rowId)
@@ -6496,8 +6506,7 @@ export function ItemEditForm({
           lockReasons[a.field] = stateLabel
             ? `Locked while the record is in ${stateLabel}`
             : 'Locked by the record’s current state'
-        else if (conds.some((c) => c.type === 'role'))
-          lockReasons[a.field] = 'Locked for your role'
+        else if (conds.some((c) => c.type === 'role')) lockReasons[a.field] = 'Locked for your role'
       } catch {
         /* malformed lock config — generic glyph */
       }
@@ -6510,7 +6519,8 @@ export function ItemEditForm({
         continue
       }
       if (isReadOnly) {
-        lockReasons[key] = `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — read-only until the lock is released`
+        lockReasons[key] =
+          `${lockHolder?.locked_by_name ?? 'Someone else'} is editing this record — read-only until the lock is released`
         continue
       }
       if (viewingAddendum) {
@@ -6542,9 +6552,13 @@ export function ItemEditForm({
   > = {}
   for (const a of assignments) {
     const ov = (
-      typeof a.overrides === 'string' ? parseJson<Record<string, unknown>>(a.overrides) : a.overrides
+      typeof a.overrides === 'string'
+        ? parseJson<Record<string, unknown>>(a.overrides)
+        : a.overrides
     ) as Record<string, unknown> | null
-    const spec = ov?.apply_to_lines as { grid?: string; target?: string; label?: string } | undefined
+    const spec = ov?.apply_to_lines as
+      | { grid?: string; target?: string; label?: string }
+      | undefined
     if (!spec?.grid || !spec?.target) continue
     const grid = spec.grid
     const target = spec.target
@@ -6622,7 +6636,8 @@ export function ItemEditForm({
     for (const [rowId, ch] of edits) {
       const saved = savedRows.find((r) => String(r.id) === String(rowId))
       const cellKeys = Object.keys(ch).filter((c) => !c.startsWith('__'))
-      const lineNo = saved?.line_number != null ? `line ${String(saved.line_number)}` : `row ${rowId}`
+      const lineNo =
+        saved?.line_number != null ? `line ${String(saved.line_number)}` : `row ${rowId}`
       changeItems.push({
         key: `e:${key}:${rowId}`,
         kind: 'edit',
@@ -8140,700 +8155,737 @@ export function ItemEditForm({
                       <LiveRowsContext.Provider value={liveRowsCtx}>
                         <StagedRelationsContext.Provider value={stagedRelsCtx}>
                           <M2MStagingContext.Provider value={m2mStagingCtx}>
-                          <FieldAffordancesContext.Provider value={fieldAffordances}>
-                            {/* Instant tooltips for truncated header values. Self-deduplicating —
+                            <FieldAffordancesContext.Provider value={fieldAffordances}>
+                              {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
           collection browser doesn't double up. */}
-                            <TipLayer />
-                            <SaveProgressDialog
-                              open={saveDialogOpen}
-                              steps={saveSteps}
-                              onClose={() => setSaveDialogOpen(false)}
-                            />
-                            <Dialog
-                              open={!!reimportDialog}
-                              onOpenChange={(open) => {
-                                if (!open && !reimportApplying) setReimportDialog(null)
-                              }}
-                            >
-                              <DialogContent>
-                                <DialogHeader>
-                                  <DialogTitle>Update this record from file</DialogTitle>
-                                </DialogHeader>
-                                <DialogBody className='space-y-3'>
-                                  {reimportDialog && (
-                                    <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-                                      {reimportDialog.diff.updates.length} will update ·{' '}
-                                      {reimportDialog.diff.creates.length} new ·{' '}
-                                      {reimportDialog.diff.deletes.length} will delete ·{' '}
-                                      {reimportDialog.diff.matchedUnchanged} unchanged
-                                    </p>
-                                  )}
-                                  {reimportDialog && (
-                                    <ImportColumnChips
-                                      diff={reimportDialog.diff}
-                                      fields={fieldConfig ?? []}
-                                    />
-                                  )}
-                                  {reimportDialog && (
-                                    <ImportIssuesPanel issues={reimportDialog.result.issues} />
-                                  )}
-                                </DialogBody>
-                                <DialogFooter>
-                                  <Button
-                                    variant='outline'
-                                    onClick={() => setReimportDialog(null)}
-                                    disabled={reimportApplying}
-                                  >
-                                    Cancel
-                                  </Button>
-                                  <Button
-                                    onClick={async () => {
-                                      if (!reimportDialog) return
-                                      setReimportApplying(true)
-                                      await applyReimportStaging(
-                                        reimportDialog.diff,
-                                        reimportDialog.result,
-                                        reimportDialog.template,
-                                        reimportDialog.existingRows
-                                      )
-                                      setReimportApplying(false)
-                                      setReimportDialog(null)
-                                    }}
-                                    disabled={reimportApplying}
-                                  >
-                                    {reimportApplying ? (
-                                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                    ) : (
-                                      'Apply to form'
+                              <TipLayer />
+                              <SaveProgressDialog
+                                open={saveDialogOpen}
+                                steps={saveSteps}
+                                onClose={() => setSaveDialogOpen(false)}
+                              />
+                              <Dialog
+                                open={!!reimportDialog}
+                                onOpenChange={(open) => {
+                                  if (!open && !reimportApplying) setReimportDialog(null)
+                                }}
+                              >
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Update this record from file</DialogTitle>
+                                  </DialogHeader>
+                                  <DialogBody className='space-y-3'>
+                                    {reimportDialog && (
+                                      <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                                        {reimportDialog.diff.updates.length} will update ·{' '}
+                                        {reimportDialog.diff.creates.length} new ·{' '}
+                                        {reimportDialog.diff.deletes.length} will delete ·{' '}
+                                        {reimportDialog.diff.matchedUnchanged} unchanged
+                                      </p>
                                     )}
-                                  </Button>
-                                </DialogFooter>
-                              </DialogContent>
-                            </Dialog>
-                            <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
-                              {showHeader && (
-                                <header
-                                  className={cn(
-                                    'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-3 transition-[padding] duration-200',
-                                    headerCondensed ? 'py-1.5' : 'py-3.5',
-                                    headerClassName
-                                  )}
-                                  data-nvr-header-row
-                                  data-nvr-condensed={headerCondensed || undefined}
-                                >
-                                  {onBack && (
-                                    <button
-                                      type='button'
-                                      onClick={onBack}
-                                      aria-label='Back'
-                                      className='group/back shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
-                                    >
-                                      <ArrowLeft
-                                        aria-hidden
-                                        className='h-4 w-4 transition-transform duration-150 group-hover/back:-translate-x-0.5'
+                                    {reimportDialog && (
+                                      <ImportColumnChips
+                                        diff={reimportDialog.diff}
+                                        fields={fieldConfig ?? []}
                                       />
-                                    </button>
-                                  )}
-                                  {/* min-width floor: without it flex crushes this block to
+                                    )}
+                                    {reimportDialog && (
+                                      <ImportIssuesPanel issues={reimportDialog.result.issues} />
+                                    )}
+                                  </DialogBody>
+                                  <DialogFooter>
+                                    <Button
+                                      variant='outline'
+                                      onClick={() => setReimportDialog(null)}
+                                      disabled={reimportApplying}
+                                    >
+                                      Cancel
+                                    </Button>
+                                    <Button
+                                      onClick={async () => {
+                                        if (!reimportDialog) return
+                                        setReimportApplying(true)
+                                        await applyReimportStaging(
+                                          reimportDialog.diff,
+                                          reimportDialog.result,
+                                          reimportDialog.template,
+                                          reimportDialog.existingRows
+                                        )
+                                        setReimportApplying(false)
+                                        setReimportDialog(null)
+                                      }}
+                                      disabled={reimportApplying}
+                                    >
+                                      {reimportApplying ? (
+                                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                      ) : (
+                                        'Apply to form'
+                                      )}
+                                    </Button>
+                                  </DialogFooter>
+                                </DialogContent>
+                              </Dialog>
+                              <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
+                                {showHeader && (
+                                  <header
+                                    className={cn(
+                                      'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-3 transition-[padding] duration-200',
+                                      headerCondensed ? 'py-1.5' : 'py-3.5',
+                                      headerClassName
+                                    )}
+                                    data-nvr-header-row
+                                    data-nvr-condensed={headerCondensed || undefined}
+                                  >
+                                    {onBack && (
+                                      <button
+                                        type='button'
+                                        onClick={onBack}
+                                        aria-label='Back'
+                                        className='group/back shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+                                      >
+                                        <ArrowLeft
+                                          aria-hidden
+                                          className='h-4 w-4 transition-transform duration-150 group-hover/back:-translate-x-0.5'
+                                        />
+                                      </button>
+                                    )}
+                                    {/* min-width floor: without it flex crushes this block to
                                       zero width before the row ever overflows, so HeaderTools'
                                       scrollWidth check never fires and the toolbar squishes the
                                       title instead of collapsing (the 1700-2050px squish bug). */}
-                                  <div className='flex min-w-[180px] flex-col md:min-w-[260px]'>
-                                    <div className='group/title flex items-center gap-1.5'>
-                                      <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
-                                        {isNew ? `New ${singularTitle}` : itemTitle}
-                                      </h1>
-                                      {!isNew &&
-                                        itemTitle &&
-                                        (copiedHeaderField === '__title__' ? (
-                                          <Check className='h-3 w-3 shrink-0 text-emerald-500' />
-                                        ) : (
-                                          <button
-                                            type='button'
-                                            className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
-                                            onClick={() => {
-                                              navigator.clipboard
-                                                .writeText(itemTitle ?? '')
-                                                .catch(() => {})
-                                              setCopiedHeaderField('__title__')
-                                              setTimeout(
-                                                () =>
-                                                  setCopiedHeaderField((prev) =>
-                                                    prev === '__title__' ? null : prev
-                                                  ),
-                                                1500
-                                              )
-                                            }}
-                                          >
-                                            <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
-                                          </button>
-                                        ))}
-                                    </div>
-                                    {lastTouchText && (
-                                      <p
-                                        className='mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
-                                        data-tip={
-                                          lastTouch
-                                            ? new Date(lastTouch.timestamp).toLocaleString()
-                                            : undefined
-                                        }
-                                        data-last-touch
-                                      >
-                                        {lastTouchText}
-                                        {completeness && (
-                                          <span
-                                            data-completeness-chip
-                                            className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
-                                              completeness.requiredMissing.length > 0
-                                                ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
-                                                : completeness.pct >= 100
-                                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
-                                                  : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
-                                            }`}
-                                            data-tip={`${completeness.filled} of ${completeness.total} required fields filled${
-                                              completeness.requiredMissing.length > 0
-                                                ? ` · missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
-                                                : ''
-                                            }`}
-                                          >
-                                            <span key={completeness.pct} className='nvr-fade-in'>
-                                              {completeness.pct}% complete
-                                            </span>
-                                          </span>
-                                        )}
-                                        {provenance && (
-                                          <span
-                                            data-provenance-chip
-                                            className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
-                                            data-tip={`${provenance.origin}${provenance.user_name ? ` · ${provenance.user_name}` : ''} · ${new Date(provenance.timestamp).toLocaleString()}`}
-                                          >
-                                            {provenance.origin}
-                                          </span>
-                                        )}
-                                        {/* Admin-only: the route 403s everyone else anyway. */}
-                                        {isAdmin && !isNew && itemId && (
-                                          <RecordViewersChip
-                                            collection={collection}
-                                            itemId={String(itemId)}
-                                          />
-                                        )}
-                                      </p>
-                                    )}
-                                    {subtitleParts.length > 0 && !headerCondensed && (
-                                      <div className='group/subtitle mt-0.5 flex items-center gap-1'>
-                                        {/* Capped to 350px on one line — a long subtitle used to wrap
-                      and push the whole header taller. The full text rides in
-                      data-tip, so hovering shows it instantly (TipLayer). */}
-                                        <div
-                                          data-tip={subtitleFullText}
-                                          className='max-w-[350px] overflow-hidden text-ellipsis whitespace-nowrap'
-                                        >
-                                          {subtitleParts.map((p, i) => {
-                                            const weightClass =
-                                              p.weight === 'bold'
-                                                ? 'font-bold'
-                                                : p.weight === 'semibold'
-                                                  ? 'font-semibold'
-                                                  : p.weight === 'medium'
-                                                    ? 'font-medium'
-                                                    : 'font-normal'
-                                            const colorClass =
-                                              p.color === 'cyan'
-                                                ? 'text-nvr-cyan'
-                                                : p.color === 'blue'
-                                                  ? 'text-blue-600 dark:text-blue-400'
-                                                  : p.color === 'green'
-                                                    ? 'text-emerald-600 dark:text-emerald-400'
-                                                    : p.color === 'amber'
-                                                      ? 'text-amber-600 dark:text-amber-400'
-                                                      : p.color === 'red'
-                                                        ? 'text-red-600 dark:text-red-400'
-                                                        : p.color === 'purple'
-                                                          ? 'text-purple-600 dark:text-purple-400'
-                                                          : 'text-slate-500 dark:text-slate-400'
-                                            const isPill = p.display_as === 'pill'
-                                            const isTag = p.display_as === 'tag'
-                                            const sep = subtitleConfig?.separator ?? ' | '
-                                            return (
-                                              <span
-                                                key={i}
-                                                className='inline-flex items-center gap-1 align-middle'
-                                              >
-                                                {i > 0 && !isPill && !isTag && (
-                                                  <span className='text-[11px] text-slate-300 dark:text-slate-600'>
-                                                    {sep}
-                                                  </span>
-                                                )}
-                                                <span
-                                                  className={[
-                                                    'text-[12px]',
-                                                    weightClass,
-                                                    colorClass,
-                                                    isPill
-                                                      ? 'rounded-full px-2 py-0.5 bg-current/10 text-[11px]'
-                                                      : '',
-                                                    isTag
-                                                      ? 'rounded px-1.5 py-0.5 border border-current/30 text-[11px]'
-                                                      : ''
-                                                  ]
-                                                    .filter(Boolean)
-                                                    .join(' ')}
-                                                >
-                                                  {p.value}
-                                                </span>
-                                              </span>
-                                            )
-                                          })}
-                                        </div>
-                                        {copiedHeaderField === '__subtitle__' ? (
-                                          <Check className='h-3 w-3 shrink-0 text-emerald-500' />
-                                        ) : (
-                                          <button
-                                            type='button'
-                                            className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
-                                            onClick={() => {
-                                              navigator.clipboard
-                                                .writeText(subtitleFullText)
-                                                .catch(() => {})
-                                              setCopiedHeaderField('__subtitle__')
-                                              setTimeout(
-                                                () =>
-                                                  setCopiedHeaderField((prev) =>
-                                                    prev === '__subtitle__' ? null : prev
-                                                  ),
-                                                1500
-                                              )
-                                            }}
-                                          >
-                                            <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
-                                          </button>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
-                                    {headerExtra}
-                                    <HeaderTools>
-                                      {isNew && (
-                                        <ImportFromFileButton
-                                          collection={collection}
-                                          onParsed={applyImportResult}
-                                        />
-                                      )}
-                                      {isNew && quickPickerSteps.length > 0 && !isReadOnly && (
-                                        <Popover
-                                          open={quickPickOpen}
-                                          onOpenChange={setQuickPickOpen}
-                                        >
-                                          <PopoverTrigger asChild>
+                                    <div className='flex min-w-[180px] flex-col md:min-w-[260px]'>
+                                      <div className='group/title flex items-center gap-1.5'>
+                                        <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
+                                          {isNew ? `New ${singularTitle}` : itemTitle}
+                                        </h1>
+                                        {!isNew &&
+                                          itemTitle &&
+                                          (copiedHeaderField === '__title__' ? (
+                                            <Check className='h-3 w-3 shrink-0 text-emerald-500' />
+                                          ) : (
                                             <button
                                               type='button'
-                                              title='Quick pick — walk the related fields in order'
-                                              data-quick-pick-toggle
-                                              className={cn(
-                                                'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors',
-                                                quickPickOpen
-                                                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                                                  : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
-                                              )}
+                                              className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
+                                              onClick={() => {
+                                                navigator.clipboard
+                                                  .writeText(itemTitle ?? '')
+                                                  .catch(() => {})
+                                                setCopiedHeaderField('__title__')
+                                                setTimeout(
+                                                  () =>
+                                                    setCopiedHeaderField((prev) =>
+                                                      prev === '__title__' ? null : prev
+                                                    ),
+                                                  1500
+                                                )
+                                              }}
                                             >
-                                              <Wand2 className='h-3.5 w-3.5' />
-                                              Quick pick
+                                              <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
                                             </button>
-                                          </PopoverTrigger>
-                                          {/* Slides through the layout's relation steps beside the
-                                              button, bound to the live draft — every pick is a
-                                              normal edit; Done just closes. */}
-                                          <PopoverContent
-                                            align='end'
-                                            sideOffset={6}
-                                            className='w-[440px] max-w-[calc(100vw-24px)] p-3'
-                                            data-quick-picker-modal
-                                          >
-                                            <QuickPicker
-                                              collection={collection}
-                                              itemId={itemId}
-                                              steps={quickPickerSteps}
-                                              fieldConfig={fieldConfig ?? []}
-                                              relations={relations}
-                                              draft={draft}
-                                              getM2M={getM2MEffectiveIds}
-                                              onChange={handleFieldChange}
-                                              onM2MChange={setQuickPickerM2M}
-                                              fieldLabels={parentFieldLabels}
-                                              fieldOptionFilters={parentFieldOptionFilters}
-                                              onFinish={() => setQuickPickOpen(false)}
-                                              finishLabel='Done'
-                                              finishRequiresComplete={false}
-                                            />
-                                          </PopoverContent>
-                                        </Popover>
-                                      )}
-                                      {/* Record tools: one compact icon group instead of a strip of
-                                          equal-weight buttons. Each tool keeps its own popover /
-                                          dialog; the group supplies border + dividers. */}
-                                      {/* Summary ⇄ Edit — a labelled segmented control, not an
-                                          icon pill: the active side is filled so the current mode
-                                          reads at a glance ("make it obvious what mode I'm in"). */}
-                                      {!isNew && itemId && !!colMeta?.read_mode_toggle && summaryModeSettled ? (
-                                        <div
-                                          role='radiogroup'
-                                          aria-label='Form mode'
-                                          data-summary-mode-toggle
-                                          data-mode={readMode ? 'summary' : 'edit'}
-                                          className='inline-flex h-9 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background p-0.5 text-[11.5px] font-medium shadow-sm'
+                                          ))}
+                                      </div>
+                                      {lastTouchText && (
+                                        <p
+                                          className='mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
+                                          data-tip={
+                                            lastTouch
+                                              ? new Date(lastTouch.timestamp).toLocaleString()
+                                              : undefined
+                                          }
+                                          data-last-touch
                                         >
-                                          <button
-                                            type='button'
-                                            role='radio'
-                                            aria-checked={readMode}
-                                            data-summary-mode-option='summary'
-                                            title='Summary mode — a read-only view of this record'
-                                            onClick={() => setReadMode(true)}
-                                            className={cn(
-                                              'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
-                                              readMode
-                                                ? 'bg-nvr-cyan text-white shadow-sm'
-                                                : 'text-slate-600 hover:bg-muted dark:text-slate-300'
-                                            )}
-                                          >
-                                            <BookOpen className='h-3.5 w-3.5' strokeWidth={2} />
-                                            Summary
-                                          </button>
-                                          <button
-                                            type='button'
-                                            role='radio'
-                                            aria-checked={!readMode}
-                                            data-summary-mode-option='edit'
-                                            title='Edit mode — change this record'
-                                            onClick={() => setReadMode(false)}
-                                            className={cn(
-                                              'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
-                                              !readMode
-                                                ? 'bg-nvr-cyan text-white shadow-sm'
-                                                : 'text-slate-600 hover:bg-muted dark:text-slate-300'
-                                            )}
-                                          >
-                                            <PencilLine className='h-3.5 w-3.5' strokeWidth={2} />
-                                            Edit
-                                          </button>
-                                        </div>
-                                      ) : null}
-                                      {!isNew && itemId ? (
-                                        <HeaderToolGroup>
-                                          {lockEnabled && !lockHolder && (lockAcquired || lockReleased) && (
-                                            <LockHolderButton
-                                              note={lockNote}
-                                              onSave={saveLockNote}
-                                              waiting={lockQueue}
-                                              onRelease={releaseLock}
-                                              releasing={releasingLock}
-                                              released={lockReleased && !lockAcquired}
-                                              onRelock={relockLock}
+                                          {lastTouchText}
+                                          {completeness && (
+                                            <span
+                                              data-completeness-chip
+                                              className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
+                                                completeness.requiredMissing.length > 0
+                                                  ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
+                                                  : completeness.pct >= 100
+                                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                                    : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+                                              }`}
+                                              data-tip={`${completeness.filled} of ${completeness.total} required fields filled${
+                                                completeness.requiredMissing.length > 0
+                                                  ? ` · missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
+                                                  : ''
+                                              }`}
+                                            >
+                                              <span key={completeness.pct} className='nvr-fade-in'>
+                                                {completeness.pct}% complete
+                                              </span>
+                                            </span>
+                                          )}
+                                          {provenance && (
+                                            <span
+                                              data-provenance-chip
+                                              className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+                                              data-tip={`${provenance.origin}${provenance.user_name ? ` · ${provenance.user_name}` : ''} · ${new Date(provenance.timestamp).toLocaleString()}`}
+                                            >
+                                              {provenance.origin}
+                                            </span>
+                                          )}
+                                          {/* Admin-only: the route 403s everyone else anyway. */}
+                                          {isAdmin && !isNew && itemId && (
+                                            <RecordViewersChip
+                                              collection={collection}
+                                              itemId={String(itemId)}
                                             />
                                           )}
+                                        </p>
+                                      )}
+                                      {subtitleParts.length > 0 && !headerCondensed && (
+                                        <div className='group/subtitle mt-0.5 flex items-center gap-1'>
+                                          {/* Capped to 350px on one line — a long subtitle used to wrap
+                      and push the whole header taller. The full text rides in
+                      data-tip, so hovering shows it instantly (TipLayer). */}
+                                          <div
+                                            data-tip={subtitleFullText}
+                                            className='max-w-[350px] overflow-hidden text-ellipsis whitespace-nowrap'
+                                          >
+                                            {subtitleParts.map((p, i) => {
+                                              const weightClass =
+                                                p.weight === 'bold'
+                                                  ? 'font-bold'
+                                                  : p.weight === 'semibold'
+                                                    ? 'font-semibold'
+                                                    : p.weight === 'medium'
+                                                      ? 'font-medium'
+                                                      : 'font-normal'
+                                              const colorClass =
+                                                p.color === 'cyan'
+                                                  ? 'text-nvr-cyan'
+                                                  : p.color === 'blue'
+                                                    ? 'text-blue-600 dark:text-blue-400'
+                                                    : p.color === 'green'
+                                                      ? 'text-emerald-600 dark:text-emerald-400'
+                                                      : p.color === 'amber'
+                                                        ? 'text-amber-600 dark:text-amber-400'
+                                                        : p.color === 'red'
+                                                          ? 'text-red-600 dark:text-red-400'
+                                                          : p.color === 'purple'
+                                                            ? 'text-purple-600 dark:text-purple-400'
+                                                            : 'text-slate-500 dark:text-slate-400'
+                                              const isPill = p.display_as === 'pill'
+                                              const isTag = p.display_as === 'tag'
+                                              const sep = subtitleConfig?.separator ?? ' | '
+                                              return (
+                                                <span
+                                                  key={i}
+                                                  className='inline-flex items-center gap-1 align-middle'
+                                                >
+                                                  {i > 0 && !isPill && !isTag && (
+                                                    <span className='text-[11px] text-slate-300 dark:text-slate-600'>
+                                                      {sep}
+                                                    </span>
+                                                  )}
+                                                  <span
+                                                    className={[
+                                                      'text-[12px]',
+                                                      weightClass,
+                                                      colorClass,
+                                                      isPill
+                                                        ? 'rounded-full px-2 py-0.5 bg-current/10 text-[11px]'
+                                                        : '',
+                                                      isTag
+                                                        ? 'rounded px-1.5 py-0.5 border border-current/30 text-[11px]'
+                                                        : ''
+                                                    ]
+                                                      .filter(Boolean)
+                                                      .join(' ')}
+                                                  >
+                                                    {p.value}
+                                                  </span>
+                                                </span>
+                                              )
+                                            })}
+                                          </div>
+                                          {copiedHeaderField === '__subtitle__' ? (
+                                            <Check className='h-3 w-3 shrink-0 text-emerald-500' />
+                                          ) : (
+                                            <button
+                                              type='button'
+                                              className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
+                                              onClick={() => {
+                                                navigator.clipboard
+                                                  .writeText(subtitleFullText)
+                                                  .catch(() => {})
+                                                setCopiedHeaderField('__subtitle__')
+                                                setTimeout(
+                                                  () =>
+                                                    setCopiedHeaderField((prev) =>
+                                                      prev === '__subtitle__' ? null : prev
+                                                    ),
+                                                  1500
+                                                )
+                                              }}
+                                            >
+                                              <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
+                                            </button>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
+                                      {headerExtra}
+                                      <HeaderTools>
+                                        {isNew && (
+                                          <ImportFromFileButton
+                                            collection={collection}
+                                            onParsed={applyImportResult}
+                                          />
+                                        )}
+                                        {isNew && quickPickerSteps.length > 0 && !isReadOnly && (
+                                          <Popover
+                                            open={quickPickOpen}
+                                            onOpenChange={setQuickPickOpen}
+                                          >
+                                            <PopoverTrigger asChild>
+                                              <button
+                                                type='button'
+                                                title='Quick pick — walk the related fields in order'
+                                                data-quick-pick-toggle
+                                                className={cn(
+                                                  'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors',
+                                                  quickPickOpen
+                                                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                                                    : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
+                                                )}
+                                              >
+                                                <Wand2 className='h-3.5 w-3.5' />
+                                                Quick pick
+                                              </button>
+                                            </PopoverTrigger>
+                                            {/* Slides through the layout's relation steps beside the
+                                              button, bound to the live draft — every pick is a
+                                              normal edit; Done just closes. */}
+                                            <PopoverContent
+                                              align='end'
+                                              sideOffset={6}
+                                              className='w-[440px] max-w-[calc(100vw-24px)] p-3'
+                                              data-quick-picker-modal
+                                            >
+                                              <QuickPicker
+                                                collection={collection}
+                                                itemId={itemId}
+                                                steps={quickPickerSteps}
+                                                fieldConfig={fieldConfig ?? []}
+                                                relations={relations}
+                                                draft={draft}
+                                                getM2M={getM2MEffectiveIds}
+                                                onChange={handleFieldChange}
+                                                onM2MChange={setQuickPickerM2M}
+                                                fieldLabels={parentFieldLabels}
+                                                fieldOptionFilters={parentFieldOptionFilters}
+                                                onFinish={() => setQuickPickOpen(false)}
+                                                finishLabel='Done'
+                                                finishRequiresComplete={false}
+                                              />
+                                            </PopoverContent>
+                                          </Popover>
+                                        )}
+                                        {/* Record tools: one compact icon group instead of a strip of
+                                          equal-weight buttons. Each tool keeps its own popover /
+                                          dialog; the group supplies border + dividers. */}
+                                        {/* Summary ⇄ Edit — a labelled segmented control, not an
+                                          icon pill: the active side is filled so the current mode
+                                          reads at a glance ("make it obvious what mode I'm in"). */}
+                                        {!isNew &&
+                                        itemId &&
+                                        colMeta?.read_mode_toggle &&
+                                        summaryModeSettled ? (
+                                          <div
+                                            role='radiogroup'
+                                            aria-label='Form mode'
+                                            data-summary-mode-toggle
+                                            data-mode={readMode ? 'summary' : 'edit'}
+                                            className='inline-flex h-9 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background p-0.5 text-[11.5px] font-medium shadow-sm'
+                                          >
+                                            <button
+                                              type='button'
+                                              role='radio'
+                                              aria-checked={readMode}
+                                              data-summary-mode-option='summary'
+                                              title='Summary mode — a read-only view of this record'
+                                              onClick={() => setReadMode(true)}
+                                              className={cn(
+                                                'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
+                                                readMode
+                                                  ? 'bg-nvr-cyan text-white shadow-sm'
+                                                  : 'text-slate-600 hover:bg-muted dark:text-slate-300'
+                                              )}
+                                            >
+                                              <BookOpen className='h-3.5 w-3.5' strokeWidth={2} />
+                                              Summary
+                                            </button>
+                                            <button
+                                              type='button'
+                                              role='radio'
+                                              aria-checked={!readMode}
+                                              data-summary-mode-option='edit'
+                                              title='Edit mode — change this record'
+                                              onClick={() => setReadMode(false)}
+                                              className={cn(
+                                                'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
+                                                !readMode
+                                                  ? 'bg-nvr-cyan text-white shadow-sm'
+                                                  : 'text-slate-600 hover:bg-muted dark:text-slate-300'
+                                              )}
+                                            >
+                                              <PencilLine className='h-3.5 w-3.5' strokeWidth={2} />
+                                              Edit
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                        {!isNew && itemId ? (
+                                          <HeaderToolGroup>
+                                            {lockEnabled &&
+                                              !lockHolder &&
+                                              (lockAcquired || lockReleased) && (
+                                                <LockHolderButton
+                                                  note={lockNote}
+                                                  onSave={saveLockNote}
+                                                  waiting={lockQueue}
+                                                  onRelease={releaseLock}
+                                                  releasing={releasingLock}
+                                                  released={lockReleased && !lockAcquired}
+                                                  onRelock={relockLock}
+                                                />
+                                              )}
+                                            <FindInRecordButton
+                                              compact
+                                              fields={findableFields}
+                                              onJump={jumpToField}
+                                            />
+                                            <button
+                                              type='button'
+                                              title='Copy a plain-text summary of this record (fields + link) for chat or email'
+                                              onClick={() => void copyRecordSummary()}
+                                              disabled={copyingSummary}
+                                              aria-label='Copy record summary'
+                                              className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
+                                            >
+                                              {copyingSummary ? (
+                                                <Loader2 className='h-4 w-4 animate-spin' />
+                                              ) : (
+                                                <Clipboard className='h-4 w-4' />
+                                              )}
+                                            </button>
+                                            <RecordSubscribeButton
+                                              compact
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                            />
+                                            <RecordInsightsButton
+                                              compact
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                            />
+                                            <RecordChatActions
+                                              compact
+                                              collection={collection}
+                                              itemDraft={draft}
+                                            />
+                                            {effectiveShowRevisions && (
+                                              <RevisionsPanel
+                                                compact
+                                                collection={collection}
+                                                item={itemId}
+                                                onRollback={() =>
+                                                  qc.invalidateQueries({
+                                                    queryKey: ['item', collection, itemId]
+                                                  })
+                                                }
+                                              />
+                                            )}
+                                          </HeaderToolGroup>
+                                        ) : (
                                           <FindInRecordButton
-                                            compact
                                             fields={findableFields}
                                             onJump={jumpToField}
                                           />
-                                          <button
-                                            type='button'
-                                            title='Copy a plain-text summary of this record (fields + link) for chat or email'
-                                            onClick={() => void copyRecordSummary()}
-                                            disabled={copyingSummary}
-                                            aria-label='Copy record summary'
-                                            className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
-                                          >
-                                            {copyingSummary ? (
-                                              <Loader2 className='h-4 w-4 animate-spin' />
-                                            ) : (
-                                              <Clipboard className='h-4 w-4' />
-                                            )}
-                                          </button>
-                                          <RecordSubscribeButton
-                                            compact
+                                        )}
+                                        {showItemActions && !isNew && (
+                                          <ItemActionButtons
                                             collection={collection}
                                             itemId={String(itemId)}
                                           />
-                                          <RecordInsightsButton
-                                            compact
-                                            collection={collection}
-                                            itemId={String(itemId)}
-                                          />
-                                          <RecordChatActions
-                                            compact
-                                            collection={collection}
-                                            itemDraft={draft}
-                                          />
-                                          {effectiveShowRevisions && (
-                                            <RevisionsPanel
-                                              compact
-                                              collection={collection}
-                                              item={itemId}
-                                              onRollback={() =>
-                                                qc.invalidateQueries({
-                                                  queryKey: ['item', collection, itemId]
-                                                })
-                                              }
-                                            />
-                                          )}
-                                        </HeaderToolGroup>
-                                      ) : (
-                                        <FindInRecordButton
-                                          fields={findableFields}
-                                          onJump={jumpToField}
-                                        />
-                                      )}
-                                      {showItemActions && !isNew && (
-                                        <ItemActionButtons
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                        />
-                                      )}
-                                      {/* Admin-defined no-code actions (#39) — always
+                                        )}
+                                        {/* Admin-defined no-code actions (#39) — always
                                         mounted; renders nothing when none exist. */}
-                                      {!isNew && itemId && (
-                                        <CustomActionButtons
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                          draft={draft}
-                                        />
-                                      )}
-                                      {/* Secondary tools — one "More" menu; the rows are the same
-                                          components (dialogs, sheets, confirms unchanged). */}
-                                      {!isNew && itemId && (
-                                        <HeaderMenu>
-                                          <ImportFromFileButton
+                                        {!isNew && itemId && (
+                                          <CustomActionButtons
                                             collection={collection}
-                                            templateFilter={(t) => t.reimport?.enabled === true}
-                                            getLabel={(t) =>
-                                              t.reimport?.button_label ?? t.button_label
-                                            }
-                                            onParsed={handleReimportParsed}
+                                            itemId={String(itemId)}
+                                            draft={draft}
                                           />
-                                          {fileLayouts.map((fl) => (
-                                            <Button
-                                              key={fl.id}
-                                              type='button'
-                                              variant='outline'
-                                              size='sm'
-                                              disabled={pdfLoading === fl.id}
-                                              onClick={() => void downloadPdf(fl.id)}
-                                              className='gap-1.5'
-                                            >
-                                              {pdfLoading === fl.id ? (
-                                                <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                              ) : (
-                                                <FileDown className='h-3.5 w-3.5' />
-                                              )}
-                                              {fl.pdf_button_label || 'Export PDF'}
-                                            </Button>
-                                          ))}
-                                          {!!(
-                                            activeLayoutData?.layout as
-                                              | { dossier_enabled?: boolean | number }
-                                              | undefined
-                                          )?.dossier_enabled && (
-                                            <button
-                                              type='button'
-                                              data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
-                                              onClick={async () => {
-                                                // #641 — server assembles the whole story; this just
-                                                // streams the PDF down with the caller's own auth.
-                                                try {
-                                                  const res = await fetch(
-                                                    `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
-                                                    {
-                                                      headers: fetchCfg.authHeaders,
-                                                      credentials: fetchCfg.credentials
-                                                    }
-                                                  )
-                                                  if (!res.ok) throw new Error(String(res.status))
-                                                  const blob = await res.blob()
-                                                  const url = URL.createObjectURL(blob)
-                                                  const a = document.createElement('a')
-                                                  a.href = url
-                                                  a.download = `dossier-${collection}-${itemId}.pdf`
-                                                  a.click()
-                                                  setTimeout(() => URL.revokeObjectURL(url), 30_000)
-                                                } catch {
-                                                  toast.error('Dossier export failed')
-                                                }
-                                              }}
-                                              className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                            >
-                                              <FileDown className='h-3.5 w-3.5' />
-                                              {(
-                                                activeLayoutData?.layout as
-                                                  | { dossier_label?: string | null }
-                                                  | undefined
-                                              )?.dossier_label || 'Dossier'}
-                                            </button>
-                                          )}
-                                          <div data-nvr-menu-divider />
-                                          {onDuplicate && (
-                                            <button
-                                              type='button'
-                                              title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
-                                              onClick={async () => {
-                                                // Copy what a person would re-create: plain scalars + M2O
-                                                // FKs, the M2M link sets (Zone, funding years…), and the
-                                                // O2M grids' child rows. Excluded: id, audit stamps,
-                                                // auto-id fields (they regenerate), computed fields
-                                                // (server re-derives), attachments.
-                                                const AUDIT = new Set([
-                                                  'id',
-                                                  'user_created',
-                                                  'date_created',
-                                                  'user_updated',
-                                                  'date_updated',
-                                                  'created_at',
-                                                  'updated_at',
-                                                  'created',
-                                                  'changed',
-                                                  'creator',
-                                                  'last_state_change'
-                                                ])
-                                                // Only fields the form actually SHOWS copy — hidden columns
-                                                // are integration/system state (external ids, status
-                                                // mirrors) that must not follow the record.
-                                                const copyable = new Set<string>()
-                                                const skip = new Set<string>(AUDIT)
-                                                for (const fc of fieldConfig ?? []) {
-                                                  const opts = fc.options as Record<
-                                                    string,
-                                                    unknown
-                                                  > | null
-                                                  if (
-                                                    opts &&
-                                                    typeof opts === 'object' &&
-                                                    (opts as { auto_id?: unknown }).auto_id
-                                                  )
-                                                    skip.add(fc.field)
-                                                  if (
-                                                    isDerivedForRecord(
-                                                      fc as { computed_type?: string | null },
-                                                      draft
-                                                    )
-                                                  )
-                                                    skip.add(fc.field)
-                                                  const readonlyFc = Boolean(
-                                                    (fc as { readonly?: boolean }).readonly
-                                                  )
-                                                  const noDupe = Boolean(
-                                                    opts &&
-                                                      typeof opts === 'object' &&
-                                                      (opts as { no_duplicate?: unknown })
-                                                        .no_duplicate
-                                                  )
-                                                  if (
-                                                    !fc.hidden &&
-                                                    !readonlyFc &&
-                                                    !noDupe &&
-                                                    (fc as { layout_assigned?: boolean })
-                                                      .layout_assigned !== false
-                                                  ) {
-                                                    copyable.add(fc.field)
-                                                  }
-                                                }
-                                                const values: Record<string, unknown> = {}
-                                                for (const [k, v] of Object.entries(draft)) {
-                                                  if (
-                                                    !copyable.has(k) ||
-                                                    skip.has(k) ||
-                                                    k.includes('.') ||
-                                                    k.startsWith('__')
-                                                  )
-                                                    continue
-                                                  if (v === undefined || v === null || v === '')
-                                                    continue
-                                                  if (typeof v === 'object') continue
-                                                  values[k] = v
-                                                }
-                                                // M2M links — every alias's committed id set, staged on the
-                                                // new form exactly like hand-picked selections.
-                                                const links: Record<string, unknown[]> = {}
-                                                for (const [
-                                                  aliasField,
-                                                  info
-                                                ] of m2mAliasFieldsForRules.entries()) {
-                                                  // Attachments never copy — file links belong to the original.
-                                                  if (
-                                                    aliasField === 'files' ||
-                                                    /_files$/i.test(info.manyCollection)
-                                                  )
-                                                    continue
-                                                  const ids =
-                                                    m2mAliasFieldStates[aliasField]?.ids ?? []
-                                                  if (ids.length) links[info.stagingKey] = ids
-                                                }
-                                                // O2M child rows for the grids this layout shows (files
-                                                // and audit children are not grids, so they never copy).
-                                                const rows: Record<
-                                                  string,
-                                                  Array<Record<string, unknown>>
-                                                > = {}
-                                                const CHILD_SKIP = [
-                                                  'id',
-                                                  'user_created',
-                                                  'date_created',
-                                                  'user_updated',
-                                                  'date_updated',
-                                                  'created_at',
-                                                  'updated_at',
-                                                  'created',
-                                                  'changed',
-                                                  'creator'
-                                                ]
-                                                for (const fc of fieldConfig ?? []) {
-                                                  if (fc.hidden) continue
-                                                  const rel = (relations ?? []).find(
-                                                    (r) =>
-                                                      r.one_collection === collection &&
-                                                      !r.junction_field &&
-                                                      (r.one_field === fc.field ||
-                                                        r.many_collection === fc.field)
-                                                  )
-                                                  if (!rel?.many_collection || !rel.many_field)
-                                                    continue
-                                                  const key = `${rel.many_collection}.${rel.many_field}`
-                                                  if (rows[key]) continue
+                                        )}
+                                        {/* Secondary tools — one "More" menu; the rows are the same
+                                          components (dialogs, sheets, confirms unchanged). */}
+                                        {!isNew && itemId && (
+                                          <HeaderMenu>
+                                            <ImportFromFileButton
+                                              collection={collection}
+                                              templateFilter={(t) => t.reimport?.enabled === true}
+                                              getLabel={(t) =>
+                                                t.reimport?.button_label ?? t.button_label
+                                              }
+                                              onParsed={handleReimportParsed}
+                                            />
+                                            {fileLayouts.map((fl) => (
+                                              <Button
+                                                key={fl.id}
+                                                type='button'
+                                                variant='outline'
+                                                size='sm'
+                                                disabled={pdfLoading === fl.id}
+                                                onClick={() => void downloadPdf(fl.id)}
+                                                className='gap-1.5'
+                                              >
+                                                {pdfLoading === fl.id ? (
+                                                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                                ) : (
+                                                  <FileDown className='h-3.5 w-3.5' />
+                                                )}
+                                                {fl.pdf_button_label || 'Export PDF'}
+                                              </Button>
+                                            ))}
+                                            {!!(
+                                              activeLayoutData?.layout as
+                                                | { dossier_enabled?: boolean | number }
+                                                | undefined
+                                            )?.dossier_enabled && (
+                                              <button
+                                                type='button'
+                                                data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
+                                                onClick={async () => {
+                                                  // #641 — server assembles the whole story; this just
+                                                  // streams the PDF down with the caller's own auth.
                                                   try {
-                                                    const res = (await client.request(
-                                                      get<{ data: Array<Record<string, unknown>> }>(
-                                                        `/items/${rel.many_collection}`,
-                                                        {
+                                                    const res = await fetch(
+                                                      `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
+                                                      {
+                                                        headers: fetchCfg.authHeaders,
+                                                        credentials: fetchCfg.credentials
+                                                      }
+                                                    )
+                                                    if (!res.ok) throw new Error(String(res.status))
+                                                    const blob = await res.blob()
+                                                    const url = URL.createObjectURL(blob)
+                                                    const a = document.createElement('a')
+                                                    a.href = url
+                                                    a.download = `dossier-${collection}-${itemId}.pdf`
+                                                    a.click()
+                                                    setTimeout(
+                                                      () => URL.revokeObjectURL(url),
+                                                      30_000
+                                                    )
+                                                  } catch {
+                                                    toast.error('Dossier export failed')
+                                                  }
+                                                }}
+                                                className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                              >
+                                                <FileDown className='h-3.5 w-3.5' />
+                                                {(
+                                                  activeLayoutData?.layout as
+                                                    | { dossier_label?: string | null }
+                                                    | undefined
+                                                )?.dossier_label || 'Dossier'}
+                                              </button>
+                                            )}
+                                            <div data-nvr-menu-divider />
+                                            {onDuplicate && (
+                                              <button
+                                                type='button'
+                                                title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
+                                                onClick={async () => {
+                                                  // Copy what a person would re-create: plain scalars + M2O
+                                                  // FKs, the M2M link sets (Zone, funding years…), and the
+                                                  // O2M grids' child rows. Excluded: id, audit stamps,
+                                                  // auto-id fields (they regenerate), computed fields
+                                                  // (server re-derives), attachments.
+                                                  const AUDIT = new Set([
+                                                    'id',
+                                                    'user_created',
+                                                    'date_created',
+                                                    'user_updated',
+                                                    'date_updated',
+                                                    'created_at',
+                                                    'updated_at',
+                                                    'created',
+                                                    'changed',
+                                                    'creator',
+                                                    'last_state_change'
+                                                  ])
+                                                  // Only fields the form actually SHOWS copy — hidden columns
+                                                  // are integration/system state (external ids, status
+                                                  // mirrors) that must not follow the record.
+                                                  const copyable = new Set<string>()
+                                                  const skip = new Set<string>(AUDIT)
+                                                  for (const fc of fieldConfig ?? []) {
+                                                    const opts = fc.options as Record<
+                                                      string,
+                                                      unknown
+                                                    > | null
+                                                    if (
+                                                      opts &&
+                                                      typeof opts === 'object' &&
+                                                      (opts as { auto_id?: unknown }).auto_id
+                                                    )
+                                                      skip.add(fc.field)
+                                                    if (
+                                                      isDerivedForRecord(
+                                                        fc as { computed_type?: string | null },
+                                                        draft
+                                                      )
+                                                    )
+                                                      skip.add(fc.field)
+                                                    const readonlyFc = Boolean(
+                                                      (fc as { readonly?: boolean }).readonly
+                                                    )
+                                                    const noDupe = Boolean(
+                                                      opts &&
+                                                        typeof opts === 'object' &&
+                                                        (opts as { no_duplicate?: unknown })
+                                                          .no_duplicate
+                                                    )
+                                                    if (
+                                                      !fc.hidden &&
+                                                      !readonlyFc &&
+                                                      !noDupe &&
+                                                      (fc as { layout_assigned?: boolean })
+                                                        .layout_assigned !== false
+                                                    ) {
+                                                      copyable.add(fc.field)
+                                                    }
+                                                  }
+                                                  const values: Record<string, unknown> = {}
+                                                  for (const [k, v] of Object.entries(draft)) {
+                                                    if (
+                                                      !copyable.has(k) ||
+                                                      skip.has(k) ||
+                                                      k.includes('.') ||
+                                                      k.startsWith('__')
+                                                    )
+                                                      continue
+                                                    if (v === undefined || v === null || v === '')
+                                                      continue
+                                                    if (typeof v === 'object') continue
+                                                    values[k] = v
+                                                  }
+                                                  // M2M links — every alias's committed id set, staged on the
+                                                  // new form exactly like hand-picked selections.
+                                                  const links: Record<string, unknown[]> = {}
+                                                  for (const [
+                                                    aliasField,
+                                                    info
+                                                  ] of m2mAliasFieldsForRules.entries()) {
+                                                    // Attachments never copy — file links belong to the original.
+                                                    if (
+                                                      aliasField === 'files' ||
+                                                      /_files$/i.test(info.manyCollection)
+                                                    )
+                                                      continue
+                                                    const ids =
+                                                      m2mAliasFieldStates[aliasField]?.ids ?? []
+                                                    if (ids.length) links[info.stagingKey] = ids
+                                                  }
+                                                  // O2M child rows for the grids this layout shows (files
+                                                  // and audit children are not grids, so they never copy).
+                                                  const rows: Record<
+                                                    string,
+                                                    Array<Record<string, unknown>>
+                                                  > = {}
+                                                  const CHILD_SKIP = [
+                                                    'id',
+                                                    'user_created',
+                                                    'date_created',
+                                                    'user_updated',
+                                                    'date_updated',
+                                                    'created_at',
+                                                    'updated_at',
+                                                    'created',
+                                                    'changed',
+                                                    'creator'
+                                                  ]
+                                                  for (const fc of fieldConfig ?? []) {
+                                                    if (fc.hidden) continue
+                                                    const rel = (relations ?? []).find(
+                                                      (r) =>
+                                                        r.one_collection === collection &&
+                                                        !r.junction_field &&
+                                                        (r.one_field === fc.field ||
+                                                          r.many_collection === fc.field)
+                                                    )
+                                                    if (!rel?.many_collection || !rel.many_field)
+                                                      continue
+                                                    const key = `${rel.many_collection}.${rel.many_field}`
+                                                    if (rows[key]) continue
+                                                    try {
+                                                      const res = (await client.request(
+                                                        get<{
+                                                          data: Array<Record<string, unknown>>
+                                                        }>(`/items/${rel.many_collection}`, {
                                                           limit: 200,
                                                           filter: JSON.stringify({
                                                             [rel.many_field]: { _eq: itemId }
                                                           })
+                                                        })
+                                                      )) as { data: Array<Record<string, unknown>> }
+                                                      const childRows = (res.data ?? []).map(
+                                                        (r0) => {
+                                                          const c = { ...r0 }
+                                                          for (const k of CHILD_SKIP) delete c[k]
+                                                          delete c[rel.many_field as string]
+                                                          for (const k of Object.keys(c)) {
+                                                            if (
+                                                              c[k] === null ||
+                                                              typeof c[k] === 'object'
+                                                            )
+                                                              delete c[k]
+                                                          }
+                                                          return c
                                                         }
                                                       )
-                                                    )) as { data: Array<Record<string, unknown>> }
-                                                    const childRows = (res.data ?? []).map((r0) => {
-                                                      const c = { ...r0 }
-                                                      for (const k of CHILD_SKIP) delete c[k]
-                                                      delete c[rel.many_field as string]
-                                                      for (const k of Object.keys(c)) {
-                                                        if (
-                                                          c[k] === null ||
-                                                          typeof c[k] === 'object'
-                                                        )
-                                                          delete c[k]
-                                                      }
-                                                      return c
-                                                    })
-                                                    if (childRows.length) rows[key] = childRows
-                                                  } catch {
-                                                    /* a grid that fails to read just doesn't copy */
+                                                      if (childRows.length) rows[key] = childRows
+                                                    } catch {
+                                                      /* a grid that fails to read just doesn't copy */
+                                                    }
                                                   }
-                                                }
-                                                onDuplicate({ values, links, rows })
+                                                  onDuplicate({ values, links, rows })
+                                                }}
+                                                className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                                data-duplicate-record
+                                              >
+                                                <svg
+                                                  width='13'
+                                                  height='13'
+                                                  viewBox='0 0 24 24'
+                                                  fill='none'
+                                                  stroke='currentColor'
+                                                  strokeWidth='2'
+                                                  strokeLinecap='round'
+                                                  strokeLinejoin='round'
+                                                  aria-hidden='true'
+                                                >
+                                                  <rect x='9' y='9' width='13' height='13' rx='2' />
+                                                  <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                                                </svg>
+                                                Duplicate
+                                              </button>
+                                            )}
+                                            <button
+                                              type='button'
+                                              title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
+                                              data-save-as-template
+                                              onClick={() => {
+                                                setTemplateName('')
+                                                setTemplateShared(false)
+                                                setTemplateDialogOpen(true)
                                               }}
                                               className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                              data-duplicate-record
                                             >
                                               <svg
                                                 width='13'
@@ -8846,634 +8898,655 @@ export function ItemEditForm({
                                                 strokeLinejoin='round'
                                                 aria-hidden='true'
                                               >
-                                                <rect x='9' y='9' width='13' height='13' rx='2' />
-                                                <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                                                <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
+                                                <polyline points='17 21 17 13 7 13 7 21' />
+                                                <polyline points='7 3 7 8 15 8' />
                                               </svg>
-                                              Duplicate
+                                              Save as template
                                             </button>
-                                          )}
-                                          <button
-                                            type='button'
-                                            title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
-                                            data-save-as-template
-                                            onClick={() => {
-                                              setTemplateName('')
-                                              setTemplateShared(false)
-                                              setTemplateDialogOpen(true)
-                                            }}
-                                            className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                          >
-                                            <svg
-                                              width='13'
-                                              height='13'
-                                              viewBox='0 0 24 24'
-                                              fill='none'
-                                              stroke='currentColor'
-                                              strokeWidth='2'
-                                              strokeLinecap='round'
-                                              strokeLinejoin='round'
-                                              aria-hidden='true'
-                                            >
-                                              <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
-                                              <polyline points='17 21 17 13 7 13 7 21' />
-                                              <polyline points='7 3 7 8 15 8' />
-                                            </svg>
-                                            Save as template
-                                          </button>
-                                          {isAdmin && (
-                                            <>
-                                              <div data-nvr-menu-divider />
-                                              <Button
-                                                type='button'
-                                                variant='outline'
-                                                size='sm'
-                                                data-nvr-menu-close
-                                                onClick={() => setRawEditOpen(true)}
-                                                title='Edit every field with conditional logic bypassed (admin)'
-                                                className='gap-1.5'
-                                              >
-                                                <Wrench className='h-3.5 w-3.5' />
-                                                Raw edit
-                                              </Button>
-                                              {!isNew && (
-                                                <Button
-                                                  type='button'
-                                                  variant='outline'
-                                                  size='sm'
-                                                  onClick={() => setViewAsOpen(true)}
-                                                  title='Render this form exactly as a chosen role sees it (nothing is saved as them)'
-                                                  className='gap-1.5'
-                                                  data-view-as-role-open
-                                                >
-                                                  <Eye className='h-3.5 w-3.5' />
-                                                  View as role…
-                                                </Button>
-                                              )}
-                                              {effectiveShowClone && (
-                                                <CloneDialog
-                                                  collection={collection}
-                                                  itemId={itemId}
-                                                  fields={fieldConfig ?? []}
-                                                  relations={relations}
-                                                  currentValues={itemData ?? {}}
-                                                  onSuccess={(newId) => onSaved?.(String(newId))}
-                                                />
-                                              )}
-                                            </>
-                                          )}
-                                          {canDelete && <div data-nvr-menu-divider />}
-                                          {canDelete &&
-                                            (confirmDelete ? (
+                                            {isAdmin && (
                                               <>
-                                                <span className='text-sm text-muted-foreground'>
-                                                  Delete?
-                                                </span>
+                                                <div data-nvr-menu-divider />
                                                 <Button
                                                   type='button'
+                                                  variant='outline'
                                                   size='sm'
-                                                  variant='destructive'
+                                                  data-nvr-menu-close
+                                                  onClick={() => setRawEditOpen(true)}
+                                                  title='Edit every field with conditional logic bypassed (admin)'
                                                   className='gap-1.5'
-                                                  onClick={() => deleteMut.mutate()}
-                                                  disabled={deleteMut.isPending}
                                                 >
-                                                  {deleteMut.isPending ? (
-                                                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                                  ) : (
-                                                    'Yes, delete'
-                                                  )}
+                                                  <Wrench className='h-3.5 w-3.5' />
+                                                  Raw edit
                                                 </Button>
+                                                {!isNew && (
+                                                  <Button
+                                                    type='button'
+                                                    variant='outline'
+                                                    size='sm'
+                                                    onClick={() => setViewAsOpen(true)}
+                                                    title='Render this form exactly as a chosen role sees it (nothing is saved as them)'
+                                                    className='gap-1.5'
+                                                    data-view-as-role-open
+                                                  >
+                                                    <Eye className='h-3.5 w-3.5' />
+                                                    View as role…
+                                                  </Button>
+                                                )}
+                                                {effectiveShowClone && (
+                                                  <CloneDialog
+                                                    collection={collection}
+                                                    itemId={itemId}
+                                                    fields={fieldConfig ?? []}
+                                                    relations={relations}
+                                                    currentValues={itemData ?? {}}
+                                                    onSuccess={(newId) => onSaved?.(String(newId))}
+                                                  />
+                                                )}
+                                              </>
+                                            )}
+                                            {canDelete && <div data-nvr-menu-divider />}
+                                            {canDelete &&
+                                              (confirmDelete ? (
+                                                <>
+                                                  <span className='text-sm text-muted-foreground'>
+                                                    Delete?
+                                                  </span>
+                                                  <Button
+                                                    type='button'
+                                                    size='sm'
+                                                    variant='destructive'
+                                                    className='gap-1.5'
+                                                    onClick={() => deleteMut.mutate()}
+                                                    disabled={deleteMut.isPending}
+                                                  >
+                                                    {deleteMut.isPending ? (
+                                                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                                    ) : (
+                                                      'Yes, delete'
+                                                    )}
+                                                  </Button>
+                                                  <Button
+                                                    type='button'
+                                                    size='sm'
+                                                    variant='outline'
+                                                    onClick={() => setConfirmDelete(false)}
+                                                  >
+                                                    Cancel
+                                                  </Button>
+                                                </>
+                                              ) : (
                                                 <Button
                                                   type='button'
                                                   size='sm'
                                                   variant='outline'
-                                                  onClick={() => setConfirmDelete(false)}
+                                                  className='gap-1.5 text-destructive hover:text-destructive'
+                                                  onClick={() => setConfirmDelete(true)}
                                                 >
-                                                  Cancel
+                                                  <Trash2 className='h-3.5 w-3.5' />
                                                 </Button>
-                                              </>
-                                            ) : (
-                                              <Button
-                                                type='button'
-                                                size='sm'
-                                                variant='outline'
-                                                className='gap-1.5 text-destructive hover:text-destructive'
-                                                onClick={() => setConfirmDelete(true)}
-                                              >
-                                                <Trash2 className='h-3.5 w-3.5' />
-                                              </Button>
-                                            ))}
-                                        </HeaderMenu>
-                                      )}
-                                      {templateDialogOpen &&
-                                        createPortal(
-                                          <div className='fixed inset-0 z-[130] flex items-center justify-center'>
-                                            {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss */}
-                                            <div
-                                              className='absolute inset-0 bg-black/30'
-                                              onClick={() => setTemplateDialogOpen(false)}
-                                            />
-                                            <div
-                                              role='dialog'
-                                              aria-label='Save as template'
-                                              className='relative w-[380px] rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
-                                              onKeyDown={(e) => {
-                                                if (e.key === 'Escape') setTemplateDialogOpen(false)
-                                              }}
-                                            >
-                                              <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
-                                                Save as template
-                                              </p>
-                                              <p className='mt-1 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
-                                                This record's plain field values become a reusable
-                                                pre-fill template — same exclusions as Duplicate (no
-                                                ids, audit stamps, computed fields, or line items).
-                                              </p>
-                                              <input
-                                                // biome-ignore lint/a11y/noAutofocus: dialog's single input
-                                                autoFocus
-                                                value={templateName}
-                                                onChange={(e) => setTemplateName(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                  if (e.key === 'Enter' && templateName.trim()) {
-                                                    ;(
-                                                      document.querySelector(
-                                                        '[data-template-save-btn]'
-                                                      ) as HTMLButtonElement | null
-                                                    )?.click()
-                                                  }
-                                                }}
-                                                placeholder='Template name'
-                                                className='mt-3 h-9 w-full rounded-md border border-slate-200 bg-background px-3 text-[13px] dark:border-border'
+                                              ))}
+                                          </HeaderMenu>
+                                        )}
+                                        {templateDialogOpen &&
+                                          createPortal(
+                                            <div className='fixed inset-0 z-[130] flex items-center justify-center'>
+                                              {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss */}
+                                              <div
+                                                className='absolute inset-0 bg-black/30'
+                                                onClick={() => setTemplateDialogOpen(false)}
                                               />
-                                              <label className='mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+                                              <div
+                                                role='dialog'
+                                                aria-label='Save as template'
+                                                className='relative w-[380px] rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
+                                                onKeyDown={(e) => {
+                                                  if (e.key === 'Escape')
+                                                    setTemplateDialogOpen(false)
+                                                }}
+                                              >
+                                                <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+                                                  Save as template
+                                                </p>
+                                                <p className='mt-1 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                                                  This record's plain field values become a reusable
+                                                  pre-fill template — same exclusions as Duplicate
+                                                  (no ids, audit stamps, computed fields, or line
+                                                  items).
+                                                </p>
                                                 <input
-                                                  type='checkbox'
-                                                  checked={templateShared}
-                                                  onChange={(e) =>
-                                                    setTemplateShared(e.target.checked)
-                                                  }
-                                                  className='h-3.5 w-3.5'
-                                                />
-                                                Share with everyone (otherwise it's just yours)
-                                              </label>
-                                              <div className='mt-4 flex justify-end gap-2'>
-                                                <button
-                                                  type='button'
-                                                  onClick={() => setTemplateDialogOpen(false)}
-                                                  className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
-                                                >
-                                                  Cancel
-                                                </button>
-                                                <button
-                                                  type='button'
-                                                  data-template-save-btn
-                                                  disabled={!templateName.trim() || templateSaving}
-                                                  onClick={async () => {
-                                                    // Same harvest rules as Duplicate: visible,
-                                                    // editable, non-computed, non-auto-id scalars
-                                                    // + M2O FKs only.
-                                                    const AUDIT = new Set([
-                                                      'id',
-                                                      'user_created',
-                                                      'date_created',
-                                                      'user_updated',
-                                                      'date_updated',
-                                                      'created_at',
-                                                      'updated_at',
-                                                      'created',
-                                                      'changed',
-                                                      'creator',
-                                                      'last_state_change'
-                                                    ])
-                                                    const values: Record<string, unknown> = {}
-                                                    for (const fc of fieldConfig ?? []) {
-                                                      const opts = fc.options as Record<
-                                                        string,
-                                                        unknown
-                                                      > | null
-                                                      if (AUDIT.has(fc.field)) continue
-                                                      if (
-                                                        opts &&
-                                                        typeof opts === 'object' &&
-                                                        (opts as { auto_id?: unknown }).auto_id
-                                                      )
-                                                        continue
-                                                      if (
-                                                        isDerivedForRecord(
-                                                          fc as { computed_type?: string | null },
-                                                          draft
-                                                        )
-                                                      )
-                                                        continue
-                                                      if (
-                                                        fc.hidden ||
-                                                        (fc as { readonly?: boolean }).readonly
-                                                      )
-                                                        continue
-                                                      if (
-                                                        (fc as { layout_assigned?: boolean })
-                                                          .layout_assigned === false
-                                                      )
-                                                        continue
-                                                      const v = draft[fc.field]
-                                                      if (v === undefined || v === null || v === '')
-                                                        continue
-                                                      if (typeof v === 'object') continue
-                                                      values[fc.field] = v
-                                                    }
-                                                    if (Object.keys(values).length === 0) {
-                                                      toast.error(
-                                                        'Nothing to save — no plain field values on this record'
-                                                      )
-                                                      return
-                                                    }
-                                                    setTemplateSaving(true)
-                                                    try {
-                                                      await client.request(
-                                                        post('/record-templates', {
-                                                          collection,
-                                                          name: templateName.trim(),
-                                                          data: values,
-                                                          is_shared: templateShared
-                                                        })
-                                                      )
-                                                      toast.success(
-                                                        `Template "${templateName.trim()}" saved`
-                                                      )
-                                                      setTemplateDialogOpen(false)
-                                                    } catch {
-                                                      toast.error('Failed to save template')
-                                                    } finally {
-                                                      setTemplateSaving(false)
+                                                  // biome-ignore lint/a11y/noAutofocus: dialog's single input
+                                                  autoFocus
+                                                  value={templateName}
+                                                  onChange={(e) => setTemplateName(e.target.value)}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && templateName.trim()) {
+                                                      ;(
+                                                        document.querySelector(
+                                                          '[data-template-save-btn]'
+                                                        ) as HTMLButtonElement | null
+                                                      )?.click()
                                                     }
                                                   }}
-                                                  className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-semibold text-white disabled:opacity-50'
-                                                >
-                                                  {templateSaving ? 'Saving…' : 'Save template'}
-                                                </button>
+                                                  placeholder='Template name'
+                                                  className='mt-3 h-9 w-full rounded-md border border-slate-200 bg-background px-3 text-[13px] dark:border-border'
+                                                />
+                                                <label className='mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+                                                  <input
+                                                    type='checkbox'
+                                                    checked={templateShared}
+                                                    onChange={(e) =>
+                                                      setTemplateShared(e.target.checked)
+                                                    }
+                                                    className='h-3.5 w-3.5'
+                                                  />
+                                                  Share with everyone (otherwise it's just yours)
+                                                </label>
+                                                <div className='mt-4 flex justify-end gap-2'>
+                                                  <button
+                                                    type='button'
+                                                    onClick={() => setTemplateDialogOpen(false)}
+                                                    className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+                                                  >
+                                                    Cancel
+                                                  </button>
+                                                  <button
+                                                    type='button'
+                                                    data-template-save-btn
+                                                    disabled={
+                                                      !templateName.trim() || templateSaving
+                                                    }
+                                                    onClick={async () => {
+                                                      // Same harvest rules as Duplicate: visible,
+                                                      // editable, non-computed, non-auto-id scalars
+                                                      // + M2O FKs only.
+                                                      const AUDIT = new Set([
+                                                        'id',
+                                                        'user_created',
+                                                        'date_created',
+                                                        'user_updated',
+                                                        'date_updated',
+                                                        'created_at',
+                                                        'updated_at',
+                                                        'created',
+                                                        'changed',
+                                                        'creator',
+                                                        'last_state_change'
+                                                      ])
+                                                      const values: Record<string, unknown> = {}
+                                                      for (const fc of fieldConfig ?? []) {
+                                                        const opts = fc.options as Record<
+                                                          string,
+                                                          unknown
+                                                        > | null
+                                                        if (AUDIT.has(fc.field)) continue
+                                                        if (
+                                                          opts &&
+                                                          typeof opts === 'object' &&
+                                                          (opts as { auto_id?: unknown }).auto_id
+                                                        )
+                                                          continue
+                                                        if (
+                                                          isDerivedForRecord(
+                                                            fc as { computed_type?: string | null },
+                                                            draft
+                                                          )
+                                                        )
+                                                          continue
+                                                        if (
+                                                          fc.hidden ||
+                                                          (fc as { readonly?: boolean }).readonly
+                                                        )
+                                                          continue
+                                                        if (
+                                                          (fc as { layout_assigned?: boolean })
+                                                            .layout_assigned === false
+                                                        )
+                                                          continue
+                                                        const v = draft[fc.field]
+                                                        if (
+                                                          v === undefined ||
+                                                          v === null ||
+                                                          v === ''
+                                                        )
+                                                          continue
+                                                        if (typeof v === 'object') continue
+                                                        values[fc.field] = v
+                                                      }
+                                                      if (Object.keys(values).length === 0) {
+                                                        toast.error(
+                                                          'Nothing to save — no plain field values on this record'
+                                                        )
+                                                        return
+                                                      }
+                                                      setTemplateSaving(true)
+                                                      try {
+                                                        await client.request(
+                                                          post('/record-templates', {
+                                                            collection,
+                                                            name: templateName.trim(),
+                                                            data: values,
+                                                            is_shared: templateShared
+                                                          })
+                                                        )
+                                                        toast.success(
+                                                          `Template "${templateName.trim()}" saved`
+                                                        )
+                                                        setTemplateDialogOpen(false)
+                                                      } catch {
+                                                        toast.error('Failed to save template')
+                                                      } finally {
+                                                        setTemplateSaving(false)
+                                                      }
+                                                    }}
+                                                    className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-semibold text-white disabled:opacity-50'
+                                                  >
+                                                    {templateSaving ? 'Saving…' : 'Save template'}
+                                                  </button>
+                                                </div>
                                               </div>
-                                            </div>
-                                          </div>,
-                                          document.body
-                                        )}
-                                    </HeaderTools>
-                                    {!!activeLayoutData?.layout?.changes_tray && !readMode && (
-                                      <ChangesTray
-                                        items={changeItems}
-                                        saving={saveMut.isPending}
-                                        onRevertAll={
-                                          changeItems.length > 1
-                                            ? () => {
-                                                for (const it of changeItems) it.onRevert()
-                                              }
-                                            : undefined
-                                        }
-                                      />
-                                    )}
-                                    {!isStepsMode && (
-                                      <div className='relative'>
-                                        {isDirty && !saveMut.isPending && (
+                                            </div>,
+                                            document.body
+                                          )}
+                                      </HeaderTools>
+                                      {!!activeLayoutData?.layout?.changes_tray && !readMode && (
+                                        <ChangesTray
+                                          items={changeItems}
+                                          saving={saveMut.isPending}
+                                          onRevertAll={
+                                            changeItems.length > 1
+                                              ? () => {
+                                                  for (const it of changeItems) it.onRevert()
+                                                }
+                                              : undefined
+                                          }
+                                        />
+                                      )}
+                                      {!isStepsMode && (
+                                        <div className='relative'>
+                                          {isDirty && !saveMut.isPending && (
+                                            <button
+                                              type='button'
+                                              onClick={() => setInspectorOpen((v) => !v)}
+                                              title='Unsaved changes — click to see what changed'
+                                              className='absolute -right-1 -top-1 z-10 h-3 w-3 rounded-full'
+                                              data-unsaved-dot
+                                            >
+                                              <span
+                                                className={cn(
+                                                  'nvr-pop absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card',
+                                                  dirtyIdle && 'nvr-idle-breathe'
+                                                )}
+                                              />
+                                            </button>
+                                          )}
+                                          <UnsavedInspector
+                                            open={inspectorOpen && isDirty}
+                                            onClose={() => setInspectorOpen(false)}
+                                            fieldConfig={fieldConfig}
+                                            draft={draft}
+                                            initial={initialDataRef.current}
+                                            m2mLinks={m2mLinks}
+                                            m2mUnlinks={m2mUnlinks}
+                                            pendingRowCount={[...pendingO2MRows.values()].reduce(
+                                              (n, r) => n + r.length,
+                                              0
+                                            )}
+                                            pendingDeleteCount={[
+                                              ...pendingO2MDeletes.values()
+                                            ].reduce((n, r) => n + r.size, 0)}
+                                          />
+                                          <Button
+                                            type='button'
+                                            size='sm'
+                                            onClick={() => handleSave()}
+                                            disabled={
+                                              saveMut.isPending || isReadOnly || viewAs.active
+                                            }
+                                            className={cn(
+                                              'gap-1.5 transition-colors duration-300',
+                                              // Summary mode has nothing to save — the button would
+                                              // only contradict the "read-only" strip.
+                                              readMode && !isNew && 'hidden',
+                                              justSaved &&
+                                                'bg-emerald-500 hover:bg-emerald-500 text-white'
+                                            )}
+                                          >
+                                            {saveMut.isPending ? (
+                                              <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                            ) : justSaved ? (
+                                              <Check className='nvr-pop h-3.5 w-3.5' />
+                                            ) : (
+                                              <Save className='h-3.5 w-3.5' />
+                                            )}
+                                            {justSaved ? 'Saved' : isNew ? 'Create' : 'Save'}
+                                          </Button>
+                                        </div>
+                                      )}
+                                      {!isNew && addendumEnabled && addendumData.length > 0 && (
+                                        <div className='relative'>
                                           <button
                                             type='button'
-                                            onClick={() => setInspectorOpen((v) => !v)}
-                                            title='Unsaved changes — click to see what changed'
-                                            className='absolute -right-1 -top-1 z-10 h-3 w-3 rounded-full'
-                                            data-unsaved-dot
+                                            onClick={() => setAddendumViewDropdownOpen((o) => !o)}
+                                            className={cn(
+                                              'flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors',
+                                              viewingAddendum
+                                                ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
+                                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
+                                            )}
+                                            title='Choose which version the form and actions apply to'
                                           >
                                             <span
                                               className={cn(
-                                                'nvr-pop absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card',
-                                                dirtyIdle && 'nvr-idle-breathe'
+                                                'h-1.5 w-1.5 shrink-0 rounded-full',
+                                                viewingAddendum ? 'bg-amber-400' : 'bg-slate-400'
                                               )}
                                             />
+                                            <span className='max-w-[160px] truncate'>
+                                              {viewingAddendum
+                                                ? (addendumData.find((a) => a.id === addendumViewId)
+                                                    ?.title ?? 'Addendum')
+                                                : 'Viewing: Current record'}
+                                            </span>
+                                            <ChevronDown className='h-3 w-3 opacity-60' />
                                           </button>
-                                        )}
-                                        <UnsavedInspector
-                                          open={inspectorOpen && isDirty}
-                                          onClose={() => setInspectorOpen(false)}
-                                          fieldConfig={fieldConfig}
-                                          draft={draft}
-                                          initial={initialDataRef.current}
-                                          m2mLinks={m2mLinks}
-                                          m2mUnlinks={m2mUnlinks}
-                                          pendingRowCount={[...pendingO2MRows.values()].reduce(
-                                            (n, r) => n + r.length,
-                                            0
-                                          )}
-                                          pendingDeleteCount={[
-                                            ...pendingO2MDeletes.values()
-                                          ].reduce((n, r) => n + r.size, 0)}
-                                        />
-                                        <Button
-                                          type='button'
-                                          size='sm'
-                                          onClick={() => handleSave()}
-                                          disabled={saveMut.isPending || isReadOnly || viewAs.active}
-                                          className={cn(
-                                            'gap-1.5 transition-colors duration-300',
-                                            // Summary mode has nothing to save — the button would
-                                            // only contradict the "read-only" strip.
-                                            readMode && !isNew && 'hidden',
-                                            justSaved &&
-                                              'bg-emerald-500 hover:bg-emerald-500 text-white'
-                                          )}
-                                        >
-                                          {saveMut.isPending ? (
-                                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                          ) : justSaved ? (
-                                            <Check className='nvr-pop h-3.5 w-3.5' />
-                                          ) : (
-                                            <Save className='h-3.5 w-3.5' />
-                                          )}
-                                          {justSaved ? 'Saved' : isNew ? 'Create' : 'Save'}
-                                        </Button>
-                                      </div>
-                                    )}
-                                    {!isNew && addendumEnabled && addendumData.length > 0 && (
-                                      <div className='relative'>
-                                        <button
-                                          type='button'
-                                          onClick={() => setAddendumViewDropdownOpen((o) => !o)}
-                                          className={cn(
-                                            'flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors',
-                                            viewingAddendum
-                                              ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
-                                              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
-                                          )}
-                                          title='Choose which version the form and actions apply to'
-                                        >
-                                          <span
-                                            className={cn(
-                                              'h-1.5 w-1.5 shrink-0 rounded-full',
-                                              viewingAddendum ? 'bg-amber-400' : 'bg-slate-400'
-                                            )}
-                                          />
-                                          <span className='max-w-[160px] truncate'>
-                                            {viewingAddendum
-                                              ? (addendumData.find((a) => a.id === addendumViewId)
-                                                  ?.title ?? 'Addendum')
-                                              : 'Viewing: Current record'}
-                                          </span>
-                                          <ChevronDown className='h-3 w-3 opacity-60' />
-                                        </button>
-                                        {addendumViewDropdownOpen && (
-                                          <div className='absolute right-0 top-full z-30 mt-1 max-h-[320px] min-w-[240px] overflow-y-auto rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
-                                            <button
-                                              type='button'
-                                              onClick={() => {
-                                                setAddendumViewId('original')
-                                                setAddendumViewDropdownOpen(false)
-                                              }}
-                                              className={cn(
-                                                'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04]',
-                                                addendumViewId === 'original' &&
-                                                  'font-semibold text-slate-900 dark:text-slate-100'
-                                              )}
-                                            >
-                                              <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
-                                              Current record
-                                            </button>
-                                            {addendumData.map((a) => (
+                                          {addendumViewDropdownOpen && (
+                                            <div className='absolute right-0 top-full z-30 mt-1 max-h-[320px] min-w-[240px] overflow-y-auto rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
                                               <button
-                                                key={a.id}
                                                 type='button'
                                                 onClick={() => {
-                                                  setAddendumViewId(a.id)
+                                                  setAddendumViewId('original')
                                                   setAddendumViewDropdownOpen(false)
                                                 }}
                                                 className={cn(
-                                                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-amber-50 dark:hover:bg-amber-500/10',
-                                                  addendumViewId === a.id &&
-                                                    'font-semibold text-amber-900 dark:text-amber-300'
+                                                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04]',
+                                                  addendumViewId === 'original' &&
+                                                    'font-semibold text-slate-900 dark:text-slate-100'
                                                 )}
                                               >
-                                                <span
+                                                <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
+                                                Current record
+                                              </button>
+                                              {addendumData.map((a) => (
+                                                <button
+                                                  key={a.id}
+                                                  type='button'
+                                                  onClick={() => {
+                                                    setAddendumViewId(a.id)
+                                                    setAddendumViewDropdownOpen(false)
+                                                  }}
                                                   className={cn(
-                                                    'h-1.5 w-1.5 shrink-0 rounded-full',
-                                                    !a.workflow_state &&
-                                                      (a.status === 'approved'
-                                                        ? 'bg-emerald-400'
-                                                        : a.status === 'rejected'
-                                                          ? 'bg-red-400'
-                                                          : 'bg-amber-400')
-                                                  )}
-                                                  style={
-                                                    a.workflow_state?.color
-                                                      ? { backgroundColor: a.workflow_state.color }
-                                                      : a.workflow_state
-                                                        ? { backgroundColor: '#f59e0b' }
-                                                        : undefined
-                                                  }
-                                                />
-                                                <span className='flex-1 truncate'>{a.title}</span>
-                                                <span
-                                                  className={cn(
-                                                    'text-[10px] text-slate-400',
-                                                    !a.workflow_state && 'capitalize'
+                                                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-amber-50 dark:hover:bg-amber-500/10',
+                                                    addendumViewId === a.id &&
+                                                      'font-semibold text-amber-900 dark:text-amber-300'
                                                   )}
                                                 >
-                                                  {a.workflow_state?.label ?? a.status}
-                                                </span>
-                                              </button>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                    {!isNew &&
-                                      showPipeline &&
-                                      (!isStepsMode || viewingAddendum) && (
-                                        <PipelineTransitionButtons
-                                          wrap={false}
-                                          key={`${pipelineCollection}:${pipelineItem}`}
-                                          collection={pipelineCollection}
-                                          item={pipelineItem}
-                                          // Same as the header buttons: save first, then transition.
-                                          onBeforeTransition={async () => {
-                                            if (!validateAll()) return false
-                                            if (!isDirty) return true
-                                            try {
-                                              await saveMut.mutateAsync()
-                                              return true
-                                            } catch {
-                                              return false
-                                            }
-                                          }}
-                                        />
+                                                  <span
+                                                    className={cn(
+                                                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                                                      !a.workflow_state &&
+                                                        (a.status === 'approved'
+                                                          ? 'bg-emerald-400'
+                                                          : a.status === 'rejected'
+                                                            ? 'bg-red-400'
+                                                            : 'bg-amber-400')
+                                                    )}
+                                                    style={
+                                                      a.workflow_state?.color
+                                                        ? {
+                                                            backgroundColor: a.workflow_state.color
+                                                          }
+                                                        : a.workflow_state
+                                                          ? { backgroundColor: '#f59e0b' }
+                                                          : undefined
+                                                    }
+                                                  />
+                                                  <span className='flex-1 truncate'>{a.title}</span>
+                                                  <span
+                                                    className={cn(
+                                                      'text-[10px] text-slate-400',
+                                                      !a.workflow_state && 'capitalize'
+                                                    )}
+                                                  >
+                                                    {a.workflow_state?.label ?? a.status}
+                                                  </span>
+                                                </button>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
                                       )}
-                                  </div>
-                                </header>
-                              )}
-                              {/* Dialogs live OUTSIDE HeaderTools: a collapsed header (⋯) unmounts its
+                                      {!isNew &&
+                                        showPipeline &&
+                                        (!isStepsMode || viewingAddendum) && (
+                                          <PipelineTransitionButtons
+                                            wrap={false}
+                                            key={`${pipelineCollection}:${pipelineItem}`}
+                                            collection={pipelineCollection}
+                                            item={pipelineItem}
+                                            // Same as the header buttons: save first, then transition.
+                                            onBeforeTransition={async () => {
+                                              if (!validateAll()) return false
+                                              if (!isDirty) return true
+                                              try {
+                                                await saveMut.mutateAsync()
+                                                return true
+                                              } catch {
+                                                return false
+                                              }
+                                            }}
+                                          />
+                                        )}
+                                    </div>
+                                  </header>
+                                )}
+                                {/* Dialogs live OUTSIDE HeaderTools: a collapsed header (⋯) unmounts its
                                 children, so a change-reason / collision prompt raised from Save never
                                 rendered once the tool strip had folded (reported 2026-09-14). */}
-                              {collision && (
-                                <MidairCollisionDialog
-                                  collision={collision}
+                                {collision && (
+                                  <MidairCollisionDialog
+                                    collision={collision}
+                                    fieldLabel={(f) => {
+                                      const fc = allFields.find((af) => af.field === f)
+                                      return fc?.label || titleCase(f)
+                                    }}
+                                    onCancel={() => setCollision(null)}
+                                    onResolve={(takeTheirs) => {
+                                      // 'theirs' fields adopt the newer value in the
+                                      // draft; the retry then writes only what the
+                                      // person explicitly kept, against the new base.
+                                      for (const c of collision.conflicts) {
+                                        if (takeTheirs.has(c.field)) {
+                                          setDraft((prev) => ({
+                                            ...prev,
+                                            [c.field]: c.current_value
+                                          }))
+                                        }
+                                      }
+                                      baseRevisionOverrideRef.current = collision.latest
+                                      setCollision(null)
+                                      setTimeout(() => saveMut.mutate(), 0)
+                                    }}
+                                  />
+                                )}
+                                <ChangeReasonDialog
+                                  challenge={crChallenge}
                                   fieldLabel={(f) => {
                                     const fc = allFields.find((af) => af.field === f)
                                     return fc?.label || titleCase(f)
                                   }}
-                                  onCancel={() => setCollision(null)}
-                                  onResolve={(takeTheirs) => {
-                                    // 'theirs' fields adopt the newer value in the
-                                    // draft; the retry then writes only what the
-                                    // person explicitly kept, against the new base.
-                                    for (const c of collision.conflicts) {
-                                      if (takeTheirs.has(c.field)) {
-                                        setDraft((prev) => ({
-                                          ...prev,
-                                          [c.field]: c.current_value
-                                        }))
-                                      }
-                                    }
-                                    baseRevisionOverrideRef.current = collision.latest
-                                    setCollision(null)
-                                    setTimeout(() => saveMut.mutate(), 0)
+                                  onCancel={() => setCrChallenge(null)}
+                                  onSubmit={(reason) => {
+                                    changeReasonRef.current = reason
+                                    setCrChallenge(null)
+                                    saveMut.mutate()
                                   }}
                                 />
-                              )}
-                              <ChangeReasonDialog
-                                challenge={crChallenge}
-                                fieldLabel={(f) => {
-                                  const fc = allFields.find((af) => af.field === f)
-                                  return fc?.label || titleCase(f)
-                                }}
-                                onCancel={() => setCrChallenge(null)}
-                                onSubmit={(reason) => {
-                                  changeReasonRef.current = reason
-                                  setCrChallenge(null)
-                                  saveMut.mutate()
-                                }}
-                              />
-                              {isAdmin && !isNew && itemId && (
-                                <RawEditSheet
-                                  collection={collection}
-                                  itemId={String(itemId)}
-                                  open={rawEditOpen}
-                                  onClose={() => setRawEditOpen(false)}
-                                  onSaved={() => {
-                                    qc.invalidateQueries({
-                                      queryKey: ['item', collection, String(itemId)]
-                                    })
-                                  }}
-                                />
-                              )}
+                                {isAdmin && !isNew && itemId && (
+                                  <RawEditSheet
+                                    collection={collection}
+                                    itemId={String(itemId)}
+                                    open={rawEditOpen}
+                                    onClose={() => setRawEditOpen(false)}
+                                    onSaved={() => {
+                                      qc.invalidateQueries({
+                                        queryKey: ['item', collection, String(itemId)]
+                                      })
+                                    }}
+                                  />
+                                )}
 
-                              {showHeader &&
-                                (headerWidgets.length > 0 || headerFields.length > 0) && (
-                                  // Condensing HIDES rather than unmounts: a
-                                  // remount refires every header widget/chip
-                                  // fetch, which read as the sub-header
-                                  // "reloading" on scroll-up.
-                                  <div
-                                    ref={headerStripRef}
-                                    className={`shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4 ${headerCondensed ? 'hidden' : 'flex'}`}
-                                  >
-                                    {[
-                                      ...headerWidgets.map((w) => ({
-                                        type: 'widget' as const,
-                                        sort: w.sort,
-                                        key: w.field,
-                                        data: w
-                                      })),
-                                      ...headerFields.map((f) => ({
-                                        type: 'field' as const,
-                                        sort: f.sort,
-                                        key: f.field,
-                                        data: f
-                                      })),
-                                      ...headerSummaries.map((h) => ({
-                                        type: 'summary' as const,
-                                        sort: 9_000,
-                                        key: `__summary__${h.field}`,
-                                        data: h
-                                      }))
-                                    ]
-                                      .sort((a, b) => a.sort - b.sort)
-                                      .map((item) => {
-                                        const copyCell = (
-                                          el: HTMLElement | null,
-                                          field: string
-                                        ) => {
-                                          if (!el) return
-                                          const clone = el.cloneNode(true) as HTMLElement
-                                          clone
-                                            .querySelectorAll('[data-copy-skip], button')
-                                            .forEach((n) => n.remove())
-                                          const text = clone.textContent?.trim() ?? ''
-                                          if (text) {
-                                            navigator.clipboard.writeText(text).catch(() => {})
-                                            setCopiedHeaderField(field)
-                                            setTimeout(
-                                              () =>
-                                                setCopiedHeaderField((prev) =>
-                                                  prev === field ? null : prev
-                                                ),
-                                              1500
+                                {showHeader &&
+                                  (headerWidgets.length > 0 || headerFields.length > 0) && (
+                                    // Condensing HIDES rather than unmounts: a
+                                    // remount refires every header widget/chip
+                                    // fetch, which read as the sub-header
+                                    // "reloading" on scroll-up.
+                                    <div
+                                      ref={headerStripRef}
+                                      className={`shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4 ${headerCondensed ? 'hidden' : 'flex'}`}
+                                    >
+                                      {[
+                                        ...headerWidgets.map((w) => ({
+                                          type: 'widget' as const,
+                                          sort: w.sort,
+                                          key: w.field,
+                                          data: w
+                                        })),
+                                        ...headerFields.map((f) => ({
+                                          type: 'field' as const,
+                                          sort: f.sort,
+                                          key: f.field,
+                                          data: f
+                                        })),
+                                        ...headerSummaries.map((h) => ({
+                                          type: 'summary' as const,
+                                          sort: 9_000,
+                                          key: `__summary__${h.field}`,
+                                          data: h
+                                        }))
+                                      ]
+                                        .sort((a, b) => a.sort - b.sort)
+                                        .map((item) => {
+                                          const copyCell = (
+                                            el: HTMLElement | null,
+                                            field: string
+                                          ) => {
+                                            if (!el) return
+                                            const clone = el.cloneNode(true) as HTMLElement
+                                            clone
+                                              .querySelectorAll('[data-copy-skip], button')
+                                              .forEach((n) => n.remove())
+                                            const text = clone.textContent?.trim() ?? ''
+                                            if (text) {
+                                              navigator.clipboard.writeText(text).catch(() => {})
+                                              setCopiedHeaderField(field)
+                                              setTimeout(
+                                                () =>
+                                                  setCopiedHeaderField((prev) =>
+                                                    prev === field ? null : prev
+                                                  ),
+                                                1500
+                                              )
+                                            }
+                                          }
+
+                                          if (item.type === 'summary') {
+                                            const h = item.data
+                                            return (
+                                              <HeaderSummaryChip
+                                                key={item.key}
+                                                collection={collection}
+                                                itemId={itemId}
+                                                field={h.field}
+                                                config={h.config}
+                                                onOpen={(t) => {
+                                                  jumpToField(h.field)
+                                                  // The grid may only mount after the tab
+                                                  // switch above — ask a few times.
+                                                  const detail = {
+                                                    collection: t.childCollection,
+                                                    field: t.fkField,
+                                                    rowId: t.rowId
+                                                  }
+                                                  for (const ms of [150, 500, 1100]) {
+                                                    window.setTimeout(
+                                                      () =>
+                                                        window.dispatchEvent(
+                                                          new CustomEvent('nvr:grid-open-row', {
+                                                            detail
+                                                          })
+                                                        ),
+                                                      ms
+                                                    )
+                                                  }
+                                                }}
+                                              />
                                             )
                                           }
-                                        }
-
-                                        if (item.type === 'summary') {
-                                          const h = item.data
-                                          return (
-                                            <HeaderSummaryChip
-                                              key={item.key}
-                                              collection={collection}
-                                              itemId={itemId}
-                                              field={h.field}
-                                              config={h.config}
-                                              onOpen={(t) => {
-                                                jumpToField(h.field)
-                                                // The grid may only mount after the tab
-                                                // switch above — ask a few times.
-                                                const detail = {
-                                                  collection: t.childCollection,
-                                                  field: t.fkField,
-                                                  rowId: t.rowId
-                                                }
-                                                for (const ms of [150, 500, 1100]) {
-                                                  window.setTimeout(
-                                                    () =>
-                                                      window.dispatchEvent(
-                                                        new CustomEvent('nvr:grid-open-row', {
-                                                          detail
-                                                        })
-                                                      ),
-                                                    ms
-                                                  )
-                                                }
-                                              }}
-                                            />
-                                          )
-                                        }
-                                        if (item.type === 'widget') {
-                                          const w = item.data
-                                          const isBtnGroup =
-                                            headerWidgetTypes[w.field] === 'button-group'
-                                          return (
-                                            <div
-                                              key={w.field}
-                                              className='group relative self-stretch border-r border-slate-200 dark:border-border'
-                                            >
-                                              <WidgetSlot
-                                                widgetId={w.widgetId}
-                                                inputBindings={w.inputBindings}
-                                                itemDraft={effectiveDraft}
-                                                itemCollection={collection}
-                                                label={w.label ?? undefined}
-                                                compact={true}
-                                                strip={true}
-                                                onWidgetType={(t) =>
-                                                  setHeaderWidgetTypes((prev) => ({
-                                                    ...prev,
-                                                    [w.field]: t
-                                                  }))
-                                                }
-                                              />
-                                              {!isBtnGroup &&
-                                                (copiedHeaderField === w.field ? (
+                                          if (item.type === 'widget') {
+                                            const w = item.data
+                                            const isBtnGroup =
+                                              headerWidgetTypes[w.field] === 'button-group'
+                                            return (
+                                              <div
+                                                key={w.field}
+                                                className='group relative self-stretch border-r border-slate-200 dark:border-border'
+                                              >
+                                                <WidgetSlot
+                                                  widgetId={w.widgetId}
+                                                  inputBindings={w.inputBindings}
+                                                  itemDraft={effectiveDraft}
+                                                  itemCollection={collection}
+                                                  label={w.label ?? undefined}
+                                                  compact={true}
+                                                  strip={true}
+                                                  onWidgetType={(t) =>
+                                                    setHeaderWidgetTypes((prev) => ({
+                                                      ...prev,
+                                                      [w.field]: t
+                                                    }))
+                                                  }
+                                                />
+                                                {!isBtnGroup &&
+                                                  (copiedHeaderField === w.field ? (
+                                                    <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                                  ) : (
+                                                    <button
+                                                      type='button'
+                                                      className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                      onClick={(e) =>
+                                                        copyCell(
+                                                          e.currentTarget.closest<HTMLElement>(
+                                                            '.group'
+                                                          ),
+                                                          w.field
+                                                        )
+                                                      }
+                                                    >
+                                                      <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                                                    </button>
+                                                  ))}
+                                              </div>
+                                            )
+                                          }
+                                          const f = item.data
+                                          if (f.field === '__owners__') {
+                                            return (
+                                              <div
+                                                key='__owners__'
+                                                className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                                              >
+                                                <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+                                                  {f.label}
+                                                </span>
+                                                <div className='mt-1'>
+                                                  <OwnersInlineCompact
+                                                    collection={pipelineCollection}
+                                                    itemId={pipelineItem}
+                                                  />
+                                                </div>
+                                                {copiedHeaderField === '__owners__' ? (
                                                   <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                                                 ) : (
                                                   <button
@@ -9484,665 +9557,667 @@ export function ItemEditForm({
                                                         e.currentTarget.closest<HTMLElement>(
                                                           '.group'
                                                         ),
-                                                        w.field
+                                                        '__owners__'
                                                       )
                                                     }
                                                   >
                                                     <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                   </button>
-                                                ))}
-                                            </div>
-                                          )
-                                        }
-                                        const f = item.data
-                                        if (f.field === '__owners__') {
+                                                )}
+                                              </div>
+                                            )
+                                          }
+                                          // M2M alias fields have no draft column — their value is the
+                                          // committed junction id set the form already tracks (same
+                                          // source SummaryPanel uses). Without this every M2M header
+                                          // field renders '—' regardless of how many links exist.
+                                          const aliasState = m2mAliasFieldStates[f.field]
+                                          // A rollup header reads the live total while its grid is on
+                                          // screen; otherwise the stored value, which is what the server
+                                          // will recalculate to anyway.
+                                          const liveRollup = liveRollupValues.get(f.field)
+                                          const raw = aliasState
+                                            ? aliasState.ids
+                                            : (liveRollup ?? effectiveDraft[f.field])
+                                          // Addendum view: a header value the addendum CHANGES reads amber,
+                                          // matching the proposed-change styling everywhere else.
+                                          // A rollup the addendum's proposed rows move counts too — the
+                                          // addendum never stores the total itself.
+                                          const changedByAddendum =
+                                            viewingAddendum &&
+                                            !aliasState &&
+                                            ((addendumViewData != null &&
+                                              f.field in addendumViewData &&
+                                              String(draft[f.field] ?? '') !==
+                                                String(addendumViewData[f.field] ?? '')) ||
+                                              (liveRollup !== undefined &&
+                                                Math.round(Number(draft[f.field] ?? 0) * 100) !==
+                                                  Math.round(liveRollup * 100)))
+                                          const thrColor = (() => {
+                                            const rules = (
+                                              f as {
+                                                thresholds?: Array<{
+                                                  op: string
+                                                  value: number
+                                                  color: string
+                                                }>
+                                              }
+                                            ).thresholds
+                                            if (!rules?.length) return undefined
+                                            const n =
+                                              typeof raw === 'number'
+                                                ? raw
+                                                : typeof raw === 'string' && raw.trim() !== ''
+                                                  ? Number(raw)
+                                                  : Number.NaN
+                                            if (!Number.isFinite(n)) return undefined
+                                            const hit = rules.find((r) =>
+                                              r.op === 'lt'
+                                                ? n < r.value
+                                                : r.op === 'lte'
+                                                  ? n <= r.value
+                                                  : r.op === 'gt'
+                                                    ? n > r.value
+                                                    : r.op === 'gte'
+                                                      ? n >= r.value
+                                                      : r.op === 'eq'
+                                                        ? n === r.value
+                                                        : false
+                                            )
+                                            return hit?.color
+                                          })()
+                                          const fColor = thrColor ?? f.color
+                                          const hColorClass = changedByAddendum
+                                            ? 'text-amber-600 dark:text-amber-400'
+                                            : fColor === 'cyan'
+                                              ? 'text-nvr-cyan'
+                                              : fColor === 'blue'
+                                                ? 'text-blue-600 dark:text-blue-400'
+                                                : fColor === 'green'
+                                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                                  : fColor === 'amber'
+                                                    ? 'text-amber-600 dark:text-amber-400'
+                                                    : fColor === 'red'
+                                                      ? 'text-red-600 dark:text-red-400'
+                                                      : fColor === 'purple'
+                                                        ? 'text-purple-600 dark:text-purple-400'
+                                                        : 'text-slate-900 dark:text-slate-100'
+                                          const hWeightClass =
+                                            f.weight === 'bold'
+                                              ? 'font-bold'
+                                              : f.weight === 'semibold'
+                                                ? 'font-semibold'
+                                                : f.weight === 'medium'
+                                                  ? 'font-medium'
+                                                  : 'font-semibold'
+                                          const textCls = `${hColorClass} ${hWeightClass}`
+                                          const isPill = f.displayAs === 'pill'
+                                          const isTag = f.displayAs === 'tag'
                                           return (
                                             <div
-                                              key='__owners__'
-                                              className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                                              key={f.field}
+                                              data-header-field={f.field}
+                                              // self-stretch so the label sits the same distance from the
+                                              // top as a widget cell's. The row is items-center, and a
+                                              // widget stat cell already stretches to full height — a
+                                              // centred field chip is shorter, so its label landed a few
+                                              // pixels lower and the two read as misaligned.
+                                              className='group relative flex flex-col justify-start self-stretch border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                                             >
                                               <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
                                                 {f.label}
                                               </span>
-                                              <div className='mt-1'>
-                                                <OwnersInlineCompact
-                                                  collection={pipelineCollection}
-                                                  itemId={pipelineItem}
-                                                />
-                                              </div>
-                                              {copiedHeaderField === '__owners__' ? (
+                                              <span
+                                                className={[
+                                                  'mt-1 leading-tight truncate max-w-[220px] pb-px',
+                                                  isPill
+                                                    ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10`
+                                                    : isTag
+                                                      ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}`
+                                                      : ''
+                                                ]
+                                                  .filter(Boolean)
+                                                  .join(' ')}
+                                              >
+                                                {(() => {
+                                                  if (
+                                                    addendumRollupLoading &&
+                                                    f.cmsField?.computed_type === 'rollup' &&
+                                                    !aliasState
+                                                  ) {
+                                                    return (
+                                                      <span
+                                                        aria-label='Loading'
+                                                        className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'
+                                                      />
+                                                    )
+                                                  }
+                                                  const inner = f.cmsField ? (
+                                                    <>
+                                                      <StripFieldValue
+                                                        field={f.cmsField}
+                                                        val={raw}
+                                                        relations={relations}
+                                                        collection={collection}
+                                                        displayFormat={f.displayFormat}
+                                                        textClassName={textCls}
+                                                      />
+                                                      {(f.cmsField.computed_type === 'rollup' ||
+                                                        f.cmsField.computed_type === 'read' ||
+                                                        f.cmsField.computed_type === 'write') &&
+                                                        !isNew &&
+                                                        !viewingAddendum && (
+                                                          <HeaderRollupExplainer
+                                                            collection={collection}
+                                                            itemId={itemId}
+                                                            field={f.cmsField.field}
+                                                          />
+                                                        )}
+                                                      {!f.cmsField.computed_type &&
+                                                        !isNew &&
+                                                        !viewingAddendum && (
+                                                          <HeaderFreshness
+                                                            collection={collection}
+                                                            itemId={itemId}
+                                                            field={f.cmsField.field}
+                                                            fields={headerTouchFields}
+                                                          />
+                                                        )}
+                                                    </>
+                                                  ) : (
+                                                    <span className={`text-[13px] ${textCls}`}>
+                                                      {formatHeaderFieldValue(raw, f.displayFormat)}
+                                                    </span>
+                                                  )
+                                                  // Configured link template ({{value}} + any {{field}} from
+                                                  // the draft) turns the header value into an external link
+                                                  // — how e.g. an external system id deep-links to that system with
+                                                  // zero hardcoding (Table Editor header chip ⚙ → Link URL).
+                                                  const linkTemplate = (
+                                                    f as { linkTemplate?: string }
+                                                  ).linkTemplate
+                                                  if (
+                                                    !linkTemplate ||
+                                                    raw === null ||
+                                                    raw === undefined ||
+                                                    raw === '' ||
+                                                    Array.isArray(raw)
+                                                  )
+                                                    return inner
+                                                  const href = linkTemplate
+                                                    .replace(
+                                                      /\{\{\s*value\s*\}\}/g,
+                                                      encodeURIComponent(String(raw))
+                                                    )
+                                                    .replace(
+                                                      /\{\{\s*([\w.]+)\s*\}\}/g,
+                                                      (_m, k: string) =>
+                                                        encodeURIComponent(String(draft[k] ?? ''))
+                                                    )
+                                                  if (!/^https?:\/\//i.test(href)) return inner
+                                                  return (
+                                                    <a
+                                                      href={href}
+                                                      target='_blank'
+                                                      rel='noopener noreferrer'
+                                                      className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
+                                                      onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                      {inner}
+                                                    </a>
+                                                  )
+                                                })()}
+                                              </span>
+                                              {copiedHeaderField === f.field ? (
                                                 <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                                               ) : (
                                                 <button
                                                   type='button'
                                                   className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                                                  onClick={(e) =>
-                                                    copyCell(
-                                                      e.currentTarget.closest<HTMLElement>(
-                                                        '.group'
-                                                      ),
-                                                      '__owners__'
-                                                    )
-                                                  }
+                                                  onClick={(e) => {
+                                                    const cell =
+                                                      e.currentTarget.closest<HTMLElement>('.group')
+                                                    const valueSpan =
+                                                      cell?.querySelectorAll<HTMLElement>(
+                                                        ':scope > span'
+                                                      )[1]
+                                                    let text = ''
+                                                    if (valueSpan) {
+                                                      const clone = valueSpan.cloneNode(
+                                                        true
+                                                      ) as HTMLElement
+                                                      clone
+                                                        .querySelectorAll('[data-copy-skip]')
+                                                        .forEach((el) => el.remove())
+                                                      text = clone.textContent?.trim() ?? ''
+                                                    }
+                                                    if (text) {
+                                                      navigator.clipboard
+                                                        .writeText(text)
+                                                        .catch(() => {})
+                                                      setCopiedHeaderField(f.field)
+                                                      setTimeout(
+                                                        () =>
+                                                          setCopiedHeaderField((prev) =>
+                                                            prev === f.field ? null : prev
+                                                          ),
+                                                        1500
+                                                      )
+                                                    }
+                                                  }}
                                                 >
                                                   <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                 </button>
                                               )}
                                             </div>
                                           )
-                                        }
-                                        // M2M alias fields have no draft column — their value is the
-                                        // committed junction id set the form already tracks (same
-                                        // source SummaryPanel uses). Without this every M2M header
-                                        // field renders '—' regardless of how many links exist.
-                                        const aliasState = m2mAliasFieldStates[f.field]
-                                        // A rollup header reads the live total while its grid is on
-                                        // screen; otherwise the stored value, which is what the server
-                                        // will recalculate to anyway.
-                                        const liveRollup = liveRollupValues.get(f.field)
-                                        const raw = aliasState
-                                          ? aliasState.ids
-                                          : (liveRollup ?? effectiveDraft[f.field])
-                                        // Addendum view: a header value the addendum CHANGES reads amber,
-                                        // matching the proposed-change styling everywhere else.
-                                        // A rollup the addendum's proposed rows move counts too — the
-                                        // addendum never stores the total itself.
-                                        const changedByAddendum =
-                                          viewingAddendum &&
-                                          !aliasState &&
-                                          ((addendumViewData != null &&
-                                            f.field in addendumViewData &&
-                                            String(draft[f.field] ?? '') !==
-                                              String(addendumViewData[f.field] ?? '')) ||
-                                            (liveRollup !== undefined &&
-                                              Math.round(Number(draft[f.field] ?? 0) * 100) !==
-                                                Math.round(liveRollup * 100)))
-                                        const hColorClass = changedByAddendum
-                                          ? 'text-amber-600 dark:text-amber-400'
-                                          : f.color === 'cyan'
-                                            ? 'text-nvr-cyan'
-                                            : f.color === 'blue'
-                                              ? 'text-blue-600 dark:text-blue-400'
-                                              : f.color === 'green'
-                                                ? 'text-emerald-600 dark:text-emerald-400'
-                                                : f.color === 'amber'
-                                                  ? 'text-amber-600 dark:text-amber-400'
-                                                  : f.color === 'red'
-                                                    ? 'text-red-600 dark:text-red-400'
-                                                    : f.color === 'purple'
-                                                      ? 'text-purple-600 dark:text-purple-400'
-                                                      : 'text-slate-900 dark:text-slate-100'
-                                        const hWeightClass =
-                                          f.weight === 'bold'
-                                            ? 'font-bold'
-                                            : f.weight === 'semibold'
-                                              ? 'font-semibold'
-                                              : f.weight === 'medium'
-                                                ? 'font-medium'
-                                                : 'font-semibold'
-                                        const textCls = `${hColorClass} ${hWeightClass}`
-                                        const isPill = f.displayAs === 'pill'
-                                        const isTag = f.displayAs === 'tag'
-                                        return (
-                                          <div
-                                            key={f.field}
-                                            data-header-field={f.field}
-                                            // self-stretch so the label sits the same distance from the
-                                            // top as a widget cell's. The row is items-center, and a
-                                            // widget stat cell already stretches to full height — a
-                                            // centred field chip is shorter, so its label landed a few
-                                            // pixels lower and the two read as misaligned.
-                                            className='group relative flex flex-col justify-start self-stretch border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
-                                          >
-                                            <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
-                                              {f.label}
-                                            </span>
-                                            <span
-                                              className={[
-                                                'mt-1 leading-tight truncate max-w-[220px] pb-px',
-                                                isPill
-                                                  ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10`
-                                                  : isTag
-                                                    ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}`
-                                                    : ''
-                                              ]
-                                                .filter(Boolean)
-                                                .join(' ')}
-                                            >
-                                              {(() => {
-                                                if (
-                                                  addendumRollupLoading &&
-                                                  f.cmsField?.computed_type === 'rollup' &&
-                                                  !aliasState
-                                                ) {
-                                                  return (
-                                                    <span
-                                                      aria-label='Loading'
-                                                      className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'
-                                                    />
-                                                  )
-                                                }
-                                                const inner = f.cmsField ? (
-                                                  <>
-                                                    <StripFieldValue
-                                                      field={f.cmsField}
-                                                      val={raw}
-                                                      relations={relations}
-                                                      collection={collection}
-                                                      displayFormat={f.displayFormat}
-                                                      textClassName={textCls}
-                                                    />
-                                                    {f.cmsField.computed_type === 'rollup' &&
-                                                      !isNew &&
-                                                      !viewingAddendum && (
-                                                        <HeaderRollupExplainer
-                                                          collection={collection}
-                                                          itemId={itemId}
-                                                          field={f.cmsField.field}
-                                                        />
-                                                      )}
-                                                    {f.cmsField.computed_type !== 'rollup' &&
-                                                      !isNew &&
-                                                      !viewingAddendum && (
-                                                        <HeaderFreshness
-                                                          collection={collection}
-                                                          itemId={itemId}
-                                                          field={f.cmsField.field}
-                                                          fields={headerTouchFields}
-                                                        />
-                                                      )}
-                                                  </>
-                                                ) : (
-                                                  <span className={`text-[13px] ${textCls}`}>
-                                                    {formatHeaderFieldValue(raw, f.displayFormat)}
-                                                  </span>
-                                                )
-                                                // Configured link template ({{value}} + any {{field}} from
-                                                // the draft) turns the header value into an external link
-                                                // — how e.g. an external system id deep-links to that system with
-                                                // zero hardcoding (Table Editor header chip ⚙ → Link URL).
-                                                const linkTemplate = (
-                                                  f as { linkTemplate?: string }
-                                                ).linkTemplate
-                                                if (
-                                                  !linkTemplate ||
-                                                  raw === null ||
-                                                  raw === undefined ||
-                                                  raw === '' ||
-                                                  Array.isArray(raw)
-                                                )
-                                                  return inner
-                                                const href = linkTemplate
-                                                  .replace(
-                                                    /\{\{\s*value\s*\}\}/g,
-                                                    encodeURIComponent(String(raw))
-                                                  )
-                                                  .replace(
-                                                    /\{\{\s*([\w.]+)\s*\}\}/g,
-                                                    (_m, k: string) =>
-                                                      encodeURIComponent(String(draft[k] ?? ''))
-                                                  )
-                                                if (!/^https?:\/\//i.test(href)) return inner
-                                                return (
-                                                  <a
-                                                    href={href}
-                                                    target='_blank'
-                                                    rel='noopener noreferrer'
-                                                    className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
-                                                    onClick={(e) => e.stopPropagation()}
-                                                  >
-                                                    {inner}
-                                                  </a>
-                                                )
-                                              })()}
-                                            </span>
-                                            {copiedHeaderField === f.field ? (
-                                              <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
-                                            ) : (
-                                              <button
-                                                type='button'
-                                                className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                                                onClick={(e) => {
-                                                  const cell =
-                                                    e.currentTarget.closest<HTMLElement>('.group')
-                                                  const valueSpan =
-                                                    cell?.querySelectorAll<HTMLElement>(
-                                                      ':scope > span'
-                                                    )[1]
-                                                  let text = ''
-                                                  if (valueSpan) {
-                                                    const clone = valueSpan.cloneNode(
-                                                      true
-                                                    ) as HTMLElement
-                                                    clone
-                                                      .querySelectorAll('[data-copy-skip]')
-                                                      .forEach((el) => el.remove())
-                                                    text = clone.textContent?.trim() ?? ''
-                                                  }
-                                                  if (text) {
-                                                    navigator.clipboard
-                                                      .writeText(text)
-                                                      .catch(() => {})
-                                                    setCopiedHeaderField(f.field)
-                                                    setTimeout(
-                                                      () =>
-                                                        setCopiedHeaderField((prev) =>
-                                                          prev === f.field ? null : prev
-                                                        ),
-                                                      1500
-                                                    )
-                                                  }
-                                                }}
-                                              >
-                                                <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
-                                              </button>
-                                            )}
-                                          </div>
-                                        )
-                                      })}
-                                    {!isNew && itemId && (
-                                      <div className='ml-auto self-center py-2 pl-3'>
-                                        <ExternalRequestsChip
-                                          collection={collection}
-                                          itemId={String(itemId)}
+                                        })}
+                                      {!isNew && itemId && (
+                                        <div className='ml-auto self-center py-2 pl-3'>
+                                          <ExternalRequestsChip
+                                            collection={collection}
+                                            itemId={String(itemId)}
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                <div
+                                  className={cn(
+                                    'flex-1 min-h-0',
+                                    summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
+                                  )}
+                                  onScroll={summaryEnabled ? undefined : condenseOnScroll}
+                                >
+                                  <div
+                                    ref={bodyRef}
+                                    className={cn(
+                                      'p-6 space-y-4',
+                                      summaryEnabled ? 'flex-1 overflow-y-auto' : ''
+                                    )}
+                                    onScroll={summaryEnabled ? condenseOnScroll : undefined}
+                                  >
+                                    {extraTopContent}
+                                    {showValidationSummary && validationSummaryItems.length > 0 && (
+                                      <ValidationSummary
+                                        items={validationSummaryItems}
+                                        onJump={focusFieldInput}
+                                        onDismiss={() => setShowValidationSummary(false)}
+                                      />
+                                    )}
+                                    {configUpdated && (
+                                      <div className='mb-2 flex items-center gap-2 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
+                                        <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
+                                        Form definition updated — fields refreshed in place. Your
+                                        unsaved edits are untouched.
+                                      </div>
+                                    )}
+
+                                    {viewAsOpen && (
+                                      <ViewAsRoleBar
+                                        roles={viewAs.roles}
+                                        roleId={viewAs.roleId}
+                                        onChange={(id) => {
+                                          viewAs.setRoleId(id)
+                                          if (!id) setViewAsOpen(false)
+                                        }}
+                                        preview={viewAs.preview}
+                                        loading={viewAs.loading}
+                                      />
+                                    )}
+                                    {recovery.state === 'offer' && (
+                                      <div className='nvr-expand-in'>
+                                        <DraftRecoveryBanner
+                                          draft={recovery.draft}
+                                          labelFor={(f) =>
+                                            (fieldConfig ?? []).find((x) => x.field === f)?.label ??
+                                            ''
+                                          }
+                                          current={initialDataRef.current}
+                                          recordChanged={
+                                            !!recovery.draft.base_updated_at &&
+                                            !!(
+                                              initialDataRef.current.date_updated ??
+                                              initialDataRef.current.updated_at
+                                            ) &&
+                                            String(
+                                              initialDataRef.current.date_updated ??
+                                                initialDataRef.current.updated_at
+                                            ) !== recovery.draft.base_updated_at
+                                          }
+                                          onRestore={restoreDraft}
+                                          onDiscard={discardDraft}
                                         />
                                       </div>
                                     )}
-                                  </div>
-                                )}
-
-                              <div
-                                className={cn(
-                                  'flex-1 min-h-0',
-                                  summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
-                                )}
-                                onScroll={summaryEnabled ? undefined : condenseOnScroll}
-                              >
-                                <div
-                                  ref={bodyRef}
-                                  className={cn(
-                                    'p-6 space-y-4',
-                                    summaryEnabled ? 'flex-1 overflow-y-auto' : ''
-                                  )}
-                                  onScroll={summaryEnabled ? condenseOnScroll : undefined}
-                                >
-                                  {extraTopContent}
-                                  {showValidationSummary && validationSummaryItems.length > 0 && (
-                                    <ValidationSummary
-                                      items={validationSummaryItems}
-                                      onJump={focusFieldInput}
-                                      onDismiss={() => setShowValidationSummary(false)}
-                                    />
-                                  )}
-                                  {configUpdated && (
-                                    <div className='mb-2 flex items-center gap-2 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
-                                      <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
-                                      Form definition updated — fields refreshed in place. Your
-                                      unsaved edits are untouched.
-                                    </div>
-                                  )}
-
-                                  {viewAsOpen && (
-                                    <ViewAsRoleBar
-                                      roles={viewAs.roles}
-                                      roleId={viewAs.roleId}
-                                      onChange={(id) => {
-                                        viewAs.setRoleId(id)
-                                        if (!id) setViewAsOpen(false)
-                                      }}
-                                      preview={viewAs.preview}
-                                      loading={viewAs.loading}
-                                    />
-                                  )}
-                                  {recovery.state === 'offer' && (
-                                    <div className='nvr-expand-in'>
-                                      <DraftRecoveryBanner
-                                        draft={recovery.draft}
-                                        labelFor={(f) =>
-                                          (fieldConfig ?? []).find((x) => x.field === f)?.label ??
-                                          ''
-                                        }
-                                        current={initialDataRef.current}
-                                        recordChanged={
-                                          !!recovery.draft.base_updated_at &&
-                                          !!(
-                                            initialDataRef.current.date_updated ??
-                                            initialDataRef.current.updated_at
-                                          ) &&
-                                          String(
-                                            initialDataRef.current.date_updated ??
-                                              initialDataRef.current.updated_at
-                                          ) !== recovery.draft.base_updated_at
-                                        }
-                                        onRestore={restoreDraft}
-                                        onDiscard={discardDraft}
-                                      />
-                                    </div>
-                                  )}
-                                  {/* No wrapper div: the strip renders null until there is a
+                                    {/* No wrapper div: the strip renders null until there is a
                                       recap, and an EMPTY sibling inside this space-y stack still
                                       costs a 16px gap above the next banner (the "more top
                                       padding than side padding"). */}
-                                  {!isNew && itemId && (
-                                    <RecordRecapStrip
-                                      collection={collection}
-                                      itemId={String(itemId)}
-                                    />
-                                  )}
-                                  {!isNew &&
-                                    itemId &&
-                                    !activeLayoutData?.layout?.hide_integrity_banner &&
-                                    // Summary mode marks the affected fields instead —
-                                    // the banner would only push the record down.
-                                    !(readMode && summaryModeSettled) && (
-                                      <RecordIntegrityBanner
+                                    {!isNew && itemId && (
+                                      <RecordRecapStrip
                                         collection={collection}
                                         itemId={String(itemId)}
-                                        onJumpToField={flashField}
                                       />
                                     )}
-                                  {!isNew &&
-                                    itemId &&
-                                    !activeLayoutData?.layout?.hide_sla_banner && (
-                                      // No wrapper div — an EMPTY sibling in this space-y stack
-                                      // still costs a 16px gap (the banner is null unless breached).
-                                      <SlaBreachBanner
-                                        collection={pipelineCollection}
-                                        itemId={String(pipelineItem)}
+                                    {!isNew &&
+                                      itemId &&
+                                      !activeLayoutData?.layout?.hide_integrity_banner &&
+                                      // Summary mode marks the affected fields instead —
+                                      // the banner would only push the record down.
+                                      !(readMode && summaryModeSettled) && (
+                                        <RecordIntegrityBanner
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          onJumpToField={flashField}
+                                        />
+                                      )}
+                                    {!isNew &&
+                                      itemId &&
+                                      !activeLayoutData?.layout?.hide_sla_banner && (
+                                        // No wrapper div — an EMPTY sibling in this space-y stack
+                                        // still costs a 16px gap (the banner is null unless breached).
+                                        <SlaBreachBanner
+                                          collection={pipelineCollection}
+                                          itemId={String(pipelineItem)}
+                                        />
+                                      )}
+                                    {importIssues.length > 0 && (
+                                      <ImportIssuesPanel
+                                        issues={importIssues}
+                                        onDismiss={() => setImportIssues([])}
                                       />
                                     )}
-                                  {importIssues.length > 0 && (
-                                    <ImportIssuesPanel
-                                      issues={importIssues}
-                                      onDismiss={() => setImportIssues([])}
-                                    />
-                                  )}
-                                  {/* The banner is null without a holder — mount it only then, or its
+                                    {/* The banner is null without a holder — mount it only then, or its
                                       empty wrapper costs a 16px gap in this space-y stack. */}
-                                  {showLockBanner && lockEnabled && lockHolder && (
-                                    <div className='nvr-expand-in'>
-                                      <ItemLockBanner
-                                        lockHolder={lockHolder}
-                                        onTakeOver={takeOver}
-                                        takingOver={takingOver}
-                                        isAdmin={isAdmin}
-                                        onRequestLock={requestLock}
-                                        requesting={requesting}
-                                        queue={lockQueue}
-                                        myPosition={lockQueuePosition}
-                                        onJoinQueue={joinLockQueue}
-                                        onLeaveQueue={leaveLockQueue}
-                                        joining={joiningLockQueue}
+                                    {showLockBanner && lockEnabled && lockHolder && (
+                                      <div className='nvr-expand-in'>
+                                        <ItemLockBanner
+                                          lockHolder={lockHolder}
+                                          onTakeOver={takeOver}
+                                          takingOver={takingOver}
+                                          isAdmin={isAdmin}
+                                          onRequestLock={requestLock}
+                                          requesting={requesting}
+                                          queue={lockQueue}
+                                          myPosition={lockQueuePosition}
+                                          onJoinQueue={joinLockQueue}
+                                          onLeaveQueue={leaveLockQueue}
+                                          joining={joiningLockQueue}
+                                        />
+                                      </div>
+                                    )}
+                                    {!isNew && (
+                                      <RecordLiveSync
+                                        collection={collection}
+                                        itemId={String(itemId)}
                                       />
-                                    </div>
-                                  )}
-                                  {!isNew && (
-                                    <RecordLiveSync
-                                      collection={collection}
-                                      itemId={String(itemId)}
-                                    />
-                                  )}
-                                  {staleBy && (
-                                    <div
-                                      className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
-                                      data-stale-record-banner
-                                    >
-                                      <AlertTriangle className='h-4 w-4 shrink-0 text-amber-500' />
-                                      <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
-                                        <span className='font-semibold'>{staleBy}</span> changed
-                                        this record while you had it open
-                                        {userTouchedRef.current.size > 0
-                                          ? ' — review their changes before saving, or your edits may overwrite theirs.'
-                                          : ' — refresh to see the latest values.'}
-                                      </p>
+                                    )}
+                                    {staleBy && (
+                                      <div
+                                        className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+                                        data-stale-record-banner
+                                      >
+                                        <AlertTriangle className='h-4 w-4 shrink-0 text-amber-500' />
+                                        <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
+                                          <span className='font-semibold'>{staleBy}</span> changed
+                                          this record while you had it open
+                                          {userTouchedRef.current.size > 0
+                                            ? ' — review their changes before saving, or your edits may overwrite theirs.'
+                                            : ' — refresh to see the latest values.'}
+                                        </p>
+                                        <button
+                                          type='button'
+                                          onClick={refreshStaleRecord}
+                                          className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
+                                        >
+                                          {userTouchedRef.current.size > 0 ? 'Dismiss' : 'Refresh'}
+                                        </button>
+                                      </div>
+                                    )}
+                                    {!summaryModeSettled ? (
+                                      <div
+                                        data-summary-mode-pending
+                                        aria-busy='true'
+                                        className='space-y-4'
+                                      >
+                                        <Skeleton className='h-10 w-full' />
+                                        <div className='grid gap-4 lg:grid-cols-2'>
+                                          <Skeleton className='h-40 w-full' />
+                                          <Skeleton className='h-40 w-full' />
+                                        </div>
+                                        <Skeleton className='h-56 w-full' />
+                                      </div>
+                                    ) : readMode && !isNew && activeLayoutData?.layout ? (
+                                      <RecordReadView
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                        // Section pencil → Edit mode, landing on the section's
+                                        // first field.
+                                        onEditSection={(_groupKey, firstField) => {
+                                          setReadMode(false)
+                                          if (firstField)
+                                            window.setTimeout(() => jumpToField(firstField), 350)
+                                        }}
+                                        // The collection's Summary layout when it has one (Table
+                                        // Editor → Layouts → type Summary), else the grouped layout
+                                        // rendered read-only.
+                                        layoutData={
+                                          (summaryLayoutData ??
+                                            activeLayoutData) as unknown as ReadViewLayout
+                                        }
+                                        flush
+                                        // Notes + tasks stay live in Summary mode — the record's
+                                        // FIELDS are read-only, the conversation about it is not —
+                                        // and the pipeline slot (state track, owners, approval
+                                        // chain) is what a reader wants first.
+                                        renderSlot={(key) =>
+                                          key === '__comments__' ||
+                                          key === '__tasks__' ||
+                                          key === '__pipeline__'
+                                            ? renderSentinel(key)
+                                            : null
+                                        }
+                                        // The integrity banner is hidden in Summary mode; the
+                                        // affected fields carry an amber mark instead.
+                                        integrityMarks
+                                        // Child grids are the REAL inline grid, read-only — PO
+                                        // match dots, row lints, submission errors, presets and
+                                        // the aggregate footer all come along ("linked lines
+                                        // to orders, highlighted errors, integration errors — just can't
+                                        // edit").
+                                        renderGrid={(a) => {
+                                          const f = (fieldConfig ?? []).find(
+                                            (x) => x.field === a.field
+                                          )
+                                          if (!f) return null
+                                          return (
+                                            <FieldRow
+                                              key={`summary-grid-${a.field}`}
+                                              field={{ ...f, readonly: true }}
+                                              draft={effectiveDraft}
+                                              onChange={handleFieldChange}
+                                              relations={relations}
+                                              collection={collection}
+                                              itemId={itemId}
+                                              visible={true}
+                                              locked={false}
+                                              layoutAiEnabled={layoutAiEnabled}
+                                              renderField={renderField}
+                                              onCountChange={handleM2MCountChange}
+                                            />
+                                          )
+                                        }}
+                                        gridCounts={o2mEffectiveCounts}
+                                      />
+                                    ) : hasTabs ? (
+                                      isStepsMode ? (
+                                        renderStepsMode()
+                                      ) : (
+                                        renderTabMode()
+                                      )
+                                    ) : (
+                                      renderSectionMode()
+                                    )}
+                                    {extraBottomContent}
+                                  </div>
+                                  {summaryEnabled && (
+                                    <div className='flex shrink-0 border-l border-slate-200'>
                                       <button
                                         type='button'
-                                        onClick={refreshStaleRecord}
-                                        className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
+                                        onClick={() => setSummaryCollapsed((v) => !v)}
+                                        title={
+                                          summaryCollapsed ? 'Expand summary' : 'Collapse summary'
+                                        }
+                                        className='border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
                                       >
-                                        {userTouchedRef.current.size > 0 ? 'Dismiss' : 'Refresh'}
+                                        {summaryCollapsed ? (
+                                          <ChevronLeft className='h-3.5 w-3.5' />
+                                        ) : (
+                                          <ChevronRight className='h-3.5 w-3.5' />
+                                        )}
                                       </button>
-                                    </div>
-                                  )}
-                                  {!summaryModeSettled ? (
-                                    <div
-                                      data-summary-mode-pending
-                                      aria-busy='true'
-                                      className='space-y-4'
-                                    >
-                                      <Skeleton className='h-10 w-full' />
-                                      <div className='grid gap-4 lg:grid-cols-2'>
-                                        <Skeleton className='h-40 w-full' />
-                                        <Skeleton className='h-40 w-full' />
-                                      </div>
-                                      <Skeleton className='h-56 w-full' />
-                                    </div>
-                                  ) : readMode && !isNew && activeLayoutData?.layout ? (
-                                    <RecordReadView
-                                      collection={collection}
-                                      itemId={String(itemId)}
-                                      // Section pencil → Edit mode, landing on the section's
-                                      // first field.
-                                      onEditSection={(_groupKey, firstField) => {
-                                        setReadMode(false)
-                                        if (firstField) window.setTimeout(() => jumpToField(firstField), 350)
-                                      }}
-                                      // The collection's Summary layout when it has one (Table
-                                      // Editor → Layouts → type Summary), else the grouped layout
-                                      // rendered read-only.
-                                      layoutData={
-                                        (summaryLayoutData ??
-                                          activeLayoutData) as unknown as ReadViewLayout
-                                      }
-                                      flush
-                                      // Notes + tasks stay live in Summary mode — the record's
-                                      // FIELDS are read-only, the conversation about it is not —
-                                      // and the pipeline slot (state track, owners, approval
-                                      // chain) is what a reader wants first.
-                                      renderSlot={(key) =>
-                                        key === '__comments__' ||
-                                        key === '__tasks__' ||
-                                        key === '__pipeline__'
-                                          ? renderSentinel(key)
-                                          : null
-                                      }
-                                      // The integrity banner is hidden in Summary mode; the
-                                      // affected fields carry an amber mark instead.
-                                      integrityMarks
-                                      // Child grids are the REAL inline grid, read-only — PO
-                                      // match dots, row lints, submission errors, presets and
-                                      // the aggregate footer all come along ("linked lines
-                                      // to orders, highlighted errors, integration errors — just can't
-                                      // edit").
-                                      renderGrid={(a) => {
-                                        const f = (fieldConfig ?? []).find((x) => x.field === a.field)
-                                        if (!f) return null
-                                        return (
-                                          <FieldRow
-                                            key={`summary-grid-${a.field}`}
-                                            field={{ ...f, readonly: true }}
-                                            draft={effectiveDraft}
-                                            onChange={handleFieldChange}
+                                      <div
+                                        className='overflow-hidden transition-all duration-200'
+                                        style={{ width: summaryCollapsed ? 0 : 232 }}
+                                      >
+                                        <div className='w-[232px] overflow-y-auto h-full'>
+                                          <SummaryPanel
+                                            onRevertChange={(f) => revertByField[f]?.()}
+                                            layoutFields={
+                                              (activeLayoutData?.assignments?.length ?? 0) > 0
+                                                ? new Set(
+                                                    (activeLayoutData?.assignments ?? []).map(
+                                                      (a) => a.field
+                                                    )
+                                                  )
+                                                : null
+                                            }
+                                            allSteps={
+                                              allTabGroups.length > 0
+                                                ? allTabGroups.map((g) => ({
+                                                    key: g.key,
+                                                    label: g.label
+                                                  }))
+                                                : allSteps
+                                            }
+                                            groupedMap={groupedMap}
+                                            ungroupedFields={ungroupedFields}
+                                            sectionGroups={sectionGroups.filter(
+                                              (g) => g.type !== 'metadata'
+                                            )}
+                                            draft={draft}
                                             relations={relations}
                                             collection={collection}
                                             itemId={itemId}
-                                            visible={true}
-                                            locked={false}
-                                            layoutAiEnabled={layoutAiEnabled}
-                                            renderField={renderField}
-                                            onCountChange={handleM2MCountChange}
-                                          />
-                                        )
-                                      }}
-                                      gridCounts={o2mEffectiveCounts}
-                                    />
-                                  ) : hasTabs ? (
-                                    isStepsMode ? (
-                                      renderStepsMode()
-                                    ) : (
-                                      renderTabMode()
-                                    )
-                                  ) : (
-                                    renderSectionMode()
-                                  )}
-                                  {extraBottomContent}
-                                </div>
-                                {summaryEnabled && (
-                                  <div className='flex shrink-0 border-l border-slate-200'>
-                                    <button
-                                      type='button'
-                                      onClick={() => setSummaryCollapsed((v) => !v)}
-                                      title={
-                                        summaryCollapsed ? 'Expand summary' : 'Collapse summary'
-                                      }
-                                      className='border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
-                                    >
-                                      {summaryCollapsed ? (
-                                        <ChevronLeft className='h-3.5 w-3.5' />
-                                      ) : (
-                                        <ChevronRight className='h-3.5 w-3.5' />
-                                      )}
-                                    </button>
-                                    <div
-                                      className='overflow-hidden transition-all duration-200'
-                                      style={{ width: summaryCollapsed ? 0 : 232 }}
-                                    >
-                                      <div className='w-[232px] overflow-y-auto h-full'>
-                                        <SummaryPanel
-                                          onRevertChange={(f) => revertByField[f]?.()}
-                                          layoutFields={
-                                            (activeLayoutData?.assignments?.length ?? 0) > 0
-                                              ? new Set(
-                                                  (activeLayoutData?.assignments ?? []).map(
-                                                    (a) => a.field
-                                                  )
-                                                )
-                                              : null
-                                          }
-                                          allSteps={
-                                            allTabGroups.length > 0
-                                              ? allTabGroups.map((g) => ({
-                                                  key: g.key,
-                                                  label: g.label
-                                                }))
-                                              : allSteps
-                                          }
-                                          groupedMap={groupedMap}
-                                          ungroupedFields={ungroupedFields}
-                                          sectionGroups={sectionGroups.filter(
-                                            (g) => g.type !== 'metadata'
-                                          )}
-                                          draft={draft}
-                                          relations={relations}
-                                          collection={collection}
-                                          itemId={itemId}
-                                          staging={m2mStagingCtx}
-                                          errors={validationErrors}
-                                          staleFields={staleFields}
-                                          changedFields={changedFieldMap}
-                                          // M2M alias values never live in the draft, so the panel
-                                          // cannot judge them empty on its own — it would mark a
-                                          // populated field "required". Hand it the state the form
-                                          // already tracks, and say nothing while it is unsettled.
-                                          aliasEmptiness={{
-                                            // O2M aliases: effective row count (saved − staged
-                                            // deletes + pending) — without this a populated grid
-                                            // read as "required" in the summary. Unsettled = null.
-                                            ...Object.fromEntries(
-                                              [...o2mAliasFields].map((field) => [
-                                                field,
-                                                field in o2mEffectiveCounts
-                                                  ? o2mEffectiveCounts[field] === 0
-                                                  : null
-                                              ])
-                                            ),
-                                            ...Object.fromEntries(
-                                              Object.entries(m2mAliasFieldStates).map(
-                                                ([field, st]) => [
+                                            staging={m2mStagingCtx}
+                                            errors={validationErrors}
+                                            staleFields={staleFields}
+                                            changedFields={changedFieldMap}
+                                            // M2M alias values never live in the draft, so the panel
+                                            // cannot judge them empty on its own — it would mark a
+                                            // populated field "required". Hand it the state the form
+                                            // already tracks, and say nothing while it is unsettled.
+                                            aliasEmptiness={{
+                                              // O2M aliases: effective row count (saved − staged
+                                              // deletes + pending) — without this a populated grid
+                                              // read as "required" in the summary. Unsettled = null.
+                                              ...Object.fromEntries(
+                                                [...o2mAliasFields].map((field) => [
                                                   field,
-                                                  st.known ? st.ids.length === 0 : null
-                                                ]
-                                              )
-                                            )
-                                          }}
-                                          onFieldClick={(stepKey, fieldKey) => {
-                                            // An empty step key means the field belongs to no step
-                                            // (the Related child collections) — there is no tab to
-                                            // open, so go straight to where it is rendered.
-                                            if (stepKey) {
-                                              if (hasContainers) {
-                                                const ownerContainer = containerGroups.find((c) =>
-                                                  groups.some(
-                                                    (g) =>
-                                                      g.type === 'tab' &&
-                                                      g.container_id === c.id &&
-                                                      g.key === stepKey
-                                                  )
+                                                  field in o2mEffectiveCounts
+                                                    ? o2mEffectiveCounts[field] === 0
+                                                    : null
+                                                ])
+                                              ),
+                                              ...Object.fromEntries(
+                                                Object.entries(m2mAliasFieldStates).map(
+                                                  ([field, st]) => [
+                                                    field,
+                                                    st.known ? st.ids.length === 0 : null
+                                                  ]
                                                 )
-                                                if (ownerContainer) {
-                                                  setContainerTab(ownerContainer, stepKey)
-                                                  bodyRef.current?.scrollTo({ top: 0 })
+                                              )
+                                            }}
+                                            onFieldClick={(stepKey, fieldKey) => {
+                                              // An empty step key means the field belongs to no step
+                                              // (the Related child collections) — there is no tab to
+                                              // open, so go straight to where it is rendered.
+                                              if (stepKey) {
+                                                if (hasContainers) {
+                                                  const ownerContainer = containerGroups.find((c) =>
+                                                    groups.some(
+                                                      (g) =>
+                                                        g.type === 'tab' &&
+                                                        g.container_id === c.id &&
+                                                        g.key === stepKey
+                                                    )
+                                                  )
+                                                  if (ownerContainer) {
+                                                    setContainerTab(ownerContainer, stepKey)
+                                                    bodyRef.current?.scrollTo({ top: 0 })
+                                                  } else {
+                                                    setActiveTab(stepKey)
+                                                  }
                                                 } else {
                                                   setActiveTab(stepKey)
                                                 }
-                                              } else {
-                                                setActiveTab(stepKey)
                                               }
-                                            }
-                                            // Switching a tab mounts that panel, and an inline grid
-                                            // does not exist in the DOM until it does — one 80ms
-                                            // shot missed it and the click read as doing nothing.
-                                            // Poll briefly instead, then give up quietly.
-                                            let tries = 0
-                                            const find = () => {
-                                              const el = (document.querySelector(
-                                                `[data-field="${fieldKey}"]`
-                                              ) ??
-                                                document.querySelector(
-                                                  `[data-header-field="${fieldKey}"]`
-                                                )) as HTMLElement | null
-                                              if (!el) {
-                                                if (tries++ < 12) setTimeout(find, 60)
-                                                return
+                                              // Switching a tab mounts that panel, and an inline grid
+                                              // does not exist in the DOM until it does — one 80ms
+                                              // shot missed it and the click read as doing nothing.
+                                              // Poll briefly instead, then give up quietly.
+                                              let tries = 0
+                                              const find = () => {
+                                                const el = (document.querySelector(
+                                                  `[data-field="${fieldKey}"]`
+                                                ) ??
+                                                  document.querySelector(
+                                                    `[data-header-field="${fieldKey}"]`
+                                                  )) as HTMLElement | null
+                                                if (!el) {
+                                                  if (tries++ < 12) setTimeout(find, 60)
+                                                  return
+                                                }
+                                                el.scrollIntoView({
+                                                  behavior: 'smooth',
+                                                  block: 'center'
+                                                })
+                                                el.classList.add(
+                                                  'ring-2',
+                                                  'ring-nvr-cyan',
+                                                  'ring-offset-2',
+                                                  'rounded-md'
+                                                )
+                                                setTimeout(
+                                                  () =>
+                                                    el.classList.remove(
+                                                      'ring-2',
+                                                      'ring-nvr-cyan',
+                                                      'ring-offset-2',
+                                                      'rounded-md'
+                                                    ),
+                                                  1500
+                                                )
+                                                // Only pull focus for a field you can actually type
+                                                // in; focusing a grid's first button scrolls it back
+                                                // out from under the highlight.
+                                                const input = el.querySelector(
+                                                  'input,textarea,select'
+                                                ) as HTMLElement | null
+                                                input?.focus()
                                               }
-                                              el.scrollIntoView({
-                                                behavior: 'smooth',
-                                                block: 'center'
-                                              })
-                                              el.classList.add(
-                                                'ring-2',
-                                                'ring-nvr-cyan',
-                                                'ring-offset-2',
-                                                'rounded-md'
-                                              )
-                                              setTimeout(
-                                                () =>
-                                                  el.classList.remove(
-                                                    'ring-2',
-                                                    'ring-nvr-cyan',
-                                                    'ring-offset-2',
-                                                    'rounded-md'
-                                                  ),
-                                                1500
-                                              )
-                                              // Only pull focus for a field you can actually type
-                                              // in; focusing a grid's first button scrolls it back
-                                              // out from under the highlight.
-                                              const input = el.querySelector(
-                                                'input,textarea,select'
-                                              ) as HTMLElement | null
-                                              input?.focus()
-                                            }
-                                            setTimeout(find, 60)
-                                          }}
-                                        />
+                                              setTimeout(find, 60)
+                                            }}
+                                          />
+                                        </div>
                                       </div>
                                     </div>
-                                  </div>
-                                )}
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          </FieldAffordancesContext.Provider>
+                            </FieldAffordancesContext.Provider>
                           </M2MStagingContext.Provider>
                         </StagedRelationsContext.Provider>
                       </LiveRowsContext.Provider>

@@ -7,7 +7,11 @@ import { del, get, patch, post } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
-import { ChangeReasonDialog, changeReasonChallenge, type ChangeReasonChallenge } from './ChangeReasonDialog'
+import {
+  type ChangeReasonChallenge,
+  ChangeReasonDialog,
+  changeReasonChallenge
+} from './ChangeReasonDialog'
 import { FieldRenderer } from './FieldRenderer'
 import { M2MCombobox, m2aWriteMeta } from './M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './M2MStagingContext'
@@ -26,6 +30,22 @@ import type { CMSField, CMSRelation } from './types'
  * junction-row creates/deletes on Save (same mechanics as the normal form).
  * O2M aliases stay read-only — their values are full child ROWS, not links.
  */
+// #9 — loose equality for the diff marks: null/''/undefined agree, numbers
+// and numeric strings agree, objects compare by JSON.
+function rawEqual(a: unknown, b: unknown): boolean {
+  const empty = (v: unknown) => v == null || v === ''
+  if (empty(a) && empty(b)) return true
+  if (typeof a === 'number' || typeof b === 'number') return Number(a) === Number(b)
+  if (typeof a === 'boolean' || typeof b === 'boolean') return String(a) === String(b)
+  if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b)
+  return String(a) === String(b)
+}
+function rawText(v: unknown): string {
+  if (v == null || v === '') return '∅'
+  const s = typeof v === 'object' ? JSON.stringify(v) : String(v)
+  return s.length > 60 ? `${s.slice(0, 57)}…` : s
+}
+
 export function RawEditSheet({
   collection,
   itemId,
@@ -120,7 +140,10 @@ export function RawEditSheet({
       unstageLink: (k, id) =>
         setM2mLinks((prev) => {
           const next = new Map(prev)
-          next.set(k, (next.get(k) ?? []).filter((x) => String(x) !== String(id)))
+          next.set(
+            k,
+            (next.get(k) ?? []).filter((x) => String(x) !== String(id))
+          )
           return next
         }),
       stageUnlink: (k, jId) =>
@@ -226,7 +249,10 @@ export function RawEditSheet({
         onClose()
       }}
     >
-      <SheetContent side='right' className='flex w-[1040px] max-w-[94vw] flex-col p-0 sm:max-w-[94vw]'>
+      <SheetContent
+        side='right'
+        className='flex w-[1040px] max-w-[94vw] flex-col p-0 sm:max-w-[94vw]'
+      >
         <SheetHeader className='shrink-0 border-b border-slate-200 px-5 py-3 dark:border-border'>
           <SheetTitle className='flex items-center gap-2 text-[14px]'>
             <Wrench className='h-4 w-4 text-nvr-cyan' />
@@ -247,23 +273,41 @@ export function RawEditSheet({
             <div className='space-y-3'>
               {rows.map(({ field, alias, m2mRel }) => {
                 const raw = field.field in draft ? draft[field.field] : record?.[field.field]
+                const changed =
+                  field.field in draft && !rawEqual(draft[field.field], record?.[field.field])
                 return (
-                  <div key={field.field} className='grid grid-cols-[220px_1fr] items-start gap-3'>
+                  <div
+                    key={field.field}
+                    className={`grid grid-cols-[220px_1fr] items-start gap-3 rounded-md ${changed ? '-mx-2 bg-amber-50 px-2 py-1 ring-1 ring-amber-200 dark:bg-amber-400/10 dark:ring-amber-500/30' : ''}`}
+                    data-raw-changed={changed ? field.field : undefined}
+                    data-raw-field={field.field}
+                  >
                     <div className='pt-1.5'>
                       <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
                         {field.label || titleCase(field.field)}
+                        {changed && (
+                          <span className='ml-1.5 rounded bg-amber-200/70 px-1 text-[9px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-500/20 dark:text-amber-200'>
+                            changed
+                          </span>
+                        )}
                       </p>
                       <p className='font-mono text-[10.5px] text-slate-400'>{field.field}</p>
+                      {changed && (
+                        <p
+                          className='mt-0.5 truncate text-[10.5px] text-slate-400'
+                          data-tip={`Was: ${rawText(record?.[field.field])}`}
+                        >
+                          was {rawText(record?.[field.field])}
+                        </p>
+                      )}
                     </div>
                     {field.field === 'id' ? (
-                      <p className='pt-1.5 font-mono text-[12px] text-slate-500'>{String(raw ?? '')}</p>
+                      <p className='pt-1.5 font-mono text-[12px] text-slate-500'>
+                        {String(raw ?? '')}
+                      </p>
                     ) : alias && m2mRel ? (
                       <M2MStagingContext.Provider value={stagingCtx}>
-                        <M2MCombobox
-                          relation={m2mRel}
-                          parentId={itemId}
-                          allRelations={relations}
-                        />
+                        <M2MCombobox relation={m2mRel} parentId={itemId} allRelations={relations} />
                       </M2MStagingContext.Provider>
                     ) : alias ? (
                       <p className='pt-1.5 text-[11.5px] italic text-slate-400'>
@@ -290,10 +334,10 @@ export function RawEditSheet({
             {(() => {
               if (!dirty) return 'No changes yet'
               const n =
-                Object.keys(draft).length +
+                Object.keys(draft).filter((k) => !rawEqual(draft[k], record?.[k])).length +
                 [...m2mLinks.values()].filter((ids) => ids.length > 0).length +
                 [...m2mUnlinks.values()].filter((ids) => ids.size > 0).length
-              return `${n} field${n !== 1 ? 's' : ''} changed`
+              return n === 0 ? 'No changes yet' : `${n} field${n !== 1 ? 's' : ''} changed`
             })()}
           </span>
           <div className='flex gap-2'>

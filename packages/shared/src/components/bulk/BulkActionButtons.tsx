@@ -96,6 +96,14 @@ export interface BulkRunResult {
   errors: Array<{ item: string; error: string }>
 }
 
+/** #1/#18 — dry-run verdict from POST /bulk-actions/preview. */
+export interface BulkPreview {
+  would_change: number
+  skipped: number
+  failed: number
+  outcomes: Array<{ item: string; outcome: 'change' | 'skip' | 'fail'; reason?: string }>
+}
+
 /** Available actions per collection, for the viewer. */
 export function useAvailableBulkActions(collections: string[]) {
   const client = useNivaroClient()
@@ -204,6 +212,33 @@ export function BulkActionButtons({
   const [open, setOpen] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [running, setRunning] = useState<string | null>(null)
+  // #1/#18 — a DB action's popover opens with its dry run: "5 of 10 would
+  // change · 3 already there"; the list explains every skip before the reason
+  // is committed. Extension actions have no preview contract.
+  const [preview, setPreview] = useState<Record<string, BulkPreview | 'loading' | null>>({})
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const loadPreview = async (a: AvailableBulkAction & { collections: string[] }) => {
+    const id = `${a.source}:${a.key}`
+    if (a.source !== 'db') return
+    setPreview((p) => ({ ...p, [id]: 'loading' }))
+    try {
+      const total: BulkPreview = { would_change: 0, skipped: 0, failed: 0, outcomes: [] }
+      for (const c of a.collections) {
+        const ids = targets.filter((t) => t.collection === c).map((t) => t.id)
+        if (ids.length === 0) continue
+        const res = await client.request<{ data: BulkPreview }>(
+          post('/bulk-actions/preview', { collection: c, key: a.key, ids })
+        )
+        total.would_change += res.data.would_change
+        total.skipped += res.data.skipped
+        total.failed += res.data.failed
+        total.outcomes.push(...res.data.outcomes)
+      }
+      setPreview((p) => ({ ...p, [id]: total }))
+    } catch {
+      setPreview((p) => ({ ...p, [id]: null }))
+    }
+  }
 
   if (actions.length === 0) return null
 
@@ -283,6 +318,10 @@ export function BulkActionButtons({
             onOpenChange={(o) => {
               setOpen(o ? id : null)
               if (!o) setReason('')
+              else {
+                setPreviewOpen(false)
+                void loadPreview(a)
+              }
             }}
           >
             <PopoverTrigger asChild>
@@ -312,6 +351,59 @@ export function BulkActionButtons({
               <p className='mt-1 text-[12px] leading-snug text-slate-600 dark:text-slate-400'>
                 {a.confirm_text ?? a.summary}
               </p>
+              {a.source === 'db' &&
+                (() => {
+                  const pv = preview[id]
+                  if (pv === 'loading')
+                    return (
+                      <p className='mt-2 text-[11.5px] text-slate-400' data-bulk-preview='loading'>
+                        Checking what would change…
+                      </p>
+                    )
+                  if (!pv) return null
+                  const skips = pv.outcomes.filter((o) => o.outcome !== 'change')
+                  const byReason = new Map<string, number>()
+                  for (const o of skips)
+                    byReason.set(
+                      o.reason ?? o.outcome,
+                      (byReason.get(o.reason ?? o.outcome) ?? 0) + 1
+                    )
+                  return (
+                    <div
+                      className='mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11.5px] dark:border-border dark:bg-muted/40'
+                      data-bulk-preview={pv.would_change}
+                    >
+                      <p className='font-medium text-slate-700 dark:text-slate-200'>
+                        {pv.would_change} of {n} would change
+                        {skips.length > 0 && (
+                          <span className='font-normal text-slate-500'>
+                            {' · '}
+                            {[...byReason.entries()].map(([r, c]) => `${c} ${r}`).join(' · ')}
+                          </span>
+                        )}
+                      </p>
+                      {skips.length > 0 && (
+                        <button
+                          type='button'
+                          onClick={() => setPreviewOpen((v) => !v)}
+                          className='mt-0.5 text-[11px] text-slate-500 underline-offset-2 hover:underline'
+                          data-bulk-preview-toggle
+                        >
+                          {previewOpen ? 'Hide' : 'Show'} which records
+                        </button>
+                      )}
+                      {previewOpen && (
+                        <ul className='mt-1 max-h-32 space-y-0.5 overflow-auto font-mono text-[10.5px] text-slate-600 dark:text-slate-300'>
+                          {skips.slice(0, 50).map((o) => (
+                            <li key={`${o.item}:${o.outcome}`} data-bulk-preview-row={o.item}>
+                              #{o.item} — {o.reason ?? o.outcome}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )
+                })()}
               {a.require_reason && (
                 <label className='mt-2.5 block'>
                   <span className='text-[11px] font-medium text-slate-600 dark:text-slate-400'>
@@ -351,7 +443,16 @@ export function BulkActionButtons({
                       : 'bg-nvr-cyan text-[#172940] hover:bg-[#00b8e0]'
                   )}
                 >
-                  {isRunning ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : `${a.label} ${n}`}
+                  {isRunning ? (
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                  ) : (
+                    (() => {
+                      const pv = preview[id]
+                      return pv && pv !== 'loading' && pv.would_change !== n
+                        ? `${a.label} · ${pv.would_change} of ${n}`
+                        : `${a.label} ${n}`
+                    })()
+                  )}
                 </button>
               </div>
             </PopoverContent>

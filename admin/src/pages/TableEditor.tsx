@@ -94,6 +94,7 @@ import {
 } from '@/components/field-picker'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
 import { IconPicker } from '@/components/icon-picker'
+import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { RelationLabel } from '@/components/relation-label'
 import { RelationPicker } from '@/components/relation-picker'
@@ -152,7 +153,6 @@ import {
   type RelationType,
   schemaApi
 } from '@/lib/schema-api'
-import { PagePresence } from '@/components/page-presence'
 import { cn, formatRelative, resolveCollectionIcon, titleCase } from '@/lib/utils'
 import { TreeSection } from '@/pages/DataModel'
 import { FieldRulesSection } from '@/pages/FieldRulesSection'
@@ -4782,13 +4782,14 @@ function FormUxSection({
   })
   const { data: states = [] } = useQuery<Array<{ key: string; label: string; color?: string }>>({
     queryKey: ['collection-states-form-ux', tableName],
-    queryFn: () =>
-      api.get(`/queues/collection-states/${tableName}`).then((r) => r.data.data ?? []),
+    queryFn: () => api.get(`/queues/collection-states/${tableName}`).then((r) => r.data.data ?? []),
     enabled: !!tableName
   })
   const saveMut = useMutation({
-    mutationFn: (patch: { read_mode_toggle?: boolean; summary_mode_rules?: SummaryModeRulesDraft }) =>
-      api.patch(`/collections/${tableName}`, patch),
+    mutationFn: (patch: {
+      read_mode_toggle?: boolean
+      summary_mode_rules?: SummaryModeRulesDraft
+    }) => api.patch(`/collections/${tableName}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['collection-meta-read-mode', tableName] })
       toast.success('Form UX setting saved')
@@ -4821,7 +4822,12 @@ function FormUxSection({
       ...cfg,
       rules: [
         ...cfg.rules,
-        { roles: null, states: null, states_op: 'in', mode: cfg.default === 'summary' ? 'edit' : 'summary' }
+        {
+          roles: null,
+          states: null,
+          states_op: 'in',
+          mode: cfg.default === 'summary' ? 'edit' : 'summary'
+        }
       ]
     })
   const roleName = (id: string) =>
@@ -4971,8 +4977,8 @@ function FormUxSection({
           <div>
             <p className='text-[12.5px] font-medium text-slate-700'>Summary mode</p>
             <p className='mt-0.5 text-[12px] text-slate-500'>
-              Show the Summary / Edit switch on the record form. Summary mode is a read-only view
-              of the record (notes and tasks stay live). Off by default.
+              Show the Summary / Edit switch on the record form. Summary mode is a read-only view of
+              the record (notes and tasks stay live). Off by default.
             </p>
           </div>
           <Switch
@@ -5068,8 +5074,8 @@ function FormUxSection({
             ))}
             {cfg.rules.length === 0 && (
               <p className='text-[11.5px] text-slate-400'>
-                No rules — every saved record opens in {cfg.default === 'summary' ? 'Summary' : 'Edit'}{' '}
-                mode.
+                No rules — every saved record opens in{' '}
+                {cfg.default === 'summary' ? 'Summary' : 'Edit'} mode.
               </p>
             )}
             <Button
@@ -5685,7 +5691,12 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
               fields: Array<{ field: string; strategy: string }>
               skipped: Array<{ field: string; reason: string }>
             }
-            batches: Array<{ batch: string; count: number; first_at: string | null; by: string | null }>
+            batches: Array<{
+              batch: string
+              count: number
+              first_at: string | null
+              by: string | null
+            }>
           }
         }>(`/data-model/${tableName}/synthetic`)
         .then((r) => r.data.data),
@@ -5694,10 +5705,14 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
   const gen = useMutation({
     mutationFn: () =>
       api
-        .post<{ data: { batch: string; created: number; requested: number; failed: Array<{ index: number; error: string }> } }>(
-          `/data-model/${tableName}/synthetic`,
-          { count: Number(count) }
-        )
+        .post<{
+          data: {
+            batch: string
+            created: number
+            requested: number
+            failed: Array<{ index: number; error: string }>
+          }
+        }>(`/data-model/${tableName}/synthetic`, { count: Number(count) })
         .then((r) => r.data.data),
     onSuccess: (r) => {
       if (r.created === 0)
@@ -5728,14 +5743,17 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
   })
   const plan = data?.plan
   return (
-    <div className='overflow-hidden rounded-lg border border-slate-200 bg-white' data-synthetic-records>
+    <div
+      className='overflow-hidden rounded-lg border border-slate-200 bg-white'
+      data-synthetic-records
+    >
       <div className='border-b border-slate-100 px-4 py-3'>
         <p className='text-[13px] font-semibold text-slate-800'>Synthetic records</p>
         <p className='mt-0.5 text-[11.5px] text-slate-500'>
-          Test rows built from this collection&apos;s field types, choices, relations and
-          validation rules — written like any other record (rules, auto-ids and revisions apply),
-          each stamped with the change reason <code className='text-[10.5px]'>synthetic:&lt;batch&gt;</code>{' '}
-          so a whole batch can be sent to the trash later. For staging, not production data.
+          Test rows built from this collection&apos;s field types, choices, relations and validation
+          rules — written like any other record (rules, auto-ids and revisions apply), each stamped
+          with the change reason <code className='text-[10.5px]'>synthetic:&lt;batch&gt;</code> so a
+          whole batch can be sent to the trash later. For staging, not production data.
         </p>
       </div>
       <div className='space-y-3 px-4 py-3'>
@@ -5786,7 +5804,11 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
         {data && data.batches.length > 0 && (
           <div className='divide-y divide-slate-100 rounded-md border border-slate-200'>
             {data.batches.map((b) => (
-              <div key={b.batch} className='flex items-center gap-3 px-3 py-1.5 text-[12px]' data-synthetic-batch={b.batch}>
+              <div
+                key={b.batch}
+                className='flex items-center gap-3 px-3 py-1.5 text-[12px]'
+                data-synthetic-batch={b.batch}
+              >
                 <code className='text-[11px] text-slate-700'>{b.batch}</code>
                 <span className='tabular-nums text-slate-600'>{b.count} rows</span>
                 <span className='text-slate-400'>
@@ -5806,12 +5828,23 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
                     >
                       Send {b.count} to trash
                     </Button>
-                    <Button size='sm' variant='ghost' className='h-6 text-[11px]' onClick={() => setConfirmBatch(null)}>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-6 text-[11px]'
+                      onClick={() => setConfirmBatch(null)}
+                    >
                       Keep
                     </Button>
                   </>
                 ) : (
-                  <Button size='sm' variant='outline' className='h-6 text-[11px]' onClick={() => setConfirmBatch(b.batch)} data-synthetic-delete>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-6 text-[11px]'
+                    onClick={() => setConfirmBatch(b.batch)}
+                    data-synthetic-delete
+                  >
                     Delete batch
                   </Button>
                 )}
@@ -13684,9 +13717,11 @@ function FieldSettingsPopover({
                       ...(() => {
                         try {
                           const parsed = gridStatsLocal.trim() ? JSON.parse(gridStatsLocal) : null
-                          return (Array.isArray(parsed) && parsed.length
-                            ? { stats: parsed }
-                            : { stats: undefined }) as Record<string, unknown>
+                          return (
+                            Array.isArray(parsed) && parsed.length
+                              ? { stats: parsed }
+                              : { stats: undefined }
+                          ) as Record<string, unknown>
                         } catch {
                           return { stats: undefined } as Record<string, unknown>
                         }
@@ -13694,9 +13729,11 @@ function FieldSettingsPopover({
                       ...(() => {
                         try {
                           const parsed = sumCapLocal.trim() ? JSON.parse(sumCapLocal) : null
-                          return (parsed?.field && parsed?.cap
-                            ? { sum_cap: parsed }
-                            : { sum_cap: undefined }) as Record<string, unknown>
+                          return (
+                            parsed?.field && parsed?.cap
+                              ? { sum_cap: parsed }
+                              : { sum_cap: undefined }
+                          ) as Record<string, unknown>
                         } catch {
                           return { sum_cap: undefined } as Record<string, unknown>
                         }
@@ -15039,9 +15076,10 @@ function FieldSettingsPopover({
                       className='font-mono text-[11px]'
                     />
                     <p className='text-[10px] text-slate-400'>
-                      Figures shown above the grid in every mode. Tokens: {'{{$parent.<field>}}'} (the
-                      record), {'{{$sum.<column>}}'} (that column over the rows on screen, incl.
-                      unsaved edits), {'{{$count}}'}. "negative": "danger" paints a negative result red.
+                      Figures shown above the grid in every mode. Tokens: {'{{$parent.<field>}}'}{' '}
+                      (the record), {'{{$sum.<column>}}'} (that column over the rows on screen,
+                      incl. unsaved edits), {'{{$count}}'}. "negative": "danger" paints a negative
+                      result red.
                     </p>
                   </div>
                 )}
@@ -15059,8 +15097,8 @@ function FieldSettingsPopover({
                     />
                     <p className='text-[10px] text-slate-400'>
                       A row cannot be saved or staged when the column summed over the grid (this row
-                      included) would exceed the cap. Pair with a server sum_cap validation rule on the
-                      child collection — this is the browser half only.
+                      included) would exceed the cap. Pair with a server sum_cap validation rule on
+                      the child collection — this is the browser half only.
                     </p>
                   </div>
                 )}
@@ -16646,8 +16684,8 @@ function SortableGroupCard({
                     <Label className='mb-1 block text-[11px]'>Summary / read-view width</Label>
                     <p className='mb-1.5 text-[10px] text-slate-400'>
                       How wide this section renders on the read-only board (Summary mode, detail
-                      sheets). Auto = half for a short fact list, full when it holds a grid or
-                      a widget.
+                      sheets). Auto = half for a short fact list, full when it holds a grid or a
+                      widget.
                     </p>
                     <Sel
                       value={group.read_width ?? 'auto'}
@@ -18295,27 +18333,31 @@ function LayoutsTab({
                     Layout type
                   </span>
                   <div className='flex items-center rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background overflow-hidden'>
-                    {(['grouped', 'table', 'file', 'addendum', 'detail', 'summary'] as const).map((lt) => (
-                      <button
-                        key={lt}
-                        type='button'
-                        onClick={() => patchLayoutMut.mutate({ id: selected.id, layout_type: lt })}
-                        className={cn(
-                          'px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
-                          (selected.layout_type ?? 'grouped') === lt
-                            ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
-                            : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
-                        )}
-                      >
-                        {lt === 'addendum'
-                          ? 'Addendum Form'
-                          : lt === 'detail'
-                            ? 'Detail (drill-down)'
-                            : lt === 'summary'
-                              ? 'Summary (read-only)'
-                              : lt}
-                      </button>
-                    ))}
+                    {(['grouped', 'table', 'file', 'addendum', 'detail', 'summary'] as const).map(
+                      (lt) => (
+                        <button
+                          key={lt}
+                          type='button'
+                          onClick={() =>
+                            patchLayoutMut.mutate({ id: selected.id, layout_type: lt })
+                          }
+                          className={cn(
+                            'px-2.5 py-1 text-[11px] font-medium transition-colors capitalize',
+                            (selected.layout_type ?? 'grouped') === lt
+                              ? 'bg-[#172940] text-white dark:bg-[#00ceff] dark:text-[#172940]'
+                              : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                          )}
+                        >
+                          {lt === 'addendum'
+                            ? 'Addendum Form'
+                            : lt === 'detail'
+                              ? 'Detail (drill-down)'
+                              : lt === 'summary'
+                                ? 'Summary (read-only)'
+                                : lt}
+                        </button>
+                      )
+                    )}
                   </div>
                 </div>
                 {selected.layout_type === 'addendum' && (
@@ -18996,7 +19038,8 @@ function LayoutsTab({
                           })
                         }
                       />
-                      {(selected.layout_type === 'detail' || selected.layout_type === 'summary') && (
+                      {(selected.layout_type === 'detail' ||
+                        selected.layout_type === 'summary') && (
                         <ReadPresentationEditor
                           layout={selected}
                           fields={layoutFieldMeta}
@@ -19191,6 +19234,10 @@ function LayoutsTab({
                         onRoleChange={setPreviewRoleId}
                         preview={previewRoleId ? rolePreviewData : null}
                       />
+                      <PreviewWithRecordSection
+                        tableName={tableName}
+                        slug={(selected as { slug?: string | null }).slug ?? null}
+                      />
                     </div>
                   </>
                 )}
@@ -19240,6 +19287,84 @@ interface RolePreviewResult {
  *  fields their permissions hide — via the live pickBestLayout + policy code.
  *  State lives in LayoutsTab so the chips can badge hidden / read-only fields
  *  while a role is selected. */
+/** input_bindings may arrive once- or (from an older double-encoding bug)
+ *  twice-stringified; parse until it is not a string, and never crash. */
+function parseBindingsDeep(
+  raw: unknown
+): Array<{ key: string; binding_type: string; binding_value: string }> {
+  let cur: unknown = raw
+  for (let i = 0; i < 4 && typeof cur === 'string'; i++) {
+    try {
+      cur = JSON.parse(cur)
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(cur) ? cur : []
+}
+
+function thresholdValid(text: string): boolean {
+  try {
+    const v = JSON.parse(text)
+    return (
+      Array.isArray(v) &&
+      v.every(
+        (r) =>
+          r &&
+          typeof r === 'object' &&
+          ['lt', 'lte', 'gt', 'gte', 'eq'].includes(r.op) &&
+          typeof r.value === 'number' &&
+          typeof r.color === 'string'
+      )
+    )
+  } catch {
+    return false
+  }
+}
+
+// #39 — render this layout with a real record: the item page pinned to the
+// layout's slug (a slug is what pins a layout; without one the record opens
+// on whatever layout resolves for it).
+function PreviewWithRecordSection({ tableName, slug }: { tableName: string; slug: string | null }) {
+  const [id, setId] = useState('')
+  const href = id.trim()
+    ? `/collections/${tableName}/${encodeURIComponent(id.trim())}${slug ? `?layout=${encodeURIComponent(slug)}` : ''}`
+    : null
+  return (
+    <div className='border-t border-slate-200 pt-2 dark:border-border' data-layout-record-preview>
+      <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+        Preview with a record
+      </p>
+      <div className='mt-1.5 flex items-center gap-1.5'>
+        <Input
+          value={id}
+          onChange={(e) => setId(e.target.value)}
+          placeholder='record id'
+          className='h-7 w-32 font-mono text-[11px]'
+        />
+        <a
+          href={href ?? '#'}
+          target='_blank'
+          rel='noreferrer'
+          aria-disabled={!href}
+          className={cn(
+            'rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:text-slate-200 dark:hover:bg-muted',
+            !href && 'pointer-events-none opacity-40'
+          )}
+          data-layout-record-preview-open
+        >
+          Open in a new tab
+        </a>
+      </div>
+      <p className='mt-1 text-[10.5px] text-slate-400'>
+        {slug
+          ? `Opens the record pinned to this layout (?layout=${slug}).`
+          : 'Give this layout a slug to pin it; without one the record opens on the layout that resolves for it.'}
+      </p>
+    </div>
+  )
+}
+
 function PreviewAsRoleSection({
   tableName,
   roles,
@@ -20163,6 +20288,8 @@ function FieldGroupsTab({
     weight?: string
     display_as?: string
     link_template?: string
+    /** #5 — JSON [{op, value, color}] threshold colouring. */
+    threshold?: string
   }
   const [headerFieldDisplayMeta, setHeaderFieldDisplayMeta] = useState<
     Record<string, HeaderFieldMeta>
@@ -20320,7 +20447,7 @@ function FieldGroupsTab({
         input_bindings: (() => {
           try {
             return typeof row.input_bindings === 'string'
-              ? JSON.parse(row.input_bindings as string)
+              ? parseBindingsDeep(row.input_bindings as string)
               : []
           } catch {
             return []
@@ -20352,7 +20479,7 @@ function FieldGroupsTab({
       const parsedBindings2: Array<{ key: string; binding_value: string }> = (() => {
         try {
           return typeof rawBindings2 === 'string'
-            ? JSON.parse(rawBindings2)
+            ? parseBindingsDeep(rawBindings2)
             : Array.isArray(rawBindings2)
               ? rawBindings2
               : []
@@ -20368,7 +20495,9 @@ function FieldGroupsTab({
         display_as:
           parsedBindings2.find((b) => b.key === '__display_as__')?.binding_value || undefined,
         link_template:
-          parsedBindings2.find((b) => b.key === '__link_template__')?.binding_value || undefined
+          parsedBindings2.find((b) => b.key === '__link_template__')?.binding_value || undefined,
+        threshold:
+          parsedBindings2.find((b) => b.key === '__threshold__')?.binding_value || undefined
       }
     }
     setHeaderFieldDisplayMeta(nextHeaderFieldMeta)
@@ -20691,6 +20820,12 @@ function FieldGroupsTab({
                 key: '__link_template__',
                 binding_type: 'static',
                 binding_value: hMeta.link_template
+              })
+            if (hMeta?.threshold)
+              styleBindings.push({
+                key: '__threshold__',
+                binding_type: 'static',
+                binding_value: hMeta.threshold
               })
             fieldAssignments.push({
               field: f,
@@ -22026,6 +22161,24 @@ function FieldGroupsTab({
                 placeholder='https://example.com/{{value}}'
                 value={meta.link_template ?? ''}
                 onChange={(e) => update({ link_template: e.target.value || undefined })}
+              />
+            </div>
+            <div className='space-y-1'>
+              <p className='text-[10px] text-slate-400 font-medium'>Threshold colours (JSON)</p>
+              {/* #5 — first matching rule wins: [{"op":"lt","value":0,"color":"red"},
+                  {"op":"lt","value":1000,"color":"amber"}]; ops lt lte gt gte eq. */}
+              <textarea
+                className={cn(
+                  'w-full rounded border bg-white px-1.5 py-1 font-mono text-[10.5px] dark:bg-background',
+                  meta.threshold && !thresholdValid(meta.threshold)
+                    ? 'border-red-400'
+                    : 'border-slate-200 dark:border-border'
+                )}
+                rows={2}
+                placeholder='[{"op":"lt","value":0,"color":"red"}]'
+                value={meta.threshold ?? ''}
+                onChange={(e) => update({ threshold: e.target.value || undefined })}
+                data-header-threshold
               />
             </div>
           </PopoverContent>

@@ -196,7 +196,7 @@ function FieldSparkline({
  * write-computed field shows its formula and the current inputs.
  */
 export interface LineageData {
-  kind: 'rollup' | 'write'
+  kind: 'rollup' | 'write' | 'read'
   stored_value?: unknown
   formula?: string
   inputs?: Record<string, unknown>
@@ -246,6 +246,22 @@ export function useFieldLineage(
 
 /** One-line summary for a rollup: "= 5 lines · 1 excluded (line type is not 4)". */
 export function lineageSummary(data: LineageData | undefined, noun = 'rows'): string | null {
+  // #15 — a computed figure's derivation: the formula with its inputs
+  // substituted ("= 3,401 − 3,394").
+  if (data && (data.kind === 'write' || data.kind === 'read') && data.formula) {
+    const fmt = (v: unknown) =>
+      typeof v === 'number'
+        ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+        : v == null || v === ''
+          ? '∅'
+          : String(v)
+    const expr = data.formula
+      .replace(/item\.([A-Za-z_][A-Za-z0-9_]*)/g, (_m, k: string) => fmt(data.inputs?.[k]))
+      .replace(/\s*-\s*/g, ' − ')
+      .replace(/\s*\*\s*/g, ' × ')
+      .replace(/\s*\/\s*/g, ' ÷ ')
+    return `= ${expr}`
+  }
   if (!data || data.kind !== 'rollup') return null
   const rows = (data.sources ?? []).reduce((a, s) => a + s.rows.length, 0)
   const excluded = (data.sources ?? []).reduce((a, s) => a + (s.excluded?.length ?? 0), 0)
@@ -1003,9 +1019,7 @@ export function FieldRow({
               type='button'
               onClick={() => applyToLines.onApply(draft[field.field] ?? null)}
               disabled={
-                draft[field.field] == null ||
-                draft[field.field] === '' ||
-                applyToLines.count === 0
+                draft[field.field] == null || draft[field.field] === '' || applyToLines.count === 0
               }
               data-apply-to-lines={field.field}
               data-tip={

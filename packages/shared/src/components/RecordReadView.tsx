@@ -5,11 +5,12 @@ import { useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
 import { sanitizeHtml } from '../lib/sanitize-html'
-import { titleCase } from '../lib/utils'
+import { formatRelative, titleCase } from '../lib/utils'
 import { FileM2MField } from './item-edit/FilePickerField'
 import { UserChip } from './item-edit/GroupSection'
-import type { CMSRelation } from './item-edit/types'
+import { useFieldTouches } from './item-edit/HeaderFreshness'
 import { richTextToPlain } from './item-edit/helpers'
+import type { CMSRelation } from './item-edit/types'
 import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
@@ -965,6 +966,35 @@ export function RecordReadView({
   gridCounts?: Record<string, number>
 }) {
   const client = useNivaroClient()
+  // #23 — "changed 2h ago by X" on every scalar label: one field-touch read
+  // over every plain field the board shows (the header chips share the key
+  // shape, react-query dedupes).
+  const touchFields = useMemo(
+    () =>
+      [
+        ...new Set(
+          (layoutData?.assignments ?? [])
+            .map((a) => a.field)
+            .filter((f) => f && !f.startsWith('__') && !f.includes('.'))
+        )
+      ].sort(),
+    [layoutData]
+  )
+  const { data: touches } = useFieldTouches(collection, itemId, touchFields)
+  const TouchMark = ({ field }: { field: string }) => {
+    const t = touches?.[field]
+    if (!t) return null
+    const machine = t.via !== 'user'
+    return (
+      <span
+        data-field-touch={field}
+        data-tip={`Changed ${formatRelative(t.at)} by ${t.who}${machine ? ` · ${t.via}` : ''}`}
+        role='img'
+        aria-label={`Changed ${formatRelative(t.at)} by ${t.who}`}
+        className={`ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle ${machine ? 'bg-amber-400' : 'bg-slate-300 dark:bg-slate-600'}`}
+      />
+    )
+  }
   const { data: integrity } = useRecordIntegrity(collection, itemId, !!integrityMarks)
   const integrityMap = useMemo(
     () => (integrityMarks && integrity?.enabled ? integrityByField(integrity.findings) : null),
@@ -1087,8 +1117,7 @@ export function RecordReadView({
       ? liveSlots
           .filter((a) =>
             groupKey === null
-              ? a.group_key == null &&
-                (position === 'leading') === LEADING_SLOTS.has(a.field)
+              ? a.group_key == null && (position === 'leading') === LEADING_SLOTS.has(a.field)
               : a.group_key === groupKey
           )
           .map((a) => ({ key: a.field, node: renderSlot(a.field, a) }))
@@ -1408,86 +1437,86 @@ export function RecordReadView({
             widget could never say it has content and hide_empty would drop
             it for good. */}
         <div className='px-5 pb-5 pt-4' hidden={!isOpen(g)}>
-            {scalars.length > 0 && (
-              // One column rhythm for the whole page: every section's facts sit
-              // on the same 2 / 3 / 4 / 6 tracks, so values line up card to
-              // card instead of each card auto-filling its own grid.
-              <dl className='grid gap-x-6 gap-y-5' data-read-dl={width}>
-                {scalars.map((a) => {
-                  if (relEmpty(a)) return null
-                  const ov = parseOverrides(a.overrides)
-                  const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
-                  const long =
-                    isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
-                  // Free text that would truncate in one track (a description,
-                  // a textarea) takes two tracks and wraps to a few lines —
-                  // "SIT_beaverfalls.pa_KEY_Q2_…" is a value, not a summary.
-                  const rawV = record?.[a.field]
-                  const wide =
-                    !long &&
-                    !isM2M(a) &&
-                    !m2oTarget(a.field) &&
-                    (String(fieldByName.get(a.field)?.interface ?? '').includes('textarea') ||
-                      (typeof rawV === 'string' && rawV.length > 36))
-                  return (
-                    <div
-                      key={a.field}
-                      // A file list, or a long list of links, is a row rather
-                      // than a fact and takes the whole width; a two-value
-                      // alias (Zone, Region) stays a fact in one track.
-                      className={`min-w-0 ${
-                        long ||
-                        (
-                          isM2M(a) &&
-                            (relTargets[a.field] === 'nivaro_files' ||
-                              (relCounts[a.field] ?? 0) > 3)
-                        )
-                          ? 'col-span-full'
-                          : emphasis || wide
-                            ? 'col-span-2'
-                            : ''
+          {scalars.length > 0 && (
+            // One column rhythm for the whole page: every section's facts sit
+            // on the same 2 / 3 / 4 / 6 tracks, so values line up card to
+            // card instead of each card auto-filling its own grid.
+            <dl className='grid gap-x-6 gap-y-5' data-read-dl={width}>
+              {scalars.map((a) => {
+                if (relEmpty(a)) return null
+                const ov = parseOverrides(a.overrides)
+                const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
+                const long =
+                  isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
+                // Free text that would truncate in one track (a description,
+                // a textarea) takes two tracks and wraps to a few lines —
+                // "SIT_beaverfalls.pa_KEY_Q2_…" is a value, not a summary.
+                const rawV = record?.[a.field]
+                const wide =
+                  !long &&
+                  !isM2M(a) &&
+                  !m2oTarget(a.field) &&
+                  (String(fieldByName.get(a.field)?.interface ?? '').includes('textarea') ||
+                    (typeof rawV === 'string' && rawV.length > 36))
+                return (
+                  <div
+                    key={a.field}
+                    // A file list, or a long list of links, is a row rather
+                    // than a fact and takes the whole width; a two-value
+                    // alias (Zone, Region) stays a fact in one track.
+                    className={`min-w-0 ${
+                      long ||
+                      (
+                        isM2M(a) &&
+                          (relTargets[a.field] === 'nivaro_files' || (relCounts[a.field] ?? 0) > 3)
+                      )
+                        ? 'col-span-full'
+                        : emphasis || wide
+                          ? 'col-span-2'
+                          : ''
+                    }`}
+                  >
+                    <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+                      {labelFor(a)}
+                      <IntegrityMark field={a.field} />
+                      <TouchMark field={a.field} />
+                    </dt>
+                    <dd
+                      className={`mt-1 min-w-0 ${
+                        emphasis
+                          ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
+                          : `${isM2M(a) || long ? '' : wide ? 'line-clamp-3 break-words ' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
                       }`}
                     >
-                      <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-                        {labelFor(a)}
-                        <IntegrityMark field={a.field} />
-                      </dt>
-                      <dd
-                        className={`mt-1 min-w-0 ${
-                          emphasis
-                            ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
-                            : `${isM2M(a) || long ? '' : wide ? 'line-clamp-3 break-words ' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
-                        }`}
-                      >
-                        {record ? (
-                          renderValue(a)
-                        ) : (
-                          <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
-                        )}
-                      </dd>
-                    </div>
-                  )
-                })}
-              </dl>
-            )}
-            {grids.map((a) => (
-              <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''} hidden={relEmpty(a)}>
-                {integrityMap?.get(a.field)?.length ? (
-                  <div className='mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'>
-                    <span className='uppercase tracking-wide'>{labelFor(a)}</span>
-                    <IntegrityMark field={a.field} />
-                    <span className='font-normal text-amber-700/80 dark:text-amber-300/80'>
-                      — {integrityMap.get(a.field)!.length} line issue
-                      {integrityMap.get(a.field)!.length === 1 ? '' : 's'}; switch to Edit to fix
-                    </span>
+                      {record ? (
+                        renderValue(a)
+                      ) : (
+                        <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                      )}
+                    </dd>
                   </div>
-                ) : null}
-                {(renderGrid ? renderGrid(a) : null) ?? renderGridAssignment(a)}
-              </div>
-            ))}
-            {renderWidgets(g.key)}
-            {renderLiveSlots(g.key)}
-          </div>
+                )
+              })}
+            </dl>
+          )}
+          {grids.map((a) => (
+            <div key={a.field} className={scalars.length > 0 ? 'mt-3' : ''} hidden={relEmpty(a)}>
+              {integrityMap?.get(a.field)?.length ? (
+                <div className='mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'>
+                  <span className='uppercase tracking-wide'>{labelFor(a)}</span>
+                  <IntegrityMark field={a.field} />
+                  <span className='font-normal text-amber-700/80 dark:text-amber-300/80'>
+                    — {integrityMap.get(a.field)!.length} line issue
+                    {integrityMap.get(a.field)!.length === 1 ? '' : 's'}; switch to Edit to fix
+                  </span>
+                </div>
+              ) : null}
+              {(renderGrid ? renderGrid(a) : null) ?? renderGridAssignment(a)}
+            </div>
+          ))}
+          {renderWidgets(g.key)}
+          {renderLiveSlots(g.key)}
+        </div>
       </section>
     )
   }
@@ -1537,6 +1566,7 @@ export function RecordReadView({
                   <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                     {labelFor(a)}
                     <IntegrityMark field={a.field} />
+                    <TouchMark field={a.field} />
                   </dt>
                   <dd className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                     {record ? renderValue(a) : '…'}

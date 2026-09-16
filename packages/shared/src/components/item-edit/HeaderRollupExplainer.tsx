@@ -52,6 +52,26 @@ export function HeaderRollupExplainer({
         <p className='mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
           Where this number comes from
         </p>
+        {data && (data.kind === 'read' || data.kind === 'write') && (
+          <div className='mb-1.5 px-1' data-lineage-formula>
+            <p className='font-mono text-[11px] text-slate-700 dark:text-foreground'>
+              {data.formula}
+            </p>
+            <p className='mt-0.5 text-[10.5px] text-slate-400'>
+              {data.kind === 'read' ? 'Computed on read from' : 'Stored on save from'}
+            </p>
+            <dl className='mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5'>
+              {Object.entries(data.inputs ?? {}).map(([k, v]) => (
+                <div key={k} className='contents'>
+                  <dt className='font-mono text-[10.5px] text-slate-500'>{k}</dt>
+                  <dd className='text-right tabular-nums text-slate-800 dark:text-foreground'>
+                    {num(v)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        )}
         {(data?.sources ?? []).map((src, i) => (
           <div key={i} className='mb-1.5'>
             <p className='px-1 text-[10.5px] text-slate-400'>

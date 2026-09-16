@@ -1577,8 +1577,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       const row = {
         ...rest,
         layout_id: newId,
-        container_id:
-          container_id != null ? (groupIdMap.get(Number(container_id)) ?? null) : null
+        container_id: container_id != null ? (groupIdMap.get(Number(container_id)) ?? null) : null
       }
       await db('nivaro_field_groups').insert(row)
       const inserted = await db('nivaro_field_groups')
@@ -1688,6 +1687,22 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: result })
   })
 
+  // input_bindings arrives as an array from the editor but as the stored JSON
+  // STRING from a GET → PUT round trip; stringifying a string double-encodes it
+  // and the editor's parser then crashes on `.find`. Unwrap before storing.
+  const serializeBindings = (v: unknown): string | null => {
+    let cur = v
+    for (let i = 0; i < 4 && typeof cur === 'string'; i++) {
+      try {
+        cur = JSON.parse(cur)
+      } catch {
+        break
+      }
+    }
+    if (cur == null || cur === '') return null
+    return JSON.stringify(cur)
+  }
+
   // PUT /collection-layouts/:id/assignments — bulk replace
   app.put('/:id/assignments', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -1739,7 +1754,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
             show_row_revisions: a.show_row_revisions ? 1 : 0,
             allow_revision_restore: a.allow_revision_restore === false ? 0 : 1,
             lock_conditions: a.lock_conditions ?? null,
-            input_bindings: a.input_bindings != null ? JSON.stringify(a.input_bindings) : null,
+            input_bindings: serializeBindings(a.input_bindings),
             widget_id: a.widget_id ?? null,
             show_approval_chain: a.show_approval_chain ? 1 : 0
           }))

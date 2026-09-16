@@ -476,6 +476,8 @@ export interface BulkRunResult {
   skipped: number
   errors: Array<{ item: string; error: string }>
   skipped_items: string[]
+  /** #1/#18 — per-record verdict (dry run and real run alike). */
+  outcomes: Array<{ item: string; outcome: 'change' | 'skip' | 'fail'; reason?: string }>
 }
 
 /** Run a DB-defined action over ids as the requesting user. */
@@ -483,16 +485,29 @@ export async function runDefinition(
   def: BulkActionRow,
   ids: Array<string | number>,
   reason: string | null,
-  req: FastifyRequest
+  req: FastifyRequest,
+  opts: { dryRun?: boolean } = {}
 ): Promise<BulkRunResult> {
   const { readOne, updateOne } = await import('./items.js')
   const user = req.user as User
+  const dryRun = !!opts.dryRun
   const result: BulkRunResult = {
     succeeded: 0,
     failed: 0,
     skipped: 0,
     errors: [],
-    skipped_items: []
+    skipped_items: [],
+    outcomes: []
+  }
+  const skip = (item: string, why: string) => {
+    result.skipped++
+    result.skipped_items.push(item)
+    result.outcomes.push({ item, outcome: 'skip', reason: why })
+  }
+  const fail = (item: string, why: string) => {
+    result.failed++
+    result.errors.push({ item, error: why })
+    result.outcomes.push({ item, outcome: 'fail', reason: why })
   }
   const collection = def.collection
 
@@ -524,13 +539,11 @@ export async function runDefinition(
         unknown
       > | null
       if (!record) {
-        result.failed++
-        result.errors.push({ item, error: 'Record not found or not readable' })
+        fail(item, 'Record not found or not readable')
         continue
       }
       if (!guardPasses(def.guard, record)) {
-        result.skipped++
-        result.skipped_items.push(item)
+        skip(item, 'nothing to change (guard not met)')
         continue
       }
 
@@ -546,13 +559,20 @@ export async function runDefinition(
         // Already at every target value (an on-hold record in an "On hold"
         // selection): leave it alone — no write, no reason on its history.
         if (Object.keys(payload).every((k) => valueUnchanged(record[k], payload[k]))) {
-          result.skipped++
-          result.skipped_items.push(item)
+          skip(item, 'already there')
           continue
         }
         if (reason) payload._change_reason = reason
-        await updateOne(user, collection, item, payload, req)
+        if (!dryRun) await updateOne(user, collection, item, payload, req)
         result.succeeded++
+        result.outcomes.push({
+          item,
+          outcome: 'change',
+          reason: Object.keys(payload)
+            .filter((k) => !k.startsWith('_'))
+            .map((k) => `${k} → ${payload[k] == null ? '∅' : String(payload[k])}`)
+            .join(', ')
+        })
         continue
       }
 
@@ -561,8 +581,7 @@ export async function runDefinition(
         .where({ collection, item })
         .first()) as WorkflowInstance | undefined
       if (!instance) {
-        result.skipped++
-        result.skipped_items.push(item)
+        skip(item, 'no pipeline instance')
         continue
       }
       const transition = candidates.find(
@@ -571,8 +590,7 @@ export async function runDefinition(
           String(t.from_state).toUpperCase() === String(instance.current_state ?? '').toUpperCase()
       )
       if (!transition) {
-        result.skipped++
-        result.skipped_items.push(item)
+        skip(item, 'no such transition from its current state')
         continue
       }
       if (instance.completed_at) {
@@ -580,8 +598,7 @@ export async function runDefinition(
           String(transition.from_state ?? '').toUpperCase() ===
           String(instance.current_state ?? '').toUpperCase()
         if (!escapes) {
-          result.skipped++
-          result.skipped_items.push(item)
+          skip(item, 'already completed')
           continue
         }
       }
@@ -590,8 +607,7 @@ export async function runDefinition(
         if (roles && roles.length > 0) {
           const userRole = req.user?.role ?? null
           if (!userRole || !roles.includes(userRole)) {
-            result.failed++
-            result.errors.push({ item, error: 'You do not have permission for this transition' })
+            fail(item, 'You do not have permission for this transition')
             continue
           }
         }
@@ -605,8 +621,7 @@ export async function runDefinition(
           collection
         )
         if (blocking) {
-          result.failed++
-          result.errors.push({ item, error: 'Transition requirements not met (open the record)' })
+          fail(item, 'Transition requirements not met (open the record)')
           continue
         }
       }
@@ -614,10 +629,14 @@ export async function runDefinition(
       if (condRaw) {
         const conditionRecord = await fetchRecordForConditions(collection, item, [condRaw])
         if (!evaluateConditionRules(condRaw, conditionRecord)) {
-          result.failed++
-          result.errors.push({ item, error: 'Transition conditions not met' })
+          fail(item, 'Transition conditions not met')
           continue
         }
+      }
+      if (dryRun) {
+        result.succeeded++
+        result.outcomes.push({ item, outcome: 'change', reason: `${transition.label}` })
+        continue
       }
       try {
         const applied = await applyTransition({
@@ -638,20 +657,16 @@ export async function runDefinition(
           comment: `→ ${toLabel} via ${transition.label} (bulk: ${def.label})${reason ? ` — "${reason}"` : ''}`
         })
         result.succeeded++
+        result.outcomes.push({ item, outcome: 'change', reason: `→ ${toLabel}` })
       } catch (err) {
         if (err instanceof TransitionBlockedError) {
-          result.failed++
-          result.errors.push({ item, error: err.message })
+          fail(item, err.message)
           continue
         }
         throw err
       }
     } catch (err) {
-      result.failed++
-      result.errors.push({
-        item,
-        error: (err instanceof Error ? err.message : String(err)).slice(0, 300)
-      })
+      fail(item, (err instanceof Error ? err.message : String(err)).slice(0, 300))
     }
   }
   return result

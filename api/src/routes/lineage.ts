@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { readItems } from '../services/items.js'
-import { getLabels } from '../services/queues.js'
 import { can } from '../services/permissions.js'
+import { getLabels } from '../services/queues.js'
 import { parseRollupFormula } from '../services/rollups.js'
 
 /**
@@ -59,8 +59,8 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
         | undefined
       if (!record) return reply.code(404).send({ error: 'Record not found' })
 
-      // ── write-computed: formula + its current inputs ──────────────────────
-      if (fieldRow.computed_type === 'write') {
+      // ── write- or read-computed: formula + its current inputs ─────────────
+      if (fieldRow.computed_type === 'write' || fieldRow.computed_type === 'read') {
         const formula = fieldRow.computed_formula
         const inputs: Record<string, unknown> = {}
         for (const m of formula.matchAll(/item\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
@@ -68,7 +68,7 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
         }
         return {
           data: {
-            kind: 'write',
+            kind: fieldRow.computed_type,
             formula,
             inputs,
             stored_value: record[field] ?? null
