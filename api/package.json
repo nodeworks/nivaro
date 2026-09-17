@@ -49,6 +49,7 @@
     "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts",
     "scope:bom-categories": "tsx extensions/efp-ops/scripts/scope-bom-categories.ts",
     "cifa:bom-categories": "tsx extensions/efp-ops/scripts/cifa-bom-categories.ts",
+    "priority:flag": "tsx extensions/efp-ops/scripts/priority-flag.ts",
     "seed:project-type-values": "tsx extensions/efp-ops/scripts/project-type-values.ts",
     "golive:settings-check": "tsx extensions/efp-ops/scripts/check-prod-settings.ts"
   },
