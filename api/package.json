@@ -44,6 +44,7 @@
     "proc:deploy": "tsx extensions/efp-ops/scripts/deploy-procedures.ts",
     "proc:deploy-app-managed": "tsx extensions/efp-ops/scripts/deploy-app-managed-procs.ts",
     "golive:convert": "tsx extensions/efp-ops/scripts/run-golive-conversions.ts",
+    "golive:prerun": "tsx extensions/efp-ops/scripts/run-golive-prerun.ts",
     "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts",
     "scope:bom-categories": "tsx extensions/efp-ops/scripts/scope-bom-categories.ts",
     "seed:project-type-values": "tsx extensions/efp-ops/scripts/project-type-values.ts",
