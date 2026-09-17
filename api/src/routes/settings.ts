@@ -19,7 +19,8 @@ function maskSettings(settings: Record<string, unknown>) {
     anthropic_api_key: settings.anthropic_api_key ? MASK : null,
     ai_gateway_client_secret: settings.ai_gateway_client_secret ? MASK : null,
     smtp_pass: settings.smtp_pass ? MASK : null,
-    sms_auth_token: settings.sms_auth_token ? MASK : null
+    sms_auth_token: settings.sms_auth_token ? MASK : null,
+    directory_password: settings.directory_password ? MASK : null
   }
 }
 
@@ -66,6 +67,9 @@ const allowedSettingsKeys = [
   // Directory sync (Microsoft Graph)
   'directory_sync_enabled',
   'directory_sync_suspend',
+  'directory_auth_mode',
+  'directory_username',
+  'directory_password',
   // SMTP / email
   'smtp_host',
   'smtp_port',
@@ -181,6 +185,11 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (patch.ai_gateway_client_secret === MASK) delete patch.ai_gateway_client_secret
     if (patch.smtp_pass === MASK) delete patch.smtp_pass
     if (patch.sms_auth_token === MASK) delete patch.sms_auth_token
+    if (patch.directory_password === MASK) delete patch.directory_password
+    if ('directory_auth_mode' in patch) {
+      patch.directory_auth_mode =
+        patch.directory_auth_mode === 'service_account' ? 'service_account' : null
+    }
 
     // Coerce smtp_secure to bit
     if ('smtp_secure' in patch) {
@@ -198,6 +207,11 @@ export async function settingsRoutes(app: FastifyInstance) {
       .where({ id: settings.id })
       .update({ ...patch, updated_at: new Date() })
     const updated = await db('nivaro_settings').where({ id: settings.id }).first()
+    if (Object.keys(patch).some((k) => k.startsWith('directory_'))) {
+      // New identity or password: forget the cached Graph token at once.
+      const { resetDirectoryToken } = await import('../services/graph-directory.js')
+      resetDirectoryToken()
+    }
     await logActivity({
       action: 'update',
       user: req.user?.id,

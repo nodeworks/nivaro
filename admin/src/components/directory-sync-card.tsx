@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookUser, RefreshCw } from 'lucide-react'
+import { BookUser, KeyRound, RefreshCw } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
@@ -14,7 +16,14 @@ import { cn, formatRelative } from '@/lib/utils'
  * how the user table currently reads, and a Run-now.
  */
 
-type Status = { configured: boolean; granted: boolean; roles: string[]; reason: string | null }
+type Status = {
+  configured: boolean
+  granted: boolean
+  roles: string[]
+  reason: string | null
+  auth_mode: 'app' | 'service_account'
+  username: string | null
+}
 type Report = {
   enabled: boolean
   suspend: boolean
@@ -49,6 +58,42 @@ export function DirectorySyncCard() {
     mutationFn: (body: Record<string, boolean>) => api.patch('/settings', body),
     onSuccess: invalidate,
     onError: () => toast.error('Could not save the directory sync setting')
+  })
+  const settingsQ = useQuery<Record<string, unknown>>({
+    queryKey: ['settings'],
+    queryFn: () => api.get('/settings').then((r) => r.data.data)
+  })
+  const [mode, setMode] = useState<'app' | 'service_account'>('app')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [seeded, setSeeded] = useState(false)
+  useEffect(() => {
+    if (seeded || !settingsQ.data) return
+    setMode(settingsQ.data.directory_auth_mode === 'service_account' ? 'service_account' : 'app')
+    setUsername(String(settingsQ.data.directory_username ?? ''))
+    setPassword(String(settingsQ.data.directory_password ?? ''))
+    setSeeded(true)
+  }, [seeded, settingsQ.data])
+  const saveIdentity = useMutation({
+    mutationFn: () =>
+      api.patch('/settings', {
+        directory_auth_mode: mode,
+        directory_username: username.trim() || null,
+        directory_password: password || null
+      }),
+    onSuccess: async () => {
+      invalidate()
+      const s = await api
+        .get('/directory/status', { params: { fresh: '1' } })
+        .then((r) => r.data.data as Status)
+      qc.setQueryData(['directory-status'], s)
+      if (s.granted) toast.success(`Directory access works as ${s.username ?? 'the app'}`)
+      else toast.error(s.reason ?? 'Directory access still not granted')
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Could not save the directory identity')
+    }
   })
   const recheck = useMutation({
     mutationFn: () => api.get('/directory/status', { params: { fresh: '1' } }),
@@ -98,6 +143,105 @@ export function DirectorySyncCard() {
         >
           {granted ? 'Access granted' : 'Waiting on User.Read.All'}
         </span>
+      </div>
+
+      <div
+        className='space-y-2 rounded-md border border-slate-200 px-3 py-2.5 dark:border-border'
+        data-directory-identity
+      >
+        <div className='flex flex-wrap items-center justify-between gap-2'>
+          <Label className='flex items-center gap-1.5 text-[12px] font-medium text-slate-700 dark:text-foreground'>
+            <KeyRound className='h-3.5 w-3.5 text-slate-400' />
+            Sign in to the directory as
+          </Label>
+          <div className='inline-flex rounded-md border border-slate-200 p-0.5 text-[11.5px] dark:border-border'>
+            {(
+              [
+                ['app', 'App registration'],
+                ['service_account', 'Service account']
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type='button'
+                onClick={() => setMode(value)}
+                aria-pressed={mode === value}
+                data-directory-mode={value}
+                className={cn(
+                  'rounded px-2.5 py-1 transition-colors',
+                  mode === value
+                    ? 'bg-nvr-navy text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {mode === 'service_account' ? (
+          <>
+            <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+              A named account with a password whose delegated User.Read.All was granted through IAM.
+              The sign-in name is its user principal name (usually the email form).
+            </p>
+            <div className='grid gap-2 sm:grid-cols-2'>
+              <div className='space-y-1'>
+                <Input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder='svc-account@company.com'
+                  autoComplete='off'
+                  className='h-8 text-[12px]'
+                  data-directory-username
+                />
+                {username.trim() && !username.includes('@') && (
+                  <p
+                    className='text-[11px] text-amber-700 dark:text-amber-300'
+                    data-directory-username-hint
+                  >
+                    Use the full sign-in name (name@domain) — Microsoft rejects the bare account
+                    name.
+                  </p>
+                )}
+              </div>
+              <Input
+                type='password'
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder='Password'
+                autoComplete='new-password'
+                className='h-8 text-[12px]'
+                data-directory-password
+              />
+            </div>
+          </>
+        ) : (
+          <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+            The app registration's own credentials (from the server environment). Needs
+            User.Read.All as an APPLICATION permission with admin consent.
+          </p>
+        )}
+        <div className='flex items-center gap-2'>
+          <Button
+            type='button'
+            size='sm'
+            onClick={() => saveIdentity.mutate()}
+            disabled={
+              saveIdentity.isPending ||
+              (mode === 'service_account' && (!username.trim() || !password))
+            }
+            className='h-7 text-[12px]'
+            data-directory-save
+          >
+            {saveIdentity.isPending ? 'Saving and testing…' : 'Save and test'}
+          </Button>
+          {status.data.username && status.data.auth_mode === 'service_account' && (
+            <span className='text-[11px] text-slate-400'>
+              Currently signing in as {status.data.username}
+            </span>
+          )}
+        </div>
       </div>
 
       {!granted && (

@@ -1,4 +1,6 @@
 import { config } from '../config.js'
+import { db } from '../db/index.js'
+import { overlaySettings } from './settings-overrides.js'
 
 // ─── Microsoft Graph directory ───────────────────────────────────────────────
 // Login enrichment (auth/oidc.ts) reads /me with the PERSON's token, so it only
@@ -8,6 +10,11 @@ import { config } from '../config.js'
 // consented. Until that consent exists the token issues fine but carries no
 // `roles` claim and every /users call 403s — `directoryStatus()` reports
 // exactly that so the UI can say what to flip instead of shrugging.
+//
+// Alternatively (nivaro_settings.directory_auth_mode = 'service_account') the
+// lookups sign in as a named SERVICE ACCOUNT with a password (the OAuth
+// password grant against the same app registration): the grant is then a
+// DELEGATED User.Read.All and rides the token's `scp` claim instead of `roles`.
 
 export type DirectoryUser = {
   id: string
@@ -36,6 +43,34 @@ export type DirectoryStatus = {
   roles: string[]
   tenant: string | null
   reason: string | null
+  auth_mode: 'app' | 'service_account'
+  username: string | null
+}
+
+export type DirectoryIdentity = {
+  mode: 'app' | 'service_account'
+  username: string | null
+  password: string | null
+}
+
+/** Which identity the lookups use — from nivaro_settings (per-instance overlay applies). */
+export async function directoryIdentity(): Promise<DirectoryIdentity> {
+  try {
+    const raw = (await db('nivaro_settings')
+      .select('directory_auth_mode', 'directory_username', 'directory_password')
+      .orderBy('id', 'asc')
+      .first()) as Record<string, unknown> | undefined
+    const row = await overlaySettings(raw ?? {})
+    const username = typeof row.directory_username === 'string' ? row.directory_username.trim() : ''
+    const password = typeof row.directory_password === 'string' ? row.directory_password : ''
+    const mode =
+      row.directory_auth_mode === 'service_account' && username && password
+        ? 'service_account'
+        : 'app'
+    return { mode, username: username || null, password: password || null }
+  } catch {
+    return { mode: 'app', username: null, password: null }
+  }
 }
 
 export class DirectoryError extends Error {
@@ -117,20 +152,26 @@ export function directoryConfigured(): boolean {
   return Boolean(c.tenant && c.clientId && c.secret)
 }
 
-let cachedToken: { token: string; expiresAt: number; roles: string[] } | null = null
+let cachedToken: { key: string; token: string; expiresAt: number; roles: string[] } | null = null
 
-function rolesFromJwt(token: string): string[] {
+/** Application `roles` and delegated `scp` scopes, as one list. */
+export function grantsFromJwt(token: string): string[] {
   try {
     const payload = JSON.parse(
       Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')
-    ) as { roles?: unknown }
-    return Array.isArray(payload.roles) ? payload.roles.map(String) : []
+    ) as { roles?: unknown; scp?: unknown }
+    const roles = Array.isArray(payload.roles) ? payload.roles.map(String) : []
+    const scp = typeof payload.scp === 'string' ? payload.scp.split(/\s+/).filter(Boolean) : []
+    return [...new Set([...roles, ...scp])]
   } catch {
     return []
   }
 }
 
-/** Client-credentials token for Graph, cached until a minute before expiry. */
+/**
+ * Graph token, cached until a minute before expiry: client credentials for the
+ * app, or the password grant for a configured service account.
+ */
 async function appToken(): Promise<{ token: string; roles: string[] }> {
   const c = credentials()
   if (!c.tenant || !c.clientId || !c.secret) {
@@ -140,15 +181,27 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
       'directory_not_configured'
     )
   }
-  if (cachedToken && cachedToken.expiresAt > Date.now()) {
+  const identity = await directoryIdentity()
+  const key = `${identity.mode}|${identity.username ?? ''}`
+  if (cachedToken && cachedToken.key === key && cachedToken.expiresAt > Date.now()) {
     return { token: cachedToken.token, roles: cachedToken.roles }
   }
-  const body = new URLSearchParams({
-    client_id: c.clientId,
-    client_secret: c.secret,
-    grant_type: 'client_credentials',
-    scope: 'https://graph.microsoft.com/.default'
-  })
+  const body =
+    identity.mode === 'service_account'
+      ? new URLSearchParams({
+          client_id: c.clientId,
+          client_secret: c.secret,
+          grant_type: 'password',
+          username: identity.username ?? '',
+          password: identity.password ?? '',
+          scope: 'https://graph.microsoft.com/.default'
+        })
+      : new URLSearchParams({
+          client_id: c.clientId,
+          client_secret: c.secret,
+          grant_type: 'client_credentials',
+          scope: 'https://graph.microsoft.com/.default'
+        })
   let res: Response
   try {
     res = await fetch(`https://login.microsoftonline.com/${c.tenant}/oauth2/v2.0/token`, {
@@ -170,18 +223,23 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
     error_description?: string
   }
   if (!res.ok || !json.access_token) {
+    const who =
+      identity.mode === 'service_account'
+        ? `the service account ${identity.username}`
+        : 'the app token'
     throw new DirectoryError(
-      `Microsoft refused the app token: ${json.error ?? res.status}${
-        json.error_description ? ` — ${json.error_description.slice(0, 200)}` : ''
+      `Microsoft refused ${who}: ${json.error ?? res.status}${
+        json.error_description ? ` — ${json.error_description.slice(0, 300)}` : ''
       }`,
       502,
       'graph_token_failed'
     )
   }
   cachedToken = {
+    key,
     token: json.access_token,
     expiresAt: Date.now() + Math.max(60, (json.expires_in ?? 3600) - 60) * 1000,
-    roles: rolesFromJwt(json.access_token)
+    roles: grantsFromJwt(json.access_token)
   }
   return { token: cachedToken.token, roles: cachedToken.roles }
 }
@@ -193,37 +251,48 @@ export function resetDirectoryToken(): void {
 
 export async function directoryStatus(): Promise<DirectoryStatus> {
   const tenant = tenantId()
+  const identity = await directoryIdentity()
+  const base = { tenant, auth_mode: identity.mode, username: identity.username }
   if (!directoryConfigured()) {
     return {
+      ...base,
       configured: false,
       granted: false,
       roles: [],
-      tenant,
       reason: 'No Microsoft tenant or app credentials configured'
     }
   }
   try {
     const { roles } = await appToken()
     const granted = roles.some((r) => GRANT_ROLES.includes(r))
+    const noGrant =
+      identity.mode === 'service_account'
+        ? `${identity.username} signed in, but its token carries no User.Read.All — grant the DELEGATED User.Read.All to the app and let the service account consent (or an admin consent for it)`
+        : 'The app token carries no Graph roles — User.Read.All must be added as an APPLICATION permission and admin-consented, or switch to a service account below'
     return {
+      ...base,
       configured: true,
       granted,
       roles,
-      tenant,
       reason: granted
         ? null
         : roles.length === 0
-          ? 'The app token carries no Graph roles — User.Read.All must be added as an APPLICATION permission and admin-consented'
-          : `The app token carries ${roles.join(', ')} but none of ${GRANT_ROLES.join(', ')}`
+          ? noGrant
+          : `The token carries ${roles.join(', ')} but none of ${GRANT_ROLES.join(', ')}`
     }
   } catch (err) {
-    return {
-      configured: true,
-      granted: false,
-      roles: [],
-      tenant,
-      reason: err instanceof Error ? err.message : String(err)
+    let reason = err instanceof Error ? err.message : String(err)
+    // "account does not exist" with a bare name = the UPN was left off.
+    if (
+      identity.mode === 'service_account' &&
+      identity.username &&
+      !identity.username.includes('@') &&
+      /AADSTS50034/.test(reason)
+    ) {
+      reason +=
+        ' — the sign-in name must be the full user principal name (name@domain), not the bare account name'
     }
+    return { ...base, configured: true, granted: false, roles: [], reason }
   }
 }
 
