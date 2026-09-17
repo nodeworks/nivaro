@@ -1,10 +1,10 @@
-import type { FastifyInstance } from 'fastify'
-import type Anthropic from '@anthropic-ai/sdk'
 import { randomUUID } from 'node:crypto'
+import type Anthropic from '@anthropic-ai/sdk'
+import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { getAiClient } from './ai-client.js'
 import { logActivity } from './activity.js'
+import { getAiClient } from './ai-client.js'
 import { parseRoom } from './chat.js'
 
 /**
@@ -306,14 +306,12 @@ async function answerQuestion(
   const client = await getAiClient()
   if (!client) return 'AI is not configured on this instance — an admin can add a key in Settings.'
 
-  const { CHAT_SYSTEM_PROMPT, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
+  const { buildChatSystemPrompt, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
     './ai-chat.js'
   )
-  const modelRow = await db('nivaro_settings')
-    .orderBy('id', 'asc')
-    .first('ai_model')
-    .catch(() => null)
-  const model = String(modelRow?.ai_model ?? '') || 'claude-haiku-4-5-20251001'
+  const { getAiModelSettings } = await import('./ai-client.js')
+  const { chatModel: model } = await getAiModelSettings()
+  const systemPrompt = await buildChatSystemPrompt(asker)
 
   const contextBlock = roomContext
     ? `Recent messages in this chat room (oldest first):\n${roomContext}\n\n`
@@ -328,7 +326,7 @@ async function answerQuestion(
     const response = await client.messages.create({
       model,
       max_tokens: 700,
-      system: CHAT_SYSTEM_PROMPT,
+      system: systemPrompt,
       tools: [
         ...CHAT_TOOLS,
         SET_REMINDER_TOOL,

@@ -26,6 +26,8 @@ import { overlaySettings } from './settings-overrides.js'
  */
 
 export interface AiSettingsRow {
+  ai_chat_guide?: string | null
+  ai_gateway_chat_model?: string | null
   anthropic_api_key?: string | null
   ai_provider?: string | null
   ai_gateway_base_url?: string | null
@@ -40,7 +42,7 @@ export interface AiSettingsRow {
   ai_max_tokens_summarize?: number | null
 }
 
-async function settingsRow(): Promise<AiSettingsRow | null> {
+export async function settingsRow(): Promise<AiSettingsRow | null> {
   const row = (await db('nivaro_settings')
     .orderBy('id', 'asc')
     .first()
@@ -190,7 +192,7 @@ interface GatewayApi {
   client_secret: string
 }
 
-function gatewayFromSettings(s: AiSettingsRow): GatewayApi {
+export function gatewayFromSettings(s: AiSettingsRow): GatewayApi {
   return {
     base_url: (s.ai_gateway_base_url ?? '').trim().replace(/\/+$/, ''),
     token_url: (s.ai_gateway_token_url ?? '').trim(),
@@ -208,7 +210,7 @@ const cacheKey = (api: GatewayApi) =>
  * credentials ride as X-Client-Id / X-Client-Secret HEADERS (SAT-NG style);
  * the form body still carries grant_type for endpoints that want it.
  */
-async function gatewayBearer(api: GatewayApi): Promise<string> {
+export async function gatewayBearer(api: GatewayApi): Promise<string> {
   const key = cacheKey(api)
   const hit = bearerCache.get(key)
   if (hit && hit.exp > Date.now()) return hit.token
@@ -474,10 +476,13 @@ export async function getAiClient(): Promise<Anthropic | null> {
 export async function getAiModelSettings() {
   const row = (await settingsRow()) ?? {}
   const gateway = row.ai_provider === 'gateway'
+  const model = gateway
+    ? row.ai_gateway_model?.trim() || row.ai_model || 'claude-4-5-haiku'
+    : (row.ai_model ?? 'claude-haiku-4-5-20251001')
   return {
-    model: gateway
-      ? row.ai_gateway_model?.trim() || row.ai_model || 'claude-4-5-haiku'
-      : (row.ai_model ?? 'claude-haiku-4-5-20251001'),
+    model,
+    /** Ask AI / chat bot: the multi-step tool loop, worth a stronger model than one-shot calls. */
+    chatModel: (gateway && row.ai_gateway_chat_model?.trim()) || model,
     maxTokensGenerate: row.ai_max_tokens_generate ?? 500,
     maxTokensSummarize: row.ai_max_tokens_summarize ?? 200
   }

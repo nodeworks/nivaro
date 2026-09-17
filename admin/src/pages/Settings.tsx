@@ -1433,7 +1433,9 @@ export function SettingsPage() {
   const [aiGatewayClientSecret, setAiGatewayClientSecret] = useState('')
   const [aiGatewayFormat, setAiGatewayFormat] = useState<'openai' | 'anthropic'>('openai')
   const [aiGatewayModel, setAiGatewayModel] = useState('')
+  const [aiGatewayChatModel, setAiGatewayChatModel] = useState('')
   const [aiPromptCaching, setAiPromptCaching] = useState(true)
+  const [aiChatGuide, setAiChatGuide] = useState('')
   const [aiTest, setAiTest] = useState<{
     state: 'idle' | 'running' | 'ok' | 'error'
     text?: string
@@ -1551,7 +1553,9 @@ export function SettingsPage() {
     setAiGatewayClientSecret(settings.ai_gateway_client_secret ?? '')
     setAiGatewayFormat(settings.ai_gateway_format === 'anthropic' ? 'anthropic' : 'openai')
     setAiGatewayModel(settings.ai_gateway_model ?? '')
+    setAiGatewayChatModel(settings.ai_gateway_chat_model ?? '')
     setAiPromptCaching(settings.ai_prompt_caching !== false)
+    setAiChatGuide(settings.ai_chat_guide ?? '')
     setAiMaxGenerate(settings.ai_max_tokens_generate ?? 500)
     setAiMaxSummarize(settings.ai_max_tokens_summarize ?? 200)
     setSlaStart(settings.sla_business_day_start ?? 9)
@@ -1769,7 +1773,9 @@ export function SettingsPage() {
       ai_gateway_client_secret: aiGatewayClientSecret || null,
       ai_gateway_format: aiGatewayFormat,
       ai_gateway_model: aiGatewayModel.trim() || null,
+      ai_gateway_chat_model: aiGatewayChatModel.trim() || null,
       ai_prompt_caching: aiPromptCaching,
+      ai_chat_guide: aiChatGuide.trim() || null,
       ai_max_tokens_generate: aiMaxGenerate,
       ai_max_tokens_summarize: aiMaxSummarize
     })
@@ -2575,6 +2581,18 @@ export function SettingsPage() {
                           data-ai-gateway-model
                         />
                       </Field>
+                      <Field
+                        label='Model id for Ask AI'
+                        hint='The data assistant reasons across several tool calls, where a small model gives confident wrong answers. Blank = the model above. One-shot features (generate, summarize, validate, briefs) keep using the model above.'
+                      >
+                        <Input
+                          value={aiGatewayChatModel}
+                          onChange={(e) => setAiGatewayChatModel(e.target.value)}
+                          placeholder='claude-4-6-sonnet'
+                          className='h-8 font-mono text-[13px]'
+                          data-ai-gateway-chat-model
+                        />
+                      </Field>
                     </>
                   )}
                   <Field
@@ -2595,6 +2613,21 @@ export function SettingsPage() {
                         {aiPromptCaching ? 'On' : 'Off'}
                       </span>
                     </div>
+                  </Field>
+                  <Field
+                    label='Data guide for Ask AI'
+                    hint='Plain text the assistant reads before every question: which collection connects two others, what a human id looks like, the everyday names people use for fields. It cannot infer your domain from column names alone.'
+                  >
+                    <Textarea
+                      value={aiChatGuide}
+                      onChange={(e) => setAiChatGuide(e.target.value)}
+                      rows={7}
+                      className='font-mono text-[12px]'
+                      placeholder={
+                        'Purchase orders connect to workflows through workflow_purchase_orders_junction.\nA workflow carries the vendor and the billing_location; a PO has no location of its own.'
+                      }
+                      data-ai-chat-guide
+                    />
                   </Field>
                   <div className='flex items-center gap-3'>
                     <Button

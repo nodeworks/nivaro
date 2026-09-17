@@ -1413,9 +1413,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(400).send({ error: 'last message must be from the user' })
     }
 
-    const { buildChatSystemPrompt, CHAT_TOOLS, MAX_ROUNDS, WRAP_UP_MESSAGE, executeChatTool } =
+    const { buildChatSystemPrompt, buildWrapUpMessages, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } =
       await import('../services/ai-chat.js')
-    const settings = await getAiModelSettings()
+    const { chatModel } = await getAiModelSettings()
+    const settings = { model: chatModel }
     const system = await buildChatSystemPrompt(req.user!)
     const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
     const proposals: Array<Record<string, unknown>> = []
@@ -1459,7 +1460,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             results.push({
               type: 'tool_result',
               tool_use_id: block.id,
-              content: JSON.stringify(result).slice(0, 30_000)
+              content: JSON.stringify(result).slice(0, 12_000)
             })
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Tool failed'
@@ -1474,26 +1475,17 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         }
         convo.push({ role: 'user', content: results })
       }
-      // Out of rounds: one last call with NO tools, so the model answers from
-      // what it gathered instead of the user getting a dead end.
+      // Out of rounds: one last call with NO tools and NO tool blocks (the
+      // transcript rides as plain text — some providers refuse tool history
+      // without a tool config), so the model answers from what it gathered
+      // instead of the user getting a dead end.
       let text = ''
       try {
-        const last = convo[convo.length - 1]
-        const wrapUp: Anthropic.MessageParam[] =
-          last?.role === 'user' && Array.isArray(last.content)
-            ? [
-                ...convo.slice(0, -1),
-                {
-                  role: 'user',
-                  content: [...last.content, { type: 'text', text: WRAP_UP_MESSAGE }]
-                }
-              ]
-            : [...convo, { role: 'user', content: WRAP_UP_MESSAGE }]
         const final = await client.messages.create({
           model: settings.model,
           max_tokens: 1500,
           system,
-          messages: wrapUp
+          messages: buildWrapUpMessages(convo)
         })
         text = final.content
           .filter((b): b is Anthropic.TextBlock => b.type === 'text')

@@ -197,7 +197,9 @@ export type CMSSettings = {
   ai_gateway_client_secret?: string | null
   ai_gateway_format?: 'openai' | 'anthropic' | null
   ai_gateway_model?: string | null
+  ai_gateway_chat_model?: string | null
   ai_prompt_caching?: boolean | null
+  ai_chat_guide?: string | null
   ai_max_tokens_generate: number | null
   ai_max_tokens_summarize: number | null
   sla_business_day_start: number | null

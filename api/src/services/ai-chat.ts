@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { settingsRow } from './ai-client.js'
 import { embedText, searchEmbeddings } from './embeddings.js'
 import {
   applyConditions,
@@ -10,6 +11,7 @@ import {
   readItems
 } from './items.js'
 import { can, getRowFilter } from './permissions.js'
+import { getLabels } from './queues.js'
 
 /**
  * Ask-your-data chat — a Claude tool-use loop over the CMS.
@@ -70,11 +72,16 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'query_items',
-    description: `Read records from a collection. ${FILTER_DOC} Sort is an array like ["-created_at"]. Returns {total, rows} — total is the full matching count even when rows are capped. Respects the user's permissions and row-level security.`,
+    description: `Read records from a collection. ${FILTER_DOC} \`search\` matches a word or phrase across the collection's text columns at once (names, descriptions, ids) — the first thing to try when someone names a place, a vendor, a title or an id. Sort is an array like ["-created_at"]. Returns {total, rows} — total is the full matching count even when rows are capped. A link field (M2O) comes back as {id, label}; ask for \`link.column\` (e.g. vendor.name) to read a column of the linked record. A to-many relation is not a column — query the related collection with a filter on its link field. Respects the user's permissions and row-level security.`,
     input_schema: {
       type: 'object' as const,
       properties: {
         collection: { type: 'string' },
+        search: {
+          type: 'string',
+          description:
+            'Free text matched against every text column (case-insensitive contains). Combine with filter.'
+        },
         filter: {
           type: 'object',
           description: 'e.g. {"status": {"_eq": "open"}} or {"$state": {"_in": ["started"]}}'
@@ -141,7 +148,7 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   {
     name: 'semantic_search',
     description:
-      "Fuzzy meaning-based search over a collection's indexed text (titles, descriptions, notes). Use when exact filters cannot express the question.",
+      'Meaning-based search over the records that have been indexed for a collection. Only useful where list_collections reports a meaningful semantic_indexed count — an unindexed collection returns nothing, which says nothing about the data. For a name, place, vendor or id use query_items with search instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -199,11 +206,49 @@ function describeFields(valid: Set<string>): string {
  * list — the model retries with a real field instead of receiving an answer
  * computed over an unfiltered table.
  */
+const TEXT_OPS = new Set(['_contains', '_ncontains', '_starts_with', '_ends_with'])
+
+/**
+ * The collection a link column points at, walking dotted hops (M2O and
+ * aliases). Null when the leaf is not a link.
+ */
+async function linkTargetOf(
+  collection: string,
+  path: string[],
+  links: (collection: string) => Promise<ChatRelations>
+): Promise<string | null> {
+  let current = collection
+  for (let i = 0; i < path.length; i++) {
+    const rel = await links(current)
+    const seg = path[i]
+    const m2o = rel.m2o.find((r) => r.field === seg)
+    const alias = m2o ? null : rel.aliases.find((a) => a.field === seg)
+    const next = m2o?.collection ?? alias?.collection ?? null
+    if (i === path.length - 1) return m2o ? next : null
+    if (!next) return null
+    current = next
+  }
+  return null
+}
+
+/** The column a text match on a link should aim at: the target's display template's first token, else name/title. */
+async function labelColumnOf(collection: string): Promise<string> {
+  try {
+    const meta = (await db('nivaro_collections').where({ collection }).first('display_template')) as
+      | { display_template: string | null }
+      | undefined
+    return meta?.display_template?.match(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ?? 'name'
+  } catch {
+    return 'name'
+  }
+}
+
 export async function compileChatFilter(
   collection: string,
   raw: unknown,
   valid: Set<string>,
-  plan: (collection: string, path: string[]) => Promise<unknown> = planConditionPath
+  plan: (collection: string, path: string[]) => Promise<unknown> = planConditionPath,
+  links: (collection: string) => Promise<ChatRelations> = relationsFor
 ): Promise<FilterCondition[]> {
   if (raw == null) return []
   if (typeof raw !== 'object' || Array.isArray(raw)) {
@@ -268,15 +313,173 @@ export async function compileChatFilter(
         `Cannot filter ${collection} on path "${c.path.join('.')}" — check the relations list_collections reports.`
       )
     }
+    // A text match against a link column compares against an id and quietly
+    // matches nothing ({vendor: {_contains: "insight"}} → 0 rows, every time).
+    if (TEXT_OPS.has(c.op)) {
+      const target = await linkTargetOf(collection, c.path, links)
+      if (target) {
+        const col = await labelColumnOf(target)
+        throw new Error(
+          `"${c.path.join('.')}" is a link to ${target} (it holds an id), so ${c.op} on it matches nothing. Filter on "${c.path.join('.')}.${col}" instead, or use search.`
+        )
+      }
+    }
   }
   return out
 }
 
+/** Physical columns of a table — the truth a junction or an unregistered table has no nivaro_fields rows for. */
+async function physicalColumns(collection: string): Promise<Array<{ name: string; type: string }>> {
+  const rows = (await db('information_schema.columns')
+    .where({ table_name: collection })
+    .select('column_name', 'data_type')
+    .orderBy('ordinal_position')
+    .catch(() => [])) as Array<{ column_name: string; data_type: string }>
+  return rows.map((r) => ({ name: r.column_name, type: r.data_type }))
+}
+
 async function fieldSet(collection: string): Promise<Set<string>> {
-  const rows = (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
-    field: string
-  }>
-  return new Set(rows.map((r) => r.field))
+  const [rows, physical] = await Promise.all([
+    db('nivaro_fields').where({ collection }).select('field') as Promise<Array<{ field: string }>>,
+    physicalColumns(collection)
+  ])
+  return new Set([...rows.map((r) => r.field), ...physical.map((c) => c.name)])
+}
+
+type ChatRelations = {
+  m2o: Array<{ field: string; collection: string }>
+  aliases: Array<{ field: string; kind: 'm2m' | 'o2m'; collection: string; fk: string | null }>
+}
+
+/** Links out of a collection (M2O) and to-many aliases onto it, from nivaro_relations. */
+async function relationsFor(collection: string): Promise<ChatRelations> {
+  const [m2o, aliases] = await Promise.all([
+    db('nivaro_relations')
+      .where({ many_collection: collection })
+      .whereNotNull('one_collection')
+      .select('many_field', 'one_collection') as Promise<
+      Array<{ many_field: string; one_collection: string }>
+    >,
+    db('nivaro_relations')
+      .where({ one_collection: collection })
+      .whereNotNull('one_field')
+      .select('one_field', 'many_collection', 'many_field', 'junction_field') as Promise<
+      Array<{
+        one_field: string
+        many_collection: string
+        many_field: string | null
+        junction_field: string | null
+      }>
+    >
+  ])
+  return {
+    m2o: m2o.map((r) => ({ field: r.many_field, collection: r.one_collection })),
+    aliases: aliases.map((r) => ({
+      field: r.one_field,
+      kind: r.junction_field ? 'm2m' : 'o2m',
+      collection: r.many_collection,
+      fk: r.many_field
+    }))
+  }
+}
+
+/**
+ * The `fields` a query may ask for: a physical column, or `link.column` through
+ * an M2O link (readItems expands it). A to-many alias is NOT a column — asking
+ * for one used to reach SQL as `[purchase_orders]` and error; a dotted path
+ * used to be dropped silently, so the model asked for `vendor.name` and got no
+ * vendor at all. Both are errors the model can act on now.
+ */
+function validateQueryFields(
+  collection: string,
+  requested: unknown,
+  valid: Set<string>,
+  physical: Set<string>,
+  rel: ChatRelations
+): string[] | undefined {
+  if (!Array.isArray(requested)) return undefined
+  const links = new Map(rel.m2o.map((r) => [r.field, r.collection]))
+  const out: string[] = []
+  for (const raw of requested.slice(0, 15)) {
+    const f = String(raw)
+    if (f.includes('.')) {
+      const head = f.split('.')[0]
+      if (!links.has(head)) {
+        throw new Error(
+          `'${f}': '${head}' is not a link field on ${collection}. Link fields: ${rel.m2o.map((r) => `${r.field} → ${r.collection}`).join(', ') || 'none'}`
+        )
+      }
+      out.push(f)
+      continue
+    }
+    if (physical.has(f)) {
+      out.push(f)
+      continue
+    }
+    const alias = rel.aliases.find((a) => a.field === f)
+    if (alias) {
+      throw new Error(
+        `'${f}' is a to-many relation (rows of ${alias.collection}), not a column of ${collection}. Query ${alias.collection}${alias.fk ? ` with a filter on ${alias.fk}` : ''} instead.`
+      )
+    }
+    if (valid.has(f)) {
+      out.push(f)
+      continue
+    }
+    throw new Error(`Unknown field '${f}' on ${collection}. Valid fields: ${describeFields(valid)}`)
+  }
+  return out
+}
+
+/**
+ * Plain foreign keys come back as bare ids (vendor: 1201). The model then
+ * prints the id as if it were the answer. Resolve every M2O value in the page
+ * to `{id, label}` — one label read per target collection, never per row.
+ */
+async function labelForeignKeys(rows: unknown[], rel: ChatRelations): Promise<unknown[]> {
+  const byTarget = new Map<string, Set<string>>()
+  const links = rel.m2o.filter((r) => r.field !== 'id')
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    for (const link of links) {
+      const v = (row as Record<string, unknown>)[link.field]
+      if (v == null || typeof v === 'object') continue
+      if (!byTarget.has(link.collection)) byTarget.set(link.collection, new Set())
+      byTarget.get(link.collection)?.add(String(v))
+    }
+  }
+  if (byTarget.size === 0) return rows
+  const labels: Record<string, string> = {}
+  const users = byTarget.get('nivaro_users')
+  if (users?.size) {
+    byTarget.delete('nivaro_users')
+    const people = (await db('nivaro_users')
+      .whereIn('id', [...users])
+      .select('id', 'first_name', 'last_name', 'email')
+      .catch(() => [])) as Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    for (const u of people) {
+      const name = [u.first_name, u.last_name].filter(Boolean).join(' ')
+      labels[`nivaro_users:${String(u.id).toUpperCase()}`] = name || u.email || String(u.id)
+    }
+  }
+  Object.assign(labels, await getLabels(byTarget).catch(() => ({})))
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object') return row
+    const r = { ...(row as Record<string, unknown>) }
+    for (const link of links) {
+      const v = r[link.field]
+      if (v == null || typeof v === 'object') continue
+      const key = `${link.collection}:${link.collection === 'nivaro_users' ? String(v).toUpperCase() : String(v)}`
+      const label = labels[key]
+      r[link.field] = label != null ? { id: v, label } : v
+    }
+    return r
+  })
 }
 
 async function readableCollections(
@@ -302,36 +505,37 @@ async function readableCollections(
   return readable
 }
 
+async function semanticIndexed(collection: string): Promise<number> {
+  const row = (await db('nivaro_embeddings')
+    .where({ collection })
+    .count({ n: '*' })
+    .first()
+    .catch(() => null)) as { n?: number | string } | null
+  return Number(row?.n ?? 0)
+}
+
 async function describeCollection(user: User, collection: string) {
   if (!(await can(user, 'read', collection))) throw new Error('No read access')
-  const [fields, m2o, aliases, binding] = await Promise.all([
+  const [registered, physical, rel, binding, semantic_indexed] = await Promise.all([
     db('nivaro_fields')
       .where({ collection })
       .select('field', 'type', 'interface', 'note') as Promise<
       Array<{ field: string; type: string; interface: string | null; note: string | null }>
     >,
-    db('nivaro_relations')
-      .where({ many_collection: collection })
-      .whereNotNull('one_collection')
-      .select('many_field', 'one_collection') as Promise<
-      Array<{ many_field: string; one_collection: string }>
-    >,
-    db('nivaro_relations')
-      .where({ one_collection: collection })
-      .whereNotNull('one_field')
-      .select('one_field', 'many_collection', 'junction_field') as Promise<
-      Array<{ one_field: string; many_collection: string; junction_field: string | null }>
-    >,
+    physicalColumns(collection),
+    relationsFor(collection),
     db('nivaro_workflow_bindings').where({ collection }).first() as Promise<
       { template: string } | undefined
-    >
+    >,
+    semanticIndexed(collection)
   ])
   const relations = [
-    ...m2o.map((r) => ({ field: r.many_field, kind: 'm2o', collection: r.one_collection })),
-    ...aliases.map((r) => ({
-      field: r.one_field,
-      kind: r.junction_field ? 'm2m' : 'o2m',
-      collection: r.many_collection
+    ...rel.m2o.map((r) => ({ field: r.field, kind: 'm2o', collection: r.collection })),
+    ...rel.aliases.map((r) => ({
+      field: r.field,
+      kind: r.kind,
+      collection: r.collection,
+      ...(r.fk ? { via_field: r.fk } : {})
     }))
   ]
   let pipeline_states: Array<{ key: string; label: string }> | undefined
@@ -341,6 +545,15 @@ async function describeCollection(user: User, collection: string) {
       .orderBy('sort')
       .select('key', 'label')) as Array<{ key: string; label: string }>
   }
+  // Registered fields first; physical columns the registry does not know
+  // (junction tables, unregistered legacy tables) are still filterable.
+  const known = new Set(registered.map((f) => f.field))
+  const fields = [
+    ...registered,
+    ...physical
+      .filter((c) => !known.has(c.name))
+      .map((c) => ({ field: c.name, type: c.type, interface: null, note: null }))
+  ]
   return {
     collection,
     fields: fields.map((f) => ({
@@ -350,6 +563,7 @@ async function describeCollection(user: User, collection: string) {
       ...(f.note ? { note: f.note } : {})
     })),
     relations,
+    semantic_indexed,
     ...(pipeline_states
       ? { pipeline_states, state_filter_example: { $state: { _in: [pipeline_states[0]?.key] } } }
       : {})
@@ -380,25 +594,34 @@ export async function executeChatTool(
 
     case 'query_items': {
       const collection = assertBusinessCollection(input.collection)
-      const valid = await fieldSet(collection)
+      const [valid, physical, rel] = await Promise.all([
+        fieldSet(collection),
+        physicalColumns(collection),
+        relationsFor(collection)
+      ])
       const conditions = await compileChatFilter(collection, input.filter, valid)
-      const fields = Array.isArray(input.fields)
-        ? (input.fields as string[]).filter((f) => valid.has(f)).slice(0, 15)
-        : undefined
+      const fields = validateQueryFields(
+        collection,
+        input.fields,
+        valid,
+        new Set(physical.map((c) => c.name)),
+        rel
+      )
       const sort = Array.isArray(input.sort)
         ? (input.sort as string[]).filter((s) => valid.has(s.replace(/^-/, ''))).slice(0, 3)
         : undefined
       const limit = Math.min(MAX_ROWS, Math.max(1, Number(input.limit) || 25))
+      const search = typeof input.search === 'string' ? input.search.trim().slice(0, 200) : ''
       const fakeReq = {
         query: conditions.length ? { conditions: JSON.stringify(conditions) } : {}
       } as never
       const res = (await readItems(
         user,
         collection,
-        { fields: fields?.length ? fields : undefined, sort, limit },
+        { fields: fields?.length ? fields : undefined, sort, limit, ...(search ? { search } : {}) },
         fakeReq
       )) as { data?: unknown[]; total?: number }
-      const rows = res.data ?? []
+      const rows = await labelForeignKeys(res.data ?? [], rel)
       const total = typeof res.total === 'number' ? res.total : rows.length
       return {
         result: { total, rows },
@@ -455,6 +678,12 @@ export async function executeChatTool(
       const query = String(input.query ?? '').slice(0, 500)
       if (!query) throw new Error('query is required')
       const limit = Math.min(10, Math.max(1, Number(input.limit) || 5))
+      const indexed = await semanticIndexed(collection)
+      if (indexed === 0) {
+        throw new Error(
+          `${collection} has no semantic index — nothing here can be found this way. Use query_items with search: "${query.slice(0, 60)}" instead.`
+        )
+      }
       const vec = await embedText(query)
       const rawHits = (await searchEmbeddings(collection, vec, limit)).filter((h) => h.score > 0)
       // Resolve hits through the permission-checked read path and DROP any hit
@@ -477,8 +706,16 @@ export async function executeChatTool(
         }
       }
       return {
-        result: { hits: visibleHits, rows },
-        summary: `${visibleHits.length} semantic hit(s) in ${collection}`
+        result: {
+          indexed_records: indexed,
+          note:
+            visibleHits.length === 0
+              ? `No hit among the ${indexed} indexed ${collection} records; unindexed records are invisible to this tool — try query_items with search.`
+              : undefined,
+          hits: visibleHits,
+          rows
+        },
+        summary: `${visibleHits.length} semantic hit(s) in ${collection} (${indexed} indexed)`
       }
     }
 
@@ -500,12 +737,13 @@ export const CHAT_SYSTEM_PROMPT = `You are the data assistant inside Nivaro, a h
 
 Rules:
 - Always ground answers in tool results. If a tool errors or returns nothing, say so plainly.
-- Prefer aggregate for counts/totals/breakdowns; query_items for record lists; semantic_search when the question is fuzzy.
+- Prefer aggregate for counts/totals/breakdowns; query_items for record lists. When someone names a place, vendor, title or id, query_items with "search" finds it across the collection's text columns in one call — semantic_search only covers indexed records and is a last resort.
+- Two things that are not directly linked usually meet on a THIRD collection: read the relations list_collections reports and look for the collection that carries a link to both (a request record that names a vendor and a site, a junction between two tables), then filter through it with dotted paths. Say which path you used.
 - The readable collections are listed below — do not call list_collections without a collection name. Call it WITH a name once per collection you have not inspected, then query. When several calls do not depend on each other, make them in the same turn.
 - A record's workflow/pipeline state is not a column: filter with {"$state": {"_in": [keys]}} using the pipeline_states keys list_collections reports. Relations are filtered with dotted paths ("project.name").
 - A filter on an unknown field is an error, never ignored — read the error, fix the field, retry once. Do not repeat a call that already errored the same way.
 - You have a limited number of tool calls per question. Plan the fewest calls that answer it; when told you are out of calls, answer from what you have and say what you could not determine.
-- Keep answers concise: lead with the answer, then a short table or list when it helps. Mention record ids so the user can look records up.
+- Keep answers concise: lead with the answer, then a short table or list when it helps. No filler openers ("Great!", "Certainly"). Mention record ids and human ids so the user can open records. When several records match, list them compactly (id, human id, name) and ask one precise question at most.
 - You cannot change data directly. To change something, call propose_action — the user then approves or rejects the proposal card in the UI. Never claim a change happened; say the proposal is awaiting their approval.
 - All access is permission-checked as the requesting user; if something is forbidden, tell the user their role lacks access.`
 
@@ -515,7 +753,8 @@ Rules:
  * across the rounds of one request (prompt caching keys on it).
  */
 export async function buildChatSystemPrompt(user: User): Promise<string> {
-  const readable = await readableCollections(user)
+  const [readable, settings] = await Promise.all([readableCollections(user), settingsRow()])
+  const guide = settings?.ai_chat_guide?.trim()
   const lines = readable.map((c) =>
     c.display_name && c.display_name !== c.collection
       ? `${c.collection} (${c.display_name})`
@@ -524,9 +763,52 @@ export async function buildChatSystemPrompt(user: User): Promise<string> {
   return `${CHAT_SYSTEM_PROMPT}
 
 Today is ${new Date().toISOString().slice(0, 10)} — resolve "this year", "last month" and similar against that date.
-
+${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}
 Readable collections (${readable.length}):
 ${lines.join(', ')}`
+}
+
+/**
+ * The out-of-rounds wrap-up as ONE plain user turn: the question, then a
+ * transcript of every tool call and (truncated) result. No tool blocks ride
+ * along — the EFP gateway's Bedrock backend refuses tool history without a
+ * tool config, and a wrap-up must never be allowed to call another tool.
+ */
+export function buildWrapUpMessages(
+  convo: Anthropic.MessageParam[],
+  opts: { perResult?: number; total?: number } = {}
+): Anthropic.MessageParam[] {
+  const perResult = opts.perResult ?? 4000
+  const total = opts.total ?? 40000
+  const question =
+    typeof convo[0]?.content === 'string' ? convo[0].content : '(see the transcript below)'
+  const lines: string[] = []
+  for (const m of convo.slice(1)) {
+    if (typeof m.content === 'string') {
+      lines.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      continue
+    }
+    for (const b of m.content as unknown as Array<Record<string, unknown>>) {
+      if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+        lines.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${b.text.trim()}`)
+      } else if (b.type === 'tool_use') {
+        lines.push(`Tool call ${String(b.name)}(${JSON.stringify(b.input ?? {})})`)
+      } else if (b.type === 'tool_result') {
+        const raw = typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? '')
+        const clipped = raw.length > perResult ? `${raw.slice(0, perResult)}… (truncated)` : raw
+        lines.push(`Result${b.is_error ? ' (error)' : ''}: ${clipped}`)
+      }
+    }
+  }
+  let transcript = lines.join('\n')
+  if (transcript.length > total)
+    transcript = `${transcript.slice(0, total)}\n… (transcript truncated)`
+  return [
+    {
+      role: 'user',
+      content: `${question}\n\nEverything gathered so far (tool calls and their results):\n${transcript}\n\n${WRAP_UP_MESSAGE}`
+    }
+  ]
 }
 
 export const WRAP_UP_MESSAGE =
