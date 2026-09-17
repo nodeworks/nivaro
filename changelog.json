@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-17T16:45:07.120Z",
+  "generated_at": "2026-09-17T22:38:48.709Z",
   "releases": [
+    {
+      "version": "0.1.305",
+      "tag": "v0.1.305",
+      "date": "2026-09-17T18:38:39-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "catalog picker: sections through a to-many alias + section_filter",
+              "hash": "74fe2a18"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.304",
       "tag": "v0.1.304",
-      "date": "2026-09-17T12:44:58-04:00",
+      "date": "2026-09-17T12:45:07-04:00",
       "sections": [
         {
           "label": "Added",
