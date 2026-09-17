@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-17T22:38:48.709Z",
+  "generated_at": "2026-09-17T22:47:30.795Z",
   "releases": [
+    {
+      "version": "0.1.306",
+      "tag": "v0.1.306",
+      "date": "2026-09-17T18:47:16-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "an M2M alias named in fields= is stripped, not selected",
+              "hash": "a6186bd4"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.305",
       "tag": "v0.1.305",
-      "date": "2026-09-17T18:38:39-04:00",
+      "date": "2026-09-17T18:38:48-04:00",
       "sections": [
         {
           "label": "Other",
