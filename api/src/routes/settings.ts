@@ -47,6 +47,7 @@ const allowedSettingsKeys = [
   'ai_gateway_client_secret',
   'ai_gateway_format',
   'ai_gateway_model',
+  'ai_prompt_caching',
   'ai_max_tokens_generate',
   'ai_max_tokens_summarize',
   'sla_business_day_start',

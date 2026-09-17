@@ -456,6 +456,11 @@ export const userSettings: DocSection = {
           'ai_gateway_model',
           '—',
           'Model id as the gateway knows it (e.g. claude-4-5-haiku). Replaces the model on every AI call while the gateway is active. POST /ai/test round-trips one prompt.'
+        ],
+        [
+          'ai_prompt_caching',
+          'on',
+          'Marks the stable prefix of every AI call with cache_control so tool loops and chats re-read it from the provider cache: system prompt, tool definitions and the conversation so far on Anthropic directly or an Anthropic-native gateway; the system prompt (which covers the tools) on the OpenAI-compatible format, where the marker rides as a content part. Prompts under the model minimum (1,024 tokens; 4,096 on Haiku 4.5) never cache. POST /ai/test repeats a padded prompt and reports the tokens read back.'
         ]
       ]
     },

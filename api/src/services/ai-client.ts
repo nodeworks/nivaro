@@ -34,6 +34,7 @@ export interface AiSettingsRow {
   ai_gateway_client_secret?: string | null
   ai_gateway_format?: string | null
   ai_gateway_model?: string | null
+  ai_prompt_caching?: boolean | number | null
   ai_model?: string | null
   ai_max_tokens_generate?: number | null
   ai_max_tokens_summarize?: number | null
@@ -56,8 +57,14 @@ export interface AiProviderInfo {
   configured: boolean
   model: string
   format?: 'openai' | 'anthropic'
+  /** prompt caching switched on (the markers ride every wire format) */
+  caching: boolean
   reason?: string
 }
+
+// unset (a row older than migration 323) = on; the column itself defaults to 1
+const cachingOn = (s: AiSettingsRow) =>
+  s.ai_prompt_caching == null ? true : Boolean(Number(s.ai_prompt_caching))
 
 /** What the AI features would use right now (no secrets). */
 export async function describeAiProvider(): Promise<AiProviderInfo> {
@@ -69,11 +76,13 @@ export async function describeAiProvider(): Promise<AiProviderInfo> {
       provider,
       configured: !!key,
       model: s.ai_model ?? 'claude-haiku-4-5-20251001',
+      caching: cachingOn(s),
       reason: key ? undefined : 'no Anthropic API key in env or settings'
     }
   }
   const format = s.ai_gateway_format === 'anthropic' ? 'anthropic' : 'openai'
   const model = s.ai_gateway_model?.trim() || s.ai_model || 'claude-4-5-haiku'
+  const caching = cachingOn(s)
   const gw = gatewayFromSettings(s)
   const missing = [
     !gw.base_url && 'base URL',
@@ -87,10 +96,89 @@ export async function describeAiProvider(): Promise<AiProviderInfo> {
       configured: false,
       model,
       format,
+      caching,
       reason: `gateway is missing its ${missing.join(', ')}`
     }
   }
-  return { provider, configured: true, model, format }
+  return { provider, configured: true, model, format, caching }
+}
+
+// ─── prompt caching ──────────────────────────────────────────────────────────
+
+/**
+ * Mark the stable prefix of a call so the provider serves it from cache on
+ * the next round: the system prompt (its last block), the tool definitions
+ * (the last one — a marker covers everything before it) and, once a
+ * conversation is under way, the newest message, so a tool loop or a chat
+ * finds its whole history cached next turn (the provider looks back up to 20
+ * blocks from a marker for an earlier hit). Three markers, under the cap of
+ * four, and a caller's own marker is never overwritten.
+ *
+ * Anthropic ignores a marker on a prefix under the model's minimum (1,024
+ * tokens on Sonnet/Opus, 4,096 on Haiku 4.5), so a short call simply does not
+ * cache — the size estimate (≈4 chars per token) only keeps the markers off
+ * requests that could never reach any minimum. Nothing here changes what the
+ * model sees; only what it is billed for. The openai shim carries the system
+ * marker only (see toOpenAi); the SDK paths carry all three.
+ */
+const MIN_CACHEABLE_CHARS = 1024 * 4
+const EPHEMERAL = { type: 'ephemeral' } as const
+
+const sizeOf = (v: unknown): number =>
+  v == null ? 0 : typeof v === 'string' ? v.length : JSON.stringify(v).length
+
+export function withPromptCaching(params: MessageParams): MessageParams {
+  if (sizeOf(params.system) + sizeOf(params.tools) + sizeOf(params.messages) < MIN_CACHEABLE_CHARS)
+    return params
+  const out: MessageParams = { ...params }
+  if (typeof params.system === 'string') {
+    if (params.system.trim())
+      out.system = [{ type: 'text', text: params.system, cache_control: EPHEMERAL }]
+  } else if (Array.isArray(params.system) && params.system.length) {
+    const blocks = [...params.system]
+    const last = blocks[blocks.length - 1]
+    blocks[blocks.length - 1] = { ...last, cache_control: last.cache_control ?? EPHEMERAL }
+    out.system = blocks
+  }
+  if (params.tools?.length) {
+    const tools = [...params.tools]
+    const last = tools[tools.length - 1] as Anthropic.Tool
+    tools[tools.length - 1] = {
+      ...last,
+      cache_control: last.cache_control ?? EPHEMERAL
+    } as typeof last
+    out.tools = tools
+  }
+  if (params.messages.length >= 3) {
+    const msgs = [...params.messages]
+    const i = msgs.length - 1
+    const last = msgs[i]
+    if (typeof last.content === 'string') {
+      if (last.content.trim())
+        msgs[i] = {
+          ...last,
+          content: [{ type: 'text', text: last.content, cache_control: EPHEMERAL }]
+        }
+    } else if (Array.isArray(last.content) && last.content.length) {
+      const blocks = [...last.content]
+      const lb = blocks[blocks.length - 1] as Block & {
+        cache_control?: typeof EPHEMERAL | null
+      }
+      if (lb.type === 'text' || lb.type === 'tool_result' || lb.type === 'image') {
+        blocks[blocks.length - 1] = { ...lb, cache_control: lb.cache_control ?? EPHEMERAL } as Block
+        msgs[i] = { ...last, content: blocks }
+      }
+    }
+    out.messages = msgs
+  }
+  return out
+}
+
+/** `messages.create` with the caching markers applied on the way in. */
+function cachingClient(inner: Anthropic, model?: string): Anthropic {
+  const create = (params: MessageParams) =>
+    inner.messages.create(withPromptCaching(model ? { ...params, model } : params) as never)
+  return { messages: { create } } as unknown as Anthropic
 }
 
 // ─── gateway: settings + bearer cache ────────────────────────────────────────
@@ -176,7 +264,24 @@ function toOpenAi(params: MessageParams, model: string): Record<string, unknown>
       : Array.isArray(params.system)
         ? textOf(params.system as Block[])
         : ''
-  if (system) messages.push({ role: 'system', content: system })
+  // A cache marker on the system prompt rides as an Anthropic-style
+  // cache_control inside a content PART (the OpenRouter convention, which the
+  // gateway maps onto the Anthropic request). Probed 2026-09-17 on the EFP
+  // gateway: this caches system + tool definitions (the gateway's own
+  // accounting reports them as cached_tokens on the repeat). Markers on
+  // later messages are deliberately NOT carried — the gateway maps them by
+  // message index and a tool loop (role: tool rows) shifts the indices, which
+  // fails the whole request ('Could not find array index N').
+  const systemMarked =
+    Array.isArray(params.system) &&
+    (params.system as Array<{ cache_control?: unknown }>).some((b) => b.cache_control)
+  if (system)
+    messages.push({
+      role: 'system',
+      content: systemMarked
+        ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+        : system
+    })
   for (const m of params.messages) {
     if (typeof m.content === 'string') {
       messages.push({ role: m.role, content: m.content })
@@ -247,7 +352,12 @@ interface OpenAiResponse {
       tool_calls?: Array<{ id: string; function?: { name?: string; arguments?: string } }>
     }
   }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number }
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    /** OpenAI's own automatic-cache accounting, when the gateway forwards it */
+    prompt_tokens_details?: { cached_tokens?: number }
+  }
   error?: { message?: string } | string
 }
 
@@ -279,7 +389,7 @@ function fromOpenAi(res: OpenAiResponse, model: string): Anthropic.Message {
       input_tokens: res.usage?.prompt_tokens ?? 0,
       output_tokens: res.usage?.completion_tokens ?? 0,
       cache_creation_input_tokens: null,
-      cache_read_input_tokens: null,
+      cache_read_input_tokens: res.usage?.prompt_tokens_details?.cached_tokens ?? null,
       server_tool_use: null,
       service_tier: null
     }
@@ -287,9 +397,10 @@ function fromOpenAi(res: OpenAiResponse, model: string): Anthropic.Message {
 }
 
 /** `client.messages.create` over an OpenAI-compatible chat/completions endpoint. */
-function openAiCompatClient(api: GatewayApi, model: string): Anthropic {
+function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): Anthropic {
   const url = `${api.base_url}/openai/v1/chat/completions`
-  const create = async (params: MessageParams): Promise<Anthropic.Message> => {
+  const create = async (raw: MessageParams): Promise<Anthropic.Message> => {
+    const params = caching ? withPromptCaching(raw) : raw
     const attempt = async (retryOn401: boolean): Promise<Anthropic.Message> => {
       const bearer = await gatewayBearer(api)
       const res = await fetch(url, {
@@ -325,13 +436,18 @@ function openAiCompatClient(api: GatewayApi, model: string): Anthropic {
 }
 
 /** The real SDK against the gateway's Anthropic-native path, model pinned. */
-async function anthropicGatewayClient(api: GatewayApi, model: string): Promise<Anthropic> {
+async function anthropicGatewayClient(
+  api: GatewayApi,
+  model: string,
+  caching: boolean
+): Promise<Anthropic> {
   const bearer = await gatewayBearer(api)
   const inner = new Anthropic({
     apiKey: null,
     authToken: bearer,
     baseURL: `${api.base_url}/anthropic`
   })
+  if (caching) return cachingClient(inner, model)
   const create = (params: MessageParams) => inner.messages.create({ ...params, model } as never)
   return { messages: { create } } as unknown as Anthropic
 }
@@ -340,17 +456,19 @@ async function anthropicGatewayClient(api: GatewayApi, model: string): Promise<A
 
 export async function getAiClient(): Promise<Anthropic | null> {
   const s = (await settingsRow()) ?? {}
+  const caching = cachingOn(s)
   if (s.ai_provider === 'gateway') {
     const api = gatewayFromSettings(s)
     if (!api.base_url || !api.token_url || !api.client_id || !api.client_secret) return null
     const model = s.ai_gateway_model?.trim() || s.ai_model || 'claude-4-5-haiku'
     return s.ai_gateway_format === 'anthropic'
-      ? anthropicGatewayClient(api, model)
-      : openAiCompatClient(api, model)
+      ? anthropicGatewayClient(api, model, caching)
+      : openAiCompatClient(api, model, caching)
   }
   const key = config.ANTHROPIC_API_KEY || s.anthropic_api_key
   if (!key) return null
-  return new Anthropic({ apiKey: key })
+  const inner = new Anthropic({ apiKey: key })
+  return caching ? cachingClient(inner) : inner
 }
 
 export async function getAiModelSettings() {

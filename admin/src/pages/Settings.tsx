@@ -1433,6 +1433,7 @@ export function SettingsPage() {
   const [aiGatewayClientSecret, setAiGatewayClientSecret] = useState('')
   const [aiGatewayFormat, setAiGatewayFormat] = useState<'openai' | 'anthropic'>('openai')
   const [aiGatewayModel, setAiGatewayModel] = useState('')
+  const [aiPromptCaching, setAiPromptCaching] = useState(true)
   const [aiTest, setAiTest] = useState<{
     state: 'idle' | 'running' | 'ok' | 'error'
     text?: string
@@ -1441,12 +1442,23 @@ export function SettingsPage() {
     setAiTest({ state: 'running' })
     try {
       const r = await api.post<{
-        data: { reply: string; ms: number; model: string; model_reported?: string }
+        data: {
+          reply: string
+          ms: number
+          model: string
+          model_reported?: string
+          cache?: { wrote: number; read: number }
+        }
       }>('/ai/test')
       const d = r.data.data
+      const cache = d.cache
+        ? d.cache.read > 0
+          ? ` · cache works (${d.cache.read.toLocaleString()} tokens read back on the repeat${d.cache.wrote > 0 ? `, ${d.cache.wrote.toLocaleString()} written` : ''})`
+          : ' · cache markers ignored by this provider (0 tokens read back)'
+        : ''
       setAiTest({
         state: 'ok',
-        text: `“${d.reply}” in ${d.ms} ms · model ${d.model_reported ?? d.model}`
+        text: `“${d.reply}” in ${d.ms} ms · model ${d.model_reported ?? d.model}${cache}`
       })
     } catch (err) {
       const e = err as { response?: { data?: { error?: string; reason?: string } } }
@@ -1539,6 +1551,7 @@ export function SettingsPage() {
     setAiGatewayClientSecret(settings.ai_gateway_client_secret ?? '')
     setAiGatewayFormat(settings.ai_gateway_format === 'anthropic' ? 'anthropic' : 'openai')
     setAiGatewayModel(settings.ai_gateway_model ?? '')
+    setAiPromptCaching(settings.ai_prompt_caching !== false)
     setAiMaxGenerate(settings.ai_max_tokens_generate ?? 500)
     setAiMaxSummarize(settings.ai_max_tokens_summarize ?? 200)
     setSlaStart(settings.sla_business_day_start ?? 9)
@@ -1756,6 +1769,7 @@ export function SettingsPage() {
       ai_gateway_client_secret: aiGatewayClientSecret || null,
       ai_gateway_format: aiGatewayFormat,
       ai_gateway_model: aiGatewayModel.trim() || null,
+      ai_prompt_caching: aiPromptCaching,
       ai_max_tokens_generate: aiMaxGenerate,
       ai_max_tokens_summarize: aiMaxSummarize
     })
@@ -2563,6 +2577,25 @@ export function SettingsPage() {
                       </Field>
                     </>
                   )}
+                  <Field
+                    label='Prompt caching'
+                    hint={
+                      aiProvider === 'gateway' && aiGatewayFormat === 'openai'
+                        ? 'Marks the system prompt (which also covers the tool definitions) so every call in a tool loop or a chat re-reads it from the provider cache instead of paying for it again. Prompts under the model minimum (4,096 tokens on Haiku 4.5) never cache. Test shows whether the gateway honours it.'
+                        : 'Marks the stable part of every call (system prompt, tool definitions, the conversation so far) so a tool loop or a chat re-reads it from the provider cache instead of paying for it again. Prompts under the model minimum (4,096 tokens on Haiku 4.5) never cache. Test shows whether the provider honours it.'
+                    }
+                  >
+                    <div className='flex items-center gap-2'>
+                      <Switch
+                        checked={aiPromptCaching}
+                        onCheckedChange={setAiPromptCaching}
+                        data-ai-prompt-caching
+                      />
+                      <span className='text-[12px] text-slate-600 dark:text-slate-300'>
+                        {aiPromptCaching ? 'On' : 'Off'}
+                      </span>
+                    </div>
+                  </Field>
                   <div className='flex items-center gap-3'>
                     <Button
                       type='button'

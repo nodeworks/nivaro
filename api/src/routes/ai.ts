@@ -99,13 +99,37 @@ export async function aiRoutes(app: FastifyInstance) {
         .map((b) => (b.type === 'text' ? b.text : ''))
         .join('')
         .trim()
+      // Prove the cache when it is switched on: the same padded system prompt
+      // twice — the first call writes the cache, the second should read it
+      // back. Padding is ~5k tokens, over every model's minimum (Haiku 4.5
+      // needs 4,096), so a zero on the read call means the provider dropped
+      // the markers, not that the prompt was too short. An OpenAI-shaped
+      // gateway reports reads only (cached_tokens), never writes.
+      let cache: { wrote: number; read: number } | undefined
+      if (info.caching) {
+        const system = `You are a connectivity probe. Reply with the single word OK. ${'The quick brown fox jumps over the lazy dog. '.repeat(500)}`
+        const probe = () =>
+          client.messages.create({
+            model,
+            max_tokens: 5,
+            system,
+            messages: [{ role: 'user', content: 'OK?' }]
+          })
+        const first = await probe()
+        const second = await probe()
+        cache = {
+          wrote: first.usage.cache_creation_input_tokens ?? 0,
+          read: second.usage.cache_read_input_tokens ?? 0
+        }
+      }
       return {
         data: {
           ...info,
           ms: Date.now() - t0,
           reply: text.slice(0, 200),
           model_reported: res.model,
-          usage: res.usage
+          usage: res.usage,
+          cache
         }
       }
     } catch (err) {
