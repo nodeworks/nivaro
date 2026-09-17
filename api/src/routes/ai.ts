@@ -1413,10 +1413,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(400).send({ error: 'last message must be from the user' })
     }
 
-    const { CHAT_SYSTEM_PROMPT, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
-      '../services/ai-chat.js'
-    )
+    const { buildChatSystemPrompt, CHAT_TOOLS, MAX_ROUNDS, WRAP_UP_MESSAGE, executeChatTool } =
+      await import('../services/ai-chat.js')
     const settings = await getAiModelSettings()
+    const system = await buildChatSystemPrompt(req.user!)
     const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
     const proposals: Array<Record<string, unknown>> = []
     const convo: Anthropic.MessageParam[] = history
@@ -1426,7 +1426,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         const response = await client.messages.create({
           model: settings.model,
           max_tokens: 1500,
-          system: CHAT_SYSTEM_PROMPT,
+          system,
           tools: CHAT_TOOLS,
           messages: convo
         })
@@ -1474,11 +1474,49 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         }
         convo.push({ role: 'user', content: results })
       }
+      // Out of rounds: one last call with NO tools, so the model answers from
+      // what it gathered instead of the user getting a dead end.
+      let text = ''
+      try {
+        const last = convo[convo.length - 1]
+        const wrapUp: Anthropic.MessageParam[] =
+          last?.role === 'user' && Array.isArray(last.content)
+            ? [
+                ...convo.slice(0, -1),
+                {
+                  role: 'user',
+                  content: [...last.content, { type: 'text', text: WRAP_UP_MESSAGE }]
+                }
+              ]
+            : [...convo, { role: 'user', content: WRAP_UP_MESSAGE }]
+        const final = await client.messages.create({
+          model: settings.model,
+          max_tokens: 1500,
+          system,
+          messages: wrapUp
+        })
+        text = final.content
+          .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n')
+          .trim()
+      } catch (err) {
+        req.log.warn({ err }, 'AI chat wrap-up call failed')
+      }
+      await logActivity({
+        action: 'ai-chat',
+        user: req.user?.id,
+        comment: `tool-call limit after ${trace.length} tool call(s)`,
+        req
+      })
       return reply.send({
         data: {
-          reply: 'I hit the tool-call limit before finishing — try a more specific question.',
+          reply:
+            text ||
+            `I used all ${MAX_ROUNDS} tool calls without reaching an answer — try a narrower question, or name the collection and fields you mean.`,
           trace,
-          proposals
+          proposals,
+          truncated: true
         }
       })
     } catch (err) {

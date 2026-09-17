@@ -1485,7 +1485,7 @@ function applyOneFilter(q: QB, field: string, op: string, value: unknown): QB {
   }
 }
 
-type FilterCondition = { path: string[]; op: string; value: unknown }
+export type FilterCondition = { path: string[]; op: string; value: unknown }
 
 type PathHop =
   | { kind: 'm2o'; from: string; fk: string; to: string }
@@ -1507,7 +1507,7 @@ async function applyUserScopes(q: QB, collection: string, user: User): Promise<v
   await applyUserScopesToQuery(q, collection, user)
 }
 
-async function planConditionPath(collection: string, path: string[]): Promise<PathPlan> {
+export async function planConditionPath(collection: string, path: string[]): Promise<PathPlan> {
   const hops: PathHop[] = []
   let current = collection
   let segs = [...path]
@@ -1588,7 +1588,7 @@ function applyPlannedCondition(
   build(q as unknown as Knex.QueryBuilder, 0, collection)
 }
 
-type OrCondition = { or: FilterCondition[] }
+export type OrCondition = { or: FilterCondition[] }
 
 /** Active at-risk rules named by a `$at_risk` condition value (id / ids / 'any'). */
 async function loadRiskRules(collection: string, value: unknown) {
@@ -1623,7 +1623,7 @@ function applyRiskRules(
   }
 }
 
-async function applyConditions(
+export async function applyConditions(
   q: QB,
   conditions: Array<FilterCondition | OrCondition>,
   collection: string
