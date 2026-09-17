@@ -48,6 +48,7 @@
     "golive:prerun": "tsx extensions/efp-ops/scripts/run-golive-prerun.ts",
     "convert:addendums": "tsx extensions/efp-ops/scripts/convert-addendums.ts",
     "scope:bom-categories": "tsx extensions/efp-ops/scripts/scope-bom-categories.ts",
+    "cifa:bom-categories": "tsx extensions/efp-ops/scripts/cifa-bom-categories.ts",
     "seed:project-type-values": "tsx extensions/efp-ops/scripts/project-type-values.ts",
     "golive:settings-check": "tsx extensions/efp-ops/scripts/check-prod-settings.ts"
   },

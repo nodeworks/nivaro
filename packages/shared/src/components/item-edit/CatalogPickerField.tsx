@@ -19,9 +19,46 @@ import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
+import { resolveM2MRelatedCollection } from './M2MCombobox'
 import { useO2MStaging } from './O2MStagingContext'
 import { RelationCombobox } from './RelationCombobox'
 import type { CMSRelation } from './types'
+
+/** A to-many `section_by`, resolved: the junction between catalog items and
+ *  the section collection, and the label path on the section row. */
+type SectionM2M = {
+  junction: string
+  fkToItem: string
+  fkToSection: string
+  target: string
+  labelPath: string
+}
+
+const walkPath = (row: Record<string, unknown>, path: string): unknown => {
+  let cur: unknown = row
+  for (const seg of path.split('.')) {
+    if (cur == null || typeof cur !== 'object') return undefined
+    cur = (cur as Record<string, unknown>)[seg]
+  }
+  return cur
+}
+
+/** Every row of a read the server would otherwise clamp at 1000. */
+async function readAllPages(
+  client: ReturnType<typeof useNivaroClient>,
+  path: string,
+  params: Record<string, unknown>
+): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = []
+  for (let page = 1; page <= 50; page++) {
+    const rows = await client
+      .request<{ data: Record<string, unknown>[] }>(get(path, { ...params, limit: 1000, page }))
+      .then((r) => r.data ?? [])
+    out.push(...rows)
+    if (rows.length < 1000) break
+  }
+  return out
+}
 
 // ─── CatalogPickerField ───────────────────────────────────────────────────────
 // BOM-style catalog picker for an inline-table O2M field: instead of listing
@@ -38,8 +75,18 @@ import type { CMSRelation } from './types'
 export interface CatalogModeConfig {
   /** Child M2O field pointing at the catalog collection (e.g. 'item'). */
   item_field: string
-  /** Dotted path on the CATALOG collection grouping items into sections (e.g. 'bom_category.name'). */
+  /** Dotted path on the CATALOG collection grouping items into sections (e.g.
+   *  'category.name'). When the first segment is a to-many alias
+   *  ('categories.name' — an item may sit in several categories) sections come
+   *  from the section collection through the junction and an item lists under
+   *  EVERY section it links to. */
   section_by: string
+  /** With a to-many `section_by`: a filter on the SECTION collection itself.
+   *  Only matching sections render, and the catalog fetch is narrowed to items
+   *  linked to at least one of them ('{alias: {_some: section_filter}}' is
+   *  added to `filter`). '$parent.<field>' tokens resolve like `filter`'s and
+   *  gate the list the same way while unresolved. */
+  section_filter?: Record<string, unknown>
   /** Optional filter applied to the catalog fetch. String values '$parent.<field>' resolve from the parent draft. */
   filter?: Record<string, unknown>
   /** Child field the entered amount writes to (default 'quantity'). */
@@ -290,22 +337,69 @@ export function CatalogPickerField({
     [childRelations, relatedCollection, config.item_field]
   )
 
-  const { data: catalogMeta } = useQuery<{ display_template?: string }>({
+  const { data: catalogMeta } = useQuery<{
+    display_template?: string
+    relations?: CMSRelation[]
+  }>({
     queryKey: ['col-meta', catalogCol],
     queryFn: () =>
       client
-        .request<{ data: { display_template?: string } }>(get(`/collections/${catalogCol}`))
+        .request<{ data: { display_template?: string; relations?: CMSRelation[] } }>(
+          get(`/collections/${catalogCol}`)
+        )
         .then((r) => r.data),
     enabled: !!catalogCol,
     staleTime: 300_000
   })
   const tmpl = catalogMeta?.display_template
 
+  // A to-many `section_by` ('categories.name'): its first segment is an M2M
+  // alias on the catalog collection. Sections then come from the SECTION
+  // collection (narrowed by `section_filter`) through the junction, and an
+  // item lists under every section it links to. A dotted M2O path keeps the
+  // one-section-per-item walk over the fetched row.
+  const sectionAliasRel = useMemo(() => {
+    const head = config.section_by.split('.')[0]
+    return (
+      (catalogMeta?.relations ?? []).find(
+        (r) => r.one_collection === catalogCol && r.one_field === head && !!r.junction_field
+      ) ?? null
+    )
+  }, [catalogMeta, catalogCol, config.section_by])
+  const sectionJunction = sectionAliasRel?.many_collection ?? null
+  const { data: junctionRelations = [] } = useQuery<CMSRelation[]>({
+    queryKey: ['collection-relations', sectionJunction],
+    queryFn: () =>
+      client
+        .request<{ data: unknown }>(get(`/collections/${sectionJunction}`))
+        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+    enabled: !!sectionJunction,
+    staleTime: 10 * 60_000
+  })
+  const sectionM2M = useMemo<SectionM2M | null>(() => {
+    if (!sectionAliasRel?.many_field || !sectionJunction) return null
+    const fkToSection = String(sectionAliasRel.junction_field)
+    // The companion leg lives on the JUNCTION's own relation list, never on
+    // the catalog collection's.
+    const other = junctionRelations.find(
+      (r) => r.many_collection === sectionJunction && r.many_field === fkToSection
+    )
+    const target = resolveM2MRelatedCollection(other)
+    if (!target) return null
+    return {
+      junction: sectionJunction,
+      fkToItem: sectionAliasRel.many_field,
+      fkToSection,
+      target,
+      labelPath: config.section_by.split('.').slice(1).join('.') || 'id'
+    }
+  }, [sectionAliasRel, sectionJunction, junctionRelations, config.section_by])
+
   // '$parent.<field>' tokens in the filter resolve from the live parent draft;
   // unresolved tokens gate the section list ("pick the type first"
   // behaviour).
   const parentDraft = parentDraftCtx?.draft
-  const { resolvedFilter, missingParents } = useMemo(() => {
+  const { resolvedFilter, resolvedSectionFilter, missingParents } = useMemo(() => {
     const missing: string[] = []
     const sub = (v: unknown): unknown => {
       if (typeof v === 'string' && v.startsWith('$parent.')) {
@@ -323,19 +417,33 @@ export function CatalogPickerField({
       return v
     }
     const f = config.filter ? (sub(config.filter) as Record<string, unknown>) : undefined
-    return { resolvedFilter: f, missingParents: [...new Set(missing)] }
-  }, [config.filter, parentDraft])
+    const sf = config.section_filter
+      ? (sub(config.section_filter) as Record<string, unknown>)
+      : undefined
+    return { resolvedFilter: f, resolvedSectionFilter: sf, missingParents: [...new Set(missing)] }
+  }, [config.filter, config.section_filter, parentDraft])
+  // The catalog read narrows to items linked to an in-scope section, so the
+  // zone/type rules live once, on the section, instead of per item.
+  const itemFilter = useMemo(() => {
+    if (!sectionAliasRel || !resolvedSectionFilter) return resolvedFilter
+    const clause = { [sectionAliasRel.one_field as string]: { _some: resolvedSectionFilter } }
+    return resolvedFilter ? { _and: [resolvedFilter, clause] } : clause
+  }, [sectionAliasRel, resolvedSectionFilter, resolvedFilter])
 
   // Catalog fetch: id + display-template fields + section path + copied + display columns
   const catalogFields = useMemo(() => {
-    const out = new Set<string>(['id', config.section_by])
+    const out = new Set<string>(['id'])
+    // A to-many section path cannot ride `fields=` (the read would 500 on the
+    // alias); its links come from the junction reads below. Until the catalog
+    // meta says which kind it is, leave it out — the key changes and refetches.
+    if (catalogMeta && !sectionAliasRel) out.add(config.section_by)
     for (const m of [...(tmpl ?? '').matchAll(/\{\{([\w.]+)\}\}/g)]) out.add(m[1])
     for (const src of Object.values(config.copy_fields ?? {})) out.add(src)
     for (const c of config.columns ?? []) out.add(c.field)
     return [...out].join(',')
-  }, [tmpl, config.section_by, config.copy_fields, config.columns])
+  }, [tmpl, catalogMeta, sectionAliasRel, config.section_by, config.copy_fields, config.columns])
 
-  const filterKey = JSON.stringify(resolvedFilter ?? null)
+  const filterKey = JSON.stringify(itemFilter ?? null)
   const { data: catalogRows = [], isLoading: catalogLoading } = useQuery<Record<string, unknown>[]>(
     {
       queryKey: ['catalog-picker', catalogCol, catalogFields, filterKey],
@@ -345,14 +453,81 @@ export function CatalogPickerField({
             get(`/items/${catalogCol}`, {
               limit: CATALOG_LIMIT,
               fields: catalogFields,
-              ...(resolvedFilter ? { filter: JSON.stringify(resolvedFilter) } : {})
+              ...(itemFilter ? { filter: JSON.stringify(itemFilter) } : {})
             })
           )
           .then((r) => r.data ?? []),
-      enabled: !!catalogCol && missingParents.length === 0,
+      // Wait for the catalog meta: a to-many section path both narrows this
+      // read and must stay out of its `fields=`.
+      enabled:
+        !!catalogCol &&
+        !!catalogMeta &&
+        missingParents.length === 0 &&
+        (!sectionAliasRel || !!sectionM2M),
       staleTime: 60_000
     }
   )
+
+  // Sections + links for a to-many `section_by`: the in-scope section rows
+  // (one read), then the junction rows for those sections (chunked, paged).
+  const sectionFilterKey = JSON.stringify(resolvedSectionFilter ?? null)
+  const { data: sectionRows = [], isLoading: sectionRowsLoading } = useQuery<
+    Array<{ id: string; name: string }>
+  >({
+    queryKey: ['catalog-sections', sectionM2M?.target, sectionM2M?.labelPath, sectionFilterKey],
+    queryFn: async () => {
+      const m = sectionM2M as SectionM2M
+      const rows = await readAllPages(client, `/items/${m.target}`, {
+        fields: `id,${m.labelPath}`,
+        ...(resolvedSectionFilter ? { filter: JSON.stringify(resolvedSectionFilter) } : {})
+      })
+      return rows.map((r) => ({
+        id: String(r.id),
+        name: String(walkPath(r, m.labelPath) ?? '').trim()
+      }))
+    },
+    enabled: !!sectionM2M && missingParents.length === 0,
+    staleTime: 60_000
+  })
+  const sectionIds = useMemo(() => sectionRows.map((s) => s.id), [sectionRows])
+  const { data: sectionLinks = [], isLoading: sectionLinksLoading } = useQuery<
+    Array<{ item: string; section: string }>
+  >({
+    queryKey: ['catalog-section-links', sectionM2M?.junction, sectionIds.join(',')],
+    queryFn: async () => {
+      const m = sectionM2M as SectionM2M
+      const out: Array<{ item: string; section: string }> = []
+      for (let i = 0; i < sectionIds.length; i += 200) {
+        const chunk = sectionIds.slice(i, i + 200)
+        const rows = await readAllPages(client, `/items/${m.junction}`, {
+          fields: `${m.fkToItem},${m.fkToSection}`,
+          filter: JSON.stringify({ [m.fkToSection]: { _in: chunk } })
+        })
+        for (const r of rows) {
+          if (r[m.fkToItem] == null || r[m.fkToSection] == null) continue
+          out.push({ item: String(r[m.fkToItem]), section: String(r[m.fkToSection]) })
+        }
+      }
+      return out
+    },
+    enabled: !!sectionM2M && sectionIds.length > 0,
+    staleTime: 60_000
+  })
+  const sectionNamesByItem = useMemo(() => {
+    const nameById = new Map(sectionRows.map((s) => [s.id, s.name]))
+    const map = new Map<string, string[]>()
+    for (const l of sectionLinks) {
+      const n = nameById.get(l.section)
+      if (!n) continue
+      const arr = map.get(l.item) ?? []
+      if (!arr.includes(n)) arr.push(n)
+      map.set(l.item, arr)
+    }
+    return map
+  }, [sectionRows, sectionLinks])
+  const sectionsPending =
+    !!sectionAliasRel &&
+    (!sectionM2M || sectionRowsLoading || (sectionIds.length > 0 && sectionLinksLoading))
   const catalogById = useMemo(() => {
     const map = new Map<string, Record<string, unknown>>()
     for (const r of catalogRows) map.set(String(r.id), r)
@@ -984,6 +1159,9 @@ export function CatalogPickerField({
   }
 
   const sections = useMemo(() => {
+    // Until the links land every item would read as Uncategorized and the
+    // first-load collapse would key on the wrong section set.
+    if (sectionsPending) return []
     const q = search.trim().toLowerCase()
     const bySection = new Map<
       string,
@@ -991,9 +1169,14 @@ export function CatalogPickerField({
     >()
     for (const row of catalogRows) {
       const label = applyDisplayTemplate(tmpl, row)
-      const sec = sectionValue(row) || 'Uncategorized'
-      if (!bySection.has(sec)) bySection.set(sec, [])
-      bySection.get(sec)!.push({ id: String(row.id), label, row })
+      const secs = sectionAliasRel
+        ? (sectionNamesByItem.get(String(row.id)) ?? [])
+        : [sectionValue(row)]
+      for (const s of secs.length ? secs : ['']) {
+        const sec = s || 'Uncategorized'
+        if (!bySection.has(sec)) bySection.set(sec, [])
+        bySection.get(sec)!.push({ id: String(row.id), label, row })
+      }
     }
     return [...bySection.entries()]
       .sort(([a], [b]) =>
@@ -1004,7 +1187,7 @@ export function CatalogPickerField({
         items: items.sort((a, b) => a.label.localeCompare(b.label))
       }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogRows, tmpl, search, config.section_by])
+  }, [catalogRows, tmpl, search, config.section_by, sectionAliasRel, sectionNamesByItem, sectionsPending])
 
   // First load: collapse everything except sections holding picked rows
   if (!collapseInitRef.current && sections.length > 0) {
@@ -1360,12 +1543,12 @@ export function CatalogPickerField({
                 to browse by category
               </p>
             )}
-            {missingParents.length === 0 && catalogLoading && (
+            {missingParents.length === 0 && (catalogLoading || sectionsPending) && (
               <div className='flex items-center justify-center gap-2 py-6 text-slate-400'>
                 <Loader2 className='h-4 w-4 animate-spin' /> Loading catalog…
               </div>
             )}
-            {missingParents.length === 0 && !catalogLoading && sections.length === 0 && (
+            {missingParents.length === 0 && !catalogLoading && !sectionsPending && sections.length === 0 && (
               <p className='px-3 py-6 text-center text-slate-400'>No catalog items</p>
             )}
 
@@ -1866,6 +2049,7 @@ export function CatalogPickerField({
           catalogCol={catalogCol}
           tmpl={tmpl}
           sectionBy={config.section_by}
+          sectionM2M={sectionM2M}
           pinnedSet={pinnedSet}
           pinnedIds={pinnedIds}
           savingIds={pinSaving}
@@ -2160,6 +2344,7 @@ function FavoritesManagerDrawer({
   catalogCol,
   tmpl,
   sectionBy,
+  sectionM2M,
   pinnedSet,
   pinnedIds,
   savingIds,
@@ -2172,6 +2357,7 @@ function FavoritesManagerDrawer({
   catalogCol: string
   tmpl: string | null | undefined
   sectionBy: string
+  sectionM2M: SectionM2M | null
   pinnedSet: Set<string>
   pinnedIds: string[]
   savingIds: Set<string>
@@ -2222,7 +2408,7 @@ function FavoritesManagerDrawer({
     const first = [...(tmpl ?? '').matchAll(/\{\{([\w.]+)\}\}/g)][0]?.[1]
     return first && !first.includes('.') ? first : 'id'
   }, [tmpl])
-  const listFields = sectionBy.includes('.') ? `*,${sectionBy}` : '*'
+  const listFields = !sectionM2M && sectionBy.includes('.') ? `*,${sectionBy}` : '*'
   const PAGE = 50
   const { data: listData, isFetching } = useQuery<{
     data: Record<string, unknown>[]
@@ -2266,6 +2452,48 @@ function FavoritesManagerDrawer({
     staleTime: 30_000
   })
 
+  // Visible ids (page + pinned) drive the per-item lookups below.
+  const visibleIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of results) ids.add(String(r.id))
+    for (const id of pinnedIds) ids.add(id)
+    return [...ids]
+  }, [results, pinnedIds])
+  // To-many sections: every category of the visible items (unscoped — this
+  // is the catalog index, not the request's filtered view).
+  const { data: sectionNames = new Map<string, string[]>() } = useQuery<Map<string, string[]>>({
+    queryKey: ['favorites-manager-sections', sectionM2M?.junction, visibleIds.join(',')],
+    queryFn: async () => {
+      const m = sectionM2M as SectionM2M
+      const links = await readAllPages(client, `/items/${m.junction}`, {
+        fields: `${m.fkToItem},${m.fkToSection}`,
+        filter: JSON.stringify({ [m.fkToItem]: { _in: visibleIds } })
+      })
+      const targetIds = [...new Set(links.map((l) => String(l[m.fkToSection])))]
+      const targets = targetIds.length
+        ? await readAllPages(client, `/items/${m.target}`, {
+            fields: `id,${m.labelPath}`,
+            filter: JSON.stringify({ id: { _in: targetIds } })
+          })
+        : []
+      const nameById = new Map(
+        targets.map((t) => [String(t.id), String(walkPath(t, m.labelPath) ?? '')])
+      )
+      const map = new Map<string, string[]>()
+      for (const l of links) {
+        const n = nameById.get(String(l[m.fkToSection]))
+        if (!n) continue
+        const k = String(l[m.fkToItem])
+        const arr = map.get(k) ?? []
+        if (!arr.includes(n)) arr.push(n)
+        map.set(k, arr)
+      }
+      return map
+    },
+    enabled: !!sectionM2M && visibleIds.length > 0,
+    staleTime: 60_000
+  })
+
   const label = (row: Record<string, unknown>) =>
     tmpl ? applyDisplayTemplate(tmpl, row) : String(row.cifa_number ?? row.name ?? `#${row.id}`)
   const description = (row: Record<string, unknown>) => {
@@ -2273,6 +2501,7 @@ function FavoritesManagerDrawer({
     return typeof d === 'string' && d.trim() && d.trim() !== label(row) ? d : ''
   }
   const category = (row: Record<string, unknown>) => {
+    if (sectionM2M) return (sectionNames.get(String(row.id)) ?? []).join(', ')
     if (!sectionBy) return ''
     const v = applyDisplayTemplate(`{{${sectionBy}}}`, row)
     return v === `{{${sectionBy}}}` ? '' : v
@@ -2292,12 +2521,6 @@ function FavoritesManagerDrawer({
   // restricted by the resolved match — i.e. only the warehouses the form's
   // current field selection filters to. Multiple matching rows per item ROLL
   // UP: numeric values sum, text takes the first row.
-  const visibleIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const r of results) ids.add(String(r.id))
-    for (const id of pinnedIds) ids.add(id)
-    return [...ids]
-  }, [results, pinnedIds])
   const relatedResults = useQueries({
     queries: relatedCols.map((rc) => {
       const match = resolveRelatedMatch(rc.match, parentDraft)

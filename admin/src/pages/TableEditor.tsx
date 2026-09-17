@@ -14962,7 +14962,7 @@ function FieldSettingsPopover({
                       value={catalogModeLocal}
                       onChange={(e) => setCatalogModeLocal(e.target.value)}
                       placeholder={
-                        '{\n  "item_field": "item",\n  "section_by": "bom_category.name",\n  "filter": {"status": {"_eq": true}},\n  "copy_fields": {"price": "price"},\n  "compute_fields": {"total": "{{price}} * {{quantity}}"}\n}'
+                        '{\n  "item_field": "item",\n  "section_by": "categories.name",\n  "section_filter": {"zones": {"_some": {"zones_id": {"_eq": "$parent.zone"}}}},\n  "filter": {"status": {"_eq": true}},\n  "copy_fields": {"price": "price"},\n  "compute_fields": {"total": "{{price}} * {{quantity}}"}\n}'
                       }
                       rows={5}
                       className='font-mono text-[11px]'
@@ -14970,7 +14970,10 @@ function FieldSettingsPopover({
                     <p className='text-[10px] text-slate-400'>
                       Replaces the grid with a full-catalog picker: every item of the child's
                       "item_field" M2O target renders under sections grouped by "section_by";
-                      entering a quantity creates the child row. Empty = normal grid.
+                      entering a quantity creates the child row. Empty = normal grid. A
+                      "section_by" through a to-many alias ("categories.name") lists an item
+                      under every category it links to; "section_filter" then scopes the
+                      categories themselves (and the items to those categories).
                     </p>
                   </div>
                 )}
