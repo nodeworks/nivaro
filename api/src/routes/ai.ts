@@ -6,7 +6,15 @@ import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hoo
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { describeAiProvider, getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import {
+  feedbackSummary,
+  formatPlaybooksForPrompt,
+  recordFeedback,
+  recordPlaybook,
+  retrievePlaybooks
+} from '../services/ai-playbooks.js'
 import { can } from '../services/permissions.js'
+import { currentTraceMeta } from '../services/request-trace.js'
 
 /** AI governance (#407): per-feature toggles — settings.ai_disabled_features
  *  JSON list of route keys; a disabled feature answers 403 with the reason. */
@@ -1417,7 +1425,17 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
     const { buildChatSystemPrompt, buildWrapUpMessages, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } =
       await import('../services/ai-chat.js')
-    const system = await buildChatSystemPrompt(req.user!)
+    // Playbooks: similar past questions + the tool plans that answered them,
+    // offered as worked examples. Only the newest user turn is matched.
+    const question = history[history.length - 1].content
+    const playbooks = await retrievePlaybooks(question)
+    const system = await buildChatSystemPrompt(req.user!, {
+      playbooks: formatPlaybooksForPrompt(playbooks)
+    })
+    const requestId = currentTraceMeta()?.id ?? null
+    const playbooksUsed = playbooks.length
+    // `convo` below aliases `history` and grows per round — judge "standalone" now.
+    const standalone = history.length === 1
     const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
     const proposals: Array<Record<string, unknown>> = []
     const convo: Anthropic.MessageParam[] = history
@@ -1443,7 +1461,28 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             comment: `${trace.length} tool call(s)`,
             req
           })
-          return reply.send({ data: { reply: text, trace, proposals } })
+          // A standalone question (no earlier turns) answered with tool calls
+          // becomes a playbook. Follow-ups ("and for 2025?") are skipped —
+          // they mean nothing without the conversation.
+          if (standalone && trace.length > 0) {
+            void recordPlaybook({
+              userId: req.user?.id,
+              requestId,
+              question,
+              trace,
+              answer: text,
+              rounds: round + 1
+            }).catch((err) => req.log.warn({ err }, 'AI playbook record failed'))
+          }
+          return reply.send({
+            data: {
+              reply: text,
+              trace,
+              proposals,
+              request_id: requestId,
+              playbooks_used: playbooksUsed
+            }
+          })
         }
 
         convo.push({ role: 'assistant', content: response.content })
@@ -1508,7 +1547,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             `I used all ${MAX_ROUNDS} tool calls without reaching an answer — try a narrower question, or name the collection and fields you mean.`,
           trace,
           proposals,
-          truncated: true
+          truncated: true,
+          request_id: requestId,
+          playbooks_used: playbooksUsed
         }
       })
     } catch (err) {
@@ -1516,6 +1557,108 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(502).send({ error: 'AI request failed' })
     }
   })
+
+  // ─── POST /feedback — thumbs on one chat answer (by request_id) ───────────
+  app.post('/feedback', { preHandler: authenticate }, async (req, reply) => {
+    const body = (req.body ?? {}) as { request_id?: unknown; rating?: unknown; comment?: unknown }
+    const requestId = typeof body.request_id === 'string' ? body.request_id.trim() : ''
+    const rating = Number(body.rating)
+    if (!/^[A-Za-z0-9-]{8,40}$/.test(requestId)) {
+      return reply.code(400).send({ error: 'request_id is required' })
+    }
+    if (rating !== 1 && rating !== -1) {
+      return reply.code(400).send({ error: 'rating must be 1 or -1' })
+    }
+    // The request must be a real logged question, and only the person who
+    // asked may rate it (admins may rate anyone's).
+    const call = await db('nivaro_ai_calls')
+      .select('id')
+      .where({ request_id: requestId })
+      .modify((q) => {
+        if (!req.isAdmin) q.where({ user: req.user!.id })
+      })
+      .first()
+    if (!call) return reply.code(404).send({ error: 'No answer of yours matches that request' })
+    await recordFeedback({
+      requestId,
+      userId: req.user!.id,
+      rating: rating as 1 | -1,
+      comment: typeof body.comment === 'string' ? body.comment : null
+    })
+    return reply.send({ data: { ok: true } })
+  })
+
+  // ─── GET /playbooks — what the chat has learned (admin) ───────────────────
+  app.get<{ Querystring: { limit?: string } }>(
+    '/playbooks',
+    { preHandler: requireAdmin },
+    async (req) => {
+      const limit = Math.min(500, Math.max(1, Number(req.query?.limit) || 100))
+      const rows = await db('nivaro_ai_playbooks as p')
+        .leftJoin('nivaro_users as u', 'u.id', 'p.user')
+        .select(
+          'p.id',
+          'p.created_at',
+          'p.updated_at',
+          'p.request_id',
+          'p.question',
+          'p.plan',
+          'p.answer',
+          'p.rounds',
+          'p.rating',
+          'p.use_count',
+          'p.last_used_at',
+          'p.user',
+          'u.first_name',
+          'u.last_name'
+        )
+        .orderBy('p.updated_at', 'desc')
+        .limit(limit)
+      const parse = (raw: unknown) => {
+        try {
+          return typeof raw === 'string' ? JSON.parse(raw) : raw
+        } catch {
+          return []
+        }
+      }
+      return {
+        data: (rows as Array<Record<string, unknown>>).map((r) => ({
+          id: Number(r.id),
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+          request_id: r.request_id,
+          question: r.question,
+          plan: parse(r.plan),
+          answer: r.answer,
+          rounds: r.rounds,
+          rating: r.rating == null ? null : Number(r.rating),
+          use_count: Number(r.use_count ?? 0),
+          last_used_at: r.last_used_at,
+          user: r.user,
+          user_name: [r.first_name, r.last_name].filter(Boolean).join(' ') || null
+        }))
+      }
+    }
+  )
+
+  app.delete<{ Params: { id: string } }>(
+    '/playbooks/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id) || id <= 0) return reply.code(400).send({ error: 'Bad id' })
+      const n = await db('nivaro_ai_playbooks').where({ id }).del()
+      const { bustPlaybookCache } = await import('../services/ai-playbooks.js')
+      bustPlaybookCache()
+      await logActivity({
+        action: 'ai-playbook-delete',
+        user: req.user?.id,
+        comment: `playbook ${id}`,
+        req
+      })
+      return reply.send({ data: { deleted: n } })
+    }
+  )
 
   // ─── POST /navigate — command-bar routing: prose → target collection ──────
   app.post('/navigate', { preHandler: authenticate }, async (req, reply) => {
@@ -1767,6 +1910,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       const since = new Date(Date.now() - hours * 3_600_000)
       const base = () => db('nivaro_ai_calls').where('created_at', '>=', since)
       const num = (v: unknown) => Number(v ?? 0)
+      const feedback = await feedbackSummary(since).catch(() => ({ up: 0, down: 0 }))
       const [totals, byFeature, byModel, byUser, series, latencies, questions] = await Promise.all([
         base().first(
           db.raw('COUNT(*) as calls'),
@@ -1851,6 +1995,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           p50: pct(0.5),
           p95: pct(0.95),
           tool_calls: num(t.tool_calls),
+          feedback,
           by_feature: (byFeature as Array<Record<string, unknown>>).map((r) => ({
             feature: String(r.feature),
             calls: num(r.calls),

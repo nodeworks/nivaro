@@ -27,6 +27,7 @@ interface Summary {
   p50: number
   p95: number
   tool_calls: number
+  feedback?: { up: number; down: number }
   by_feature: Array<{
     feature: string
     calls: number
@@ -270,6 +271,15 @@ export function AiAnalyticsView() {
           label='Latency p95'
           value={s ? `${(s.p95 / 1000).toFixed(1)}s` : '—'}
           sub={s ? `${num(s.tool_calls)} tool calls` : undefined}
+        />
+        <Tile
+          label='Helpful'
+          value={
+            s?.feedback && s.feedback.up + s.feedback.down > 0
+              ? `${Math.round((s.feedback.up / (s.feedback.up + s.feedback.down)) * 100)}%`
+              : '—'
+          }
+          sub={s?.feedback ? `${num(s.feedback.up)} up · ${num(s.feedback.down)} down` : undefined}
         />
       </div>
 

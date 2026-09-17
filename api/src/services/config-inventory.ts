@@ -118,7 +118,37 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_picker_exclusions',
   'nivaro_pinned_items',
   'nivaro_file_folders',
-  'nivaro_sync_jobs'
+  'nivaro_sync_jobs',
+
+  // ── classified 2026-09-17 (migrations 210–327 — authored config, incl. AI playbooks: learned question→plan pairs follow the instance) ──
+  'nivaro_environments',
+  'nivaro_environment_components',
+  'nivaro_extension_settings',
+  'nivaro_conformance_schedules',
+  'nivaro_broadcast_templates',
+  'nivaro_announcements',
+  'nivaro_log_alert_rules',
+  'nivaro_maintenance_windows',
+  'nivaro_monitors',
+  'nivaro_monitor_subscribers',
+  'nivaro_report_templates',
+  'nivaro_integration_contracts',
+  'nivaro_feature_flags',
+  'nivaro_user_groups',
+  'nivaro_user_group_members',
+  'nivaro_automation_tests',
+  'nivaro_sso_providers',
+  'nivaro_pipeline_owner_group_teams',
+  'nivaro_team_scopes',
+  'nivaro_custom_actions',
+  'nivaro_mail_templates',
+  'nivaro_inbound_mappings',
+  'nivaro_export_presets',
+  'nivaro_import_mappings',
+  'nivaro_bulk_recipes',
+  'nivaro_queue_labels',
+  'nivaro_settings_overrides',
+  'nivaro_ai_playbooks'
 ]
 
 /** Derived from business data — differing between environments proves nothing. */
@@ -133,7 +163,20 @@ export const DERIVED_TABLES: string[] = [
   'nivaro_embeddings',
   'nivaro_files',
   'nivaro_import_queue',
-  'nivaro_sequences'
+  'nivaro_sequences',
+
+  // ── classified 2026-09-17 — regenerable sweeps, snapshots, version history ──
+  'nivaro_record_integrity',
+  'nivaro_conformance_runs',
+  'nivaro_conformance_findings',
+  'nivaro_readiness_snapshots',
+  'nivaro_config_health',
+  'nivaro_report_snapshots',
+  'nivaro_storage_snapshots',
+  'nivaro_layout_versions',
+  'nivaro_report_versions',
+  'nivaro_import_definition_versions',
+  'nivaro_graphql_schema_log'
 ]
 
 /** Operational / ephemeral. Never meaningful to compare across environments. */
@@ -185,7 +228,41 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_addendum_approvals',
   'nivaro_approval_instances',
   'nivaro_approval_decisions',
-  'nivaro_api_keys'
+  'nivaro_api_keys',
+
+  // ── classified 2026-09-17 — per-user state, logs, reactions, journals ──
+  'nivaro_ai_calls',
+  'nivaro_ai_feedback',
+  'nivaro_concurrency_samples',
+  'nivaro_outbox',
+  'nivaro_action_journal',
+  'nivaro_view_subscriptions',
+  'nivaro_api_changelog',
+  'nivaro_chat_reactions',
+  'nivaro_notification_mutes',
+  'nivaro_chat_pins',
+  'nivaro_reminders',
+  'nivaro_chat_saved',
+  'nivaro_record_links',
+  'nivaro_outbound_log',
+  'nivaro_announcement_acks',
+  'nivaro_announcement_deliveries',
+  'nivaro_report_annotations',
+  'nivaro_job_runs',
+  'nivaro_rum_events',
+  'nivaro_login_events',
+  'nivaro_extension_events',
+  'nivaro_legal_holds',
+  'nivaro_sla_escalations',
+  'nivaro_sla_acks',
+  'nivaro_comment_reactions',
+  'nivaro_item_lock_queue',
+  'nivaro_entry_reactions',
+  'nivaro_access_requests',
+  'nivaro_record_views',
+  'nivaro_mail_log',
+  'nivaro_drafts',
+  'nivaro_collection_snapshots'
 ]
 
 /**

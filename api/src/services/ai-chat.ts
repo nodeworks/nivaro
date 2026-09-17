@@ -753,7 +753,10 @@ Rules:
  * collections, so the model spends no tool round discovering names. Stable
  * across the rounds of one request (prompt caching keys on it).
  */
-export async function buildChatSystemPrompt(user: User): Promise<string> {
+export async function buildChatSystemPrompt(
+  user: User,
+  opts: { playbooks?: string } = {}
+): Promise<string> {
   const [readable, settings] = await Promise.all([readableCollections(user), settingsRow()])
   const guide = settings?.ai_chat_guide?.trim()
   const lines = readable.map((c) =>
@@ -764,7 +767,7 @@ export async function buildChatSystemPrompt(user: User): Promise<string> {
   return `${CHAT_SYSTEM_PROMPT}
 
 Today is ${new Date().toISOString().slice(0, 10)} — resolve "this year", "last month" and similar against that date.
-${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}
+${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}${opts.playbooks ? `\n${opts.playbooks}\n` : ''}
 Readable collections (${readable.length}):
 ${lines.join(', ')}`
 }

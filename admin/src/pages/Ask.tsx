@@ -1,5 +1,5 @@
 import { createNivaro } from '@nivaro/sdk'
-import { AiMarkdown, NavigationContext, NivaroProvider } from '@nivaro/shared'
+import { AiFeedbackButtons, AiMarkdown, NavigationContext, NivaroProvider } from '@nivaro/shared'
 import { useMutation } from '@tanstack/react-query'
 import { Loader2, Mic, Send, Sparkles, Volume2, VolumeX, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -30,6 +30,8 @@ interface ChatTurn {
   content: string
   trace?: TraceEntry[]
   proposals?: Proposal[]
+  requestId?: string | null
+  playbooksUsed?: number
 }
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
@@ -219,17 +221,29 @@ function AskPageInner() {
   const send = useMutation({
     mutationFn: (history: ChatTurn[]) =>
       api
-        .post<{ data: { reply: string; trace: TraceEntry[]; proposals?: Proposal[] } }>(
-          '/ai/chat',
-          {
-            messages: history.map((t) => ({ role: t.role, content: t.content }))
+        .post<{
+          data: {
+            reply: string
+            trace: TraceEntry[]
+            proposals?: Proposal[]
+            request_id?: string | null
+            playbooks_used?: number
           }
-        )
+        }>('/ai/chat', {
+          messages: history.map((t) => ({ role: t.role, content: t.content }))
+        })
         .then((r) => r.data.data),
     onSuccess: (data) => {
       setTurns((prev) => [
         ...prev,
-        { role: 'assistant', content: data.reply, trace: data.trace, proposals: data.proposals }
+        {
+          role: 'assistant',
+          content: data.reply,
+          trace: data.trace,
+          proposals: data.proposals,
+          requestId: data.request_id ?? null,
+          playbooksUsed: data.playbooks_used ?? 0
+        }
       ])
       speak(data.reply)
     },
@@ -340,6 +354,18 @@ function AskPageInner() {
                         ))}
                       </div>
                     )}
+                    <div className='mt-1.5 flex items-center justify-between gap-2'>
+                      <AiFeedbackButtons requestId={t.requestId} />
+                      {(t.playbooksUsed ?? 0) > 0 && (
+                        <span
+                          className='text-[10px] text-slate-400'
+                          data-ai-playbooks-used={t.playbooksUsed}
+                        >
+                          reused {t.playbooksUsed} past{' '}
+                          {t.playbooksUsed === 1 ? 'answer' : 'answers'}
+                        </span>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <span className='whitespace-pre-wrap'>{t.content}</span>

@@ -2,6 +2,7 @@ export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
+export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {

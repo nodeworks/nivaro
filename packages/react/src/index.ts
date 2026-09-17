@@ -72,6 +72,7 @@ export {
   AccessDeniedPanel,
   AddendumPanel,
   AiAnalyticsView,
+  AiFeedbackButtons,
   AiMarkdown,
   AiReviewCard,
   AlertManagerView,
