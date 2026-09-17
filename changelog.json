@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-17T15:54:10.221Z",
+  "generated_at": "2026-09-17T16:12:30.134Z",
   "releases": [
+    {
+      "version": "0.1.303",
+      "tag": "v0.1.303",
+      "date": "2026-09-17T12:12:18-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ai",
+              "text": "playbooks + thumbs — Ask AI learns from its own answers",
+              "hash": "c3b4241e"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.302",
       "tag": "v0.1.302",
-      "date": "2026-09-17T11:53:59-04:00",
+      "date": "2026-09-17T11:54:10-04:00",
       "sections": [
         {
           "label": "Added",
