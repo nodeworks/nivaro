@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
-import { getAiClient } from '../services/ai-client.js'
+import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
 import { aggregateThroughput, parseThroughputParams } from '../services/throughput.js'
 
 export async function throughputRoutes(app: FastifyInstance) {
@@ -156,8 +156,9 @@ export async function throughputRoutes(app: FastifyInstance) {
     }
     const client = await getAiClient()
     if (!client) return reply.code(503).send({ error: 'AI is not configured' })
+    const { model } = await getAiModelSettings()
     const resp = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model,
       max_tokens: 1200,
       messages: [
         {

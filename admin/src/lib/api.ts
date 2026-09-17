@@ -190,6 +190,13 @@ export type CMSSettings = {
   presence_sweep_interval: number | null
   presence_ping_interval: number | null
   ai_model: string | null
+  ai_provider?: 'anthropic' | 'gateway' | null
+  ai_gateway_base_url?: string | null
+  ai_gateway_token_url?: string | null
+  ai_gateway_client_id?: string | null
+  ai_gateway_client_secret?: string | null
+  ai_gateway_format?: 'openai' | 'anthropic' | null
+  ai_gateway_model?: string | null
   ai_max_tokens_generate: number | null
   ai_max_tokens_summarize: number | null
   sla_business_day_start: number | null

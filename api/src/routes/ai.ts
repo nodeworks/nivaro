@@ -1,10 +1,11 @@
-import Anthropic from '@anthropic-ai/sdk'
+import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { describeAiProvider, getAiClient, getAiModelSettings } from '../services/ai-client.js'
 import { can } from '../services/permissions.js'
 
 /** AI governance (#407): per-feature toggles — settings.ai_disabled_features
@@ -16,29 +17,6 @@ async function aiFeatureEnabled(key: string): Promise<boolean> {
     return !list.includes(key)
   } catch {
     return true
-  }
-}
-
-async function getClient(): Promise<Anthropic | null> {
-  const key =
-    config.ANTHROPIC_API_KEY ||
-    (await db('nivaro_settings')
-      .orderBy('id', 'asc')
-      .first()
-      .then((s: { anthropic_api_key?: string | null }) => s?.anthropic_api_key ?? null))
-  if (!key) return null
-  return new Anthropic({ apiKey: key })
-}
-
-async function getAiSettings() {
-  const row = await db('nivaro_settings')
-    .orderBy('id', 'asc')
-    .first('ai_model', 'ai_max_tokens_generate', 'ai_max_tokens_summarize')
-    .catch(() => null)
-  return {
-    model: (row?.ai_model as string | null) ?? 'claude-haiku-4-5-20251001',
-    maxTokensGenerate: (row?.ai_max_tokens_generate as number | null) ?? 500,
-    maxTokensSummarize: (row?.ai_max_tokens_summarize as number | null) ?? 200
   }
 }
 
@@ -93,8 +71,51 @@ function describeQuery(
 
 export async function aiRoutes(app: FastifyInstance) {
   // POST /ai/query — natural-language → validated filter DSL → knex query
+  // What the AI features are configured to use (no secrets) — Settings → AI.
+  app.get('/provider', { preHandler: requireAdmin }, async () => {
+    return { data: await describeAiProvider() }
+  })
+
+  // Round trip one tiny prompt through the configured provider so a gateway
+  // (token endpoint, base URL, model id) can be proven from the Settings page
+  // before any feature depends on it.
+  app.post('/test', { preHandler: requireAdmin }, async (_req, reply) => {
+    const info = await describeAiProvider()
+    if (!info.configured)
+      return reply
+        .code(503)
+        .send({ error: `AI not configured: ${info.reason ?? 'unknown'}`, ...info })
+    const client = await getAiClient()
+    if (!client) return reply.code(503).send({ error: 'AI not configured', ...info })
+    const { model } = await getAiModelSettings()
+    const t0 = Date.now()
+    try {
+      const res = await client.messages.create({
+        model,
+        max_tokens: 20,
+        messages: [{ role: 'user', content: 'Reply with the single word OK.' }]
+      })
+      const text = res.content
+        .map((b) => (b.type === 'text' ? b.text : ''))
+        .join('')
+        .trim()
+      return {
+        data: {
+          ...info,
+          ms: Date.now() - t0,
+          reply: text.slice(0, 200),
+          model_reported: res.model,
+          usage: res.usage
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return reply.code(502).send({ error: message.slice(0, 600), ...info, ms: Date.now() - t0 })
+    }
+  })
+
   app.post('/query', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -347,7 +368,7 @@ export async function aiRoutes(app: FastifyInstance) {
         '{"filters":[{"field":"<field or dotted.path>","op":"<op>","value":<value>}],"sort":{"field":"<direct field>","dir":"asc"|"desc"},"limit":<number>,"interpreted":"<one-line summary>"}'
       ].join('\n')
 
-      const { model } = await getAiSettings()
+      const { model } = await getAiModelSettings()
       const message = await client.messages.create({
         model,
         max_tokens: 800,
@@ -529,7 +550,7 @@ export async function aiRoutes(app: FastifyInstance) {
 
   // POST /ai/map-columns — suggest CSV column → field mappings for the import wizard
   app.post('/map-columns', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -579,7 +600,7 @@ export async function aiRoutes(app: FastifyInstance) {
       samples.length ? `\nSample rows: ${JSON.stringify(samples)}` : ''
     }`
 
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     const message = await client.messages.create({
       model,
       max_tokens: 500,
@@ -633,7 +654,7 @@ export async function aiRoutes(app: FastifyInstance) {
   // the proposal flows into POST /change-sets/plan for impact preview and an
   // explicit admin APPLY. The model only proposes; humans commit schema.
   app.post('/schema', { preHandler: requireAdmin }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -664,7 +685,7 @@ export async function aiRoutes(app: FastifyInstance) {
       }
     }
 
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     try {
       const msg = await client.messages.create({
         model,
@@ -721,7 +742,7 @@ export async function aiRoutes(app: FastifyInstance) {
   })
 
   app.post('/sql', { preHandler: requireAdmin }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -783,7 +804,7 @@ export async function aiRoutes(app: FastifyInstance) {
           ? `This SQL query failed. Fix it. Return the corrected SQL in a fenced sql code block followed by ONE sentence about what was wrong.\n\nSQL:\n${b.current_sql}\n\nError:\n${b.error ?? '(not provided)'}`
           : `Write a Microsoft SQL Server (T-SQL) query for this request. Params use :name placeholders (e.g. :year). Return the SQL in a fenced sql code block followed by ONE sentence describing it.\n\nRequest: ${b.prompt}${b.current_sql ? `\n\nCurrent query (revise it): ${b.current_sql}` : ''}`
 
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     try {
       const msg = await client.messages.create({
         model,
@@ -813,7 +834,7 @@ export async function aiRoutes(app: FastifyInstance) {
   // AI formula assistant (#130): prose -> a {{token}} formula for the shared
   // expression engine (or item.<col> for server write-computed fields).
   app.post('/formula', { preHandler: requireAdmin }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -860,7 +881,7 @@ export async function aiRoutes(app: FastifyInstance) {
       ? `Available fields:\n${fieldLines.join('\n')}`
       : 'No field list provided.'
 
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     try {
       const msg = await client.messages.create({
         model,
@@ -894,7 +915,7 @@ export async function aiRoutes(app: FastifyInstance) {
   })
 
   app.post('/generate', { preHandler: requireAdmin }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -921,7 +942,7 @@ export async function aiRoutes(app: FastifyInstance) {
 
     const prompt = `Generate content for the \`${field}\` field of a \`${collection}\` record.${fieldMeta ? ` Field description: ${fieldMeta.note ?? fieldMeta.field}.` : ''} Existing record data: ${JSON.stringify(item)}. Additional context: ${context ?? 'none'}. Return only the field value, no explanation.`
 
-    const { model, maxTokensGenerate } = await getAiSettings()
+    const { model, maxTokensGenerate } = await getAiModelSettings()
 
     const message = await client.messages.create({
       model,
@@ -945,7 +966,7 @@ export async function aiRoutes(app: FastifyInstance) {
 
   // POST /ai/summarize — summarize a record in 2-3 sentences
   app.post('/summarize', { preHandler: requireAdmin }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -984,7 +1005,7 @@ export async function aiRoutes(app: FastifyInstance) {
       ? promptTemplate.replace(/\{\{\s*data\s*\}\}/g, JSON.stringify(item))
       : `Summarize this ${collection} record in 2-3 sentences for a business user. Data: ${JSON.stringify(item)}. Be concise and factual.`
 
-    const { model, maxTokensSummarize } = await getAiSettings()
+    const { model, maxTokensSummarize } = await getAiModelSettings()
 
     const message = await client.messages.create({
       model,
@@ -1010,7 +1031,7 @@ export async function aiRoutes(app: FastifyInstance) {
   // Revision summarizer (#160): AI prose over a record's change history in a
   // window — deltas only (small), read-permission gated.
   app.post('/summarize-changes', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -1075,7 +1096,7 @@ export async function aiRoutes(app: FastifyInstance) {
       })
       .join('\n')
       .slice(0, 12000)
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     try {
       const msg = await client.messages.create({
         model,
@@ -1109,7 +1130,7 @@ export async function aiRoutes(app: FastifyInstance) {
   })
 
   app.post('/review', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -1176,7 +1197,7 @@ ${Object.entries(children)
 
 Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"suggestion","field":"<field name or area>","message":"<specific, actionable finding>"}]. Return [] if the record looks ready.`
 
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     const message = await client.messages.create({
       model,
       max_tokens: 1500,
@@ -1226,11 +1247,11 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     if (!(await aiFeatureEnabled('cleanup'))) {
       return reply.code(403).send({ error: 'AI text cleanup is disabled on this instance' })
     }
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) return reply.code(503).send({ error: 'AI is not configured' })
     const text = String((req.body as { text?: string })?.text ?? '').slice(0, 4000)
     if (!text.trim()) return reply.code(400).send({ error: 'text is required' })
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     try {
       const msg = await client.messages.create({
         model,
@@ -1253,7 +1274,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
   })
 
   app.post('/brief', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -1266,7 +1287,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       instructions?.slice(0, 1000) ||
       'You write a short daily briefing for a business user from the data provided. Open with one summary sentence, then 3-5 concrete insights citing real numbers from the data, call out anything needing immediate attention, and end with one or two positives. Plain text only — no markdown, no headers. 150-220 words.'
 
-    const { model } = await getAiSettings()
+    const { model } = await getAiModelSettings()
     const message = await client.messages.create({
       model,
       max_tokens: 512,
@@ -1350,7 +1371,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
   // ─── POST /chat — ask-your-data tool-use loop ─────────────────────────────
   app.post('/chat', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -1371,7 +1392,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const { CHAT_SYSTEM_PROMPT, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
       '../services/ai-chat.js'
     )
-    const settings = await getAiSettings()
+    const settings = await getAiModelSettings()
     const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
     const proposals: Array<Record<string, unknown>> = []
     const convo: Anthropic.MessageParam[] = history
@@ -1444,7 +1465,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
   // ─── POST /navigate — command-bar routing: prose → target collection ──────
   app.post('/navigate', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getClient()
+    const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
@@ -1467,7 +1488,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     }
     if (readable.length === 0) return reply.code(403).send({ error: 'No readable collections' })
 
-    const settings = await getAiSettings()
+    const settings = await getAiModelSettings()
     try {
       const response = await client.messages.create({
         model: settings.model,
@@ -1545,7 +1566,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       }
       const prompt = String(req.body?.prompt ?? '').trim()
       if (!prompt) return reply.code(400).send({ error: 'prompt is required' })
-      const client = await getClient()
+      const client = await getAiClient()
       if (!client) return reply.code(503).send({ error: 'AI is not configured' })
 
       const collections = (await db('nivaro_collections')
@@ -1561,7 +1582,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         }
       })()
 
-      const cfg = await getAiSettings()
+      const cfg = await getAiModelSettings()
       const sys = [
         'You draft Nivaro automation flows as STRICT JSON. Output ONLY a JSON object, no prose.',
         'Shape: {"name": string, "description": string, "trigger": "event"|"schedule"|"webhook",',

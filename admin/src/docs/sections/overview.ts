@@ -425,7 +425,38 @@ export const userSettings: DocSection = {
           'Model used for all AI generate and summarize requests.'
         ],
         ['ai_max_tokens_generate', '500', 'Token budget for /ai/generate.'],
-        ['ai_max_tokens_summarize', '200', 'Token budget for /ai/summarize.']
+        ['ai_max_tokens_summarize', '200', 'Token budget for /ai/summarize.'],
+        [
+          'ai_provider',
+          'anthropic',
+          "'anthropic' = Anthropic's API with the key above; 'gateway' = a model gateway reached with OAuth client-credentials (the fields below)."
+        ],
+        [
+          'ai_gateway_base_url',
+          '—',
+          'Gateway root URL; the wire format decides the path appended.'
+        ],
+        [
+          'ai_gateway_token_url',
+          '—',
+          'OAuth client-credentials endpoint (query string allowed). Client id and secret ride as X-Client-Id / X-Client-Secret headers.'
+        ],
+        ['ai_gateway_client_id', '—', 'Sent as X-Client-Id.'],
+        [
+          'ai_gateway_client_secret',
+          '—',
+          'Sent as X-Client-Secret. Masked on GET; a re-submitted mask keeps the stored value. Per-instance overrides apply.'
+        ],
+        [
+          'ai_gateway_format',
+          'openai',
+          "'openai' posts to <base>/openai/v1/chat/completions (translated from and to the Anthropic Messages shape, tools included); 'anthropic' uses <base>/anthropic natively."
+        ],
+        [
+          'ai_gateway_model',
+          '—',
+          'Model id as the gateway knows it (e.g. claude-4-5-haiku). Replaces the model on every AI call while the gateway is active. POST /ai/test round-trips one prompt.'
+        ]
       ]
     },
     { type: 'h3', text: 'Presence Tracking' },

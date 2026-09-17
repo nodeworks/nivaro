@@ -1424,6 +1424,38 @@ export function SettingsPage() {
   const [sweepInterval, setSweepInterval] = useState(8000)
   const [pingInterval, setPingInterval] = useState(10000)
   const [aiModel, setAiModel] = useState('claude-haiku-4-5-20251001')
+  // AI provider (migration 322): Anthropic directly, or a model gateway
+  // reached with OAuth client-credentials — all of it here, no External API row.
+  const [aiProvider, setAiProvider] = useState<'anthropic' | 'gateway'>('anthropic')
+  const [aiGatewayBaseUrl, setAiGatewayBaseUrl] = useState('')
+  const [aiGatewayTokenUrl, setAiGatewayTokenUrl] = useState('')
+  const [aiGatewayClientId, setAiGatewayClientId] = useState('')
+  const [aiGatewayClientSecret, setAiGatewayClientSecret] = useState('')
+  const [aiGatewayFormat, setAiGatewayFormat] = useState<'openai' | 'anthropic'>('openai')
+  const [aiGatewayModel, setAiGatewayModel] = useState('')
+  const [aiTest, setAiTest] = useState<{
+    state: 'idle' | 'running' | 'ok' | 'error'
+    text?: string
+  }>({ state: 'idle' })
+  async function runAiTest() {
+    setAiTest({ state: 'running' })
+    try {
+      const r = await api.post<{
+        data: { reply: string; ms: number; model: string; model_reported?: string }
+      }>('/ai/test')
+      const d = r.data.data
+      setAiTest({
+        state: 'ok',
+        text: `“${d.reply}” in ${d.ms} ms · model ${d.model_reported ?? d.model}`
+      })
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string; reason?: string } } }
+      setAiTest({
+        state: 'error',
+        text: e.response?.data?.error ?? e.response?.data?.reason ?? 'request failed'
+      })
+    }
+  }
   const [aiMaxGenerate, setAiMaxGenerate] = useState(500)
   const [aiMaxSummarize, setAiMaxSummarize] = useState(200)
   const [slaStart, setSlaStart] = useState(9)
@@ -1500,6 +1532,13 @@ export function SettingsPage() {
     setSweepInterval(settings.presence_sweep_interval ?? 8000)
     setPingInterval(settings.presence_ping_interval ?? 10000)
     setAiModel(settings.ai_model ?? 'claude-haiku-4-5-20251001')
+    setAiProvider(settings.ai_provider === 'gateway' ? 'gateway' : 'anthropic')
+    setAiGatewayBaseUrl(settings.ai_gateway_base_url ?? '')
+    setAiGatewayTokenUrl(settings.ai_gateway_token_url ?? '')
+    setAiGatewayClientId(settings.ai_gateway_client_id ?? '')
+    setAiGatewayClientSecret(settings.ai_gateway_client_secret ?? '')
+    setAiGatewayFormat(settings.ai_gateway_format === 'anthropic' ? 'anthropic' : 'openai')
+    setAiGatewayModel(settings.ai_gateway_model ?? '')
     setAiMaxGenerate(settings.ai_max_tokens_generate ?? 500)
     setAiMaxSummarize(settings.ai_max_tokens_summarize ?? 200)
     setSlaStart(settings.sla_business_day_start ?? 9)
@@ -1710,6 +1749,13 @@ export function SettingsPage() {
     mutation.mutate({
       anthropic_api_key: anthropicKey || null,
       ai_model: aiModel,
+      ai_provider: aiProvider,
+      ai_gateway_base_url: aiGatewayBaseUrl.trim() || null,
+      ai_gateway_token_url: aiGatewayTokenUrl.trim() || null,
+      ai_gateway_client_id: aiGatewayClientId.trim() || null,
+      ai_gateway_client_secret: aiGatewayClientSecret || null,
+      ai_gateway_format: aiGatewayFormat,
+      ai_gateway_model: aiGatewayModel.trim() || null,
       ai_max_tokens_generate: aiMaxGenerate,
       ai_max_tokens_summarize: aiMaxSummarize
     })
@@ -2410,39 +2456,180 @@ export function SettingsPage() {
               {activeSection === 'ai' && (
                 <SectionWrap title='AI Features' onSave={saveAI} saving={mutation.isPending}>
                   <Field
-                    label='Anthropic API Key'
+                    label='Provider'
                     hint={
-                      settings.anthropic_api_key
-                        ? 'Key configured. Leave blank to remove, or enter a new value to replace.'
-                        : 'Required for AI field generation and record summarization. Leave blank to disable.'
+                      aiProvider === 'gateway'
+                        ? 'Every AI feature calls the gateway with OAuth client-credentials. Save, then Test.'
+                        : "Anthropic's API directly with the key below."
                     }
                   >
-                    <Input
-                      type='password'
-                      placeholder='sk-ant-…'
-                      value={anthropicKey}
-                      onChange={(e) => setAnthropicKey(e.target.value)}
-                      className='h-8 font-mono text-[13px]'
-                      autoComplete='off'
-                    />
-                  </Field>
-                  <Field
-                    label='Model'
-                    hint='Used for all AI generation and summarization requests.'
-                  >
-                    <Select value={aiModel} onValueChange={setAiModel}>
-                      <SelectTrigger className='h-8 text-[13px]'>
+                    <Select
+                      value={aiProvider}
+                      onValueChange={(v) => setAiProvider(v as 'anthropic' | 'gateway')}
+                    >
+                      <SelectTrigger className='h-8 text-[13px]' data-ai-provider>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {AI_MODELS.map((m) => (
-                          <SelectItem key={m.value} value={m.value}>
-                            {m.label}
-                          </SelectItem>
-                        ))}
+                        <SelectItem value='anthropic'>Anthropic (API key)</SelectItem>
+                        <SelectItem value='gateway'>Model gateway (via External API)</SelectItem>
                       </SelectContent>
                     </Select>
                   </Field>
+                  {aiProvider === 'gateway' && (
+                    <>
+                      <Field
+                        label='Gateway base URL'
+                        hint='The model-gateway root; the wire format decides the path appended to it.'
+                      >
+                        <Input
+                          value={aiGatewayBaseUrl}
+                          onChange={(e) => setAiGatewayBaseUrl(e.target.value)}
+                          placeholder='https://flow.api.example.com/orgs/<org>/modelgws/<name>'
+                          className='h-8 font-mono text-[13px]'
+                          data-ai-gateway-base-url
+                        />
+                      </Field>
+                      <Field
+                        label='Token URL'
+                        hint='OAuth client-credentials endpoint; a scope in the query string is fine. Credentials go as X-Client-Id / X-Client-Secret headers.'
+                      >
+                        <Input
+                          value={aiGatewayTokenUrl}
+                          onChange={(e) => setAiGatewayTokenUrl(e.target.value)}
+                          placeholder='https://sat.example.com/v2/oauth/token?scope=flow%3Aaccess'
+                          className='h-8 font-mono text-[13px]'
+                          data-ai-gateway-token-url
+                        />
+                      </Field>
+                      <div className='grid gap-3 sm:grid-cols-2'>
+                        <Field label='Client id'>
+                          <Input
+                            value={aiGatewayClientId}
+                            onChange={(e) => setAiGatewayClientId(e.target.value)}
+                            className='h-8 font-mono text-[13px]'
+                            autoComplete='off'
+                            data-ai-gateway-client-id
+                          />
+                        </Field>
+                        <Field
+                          label='Client secret'
+                          hint={
+                            settings.ai_gateway_client_secret
+                              ? 'Secret stored. Leave the mask to keep it, or paste a new value.'
+                              : 'Stored masked, like the Anthropic key.'
+                          }
+                        >
+                          <Input
+                            type='password'
+                            value={aiGatewayClientSecret}
+                            onChange={(e) => setAiGatewayClientSecret(e.target.value)}
+                            className='h-8 font-mono text-[13px]'
+                            autoComplete='off'
+                            data-ai-gateway-client-secret
+                          />
+                        </Field>
+                      </div>
+                      <Field
+                        label='Wire format'
+                        hint='OpenAI-compatible posts to <base>/openai/v1/chat/completions and is translated from the Messages shape (tools included). Anthropic-native uses <base>/anthropic with the SDK.'
+                      >
+                        <Select
+                          value={aiGatewayFormat}
+                          onValueChange={(v) => setAiGatewayFormat(v as 'openai' | 'anthropic')}
+                        >
+                          <SelectTrigger className='h-8 text-[13px]' data-ai-gateway-format>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value='openai'>
+                              OpenAI-compatible (chat/completions)
+                            </SelectItem>
+                            <SelectItem value='anthropic'>Anthropic-native (messages)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <Field
+                        label='Model id'
+                        hint='As the gateway names it (for example claude-4-5-haiku). Replaces the model on every AI call while the gateway is active.'
+                      >
+                        <Input
+                          value={aiGatewayModel}
+                          onChange={(e) => setAiGatewayModel(e.target.value)}
+                          placeholder='claude-4-5-haiku'
+                          className='h-8 font-mono text-[13px]'
+                          data-ai-gateway-model
+                        />
+                      </Field>
+                    </>
+                  )}
+                  <div className='flex items-center gap-3'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='h-8'
+                      disabled={aiTest.state === 'running'}
+                      onClick={runAiTest}
+                      data-ai-test
+                    >
+                      {aiTest.state === 'running' ? 'Testing…' : 'Test the saved provider'}
+                    </Button>
+                    {aiTest.state === 'ok' && (
+                      <span
+                        className='text-[12px] text-emerald-700 dark:text-emerald-300'
+                        data-ai-test-result='ok'
+                      >
+                        {aiTest.text}
+                      </span>
+                    )}
+                    {aiTest.state === 'error' && (
+                      <span
+                        className='text-[12px] text-rose-700 dark:text-rose-300'
+                        data-ai-test-result='error'
+                      >
+                        {aiTest.text}
+                      </span>
+                    )}
+                  </div>
+                  {aiProvider === 'anthropic' && (
+                    <>
+                      <Field
+                        label='Anthropic API Key'
+                        hint={
+                          settings.anthropic_api_key
+                            ? 'Key configured. Leave blank to remove, or enter a new value to replace.'
+                            : 'Required for AI field generation and record summarization. Leave blank to disable.'
+                        }
+                      >
+                        <Input
+                          type='password'
+                          placeholder='sk-ant-…'
+                          value={anthropicKey}
+                          onChange={(e) => setAnthropicKey(e.target.value)}
+                          className='h-8 font-mono text-[13px]'
+                          autoComplete='off'
+                        />
+                      </Field>
+                      <Field
+                        label='Model'
+                        hint='Used for all AI generation and summarization requests.'
+                      >
+                        <Select value={aiModel} onValueChange={setAiModel}>
+                          <SelectTrigger className='h-8 text-[13px]'>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AI_MODELS.map((m) => (
+                              <SelectItem key={m.value} value={m.value}>
+                                {m.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                    </>
+                  )}
                   <Field
                     label='Max tokens — field generation'
                     hint='Token budget for the /ai/generate endpoint.'

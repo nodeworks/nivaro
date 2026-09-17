@@ -17,6 +17,7 @@ function maskSettings(settings: Record<string, unknown>) {
   return {
     ...settings,
     anthropic_api_key: settings.anthropic_api_key ? MASK : null,
+    ai_gateway_client_secret: settings.ai_gateway_client_secret ? MASK : null,
     smtp_pass: settings.smtp_pass ? MASK : null,
     sms_auth_token: settings.sms_auth_token ? MASK : null
   }
@@ -39,6 +40,13 @@ const allowedSettingsKeys = [
   'presence_sweep_interval',
   'presence_ping_interval',
   'ai_model',
+  'ai_provider',
+  'ai_gateway_base_url',
+  'ai_gateway_token_url',
+  'ai_gateway_client_id',
+  'ai_gateway_client_secret',
+  'ai_gateway_format',
+  'ai_gateway_model',
   'ai_max_tokens_generate',
   'ai_max_tokens_summarize',
   'sla_business_day_start',
@@ -167,6 +175,7 @@ export async function settingsRoutes(app: FastifyInstance) {
 
     // Preserve secrets if masked value re-submitted
     if (patch.anthropic_api_key === MASK) delete patch.anthropic_api_key
+    if (patch.ai_gateway_client_secret === MASK) delete patch.ai_gateway_client_secret
     if (patch.smtp_pass === MASK) delete patch.smtp_pass
     if (patch.sms_auth_token === MASK) delete patch.sms_auth_token
 
