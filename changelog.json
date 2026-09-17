@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-09-16T20:42:30.903Z",
+  "generated_at": "2026-09-17T13:40:04.780Z",
   "releases": [
+    {
+      "version": "0.1.299",
+      "tag": "v0.1.299",
+      "date": "2026-09-17T09:39:53-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ai",
+              "text": "prompt caching on every AI call, provable from Settings",
+              "hash": "6a740edf"
+            },
+            {
+              "section": "Added",
+              "scope": "ai",
+              "text": "provider setting — Anthropic directly or a model gateway via OAuth client-credentials",
+              "hash": "d293dd8c"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "script alias for the go-live pre-run",
+              "hash": "00922b0b"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "script alias for the legacy notification-prefs sync",
+              "hash": "89fc5d96"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "scripts for the go-live gap closers",
+              "hash": "4c10892e"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.298",
       "tag": "v0.1.298",
-      "date": "2026-09-16T16:42:20-04:00",
+      "date": "2026-09-16T16:42:30-04:00",
       "sections": [
         {
           "label": "Added",
