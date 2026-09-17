@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { setTraceUser } from '../services/request-trace.js'
 import type { Role, User } from '../types.js'
 
 export interface ApiKeyScope {
@@ -52,6 +53,7 @@ function touchLastAccess(userId: string) {
 
 async function hydrateRole(req: FastifyRequest, user: User, opts?: { touch?: boolean }) {
   req.user = user
+  setTraceUser(String(user.id))
   if (opts?.touch !== false) touchLastAccess(String(user.id))
   if (user.role) {
     const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()

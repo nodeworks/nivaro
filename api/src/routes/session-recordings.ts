@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -69,8 +70,29 @@ export async function recordingRetentionDays(): Promise<number> {
     return RECORDING_RETENTION_DAYS
   }
 }
-const MAX_BYTES = 15_000_000 // 15MB per recording
-const MAX_CHUNK = 1_500_000 // 1.5MB per chunk
+const MAX_BYTES = 15_000_000 // 15MB STORED (gzip) per recording ≈ 100MB+ of raw events
+/**
+ * Raw (decoded) size of one chunk. An rrweb full snapshot of a heavy page (a
+ * record form with grids, a queue table) runs 2–6MB on its own, and the old
+ * 1.5MB cap — plus Fastify's 2MB body limit in front of it — 413'd the
+ * snapshot, which the client read as fatal and stopped recording for the rest
+ * of the session. Chunks are gzip-stored (`gz:` + base64), so the per-recording
+ * cap counts compressed bytes.
+ */
+const MAX_CHUNK = 8_000_000
+const CHUNK_BODY_LIMIT = 9_000_000
+
+function encodeChunk(json: string): string {
+  return `gz:${gzipSync(Buffer.from(json, 'utf8')).toString('base64')}`
+}
+
+/** Chunks written before gzip storage are plain JSON — both shapes read. */
+function decodeChunk(stored: string): string {
+  if (stored.startsWith('gz:')) {
+    return gunzipSync(Buffer.from(stored.slice(3), 'base64')).toString('utf8')
+  }
+  return stored
+}
 
 /** '__none__' in the comma list means rows with no recorded origin. */
 function parseOrigins(raw: string | undefined): { list: string[]; includeNull: boolean } {
@@ -199,7 +221,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string }; Body: { seq?: number; events?: unknown[] } }>(
     '/:id/events',
-    { preHandler: requireAuth, bodyLimit: 2_000_000 },
+    { preHandler: requireAuth, bodyLimit: CHUNK_BODY_LIMIT },
     async (req, reply) => {
       const { seq, events } = req.body ?? {}
       if (!Array.isArray(events) || events.length === 0 || typeof seq !== 'number') {
@@ -219,7 +241,8 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       if (payload.length > MAX_CHUNK) {
         return reply.code(413).send({ error: 'Chunk too large' })
       }
-      if (rec.byte_size + payload.length > MAX_BYTES) {
+      const stored = encodeChunk(payload)
+      if (rec.byte_size + stored.length > MAX_BYTES) {
         await db('nivaro_session_recordings')
           .where({ id: rec.id })
           .update({ truncated: true, ended_at: new Date() })
@@ -229,7 +252,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       await db('nivaro_session_events').insert({
         recording: rec.id,
         seq,
-        events: payload,
+        events: stored,
         created_at: new Date()
       })
       await db('nivaro_session_recordings')
@@ -237,7 +260,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         .update({
           last_event_at: new Date(),
           event_count: db.raw('event_count + ?', [events.length]),
-          byte_size: db.raw('byte_size + ?', [payload.length])
+          byte_size: db.raw('byte_size + ?', [stored.length])
         })
       return reply.send({ data: { ok: true } })
     }
@@ -406,7 +429,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const events: RrwebEventLike[] = []
       for (const c of chunks) {
         try {
-          events.push(...(JSON.parse(c.events) as RrwebEventLike[]))
+          events.push(...(JSON.parse(decodeChunk(c.events)) as RrwebEventLike[]))
         } catch {
           /* skip corrupt chunk — a partial replay beats none */
         }
@@ -462,7 +485,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const events: unknown[] = []
       for (const c of chunks) {
         try {
-          events.push(...(JSON.parse(c.events) as unknown[]))
+          events.push(...(JSON.parse(decodeChunk(c.events)) as unknown[]))
         } catch {
           /* skip corrupt chunk */
         }

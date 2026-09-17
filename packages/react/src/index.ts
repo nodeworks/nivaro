@@ -71,6 +71,8 @@ export {
   ACTIVE_USER_OPTION_FILTER,
   AccessDeniedPanel,
   AddendumPanel,
+  AiAnalyticsView,
+  AiMarkdown,
   AiReviewCard,
   AlertManagerView,
   type AlertManagerViewProps,

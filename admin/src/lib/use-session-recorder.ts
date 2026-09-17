@@ -22,7 +22,6 @@ function clientMeta(): Record<string, string | number> {
   }
 }
 
-
 /**
  * rrweb session recorder — two modes, one hook.
  *
@@ -45,6 +44,60 @@ function clientMeta(): Record<string, string | number> {
 
 const FLUSH_MS = 10_000
 const FLUSH_COUNT = 150
+/**
+ * Raw JSON bytes per upload. The server takes 8MB per chunk; a full snapshot
+ * of a heavy page can be several MB on its own, so the buffer is cut by SIZE,
+ * not count, and an oversized single event travels alone.
+ */
+const CHUNK_BYTES = 2_000_000
+
+function splitBySize(events: unknown[]): unknown[][] {
+  const out: unknown[][] = []
+  let cur: unknown[] = []
+  let size = 2
+  for (const ev of events) {
+    let len = 0
+    try {
+      len = JSON.stringify(ev).length + 1
+    } catch {
+      continue
+    }
+    if (cur.length > 0 && size + len > CHUNK_BYTES) {
+      out.push(cur)
+      cur = []
+      size = 2
+    }
+    cur.push(ev)
+    size += len
+  }
+  if (cur.length > 0) out.push(cur)
+  return out
+}
+
+/**
+ * Upload events in size-bounded chunks. A 413 drops THAT chunk and keeps
+ * recording (one lost snapshot beats a dead session); a 409 means the
+ * recording is closed or capped — stop for good.
+ */
+async function postEventChunks(
+  recordingId: string,
+  nextSeq: () => number,
+  events: unknown[]
+): Promise<'ok' | 'closed'> {
+  for (const chunk of splitBySize(events)) {
+    const seq = nextSeq()
+    try {
+      await api.post(`/session-recordings/${recordingId}/events`, { seq, events: chunk })
+    } catch (err) {
+      const status = (err as { response?: { status?: number } }).response?.status
+      if (status === 409) return 'closed'
+      if (status === 413) {
+        console.warn(`[session-recorder] chunk ${seq} too large — dropped`)
+      }
+    }
+  }
+  return 'ok'
+}
 /** Buffer checkout window — two of these = the clip length ceiling. */
 const CLIP_WINDOW_MS = 30_000
 /** One clip per error burst: reuse a clip minted this recently. */
@@ -85,7 +138,6 @@ export async function captureErrorClip(): Promise<ErrorReplayLink | null> {
     return null
   }
 }
-
 
 // ── Replay context instrumentation ───────────────────────────────────────────
 // Console lines + route changes ride the recording as rrweb CUSTOM events
@@ -208,15 +260,10 @@ export function useSessionRecorder() {
       if (state.dead || !state.recordingId || state.buffer.length === 0) return
       const events = state.buffer
       state.buffer = []
-      const seq = state.seq++
-      try {
-        await api.post(`/session-recordings/${state.recordingId}/events`, { seq, events })
-      } catch (err) {
-        const status = (err as { response?: { status?: number } }).response?.status
-        if (status === 409 || status === 413) {
-          state.dead = true
-          state.stop?.()
-        }
+      const outcome = await postEventChunks(state.recordingId, () => state.seq++, events)
+      if (outcome === 'closed') {
+        state.dead = true
+        state.stop?.()
       }
     }
 
@@ -224,7 +271,7 @@ export function useSessionRecorder() {
       try {
         const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
           origin: window.location.origin,
-            meta: clientMeta()
+          meta: clientMeta()
         })
         if (cancelled) return
         state.recordingId = r.data.data.id
@@ -244,7 +291,10 @@ export function useSessionRecorder() {
         {
           const { record: rec } = await import('rrweb')
           state.uninstrument = instrumentReplayContext((tag, payload) =>
-            (rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(tag, payload)
+            (rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(
+              tag,
+              payload
+            )
           )
         }
 
@@ -318,7 +368,10 @@ export function useSessionRecorder() {
         {
           const { record: rec } = await import('rrweb')
           state.uninstrument = instrumentReplayContext((tag, payload) =>
-            (rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(tag, payload)
+            (rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(
+              tag,
+              payload
+            )
           )
         }
 
@@ -336,7 +389,8 @@ export function useSessionRecorder() {
             meta: clientMeta()
           })
           const id = r.data.data.id
-          await api.post(`/session-recordings/${id}/events`, { seq: 0, events })
+          let clipSeq = 0
+          await postEventChunks(id, () => clipSeq++, events)
           await api.post(`/session-recordings/${id}/end`).catch(() => {})
           const link: ErrorReplayLink = { recording_id: id, offset_ms: null }
           state.lastClip = { at: Date.now(), link }

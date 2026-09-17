@@ -50,6 +50,63 @@ export interface ErrorReplayLink {
 
 const FLUSH_MS = 10_000
 const FLUSH_COUNT = 150
+/**
+ * Raw JSON bytes per upload. The server takes 8MB per chunk; a full snapshot
+ * of a heavy page can be several MB on its own, so the buffer is cut by SIZE,
+ * not count, and an oversized single event travels alone.
+ */
+const CHUNK_BYTES = 2_000_000
+
+function splitBySize(events: unknown[]): unknown[][] {
+  const out: unknown[][] = []
+  let cur: unknown[] = []
+  let size = 2
+  for (const ev of events) {
+    let len = 0
+    try {
+      len = JSON.stringify(ev).length + 1
+    } catch {
+      continue
+    }
+    if (cur.length > 0 && size + len > CHUNK_BYTES) {
+      out.push(cur)
+      cur = []
+      size = 2
+    }
+    cur.push(ev)
+    size += len
+  }
+  if (cur.length > 0) out.push(cur)
+  return out
+}
+
+/**
+ * Upload events in size-bounded chunks. A 413 drops THAT chunk and keeps
+ * recording (one lost snapshot beats a dead session); a 409 means the
+ * recording is closed or capped — stop for good.
+ */
+async function postEventChunks(
+  client: NivaroClient,
+  recordingId: string,
+  nextSeq: () => number,
+  events: unknown[]
+): Promise<'ok' | 'closed'> {
+  for (const chunk of splitBySize(events)) {
+    const seq = nextSeq()
+    try {
+      await client.request(appendSessionRecordingEvents(recordingId, seq, chunk))
+    } catch (err) {
+      const status =
+        (err as { status?: number; response?: { status?: number } }).status ??
+        (err as { response?: { status?: number } }).response?.status
+      if (status === 409) return 'closed'
+      if (status === 413) {
+        console.warn(`[session-recorder] chunk ${seq} too large — dropped`)
+      }
+    }
+  }
+  return 'ok'
+}
 /** Buffer checkout window — two of these = the clip length ceiling. */
 const CLIP_WINDOW_MS = 30_000
 /** One clip per error burst: reuse a clip minted this recently. */
@@ -199,17 +256,10 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       if (!client || state.dead || !state.recordingId || state.buffer.length === 0) return
       const events = state.buffer
       state.buffer = []
-      const seq = state.seq++
-      try {
-        await client.request(appendSessionRecordingEvents(state.recordingId, seq, events))
-      } catch (err) {
-        const status =
-          (err as { status?: number; response?: { status?: number } }).status ??
-          (err as { response?: { status?: number } }).response?.status
-        if (status === 409 || status === 413) {
-          state.dead = true
-          state.stop?.()
-        }
+      const outcome = await postEventChunks(client, state.recordingId, () => state.seq++, events)
+      if (outcome === 'closed') {
+        state.dead = true
+        state.stop?.()
       }
     }
 
@@ -286,7 +336,8 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
           startSessionRecording(appLabel ?? 'error-clip', undefined, true)
         )
         const id = started.data.id
-        await client.request(appendSessionRecordingEvents(id, 0, events))
+        let clipSeq = 0
+        await postEventChunks(client, id, () => clipSeq++, events)
         await client.request(endSessionRecording(id)).catch(() => {})
         const link: ErrorReplayLink = { recording_id: id, offset_ms: null }
         state.lastClip = { at: Date.now(), link }

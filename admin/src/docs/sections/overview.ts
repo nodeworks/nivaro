@@ -468,6 +468,11 @@ export const userSettings: DocSection = {
           'Marks the stable prefix of every AI call with cache_control so tool loops and chats re-read it from the provider cache: system prompt, tool definitions and the conversation so far on Anthropic directly or an Anthropic-native gateway; the system prompt (which covers the tools) on the OpenAI-compatible format, where the marker rides as a content part. Prompts under the model minimum (1,024 tokens; 4,096 on Haiku 4.5) never cache. POST /ai/test repeats a padded prompt and reports the tokens read back.'
         ],
         [
+          'AI Analytics (page)',
+          '/ai-analytics',
+          'Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin).'
+        ],
+        [
           'ai_chat_guide',
           '—',
           "Free text appended to the Ask AI system prompt: how this instance's data hangs together (which collection bridges two others, what human ids look like, everyday names for fields). The model cannot infer a deployment's domain from column names alone."

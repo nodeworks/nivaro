@@ -298,6 +298,9 @@ const PageViewPage = lazy(() =>
 const ApiAnalyticsPage = lazy(() =>
   import('@/pages/ApiAnalytics').then((m) => ({ default: m.ApiAnalyticsPage }))
 )
+const AiAnalyticsPage = lazy(() =>
+  import('@/pages/AiAnalytics').then((m) => ({ default: m.AiAnalyticsPage }))
+)
 const ChangelogPage = lazy(() => import('@/pages/Changelog'))
 const ContrastAuditPage = lazy(() => import('@/pages/ContrastAudit'))
 const E2eRecorderPage = lazy(() => import('@/pages/E2eRecorder'))
@@ -610,6 +613,7 @@ export default function App() {
                   <Route path='pages-admin/:id/edit' element={<PageEditPage />} />
                   <Route path='p/:slug' element={<PageViewPage />} />
                   <Route path='api-analytics' element={<ApiAnalyticsPage />} />
+                  <Route path='ai-analytics' element={<AiAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />
                   <Route path='ops-console' element={<OpsConsolePage />} />

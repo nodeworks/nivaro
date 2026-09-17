@@ -1395,7 +1395,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
   // ─── POST /chat — ask-your-data tool-use loop ─────────────────────────────
   app.post('/chat', { preHandler: authenticate }, async (req, reply) => {
-    const client = await getAiClient()
+    const { chatModel } = await getAiModelSettings()
+    const settings = { model: chatModel }
+    const client = await getAiClient({ model: chatModel })
     if (!client) {
       return reply
         .code(503)
@@ -1415,8 +1417,6 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
     const { buildChatSystemPrompt, buildWrapUpMessages, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } =
       await import('../services/ai-chat.js')
-    const { chatModel } = await getAiModelSettings()
-    const settings = { model: chatModel }
     const system = await buildChatSystemPrompt(req.user!)
     const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
     const proposals: Array<Record<string, unknown>> = []
@@ -1754,6 +1754,239 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         req
       })
       return reply.send({ data: { id: flowId } })
+    }
+  )
+
+  // ── AI call log + analytics (the /api-analytics twin for model calls) ──────
+
+  app.get<{ Querystring: { hours?: string } }>(
+    '/analytics',
+    { preHandler: requireAdmin },
+    async (req) => {
+      const hours = Math.min(24 * 90, Math.max(1, Number(req.query?.hours) || 24 * 7))
+      const since = new Date(Date.now() - hours * 3_600_000)
+      const base = () => db('nivaro_ai_calls').where('created_at', '>=', since)
+      const num = (v: unknown) => Number(v ?? 0)
+      const [totals, byFeature, byModel, byUser, series, latencies, questions] = await Promise.all([
+        base().first(
+          db.raw('COUNT(*) as calls'),
+          db.raw("SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors"),
+          db.raw('SUM(CAST(ISNULL(input_tokens, 0) AS BIGINT)) as input_tokens'),
+          db.raw('SUM(CAST(ISNULL(output_tokens, 0) AS BIGINT)) as output_tokens'),
+          db.raw('SUM(CAST(ISNULL(cache_read_tokens, 0) AS BIGINT)) as cache_read_tokens'),
+          db.raw('SUM(ISNULL(cost_usd, 0)) as cost_usd'),
+          db.raw('AVG(CAST(latency_ms AS FLOAT)) as avg_latency'),
+          db.raw('SUM(ISNULL(tool_calls, 0)) as tool_calls')
+        ),
+        base()
+          .select('feature')
+          .count({ calls: '*' })
+          .sum({
+            cost_usd: 'cost_usd',
+            input_tokens: 'input_tokens',
+            output_tokens: 'output_tokens'
+          })
+          .avg({ avg_latency: 'latency_ms' })
+          .select(db.raw("SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors"))
+          .select(db.raw('COUNT(DISTINCT request_id) as requests'))
+          .groupBy('feature')
+          .orderBy('calls', 'desc'),
+        base()
+          .select('model', 'provider')
+          .count({ calls: '*' })
+          .sum({
+            cost_usd: 'cost_usd',
+            input_tokens: 'input_tokens',
+            output_tokens: 'output_tokens',
+            cache_read_tokens: 'cache_read_tokens'
+          })
+          .avg({ avg_latency: 'latency_ms' })
+          .groupBy('model', 'provider')
+          .orderBy('calls', 'desc'),
+        db('nivaro_ai_calls as c')
+          .leftJoin('nivaro_users as u', 'u.id', 'c.user')
+          .where('c.created_at', '>=', since)
+          .select('c.user', 'u.first_name', 'u.last_name', 'u.email')
+          .count({ calls: '*' })
+          .sum({ cost_usd: 'c.cost_usd' })
+          .select(db.raw('COUNT(DISTINCT c.request_id) as requests'))
+          .groupBy('c.user', 'u.first_name', 'u.last_name', 'u.email')
+          .orderBy('calls', 'desc')
+          .limit(15),
+        base()
+          .select(
+            db.raw(
+              hours <= 48
+                ? "FORMAT(created_at, 'yyyy-MM-dd HH:00') as bucket"
+                : "FORMAT(created_at, 'yyyy-MM-dd') as bucket"
+            )
+          )
+          .count({ calls: '*' })
+          .sum({ cost_usd: 'cost_usd' })
+          .select(db.raw("SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors"))
+          .groupByRaw(
+            hours <= 48
+              ? "FORMAT(created_at, 'yyyy-MM-dd HH:00')"
+              : "FORMAT(created_at, 'yyyy-MM-dd')"
+          )
+          .orderBy('bucket', 'asc'),
+        base().select('latency_ms').orderBy('latency_ms', 'asc'),
+        base().whereNotNull('request_id').countDistinct({ n: 'request_id' }).first()
+      ])
+      const lat = (latencies as Array<{ latency_ms: number }>).map((r) => r.latency_ms)
+      const pct = (p: number) =>
+        lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * p))] : 0
+      const t = (totals ?? {}) as Record<string, unknown>
+      return {
+        data: {
+          hours,
+          calls: num(t.calls),
+          requests: num((questions as { n?: unknown } | undefined)?.n),
+          errors: num(t.errors),
+          input_tokens: num(t.input_tokens),
+          output_tokens: num(t.output_tokens),
+          cache_read_tokens: num(t.cache_read_tokens),
+          cost_usd: num(t.cost_usd),
+          avg_latency: Math.round(num(t.avg_latency)),
+          p50: pct(0.5),
+          p95: pct(0.95),
+          tool_calls: num(t.tool_calls),
+          by_feature: (byFeature as Array<Record<string, unknown>>).map((r) => ({
+            feature: String(r.feature),
+            calls: num(r.calls),
+            requests: num(r.requests),
+            errors: num(r.errors),
+            cost_usd: num(r.cost_usd),
+            input_tokens: num(r.input_tokens),
+            output_tokens: num(r.output_tokens),
+            avg_latency: Math.round(num(r.avg_latency))
+          })),
+          by_model: (byModel as Array<Record<string, unknown>>).map((r) => ({
+            model: String(r.model),
+            provider: String(r.provider),
+            calls: num(r.calls),
+            cost_usd: num(r.cost_usd),
+            input_tokens: num(r.input_tokens),
+            output_tokens: num(r.output_tokens),
+            cache_read_tokens: num(r.cache_read_tokens),
+            avg_latency: Math.round(num(r.avg_latency))
+          })),
+          by_user: (byUser as Array<Record<string, unknown>>).map((r) => ({
+            user: r.user ? String(r.user) : null,
+            name:
+              [r.first_name, r.last_name].filter(Boolean).join(' ') ||
+              (r.email ? String(r.email) : null) ||
+              (r.user ? 'Unknown user' : 'System'),
+            calls: num(r.calls),
+            requests: num(r.requests),
+            cost_usd: num(r.cost_usd)
+          })),
+          series: (series as Array<Record<string, unknown>>).map((r) => ({
+            bucket: String(r.bucket),
+            calls: num(r.calls),
+            errors: num(r.errors),
+            cost_usd: num(r.cost_usd)
+          }))
+        }
+      }
+    }
+  )
+
+  app.get<{
+    Querystring: {
+      hours?: string
+      feature?: string
+      model?: string
+      user?: string
+      status?: string
+      request_id?: string
+      page?: string
+      limit?: string
+    }
+  }>('/calls', { preHandler: requireAdmin }, async (req) => {
+    const q = req.query ?? {}
+    const hours = Math.min(24 * 90, Math.max(1, Number(q.hours) || 24 * 7))
+    const since = new Date(Date.now() - hours * 3_600_000)
+    const page = Math.max(1, Number(q.page) || 1)
+    const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
+    const apply = (b: ReturnType<typeof db>) => {
+      b.where('c.created_at', '>=', since)
+      if (q.feature) b.where('c.feature', q.feature)
+      if (q.model) b.where('c.model', q.model)
+      if (q.user) b.where('c.user', q.user)
+      if (q.status === 'error' || q.status === 'ok') b.where('c.status', q.status)
+      if (q.request_id) b.where('c.request_id', q.request_id)
+      return b
+    }
+    const [rows, total] = await Promise.all([
+      apply(db('nivaro_ai_calls as c'))
+        .leftJoin('nivaro_users as u', 'u.id', 'c.user')
+        .select(
+          'c.id',
+          'c.created_at',
+          'c.request_id',
+          'c.user',
+          'c.feature',
+          'c.route',
+          'c.provider',
+          'c.model',
+          'c.status',
+          'c.latency_ms',
+          'c.input_tokens',
+          'c.output_tokens',
+          'c.cache_read_tokens',
+          'c.cost_usd',
+          'c.stop_reason',
+          'c.tool_calls',
+          'c.rounds',
+          'c.error',
+          'u.first_name',
+          'u.last_name',
+          'u.email'
+        )
+        .orderBy('c.id', 'desc')
+        .offset((page - 1) * limit)
+        .limit(limit),
+      apply(db('nivaro_ai_calls as c')).count({ n: '*' }).first()
+    ])
+    return {
+      data: (rows as Array<Record<string, unknown>>).map((r) => ({
+        ...r,
+        id: Number(r.id),
+        cost_usd: r.cost_usd == null ? null : Number(r.cost_usd),
+        user_name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || null
+      })),
+      total: Number((total as { n?: unknown } | undefined)?.n ?? 0),
+      page,
+      limit
+    }
+  })
+
+  /** One call with its capped request + response bodies. */
+  app.get<{ Params: { id: string } }>(
+    '/calls/:id',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = (await db('nivaro_ai_calls')
+        .where({ id: Number(req.params.id) })
+        .first()) as Record<string, unknown> | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const parse = (v: unknown) => {
+        if (typeof v !== 'string') return null
+        try {
+          return JSON.parse(v)
+        } catch {
+          return v
+        }
+      }
+      return {
+        data: {
+          ...row,
+          id: Number(row.id),
+          request: parse(row.request),
+          response: parse(row.response)
+        }
+      }
     }
   )
 }

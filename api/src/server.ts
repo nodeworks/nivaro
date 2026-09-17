@@ -31,6 +31,7 @@ import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { sharePublicRoutes } from './routes/share-links.js'
 import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
+import { pruneAiCalls } from './services/ai-log.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
@@ -525,6 +526,7 @@ export async function buildServer() {
           }
           await purgeExpiredTrash()
           await purgeExpiredRecordings().catch(() => {})
+          await pruneAiCalls().catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
             .del()

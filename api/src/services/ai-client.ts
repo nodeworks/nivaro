@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { loggedCreate } from './ai-log.js'
 import { overlaySettings } from './settings-overrides.js'
 
 /**
@@ -177,9 +178,34 @@ export function withPromptCaching(params: MessageParams): MessageParams {
 }
 
 /** `messages.create` with the caching markers applied on the way in. */
-function cachingClient(inner: Anthropic, model?: string): Anthropic {
-  const create = (params: MessageParams) =>
-    inner.messages.create(withPromptCaching(model ? { ...params, model } : params) as never)
+function cachingClient(
+  inner: Anthropic,
+  provider: 'anthropic' | 'gateway-anthropic',
+  model?: string
+): Anthropic {
+  const create = loggedCreate(
+    provider,
+    (params: MessageParams) =>
+      inner.messages.create(
+        withPromptCaching(model ? { ...params, model } : params) as never
+      ) as Promise<Anthropic.Message>
+  )
+  return { messages: { create } } as unknown as Anthropic
+}
+
+/** The plain SDK client, every call logged. */
+function loggedClient(
+  inner: Anthropic,
+  provider: 'anthropic' | 'gateway-anthropic',
+  model?: string
+): Anthropic {
+  const create = loggedCreate(
+    provider,
+    (params: MessageParams) =>
+      inner.messages.create(
+        (model ? { ...params, model } : params) as never
+      ) as Promise<Anthropic.Message>
+  )
   return { messages: { create } } as unknown as Anthropic
 }
 
@@ -434,7 +460,7 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
   }
   // Call sites only ever use messages.create; the rest of the SDK surface is
   // deliberately absent (a throw is better than a silent no-op there).
-  return { messages: { create } } as unknown as Anthropic
+  return { messages: { create: loggedCreate('gateway-openai', create) } } as unknown as Anthropic
 }
 
 /** The real SDK against the gateway's Anthropic-native path, model pinned. */
@@ -449,20 +475,27 @@ async function anthropicGatewayClient(
     authToken: bearer,
     baseURL: `${api.base_url}/anthropic`
   })
-  if (caching) return cachingClient(inner, model)
-  const create = (params: MessageParams) => inner.messages.create({ ...params, model } as never)
-  return { messages: { create } } as unknown as Anthropic
+  return caching
+    ? cachingClient(inner, 'gateway-anthropic', model)
+    : loggedClient(inner, 'gateway-anthropic', model)
 }
 
 // ─── public ──────────────────────────────────────────────────────────────────
 
-export async function getAiClient(): Promise<Anthropic | null> {
+/**
+ * The one AI client factory. On the gateway paths the MODEL IS PINNED here
+ * (the gateway only knows its own ids), so a caller that needs a different
+ * model — Ask AI on the chat model — must ask for it: `getAiClient({ model })`.
+ * A `model` in the messages.create params is overridden on those paths.
+ */
+export async function getAiClient(opts?: { model?: string | null }): Promise<Anthropic | null> {
   const s = (await settingsRow()) ?? {}
   const caching = cachingOn(s)
   if (s.ai_provider === 'gateway') {
     const api = gatewayFromSettings(s)
     if (!api.base_url || !api.token_url || !api.client_id || !api.client_secret) return null
-    const model = s.ai_gateway_model?.trim() || s.ai_model || 'claude-4-5-haiku'
+    const model =
+      opts?.model?.trim() || s.ai_gateway_model?.trim() || s.ai_model || 'claude-4-5-haiku'
     return s.ai_gateway_format === 'anthropic'
       ? anthropicGatewayClient(api, model, caching)
       : openAiCompatClient(api, model, caching)
@@ -470,7 +503,7 @@ export async function getAiClient(): Promise<Anthropic | null> {
   const key = config.ANTHROPIC_API_KEY || s.anthropic_api_key
   if (!key) return null
   const inner = new Anthropic({ apiKey: key })
-  return caching ? cachingClient(inner) : inner
+  return caching ? cachingClient(inner, 'anthropic') : loggedClient(inner, 'anthropic')
 }
 
 export async function getAiModelSettings() {

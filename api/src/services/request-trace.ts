@@ -51,6 +51,9 @@ interface TraceContext {
   start: number
   spans: TraceSpan[]
   urlHint?: string
+  /** Per-request id — the AI call log groups a tool loop's calls under it. */
+  id: string
+  userId?: string
 }
 
 const als = new AsyncLocalStorage<TraceContext>()
@@ -65,7 +68,24 @@ const buffer: TraceRecord[] = []
 export function beginTrace(urlHint?: string): void {
   // enterWith (rather than als.run) is what lets a Fastify onRequest hook scope
   // the context for the whole request without wrapping the handler chain.
-  als.enterWith({ start: performance.now(), spans: [], urlHint })
+  als.enterWith({ start: performance.now(), spans: [], urlHint, id: randomUUID() })
+}
+
+/** Stamp the resolved user onto the current request's trace (authenticate calls it). */
+export function setTraceUser(userId: string): void {
+  const ctx = als.getStore()
+  if (ctx) ctx.userId = userId
+}
+
+/** What the AI call log attributes a call to: the request id, route and user, if any. */
+export function currentTraceMeta(): {
+  id: string
+  urlHint: string | null
+  userId: string | null
+} | null {
+  const ctx = als.getStore()
+  if (!ctx) return null
+  return { id: ctx.id, urlHint: ctx.urlHint ?? null, userId: ctx.userId ?? null }
 }
 
 /** #304 — the current request's URL, for pool-leak attribution. */

@@ -303,14 +303,14 @@ async function answerQuestion(
   question: string,
   roomContext?: string
 ): Promise<string> {
-  const client = await getAiClient()
+  const { getAiModelSettings } = await import('./ai-client.js')
+  const { chatModel: model } = await getAiModelSettings()
+  const client = await getAiClient({ model })
   if (!client) return 'AI is not configured on this instance — an admin can add a key in Settings.'
 
   const { buildChatSystemPrompt, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
     './ai-chat.js'
   )
-  const { getAiModelSettings } = await import('./ai-client.js')
-  const { chatModel: model } = await getAiModelSettings()
   const systemPrompt = await buildChatSystemPrompt(asker)
 
   const contextBlock = roomContext

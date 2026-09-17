@@ -1,11 +1,13 @@
+import { createNivaro } from '@nivaro/sdk'
+import { AiMarkdown, NavigationContext, NivaroProvider } from '@nivaro/shared'
 import { useMutation } from '@tanstack/react-query'
 import { Loader2, Mic, Send, Sparkles, Volume2, VolumeX, Wrench } from 'lucide-react'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { SimpleMarkdown } from '@/pages/PageView'
 
 interface TraceEntry {
   tool: string
@@ -30,76 +32,7 @@ interface ChatTurn {
   proposals?: Proposal[]
 }
 
-/** SimpleMarkdown plus pipe-table support — AI answers lean on tables. */
-function ChatMarkdown({ content }: { content: string }) {
-  const lines = content.split('\n')
-  const blocks: ReactNode[] = []
-  let buffer: string[] = []
-  let tableRows: string[] = []
-
-  const flushText = (key: string) => {
-    if (buffer.length === 0) return
-    blocks.push(<SimpleMarkdown key={key} content={buffer.join('\n')} />)
-    buffer = []
-  }
-  const flushTable = (key: string) => {
-    if (tableRows.length === 0) return
-    const parse = (line: string) =>
-      line
-        .replace(/^\|/, '')
-        .replace(/\|$/, '')
-        .split('|')
-        .map((c) => c.trim())
-    const header = parse(tableRows[0])
-    const body = tableRows
-      .slice(1)
-      .filter((r) => !/^\|?[\s:|-]+\|?$/.test(r))
-      .map(parse)
-    blocks.push(
-      <div key={key} className='my-2 overflow-x-auto'>
-        <table className='w-auto min-w-[50%] text-left text-[12.5px]'>
-          <thead>
-            <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border'>
-              {header.map((h, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: static content
-                <th key={i} className='py-1 pr-4 font-medium'>
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className='divide-y divide-slate-100 dark:divide-border'>
-            {body.map((row, ri) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: static content
-              <tr key={ri}>
-                {row.map((c, ci) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: static content
-                  <td key={ci} className='py-1 pr-4 text-slate-700 dark:text-slate-300'>
-                    {c}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    )
-    tableRows = []
-  }
-
-  lines.forEach((line, i) => {
-    if (line.trimStart().startsWith('|')) {
-      flushText(`t-${i}`)
-      tableRows.push(line.trim())
-    } else {
-      flushTable(`tb-${i}`)
-      buffer.push(line)
-    }
-  })
-  flushTable('tb-end')
-  flushText('t-end')
-  return <div className='space-y-1'>{blocks}</div>
-}
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
 const SUGGESTIONS = [
   'How many records are in each collection?',
@@ -212,7 +145,7 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
   )
 }
 
-export function AskPage() {
+function AskPageInner() {
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -388,7 +321,7 @@ export function AskPage() {
               >
                 {t.role === 'assistant' ? (
                   <>
-                    <ChatMarkdown content={t.content} />
+                    <AiMarkdown content={t.content} />
                     {t.proposals?.map((p) => (
                       <ProposalCard key={p.proposal_id} proposal={p} />
                     ))}
@@ -472,5 +405,17 @@ export function AskPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Providers so friendly ids in answers link to /collections/:c/:id. */
+export function AskPage() {
+  const navigate = useNavigate()
+  return (
+    <NivaroProvider client={sharedClient}>
+      <NavigationContext.Provider value={{ navigate: (p: string) => navigate(p) }}>
+        <AskPageInner />
+      </NavigationContext.Provider>
+    </NivaroProvider>
   )
 }
