@@ -1882,12 +1882,14 @@ export async function readItems(
     }
   }
 
-  // Strip O2M virtual field names — they have no physical column (e.g. 'report_widgets'
-  // on report_definitions). Selecting them causes MSSQL "Invalid column name" errors.
+  // Strip alias field names (O2M AND M2M) — they have no physical column
+  // (e.g. 'report_widgets' on report_definitions, or an M2M alias a client
+  // names with a dotted path). Selecting them causes MSSQL "Invalid column
+  // name" errors; readOne strips both kinds too.
   if (selectFields[0] !== '*') {
     const o2mVirtual = new Set(
       rels
-        .filter((r) => r.one_collection === collection && r.one_field != null && !r.junction_field)
+        .filter((r) => r.one_collection === collection && r.one_field != null)
         .map((r) => r.one_field as string)
     )
     // 'id' is the PK, never an O2M alias — a corrupted relation row with
@@ -1895,7 +1897,9 @@ export async function readItems(
     o2mVirtual.delete('id')
     if (o2mVirtual.size > 0) {
       selectFields = selectFields.filter((f) => !o2mVirtual.has(f))
+      for (const k of Object.keys(nestedFieldMap)) if (o2mVirtual.has(k)) delete nestedFieldMap[k]
     }
+    if (selectFields.length === 0) selectFields = ['*']
   }
 
   // For each related collection referenced in the filter or sort, pre-load their
