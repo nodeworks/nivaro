@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-17T13:40:04.780Z",
+  "generated_at": "2026-09-17T14:14:27.005Z",
   "releases": [
+    {
+      "version": "0.1.300",
+      "tag": "v0.1.300",
+      "date": "2026-09-17T10:14:14-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ai",
+              "text": "ask-AI filters compile through the conditions engine; wrap up instead of dead-ending at the tool-call cap",
+              "hash": "f6e56a80"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.299",
       "tag": "v0.1.299",
-      "date": "2026-09-17T09:39:53-04:00",
+      "date": "2026-09-17T09:40:04-04:00",
       "sections": [
         {
           "label": "Added",
