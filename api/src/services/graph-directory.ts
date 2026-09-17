@@ -15,6 +15,12 @@ import { overlaySettings } from './settings-overrides.js'
 // lookups sign in as a named SERVICE ACCOUNT with a password (the OAuth
 // password grant against the same app registration): the grant is then a
 // DELEGATED User.Read.All and rides the token's `scp` claim instead of `roles`.
+// When Conditional Access demands MFA the password grant is refused outright,
+// so the third mode ('connected') has an admin sign in AS the service account
+// once in the browser (`directoryConnectUrl` → the OIDC callback →
+// `completeDirectoryConnect`) and keeps the REFRESH TOKEN; every Graph token
+// after that is a refresh_token grant, and a rotated refresh token is stored
+// back as it arrives.
 
 export type DirectoryUser = {
   id: string
@@ -43,34 +49,192 @@ export type DirectoryStatus = {
   roles: string[]
   tenant: string | null
   reason: string | null
-  auth_mode: 'app' | 'service_account'
+  auth_mode: DirectoryAuthMode
   username: string | null
+  connected_user: string | null
+  connected_at: string | null
 }
 
+export type DirectoryAuthMode = 'app' | 'service_account' | 'connected'
+
 export type DirectoryIdentity = {
-  mode: 'app' | 'service_account'
+  mode: DirectoryAuthMode
   username: string | null
   password: string | null
+  refreshToken: string | null
+  connectedUser: string | null
+  connectedAt: string | null
 }
 
 /** Which identity the lookups use — from nivaro_settings (per-instance overlay applies). */
 export async function directoryIdentity(): Promise<DirectoryIdentity> {
   try {
     const raw = (await db('nivaro_settings')
-      .select('directory_auth_mode', 'directory_username', 'directory_password')
+      .select(
+        'directory_auth_mode',
+        'directory_username',
+        'directory_password',
+        'directory_refresh_token',
+        'directory_connected_user',
+        'directory_connected_at'
+      )
       .orderBy('id', 'asc')
       .first()) as Record<string, unknown> | undefined
     const row = await overlaySettings(raw ?? {})
     const username = typeof row.directory_username === 'string' ? row.directory_username.trim() : ''
     const password = typeof row.directory_password === 'string' ? row.directory_password : ''
-    const mode =
-      row.directory_auth_mode === 'service_account' && username && password
-        ? 'service_account'
-        : 'app'
-    return { mode, username: username || null, password: password || null }
+    const refreshToken =
+      typeof row.directory_refresh_token === 'string' ? row.directory_refresh_token : ''
+    const connectedUser =
+      typeof row.directory_connected_user === 'string' ? row.directory_connected_user : ''
+    const connectedAt =
+      row.directory_connected_at instanceof Date
+        ? row.directory_connected_at.toISOString()
+        : typeof row.directory_connected_at === 'string'
+          ? row.directory_connected_at
+          : null
+    const mode: DirectoryAuthMode =
+      row.directory_auth_mode === 'connected' && refreshToken
+        ? 'connected'
+        : row.directory_auth_mode === 'service_account' && username && password
+          ? 'service_account'
+          : 'app'
+    return {
+      mode,
+      username: username || null,
+      password: password || null,
+      refreshToken: refreshToken || null,
+      connectedUser: connectedUser || null,
+      connectedAt
+    }
   } catch {
-    return { mode: 'app', username: null, password: null }
+    return {
+      mode: 'app',
+      username: null,
+      password: null,
+      refreshToken: null,
+      connectedUser: null,
+      connectedAt: null
+    }
   }
+}
+
+const GRAPH_SCOPE = 'https://graph.microsoft.com/.default'
+
+/**
+ * The authorize URL for the one-time interactive connect. `prompt=login`
+ * forces a fresh sign-in (as the service account, not whoever is browsing),
+ * `offline_access` is what yields the refresh token.
+ */
+export function directoryConnectUrl(args: {
+  state: string
+  redirectUri: string
+  loginHint?: string | null
+}): string {
+  const c = credentials()
+  if (!c.tenant || !c.clientId) {
+    throw new DirectoryError(
+      'Directory lookups are not configured (no Microsoft tenant or app credentials)',
+      503,
+      'directory_not_configured'
+    )
+  }
+  const q = new URLSearchParams({
+    client_id: c.clientId,
+    response_type: 'code',
+    redirect_uri: args.redirectUri,
+    response_mode: 'query',
+    scope: 'openid profile offline_access https://graph.microsoft.com/User.Read.All',
+    state: args.state,
+    prompt: 'login'
+  })
+  if (args.loginHint) q.set('login_hint', args.loginHint)
+  return `https://login.microsoftonline.com/${c.tenant}/oauth2/v2.0/authorize?${q.toString()}`
+}
+
+function jwtPayload(token: string): Record<string, unknown> {
+  try {
+    return JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'))
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Exchange the authorization code, store the refresh token + who signed in,
+ * and switch the auth mode to 'connected'. Returns the connected UPN.
+ */
+export async function completeDirectoryConnect(args: {
+  code: string
+  redirectUri: string
+}): Promise<{ user: string; granted: boolean }> {
+  const c = credentials()
+  if (!c.tenant || !c.clientId || !c.secret) {
+    throw new DirectoryError(
+      'Directory lookups are not configured (no Microsoft tenant or app credentials)',
+      503,
+      'directory_not_configured'
+    )
+  }
+  const res = await fetch(`https://login.microsoftonline.com/${c.tenant}/oauth2/v2.0/token`, {
+    method: 'POST',
+    body: new URLSearchParams({
+      client_id: c.clientId,
+      client_secret: c.secret,
+      grant_type: 'authorization_code',
+      code: args.code,
+      redirect_uri: args.redirectUri
+    }),
+    signal: AbortSignal.timeout(10000)
+  })
+  const json = (await res.json().catch(() => ({}))) as {
+    access_token?: string
+    refresh_token?: string
+    id_token?: string
+    error?: string
+    error_description?: string
+  }
+  if (!res.ok || !json.refresh_token || !json.access_token) {
+    throw new DirectoryError(
+      `Microsoft refused the connect: ${json.error ?? res.status}${
+        json.error_description ? ` — ${json.error_description.slice(0, 300)}` : ''
+      }${!res.ok || json.refresh_token ? '' : ' (no refresh token issued — offline_access missing?)'}`,
+      502,
+      'graph_token_failed'
+    )
+  }
+  const claims = jwtPayload(json.id_token ?? json.access_token)
+  const user = String(
+    claims.preferred_username ?? claims.upn ?? claims.email ?? claims.unique_name ?? ''
+  )
+  const granted = grantsFromJwt(json.access_token).some((r) => GRANT_ROLES.includes(r))
+  const row = await db('nivaro_settings').select('id').orderBy('id', 'asc').first()
+  if (row) {
+    await db('nivaro_settings')
+      .where({ id: row.id })
+      .update({
+        directory_auth_mode: 'connected',
+        directory_refresh_token: json.refresh_token,
+        directory_connected_user: user || null,
+        directory_connected_at: new Date()
+      })
+  }
+  resetDirectoryToken()
+  return { user, granted }
+}
+
+/** Forget the connected account (the refresh token is discarded, mode falls back to the app). */
+export async function disconnectDirectory(): Promise<void> {
+  const row = await db('nivaro_settings').select('id').orderBy('id', 'asc').first()
+  if (row) {
+    await db('nivaro_settings').where({ id: row.id }).update({
+      directory_auth_mode: null,
+      directory_refresh_token: null,
+      directory_connected_user: null,
+      directory_connected_at: null
+    })
+  }
+  resetDirectoryToken()
 }
 
 export class DirectoryError extends Error {
@@ -182,26 +346,34 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
     )
   }
   const identity = await directoryIdentity()
-  const key = `${identity.mode}|${identity.username ?? ''}`
+  const key = `${identity.mode}|${identity.username ?? ''}|${identity.connectedUser ?? ''}`
   if (cachedToken && cachedToken.key === key && cachedToken.expiresAt > Date.now()) {
     return { token: cachedToken.token, roles: cachedToken.roles }
   }
   const body =
-    identity.mode === 'service_account'
+    identity.mode === 'connected'
       ? new URLSearchParams({
           client_id: c.clientId,
           client_secret: c.secret,
-          grant_type: 'password',
-          username: identity.username ?? '',
-          password: identity.password ?? '',
-          scope: 'https://graph.microsoft.com/.default'
+          grant_type: 'refresh_token',
+          refresh_token: identity.refreshToken ?? '',
+          scope: `${GRAPH_SCOPE} offline_access`
         })
-      : new URLSearchParams({
-          client_id: c.clientId,
-          client_secret: c.secret,
-          grant_type: 'client_credentials',
-          scope: 'https://graph.microsoft.com/.default'
-        })
+      : identity.mode === 'service_account'
+        ? new URLSearchParams({
+            client_id: c.clientId,
+            client_secret: c.secret,
+            grant_type: 'password',
+            username: identity.username ?? '',
+            password: identity.password ?? '',
+            scope: GRAPH_SCOPE
+          })
+        : new URLSearchParams({
+            client_id: c.clientId,
+            client_secret: c.secret,
+            grant_type: 'client_credentials',
+            scope: GRAPH_SCOPE
+          })
   let res: Response
   try {
     res = await fetch(`https://login.microsoftonline.com/${c.tenant}/oauth2/v2.0/token`, {
@@ -218,22 +390,48 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
   }
   const json = (await res.json().catch(() => ({}))) as {
     access_token?: string
+    refresh_token?: string
     expires_in?: number
     error?: string
     error_description?: string
   }
   if (!res.ok || !json.access_token) {
     const who =
-      identity.mode === 'service_account'
-        ? `the service account ${identity.username}`
-        : 'the app token'
+      identity.mode === 'connected'
+        ? `the connected account ${identity.connectedUser ?? ''}`
+        : identity.mode === 'service_account'
+          ? `the service account ${identity.username}`
+          : 'the app token'
+    const hint =
+      identity.mode === 'connected' && json.error === 'invalid_grant'
+        ? ' — the stored sign-in has expired or was revoked; connect the account again from Settings → Microsoft'
+        : ''
     throw new DirectoryError(
       `Microsoft refused ${who}: ${json.error ?? res.status}${
         json.error_description ? ` — ${json.error_description.slice(0, 300)}` : ''
-      }`,
+      }${hint}`,
       502,
       'graph_token_failed'
     )
+  }
+  // Microsoft rotates refresh tokens; keep the newest so the connection never
+  // ages out while it is in use.
+  if (
+    identity.mode === 'connected' &&
+    json.refresh_token &&
+    json.refresh_token !== identity.refreshToken
+  ) {
+    void db('nivaro_settings')
+      .orderBy('id', 'asc')
+      .first()
+      .then((row) =>
+        row
+          ? db('nivaro_settings')
+              .where({ id: row.id })
+              .update({ directory_refresh_token: json.refresh_token })
+          : undefined
+      )
+      .catch(() => undefined)
   }
   cachedToken = {
     key,
@@ -252,7 +450,13 @@ export function resetDirectoryToken(): void {
 export async function directoryStatus(): Promise<DirectoryStatus> {
   const tenant = tenantId()
   const identity = await directoryIdentity()
-  const base = { tenant, auth_mode: identity.mode, username: identity.username }
+  const base = {
+    tenant,
+    auth_mode: identity.mode,
+    username: identity.username,
+    connected_user: identity.connectedUser,
+    connected_at: identity.connectedAt
+  }
   if (!directoryConfigured()) {
     return {
       ...base,
@@ -266,9 +470,11 @@ export async function directoryStatus(): Promise<DirectoryStatus> {
     const { roles } = await appToken()
     const granted = roles.some((r) => GRANT_ROLES.includes(r))
     const noGrant =
-      identity.mode === 'service_account'
-        ? `${identity.username} signed in, but its token carries no User.Read.All — grant the DELEGATED User.Read.All to the app and let the service account consent (or an admin consent for it)`
-        : 'The app token carries no Graph roles — User.Read.All must be added as an APPLICATION permission and admin-consented, or switch to a service account below'
+      identity.mode === 'connected'
+        ? `${identity.connectedUser} is connected, but its token carries no User.Read.All — grant the DELEGATED User.Read.All to the app for that account, then connect again`
+        : identity.mode === 'service_account'
+          ? `${identity.username} signed in, but its token carries no User.Read.All — grant the DELEGATED User.Read.All to the app and let the service account consent (or an admin consent for it)`
+          : 'The app token carries no Graph roles — User.Read.All must be added as an APPLICATION permission and admin-consented, or switch to a service account below'
     return {
       ...base,
       configured: true,

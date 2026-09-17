@@ -20,7 +20,8 @@ function maskSettings(settings: Record<string, unknown>) {
     ai_gateway_client_secret: settings.ai_gateway_client_secret ? MASK : null,
     smtp_pass: settings.smtp_pass ? MASK : null,
     sms_auth_token: settings.sms_auth_token ? MASK : null,
-    directory_password: settings.directory_password ? MASK : null
+    directory_password: settings.directory_password ? MASK : null,
+    directory_refresh_token: settings.directory_refresh_token ? MASK : null
   }
 }
 
@@ -70,6 +71,7 @@ const allowedSettingsKeys = [
   'directory_auth_mode',
   'directory_username',
   'directory_password',
+  'directory_refresh_token',
   // SMTP / email
   'smtp_host',
   'smtp_port',
@@ -186,9 +188,12 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (patch.smtp_pass === MASK) delete patch.smtp_pass
     if (patch.sms_auth_token === MASK) delete patch.sms_auth_token
     if (patch.directory_password === MASK) delete patch.directory_password
+    if (patch.directory_refresh_token === MASK) delete patch.directory_refresh_token
     if ('directory_auth_mode' in patch) {
       patch.directory_auth_mode =
-        patch.directory_auth_mode === 'service_account' ? 'service_account' : null
+        patch.directory_auth_mode === 'service_account' || patch.directory_auth_mode === 'connected'
+          ? patch.directory_auth_mode
+          : null
     }
 
     // Coerce smtp_secure to bit

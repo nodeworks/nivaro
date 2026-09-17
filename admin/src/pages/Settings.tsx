@@ -21,7 +21,7 @@ import {
   UserRound,
   X
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { DirectorySyncCard } from '@/components/directory-sync-card'
 import { Badge } from '@/components/ui/badge'
@@ -1374,6 +1374,12 @@ export function SettingsPage() {
   })
 
   const [activeSection, setActiveSection] = usePersistedTab<Section>('nvr_tab_settings', 'project')
+  // ?section=<id> deep-links a tab (the directory connect round-trip lands here).
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('section')
+    if (wanted && NAV.some((n) => n.id === wanted)) setActiveSection(wanted as Section)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
+  }, [])
 
   function toAdGroupArray(v: unknown): AdGroupRow[] {
     if (Array.isArray(v)) return v as AdGroupRow[]

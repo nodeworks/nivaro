@@ -21,9 +21,12 @@ type Status = {
   granted: boolean
   roles: string[]
   reason: string | null
-  auth_mode: 'app' | 'service_account'
+  auth_mode: AuthMode
   username: string | null
+  connected_user: string | null
+  connected_at: string | null
 }
+type AuthMode = 'app' | 'service_account' | 'connected'
 type Report = {
   enabled: boolean
   suspend: boolean
@@ -63,17 +66,60 @@ export function DirectorySyncCard() {
     queryKey: ['settings'],
     queryFn: () => api.get('/settings').then((r) => r.data.data)
   })
-  const [mode, setMode] = useState<'app' | 'service_account'>('app')
+  const [mode, setMode] = useState<AuthMode>('app')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [seeded, setSeeded] = useState(false)
   useEffect(() => {
     if (seeded || !settingsQ.data) return
-    setMode(settingsQ.data.directory_auth_mode === 'service_account' ? 'service_account' : 'app')
+    const m = settingsQ.data.directory_auth_mode
+    setMode(m === 'service_account' || m === 'connected' ? m : 'app')
     setUsername(String(settingsQ.data.directory_username ?? ''))
     setPassword(String(settingsQ.data.directory_password ?? ''))
     setSeeded(true)
   }, [seeded, settingsQ.data])
+  const recheckFresh = async () => {
+    const s = await api
+      .get('/directory/status', { params: { fresh: '1' } })
+      .then((r) => r.data.data as Status)
+    qc.setQueryData(['directory-status'], s)
+    return s
+  }
+  // Landing back from the Microsoft connect round-trip.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const outcome = params.get('directory')
+    if (!outcome) return
+    if (outcome === 'connected') {
+      toast.success(`Directory connected as ${params.get('user') ?? 'the service account'}`)
+    } else {
+      toast.error(params.get('reason') ?? 'Directory connect failed', { duration: 12000 })
+    }
+    for (const k of ['directory', 'user', 'reason']) params.delete(k)
+    const qs = params.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`)
+    invalidate()
+    void recheckFresh().then((s) => {
+      if (outcome === 'connected' && !s.granted && s.reason)
+        toast.error(s.reason, { duration: 12000 })
+    })
+    // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
+  }, [])
+  const startConnect = () => {
+    const q = new URLSearchParams({ returnTo: `${window.location.origin}/settings` })
+    if (username.trim()) q.set('login_hint', username.trim())
+    window.location.href = `/api/directory/connect?${q.toString()}`
+  }
+  const disconnect = useMutation({
+    mutationFn: () => api.post('/directory/disconnect'),
+    onSuccess: async () => {
+      setMode('app')
+      invalidate()
+      await recheckFresh()
+      toast.success('Directory account disconnected')
+    },
+    onError: () => toast.error('Could not disconnect')
+  })
   const saveIdentity = useMutation({
     mutationFn: () =>
       api.patch('/settings', {
@@ -158,7 +204,8 @@ export function DirectorySyncCard() {
             {(
               [
                 ['app', 'App registration'],
-                ['service_account', 'Service account']
+                ['service_account', 'Service account'],
+                ['connected', 'Connected account']
               ] as const
             ).map(([value, label]) => (
               <button
@@ -179,7 +226,70 @@ export function DirectorySyncCard() {
             ))}
           </div>
         </div>
-        {mode === 'service_account' ? (
+        {mode === 'connected' ? (
+          <div className='space-y-2' data-directory-connected>
+            <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+              Sign in as the service account once in the browser (multi-factor prompts work there).
+              Nivaro keeps the sign-in and renews it silently from then on. The connection lapses if
+              the account goes unused for about 90 days or an admin revokes its sessions — reconnect
+              from here when that happens.
+            </p>
+            {status.data.connected_user ? (
+              <div className='flex flex-wrap items-center gap-2 text-[12px]'>
+                <span className='text-slate-700 dark:text-foreground' data-directory-connected-user>
+                  Connected as <span className='font-medium'>{status.data.connected_user}</span>
+                  {status.data.connected_at && (
+                    <span className='text-slate-400'>
+                      {' '}
+                      · {formatRelative(status.data.connected_at)}
+                    </span>
+                  )}
+                </span>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='h-7 text-[12px]'
+                  onClick={startConnect}
+                  data-directory-reconnect
+                >
+                  Reconnect…
+                </Button>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='ghost'
+                  className='h-7 text-[12px] text-rose-600 hover:text-rose-700'
+                  onClick={() => disconnect.mutate()}
+                  disabled={disconnect.isPending}
+                  data-directory-disconnect
+                >
+                  Disconnect
+                </Button>
+              </div>
+            ) : (
+              <div className='flex flex-wrap items-center gap-2'>
+                <Input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder='svc-account@company.com (sign-in hint, optional)'
+                  autoComplete='off'
+                  className='h-8 max-w-[320px] text-[12px]'
+                  data-directory-username
+                />
+                <Button
+                  type='button'
+                  size='sm'
+                  className='h-7 text-[12px]'
+                  onClick={startConnect}
+                  data-directory-connect
+                >
+                  Connect service account…
+                </Button>
+              </div>
+            )}
+          </div>
+        ) : mode === 'service_account' ? (
           <>
             <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
               A named account with a password whose delegated User.Read.All was granted through IAM.
@@ -222,26 +332,28 @@ export function DirectorySyncCard() {
             User.Read.All as an APPLICATION permission with admin consent.
           </p>
         )}
-        <div className='flex items-center gap-2'>
-          <Button
-            type='button'
-            size='sm'
-            onClick={() => saveIdentity.mutate()}
-            disabled={
-              saveIdentity.isPending ||
-              (mode === 'service_account' && (!username.trim() || !password))
-            }
-            className='h-7 text-[12px]'
-            data-directory-save
-          >
-            {saveIdentity.isPending ? 'Saving and testing…' : 'Save and test'}
-          </Button>
-          {status.data.username && status.data.auth_mode === 'service_account' && (
-            <span className='text-[11px] text-slate-400'>
-              Currently signing in as {status.data.username}
-            </span>
-          )}
-        </div>
+        {mode !== 'connected' && (
+          <div className='flex items-center gap-2'>
+            <Button
+              type='button'
+              size='sm'
+              onClick={() => saveIdentity.mutate()}
+              disabled={
+                saveIdentity.isPending ||
+                (mode === 'service_account' && (!username.trim() || !password))
+              }
+              className='h-7 text-[12px]'
+              data-directory-save
+            >
+              {saveIdentity.isPending ? 'Saving and testing…' : 'Save and test'}
+            </Button>
+            {status.data.username && status.data.auth_mode === 'service_account' && (
+              <span className='text-[11px] text-slate-400'>
+                Currently signing in as {status.data.username}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {!granted && (

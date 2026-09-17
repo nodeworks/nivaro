@@ -345,6 +345,42 @@ export async function authRoutes(app: FastifyInstance) {
 
   // OIDC callback
   app.get('/callback', async (req, reply) => {
+    // Directory connect (Settings → Microsoft): the same registered callback,
+    // but the code is exchanged for the SERVICE ACCOUNT's refresh token and
+    // stored — nobody is signed in or out of Nivaro by this branch.
+    const connect = req.session.directoryConnect
+    if (connect) {
+      req.session.directoryConnect = undefined
+      const q = req.query as Record<string, string | undefined>
+      const back = (params: string) => reply.redirect(`${connect.returnTo}${params}`)
+      if (!q.code || q.state !== connect.state) {
+        const why = q.error_description ?? q.error ?? 'state mismatch'
+        return back(
+          `?section=microsoft&directory=error&reason=${encodeURIComponent(why.slice(0, 300))}`
+        )
+      }
+      try {
+        const { completeDirectoryConnect } = await import('../services/graph-directory.js')
+        const done = await completeDirectoryConnect({
+          code: q.code,
+          redirectUri: connect.redirectUri
+        })
+        await logActivity({
+          action: 'directory-connect',
+          user: req.session.userId ?? null,
+          collection: 'nivaro_settings',
+          item: '1',
+          comment: `Connected the directory as ${done.user}`
+        })
+        return back(`?section=microsoft&directory=connected&user=${encodeURIComponent(done.user)}`)
+      } catch (err) {
+        app.log.error({ err }, 'Directory connect failed')
+        const why = err instanceof Error ? err.message : String(err)
+        return back(
+          `?section=microsoft&directory=error&reason=${encodeURIComponent(why.slice(0, 300))}`
+        )
+      }
+    }
     const { oidcState, codeVerifier } = req.session
     if (!oidcState || !codeVerifier) {
       return reply.code(400).send({ error: 'Invalid session state' })

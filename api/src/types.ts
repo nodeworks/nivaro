@@ -178,6 +178,8 @@ declare module '@fastify/session' {
     oidcRedirectUri?: string
     codeVerifier?: string
     returnTo?: string
+    /** One-time directory connect in flight (Settings → Microsoft → Connect). */
+    directoryConnect?: { state: string; redirectUri: string; returnTo: string }
   }
 }
 

@@ -1,11 +1,16 @@
+import { randomBytes } from 'node:crypto'
 import type { FastifyInstance, FastifyReply } from 'fastify'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import { checkDirectory } from '../services/directory-sync.js'
 import {
   DirectoryError,
   type DirectoryUser,
+  directoryConnectUrl,
   directoryStatus,
+  disconnectDirectory,
   fetchDirectoryManager,
   fetchDirectoryPhoto,
   lookupDirectoryUser,
@@ -188,6 +193,53 @@ export async function directoryRoutes(app: FastifyInstance) {
   )
 
   // The newest whole-table run, for the Settings card.
+  // One-time interactive connect: send the admin to Microsoft to sign in AS
+  // the service account; the OIDC callback stores the refresh token.
+  // `returnTo` is the Settings page to land back on (allowlisted origins only).
+  app.get('/connect', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as { returnTo?: string; login_hint?: string }
+    const allowed = new Set(
+      [config.ADMIN_URL, config.PUBLIC_URL, ...config.APP_URLS.split(',')]
+        .map((u) => u.trim())
+        .filter(Boolean)
+        .map((u) => {
+          try {
+            return new URL(u).origin
+          } catch {
+            return ''
+          }
+        })
+    )
+    let returnTo = `${config.ADMIN_URL}/settings`
+    try {
+      const parsed = new URL(q.returnTo ?? '', config.ADMIN_URL)
+      if (allowed.has(parsed.origin)) returnTo = `${parsed.origin}${parsed.pathname}`
+    } catch {
+      /* default */
+    }
+    const state = randomBytes(24).toString('base64url')
+    const redirectUri = `${new URL(returnTo).origin}/api/auth/callback`
+    let url: string
+    try {
+      url = directoryConnectUrl({ state, redirectUri, loginHint: q.login_hint ?? null })
+    } catch (err) {
+      return sendDirectoryError(reply, err)
+    }
+    req.session.directoryConnect = { state, redirectUri, returnTo }
+    return reply.redirect(url)
+  })
+
+  app.post('/disconnect', { preHandler: requireAdmin }, async (req) => {
+    await disconnectDirectory()
+    await logActivity({
+      action: 'directory-disconnect',
+      user: req.user?.id ?? null,
+      collection: 'nivaro_settings',
+      item: '1'
+    })
+    return { data: { ok: true } }
+  })
+
   app.get('/report', { preHandler: requireAdmin }, async () => {
     const row = (await db('nivaro_settings').first(
       'directory_sync_enabled',
