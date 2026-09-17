@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-17T16:12:30.134Z",
+  "generated_at": "2026-09-17T16:45:07.120Z",
   "releases": [
+    {
+      "version": "0.1.304",
+      "tag": "v0.1.304",
+      "date": "2026-09-17T12:44:58-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "directory",
+              "text": "connected account — one interactive sign-in, then refresh tokens",
+              "hash": "6439d7a9"
+            },
+            {
+              "section": "Added",
+              "scope": "directory",
+              "text": "sign in to Microsoft Graph as a service account",
+              "hash": "f016ffc1"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.303",
       "tag": "v0.1.303",
-      "date": "2026-09-17T12:12:18-04:00",
+      "date": "2026-09-17T12:12:30-04:00",
       "sections": [
         {
           "label": "Added",
