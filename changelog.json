@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-17T22:47:30.795Z",
+  "generated_at": "2026-09-18T12:52:05.798Z",
   "releases": [
+    {
+      "version": "0.1.307",
+      "tag": "v0.1.307",
+      "date": "2026-09-18T08:51:52-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Directus-shaped relation filters, nested list args, junction-shaped M2M rows",
+              "hash": "20004670"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "priority:flag script alias for the efp-ops seed",
+              "hash": "b4a440ba"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.306",
       "tag": "v0.1.306",
-      "date": "2026-09-17T18:47:16-04:00",
+      "date": "2026-09-17T18:47:30-04:00",
       "sections": [
         {
           "label": "Other",
