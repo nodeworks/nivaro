@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-18T12:52:05.798Z",
+  "generated_at": "2026-09-18T13:22:37.103Z",
   "releases": [
+    {
+      "version": "0.1.308",
+      "tag": "v0.1.308",
+      "date": "2026-09-18T09:22:23-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "logout survives the rolling session save",
+              "hash": "d6545614"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "retire:po-file-queue script alias",
+              "hash": "5697056a"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.307",
       "tag": "v0.1.307",
-      "date": "2026-09-18T08:51:52-04:00",
+      "date": "2026-09-18T08:52:05-04:00",
       "sections": [
         {
           "label": "Other",
