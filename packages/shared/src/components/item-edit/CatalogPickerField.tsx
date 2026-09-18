@@ -87,6 +87,12 @@ export interface CatalogModeConfig {
    *  added to `filter`). '$parent.<field>' tokens resolve like `filter`'s and
    *  gate the list the same way while unresolved. */
   section_filter?: Record<string, unknown>
+  /** With a to-many `section_by`: a filter on the JUNCTION row — the
+   *  membership itself, when it carries columns of its own (a link that only
+   *  applies in one scope). An item lists under a section only through a link
+   *  that passes, and the catalog fetch requires one such link to an in-scope
+   *  section. '$parent.<field>' tokens resolve and gate like `filter`'s. */
+  link_filter?: Record<string, unknown>
   /** Optional filter applied to the catalog fetch. String values '$parent.<field>' resolve from the parent draft. */
   filter?: Record<string, unknown>
   /** Child field the entered amount writes to (default 'quantity'). */
@@ -399,7 +405,7 @@ export function CatalogPickerField({
   // unresolved tokens gate the section list ("pick the type first"
   // behaviour).
   const parentDraft = parentDraftCtx?.draft
-  const { resolvedFilter, resolvedSectionFilter, missingParents } = useMemo(() => {
+  const { resolvedFilter, resolvedSectionFilter, resolvedLinkFilter, missingParents } = useMemo(() => {
     const missing: string[] = []
     const sub = (v: unknown): unknown => {
       if (typeof v === 'string' && v.startsWith('$parent.')) {
@@ -420,15 +426,28 @@ export function CatalogPickerField({
     const sf = config.section_filter
       ? (sub(config.section_filter) as Record<string, unknown>)
       : undefined
-    return { resolvedFilter: f, resolvedSectionFilter: sf, missingParents: [...new Set(missing)] }
-  }, [config.filter, config.section_filter, parentDraft])
+    const lf = config.link_filter
+      ? (sub(config.link_filter) as Record<string, unknown>)
+      : undefined
+    return {
+      resolvedFilter: f,
+      resolvedSectionFilter: sf,
+      resolvedLinkFilter: lf,
+      missingParents: [...new Set(missing)]
+    }
+  }, [config.filter, config.section_filter, config.link_filter, parentDraft])
   // The catalog read narrows to items linked to an in-scope section, so the
   // zone/type rules live once, on the section, instead of per item.
   const itemFilter = useMemo(() => {
-    if (!sectionAliasRel || !resolvedSectionFilter) return resolvedFilter
-    const clause = { [sectionAliasRel.one_field as string]: { _some: resolvedSectionFilter } }
+    if (!sectionAliasRel || (!resolvedSectionFilter && !resolvedLinkFilter)) return resolvedFilter
+    // `_link` holds the junction row to the same link the section matched on.
+    const some = {
+      ...(resolvedSectionFilter ?? {}),
+      ...(resolvedLinkFilter ? { _link: resolvedLinkFilter } : {})
+    }
+    const clause = { [sectionAliasRel.one_field as string]: { _some: some } }
     return resolvedFilter ? { _and: [resolvedFilter, clause] } : clause
-  }, [sectionAliasRel, resolvedSectionFilter, resolvedFilter])
+  }, [sectionAliasRel, resolvedSectionFilter, resolvedLinkFilter, resolvedFilter])
 
   // Catalog fetch: id + display-template fields + section path + copied + display columns
   const catalogFields = useMemo(() => {
@@ -493,7 +512,12 @@ export function CatalogPickerField({
   const { data: sectionLinks = [], isLoading: sectionLinksLoading } = useQuery<
     Array<{ item: string; section: string }>
   >({
-    queryKey: ['catalog-section-links', sectionM2M?.junction, sectionIds.join(',')],
+    queryKey: [
+      'catalog-section-links',
+      sectionM2M?.junction,
+      sectionIds.join(','),
+      JSON.stringify(resolvedLinkFilter ?? null)
+    ],
     queryFn: async () => {
       const m = sectionM2M as SectionM2M
       const out: Array<{ item: string; section: string }> = []
@@ -501,7 +525,11 @@ export function CatalogPickerField({
         const chunk = sectionIds.slice(i, i + 200)
         const rows = await readAllPages(client, `/items/${m.junction}`, {
           fields: `${m.fkToItem},${m.fkToSection}`,
-          filter: JSON.stringify({ [m.fkToSection]: { _in: chunk } })
+          filter: JSON.stringify(
+            resolvedLinkFilter
+              ? { _and: [{ [m.fkToSection]: { _in: chunk } }, resolvedLinkFilter] }
+              : { [m.fkToSection]: { _in: chunk } }
+          )
         })
         for (const r of rows) {
           if (r[m.fkToItem] == null || r[m.fkToSection] == null) continue
@@ -1172,6 +1200,9 @@ export function CatalogPickerField({
       const secs = sectionAliasRel
         ? (sectionNamesByItem.get(String(row.id)) ?? [])
         : [sectionValue(row)]
+      // A membership filter means "no passing link" = not in this catalog,
+      // never Uncategorized.
+      if (sectionAliasRel && resolvedLinkFilter && secs.length === 0) continue
       for (const s of secs.length ? secs : ['']) {
         const sec = s || 'Uncategorized'
         if (!bySection.has(sec)) bySection.set(sec, [])
@@ -1187,7 +1218,7 @@ export function CatalogPickerField({
         items: items.sort((a, b) => a.label.localeCompare(b.label))
       }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogRows, tmpl, search, config.section_by, sectionAliasRel, sectionNamesByItem, sectionsPending])
+  }, [catalogRows, tmpl, search, config.section_by, sectionAliasRel, sectionNamesByItem, sectionsPending, resolvedLinkFilter])
 
   // First load: collapse everything except sections holding picked rows
   if (!collapseInitRef.current && sections.length > 0) {

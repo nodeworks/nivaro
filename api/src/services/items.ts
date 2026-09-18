@@ -1338,6 +1338,13 @@ function applyFilters(
           unknown
         >
         const otherRels = relCache.get(otherCollection) ?? []
+        // `_link` filters the JUNCTION row itself (a membership that carries
+        // its own columns — a scope, a role, a date); every other key filters
+        // the related record. Both must hold on the SAME link.
+        const { _link: linkFilter, ...targetFilter } = innerFilter as Record<string, unknown> & {
+          _link?: unknown
+        }
+        const junctionRels = relCache.get(junction) ?? []
 
         const subFn = function (this: QB) {
           this.select(db.raw('1'))
@@ -1347,8 +1354,10 @@ function applyFilters(
               this.select(db.raw('1'))
                 .from(otherCollection)
                 .whereRaw('??.?? = ??.??', [otherCollection, 'id', junction, fkToOther])
-              applyFilters(this, innerFilter, otherCollection, otherRels)
+              applyFilters(this, targetFilter, otherCollection, otherRels)
             })
+          if (linkFilter && typeof linkFilter === 'object')
+            applyFilters(this, linkFilter as Record<string, unknown>, junction, junctionRels)
         }
 
         if (hasSome) {
@@ -2206,6 +2215,19 @@ async function primeRelCacheForFilter(
         if (inner && typeof inner === 'object') {
           await primeRelCacheForFilter(inner as Record<string, unknown>, otherCol, otherRels)
         }
+      }
+      // `_link` filters the junction row itself — its relations get primed too.
+      const wrapped = ((value as Record<string, unknown>)['_some'] ??
+        (value as Record<string, unknown>)['_none']) as Record<string, unknown> | undefined
+      const link = wrapped?.['_link']
+      if (link && typeof link === 'object') {
+        if (!relCache.has(m2mMatch.junction))
+          relCache.set(m2mMatch.junction, await getRelations(m2mMatch.junction))
+        await primeRelCacheForFilter(
+          link as Record<string, unknown>,
+          m2mMatch.junction,
+          relCache.get(m2mMatch.junction) as CMSRelation[]
+        )
       }
     }
   }

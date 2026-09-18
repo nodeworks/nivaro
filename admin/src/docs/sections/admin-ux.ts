@@ -732,6 +732,10 @@ export const adminUxListSignals: DocSection = {
     {
       type: 'p',
       text: 'A catalog-picker grid may declare `catalog_mode.row_flags: [{label, when}]` — `when` is a boolean expression over the child row (`{{shipped_qty}} > {{quantity}}`). A row the expression matches carries the label as an amber flag in the Summary table. Pair it with an extension-registered Data Integrity check when the sweep should report the same fact across records.'
+    },
+    {
+      type: 'p',
+      text: 'With a to-many `section_by`, `catalog_mode.link_filter` filters the JUNCTION row between item and section — for memberships that carry their own columns (an item that belongs to a category only in one region). An item lists under a section only through a link that passes, the catalog read requires one such link to an in-scope section (`_link` inside the `_some`), and an item with no passing link is left out rather than shown as Uncategorized. `$parent.<field>` tokens resolve and gate the list like `filter`.'
     }
   ]
 }

@@ -361,6 +361,16 @@ export const apiFilter: DocSection = {
     {
       type: 'note',
       text: 'Both `_some` and `_none` work on O2M virtual fields (one-to-many) and M2M junction relations. Use these operators to filter based on existence/non-existence of related records.'
+    },
+    { type: 'h3', text: 'Filtering on the link itself (`_link`)' },
+    {
+      type: 'p',
+      text: 'When an M2M junction row carries columns of its own — a membership that only applies in one region, a role on the link — put a `_link` filter inside `_some` / `_none`. Every other key filters the related record; `_link` filters the junction row, and both must hold on the SAME link.'
+    },
+    {
+      type: 'pre',
+      code: `// articles tagged "featured" through a link that is global or scoped to region 3
+?filter={"tags":{"_some":{"name":{"_eq":"featured"},"_link":{"_or":[{"region_id":{"_null":true}},{"region_id":{"_eq":3}}]}}}}`
     }
   ]
 }
