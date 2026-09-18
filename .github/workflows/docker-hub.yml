@@ -13,6 +13,9 @@ on:
 # digests into one multi-arch manifest.
 jobs:
   build:
+    # The dev repo receives the same tags a minute earlier; only the public
+    # mirror publishes, or the two runs race for one version.
+    if: github.repository == 'nodeworks/nivaro'
     strategy:
       matrix:
         include:
@@ -60,6 +63,9 @@ jobs:
           retention-days: 1
 
   merge:
+    # The dev repo receives the same tags a minute earlier; only the public
+    # mirror publishes, or the two runs race for one version.
+    if: github.repository == 'nodeworks/nivaro'
     name: Merge manifest & tag
     runs-on: ubuntu-latest
     needs: build

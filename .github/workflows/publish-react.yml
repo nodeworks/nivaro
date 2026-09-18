@@ -9,6 +9,9 @@ on:
 
 jobs:
   publish:
+    # The dev repo receives the same tags a minute earlier; only the public
+    # mirror publishes, or the two runs race for one version.
+    if: github.repository == 'nodeworks/nivaro'
     name: Publish @nivaro/react to npm
     runs-on: ubuntu-latest
     permissions:
