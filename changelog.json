@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-18T13:22:37.103Z",
+  "generated_at": "2026-09-18T14:21:50.504Z",
   "releases": [
+    {
+      "version": "0.1.309",
+      "tag": "v0.1.309",
+      "date": "2026-09-18T10:21:37-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "first sign-ins create a provisional account that can request access",
+              "hash": "ed91d406"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.308",
       "tag": "v0.1.308",
-      "date": "2026-09-18T09:22:23-04:00",
+      "date": "2026-09-18T09:22:37-04:00",
       "sections": [
         {
           "label": "Other",
