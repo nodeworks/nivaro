@@ -71,8 +71,8 @@ export const slaScheduleDocs: DocSection = {
       items: [
         'Holiday dates count zero business hours regardless of weekday.',
         'Defaults: Monday–Friday, 9:00–17:00, no holidays.',
-        'Timezone: the day start/end hours are wall-clock times in the IANA zone set in Settings → SLA (e.g. America/New_York). Leave it empty and the API server\'s own zone applies — deployed containers run UTC, so set it explicitly.',
-        'Regional clocks: map a region collection (Settings → SLA → Regional clocks) and each record linked to a mapped region counts business hours on that region\'s zone. Unmapped regions, and records with no region link, follow the SLA timezone.',
+        "Timezone: the day start/end hours are wall-clock times in the IANA zone set in Settings → SLA (e.g. America/New_York). Leave it empty and the API server's own zone applies — deployed containers run UTC, so set it explicitly.",
+        "Regional clocks: map a region collection (Settings → SLA → Regional clocks) and each record linked to a mapped region counts business hours on that region's zone. Unmapped regions, and records with no region link, follow the SLA timezone.",
         'Applies to every SLA consumer — status endpoints, queue SLA columns, breach notifications, escalation ladders and My Work.',
         'Applies only to rules with "business hours only" enabled; other rules use wall-clock hours.'
       ]
@@ -168,6 +168,20 @@ GET /api/auth/saml/metadata     # SP metadata for your IdP`
     {
       type: 'note',
       text: 'Email claims fall back to upn / preferred_username (email-shaped values only) for issuers that do not send a plain email claim. TOTP second factor applies to both flows.'
+    },
+    { type: 'h2', id: 'sso-new-accounts', text: 'New accounts' },
+    {
+      type: 'p',
+      text: 'A first sign-in creates the account automatically. A returning person is matched by the identity provider subject first; email only links a pre-provisioned account on its first sign-in. Settings → Sign-in providers → New accounts picks the role a new account starts in (after any directory-group mapping) and the role it moves to once the person submits an access request. Admin roles cannot be chosen.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/users/me/access-request
+{ "reason": "Forecasting for the Central zone", "divisions": [1, 2], "vendor": null }
+
+# → stores preferences.access_request and, when the account still holds the
+#   first-sign-in role, moves it to the access-request role
+{ "data": { "access_request": { ... }, "role_changed": true } }`
     }
   ]
 }

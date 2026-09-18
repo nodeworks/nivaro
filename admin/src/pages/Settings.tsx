@@ -654,6 +654,90 @@ const EMPTY_SSO_DRAFT = {
   is_active: true
 }
 
+// ─── Provisional-account roles (migration 330) ───────────────────────────────
+// Which role a brand-new sign-in lands in, and which role it moves to once the
+// person submits an access request. Both commit on pick.
+
+const NO_ROLE = '__none__'
+
+function NewUserRolesCard() {
+  const queryClient = useQueryClient()
+  const { data: settings } = useSettings()
+  const { data: roles = [] } = useQuery<Role[]>({
+    queryKey: ['roles'],
+    queryFn: () => api.get<{ data: Role[] }>('/roles').then((r) => r.data.data)
+  })
+  const pickable = roles.filter((r) => !r.admin_access)
+  const save = useMutation({
+    mutationFn: (body: Record<string, string | null>) => api.patch('/settings', body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      toast.success('New-account roles saved')
+    },
+    onError: () => toast.error('Could not save the role')
+  })
+  const current = (settings ?? {}) as {
+    new_user_role?: string | null
+    access_request_role?: string | null
+  }
+  const rows: Array<{ key: 'new_user_role' | 'access_request_role'; label: string; hint: string }> =
+    [
+      {
+        key: 'new_user_role',
+        label: 'First sign-in',
+        hint: 'Role for an account created by its first sign-in (after any directory-group mapping).'
+      },
+      {
+        key: 'access_request_role',
+        label: 'After an access request',
+        hint: 'Role the account moves to once the person submits their access request for review.'
+      }
+    ]
+  return (
+    <div data-new-user-roles className='mt-8 border-t border-slate-200 pt-6 dark:border-border'>
+      <h3 className='mb-1 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+        New accounts
+      </h3>
+      <p className='mb-4 text-[12px] text-muted-foreground'>
+        People who sign in for the first time get an account automatically. Pick the role that
+        account starts in and the role it waits in after asking for access. Admin roles cannot be
+        chosen.
+      </p>
+      <div className='space-y-4'>
+        {rows.map((row) => {
+          const value = current[row.key] ? String(current[row.key]).toUpperCase() : NO_ROLE
+          return (
+            <div key={row.key}>
+              <Label className='text-[12px]'>{row.label}</Label>
+              <Select
+                value={value}
+                onValueChange={(v) => save.mutate({ [row.key]: v === NO_ROLE ? null : v })}
+              >
+                <SelectTrigger className='mt-1 h-9' data-new-user-role={row.key}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_ROLE}>
+                    {row.key === 'new_user_role'
+                      ? 'Automatic (first non-admin role)'
+                      : 'Leave the role alone'}
+                  </SelectItem>
+                  {pickable.map((r) => (
+                    <SelectItem key={r.id} value={String(r.id).toUpperCase()}>
+                      {r.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className='mt-1 text-[11px] text-muted-foreground'>{row.hint}</p>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function SsoProvidersSection() {
   const queryClient = useQueryClient()
   interface DefaultProvider {
@@ -1078,6 +1162,7 @@ function SsoProvidersSection() {
             </div>
           </div>
         )}
+        <NewUserRolesCard />
       </div>
     </div>
   )

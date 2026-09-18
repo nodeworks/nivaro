@@ -147,6 +147,8 @@ export interface GraphOrgProfile {
   country: string | null
   employee_id: string | null
   preferred_language: string | null
+  given_name: string | null
+  family_name: string | null
 }
 
 // Azure AD ID tokens carry no org fields (jobTitle/companyName/department live
@@ -156,7 +158,7 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
   if (!isMicrosoftIssuer()) return null
   try {
     const res = await fetch(
-      'https://graph.microsoft.com/v1.0/me?$select=jobTitle,companyName,department,mobilePhone,businessPhones,officeLocation,city,state,country,employeeId,preferredLanguage',
+      'https://graph.microsoft.com/v1.0/me?$select=givenName,surname,jobTitle,companyName,department,mobilePhone,businessPhones,officeLocation,city,state,country,employeeId,preferredLanguage',
       {
         headers: { Authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(5000)
@@ -164,6 +166,8 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
     )
     if (!res.ok) return null
     const g = (await res.json()) as {
+      givenName?: string | null
+      surname?: string | null
       jobTitle?: string | null
       companyName?: string | null
       department?: string | null
@@ -192,7 +196,9 @@ export async function fetchGraphProfile(accessToken: string): Promise<GraphOrgPr
       state: g.state ?? null,
       country: g.country ?? null,
       employee_id: g.employeeId ?? null,
-      preferred_language: g.preferredLanguage ?? null
+      preferred_language: g.preferredLanguage ?? null,
+      given_name: g.givenName?.trim() || null,
+      family_name: g.surname?.trim() || null
     }
   } catch {
     return null
@@ -301,12 +307,19 @@ async function buildProfileFromTokens(
         ])
       : [null, null]
 
+  const nameParts = splitDisplayName(claims?.name)
+
   return {
     sub: claims?.sub ?? '',
     email: emailClaim ?? emailish(claims?.upn) ?? '',
     name: (claims?.name as string | undefined) ?? '',
-    given_name: (claims?.given_name as string | undefined) ?? null,
-    family_name: (claims?.family_name as string | undefined) ?? null,
+    // Microsoft id_tokens omit given_name/family_name unless the app opts into
+    // those optional claims — Graph's givenName/surname fill in, then the
+    // display-name claim as the last resort, so a first sign-in is never nameless.
+    given_name:
+      (claims?.given_name as string | undefined) ?? graph?.given_name ?? nameParts.given ?? null,
+    family_name:
+      (claims?.family_name as string | undefined) ?? graph?.family_name ?? nameParts.family ?? null,
     groups: (claims?.groups as string[] | undefined) ?? [],
     title: graph?.title ?? null,
     company: graph?.company ?? null,
@@ -321,6 +334,24 @@ async function buildProfileFromTokens(
     avatar,
     tokens
   }
+}
+
+/** 'Lee, Robert (Contractor)' or 'Robert Lee' → given/family. Parentheticals
+ *  are dropped; a single word is a given name only. */
+export function splitDisplayName(name: unknown): { given: string | null; family: string | null } {
+  if (typeof name !== 'string') return { given: null, family: null }
+  const clean = name
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!clean) return { given: null, family: null }
+  if (clean.includes(',')) {
+    const [family, given] = clean.split(',', 2).map((p) => p.trim())
+    return { given: given || null, family: family || null }
+  }
+  const parts = clean.split(' ')
+  if (parts.length === 1) return { given: parts[0], family: null }
+  return { given: parts[0], family: parts.slice(1).join(' ') }
 }
 
 export function generateState() {

@@ -106,6 +106,10 @@ const allowedSettingsKeys = [
   'portal_url',
   'portal_routes',
   'welcome_message',
+  // Provisional-account roles (migration 330): first sign-in role + the role an
+  // access request moves the account to
+  'new_user_role',
+  'access_request_role',
   'login_links',
   'formula_constants',
   'fiscal_year_start_month',

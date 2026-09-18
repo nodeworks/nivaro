@@ -70,11 +70,16 @@ export async function findOrCreateFromOIDC(profile: {
     }
   }
 
-  // Assign role: AD group mapping takes priority, then first non-admin role
+  // Assign role: AD group mapping first, then the instance's configured
+  // provisional role (nivaro_settings.new_user_role — the "awaiting
+  // authorization" seat a self-service sign-up starts in), then the first
+  // non-admin app role as the historic fallback.
   let assignedRole: string | null = adRole
+  if (!assignedRole) assignedRole = await configuredNewUserRole()
   if (!assignedRole) {
     const defaultRole = await db('nivaro_roles')
       .where({ admin_access: false, app_access: true })
+      .orderBy('name')
       .first()
     assignedRole = defaultRole?.id ?? null
   }
@@ -126,7 +131,21 @@ export async function findOrCreateFromOIDC(profile: {
       .catch(() => {})
   }
 
-  return db<User>('nivaro_users').where({ id }).first() as Promise<User>
+  // `.returning('id')` hands back an OBJECT on mssql — reading with the raw
+  // value 500'd every first sign-in ("Validation failed for parameter p1").
+  return db<User>('nivaro_users').where({ id: newId }).first() as Promise<User>
+}
+
+/** nivaro_settings.new_user_role when it names a live, non-admin role. */
+async function configuredNewUserRole(): Promise<string | null> {
+  const settings = (await db('nivaro_settings')
+    .first('new_user_role')
+    .catch(() => null)) as { new_user_role?: string | null } | null
+  const roleId = settings?.new_user_role
+  if (!roleId) return null
+  const role = await db('nivaro_roles').where({ id: roleId }).first('id', 'admin_access')
+  if (!role || role.admin_access) return null
+  return String(role.id)
 }
 
 export async function getUser(id: string): Promise<User | undefined> {

@@ -318,6 +318,77 @@ export async function usersRoutes(app: FastifyInstance) {
     })
   })
 
+  // POST /users/me/access-request — a provisional account (the role
+  // nivaro_settings.new_user_role hands to a first sign-in) submits why it
+  // needs access. The request lives in preferences.access_request (what the
+  // admin Users page reads), and the account moves to
+  // nivaro_settings.access_request_role so it queues for review. Only an
+  // account still on the new-user role (or with no role at all) is moved —
+  // a resubmit, or a real user, never changes role here; admins never move.
+  app.post('/me/access-request', { preHandler: authenticate }, async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const reason = String(body.reason ?? '').trim()
+    if (!reason) return reply.code(400).send({ error: 'reason is required' })
+    const divisions = Array.isArray(body.divisions)
+      ? (body.divisions as unknown[]).filter((v) => typeof v === 'string' || typeof v === 'number')
+      : []
+    const vendor =
+      typeof body.vendor === 'string' || typeof body.vendor === 'number' ? body.vendor : null
+    const access_request = {
+      divisions: divisions.slice(0, 50),
+      vendor,
+      vendor_name: body.vendor_name == null ? null : String(body.vendor_name).slice(0, 500),
+      reason: reason.slice(0, 2000),
+      submitted_at: new Date().toISOString()
+    }
+
+    const me = req.user!.id
+    const row = await db('nivaro_users').where({ id: me }).first('preferences', 'role')
+    const prefs =
+      typeof row?.preferences === 'string'
+        ? (JSON.parse(row.preferences) as Record<string, unknown>)
+        : ((row?.preferences as Record<string, unknown>) ?? {})
+    const patch: Record<string, unknown> = {
+      preferences: JSON.stringify({ ...prefs, access_request })
+    }
+
+    const settings = (await db('nivaro_settings')
+      .first('new_user_role', 'access_request_role')
+      .catch(() => null)) as {
+      new_user_role?: string | null
+      access_request_role?: string | null
+    } | null
+    const currentRole = row?.role ? String(row.role).toUpperCase() : null
+    const startRole = settings?.new_user_role ? String(settings.new_user_role).toUpperCase() : null
+    const nextRole = settings?.access_request_role
+      ? String(settings.access_request_role).toUpperCase()
+      : null
+    let roleChanged = false
+    if (
+      nextRole &&
+      !req.isAdmin &&
+      nextRole !== currentRole &&
+      (currentRole === null || (startRole !== null && currentRole === startRole))
+    ) {
+      const target = await db('nivaro_roles').where({ id: nextRole }).first('id', 'admin_access')
+      if (target && !target.admin_access) {
+        patch.role = target.id
+        roleChanged = true
+      }
+    }
+
+    await db('nivaro_users').where({ id: me }).update(patch)
+    await logActivity({
+      action: 'access-request',
+      user: me,
+      collection: 'nivaro_users',
+      item: me,
+      comment: roleChanged ? 'submitted; moved to the review role' : 'submitted',
+      req
+    })
+    return reply.send({ data: { access_request, role_changed: roleChanged } })
+  })
+
   app.patch('/me/preferences', { preHandler: authenticate }, async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>
     const patch: Record<string, unknown> = {}
