@@ -5,6 +5,11 @@ import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
 
+/** Only an active, non-redacted account may hold a session. */
+export function canSignIn(user: Pick<User, 'status'> & { is_redacted?: unknown }): boolean {
+  return user.status === 'active' && !user.is_redacted
+}
+
 export async function findOrCreateFromOIDC(profile: {
   sub: string
   email: string
@@ -34,6 +39,10 @@ export async function findOrCreateFromOIDC(profile: {
   }
 
   const adRole = await resolveRoleFromAdGroups(profile.groups ?? [])
+
+  // A suspended or redacted account is handed back untouched: the callback
+  // refuses the sign-in, and the attempt must not refresh the row.
+  if (existing && !canSignIn(existing)) return existing
 
   if (existing) {
     const updates: Record<string, unknown> = {

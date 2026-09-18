@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { verify as verifyTotp } from 'otplib'
 import {
   buildDynamicLoginUrl,
@@ -18,7 +18,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { recordLogin } from '../services/security.js'
-import { findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
+import { canSignIn, findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
 
 // Validate returnTo against all configured allowed origins (admin + any APP_URLS).
@@ -57,6 +57,27 @@ function loginUrlFor(returnTo: string | undefined, query: string): string {
   } catch {
     return `${new URL(config.ADMIN_URL).origin}/login${query}`
   }
+}
+
+/** A suspended or redacted account authenticated with the IdP: no session,
+ *  an audit row that says so, and a login page that can explain it. */
+async function refuseSuspended(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  userId: string,
+  method: string
+) {
+  const returnTo = req.session.returnTo
+  req.session.userId = undefined
+  req.session.pendingTotpUserId = undefined
+  req.session.returnTo = undefined
+  await logActivity({
+    action: 'login-refused',
+    user: userId,
+    comment: `Account is not active (${method})`,
+    req
+  })
+  return reply.redirect(loginUrlFor(returnTo, '?error=suspended'))
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -410,6 +431,8 @@ export async function authRoutes(app: FastifyInstance) {
       req.session.oidcRedirectUri = undefined
       req.session.oidcProviderId = undefined
 
+      if (!canSignIn(user)) return refuseSuspended(req, reply, user.id, 'oidc')
+
       // Second factor required — defer the full session until TOTP passes
       if (user.totp_enabled) {
         req.session.userId = undefined
@@ -518,6 +541,8 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       const user = (await findOrCreateFromOIDC(identity)) as UserWithTotp
+
+      if (!canSignIn(user)) return refuseSuspended(req, reply, user.id, 'saml')
 
       // Honor TOTP pending flow, same as OIDC
       if (user.totp_enabled) {
