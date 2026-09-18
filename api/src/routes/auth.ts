@@ -12,6 +12,7 @@ import {
   oidcConfigured
 } from '../auth/oidc.js'
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
+import { revokeSessions } from '../auth/session.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -672,7 +673,13 @@ export async function authRoutes(app: FastifyInstance) {
         } catch {}
       }
     }
-    if (toDelete.length) await redis.del(...toDelete)
+    // Revoke, don't just delete: a rolling save from another tab's in-flight
+    // request would otherwise write any of these back (see auth/session.ts).
+    if (toDelete.length)
+      await revokeSessions(
+        redis,
+        toDelete.map((k) => k.slice('sess:'.length))
+      )
 
     return reply.send({ ok: true, destroyed: toDelete.length })
   })
