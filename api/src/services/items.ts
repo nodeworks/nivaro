@@ -1152,6 +1152,31 @@ function applyOneFilterOp(q: QB, key: string, op: string, val: unknown) {
  * `collection` is the table `q` is currently querying.
  * `rels` are the relations for `collection` (pre-loaded by the caller).
  */
+/** Directus shape: a to-many alias filtered by the related collection's own
+ *  fields (`purchase_orders: {number: {_in: [...]}}`) means "at least one
+ *  related row matches" — the same as `_some`. Operator-only objects
+ *  (`{_null: true}`) and explicit `_some`/`_none` pass through untouched. */
+function implicitSome(nested: Record<string, unknown>): Record<string, unknown> {
+  const keys = Object.keys(nested)
+  if (keys.length === 0) return nested
+  if ('_some' in nested || '_none' in nested) return nested
+  if (keys.every((k) => k.startsWith('_') && k !== '_and' && k !== '_or')) return nested
+  return { _some: nested }
+}
+
+/** Compile a Directus-style filter onto an existing knex query for
+ *  `collection` — the same compiler readItems uses, for callers that build
+ *  their own base query (the GraphQL nested-list resolvers). */
+export async function applyFilterToQuery(
+  q: QB,
+  filter: Record<string, unknown>,
+  collection: string
+): Promise<void> {
+  const rels = await getRelsForCollection(collection)
+  await primeRelCacheForFilter(filter, collection, rels)
+  applyFilters(q, filter, collection, rels)
+}
+
 function applyFilters(
   q: QB,
   filter: Record<string, unknown>,
@@ -1212,7 +1237,7 @@ function applyFilters(
     // ── O2M relation ─────────────────────────────────────────────────────────
     const o2mMatch = findO2MRelation(key, collection, rels)
     if (o2mMatch && typeof value === 'object' && value !== null) {
-      const nestedFilter = value as Record<string, unknown>
+      const nestedFilter = implicitSome(value as Record<string, unknown>)
       const manyCollection = o2mMatch.many_collection
       const manyField = o2mMatch.many_field
 
@@ -1274,7 +1299,7 @@ function applyFilters(
     // ── M2M relation ─────────────────────────────────────────────────────────
     const m2mMatch = findM2MRelation(key, collection, rels)
     if (m2mMatch && typeof value === 'object' && value !== null) {
-      const nestedFilter = value as Record<string, unknown>
+      const nestedFilter = implicitSome(value as Record<string, unknown>)
       const { junction, fkToParent, fkToOther, otherCollection } = m2mMatch
 
       const hasSome = '_some' in nestedFilter

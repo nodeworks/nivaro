@@ -13,6 +13,7 @@ import {
   GraphQLSchema,
   GraphQLString
 } from 'graphql'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import {
   domainMutationFields,
@@ -24,6 +25,7 @@ import { ALL_DOMAIN_TYPES } from '../graphql/types.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
 import {
+  applyFilterToQuery,
   CollectionNotFoundError,
   createOne,
   deleteOne,
@@ -233,6 +235,59 @@ interface GQLContext {
   isAdmin?: boolean
 }
 
+/** Directus-style arguments on a nested to-many field
+ *  (`forecasts(limit: 1, sort: ["-year.id", "-id"], filter: {...})`). */
+const NESTED_LIST_ARGS = {
+  sort: {
+    type: new GraphQLList(GraphQLString),
+    description: 'Sort fields. Prefix - for desc; dotted paths follow an M2O.'
+  },
+  limit: { type: GraphQLInt, description: '-1 = all' },
+  offset: { type: GraphQLInt }
+}
+
+/** Apply nested-list args to a raw knex query over `collection`. A dotted
+ *  sort whose leaf is `id` orders by the FK column itself (`year.id` = the
+ *  year column); any other dotted sort left-joins the target once. */
+async function applyNestedListArgs(
+  q: Knex.QueryBuilder,
+  collection: string,
+  args: { filter?: Record<string, unknown>; sort?: string[]; limit?: number; offset?: number },
+  m2oOf: (field: string) => string | undefined
+): Promise<void> {
+  if (args.filter && Object.keys(args.filter).length)
+    await applyFilterToQuery(q, args.filter, collection)
+  const joined = new Set<string>()
+  for (const raw of args.sort ?? []) {
+    const desc = raw.startsWith('-')
+    const path = desc ? raw.slice(1) : raw
+    const dir = desc ? 'desc' : 'asc'
+    const segs = path.split('.')
+    if (segs.length === 1) {
+      q.orderBy(`${collection}.${segs[0]}`, dir)
+      continue
+    }
+    const [fk, leaf] = segs
+    const target = m2oOf(fk)
+    if (!target || segs.length > 2) continue
+    if (leaf === 'id') {
+      q.orderBy(`${collection}.${fk}`, dir)
+      continue
+    }
+    const alias = `_s_${fk}`
+    if (!joined.has(alias)) {
+      q.leftJoin(`${target} as ${alias}`, `${alias}.id`, `${collection}.${fk}`)
+      joined.add(alias)
+    }
+    q.orderBy(`${alias}.${leaf}`, dir)
+  }
+  if (args.limit != null && args.limit >= 0) q.limit(args.limit)
+  if (args.offset != null && args.offset > 0) {
+    if (!(args.sort ?? []).length) q.orderBy(`${collection}.id`, 'asc')
+    q.offset(args.offset)
+  }
+}
+
 export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   const collections = await listCollections()
   // `hidden` on a collection is a UI flag (keep it out of the nav), not an API
@@ -306,6 +361,89 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   // ── Type registry (build ALL types first so thunks can cross-reference) ────
   const typeRegistry = new Map<string, GraphQLObjectType>()
 
+  // nivaro_files is a system table (never in nivaro_collections), but business
+  // M2M aliases point at it (a record's attached files). Give it a fixed,
+  // safe read type so `files { id filename_download }` resolves.
+  if ([...m2mMap.values()].some((m) => m.otherCollection === 'nivaro_files')) {
+    typeRegistry.set(
+      'nivaro_files',
+      new GraphQLObjectType({
+        name: 'nivaro_files',
+        fields: {
+          id: { type: GraphQLID },
+          title: { type: GraphQLString },
+          filename_download: { type: GraphQLString },
+          filename_disk: { type: GraphQLString },
+          type: { type: GraphQLString },
+          filesize: { type: GraphQLInt },
+          width: { type: GraphQLInt },
+          height: { type: GraphQLInt },
+          description: { type: GraphQLString },
+          uploaded_on: { type: GraphQLString },
+          modified_on: { type: GraphQLString }
+        }
+      })
+    )
+  }
+  // One object type per M2M alias, shaped like the Directus junction row the
+  // legacy API returned: `id` = the JUNCTION row id (integrations delete
+  // junction rows by it), the junction's FK to the target as an object
+  // (`purchase_orders { purchase_order { number } }`), and every target field
+  // flattened on top (`purchase_orders { number }`) for the nivaro-native shape.
+  const m2mRowTypes = new Map<string, GraphQLObjectType>()
+  const m2mRowType = (
+    parentCol: string,
+    field: string,
+    info: { junction: string; fkToParent: string; fkToOther: string; otherCollection: string },
+    otherType: GraphQLObjectType
+  ): GraphQLObjectType => {
+    const name = `${parentCol}_${field}_m2m`
+    const have = m2mRowTypes.get(name)
+    if (have) return have
+    const t = new GraphQLObjectType({
+      name,
+      description: `${info.junction} rows linking ${parentCol} to ${info.otherCollection}`,
+      fields: () => {
+        const out: Record<string, GraphQLFieldConfig<unknown, GQLContext>> = {}
+        for (const [k, fld] of Object.entries(otherType.getFields())) {
+          if (k === 'id' || k === info.fkToOther) continue
+          out[k] = {
+            type: fld.type,
+            description: fld.description ?? undefined,
+            args: Object.fromEntries(
+              fld.args.map((a) => [
+                a.name,
+                { type: a.type, description: a.description ?? undefined }
+              ])
+            ),
+            resolve: fld.resolve
+              ? (src, args, ctx, inf) =>
+                  (fld.resolve as NonNullable<typeof fld.resolve>)(
+                    (src as { __target: unknown }).__target,
+                    args,
+                    ctx,
+                    inf
+                  )
+              : (src) => ((src as { __target: Record<string, unknown> }).__target ?? {})[k]
+          }
+        }
+        out.id = {
+          type: GraphQLID,
+          description: 'Junction row id',
+          resolve: (src) => (src as { __junction_id: unknown }).__junction_id
+        }
+        out[info.fkToOther] = {
+          type: otherType,
+          description: `The ${info.otherCollection} row`,
+          resolve: (src) => (src as { __target: unknown }).__target
+        }
+        return out
+      }
+    })
+    m2mRowTypes.set(name, t)
+    return t
+  }
+
   for (const col of visible) {
     const colName = col.collection
     const fields = allFields.get(colName) ?? []
@@ -349,16 +487,33 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
               const otherType = typeRegistry.get(m2mInfo.otherCollection)
               if (otherType) {
                 const info = { ...m2mInfo }
+                const otherCol = info.otherCollection
                 gqlFields[f.field] = {
-                  type: new GraphQLList(new GraphQLNonNull(otherType)),
+                  type: new GraphQLList(
+                    new GraphQLNonNull(m2mRowType(colName, f.field, info, otherType))
+                  ),
                   description: f.note ?? undefined,
-                  resolve: async (source: unknown) => {
+                  args: {
+                    ...NESTED_LIST_ARGS,
+                    filter: {
+                      type: (filterRegistry.get(otherCol) ?? GraphQLJSON) as GraphQLInputType
+                    }
+                  },
+                  resolve: async (source: unknown, args: Record<string, unknown>) => {
                     const parentId = (source as Record<string, unknown>)['id']
                     if (parentId == null) return []
-                    return db(`${info.junction} as _j`)
-                      .where({ [`_j.${info.fkToParent}`]: parentId })
-                      .join(`${info.otherCollection} as _rel`, '_rel.id', `_j.${info.fkToOther}`)
-                      .select('_rel.*')
+                    const q = db(`${info.junction} as _j`)
+                      .join(otherCol, `${otherCol}.id`, `_j.${info.fkToOther}`)
+                      .where(`_j.${info.fkToParent}`, parentId as string | number)
+                      .select(`${otherCol}.*`, '_j.id as __junction_id')
+                    await applyNestedListArgs(q, otherCol, args as never, (fk) =>
+                      m2oMap.get(`${otherCol}.${fk}`)
+                    )
+                    const rows = (await q) as Array<Record<string, unknown>>
+                    return rows.map(({ __junction_id, ...target }) => ({
+                      __junction_id,
+                      __target: target
+                    }))
                   }
                 }
                 continue
@@ -371,13 +526,26 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
               const manyType = typeRegistry.get(o2mInfo.manyCollection)
               if (manyType) {
                 const info = { ...o2mInfo }
+                const manyCol = info.manyCollection
                 gqlFields[f.field] = {
                   type: new GraphQLList(new GraphQLNonNull(manyType)),
                   description: f.note ?? undefined,
-                  resolve: async (source: unknown) => {
+                  args: {
+                    ...NESTED_LIST_ARGS,
+                    filter: {
+                      type: (filterRegistry.get(manyCol) ?? GraphQLJSON) as GraphQLInputType
+                    }
+                  },
+                  resolve: async (source: unknown, args: Record<string, unknown>) => {
                     const parentId = (source as Record<string, unknown>)['id']
                     if (parentId == null) return []
-                    return db(info.manyCollection).where({ [info.manyField]: parentId })
+                    const q = db(manyCol)
+                      .where(`${manyCol}.${info.manyField}`, parentId as string | number)
+                      .select(`${manyCol}.*`)
+                    await applyNestedListArgs(q, manyCol, args as never, (fk) =>
+                      m2oMap.get(`${manyCol}.${fk}`)
+                    )
+                    return q
                   }
                 }
                 continue
@@ -400,9 +568,15 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   // ── Per-collection filter input types (thunks allow self-ref _and/_or) ───
   const filterRegistry = new Map<string, GraphQLInputObjectType>()
 
-  // Wrapper input types for O2M and M2M relations (_some / _none)
-  // Built alongside filterRegistry so thunks can reference them.
+  // Wrapper input types for O2M and M2M relations: `_some` / `_none`, PLUS the
+  // related collection's own filter fields — the Directus shape
+  // (`purchase_orders: {number: {_in: [...]}}`), which items.ts reads as an
+  // implicit `_some`. Built alongside filterRegistry so thunks can reference them.
   const relationWrapperTypes: GraphQLInputObjectType[] = []
+  const innerFieldsOf = (
+    inner: GraphQLInputObjectType
+  ): Record<string, { type: GraphQLInputType }> =>
+    Object.fromEntries(Object.entries(inner.getFields()).map(([k, v]) => [k, { type: v.type }]))
 
   for (const col of visible) {
     const colName = col.collection
@@ -429,7 +603,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   fields: (): Record<string, { type: GraphQLInputType }> => {
                     const inner = filterRegistry.get(m2mOtherCollection)
                     if (!inner) return { _exists: { type: GraphQLBoolean } }
-                    return { _some: { type: inner }, _none: { type: inner } }
+                    return {
+                      _some: { type: inner },
+                      _none: { type: inner },
+                      ...innerFieldsOf(inner)
+                    }
                   }
                 })
                 relationWrapperTypes.push(wrapperType)
@@ -449,7 +627,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   fields: (): Record<string, { type: GraphQLInputType }> => {
                     const inner = filterRegistry.get(o2mManyCollection)
                     if (!inner) return { _exists: { type: GraphQLBoolean } }
-                    return { _some: { type: inner }, _none: { type: inner } }
+                    return {
+                      _some: { type: inner },
+                      _none: { type: inner },
+                      ...innerFieldsOf(inner)
+                    }
                   }
                 })
                 relationWrapperTypes.push(wrapperType)
