@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-18T18:03:27.428Z",
+  "generated_at": "2026-09-18T18:27:45.523Z",
   "releases": [
+    {
+      "version": "0.1.312",
+      "tag": "v0.1.312",
+      "date": "2026-09-18T14:27:33-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "edit membership rows as one line per member with a multi-select",
+              "hash": "572c7fa2"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.311",
       "tag": "v0.1.311",
-      "date": "2026-09-18T14:03:16-04:00",
+      "date": "2026-09-18T14:03:27-04:00",
       "sections": [
         {
           "label": "Other",
