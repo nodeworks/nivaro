@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-18T15:39:07.488Z",
+  "generated_at": "2026-09-18T18:03:27.428Z",
   "releases": [
+    {
+      "version": "0.1.311",
+      "tag": "v0.1.311",
+      "date": "2026-09-18T14:03:16-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "filter an M2M link on the junction row itself (_link, link_filter)",
+              "hash": "2aec99de"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.310",
       "tag": "v0.1.310",
-      "date": "2026-09-18T11:38:50-04:00",
+      "date": "2026-09-18T11:39:07-04:00",
       "sections": [
         {
           "label": "Documentation",
