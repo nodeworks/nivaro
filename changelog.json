@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-18T14:21:50.504Z",
+  "generated_at": "2026-09-18T15:39:07.488Z",
   "releases": [
+    {
+      "version": "0.1.310",
+      "tag": "v0.1.310",
+      "date": "2026-09-18T11:38:50-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "suspended sign-ins are refused at the SSO callback",
+              "hash": "8ba30573"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "refuse a suspended account at the SSO callback",
+              "hash": "c8048aa3"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.309",
       "tag": "v0.1.309",
-      "date": "2026-09-18T10:21:37-04:00",
+      "date": "2026-09-18T10:21:50-04:00",
       "sections": [
         {
           "label": "Other",
