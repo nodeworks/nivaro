@@ -147,7 +147,7 @@ export const userUsersRoles: DocSection = {
     {
       type: 'ul',
       items: [
-        '**Status** — `active` users can log in; `suspended` users are blocked at the authenticate middleware.',
+        '**Status** — `active` users can log in. A `suspended` (or redacted) user is blocked at the authenticate middleware, and a Microsoft / SAML sign-in is refused at the callback: no session, a `login-refused` activity row, and the login page explains that the account is suspended.',
         '**Role** — each user has one role. Role assignment controls what collections and actions are permitted.',
         '**Admin access** — if the assigned role has `admin_access: true`, all permission checks are bypassed.'
       ]
