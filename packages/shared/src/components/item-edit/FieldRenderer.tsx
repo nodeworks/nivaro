@@ -22,6 +22,7 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { type CatalogModeConfig, CatalogPickerField } from './CatalogPickerField'
+import { type MembershipSetConfig, MembershipSetField } from './MembershipSetField'
 import {
   AddressAutocompleteField,
   ChecklistReadOnly,
@@ -837,6 +838,18 @@ export function FieldRenderer({
             : opts.submission_errors && typeof opts.submission_errors === 'object'
               ? (opts.submission_errors as { line_field?: string })
               : undefined
+        const membershipSet = opts.membership_set as MembershipSetConfig | undefined
+        if (membershipSet?.key_field && membershipSet?.value_field) {
+          return (
+            <MembershipSetField
+              relatedCollection={o2mCol}
+              manyField={o2mManyField}
+              parentId={itemId}
+              config={membershipSet}
+              readOnly={field.readonly}
+            />
+          )
+        }
         const catalogMode = opts.catalog_mode as CatalogModeConfig | undefined
         if (catalogMode?.item_field && catalogMode?.section_by) {
           return (

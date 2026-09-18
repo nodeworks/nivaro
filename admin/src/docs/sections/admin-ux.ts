@@ -736,6 +736,10 @@ export const adminUxListSignals: DocSection = {
     {
       type: 'p',
       text: 'With a to-many `section_by`, `catalog_mode.link_filter` filters the JUNCTION row between item and section — for memberships that carry their own columns (an item that belongs to a category only in one region). An item lists under a section only through a link that passes, the catalog read requires one such link to an in-scope section (`_link` inside the `_some`), and an item with no passing link is left out rather than shown as Uncategorized. `$parent.<field>` tokens resolve and gate the list like `filter`.'
+    },
+    {
+      type: 'p',
+      text: 'An O2M whose rows are MEMBERSHIPS — one row per (member, scope), where a blank scope means "every scope" — can set `options.membership_set: {key_field, value_field, empty_label?, key_label?, value_label?}` on the inline-table field. The grid is replaced by one line per member with its scopes as a multi-select (toggle chips up to ten options, a searchable checklist beyond). Storage is unchanged: nothing picked = a single row with a blank scope; picks = one row per picked value. The first pick re-points the blank row and clearing the last pick blanks it again, so a member never drops out mid-edit. Writes are immediate and go through the items API.'
     }
   ]
 }
