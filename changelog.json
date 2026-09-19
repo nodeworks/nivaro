@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-18T19:10:29.059Z",
+  "generated_at": "2026-09-19T22:43:26.624Z",
   "releases": [
+    {
+      "version": "0.1.314",
+      "tag": "v0.1.314",
+      "date": "2026-09-19T18:43:15-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a range filter in a header cell opens a popover",
+              "hash": "d4fe9540"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "type each column filter by what the column holds",
+              "hash": "d32f2237"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.313",
       "tag": "v0.1.313",
-      "date": "2026-09-18T15:10:19-04:00",
+      "date": "2026-09-18T15:10:29-04:00",
       "sections": [
         {
           "label": "Other",
