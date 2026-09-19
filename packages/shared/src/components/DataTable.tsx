@@ -1,5 +1,6 @@
 import { EmptyState } from './EmptyState'
 import {
+  CalendarDays,
   Check,
   Inbox,
   ChevronDown,
@@ -10,6 +11,20 @@ import {
   X
 } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  DATE_FILTER_OPS,
+  type DateFilterOp,
+  describeDateFilter,
+  formatDateFilter,
+  parseDateFilter
+} from '../lib/date-filter'
+import {
+  describeNumberFilter,
+  formatNumberFilter,
+  NUMBER_FILTER_OPS,
+  type NumberFilterOp,
+  parseNumberFilter
+} from '../lib/number-filter'
 import { cn, formatNumber } from '../lib/utils'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
@@ -41,7 +56,7 @@ export interface FilterDef {
   key: string
   placeholder: string
   /** Defaults to 'select' — every existing FilterDef without this field keeps its current dropdown behavior unchanged. */
-  type?: 'select' | 'text' | 'range' | 'combobox'
+  type?: 'select' | 'text' | 'range' | 'combobox' | 'date' | 'number'
   /** Required when type is 'select' or omitted; static options for 'combobox'; ignored for 'text'/'range'. */
   options?: { label: string; value: string }[]
   /** 'combobox' only: server-backed autocomplete. Called (debounced) with the search
@@ -313,6 +328,220 @@ function FilterCombobox({
 // One filter def rendered as its control. 'inline' = the classic compact
 // toolbar chip; 'stacked' = label above a full-width control, for filter rails.
 
+/** A date column asks a question with an operator: on, before, after, on or
+ *  before, on or after, between. The value carries the operator with it
+ *  (`before:2026-09-19`), so a saved view reads the same everywhere. */
+function OpDateFilter({
+  value,
+  placeholder,
+  onChange
+}: {
+  value: string
+  placeholder: string
+  onChange: (v: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const parsed = parseDateFilter(value)
+  const [op, setOp] = useState<DateFilterOp>(parsed?.op ?? 'on')
+  const [from, setFrom] = useState(parsed?.from ?? '')
+  const [to, setTo] = useState(parsed?.to ?? '')
+  useEffect(() => {
+    if (!open) return
+    const p = parseDateFilter(value)
+    setOp(p?.op ?? 'on')
+    setFrom(p?.from ?? '')
+    setTo(p?.to ?? '')
+  }, [open, value])
+
+  const apply = (nextOp: DateFilterOp, a: string, b: string) => {
+    if (!a) return
+    onChange(formatDateFilter({ op: nextOp, from: a, to: b || a }))
+    if (nextOp !== 'between' || b) setOpen(false)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-date-filter
+          className='flex h-8 w-full items-center justify-between gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-left text-[12px] dark:border-border dark:bg-muted'
+        >
+          <span className={cn('truncate', !parsed && 'text-slate-500 dark:text-muted-foreground')}>
+            {parsed ? describeDateFilter(parsed) : placeholder}
+          </span>
+          {parsed ? (
+            <X
+              className='h-3 w-3 shrink-0 text-slate-400 hover:text-slate-700'
+              onClick={(e) => {
+                e.stopPropagation()
+                onChange(null)
+              }}
+            />
+          ) : (
+            <CalendarDays className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-[248px] space-y-2 p-2'>
+        <div className='grid grid-cols-3 gap-1'>
+          {DATE_FILTER_OPS.map((o) => (
+            <button
+              key={o.op}
+              type='button'
+              data-date-op={o.op}
+              aria-pressed={op === o.op}
+              onClick={() => {
+                setOp(o.op)
+                if (from) apply(o.op, from, to)
+              }}
+              className={cn(
+                'rounded border px-1 py-1 text-[11px] leading-tight transition-colors',
+                op === o.op
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 font-medium'
+                  : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-muted-foreground'
+              )}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <div className='flex items-center gap-1'>
+          <input
+            type='date'
+            value={from}
+            onChange={(e) => {
+              setFrom(e.target.value)
+              if (op !== 'between') apply(op, e.target.value, '')
+            }}
+            className='h-7 flex-1 rounded border border-slate-200 bg-background px-1 text-[12px] dark:border-border'
+          />
+          {op === 'between' && (
+            <>
+              <span className='text-[11px] text-slate-400'>to</span>
+              <input
+                type='date'
+                value={to}
+                onChange={(e) => {
+                  setTo(e.target.value)
+                  apply('between', from, e.target.value)
+                }}
+                className='h-7 flex-1 rounded border border-slate-200 bg-background px-1 text-[12px] dark:border-border'
+              />
+            </>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** Same shape for a numeric column: =, ≠, >, ≥, <, ≤, between. */
+function OpNumberFilter({
+  value,
+  placeholder,
+  onChange
+}: {
+  value: string
+  placeholder: string
+  onChange: (v: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const parsed = parseNumberFilter(value)
+  const [op, setOp] = useState<NumberFilterOp>(parsed?.op ?? 'eq')
+  const [a, setA] = useState(parsed ? String(parsed.a) : '')
+  const [b, setB] = useState(parsed?.b != null ? String(parsed.b) : '')
+  useEffect(() => {
+    if (!open) return
+    const p = parseNumberFilter(value)
+    setOp(p?.op ?? 'eq')
+    setA(p ? String(p.a) : '')
+    setB(p?.b != null ? String(p.b) : '')
+  }, [open, value])
+
+  const apply = (nextOp: NumberFilterOp, x: string, y: string) => {
+    if (x === '' || Number.isNaN(Number(x))) return
+    if (nextOp === 'between' && (y === '' || Number.isNaN(Number(y)))) return
+    onChange(formatNumberFilter({ op: nextOp, a: Number(x), b: y === '' ? undefined : Number(y) }))
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-number-filter
+          className='flex h-8 w-full items-center justify-between gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-left text-[12px] dark:border-border dark:bg-muted'
+        >
+          <span className={cn('truncate', !parsed && 'text-slate-500 dark:text-muted-foreground')}>
+            {parsed ? describeNumberFilter(parsed) : placeholder}
+          </span>
+          {parsed ? (
+            <X
+              className='h-3 w-3 shrink-0 text-slate-400 hover:text-slate-700'
+              onClick={(e) => {
+                e.stopPropagation()
+                onChange(null)
+              }}
+            />
+          ) : (
+            <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-[220px] space-y-2 p-2'>
+        <div className='grid grid-cols-4 gap-1'>
+          {NUMBER_FILTER_OPS.map((o) => (
+            <button
+              key={o.op}
+              type='button'
+              data-number-op={o.op}
+              aria-pressed={op === o.op}
+              onClick={() => {
+                setOp(o.op)
+                apply(o.op, a, b)
+              }}
+              className={cn(
+                'rounded border px-1 py-1 text-[11px] transition-colors',
+                op === o.op
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 font-medium'
+                  : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-muted-foreground'
+              )}
+            >
+              {o.symbol}
+            </button>
+          ))}
+        </div>
+        <div className='flex items-center gap-1'>
+          <Input
+            type='number'
+            value={a}
+            onChange={(e) => {
+              setA(e.target.value)
+              apply(op, e.target.value, b)
+            }}
+            className='h-7 text-[12px]'
+          />
+          {op === 'between' && (
+            <>
+              <span className='text-[11px] text-slate-400'>–</span>
+              <Input
+                type='number'
+                value={b}
+                onChange={(e) => {
+                  setB(e.target.value)
+                  apply(op, a, e.target.value)
+                }}
+                className='h-7 text-[12px]'
+              />
+            </>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function FilterControl({
   def,
   value,
@@ -350,6 +579,26 @@ export function FilterControl({
         )}
       >
         <FilterCombobox def={def} value={value} onChange={onChange} />
+      </div>
+    )
+  } else if (def.type === 'date') {
+    control = (
+      <div className={cn(cell && '[&>div>button]:h-7 [&>div>button]:text-[12px]', widthCls)}>
+        <OpDateFilter
+          value={currentVal}
+          placeholder={def.placeholder}
+          onChange={(v) => onChange(v ?? '')}
+        />
+      </div>
+    )
+  } else if (def.type === 'number') {
+    control = (
+      <div className={cn(cell && '[&>div>button]:h-7 [&>div>button]:text-[12px]', widthCls)}>
+        <OpNumberFilter
+          value={currentVal}
+          placeholder={def.placeholder}
+          onChange={(v) => onChange(v ?? '')}
+        />
       </div>
     )
   } else if (def.type === 'range') {

@@ -6,6 +6,7 @@ import { getSlaScheduleSync } from './business-hours.js'
 import { parseJson } from './pipeline-engine.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { normalizeDisplayConfig } from './queues.js'
+import { parseColumnFilterOp } from './column-filter-ops.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
 // path cannot (or intentionally does not) serve correctly: sla_status/
@@ -52,6 +53,15 @@ export function requiresLiveResolveFallback(
   if (_filters && (_filters as Record<string, unknown>).fulfilment) return true
   if (_filters && (_filters as Record<string, unknown>).send_backs) return true
   if (sortKey === 'fulfilment' || sortKey === 'send_backs') return true
+  // A date / number / boolean column filter carries its operator in the value.
+  // `extra` holds whatever the source column stringified to (ISO one row,
+  // MM/DD/YYYY the next), so the comparison is JS on the resolved rows, never
+  // a JSON_VALUE string compare that would silently mis-order them.
+  for (const [key, raw] of Object.entries(_filters ?? {})) {
+    if (!key.startsWith('extra.')) continue
+    const values = Array.isArray(raw) ? raw : [raw]
+    if (values.some((v) => typeof v === 'string' && parseColumnFilterOp(v))) return true
+  }
   // Only an owners sort still live-resolves (it would need SQL string
   // aggregation across the owners M2M). priority sorts and sla_status/
   // aging_hours filters are served from the cache via a narrow scan +

@@ -27,6 +27,11 @@ import {
   addendumRecordPath,
   loadAddendums
 } from './pipeline-subject.js'
+import {
+  matchesColumnFilterOp,
+  parseColumnFilterOp,
+  sortOptionValues
+} from './column-filter-ops.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
 
@@ -652,7 +657,14 @@ export function applyColumnFilters(
         const v = item.extra?.[path]
         if (v == null) return false
         const haystack = String(v).toLowerCase()
-        if (!matchesAny(value, (needle) => haystack.includes(needle.toLowerCase()))) {
+        // A date / number / boolean filter arrives with its operator encoded;
+        // anything else is the historic contains-match.
+        if (
+          !matchesAny(value, (needle) => {
+            const op = parseColumnFilterOp(needle)
+            return op ? matchesColumnFilterOp(v, op) : haystack.includes(needle.toLowerCase())
+          })
+        ) {
           return false
         }
       }
@@ -737,6 +749,47 @@ export function sortItems(
         : String(av).localeCompare(String(bv))
     return desc ? -cmp : cmp
   })
+}
+
+/** Distinct values a column actually holds, so its filter offers what is
+ *  there instead of every row of the target table (a location list that is
+ *  the sites these requests use, not 40k legacy rows). Capped: past the cap
+ *  the client falls back to server-backed search. */
+const EXTRA_VALUE_CAP = 2000
+
+export function computeExtraValues(
+  items: QueueItem[],
+  filters?: Record<string, string | string[]>
+): Record<string, string[]> {
+  const paths = new Set<string>()
+  for (const item of items) for (const p of Object.keys(item.extra ?? {})) paths.add(p)
+  const out: Record<string, string[]> = {}
+  for (const path of paths) {
+    // Every OTHER column's filter narrows this one — picking a zone leaves the
+    // region list showing only that zone's regions, the way a record form's
+    // pickers cascade. Its own filter is excluded, or choosing a value would
+    // hide the alternatives.
+    const others = Object.fromEntries(
+      Object.entries(filters ?? {}).filter(([k]) => k !== `extra.${path}`)
+    )
+    const rows = Object.keys(others).length > 0 ? applyColumnFilters(items, others) : items
+    const seen = new Set<string>()
+    let overflow = false
+    for (const item of rows) {
+      const raw = item.extra?.[path]
+      if (raw == null || raw === '') continue
+      // A multi-value cell ("BLT, HRT +2") filters by its parts.
+      for (const part of String(raw).split(', ')) {
+        const v = part.replace(/\s*\+\d+ more$/, '').trim()
+        if (!v) continue
+        seen.add(v)
+        if (seen.size > EXTRA_VALUE_CAP) overflow = true
+      }
+      if (overflow) break
+    }
+    if (!overflow && seen.size > 0) out[path] = sortOptionValues(seen)
+  }
+  return out
 }
 
 export function computeAvailableValues(items: QueueItem[]): {
@@ -863,6 +916,12 @@ export interface ExtraFieldMeta {
   target_collection?: string
   display_field?: string
   aggregate?: QueueAggregateFn
+  /** Another extra-field path whose selection narrows this one's options (a
+   *  region list cut down to the chosen zones). Derived, not configured: the
+   *  target collection has an M2O to that path's target collection. */
+  cascade_from?: string
+  /** The M2O column on THIS target that points at the parent's target. */
+  cascade_field?: string
 }
 
 /** Classify each configured extra-field path so the admin can render the right
@@ -921,6 +980,27 @@ export async function computeExtraFieldMeta(
         display_field: segments[segments.length - 1],
         ...(aggByPath.has(path) ? { aggregate: aggByPath.get(path) } : {})
       })
+    }
+  }
+  // Cascades: a relation column whose target belongs to another relation
+  // column's target (regions.division → divisions) narrows with it, the same
+  // way a record form's pickers do. First parent wins; never self.
+  const relMetas = out.filter((m) => m.kind === 'relation' && m.target_collection)
+  for (const m of relMetas) {
+    for (const parent of relMetas) {
+      if (parent.path === m.path || parent.target_collection === m.target_collection) continue
+      const link = allRelations.find(
+        (r) =>
+          r.many_collection === m.target_collection &&
+          r.one_collection === parent.target_collection &&
+          r.junction_field === null &&
+          r.many_field
+      )
+      if (link) {
+        m.cascade_from = parent.path
+        m.cascade_field = link.many_field
+        break
+      }
     }
   }
   return out
@@ -2366,6 +2446,9 @@ export async function fetchQueueItems(
     collection: string[]
     state: string[]
     owners: Array<{ id: string; name: string }>
+    /** Distinct values per extra-column path, narrowed by the other active
+     *  filters; absent for a column with too many to enumerate. */
+    extra?: Record<string, string[]>
   }
   truncated: boolean
   total: number
@@ -2470,6 +2553,10 @@ export async function fetchQueueItems(
   const scoped = applyScopeFilter(withClaims, scope, user.id)
   await attachLabels(scoped)
   const availableValues = computeAvailableValues(scoped)
+  const extraValues = computeExtraValues(
+    scoped,
+    (options.filters ?? undefined) as Record<string, string | string[]> | undefined
+  )
   const filtered = options.filters ? applyColumnFilters(scoped, options.filters) : scoped
   const sorted = options.sort ? sortItems(filtered, options.sort, priorityWeights) : filtered
   // Each resolver's `matchedCount` feeds only the `truncated` flag above — it is
@@ -2506,7 +2593,7 @@ export async function fetchQueueItems(
     items: paged,
     stats: exact?.stats ?? liveExact ?? computeStats(scoped),
     filteredStats: hasActiveColumnFilters(options.filters) ? computeStats(filtered) : null,
-    availableValues: exact?.availableValues ?? availableValues,
+    availableValues: { ...(exact?.availableValues ?? availableValues), extra: extraValues },
     truncated,
     total
   }

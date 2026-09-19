@@ -52,6 +52,8 @@ import { useDebounced } from '../../hooks/useDebounced'
 import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
+import { describeDateFilter, parseDateFilter } from '../../lib/date-filter'
+import { describeNumberFilter, parseNumberFilter } from '../../lib/number-filter'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { buildGroups } from '../../lib/queue-grouping'
@@ -944,6 +946,9 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       collection: string[]
       state: string[]
       owners?: Array<{ id: string; name: string }>
+      /** Distinct values per extra column, already narrowed by the other
+       *  active filters — absent when there are too many to enumerate. */
+      extra?: Record<string, string[]>
     }
     truncated: boolean
     total: number
@@ -2240,6 +2245,22 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // display format (dates/numbers) instead of echoing the raw stored value.
   const displayFilterValue = (def: FilterDef, value: string | string[]): string => {
     if (def.key.startsWith('extra.')) {
+      // Operator-carrying values read as the question they ask, not the raw
+      // encoding ("Before 09/19/26", "≥ 1,000", "Yes").
+      const single = Array.isArray(value) ? value[0] : value
+      if (typeof single === 'string') {
+        const d = parseDateFilter(single)
+        if (d) return describeDateFilter(d)
+        const n = parseNumberFilter(single)
+        if (n) return describeNumberFilter(n)
+        if (single === 'bool:true' || single === 'bool:false') {
+          const bf = formatConfigFor(def.key.slice('extra.'.length))
+          const labels = bf?.type === 'boolean' ? bf : null
+          return single === 'bool:true'
+            ? (labels?.true_label ?? 'Yes')
+            : (labels?.false_label ?? 'No')
+        }
+      }
       const fmt = formatConfigFor(def.key.slice('extra.'.length))
       if (fmt) {
         const vals = (Array.isArray(value) ? value : [value]).filter((v) => v !== '')
@@ -2373,21 +2394,44 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     },
     ...extraFieldKeys.map((f) => {
       const meta = extraFieldMetaByPath.get(f)
-      if (meta?.kind === 'relation') {
+      const label = aliasFor(`extra.${f}`, formatColumnHeader(f))
+      const base = { key: `extra.${f}`, placeholder: label }
+      // What the column HOLDS decides how it is filtered — its configured
+      // display format already says so, and it beats relation-ness (a unit
+      // cost reached through a relation is still a number).
+      const fmt = formatConfigFor(f)
+      if (fmt?.type === 'datetime') return { ...base, type: 'date' as const }
+      if (fmt?.type === 'number') return { ...base, type: 'number' as const }
+      if (fmt?.type === 'boolean')
         return {
-          key: `extra.${f}`,
-          placeholder: aliasFor(`extra.${f}`, formatColumnHeader(f)),
+          ...base,
+          type: 'select' as const,
+          options: [
+            { label: fmt.true_label ?? 'Yes', value: 'bool:true' },
+            { label: fmt.false_label ?? 'No', value: 'bool:false' }
+          ]
+        }
+      // Otherwise pick from what the column actually holds here. The server
+      // narrows those values by the OTHER active filters, so choosing a zone
+      // leaves the region list showing that zone's regions — the cascade a
+      // record form does, without naming any pair of columns.
+      const present = data?.available_values.extra?.[f]
+      if (present?.length)
+        return {
+          ...base,
+          type: 'combobox' as const,
+          multi: true,
+          options: present.map((v) => ({ label: fmt ? formatMultiValue(v, fmt) : v, value: v }))
+        }
+      if (meta?.kind === 'relation')
+        return {
+          ...base,
           type: 'combobox' as const,
           multi: true,
           restricted: Boolean(allowedValuesByPath[f]?.length),
           loadOptions: makeRelationLoader(meta)
         }
-      }
-      return {
-        key: `extra.${f}`,
-        placeholder: `Search ${aliasFor(`extra.${f}`, formatColumnHeader(f))}…`,
-        type: 'text' as const
-      }
+      return { ...base, placeholder: `Search ${label}…`, type: 'text' as const }
     })
   ].filter((def) => effectiveVisible.has(def.key) || def.key === 'label' || def.key === 'owners')
 

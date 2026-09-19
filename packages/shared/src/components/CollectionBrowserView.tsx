@@ -36,6 +36,14 @@ import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { del, get, patch, post } from '../lib/commands'
 import {
+  DATE_FILTER_OPS,
+  type DateFilterOp,
+  dateFilterBounds,
+  describeDateFilter,
+  formatDateFilter,
+  parseDateFilter
+} from '../lib/date-filter'
+import {
   type ColumnFormatConfig,
   countFromResolved,
   formatMultiValue,
@@ -1497,17 +1505,18 @@ function DateColFilter({
   }
   const summary = (() => {
     if (!value) return 'All'
-    if (value.startsWith('r:')) {
-      const [a, b] = value.slice(2).split('..')
-      return a === b ? fmtD(a) : `${fmtD(a)}–${fmtD(b)}`
-    }
+    const parsed = parseDateFilter(value)
+    if (parsed) return describeDateFilter(parsed)
     return DATE_PRESETS.find((d) => d.value === value)?.label ?? value
   })()
+  const [op, setOp] = useState<DateFilterOp>('between')
+  useEffect(() => {
+    if (open) setOp(parseDateFilter(value)?.op ?? 'between')
+  }, [open, value])
   const applyRange = () => {
     const a = from || to
-    const b = to || from
     if (!a) return
-    onChange(`r:${a}..${b}`)
+    onChange(formatDateFilter({ op, from: a, to: to || from || a }))
     setOpen(false)
   }
   return (
@@ -1566,6 +1575,24 @@ function DateColFilter({
             <p className='pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
               Date or range
             </p>
+            <div className='grid grid-cols-3 gap-1 pb-1.5'>
+              {DATE_FILTER_OPS.map((o) => (
+                <button
+                  key={o.op}
+                  type='button'
+                  data-date-op={o.op}
+                  aria-pressed={op === o.op}
+                  onClick={() => setOp(o.op)}
+                  className={`rounded border px-1 py-0.5 text-[10px] font-normal normal-case leading-tight tracking-normal ${
+                    op === o.op
+                      ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-slate-800 dark:text-slate-100'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
             <div className='flex items-center gap-1'>
               <input
                 type='date'
@@ -1574,12 +1601,15 @@ function DateColFilter({
                 aria-label='From date'
                 className='h-6 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1 text-[10.5px] font-normal dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
               />
-              <span className='text-[10px] text-slate-400'>–</span>
+              <span className={`text-[10px] text-slate-400 ${op === 'between' ? '' : 'hidden'}`}>
+                –
+              </span>
               <input
                 type='date'
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
                 aria-label='To date'
+                hidden={op !== 'between'}
                 className='h-6 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1 text-[10.5px] font-normal dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
               />
             </div>
@@ -4216,15 +4246,13 @@ export function CollectionBrowserView({
         conds.push({ path: [key], op: f.op, value: Number(f.value) })
       else if (f.kind === 'bool') conds.push({ path: [key], op: '_eq', value: f.value === 'true' })
       else if (f.kind === 'date' && f.value) {
-        const r = f.value.startsWith('r:')
-          ? (() => {
-              const [a, b] = f.value.slice(2).split('..')
-              return a ? { from: a, to: b || a } : null
-            })()
-          : dateRangeFor(f.value)
+        const parsed = parseDateFilter(f.value)
+        const bounds = parsed ? dateFilterBounds(parsed) : null
+        const r = bounds ?? dateRangeFor(f.value)
         if (r) {
-          conds.push({ path: [key], op: '_gte', value: r.from })
-          conds.push({ path: [key], op: '_lte', value: `${r.to}T23:59:59` })
+          // An open-ended operator (before / after) pushes one bound only.
+          if (r.from) conds.push({ path: [key], op: '_gte', value: r.from })
+          if (r.to) conds.push({ path: [key], op: '_lte', value: `${r.to}T23:59:59` })
         }
       }
     }
