@@ -66,6 +66,8 @@ export interface FilterDef {
   multi?: boolean
   /** Options are narrowed to the viewer's restricted scope — renders an amber badge. */
   restricted?: boolean
+  /** 'range' only: suffix shown in the summary ("38d", "12h"). */
+  range_unit?: string
 }
 
 export interface DataTableProps<T = Record<string, unknown>> {
@@ -436,6 +438,80 @@ function OpDateFilter({
   )
 }
 
+/** A min/max range behind one button: the header cell has room for a summary
+ *  ("30d+", "1–30d"), not for two number inputs. */
+function RangePopoverFilter({
+  value,
+  placeholder,
+  unit,
+  onChange
+}: {
+  value: string
+  placeholder: string
+  unit?: string
+  onChange: (v: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [min, max] = value.split(':')
+  const u = unit ?? ''
+  const summary =
+    min && max ? `${min}–${max}${u}` : min ? `${min}${u}+` : max ? `≤ ${max}${u}` : placeholder
+  const set = (a: string, b: string) => onChange(a === '' && b === '' ? null : `${a}:${b}`)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-range-filter
+          className='flex h-8 w-full items-center justify-between gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 text-left text-[12px] dark:border-border dark:bg-muted'
+        >
+          <span
+            className={cn('truncate', !min && !max && 'text-slate-500 dark:text-muted-foreground')}
+          >
+            {summary}
+          </span>
+          {min || max ? (
+            <X
+              className='h-3 w-3 shrink-0 text-slate-400 hover:text-slate-700'
+              onClick={(e) => {
+                e.stopPropagation()
+                onChange(null)
+              }}
+            />
+          ) : (
+            <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-[200px] p-2'>
+        <p className='pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
+          {placeholder}
+        </p>
+        <div className='flex items-center gap-1'>
+          <Input
+            type='number'
+            aria-label={`Minimum ${placeholder}`}
+            placeholder='Min'
+            value={min ?? ''}
+            onChange={(e) => set(e.target.value, max ?? '')}
+            className='h-7 text-[12px]'
+          />
+          <span className='text-[11px] text-slate-400'>–</span>
+          <Input
+            type='number'
+            aria-label={`Maximum ${placeholder}`}
+            placeholder='Max'
+            value={max ?? ''}
+            onChange={(e) => set(min ?? '', e.target.value)}
+            className='h-7 text-[12px]'
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 /** Same shape for a numeric column: =, ≠, >, ≥, <, ≤, between. */
 function OpNumberFilter({
   value,
@@ -597,6 +673,19 @@ export function FilterControl({
         <OpNumberFilter
           value={currentVal}
           placeholder={def.placeholder}
+          onChange={(v) => onChange(v ?? '')}
+        />
+      </div>
+    )
+  } else if (def.type === 'range' && cell) {
+    // Two number inputs do not fit a header cell — they clip to "M – M" and
+    // the value is unreadable. Same question behind one summary button.
+    control = (
+      <div className='[&>div>button]:h-7 [&>div>button]:text-[12px] w-full'>
+        <RangePopoverFilter
+          value={currentVal}
+          placeholder={def.placeholder}
+          unit={def.range_unit}
           onChange={(v) => onChange(v ?? '')}
         />
       </div>

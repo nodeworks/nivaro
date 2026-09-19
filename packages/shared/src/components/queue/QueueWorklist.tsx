@@ -2321,7 +2321,12 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           }
         ]
       : []),
-    { key: 'aging_hours', placeholder: 'Aging (hours)', type: 'range' as const },
+    {
+      key: 'aging_hours',
+      placeholder: aliasFor('aging_hours', 'Aging (hours)'),
+      type: 'range' as const,
+      range_unit: 'h'
+    },
     ...(addendumsEnabled
       ? [
           {
