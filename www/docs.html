@@ -745,7 +745,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <h2 class="doc-h2" id="users">Users</h2>
           <p class="doc-p">The Users page lists all Nivaro users. Users are created automatically on first Microsoft OIDC login, or manually by an administrator.</p>
           <ul class="doc-ul">
-            <li>**Status** — <code class="doc-code">active</code> users can log in; <code class="doc-code">suspended</code> users are blocked at the authenticate middleware.</li>
+            <li>**Status** — <code class="doc-code">active</code> users can log in. A <code class="doc-code">suspended</code> (or redacted) user is blocked at the authenticate middleware, and a Microsoft / SAML sign-in is refused at the callback: no session, a <code class="doc-code">login-refused</code> activity row, and the login page explains that the account is suspended.</li>
             <li>**Role** — each user has one role. Role assignment controls what collections and actions are permitted.</li>
             <li>**Admin access** — if the assigned role has <code class="doc-code">admin_access: true</code>, all permission checks are bypassed.</li>
           </ul>
@@ -836,6 +836,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <!-- SYNC:files -->
           <h1 class="doc-h1" id="files">Files</h1>
           <p class="doc-p">The file manager lets you upload, browse, and delete files. Uploaded files are stored on local disk and metadata is tracked in <code class="doc-code">nivaro_files</code>.</p>
+          <p class="doc-p">The Unused scope lists files no record references (every foreign key into nivaro_files is checked live). "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>POST /api/files</td><td>Upload a file (multipart/form-data). Returns nivaro_files metadata.</td></tr>
@@ -845,7 +846,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <!-- /SYNC:files -->
         </div>
 
-        <div class="doc-section" id="s-extensions" data-toc='[{"id":"extensions","label":"Extensions"}]'>
+        <div class="doc-section" id="s-extensions" data-toc='[{"id":"extensions","label":"Extensions"},{"id":"extension-settings","label":"Extension settings"},{"id":"extension-registry","label":"Registry: what an extension registered"},{"id":"extension-staged-builds","label":"Staged builds"},{"id":"extension-settings-compare","label":"Settings across environments"}]'>
           <!-- SYNC:extensions -->
           <h1 class="doc-h1" id="extensions">Extensions</h1>
           <p class="doc-p">Extensions are Node.js plugins that extend Nivaro's behavior — custom routes, hooks, scheduled jobs, and Inngest functions. The Extensions page shows all discovered plugins and their status.</p>
@@ -858,6 +859,17 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <p class="doc-p">Use the toggle switch to enable or disable an extension without removing it. Disabled extensions have their hooks skipped and cron jobs paused. The enabled state persists across restarts via <code class="doc-code">api/extensions/.config.json</code>.</p>
           <p class="doc-p">Click **Scan for new** to pick up any extensions added to <code class="doc-code">api/extensions/</code> since the server started, without restarting.</p>
           <p class="doc-p">Missing extensions (folder deleted but config entry remains) can be removed by clicking the trash icon on the amber card.</p>
+          <h2 class="doc-h2" id="extension-settings">Extension settings</h2>
+          <p class="doc-p">An extension declares admin-editable settings on its export (<code class="doc-code">settings: [{ key, label, type, default, description }]</code>) and reads them with <code class="doc-code">ctx.settings.get(key)</code>. Values live in the database, so they change without a redeploy, and a save is **in effect immediately** — the server busts the settings cache before it answers.</p>
+          <p class="doc-p">A declaration may also carry <code class="doc-code">validate(value)</code> (return a message to refuse the value — the settings sheet shows it on the field), <code class="doc-code">on_change(value)</code> (run the moment the value is saved, for an extension that caches its own configuration), and <code class="doc-code">production_expect</code> (the value production is expected to hold). The sheet notes under each key when it last changed, whether it validates or applies immediately, and whether it matches the production expectation.</p>
+          <p class="doc-p">Every changed key writes one activity row (<code class="doc-code">extension-settings-update</code>, <code class="doc-code">key: old → new</code>, secrets masked) — **Show change history** in the sheet lists them with who and when, and <code class="doc-code">GET /api/extensions/:id/settings/history</code> returns the same list.</p>
+          <p class="doc-p">The Go-Live Readiness scorecard carries a **Configuration › Extension settings match their production expectations** check: it warns, naming each key, while any setting with a <code class="doc-code">production_expect</code> holds a different value on this instance.</p>
+          <h2 class="doc-h2" id="extension-registry">Registry: what an extension registered</h2>
+          <p class="doc-p">The layers icon on an extension row opens its registry — every hook (timing, collection, action), cron (expression, next run), flow operation and trigger, mail type, readiness and integrity check, notes source, bulk and item action, digest section and other registration it made when it loaded, plus its declared settings and observed capabilities. <code class="doc-code">GET /api/extensions/:id/registry</code> returns the same.</p>
+          <h2 class="doc-h2" id="extension-staged-builds">Staged builds</h2>
+          <p class="doc-p">Drop a new build at <code class="doc-code">api/extensions/&lt;id&gt;.next</code> and the row shows **Staged build**. Promote validates the staged entry module (it must import cleanly and export the same <code class="doc-code">id</code>), swaps it into <code class="doc-code">api/extensions/&lt;id&gt;</code>, and keeps the previous build at <code class="doc-code">api/extensions/&lt;id&gt;.prev</code>; **Roll back** reverses the swap and parks the promoted build at <code class="doc-code">.next</code> again. The running process keeps serving the build it loaded — hooks and crons cannot be torn down mid-flight — so either action takes effect on the **next restart**. Parked <code class="doc-code">.next</code> / <code class="doc-code">.prev</code> folders are never loaded as extensions of their own. Both actions are activity-logged.</p>
+          <h2 class="doc-h2" id="extension-settings-compare">Settings across environments</h2>
+          <p class="doc-p">Environments → **Extension settings across environments** lays one extension's settings side by side: this instance beside every registered API component, probed server-side with the component's own token (secrets compare as set / unset). Rows whose values differ are tinted; a value that departs from <code class="doc-code">production_expect</code> reads amber.</p>
           <!-- /SYNC:extensions -->
         </div>
 
@@ -886,7 +898,18 @@ Server listening on http://0.0.0.0:3055</code></pre>
             <tbody><tr><tr><td>anthropic_api_key</td><td>—</td><td>Anthropic API key. Masked on GET. Falls back to ANTHROPIC_API_KEY env var.</td></tr>
               <tr><td>ai_model</td><td>claude-haiku-4-5-20251001</td><td>Model used for all AI generate and summarize requests.</td></tr>
               <tr><td>ai_max_tokens_generate</td><td>500</td><td>Token budget for /ai/generate.</td></tr>
-              <tr><td>ai_max_tokens_summarize</td><td>200</td><td>Token budget for /ai/summarize.</td></tr></tr></tbody>
+              <tr><td>ai_max_tokens_summarize</td><td>200</td><td>Token budget for /ai/summarize.</td></tr>
+              <tr><td>ai_provider</td><td>anthropic</td><td>'anthropic' = Anthropic's API with the key above; 'gateway' = a model gateway reached with OAuth client-credentials (the fields below).</td></tr>
+              <tr><td>ai_gateway_base_url</td><td>—</td><td>Gateway root URL; the wire format decides the path appended.</td></tr>
+              <tr><td>ai_gateway_token_url</td><td>—</td><td>OAuth client-credentials endpoint (query string allowed). Client id and secret ride as X-Client-Id / X-Client-Secret headers.</td></tr>
+              <tr><td>ai_gateway_client_id</td><td>—</td><td>Sent as X-Client-Id.</td></tr>
+              <tr><td>ai_gateway_client_secret</td><td>—</td><td>Sent as X-Client-Secret. Masked on GET; a re-submitted mask keeps the stored value. Per-instance overrides apply.</td></tr>
+              <tr><td>ai_gateway_format</td><td>openai</td><td>'openai' posts to &lt;base&gt;/openai/v1/chat/completions (translated from and to the Anthropic Messages shape, tools included); 'anthropic' uses &lt;base&gt;/anthropic natively.</td></tr>
+              <tr><td>ai_gateway_model</td><td>—</td><td>Model id as the gateway knows it (e.g. claude-4-5-haiku). Replaces the model on every AI call while the gateway is active. POST /ai/test round-trips one prompt.</td></tr>
+              <tr><td>ai_gateway_chat_model</td><td>—</td><td>Gateway model id for Ask AI and the chat bot only (the multi-step tool loop). Blank = ai_gateway_model. Lets a stronger model answer questions while the one-shot features stay on a cheap one.</td></tr>
+              <tr><td>ai_prompt_caching</td><td>on</td><td>Marks the stable prefix of every AI call with cache_control so tool loops and chats re-read it from the provider cache: system prompt, tool definitions and the conversation so far on Anthropic directly or an Anthropic-native gateway; the system prompt (which covers the tools) on the OpenAI-compatible format, where the marker rides as a content part. Prompts under the model minimum (1,024 tokens; 4,096 on Haiku 4.5) never cache. POST /ai/test repeats a padded prompt and reports the tokens read back.</td></tr>
+              <tr><td>AI Analytics (page)</td><td>/ai-analytics</td><td>Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin).</td></tr>
+              <tr><td>ai_chat_guide</td><td>—</td><td>Free text appended to the Ask AI system prompt: how this instance's data hangs together (which collection bridges two others, what human ids look like, everyday names for fields). The model cannot infer a deployment's domain from column names alone.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Presence Tracking</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -959,6 +982,14 @@ emitNotification(app.io, targetUserId, {
   item: projectId,
 });</code></pre>
           <div class="doc-note">The Socket.io bell uses the user's static token for authentication. If a user has no static token, real-time delivery is unavailable but they can still poll the REST endpoints.</div>
+          <h3 class="doc-h3">Why did I get this?</h3>
+          <p class="doc-p">Every notification row carries a "Why me?" expander: which record watch, subscription, sender or notification rule produced it (with a link to manage the subscription), and what each channel did with it — landed in-app, pushed, emailed now, held for the daily summary, or held by quiet hours. Rows written before this shipped answer with the category's notification rules.</p>
+          <h3 class="doc-h3">Every change in a bundled watch</h3>
+          <p class="doc-p">A record watch folds one sitting's edits into a single notification ("3 changes by …"). Its "N changes" expander lists every line as was → now, including the child rows the person touched, so you never have to open the record to see what moved.</p>
+          <h3 class="doc-h3">Read receipts for what you sent</h3>
+          <p class="doc-p">Notifications → Sent lists the messages you sent — one row per send, with each recipient and whether they have read it (and when). Critical sends show by default; untick "Critical only" for everything. A send becomes critical by leading its subject with "Critical:" — the Message-stakeholders form has a checkbox for it — which puts it in the Critical lane and past mutes and quiet hours.</p>
+          <h3 class="doc-h3">Letting a category through quiet hours</h3>
+          <p class="doc-p">Profile → Notification rules has a Quiet hours column: ticked, that category's push and instant email go out even inside your quiet window (the in-app row always lands either way). Critical alerts always get through regardless.</p>
           <!-- /SYNC:notifications -->
         </div>
 
@@ -976,6 +1007,12 @@ emitNotification(app.io, targetUserId, {
           </ul>
           <h3 class="doc-h3">Editing and deleting</h3>
           <p class="doc-p">Authors can edit or delete their own comments. Admins can edit or delete any comment.</p>
+          <h3 class="doc-h3">Finding a note: filters and search</h3>
+          <p class="doc-p">The Notes thread mixes what people wrote with what the system recorded. Three chips above the thread — People (comments and notes), System (state changes, change reasons, addendums, imports) and Integration (events an integration recorded) — carry counts and switch a bucket off; the search box narrows by text, author, badge or context. The counts always describe the whole thread, and the strip reports "n of m" while a filter is active.</p>
+          <h3 class="doc-h3">Import history</h3>
+          <p class="doc-p">Every write an import makes carries <code class="doc-code">import:&lt;name&gt;:&lt;file or run&gt;</code> as its change reason, so the thread lists the imports that touched the record: a file-driven import links its source file, a staged run names the run number, and lines an import template created fold into one entry per run ("Imported 12 workflow line items rows via Bid Import").</p>
+          <h3 class="doc-h3">Machine markers</h3>
+          <p class="doc-p">Comment strings written by machinery — a sync script's provenance tag, a stored procedure's marker — are never notes. Extensions declare theirs with <code class="doc-code">ctx.notes.registerMachineMarkers({ exact, prefixes })</code>; the thread drops matching comments and row history renders them as provenance. Core declares none itself.</p>
           <!-- /SYNC:comments -->
         </div>
 
@@ -1747,7 +1784,7 @@ x-workspace: ws-uuid-here</code></pre>
             <li>group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.</li>
             <li>requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs or m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.</li>
             <li>auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).</li>
-            <li>Related-row conditions: field "&lt;childCollection&gt;:&lt;fkField&gt;" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.&lt;field&gt;" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the requisition: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.requisition_amount"}}. An unresolved $record token or unknown hop fails the filter closed.</li>
+            <li>Related-row conditions: field "&lt;childCollection&gt;:&lt;fkField&gt;" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.&lt;field&gt;" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the request total: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.total_amount"}}. An unresolved $record token or unknown hop fails the filter closed.</li>
           </ul>
           <div class="doc-note">Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.</div>
           <!-- /SYNC:workflow-overview -->
@@ -2250,6 +2287,10 @@ Authorization: Bearer &lt;token&gt;
 // Items that have comments from a specific user
 ?filter={"comments":{"_some":{"author_id":{"_eq":"user-42"}}}}</code></pre>
           <div class="doc-note">Both <code class="doc-code">_some</code> and <code class="doc-code">_none</code> work on O2M virtual fields (one-to-many) and M2M junction relations. Use these operators to filter based on existence/non-existence of related records.</div>
+          <h3 class="doc-h3">Filtering on the link itself (<code class="doc-code">_link</code>)</h3>
+          <p class="doc-p">When an M2M junction row carries columns of its own — a membership that only applies in one region, a role on the link — put a <code class="doc-code">_link</code> filter inside <code class="doc-code">_some</code> / <code class="doc-code">_none</code>. Every other key filters the related record; <code class="doc-code">_link</code> filters the junction row, and both must hold on the SAME link.</p>
+          <pre class="doc-pre"><code>// articles tagged "featured" through a link that is global or scoped to region 3
+?filter={"tags":{"_some":{"name":{"_eq":"featured"},"_link":{"_or":[{"region_id":{"_null":true}},{"region_id":{"_eq":3}}]}}}}</code></pre>
           <!-- /SYNC:filter-dsl -->
         </div>
 
@@ -3201,7 +3242,7 @@ await fetch('/api/external-apis/42/import-spec', {
       "id": "uuid",
       "collection": "projects",
       "item": "123",
-      "user": { "id": "...", "first_name": "Rob", "last_name": "Lee", "email": "rob@..." },
+      "user": { "id": "...", "first_name": "Alex", "last_name": "Chen", "email": "alex@..." },
       "text": "Looks good @finance_team",
       "created_at": "...",
       "updated_at": "...",
@@ -3321,7 +3362,7 @@ Authorization: Bearer &lt;admin-token&gt;
         </div>
 
         <!-- GRAPHQL -->
-        <div class="doc-section" id="s-graphql-overview" data-toc='[{"id":"graphql-overview","label":"GraphQL API — Overview"}]'>
+        <div class="doc-section" id="s-graphql-overview" data-toc='[{"id":"graphql-overview","label":"GraphQL API — Overview"},{"id":"graphql-cost-limits","label":"Query cost limits"}]'>
           <!-- SYNC:graphql-overview -->
           <h1 class="doc-h1" id="graphql-overview">GraphQL API — Overview</h1>
           <p class="doc-p">Nivaro auto-generates a GraphQL schema from the live <code class="doc-code">nivaro_collections</code> + <code class="doc-code">nivaro_fields</code> metadata — the same source used to build the OpenAPI spec. Every non-hidden collection gets query and mutation fields automatically. Schema is rebuilt in the <code class="doc-code">onReady</code> hook when the server starts, and can be manually rebuilt at runtime.</p>
@@ -3332,6 +3373,8 @@ Authorization: Bearer &lt;admin-token&gt;
               <tr><td>POST /api/graphql/rebuild</td><td>Admin — rebuild the schema from current nivaro_collections/fields.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">GraphQL queries and mutations go through the same RBAC permission layer as the REST API. Unauthenticated requests receive <code class="doc-code">UNAUTHENTICATED</code> errors; forbidden operations receive <code class="doc-code">FORBIDDEN</code> errors.</div>
+          <h2 class="doc-h2" id="graphql-cost-limits">Query cost limits</h2>
+          <p class="doc-p">A query is measured before it executes. The total number of selected fields is capped at <code class="doc-code">GRAPHQL_MAX_SELECTIONS</code> (default 2500). Nesting depth is unlimited by default — set <code class="doc-code">GRAPHQL_MAX_DEPTH</code> on the instance to cap it, or give a named API key its own <code class="doc-code">graphql_max_depth</code>, which applies only to that key. A refused query answers HTTP 400 with an <code class="doc-code">errors[]</code> message naming the measured cost and the limit.</p>
           <!-- /SYNC:graphql-overview -->
         </div>
 
@@ -3339,6 +3382,7 @@ Authorization: Bearer &lt;admin-token&gt;
           <!-- SYNC:graphql-queries -->
           <h1 class="doc-h1" id="graphql-queries">Queries</h1>
           <h3 class="doc-h3">List query</h3>
+          <p class="doc-p">A list query returns the items directly. Page facts (<code class="doc-code">total</code>, <code class="doc-code">limit</code>, <code class="doc-code">offset</code>) live on the sibling <code class="doc-code">&lt;collection&gt;_metadata</code> query, which takes the same <code class="doc-code">filter</code> / <code class="doc-code">search</code> / <code class="doc-code">limit</code> / <code class="doc-code">offset</code> arguments — ask for both in one request when you paginate.</p>
           <pre class="doc-pre"><code>query {
   articles(
     filter: { status: { _eq: "active" } }
@@ -3347,11 +3391,16 @@ Authorization: Bearer &lt;admin-token&gt;
     offset: 0
     search: "fiber"
   ) {
-    data {
-      id
-      name
-      status
-    }
+    id
+    name
+    status
+  }
+  articles_metadata(
+    filter: { status: { _eq: "active" } }
+    search: "fiber"
+    limit: 10
+    offset: 0
+  ) {
     total
     limit
     offset
@@ -3498,8 +3547,8 @@ unsub()</code></pre>
           <p class="doc-p">For each non-hidden collection with at least one visible field, the schema includes:</p>
           <ul class="doc-ul">
             <li>An object type named after the collection (e.g. <code class="doc-code">articles</code>)</li>
-            <li>A list wrapper type named <code class="doc-code">collectionName_list</code> with <code class="doc-code">data</code>, <code class="doc-code">total</code>, <code class="doc-code">limit</code>, and <code class="doc-code">offset</code></li>
-            <li>Two query fields: <code class="doc-code">collectionName</code> (list) and <code class="doc-code">collectionName_by_id</code> (single)</li>
+            <li>A page-facts type named <code class="doc-code">collectionName_metadata</code> with <code class="doc-code">total</code>, <code class="doc-code">limit</code>, and <code class="doc-code">offset</code></li>
+            <li>Three query fields: <code class="doc-code">collectionName</code> (list of items), <code class="doc-code">collectionName_metadata</code> (page facts for the same arguments) and <code class="doc-code">collectionName_by_id</code> (single)</li>
             <li>Three mutation fields: <code class="doc-code">create_collectionName</code>, <code class="doc-code">update_collectionName_item</code>, <code class="doc-code">delete_collectionName_item</code></li>
             <li>A typed filter input type named <code class="doc-code">collectionName_filter</code> with per-field operator inputs and <code class="doc-code">_and</code>/<code class="doc-code">_or</code> combinators</li>
           </ul>
@@ -3560,8 +3609,7 @@ query {
     title: { _contains: "fiber" }
     submitted_at: { _nnull: true }
   }) {
-    data { id status amount }
-    total
+    id status amount
   }
 }</code></pre>
           <h3 class="doc-h3">Logical combinators</h3>
@@ -3572,7 +3620,7 @@ query {
       { priority: { _gte: 3 } }
     ]
   }) {
-    data { id name status }
+    id name status
   }
 }</code></pre>
           <h3 class="doc-h3">M2O nested filter</h3>
@@ -3584,7 +3632,7 @@ query {
       division: { name: { _eq: "Network Engineering" } }
     }
   }) {
-    data { id title }
+    id title
   }
 }</code></pre>
           <h3 class="doc-h3">O2M / M2M filters</h3>
@@ -3594,7 +3642,7 @@ query {
   projects(filter: {
     inventory_requests: { _some: { status: { _eq: "pending" } } }
   }) {
-    data { id name }
+    id name
   }
 }
 
@@ -3603,7 +3651,7 @@ query {
   inventory_requests(filter: {
     tags: { _none: { label: { _eq: "archived" } } }
   }) {
-    data { id title }
+    id title
   }
 }</code></pre>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -3627,21 +3675,21 @@ query {
           <pre class="doc-pre"><code># Simple multi-field sort
 query {
   inventory_requests(sort: ["-submitted_at", "title"]) {
-    data { id title submitted_at }
+    id title submitted_at
   }
 }
 
 # Sort by related field (M2O)
 query {
   inventory_requests(sort: ["project.name", "-submitted_at"]) {
-    data { id title }
+    id title
   }
 }
 
 # Two-hop M2O sort
 query {
   inventory_requests(sort: ["project.division.name"]) {
-    data { id title }
+    id title
   }
 }</code></pre>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -3671,7 +3719,7 @@ const res = await fetch('https://nivaro.example.com/api/graphql', {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer 3a7f2b9c...',
   },
-  body: JSON.stringify({ query: '{ articles { data { id name } total } }' }),
+  body: JSON.stringify({ query: '{ articles { id name } articles_metadata { total } }' }),
 })
 const { data, errors } = await res.json()
 
@@ -3684,7 +3732,7 @@ const client = axios.create({
 })
 
 const { data } = await client.post('/api/graphql', {
-  query: '{ articles { data { id name } total } }',
+  query: '{ articles { id name } articles_metadata { total } }',
 })</code></pre>
           <div class="doc-note">Permissions are evaluated per field — you can request any fields in a query, but only permitted ones are resolved. Missing fields in the response indicate permission denial.</div>
           <!-- /SYNC:graphql-auth -->
@@ -5054,6 +5102,7 @@ const { data: rows, cached, executed_at } = await nivaro.request(
 )
 // rows → Record[] — raw query results (any shape, depends on the query)</code></pre>
           <h3 class="doc-h3">Example: Defining a custom query</h3>
+          <p class="doc-p">Two operator switches live on the query editor: "Warm daily at 06:00" (#41) flags the query for the query-cache-warmers cron, which pre-runs it with default parameters so the first report of the morning hits a warm Redis result; and "Last slow plan" (#90) loads the execution plan captured the last time a saved run of the query took longer than CUSTOM_QUERY_SLOW_PLAN_MS (5 s default) on this replica — no re-run needed to see why it was slow. API: GET /custom-queries/:id/last-plan.</p>
           <p class="doc-p">In the admin UI at <code class="doc-code">/custom-queries</code>, create a query:</p>
           <pre class="doc-pre"><code>-- Name: High-value deals
 -- Access: authenticated
@@ -6993,6 +7042,12 @@ Authorization: Bearer &lt;token&gt;
 }</code></pre>
           <h3 class="doc-h3">OIDC authentication</h3>
           <p class="doc-p">All auth flows through Microsoft OIDC (PKCE). First name, last name, and email are synced from the OIDC token on every login. No separate user creation required.</p>
+          <h3 class="doc-h3">Directory lookups (User.Read.All)</h3>
+          <p class="doc-p">Login enrichment only refreshes a profile when that person signs in. With <code class="doc-code">User.Read.All</code> granted to the app registration as an **application** permission (admin-consented), the server reads any tenant user with its own token: <code class="doc-code">GET /api/directory/users?q=</code> searches by name or email, <code class="doc-code">GET /api/directory/users/:key</code> returns one entry (Graph id, UPN or email) with their manager and the Nivaro account it maps to, and <code class="doc-code">POST /api/directory/sync/:userId</code> (admin) pulls a directory entry onto a Nivaro profile — the directory wins for every field it has a value for; blanks never clear a stored value. <code class="doc-code">GET /api/directory/status</code> reports whether the app token actually carries the permission, and the Users page shows the same verdict: the Microsoft directory card on a user, and a "Find in Microsoft directory" search inside Add User that fills the form from the tenant.</p>
+          <div class="doc-note">A delegated User.Read.All is not enough: it only widens the token of the person logging in. The app token must carry the role — the status endpoint says "no Graph roles" until admin consent is granted. Credentials default to the OIDC app registration; <code class="doc-code">GRAPH_TENANT_ID</code> / <code class="doc-code">GRAPH_CLIENT_ID</code> / <code class="doc-code">GRAPH_CLIENT_SECRET</code> override them when a separate app owns the directory permission.</div>
+          <h3 class="doc-h3">Directory sync — is this person still with the company?</h3>
+          <p class="doc-p">Every user carries a directory verdict: **With the company** (found, account enabled), **Disabled in Azure**, **Not in directory**, or not checked yet. Three ways to take it: the nightly <code class="doc-code">directory-sync</code> job (04:15; Settings → Microsoft → Directory sync switches it on, and it skips itself until the app token carries User.Read.All), the **Check directory** button on the Users page (<code class="doc-code">POST /api/directory/check</code>, everyone or a selected list), and the per-user check — the refresh glyph beside each verdict pill, or **Sync from directory** on the user page (<code class="doc-code">POST /api/directory/sync/:id</code>, which also pulls the profile). A whole-table check walks the tenant once, 999 users per call; a handful of ids are looked up directly.</p>
+          <p class="doc-p">Someone the directory no longer has — missing or disabled — is **suspended** while the "Suspend people the directory no longer has" switch is on (the default). A suspension is never lifted by the check, and redaction stays a separate, deliberate action. The Users page filter **Directory: Departed** lists them, and **Hand off N departed** moves everything they still hold (queue claims, open record ownerships, tasks, owner-group seats, delegate chains, subscriptions) to one successor in a single pass — the same offboarding run each user page offers alone. Admins get one notification per nightly run naming who left; <code class="doc-code">GET /api/directory/report</code> carries the last run and the current counts.</p>
           <!-- /SYNC:microsoft-oidc -->
         </div>
 
@@ -7137,6 +7192,7 @@ Authorization: Bearer &lt;token&gt;
           <!-- SYNC:data-integrity -->
           <h1 class="doc-h1" id="data-integrity">Data Integrity</h1>
           <p class="doc-p">Data Integrity (Monitoring → Data Integrity, <code class="doc-code">/data-integrity</code>) answers "which records would fail their own form today". Pick a collection and run its checks over the newest records; every finding names the record, the field, and what is wrong in plain language. A nightly schedule can re-run a collection and notify you when the count rises.</p>
+          <p class="doc-p">Every finding row on a run carries "Assign…": pick a person and the finding becomes an open task on the record (title "Data integrity: &lt;message&gt;") with an in-app notification; the sweep page is where an admin triages a whole run, so routing lives there as well as on the record banner (#37). API: POST /api/config-conformance/findings/:id/assign {user_id}.</p>
           <h3 class="doc-h3">What it checks</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Check</th><th>What counts as a finding</th></tr></thead>
@@ -7144,8 +7200,8 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>Validation</td><td>A field value fails one of its validation rules — the same evaluator the save path uses. Date-offset rules ("at least 7 days from today") are judged against the record's creation date.</td></tr>
               <tr><td>Not an available option</td><td>A cascade-filtered picker holds a value its parent would no longer offer (a sub type outside the chosen project type).</td></tr>
               <tr><td>Broken display label</td><td>Every part of the display template resolved empty, so the record shows as its internal id.</td></tr>
-              <tr><td>Lines missing rule inputs</td><td>A line's rule INPUT is empty — a workflow line with no category has no basis for its task, Oracle category or PO line type, whatever those hold today. Reported per line naming the empty field and the targets it drives; fixed by filling the input on the record, never automatically.</td></tr>
-              <tr><td>Lines off their rules</td><td>An inline-grid row rule (task from the CIFA, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \"X\" — rules derive \"Y\"".</td></tr></tr></tbody>
+              <tr><td>Lines missing rule inputs</td><td>A line's rule INPUT is empty — a line item with no category has no basis for its task, GL category or PO line type, whatever those hold today. Reported per line naming the empty field and the targets it drives; fixed by filling the input on the record, never automatically.</td></tr>
+              <tr><td>Lines off their rules</td><td>An inline-grid row rule (task from the SKU, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \"X\" — rules derive \"Y\"".</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Row-rule checks read the rules on the collection's ACTIVE grouped layout — the same layout the API applies on line creates. Rules configured only on a slugged or role-conditional layout are a per-audience view and are not swept.</div>
           <h3 class="doc-h3">Fixing findings — proposals</h3>
@@ -7155,7 +7211,7 @@ Authorization: Bearer &lt;token&gt;
             <tbody><tr><tr><td>Not an available option</td><td>Set the only option under the current parent · replace with the same-named option under the current parent · keep the value and set the PARENT it belongs to (shows who last changed the parent) · choose from the options that qualify · clear.</td></tr>
               <tr><td>Required empty</td><td>Copy from a linked record (the form's cross-record defaults) · the layout's default · restore the value it held before someone or an import blanked it · the one value every linked record agrees on (project → its region) · choose from the options the form would offer. Required links (M2M) get the same treatment and are created as junction rows.</td></tr>
               <tr><td>Validation</td><td>The rule's boundary (minimum, maximum, N days from the creation date) or a normalized form of the current value (trimmed, upper/lower-cased, stripped) — only when it passes every rule on the field.</td></tr>
-              <tr><td>Lines missing rule inputs</td><td>Set the missing input from what sibling lines carry (lines with the same CIFA elsewhere, this record's other lines) or choose it — either way the rules derive the rest of the line (task, Oracle category, PO line type, price) in the same write.</td></tr>
+              <tr><td>Lines missing rule inputs</td><td>Set the missing input from what sibling lines carry (lines with the same SKU elsewhere, this record's other lines) or choose it — either way the rules derive the rest of the line (task, GL category, PO line type, price) in the same write.</td></tr>
               <tr><td>Lines off their rules</td><td>Re-run the rules on the drifted lines, previewing every change.</td></tr>
               <tr><td>Broken display label</td><td>Regenerate the id from its pattern.</td></tr>
               <tr><td>Always</td><td>"Ask &lt;owner&gt; to resolve it" creates a task on the record for its current workflow owner (or creator) with the finding text — for when nothing on the record can derive a value. "Ask AI for a suggestion" (opt-in, needs the AI key) has the model pick from the SAME candidate list; it is marked AI, ranked last, and never applied on its own.</td></tr></tr></tbody>
@@ -7192,6 +7248,7 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>Actions</td><td>Open the detail sheet, re-queue the same file, or cancel.</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">The New import dialog previews the file BEFORE queueing, using the worker's own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file's columns against the staging table, warning about columns the table does not have and columns it expects but the file omits.</p>
+          <p class="doc-p">Service-mode definitions (rows written through the items service instead of a staging table + procedure) go one step further: the preview is a DRY RUN of the real importer — the same lookups, header mapping, natural-key dedupe and field diff, with nothing written — and reports what a run would do: how many rows would be created, how many existing rows would change (field by field, old → new), how many are unchanged, and every skipped row with the rule that dropped it ("row 12 · no cifa_items match for cifa", "row 40 · duplicate key in file (a later row wins)"). Lookup values a real run would stub-create are listed too. Click a count to see the rows behind it.</p>
           <div class="doc-note">The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.</div>
           <h2 class="doc-h2" id="imports-collection">Collection imports</h2>
           <p class="doc-p">The row-by-row CSV importer. Rows go through the normal item API, so validation rules, hooks, row-level security and activity logging all apply. Jobs process in the background with live progress counters.</p>
@@ -7209,7 +7266,7 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>merge</td><td>Only the mapped fields are updated.</td></tr></tr></tbody>
           </table></div>
           <h2 class="doc-h2" id="imports-definitions">Definitions</h2>
-          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — the EFP purchase-order import reports linked PO number, matched and unmatched line counts).</p>
+          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).</p>
           <div class="doc-note doc-warn">Both importers are admin-only for writes, and <code class="doc-code">nivaro_*</code> system tables are blocked as collection-import targets. Staging table and procedure names are validated as plain identifiers because they are interpolated into SQL — BULK INSERT and EXEC cannot bind an object name.</div>
           <!-- /SYNC:imports -->
         </div>
@@ -7392,6 +7449,8 @@ const { data: created } = await cms.request(
           <p class="doc-p">Notification Subscriptions let users opt into notifications for collection-level events (create, update, delete) with optional field-value filters. Unlike Field Watches (which track specific field changes), subscriptions fire on any matching event.</p>
           <h3 class="doc-h3">Subscribing to a single record</h3>
           <p class="doc-p">Every record page has a bell button in the header. Click it to watch that specific record — choose "State changes only" (notify when the record moves to a new workflow state) or "All changes" (every edit, deletion, and state change). The bell fills in when you are subscribed; open it again to switch modes or unsubscribe. Record subscriptions are ordinary notification subscriptions scoped to the record id, so they also appear on the Notification Subscriptions page.</p>
+          <h3 class="doc-h3">Watching one line</h3>
+          <p class="doc-p">Every saved row in a record's grid has its own bell (beside Row history). Watching a line — one forecast year, one PO line — notifies you only when that row changes, and the notification names the row and the record it belongs to ("workflow line items CM26-79811 · Line 4: 2 changes by …"). It is an ordinary subscription on the child collection scoped to the row id, listed on the Notification Subscriptions page like any other.</p>
           <h3 class="doc-h3">Creating a subscription</h3>
           <p class="doc-p">Navigate to Monitoring → Notification Subscriptions. Users manage their own subscriptions; admins can view all subscriptions.</p>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -8144,24 +8203,24 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
           <h3 class="doc-h3">Why is this cell locked?</h3>
           <p class="doc-p">A cell a <code class="doc-code">lock</code> rule holds is read-only in both the inline editor and the row panel, and hovering it says which trigger locked it, using the row's own value: "Locked — Category is Installation - Labor". The evaluate call returns <code class="doc-code">lock_reasons</code> (trigger field, operator, value) beside <code class="doc-code">locks</code>.</p>
           <h3 class="doc-h3">Seed-only rules, conditional sources and pinned picker defaults</h3>
-          <p class="doc-p">A rule flagged **seed only** (Table Editor → rule footer) treats its target as an INPUT it merely fills when empty — a project's default category or default CIFA for a new line. "Re-run rules" never blanks a seed-only target to re-derive it, Data Integrity never reports it as drift, and the row-input check still flags the line when it stays empty. Without the flag, a "default" rule would turn a hand-picked input into a target the re-run wipes. A seed-only value still equal to one of the rule family's own defaults counts as auto and FOLLOWS its trigger (switch a line from materials to equipment and the default CIFA swaps); any other value is a hand pick and stays, and the row editor labels it overridden. When the new state derives nothing, the seeded value is left in place.</p>
-          <p class="doc-p">A precedence source may carry <code class="doc-code">when: {field, op, value, related_field?}</code> — the source only yields a candidate when the row (or the parent, via a <code class="doc-code">$parent.&lt;field&gt;</code> field) matches, with the same related-field hops as a trigger. One chain can therefore hold "P2 default when the workflow source is P2, services default for labor lines, goods default otherwise" in front of the legacy fallback. A source whose row field is empty is closed unless the op is about emptiness.</p>
-          <p class="doc-p">An M2O picker column can float a context-dependent default to the top of its list: <code class="doc-code">options.pinned_options: [{when:{field,op,value}, parent_field, parent_collection, source_field, tag}]</code> — when the ROW matches <code class="doc-code">when</code> (a materials line), the value the parent's linked record holds in <code class="doc-code">source_field</code> (workflow → project → default materials CIFA) is pinned first with a tag, above search results and sort. Nothing is pinned without a match or a value. Entries are tried in order (project first, then the project type, say); <code class="doc-code">when.field</code> may name a <code class="doc-code">$parent.&lt;field&gt;</code> to key on the parent record (a P2 workflow gets the P2 default). Works on the plain and the grouped picker alike.</p>
+          <p class="doc-p">A rule flagged **seed only** (Table Editor → rule footer) treats its target as an INPUT it merely fills when empty — a project's default category or default SKU for a new line. "Re-run rules" never blanks a seed-only target to re-derive it, Data Integrity never reports it as drift, and the row-input check still flags the line when it stays empty. Without the flag, a "default" rule would turn a hand-picked input into a target the re-run wipes. A seed-only value still equal to one of the rule family's own defaults counts as auto and FOLLOWS its trigger (switch a line from materials to equipment and the default SKU swaps); any other value is a hand pick and stays, and the row editor labels it overridden. When the new state derives nothing, the seeded value is left in place.</p>
+          <p class="doc-p">A precedence source may carry <code class="doc-code">when: {field, op, value, related_field?}</code> — the source only yields a candidate when the row (or the parent, via a <code class="doc-code">$parent.&lt;field&gt;</code> field) matches, with the same related-field hops as a trigger. One chain can therefore hold "alternate default when the parent record comes from a second source system, services default for labor lines, goods default otherwise" in front of a generic fallback. A source whose row field is empty is closed unless the op is about emptiness.</p>
+          <p class="doc-p">An M2O picker column can float a context-dependent default to the top of its list: <code class="doc-code">options.pinned_options: [{when:{field,op,value}, parent_field, parent_collection, source_field, tag}]</code> — when the ROW matches <code class="doc-code">when</code> (a materials line), the value the parent's linked record holds in <code class="doc-code">source_field</code> (order → project → default materials SKU) is pinned first with a tag, above search results and sort. Nothing is pinned without a match or a value. Entries are tried in order (project first, then the project type, say); <code class="doc-code">when.field</code> may name a <code class="doc-code">$parent.&lt;field&gt;</code> to key on the parent record (a record from a second source system gets that system's default). Works on the plain and the grouped picker alike.</p>
           <h3 class="doc-h3">Re-running rules over existing lines</h3>
-          <p class="doc-p">A rule added or changed after lines were created never touched them. The grid toolbar's "re-run rules…" opens a panel with two modes: **Fill blanks only** writes rule targets that are empty today — plus any target a rule LOCKS on that line, since nobody could have typed those — **Re-derive everything** treats every rule target as blank first so set rules win over hand-typed values (a rule that derives nothing never erases what a line had). Preview lists which fields would change on how many lines and writes nothing. On a staged grid (save mode pending — workflow lines) the re-derived values are queued as row edits: lines show as Edited and land with the record's Save, so they can still be cancelled. Lines not yet saved — a new record's lines, staged additions — are planned alongside the saved ones (sent as <code class="doc-code">rows</code> with a client key; the server never writes them) and their patches are written back into the staged rows; staged edits on saved lines are overlaid first so the plan judges what the grid shows. On an immediate-mode grid Apply goes through the normal update path right away, so each line gets a revision attributed to you and the lines timeline shows the batch. The same call is <code class="doc-code">POST /field-rules/apply</code> with <code class="doc-code">{collection, fk_field, parent_id, parent_context, row_rules, mode, dry_run}</code> — update permission on the child collection is required for a real run, read permission for a preview.</p>
+          <p class="doc-p">A rule added or changed after lines were created never touched them. The grid toolbar's "re-run rules…" opens a panel with two modes: **Fill blanks only** writes rule targets that are empty today — plus any target a rule LOCKS on that line, since nobody could have typed those — **Re-derive everything** treats every rule target as blank first so set rules win over hand-typed values (a rule that derives nothing never erases what a line had). Preview lists which fields would change on how many lines and writes nothing. On a staged grid (save mode pending) the re-derived values are queued as row edits: lines show as Edited and land with the record's Save, so they can still be cancelled. Lines not yet saved — a new record's lines, staged additions — are planned alongside the saved ones (sent as <code class="doc-code">rows</code> with a client key; the server never writes them) and their patches are written back into the staged rows; staged edits on saved lines are overlaid first so the plan judges what the grid shows. On an immediate-mode grid Apply goes through the normal update path right away, so each line gets a revision attributed to you and the lines timeline shows the batch. The same call is <code class="doc-code">POST /field-rules/apply</code> with <code class="doc-code">{collection, fk_field, parent_id, parent_context, row_rules, mode, dry_run}</code> — update permission on the child collection is required for a real run, read permission for a preview.</p>
           <h3 class="doc-h3">Testing rules against a record</h3>
           <p class="doc-p">Below the rule list, "Test rules against a record" runs the rules exactly as edited (unsaved) against one real child record and lists what every rule did: the resolved trigger value, whether it fired, was not triggered or was skipped (and why), the value it wrote, per-rule time, and the pass's query count. Nothing is written. Optionally name a changed field to simulate a live edit instead of the create-time pass.</p>
           <pre class="doc-pre"><code>// Live edit from a grid editor (probe returns what the rules WOULD derive):
 // POST /api/field-rules/evaluate
 {
-  "collection": "workflow_line_items",
+  "collection": "order_lines",
   "data": { "category": 67, "task": 42 },
   "changed_field": "category",
   "probe": true,
-  "parent_context": { "workflow_type": 1, "project_type": 2 },
+  "parent_context": { "order_type": 1, "project_type": 2 },
   "row_rules": [ /* the grid's row_rules */ ]
 }
-// → { "updates": { "oracle_category": 720, ... }, "locks": [], "expected": { "task": 1, ... } }
+// → { "updates": { "gl_category": 720, ... }, "locks": [], "expected": { "task": 1, ... } }
 
 // Reset one field to its rule-derived value:
 // { ..., "target_fields": ["task"], "probe": true }
@@ -8169,14 +8228,14 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
 // Dry run against a real row (admin):
 // POST /api/field-rules/explain
 {
-  "collection": "workflow_line_items",
-  "record_id": 465323,
-  "parent_collection": "workflows",
-  "fk_field": "workflow",
-  "parent_context_fields": ["workflow_type", "project_type"],
+  "collection": "order_lines",
+  "record_id": 1234,
+  "parent_collection": "orders",
+  "fk_field": "order",
+  "parent_context_fields": ["order_type", "project_type"],
   "row_rules": [ /* ... */ ]
 }
-// → { "data": { "trace": [{ "index": 0, "target_field": "oracle_category", "outcome": "wrote", ... }], "changes": {...}, "queries": 4, "ms": 260 } }
+// → { "data": { "trace": [{ "index": 0, "target_field": "gl_category", "outcome": "wrote", ... }], "changes": {...}, "queries": 4, "ms": 260 } }
 
 // Rule evaluation cost per collection (admin; also on the API Analytics page):
 // GET /api/field-rules/stats</code></pre>
@@ -8334,12 +8393,12 @@ useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
      "lookup": {"collection": "line_items", "field": "quantity_received",
                 "match": [{"local": "purchase_order", "remote": "purchase_order"},
                           {"local": "line_item_number", "remote": "line_number"}]}}],
-  "status": {"field": "efp_review_status",
+  "status": {"field": "review_status",
     "options": [{"value": "approved", "label": "Approve", "color": "green"},
                 {"value": "rejected", "label": "Reject", "color": "red", "require_note": true}],
     "empty_label": "Unreviewed", "stamp_user_field": "approved_by", "stamp_date_field": "approved_on",
-    "action_endpoint": "/efp/invoice-approvals/decide"},
-  "enrich_endpoint": "/efp/invoice-approvals/enrich"
+    "action_endpoint": "/my-extension/invoice-approvals/decide"},
+  "enrich_endpoint": "/my-extension/invoice-approvals/enrich"
 }
 
 // enrich endpoint contract
@@ -9900,16 +9959,16 @@ Authorization: Bearer &lt;token&gt;
           <!-- /SYNC:picker-exclusions -->
         </div>
 
-        <div class="doc-section" id="s-upsert-keys" data-toc='[{"id":"upsert-keys","label":"Natural Key (Upsert)"}]'>
+        <div class="doc-section" id="s-upsert-keys" data-toc='[{"id":"upsert-keys","label":"Natural Key (Upsert)"},{"id":"synthetic-records","label":"Synthetic records"}]'>
           <!-- SYNC:upsert-keys -->
           <h1 class="doc-h1" id="upsert-keys">Natural Key (Upsert)</h1>
           <p class="doc-p">A collection can declare the columns that identify a record — its natural key. When a create arrives whose payload matches an existing row on every key column, the items service updates that row instead of inserting a duplicate. The collection stays one-row-per-key no matter which client writes: a form grid, the REST API, or a GraphQL integration that still sends one create per change.</p>
           <h3 class="doc-h3">Config</h3>
           <pre class="doc-pre"><code>// Stored on nivaro_collections.upsert_keys — a JSON array of column names
-["workflow", "year"]
+["project", "year"]
 
-// PATCH /api/collections/forecasts
-{"upsert_keys": ["workflow", "year"]}
+// PATCH /api/collections/budgets
+{"upsert_keys": ["project", "year"]}
 
 // Empty list = plain inserts (the default)</code></pre>
           <ul class="doc-ul">
@@ -9918,7 +9977,9 @@ Authorization: Bearer &lt;token&gt;
             <li>Pair it with a unique index on the same columns when the database must enforce the key as well.</li>
             <li>Configure it in Data Model → the collection → Settings → "Natural key (upsert)".</li>
           </ul>
-          <div class="doc-note">Example: <code class="doc-code">forecasts</code> is keyed on (workflow, year). A partner integration that models every re-forecast as a new record now lands as an in-place update with a revision snapshot, rather than a second row for the same year.</div>
+          <h3 class="doc-h3" id="synthetic-records">Synthetic records</h3>
+          <p class="doc-p">Data Model → the collection → Settings → "Synthetic records" generates up to 200 test rows from the collection's OWN metadata: an existing row for every M2O relation (active users for user links), one of the declared choices for select fields, integers and amounts inside the validation min/max, dates inside a min/max-days-from-today rule, and made-up strings shaped by the field name (emails at example.com, 555 phone numbers, SYN- codes, short paragraphs for rich text). Audit stamps, computed fields, auto-ids, aliases and read-only fields are left alone; the plan lists what gets filled and what is skipped and why. Rows are created through the items service — rules, auto-ids, hooks and revisions apply — and every row carries the change reason <code class="doc-code">synthetic:&lt;batch&gt;</code>, which is how a batch is listed and sent to the trash later. Routes: <code class="doc-code">GET/POST /data-model/:table/synthetic</code>, <code class="doc-code">DELETE /data-model/:table/synthetic/:batch</code> (admin).</p>
+          <div class="doc-note">Example: <code class="doc-code">budgets</code> is keyed on (project, year). A partner integration that models every revised budget as a new record now lands as an in-place update with a revision snapshot, rather than a second row for the same year.</div>
           <!-- /SYNC:upsert-keys -->
         </div>
 
@@ -9981,8 +10042,8 @@ Authorization: Bearer &lt;token&gt;
             <tbody><tr><tr><td><code class="doc-code">fields</code></td><td>Fields whose change demands a reason (judged on the caller's own payload — machine-derived writes never prompt).</td></tr>
               <tr><td><code class="doc-code">reasons</code></td><td>Preset reasons offered as a pick list.</td></tr>
               <tr><td><code class="doc-code">allow_free_text</code></td><td>Whether a typed reason is accepted (default true).</td></tr>
-              <tr><td><code class="doc-code">context_fields</code></td><td>Identity fields echoed into the challenge so the prompt names WHICH record: <code class="doc-code">["year"]</code> on forecasts makes the dialog read "You changed January for Year 2026".</td></tr>
-              <tr><td><code class="doc-code">on_create</code></td><td>Also demand a reason when a NEW record arrives with any flagged field filled — a new forecast year on an existing workflow prompts like an edited month.</td></tr></tr></tbody>
+              <tr><td><code class="doc-code">context_fields</code></td><td>Identity fields echoed into the challenge so the prompt names WHICH record: <code class="doc-code">["year"]</code> on a yearly budget collection makes the dialog read "You changed January for Year 2026".</td></tr>
+              <tr><td><code class="doc-code">on_create</code></td><td>Also demand a reason when a NEW record arrives with any flagged field filled — a new budget year on an existing project prompts like an edited month.</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">The shared <code class="doc-code">ChangeReasonDialog</code> handles the 422 everywhere records are edited — the record form, inline grids (edits and new rows), and headless apps built on @nivaro/react — and retries the same write with the reason attached. Natural-key upserts (a create that matched an existing row) supply their own stated reason instead of prompting, since the caller could not know it was editing.</p>
           <pre class="doc-pre"><code>{
@@ -10518,7 +10579,7 @@ Authorization: Bearer &lt;token&gt;
 {
   "data": [
     { "revision_id": 12, "timestamp": "2026-01-01T09:00:00Z", "value": 1200, "user": "Jane Smith" },
-    { "revision_id": 18, "timestamp": "2026-01-08T14:23:00Z", "value": 1350, "user": "Rob Lee" },
+    { "revision_id": 18, "timestamp": "2026-01-08T14:23:00Z", "value": 1350, "user": "Alex Chen" },
     { "revision_id": 24, "timestamp": "2026-02-01T11:00:00Z", "value": 1500, "user": "Jane Smith" }
   ]
 }</code></pre>
@@ -10629,7 +10690,7 @@ POST /api/items/pages
           <!-- /SYNC:content-ops-m2a -->
         </div>
 
-        <div class="doc-section" id="s-content-ops-grid-presets" data-toc='[{"id":"content-ops-grid-presets","label":"Grid View Presets &amp; Nested Relations"},{"id":"grid-view-presets","label":"View presets (column_presets)"},{"id":"grid-nested-relations","label":"Nested relation editor (drawer_relations)"},{"id":"grid-cascade-swap","label":"Cascade swap on unavailable (parent_cascades[].on_unavailable)"}]'>
+        <div class="doc-section" id="s-content-ops-grid-presets" data-toc='[{"id":"content-ops-grid-presets","label":"Grid View Presets &amp; Nested Relations"},{"id":"grid-view-presets","label":"View presets (column_presets)"},{"id":"grid-nested-relations","label":"Nested relation editor (drawer_relations)"},{"id":"grid-compare-series","label":"Comparison series (compare_series)"},{"id":"grid-cascade-swap","label":"Cascade swap on unavailable (parent_cascades[].on_unavailable)"}]'>
           <!-- SYNC:content-ops-grid-presets -->
           <h1 class="doc-h1" id="content-ops-grid-presets">Grid View Presets &amp; Nested Relations</h1>
           <p class="doc-p">Two layout options for an O2M field rendered as an inline grid (interface <code class="doc-code">inline-table</code>) in the item editor: named view presets that switch which columns the grid shows, and a nested relation editor that lets a grandchild collection be edited from inside each row's expanded drawer. Both are configured per-field in Data Model, not by the end user.</p>
@@ -10660,7 +10721,7 @@ POST /api/items/pages
           <p class="doc-p">Data Model → table → hover the O2M field's chip in the Table Editor and click the gear icon → set Interface to Inline Table. Two additional sections appear in the same popover: "Column presets" (name + a multi-select of that grid's available columns per preset — reorder with the up/down arrows) and "Drawer relations" (pick a relation, then optionally a sum field and a cap field for the hint). A preset needs both a name and at least one column to be saved; an empty preset is dropped on save. A drawer relation needs a relation selected to be saved; the hint is only attached when BOTH sum field and cap field are set — leaving either blank saves the relation as a plain string with no hint.</p>
           <div class="doc-note">The Drawer relations picker offers only relations defined on this table pointing to a child collection. The sum field options come from that CHILD relation's target (the grandchild collection) — chosen fresh per row once a relation is picked, and reset whenever the relation changes since a new relation implies a new grandchild collection. The cap field options come from this table's (the child's) own numeric fields — a different collection than the sum field, on purpose, since the cap lives on the row itself, not the rows underneath it.</div>
           <h3 class="doc-h3">Row match panel</h3>
-          <p class="doc-p">A third per-field option, <code class="doc-code">row_match_panel</code>, answers "which related record is this row matched to — and if none, why not?" inside the row editor. Point it at an O2M alias on the child collection (a workflow line's <code class="doc-code">po_line_items</code>) and list the columns to show for a match. For the unmatched case, describe how to find the nearest candidate: a filter over the target collection (with <code class="doc-code">$parent.&lt;field&gt;</code> tokens, so an M2M alias on the parent gives the linked purchase orders) and the keys the match rule compares. The panel then says which key disagrees with the nearest candidate — "PO 12345 line 3 differs — Amount: $500.00 here vs $520.00 on the PO" — or that no candidate carries that line number, or that the parent has nothing linked to match against yet.</p>
+          <p class="doc-p">A third per-field option, <code class="doc-code">row_match_panel</code>, answers "which related record is this row matched to — and if none, why not?" inside the row editor. Point it at an O2M alias on the child collection (a request line's <code class="doc-code">po_line_items</code>) and list the columns to show for a match. For the unmatched case, describe how to find the nearest candidate: a filter over the target collection (with <code class="doc-code">$parent.&lt;field&gt;</code> tokens, so an M2M alias on the parent gives the linked purchase orders) and the keys the match rule compares. The panel then says which key disagrees with the nearest candidate — "PO 12345 line 3 differs — Amount: $500.00 here vs $520.00 on the PO" — or that no candidate carries that line number, or that the parent has nothing linked to match against yet.</p>
           <pre class="doc-pre"><code>{
   "row_match_panel": {
     "relation": "po_line_items",
@@ -10681,7 +10742,7 @@ POST /api/items/pages
       "parent_label": "PO",
       "parent_path": "purchase_order.number"
     },
-    "no_parent_message": "No purchase order is linked to this workflow yet."
+    "no_parent_message": "No purchase order is linked to this record yet."
   }
 }</code></pre>
           <h3 class="doc-h3">Unmatched related lines</h3>
@@ -10698,8 +10759,31 @@ POST /api/items/pages
           <h3 class="doc-h3">Header summary chip</h3>
           <p class="doc-p">An inline-table field may carry <code class="doc-code">options.header_summary</code> (layout-local): a formula evaluated per child row on the server (expr-eval, <code class="doc-code">item.&lt;column&gt;</code> — "item.amount - item.allocated_total"), summed over the rows where it is positive, shown in the record header as a chip ("Unallocated · $1,240 · across 3 lines"). Clicking the chip switches to the step holding the grid and opens the first contributing row. The figure refreshes whenever a grid on the record saves. Keys: <code class="doc-code">label</code>, <code class="doc-code">formula</code>, <code class="doc-code">format</code> (currency | number), <code class="doc-code">positive_only</code> (default true), <code class="doc-code">count_label</code> ("lines"), <code class="doc-code">hide_when_zero</code> (default true).</p>
           <p class="doc-p">Clicking the chip lists the contributing rows biggest-first (named by <code class="doc-code">row_label</code>, e.g. "Line {{line_number}} · {{item_description}}") and opens whichever you pick. Rollup header fields carry their own explainer beneath the value — "= 5 lines · 1 excluded (line type is not 4)" — whose popover lists the contributors, the rows the source filter left out with the reason, and per-source subtotals.</p>
+          <h3 class="doc-h3" id="grid-compare-series">Comparison series (compare_series)</h3>
+          <p class="doc-p">An inline-table grid may carry <code class="doc-code">options.compare_series</code> (layout-local; grid ⚙ → Comparison series): an endpoint that reports, for the same rows and columns, what actually happened beside what the grid plans — a month × year forecast grid with invoiced spend under every month is the typical use. The grid stays domain-blind: the endpoint names the series ("Actual"), what the grid's own figures are called ("Forecast"), the noun for a detail row ("invoice"), which row key and columns it speaks about, which months are closed, the verdict to show and why, and any headline figures. <code class="doc-code">{{$parent.&lt;field&gt;}}</code> tokens in the endpoint read the record draft.</p>
+          <pre class="doc-pre"><code>{
+  "compare_series": { "endpoint": "/my-extension/actuals/{{$parent.id}}" }
+}
+
+// Endpoint response, under "data":
+{
+  "label": "Actual",
+  "plan_label": "Forecast",
+  "unit": { "one": "invoice", "many": "invoices" },
+  "key_field": "year",
+  "columns": ["january", "february", "…", "total"],
+  "rows": [{ "key": 2026, "values": { "april": 438228.88 }, "details": { "april": [{ "id": 1, "label": "INV-1", "sub": "Vendor", "amount": 438228.88, "date": "2026-04-03", "tone": "warn", "note": "On hold", "meta": [{ "label": "PO", "value": "102-…" }] }] } }],
+  "closed_through": "2026-09",
+  "closed_rule": "A month closes 45 days before its end (payment terms).",
+  "status": { "key": "good", "label": "On track", "tone": "ok", "reason": "Every closed month reconciles" },
+  "figures": [{ "label": "Invoiced to date", "value": 4887306.79, "format": "currency" }]
+}</code></pre>
+          <p class="doc-p">What renders, in both Edit and Summary mode: a second read-only line under every cell (the figure opens a popover listing the detail rows behind it — number, vendor, date, amount, tone and note), a signed delta in role colours where the two disagree (a closed month that disagrees is the reviewable case; an open month already over its plan is the alarming one; an open month still under plan stays quiet), closed months shaded, the verdict chip leading the figure strip with its reason on hover, a "Closed through" lock chip, the endpoint's figures as chips, an "Actual · closed" hint under each input in the row editor, a ghost row for any series key the grid has no row for ("No plan for this year"), and the series sum in the footer. An endpoint failure shows one quiet "unavailable" chip and leaves the grid alone.</p>
+          <p class="doc-p">Optional keys the endpoint may add: <code class="doc-code">series</code> — extra read-only lines under the actual (<code class="doc-code">[{key, label, hint, rows: [{key, values}]}]</code>, e.g. a "Committed" line for money on order but not yet invoiced; no delta, the hint shows on hover); <code class="doc-code">closed_locked</code> + <code class="doc-code">closed_locked_message</code> — closed columns render read-only in the row editor for non-admins (the writer refuses anything but the actual there; admins may edit, with a reason); <code class="doc-code">proposals</code> — suggested values for EMPTY cells (<code class="doc-code">[{id, label, reason, change_reason, rows: [{key, values}]}]</code>) rendered as an Apply / Dismiss banner above the grid: Apply stages the values onto empty, open cells only (a key with no grid row becomes a staged new row) with <code class="doc-code">change_reason</code> on every touched row, Dismiss is remembered per browser, and an applied-then-discarded proposal comes back on the next load.</p>
+          <p class="doc-p">Reconcile and carry forward: on a CLOSED column whose plan disagrees with its actual, the actual's popover (and the "Actual · closed" hint in the row editor) offers a one-click reconcile — "set &lt;month&gt; to the actual, move the remainder to &lt;open month&gt;" with the target chosen from the row's later open months and a prefilled reason ("Reconciled March 2026 to invoiced ($x) — moved $y to November"). It stages the change on pending-mode grids (the reason rides the row, so the save does not ask again) and writes it on immediate ones. The last column (the sum) also carries a "Closed Δ" line: plan vs actual summed over the row's closed months.</p>
+          <p class="doc-p">Spread remaining (<code class="doc-code">options.spread_remaining</code>) grew shape presets — Evenly, Front-loaded, Back-loaded, and "Like &lt;previous key&gt;" when the grid row one key below holds values (<code class="doc-code">presets</code> narrows the list) — skips columns the comparison series marks closed (the hint says how many), and has a grid-level twin in the toolbar ("spread across &lt;keys&gt;…", <code class="doc-code">across_rows: false</code> to hide it) that puts the remaining amount over every row's empty open cells, oldest row first, staging or writing per the grid's save mode.</p>
           <h3 class="doc-h3">Row lints</h3>
-          <p class="doc-p">An inline-table field may carry <code class="doc-code">options.row_lints</code> (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (<code class="doc-code">{label, when: {field, op, value}, expect: {field, op, value}}</code>, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. Workflow lines check that a Labor line carries a Services PO line type and a Materials line a Goods one.</p>
+          <p class="doc-p">An inline-table field may carry <code class="doc-code">options.row_lints</code> (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (<code class="doc-code">{label, when: {field, op, value}, expect: {field, op, value}}</code>, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. A typical lint checks that a Labor line carries a Services PO line type and a Materials line a Goods one.</p>
           <h3 class="doc-h3" id="grid-cascade-swap">Cascade swap on unavailable (parent_cascades[].on_unavailable)</h3>
           <p class="doc-p">A parent → child picker cascade (<code class="doc-code">options.parent_cascades</code>, Data Model → grid field ⚙ → Cascade from parent) can carry <code class="doc-code">on_unavailable</code>: when the USER changes the parent field on the record and a row’s current value is no longer offered under the new parent, the row is re-pointed instead of just flagged amber. The replacement is the target row that keeps the <code class="doc-code">keep</code> columns of the old value and takes the <code class="doc-code">replace</code> columns from the parent’s defaults (each entry uses the pinned_options shape — <code class="doc-code">parent_field</code>, <code class="doc-code">parent_collection</code>, <code class="doc-code">source_field</code>, optional <code class="doc-code">when</code> over <code class="doc-code">$parent.*</code> fields — first entry with a value wins). The grid then runs its row rules with the child field as the changed field, so every downstream derivation follows, and writes through its normal path (staged on pending-mode grids and new records, PATCHed on immediate grids). A record that merely loaded with a stale value is never touched; a value with no matching option stays flagged.</p>
           <pre class="doc-pre"><code>{
@@ -11059,13 +11143,19 @@ MIGRATION_LOCK_TIMEOUT_MS=60000   # how long a starting instance waits for the l
           <h1 class="doc-h1" id="ts-codegen">Schema → TypeScript Codegen</h1>
           <p class="doc-p">Automatically generate TypeScript interfaces for every collection from the metadata registry. The endpoint returns a ready-to-commit .ts file with one fully-typed interface per collection, including field types, relations, computed fields, and validation rules.</p>
           <h3 class="doc-h3" id="ts-codegen-usage">Generating Types</h3>
-          <pre class="doc-pre"><code># Download and save types
+          <pre class="doc-pre"><code># The SDK ships a CLI — no curl, no copy-paste
+npx nivaro types --url https://nivaro.example.com --token &lt;admin token&gt; --out src/nivaro-types.d.ts
+npx nivaro types --typed-client --out src/nivaro-client.ts   # + createTypedNivaro() wrapper
+# NIVARO_URL / NIVARO_TOKEN are read when the flags are omitted
+
+# Or download the endpoint directly
 curl -H "Authorization: Bearer &lt;token&gt;" \
   https://nivaro.example.com/api/dev-tools/types.ts &gt; src/nivaro-types.ts
 
 # Or via SDK
 const typesTs = await nivaro.request(getTypes());
 console.log(typesTs);  // raw TypeScript code</code></pre>
+          <div class="doc-note">The <code class="doc-code">nivaro</code> CLI is installed with <code class="doc-code">@nivaro/sdk</code> (its <code class="doc-code">bin</code>). <code class="doc-code">nivaro types</code> exits 0 when the file was written, 1 on usage errors, 2 when the request failed — wire it into a <code class="doc-code">postinstall</code> or a pre-commit step and the types can never drift from the instance.</div>
           <h3 class="doc-h3" id="ts-codegen-example">Generated Output</h3>
           <pre class="doc-pre"><code>// Example generated interface
 
@@ -11363,7 +11453,7 @@ const result = await callExternalApi(apiId, {
           <p class="doc-p">All API requests are rate-limited per principal using a Redis fixed-window counter. A global limit applies to all keys; individual API keys can override with their own per-key limits. Every response includes standard X-RateLimit headers so clients can adjust their request rate.</p>
           <h3 class="doc-h3" id="rate-limits-configuration">Configuration</h3>
           <pre class="doc-pre"><code># .env
-RATE_LIMIT_PER_MINUTE=600    # Global limit (default: 600)
+RATE_LIMIT_PER_MINUTE=600    # Global limit (unset/0 = no rate limiting, the default)
 RATE_LIMIT_BURST=100         # Allow temporary bursts (optional)</code></pre>
           <h3 class="doc-h3" id="rate-limits-api-key-overrides">Per-API-Key Overrides</h3>
           <p class="doc-p">Named API keys can have their own rate limit. Set when creating the key:</p>

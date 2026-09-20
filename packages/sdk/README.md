@@ -1669,6 +1669,8 @@ const { data: rows, cached, executed_at } = await nivaro.request(
 
 #### Example: Defining a custom query
 
+Two operator switches live on the query editor: "Warm daily at 06:00" (#41) flags the query for the query-cache-warmers cron, which pre-runs it with default parameters so the first report of the morning hits a warm Redis result; and "Last slow plan" (#90) loads the execution plan captured the last time a saved run of the query took longer than CUSTOM_QUERY_SLOW_PLAN_MS (5 s default) on this replica — no re-run needed to see why it was slow. API: GET /custom-queries/:id/last-plan.
+
 In the admin UI at `/custom-queries`, create a query:
 
 ```typescript
