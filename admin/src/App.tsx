@@ -16,7 +16,7 @@ import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { I18nProvider } from '@/lib/i18n'
 import { ThemeProvider, useTheme } from '@/lib/theme'
-import { SlugResolverPage } from '@/pages/SlugResolver'
+import { RecordAliasRedirect, SlugResolverPage } from '@/pages/SlugResolver'
 
 /**
  * Sonner needs to be TOLD the theme — without the prop it renders light
@@ -498,7 +498,14 @@ export default function App() {
                     element={<CollectionBrowserPage />}
                   />
                   <Route path='collections/:collection/s/:slug' element={<SlugResolverPage />} />
-                  <Route path='collections/:collection/:id' element={<ItemEditPage />} />
+                  <Route
+                    path='collections/:collection/:id'
+                    element={
+                      <RecordAliasRedirect>
+                        <ItemEditPage />
+                      </RecordAliasRedirect>
+                    }
+                  />
                   <Route path='users' element={<UsersPage />} />
                   <Route path='users/:id' element={<UserEditPage />} />
                   <Route path='roles' element={<RolesPage />} />
