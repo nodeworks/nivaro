@@ -3688,6 +3688,21 @@ export function InlineTableField({
     staleTime: 60_000
   })
 
+  // The child collection's OWN display template is the authoritative name for
+  // a row — a forecast is "2026", not "#6423129". Same key and shape as the
+  // M2O label lookups above, so it costs one shared fetch.
+  const { data: ownCollectionMeta } = useQuery<{ display_template?: string | null }>({
+    queryKey: ['collection-display-meta', relatedCollection],
+    queryFn: () =>
+      client
+        .request<{ data: { display_template?: string | null } }>(
+          get(`/collections/${relatedCollection}`)
+        )
+        .then((r) => r.data),
+    enabled: !!relatedCollection,
+    staleTime: 10 * 60_000
+  })
+
   // Synthetic read-only columns appended AFTER child columns. field = "relationField.memberField"
   // (the dot is the discriminator effectiveCols.map() sites use to detect a summary column —
   // real CMSField.field values are plain identifiers and never contain one).
@@ -6356,6 +6371,16 @@ export function InlineTableField({
   /** Short human handle for the row being edited, for the panel header — the
    *  first text-ish column that has a value, else the row id. */
   const rowIdentityLabel = (row: Record<string, unknown>): string => {
+    // The collection's display template wins: it is what an admin configured
+    // this row to be called, and the heuristic below deliberately skips bare
+    // numbers (an FK id or an amount reads as a mystery), which would
+    // otherwise reduce a perfectly good "2026" to "#6423129".
+    const tmpl = ownCollectionMeta?.display_template
+    if (tmpl) {
+      const rendered = applyDisplayTemplate(tmpl, row).trim()
+      if (rendered && rendered !== '-' && rendered !== String(row.id ?? ''))
+        return rendered.length > 60 ? `${rendered.slice(0, 60)}…` : rendered
+    }
     for (const c of effectiveCols) {
       if (isSummaryCol(c)) continue
       const v = row[c.field]
