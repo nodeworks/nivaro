@@ -43,6 +43,7 @@
     "seed:sla-zones": "tsx extensions/efp-ops/scripts/seed-sla-zone-map.ts",
     "proc:dump": "tsx extensions/efp-ops/scripts/dump-procedures.ts",
     "proc:deploy": "tsx extensions/efp-ops/scripts/deploy-procedures.ts",
+    "invoice:due-dates": "tsx extensions/efp-ops/scripts/invoice-due-dates.ts",
     "fix:other-spend-duplicates": "tsx extensions/efp-ops/scripts/fix-other-spend-duplicates.ts",
     "proc:deploy-app-managed": "tsx extensions/efp-ops/scripts/deploy-app-managed-procs.ts",
     "golive:convert": "tsx extensions/efp-ops/scripts/run-golive-conversions.ts",
