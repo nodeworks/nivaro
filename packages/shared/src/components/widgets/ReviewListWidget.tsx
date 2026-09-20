@@ -3,7 +3,7 @@ import { AlertCircle, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { patch, post } from '../../lib/commands'
-import { formatDate, formatDateTime } from '../../lib/utils'
+import { cn, formatDate, formatDateTime } from '../../lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -46,6 +46,11 @@ export interface ReviewListConfig {
   aggregate_sum?: string | null
   aggregate_sum_format?: ReviewListColumnFormat | null
   group_meta?: Array<string | ReviewListColumnSpec>
+  /** Order groups by a field instead of by key — the most pressing first
+   *  (`{field: 'due_date', direction: 'asc'}` puts the soonest due on top).
+   *  A group sorts on its EARLIEST value, since one late line makes the
+   *  whole invoice late. Groups missing the field keep the key order, last. */
+  group_sort?: { field: string; direction?: 'asc' | 'desc' }
   line_columns?: Array<string | ReviewListColumnSpec>
   status: {
     field: string
@@ -205,6 +210,20 @@ function buildGroups(
   return groups
 }
 
+/** A group's sort value: the earliest (or latest) of its rows' values. */
+function groupSortValue(rows: ReviewListRow[], field: string, desc: boolean): number | null {
+  let best: number | null = null
+  for (const r of rows) {
+    const raw = r.values[field]
+    if (raw == null || raw === '') continue
+    const n = typeof raw === 'number' ? raw : Date.parse(String(raw))
+    const v = Number.isNaN(n) ? Number(raw) : n
+    if (!Number.isFinite(v)) continue
+    if (best == null || (desc ? v > best : v < best)) best = v
+  }
+  return best
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export interface ReviewListWidgetProps {
@@ -240,10 +259,20 @@ export function ReviewListWidget({
   } | null>(null)
   const [noteText, setNoteText] = useState('')
 
-  const groups = useMemo(
-    () => (data ? buildGroups(data, config.aggregate_sum) : []),
-    [data, config.aggregate_sum]
-  )
+  const groups = useMemo(() => {
+    const built = data ? buildGroups(data, config.aggregate_sum) : []
+    const gs = config.group_sort
+    if (!gs?.field) return built
+    const desc = gs.direction === 'desc'
+    return [...built].sort((a, b) => {
+      const av = groupSortValue(a.rows, gs.field, desc)
+      const bv = groupSortValue(b.rows, gs.field, desc)
+      if (av == null && bv == null) return 0
+      if (av == null) return 1 // groups with no value keep to the end
+      if (bv == null) return -1
+      return desc ? bv - av : av - bv
+    })
+  }, [data, config.aggregate_sum, config.group_sort])
   // Row enrichment (verdict chips, per-row act permission) from an extension
   // endpoint — the widget stays domain-blind; the endpoint owns the rules.
   const rowIds = useMemo(() => (data?.rows ?? []).map((r) => String(r.id)), [data])
@@ -394,9 +423,30 @@ export function ReviewListWidget({
           const firstRow = group.rows[0]
           const stampUser = firstRow.stamp_user
           const stampDate = firstRow.stamp_date
+          // A group inherits the loudest tone its rows were enriched with, so
+          // "overdue" is visible before anything is expanded.
+          const tone = group.rows.reduce<'danger' | 'warn' | null>((worst, r) => {
+            for (const chip of enrichFor(r.id)?.chips ?? []) {
+              if (chip.tone === 'danger') return 'danger'
+              if (chip.tone === 'warn' && worst == null) worst = 'warn'
+            }
+            return worst
+          }, null)
 
           return (
-            <div key={group.key} className='rounded-md border border-slate-200 dark:border-border'>
+            <div
+              key={group.key}
+              data-review-group={group.key}
+              data-review-tone={tone ?? undefined}
+              className={cn(
+                'rounded-md border',
+                tone === 'danger'
+                  ? 'border-l-2 border-l-red-500 border-red-200 bg-red-50/40 dark:border-red-500/40 dark:bg-red-500/5'
+                  : tone === 'warn'
+                    ? 'border-l-2 border-l-amber-500 border-amber-200 bg-amber-50/40 dark:border-amber-500/40 dark:bg-amber-500/5'
+                    : 'border-slate-200 dark:border-border'
+              )}
+            >
               <div className='flex w-full flex-wrap items-center gap-2 px-3 py-2'>
                 <button
                   type='button'
