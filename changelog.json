@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-09-19T22:43:26.624Z",
+  "generated_at": "2026-09-20T19:09:39.600Z",
   "releases": [
+    {
+      "version": "0.1.315",
+      "tag": "v0.1.315",
+      "date": "2026-09-20T15:09:29-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync the published reference with the features already shipped",
+              "hash": "5d2c1251"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a due-date backfill an operator can run",
+              "hash": "98c8a7f5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a human alias in the URL resolves to the real key",
+              "hash": "bfd903da"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "review lists: order groups by a field, and tint an urgent group",
+              "hash": "56bf4368"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "project other spend is project-wide, not one copy per zone",
+              "hash": "c6cd9d6f"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.314",
       "tag": "v0.1.314",
-      "date": "2026-09-19T18:43:15-04:00",
+      "date": "2026-09-19T18:43:26-04:00",
       "sections": [
         {
           "label": "Other",
