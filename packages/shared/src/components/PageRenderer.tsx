@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DrilldownContext,
   type DrilldownTarget,
@@ -19,6 +19,7 @@ import {
 } from '../lib/use-my-scopes'
 import { formatNumber, formatRelative, titleCase } from '../lib/utils'
 import { MatrixEditor, type MatrixEditorConfig } from './MatrixEditor'
+import { CacheStamp, type CustomQueryEnvelope } from './CacheStamp'
 import { QueryStatStrip, type QueryWidgetStat } from './QueryStatStrip'
 import { RecordGridEditor, type RecordGridEditorConfig } from './RecordGridEditor'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
@@ -1057,17 +1058,36 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   // and flashed "No data" before the gate opened and the loader appeared.
   // isPending stays true from mount until data actually lands; the gate always
   // settles (it opens on scope errors too), so this cannot spin forever.
-  const { data, isPending, error } = useQuery<Array<Record<string, unknown>>>({
+  // The whole envelope is kept, not just the rows: a cached figure has to be
+  // able to say how old it is, otherwise the viewer cannot tell a live number
+  // from one several minutes stale.
+  const forceRefreshRef = useRef(false)
+  const {
+    data: envelope,
+    isPending,
+    error,
+    refetch,
+    isFetching
+  } = useQuery<CustomQueryEnvelope>({
     queryKey: ['page-renderer-query', cfg.query_slug, JSON.stringify(effectiveParams)],
-    queryFn: () =>
-      client
-        .request<{ data: Array<Record<string, unknown>> }>(
-          post(`/custom-queries/${cfg.query_slug}/execute`, { params: effectiveParams })
-        )
-        .then((r) => r.data),
+    queryFn: () => {
+      const refresh = forceRefreshRef.current
+      forceRefreshRef.current = false
+      return client.request<CustomQueryEnvelope>(
+        post(`/custom-queries/${cfg.query_slug}/execute`, {
+          params: effectiveParams,
+          ...(refresh ? { refresh: true } : {})
+        })
+      )
+    },
     enabled: !!cfg.query_slug && scopeGateOpen,
     staleTime: 60_000
   })
+  const data = envelope?.data
+  const refreshNow = useCallback(() => {
+    forceRefreshRef.current = true
+    void refetch()
+  }, [refetch])
   const isLoading = isPending
   if (!cfg.query_slug) return <div className='p-3 text-[12px] text-slate-400'>Set a query slug</div>
   // Widget actions (e.g. "Run recalculation") run through a styled dialog:
@@ -1129,8 +1149,16 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
       setActionStatus(`${run.action.label} failed: ${message}`)
     }
   }
+  const cacheStamp = (
+    <CacheStamp
+      envelope={envelope}
+      onRefresh={refreshNow}
+      refreshing={isFetching && !isPending}
+      className='ml-auto'
+    />
+  )
   const filterBar =
-    (cfg.filters && cfg.filters.length > 0) || cfg.actions?.length ? (
+    (cfg.filters && cfg.filters.length > 0) || cfg.actions?.length || envelope?.cache_ttl ? (
       <div className='flex flex-wrap items-center gap-2 pb-2'>
         {(cfg.filters ?? []).map((f) => {
           const dim = matchScopeDimension(scopes, { key: f.param, collection: f.collection })
@@ -1158,6 +1186,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
           </button>
         ))}
         {actionStatus && <span className='text-[12px] text-slate-500'>{actionStatus}</span>}
+        {cacheStamp}
       </div>
     ) : null
   const statStrip = cfg.stats?.length ? (

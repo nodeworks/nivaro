@@ -213,6 +213,8 @@ export {
   useScopeDimensions
 } from './components/pipeline/teamScopes'
 export { QualityRulesView } from './components/QualityRulesView'
+export type { CustomQueryEnvelope } from './components/CacheStamp'
+export { CacheStamp } from './components/CacheStamp'
 export type { QueryWidgetStat } from './components/QueryStatStrip'
 export { QueryStatStrip } from './components/QueryStatStrip'
 export type { QueryTableColumn, QueryTableConfig } from './components/QueryTable'

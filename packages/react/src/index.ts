@@ -248,6 +248,7 @@ export {
   playNotificationSound,
   precisionOf,
   QualityRulesView,
+  CacheStamp,
   QueryStatStrip,
   QueryTable,
   QueryWidgetBody,

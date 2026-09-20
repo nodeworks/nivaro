@@ -646,16 +646,38 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         req.isAdmin ?? false
       )
 
-      // Cache check.
+      // Cache check. A caller may ask to bypass it — the viewer can see how old
+      // a cached figure is, so they need a way to act on that. Refusing it for
+      // `public` queries keeps an anonymous caller from bypassing the cache at
+      // will and turning a cheap page into repeated proc executions.
+      const wantsRefresh =
+        (req.body as { refresh?: boolean })?.refresh === true &&
+        (query.access !== 'public' || !!req.user)
+
       const cacheKey = `cq:${slug}:${JSON.stringify(finalParams)}`
-      if (query.cache_ttl > 0 && app.redis) {
+      if (query.cache_ttl > 0 && app.redis && !wantsRefresh) {
         try {
           const cached = await app.redis.get(cacheKey)
           if (cached) {
+            // Entries are {cached_at, rows}; a bare array is an older entry
+            // written before that shape, whose age is simply unknown.
+            const parsed = parseJson<unknown>(cached)
+            const entry = Array.isArray(parsed)
+              ? { cached_at: null as string | null, rows: parsed as unknown[] }
+              : (parsed as { cached_at?: string; rows?: unknown[] } | null)
+            const rows = Array.isArray(parsed) ? (parsed as unknown[]) : (entry?.rows ?? [])
+            const cachedAt = Array.isArray(parsed) ? null : (entry?.cached_at ?? null)
+            const expiresIn = await app.redis.ttl(cacheKey).catch(() => -1)
             return {
-              data: parseJson<unknown[]>(cached) ?? [],
+              data: rows,
               cached: true,
-              executed_at: new Date().toISOString()
+              cached_at: cachedAt,
+              age_seconds: cachedAt
+                ? Math.max(0, Math.round((Date.now() - Date.parse(cachedAt)) / 1000))
+                : null,
+              expires_in_seconds: expiresIn >= 0 ? expiresIn : null,
+              cache_ttl: query.cache_ttl,
+              executed_at: cachedAt
             }
           }
         } catch (err) {
@@ -677,10 +699,15 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       const execMs = Date.now() - execStarted
       if (execMs >= SLOW_PLAN_MS) captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
 
-      // Cache the result.
+      // Cache the result, stamped so a viewer can be told how old it is.
+      const cachedAt = new Date().toISOString()
       if (query.cache_ttl > 0 && app.redis) {
         try {
-          await app.redis.setex(cacheKey, query.cache_ttl, JSON.stringify(rows))
+          await app.redis.setex(
+            cacheKey,
+            query.cache_ttl,
+            JSON.stringify({ cached_at: cachedAt, rows })
+          )
         } catch (err) {
           app.log.warn({ err }, 'Custom query cache write failed')
         }
@@ -695,7 +722,15 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         user: req.user?.id,
         req
       })
-      return { data: rows, cached: false, executed_at: new Date().toISOString() }
+      return {
+        data: rows,
+        cached: false,
+        cached_at: query.cache_ttl > 0 ? cachedAt : null,
+        age_seconds: 0,
+        expires_in_seconds: query.cache_ttl > 0 ? query.cache_ttl : null,
+        cache_ttl: query.cache_ttl,
+        executed_at: cachedAt
+      }
     }
   )
 }
