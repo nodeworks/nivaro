@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-20T19:09:39.600Z",
+  "generated_at": "2026-09-20T23:06:55.305Z",
   "releases": [
+    {
+      "version": "0.1.316",
+      "tag": "v0.1.316",
+      "date": "2026-09-20T19:06:44-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "custom-queries",
+              "text": "show how old a cached result is, and let a viewer refresh it",
+              "hash": "e3d5131f"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "scripts",
+              "text": "add fix:po-line-duplicates alias",
+              "hash": "23fa2b8a"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.315",
       "tag": "v0.1.315",
-      "date": "2026-09-20T15:09:29-04:00",
+      "date": "2026-09-20T15:09:39-04:00",
       "sections": [
         {
           "label": "Documentation",
