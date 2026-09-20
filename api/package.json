@@ -45,6 +45,7 @@
     "proc:deploy": "tsx extensions/efp-ops/scripts/deploy-procedures.ts",
     "invoice:due-dates": "tsx extensions/efp-ops/scripts/invoice-due-dates.ts",
     "fix:other-spend-duplicates": "tsx extensions/efp-ops/scripts/fix-other-spend-duplicates.ts",
+    "fix:po-line-duplicates": "tsx extensions/efp-ops/scripts/fix-po-line-duplicates.ts",
     "proc:deploy-app-managed": "tsx extensions/efp-ops/scripts/deploy-app-managed-procs.ts",
     "golive:convert": "tsx extensions/efp-ops/scripts/run-golive-conversions.ts",
     "golive:prerun": "tsx extensions/efp-ops/scripts/run-golive-prerun.ts",
