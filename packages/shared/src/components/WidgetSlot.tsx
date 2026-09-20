@@ -64,11 +64,12 @@ import {
   XCircle,
   Zap
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useDrilldown, useOptionalNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
+import { CacheStamp, type CustomQueryEnvelope } from './CacheStamp'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { Button } from './ui/button'
 import {
@@ -1035,6 +1036,12 @@ export function WidgetSlot({
   // Bumped by review_list's onRefetch after a group PATCH settles — included
   // (undebounced) in the render effect's deps to force an immediate refetch.
   const [refetchTick, setRefetchTick] = useState(0)
+  // Set just before a render so that one request skips the cache.
+  const forceRenderRef = useRef(false)
+  const refreshWidget = useCallback(() => {
+    forceRenderRef.current = true
+    setRefetchTick((t) => t + 1)
+  }, [])
   // The host record's id, for scoping the cache subscription below to its
   // own grids (assigned after inputs resolve — the effect reads the ref).
   const hostRecordIdRef = useRef<string | number | null>(null)
@@ -1280,6 +1287,12 @@ export function WidgetSlot({
           draft: itemDraft,
           bindings: inputBindings,
           item_collection: itemCollection
+        }
+        // A viewer asking to refresh must bypass the cached result, not just
+        // re-read it.
+        if (forceRenderRef.current) {
+          ;(body as Record<string, unknown>).refresh = true
+          forceRenderRef.current = false
         }
         // Through the client when there is one so the host's request gate
         // holds a hidden tab's render (the costliest call on a record page).
@@ -1632,6 +1645,14 @@ export function WidgetSlot({
             {JSON.stringify(renderData, null, 2)}
           </pre>
         )}
+        {renderData.cache ? (
+          <CacheStamp
+            envelope={renderData.cache as unknown as CustomQueryEnvelope}
+            onRefresh={refreshWidget}
+            refreshing={renderLoading}
+            className='mt-2 justify-end'
+          />
+        ) : null}
       </>
     )
   }

@@ -118,7 +118,9 @@ async function renderWidget(
   widget: Record<string, unknown>,
   inputs: Record<string, unknown>,
   user: User | undefined,
-  isAdmin: boolean
+  isAdmin: boolean,
+  redis?: FastifyInstance['redis'],
+  refresh = false
 ) {
   const config = (parseJson(widget.config) ?? {}) as Record<string, unknown>
   const type = widget.widget_type as string
@@ -410,13 +412,60 @@ async function renderWidget(
       }
       return `'${String(v).replace(/'/g, "''")}'`
     })
+    // Widgets used to run the query on EVERY render, ignoring the custom
+    // query's own cache_ttl entirely -- a record page re-ran a multi-second
+    // stored procedure each time it opened.
+    //
+    // Same key SCHEME as POST /custom-queries/:slug/execute, but the two do
+    // NOT share entries in practice: that route expands every declared param
+    // (nulls included) while this path carries only the bound ones, so the
+    // same question produces two keys. Verified, not assumed. Each surface
+    // still caches independently, which is the whole win; making them share
+    // would mean running the widget's params through the route's builder,
+    // whose validation this path deliberately does not apply.
+    //
+    // Scope injection is what keeps sharing-by-accident safe regardless: the
+    // route mixes a restricted caller's scope values INTO the params before
+    // keying, so a scoped result can never land under an unscoped key.
+    const cacheKey = `cq:${cq.slug}:${JSON.stringify(params)}`
+    const cacheTtl = Number(cq.cache_ttl ?? 0)
+    let cachedRows: unknown[] | null = null
+    let cacheInfo: Record<string, unknown> | undefined
+    if (cacheTtl > 0 && redis && !refresh) {
+      try {
+        const hit = await redis.get(cacheKey)
+        if (hit) {
+          const parsed = parseJson(hit)
+          // Entries are {cached_at, rows}; a bare array predates that shape.
+          const isLegacy = Array.isArray(parsed)
+          const entry = isLegacy ? null : (parsed as { cached_at?: string; rows?: unknown[] } | null)
+          cachedRows = isLegacy ? (parsed as unknown[]) : (entry?.rows ?? null)
+          const cachedAt = isLegacy ? null : (entry?.cached_at ?? null)
+          if (cachedRows) {
+            const expiresIn = await redis.ttl(cacheKey).catch(() => -1)
+            cacheInfo = {
+              cached: true,
+              cached_at: cachedAt,
+              age_seconds: cachedAt
+                ? Math.max(0, Math.round((Date.now() - Date.parse(cachedAt)) / 1000))
+                : null,
+              expires_in_seconds: expiresIn >= 0 ? expiresIn : null,
+              cache_ttl: cacheTtl
+            }
+          }
+        }
+      } catch {
+        /* a cache read must never fail a render */
+      }
+    }
+
     // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
     const knexClient = (db as any).client
     const Driver = knexClient._driver() as {
       Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
     }
     const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
-    const rows: unknown[] = await new Promise<unknown[]>((resolve, reject) => {
+    const rows: unknown[] = cachedRows ?? await new Promise<unknown[]>((resolve, reject) => {
       let settled = false
       const done = (fn: () => void) => {
         if (!settled) {
@@ -450,6 +499,24 @@ async function renderWidget(
       req.on('error', (e) => done(() => reject(e)))
       conn.execSqlBatch(req)
     }).finally(() => knexClient.releaseConnection(conn))
+    if (!cachedRows) {
+      const cachedAt = new Date().toISOString()
+      if (cacheTtl > 0 && redis) {
+        try {
+          await redis.setex(cacheKey, cacheTtl, JSON.stringify({ cached_at: cachedAt, rows }))
+        } catch {
+          /* a cache write must never fail a render */
+        }
+      }
+      if (cacheTtl > 0)
+        cacheInfo = {
+          cached: false,
+          cached_at: cachedAt,
+          age_seconds: 0,
+          expires_in_seconds: cacheTtl,
+          cache_ttl: cacheTtl
+        }
+    }
     const valueFields = config.value_fields as
       | Array<{ field: string; label?: string; prefix?: string; suffix?: string; format?: string }>
       | undefined
@@ -460,14 +527,14 @@ async function renderWidget(
         label: vf.label ?? vf.field,
         display: { prefix: vf.prefix ?? '', suffix: vf.suffix ?? '', format: vf.format ?? '' }
       }))
-      return { values }
+      return { values, cache: cacheInfo }
     }
     const valueField = config.value_field as string | undefined
     if (valueField) {
       const firstRow = (rows[0] ?? {}) as Record<string, unknown>
-      return { value: firstRow[valueField] ?? null, display: config.display ?? {} }
+      return { value: firstRow[valueField] ?? null, display: config.display ?? {}, cache: cacheInfo }
     }
-    return { rows, display: config.display ?? {} }
+    return { rows, display: config.display ?? {}, cache: cacheInfo }
   }
 
   if (type === 'external-api') {
@@ -755,7 +822,14 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     }
 
     try {
-      const data = await renderWidget(widget, inputs, req.user, req.isAdmin ?? false)
+      const data = await renderWidget(
+        widget,
+        inputs,
+        req.user,
+        req.isAdmin ?? false,
+        app.redis,
+        (req.body as { refresh?: boolean })?.refresh === true
+      )
       return reply.send({ data })
     } catch (err) {
       const code = (err as { statusCode?: number }).statusCode ?? 500
