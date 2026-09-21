@@ -2581,7 +2581,10 @@ async function applyAliasM2MWrites(
  * create payload: returns the id of the row that already holds this natural
  * key, or null when the collection has no keys, the payload does not carry
  * all of them, or no row matches. Null-valued keys never match (a key with no
- * value is not an identity).
+ * value is not an identity) — unless the key is declared OPTIONAL with a
+ * trailing `?` (`"category?"`): an absent or empty optional key matches rows
+ * where that column IS NULL, so one natural key can cover both a plain record
+ * and its optional sub-divisions.
  */
 async function findUpsertTarget(
   collection: string,
@@ -2594,21 +2597,34 @@ async function findUpsertTarget(
   try {
     const parsed = JSON.parse(String(raw))
     keys = Array.isArray(parsed)
-      ? parsed.map(String).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+      ? parsed.map(String).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*\??$/.test(k))
       : []
   } catch {
     return null
   }
   if (keys.length === 0) return null
   const where: Record<string, unknown> = {}
-  for (const k of keys) {
+  const nullKeys: string[] = []
+  let required = 0
+  for (const raw of keys) {
+    const optional = raw.endsWith('?')
+    const k = optional ? raw.slice(0, -1) : raw
     const v = data[k]
-    if (v === undefined || v === null || v === '') return null
+    if (v === undefined || v === null || v === '') {
+      if (!optional) return null
+      nullKeys.push(k)
+      continue
+    }
+    if (!optional) required++
     where[k] =
       typeof v === 'object' && v !== null && 'id' in (v as object) ? (v as { id: unknown }).id : v
   }
+  // Optional keys alone are not an identity.
+  if (required === 0) return null
   try {
-    const row = (await db(collection).where(where).orderBy('id').first('id')) as
+    const q = db(collection).where(where)
+    for (const k of nullKeys) q.whereNull(k)
+    const row = (await q.orderBy('id').first('id')) as
       | { id: string | number }
       | undefined
     return row?.id ?? null

@@ -342,9 +342,10 @@ export async function collectionsRoutes(app: FastifyInstance) {
       svc.clearMetadataCache()
     }
     if ('upsert_keys' in body) {
-      // Column names only — an empty list means "no natural key".
+      // Column names only — an empty list means "no natural key". A trailing
+      // `?` marks an optional key (absent = matches rows where it is NULL).
       const list = Array.isArray(rawUpsertKeys)
-        ? rawUpsertKeys.map(String).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+        ? rawUpsertKeys.map(String).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*\??$/.test(k))
         : []
       patch.upsert_keys = list.length > 0 ? JSON.stringify(list) : null
       svc.clearMetadataCache()
