@@ -121,6 +121,16 @@ export async function restoreTrashRow(user: User, trashId: number): Promise<{ it
     await db(row.collection).insert(insertData)
   }
 
+  // The re-insert is raw, so nothing told the stored rollups a contributor
+  // came back: a restored child row left its parent's total where the delete
+  // had put it. Same recalc the items service runs after a create.
+  try {
+    const { recalcAffectedRollups } = await import('./rollups.js')
+    await recalcAffectedRollups(row.collection, insertData)
+  } catch {
+    /* a rollup miss must never fail a restore — the drift sweep reports it */
+  }
+
   await db('nivaro_trash').where({ id: trashId }).del()
   return { item_id: row.item_id }
 }
