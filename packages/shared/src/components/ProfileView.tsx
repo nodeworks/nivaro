@@ -892,7 +892,7 @@ export function LinkAppCard() {
             onClick={() => save.mutate(o.v)}
             className={
               current === o.v
-                ? 'rounded bg-slate-900 px-3 py-1 text-[12.5px] font-medium text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                ? 'rounded bg-nvr-cyan px-3 py-1 text-[12.5px] font-medium text-white'
                 : 'rounded px-3 py-1 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
             }
           >
