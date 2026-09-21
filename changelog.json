@@ -1,10 +1,57 @@
 {
-  "generated_at": "2026-09-20T23:06:55.305Z",
+  "generated_at": "2026-09-21T00:01:14.129Z",
   "releases": [
+    {
+      "version": "0.1.317",
+      "tag": "v0.1.317",
+      "date": "2026-09-20T20:00:58-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "widgets",
+              "text": "show the cache age on header-strip widgets too",
+              "hash": "5e63acf1"
+            },
+            {
+              "section": "Added",
+              "scope": "widgets",
+              "text": "honour the query's cache, and show the viewer its age",
+              "hash": "936fc759"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "name a row by its display template, not its internal id",
+              "hash": "db2b1d6b"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "db",
+              "text": "index nivaro_workflow_instances on (collection, item)",
+              "hash": "dbd6d0b5"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.316",
       "tag": "v0.1.316",
-      "date": "2026-09-20T19:06:44-04:00",
+      "date": "2026-09-20T19:06:55-04:00",
       "sections": [
         {
           "label": "Added",
