@@ -35,7 +35,7 @@
  * It always ends with a `### DONE` or `### FAILED at <stage>` line, because it
  * is usually run under nohup and a log that simply stops says nothing.
  */
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
@@ -299,13 +299,34 @@ async function main() {
       for (const v of cfg.verify) {
         // A recreating container answers the new version once and then 502s
         // for a minute. Two consecutive good answers, not one.
+        // Probed with curl, not fetch: node's fetch trusts only its bundled
+        // CAs and rejects the corporate-signed staging cert
+        // (UNABLE_TO_VERIFY_LEAF_SIGNATURE) — 50 polls read "not yet" on
+        // 2026-09-21 while curl, which uses the system keychain, answered the
+        // new version every time. A probe failure is printed once per
+        // distinct reason so a broken probe can never pass for a slow deploy.
         let streak = 0
+        let lastErr = ''
         await until(`${v.name} on ${V}`, async () => {
-          const res = await fetch(v.url, { signal: AbortSignal.timeout(10_000) }).catch(() => null)
-          const body = res?.ok ? await res.json().catch(() => null) : null
+          let body = null
+          try {
+            body = JSON.parse(
+              execFileSync('curl', ['-sS', '-m', '10', v.url], {
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'pipe']
+              })
+            )
+          } catch (err) {
+            const msg = String(err?.stderr || err?.message || err).trim().split('\n')[0]
+            if (msg !== lastErr) log(`  probe: ${msg}`)
+            lastErr = msg
+          }
           streak = body?.[v.field ?? 'version'] === V ? streak + 1 : 0
           return streak >= 2
-        }, { tries: 50, every: 15_000 })
+          // The GitLab deploy job npm-installs on the host, prunes, pulls the
+          // image and runs the gate: 13–15 minutes end to end, which outran
+          // the earlier 12.5-minute window. Wait up to 30 minutes.
+        }, { tries: 120, every: 15_000 })
       }
     }
     console.log(`\n### DONE — nivaro ${V}\n`)

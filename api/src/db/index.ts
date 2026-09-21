@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import knex from 'knex'
 import { config } from '../config.js'
+import { recordEffects } from './migration-effects.js'
 import { getTenantDb } from './tenant-context.js'
 
 const cloudMode = !!process.env.CLOUD_META_DB_URL
@@ -21,7 +22,15 @@ export const migrationSource = {
     return file.replace(/\.js$/, '.ts')
   },
   async getMigration(file: string) {
-    return import(join(migrationsDir, file))
+    const mod = await import(join(migrationsDir, file))
+    const name = file.replace(/\.js$/, '.ts')
+    // Record what each run changed — the ledger alone cannot tell a migration
+    // that built things from one whose guards found everything already there.
+    return {
+      ...mod,
+      up: recordEffects(name, 'up', mod.up),
+      down: typeof mod.down === 'function' ? recordEffects(name, 'down', mod.down) : mod.down
+    }
   }
 }
 

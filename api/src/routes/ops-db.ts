@@ -187,6 +187,75 @@ export async function opsDbRoutes(app: FastifyInstance) {
     }
   )
 
+  // #484 — backup tables left behind by repair scripts. They are made by hand
+  // (SELECT … INTO zz_backup_…) right before a destructive fix and nothing
+  // ever lists, ages or removes them. A table only appears here when its NAME
+  // says backup AND nothing depends on it: never a registered collection,
+  // never a system table, never one a foreign key points at.
+  const BACKUP_STALE_DAYS = Math.max(1, Number(process.env.BACKUP_TABLE_STALE_DAYS ?? 30) || 30)
+  const listBackupTables = async () =>
+    (await db.raw(
+      `SELECT t.name,
+              t.create_date,
+              DATEDIFF(day, t.create_date, GETDATE()) AS age_days,
+              (SELECT SUM(p.rows) FROM sys.partitions p
+                WHERE p.object_id = t.object_id AND p.index_id IN (0, 1)) AS row_count,
+              CAST((SELECT SUM(a.total_pages) * 8 / 1024.0
+                      FROM sys.partitions p
+                      JOIN sys.allocation_units a ON a.container_id = p.partition_id
+                     WHERE p.object_id = t.object_id) AS decimal(12, 2)) AS size_mb,
+              (SELECT MAX(v) FROM (VALUES (u.last_user_seek), (u.last_user_scan), (u.last_user_lookup)) AS x(v)) AS last_read,
+              u.last_user_update AS last_write
+         FROM sys.tables t
+         LEFT JOIN (
+           SELECT object_id,
+                  MAX(last_user_seek) AS last_user_seek, MAX(last_user_scan) AS last_user_scan,
+                  MAX(last_user_lookup) AS last_user_lookup, MAX(last_user_update) AS last_user_update
+             FROM sys.dm_db_index_usage_stats WHERE database_id = DB_ID() GROUP BY object_id
+         ) u ON u.object_id = t.object_id
+        WHERE (t.name LIKE 'zz[_]%' OR t.name LIKE '%[_]backup[_]%' OR t.name LIKE '%[_]backup'
+               OR t.name LIKE '%[_]bak' OR t.name LIKE '%[_]bak[_]%')
+          AND t.name NOT LIKE 'nivaro[_]%'
+          AND NOT EXISTS (SELECT 1 FROM nivaro_collections c WHERE c.collection = t.name)
+          AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys f WHERE f.referenced_object_id = t.object_id)
+        ORDER BY t.create_date`
+    )) as Array<Record<string, unknown>>
+
+  app.get('/backup-tables', async (_req, reply) => {
+    const result = await dmv(listBackupTables)
+    if (!('data' in result) || !Array.isArray(result.data)) return reply.send(result)
+    const data = result.data.map((r) => ({
+      ...r,
+      stale: Number(r.age_days ?? 0) >= BACKUP_STALE_DAYS
+    }))
+    return reply.send({
+      data,
+      stale_after_days: BACKUP_STALE_DAYS,
+      total_mb:
+        Math.round(
+          data.reduce((n, r) => n + Number((r as Record<string, unknown>).size_mb ?? 0), 0) * 100
+        ) / 100
+    })
+  })
+
+  app.post<{ Body: { table?: string } }>('/backup-tables/drop', async (req, reply) => {
+    const table = String(req.body?.table ?? '')
+    if (!/^[A-Za-z0-9_]+$/.test(table)) return reply.code(400).send({ error: 'Invalid identifier' })
+    // The listing IS the allow-list: a name that is not in it right now —
+    // because it never matched, or something started depending on it — is refused.
+    const row = (await listBackupTables()).find((r) => String(r.name) === table)
+    if (!row) return reply.code(404).send({ error: 'Not a backup table that can be dropped here' })
+    await db.raw(`DROP TABLE [${table}]`)
+    await logActivity({
+      action: 'backup-table-drop',
+      user: req.user?.id,
+      collection: table,
+      comment: `dropped backup table ${table} (${Number(row.row_count ?? 0).toLocaleString()} rows, ${row.size_mb} MB, ${row.age_days} days old)`,
+      req
+    })
+    return reply.send({ data: { dropped: table } })
+  })
+
   // #289 — sessions holding open transactions while idle.
   app.get('/long-transactions', async (_req, reply) => {
     const result = await dmv(async () => {
@@ -405,11 +474,9 @@ export async function opsDbRoutes(app: FastifyInstance) {
         [manyCollection, manyField]
       )) as Array<{ IS_NULLABLE: string }>
       if (colInfo[0]?.IS_NULLABLE !== 'YES') {
-        return reply
-          .code(400)
-          .send({
-            error: `${manyCollection}.${manyField} is NOT NULL — null-out is impossible; use trash-delete or fix the parent`
-          })
+        return reply.code(400).send({
+          error: `${manyCollection}.${manyField} is NOT NULL — null-out is impossible; use trash-delete or fix the parent`
+        })
       }
       const { selectInChunks } = await import('../services/db-batch.js')
       await selectInChunks(ids, 1000, async (chunk) => {
@@ -497,7 +564,8 @@ export async function opsDbRoutes(app: FastifyInstance) {
       ).redis
       if (!redis) return reply.send({ unavailable: 'Redis is not connected' })
       const info = await redis.info('memory')
-      const pick = (key: string) => info.match(new RegExp(`^${key}:(.+)$`, 'm'))?.[1]?.trim() ?? null
+      const pick = (key: string) =>
+        info.match(new RegExp(`^${key}:(.+)$`, 'm'))?.[1]?.trim() ?? null
       const MAX_KEYS = 20_000
       const groups = new Map<string, { count: number; samples: string[] }>()
       let cursor = '0'
@@ -515,7 +583,13 @@ export async function opsDbRoutes(app: FastifyInstance) {
           groups.set(prefix, g)
         }
       } while (cursor !== '0' && scanned < MAX_KEYS)
-      const rows: Array<{ prefix: string; keys: number; sampled: number; avg_bytes: number; est_bytes: number }> = []
+      const rows: Array<{
+        prefix: string
+        keys: number
+        sampled: number
+        avg_bytes: number
+        est_bytes: number
+      }> = []
       for (const [prefix, g] of groups) {
         let total = 0
         let n = 0
@@ -531,7 +605,13 @@ export async function opsDbRoutes(app: FastifyInstance) {
           }
         }
         const avg = n ? total / n : 0
-        rows.push({ prefix, keys: g.count, sampled: n, avg_bytes: Math.round(avg), est_bytes: Math.round(avg * g.count) })
+        rows.push({
+          prefix,
+          keys: g.count,
+          sampled: n,
+          avg_bytes: Math.round(avg),
+          est_bytes: Math.round(avg * g.count)
+        })
       }
       rows.sort((a, b) => b.est_bytes - a.est_bytes)
       return reply.send({

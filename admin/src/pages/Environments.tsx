@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AppWindow,
   Boxes,
@@ -448,6 +448,8 @@ function EnvironmentDetail({
         )}
       </div>
 
+      <SharedCodeStrip components={env.components} />
+
       {env.components.map((c) => (
         <ComponentCard key={c.id} component={c} onChanged={onChanged} />
       ))}
@@ -470,6 +472,63 @@ function EnvironmentDetail({
   )
 }
 
+// ─── Shared code check ───────────────────────────────────────────────────────
+// Admin and the headless frontends render the same @nivaro/react components
+// but deploy on separate schedules. Reads each component's status through the
+// SAME query keys the cards use (react-query dedupes), so this costs nothing
+// extra; a tier whose API build and frontends disagree on the shared version
+// is flagged — that mismatch is the usual cause of "it works in admin but not
+// in the portal".
+function SharedCodeStrip({ components }: { components: Component[] }) {
+  const probed = components.filter((c) => !!c.base_url && c.kind !== 'service')
+  const results = useQueries({
+    queries: probed.map((c) => ({
+      queryKey: ['environment-comp-status', c.id],
+      queryFn: () =>
+        api
+          .get<{ data: CompStatus }>(`/environments/components/${c.id}/status`)
+          .then((r) => r.data.data),
+      staleTime: 30_000,
+      retry: false
+    }))
+  })
+  const known = probed
+    .map((c, i) => ({ c, react: results[i]?.data?.react }))
+    .filter((x): x is { c: Component; react: string } => typeof x.react === 'string')
+  if (known.length < 2) return null
+  const versions = new Set(known.map((k) => k.react))
+  const diverged = versions.size > 1
+  return (
+    <div
+      data-shared-code={diverged ? 'diverged' : 'aligned'}
+      className={cn(
+        'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-[12px]',
+        diverged
+          ? 'border-amber-300 bg-[#fffbeb] text-amber-800 dark:border-amber-700 dark:bg-[#3a2e12] dark:text-amber-200'
+          : 'border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-card dark:text-muted-foreground'
+      )}
+    >
+      <span className='font-medium'>
+        {diverged ? 'Shared code diverged' : 'Shared code aligned'}
+      </span>
+      {known.map((k) => (
+        <span key={k.c.id} className='inline-flex items-center gap-1'>
+          <span className='text-slate-400 dark:text-muted-foreground'>
+            {k.c.kind === 'api' ? `${k.c.name} (admin)` : k.c.name}
+          </span>
+          <code className='font-mono text-[11.5px]'>@nivaro/react {k.react}</code>
+        </span>
+      ))}
+      {diverged && (
+        <span className='basis-full text-[11.5px]'>
+          A record form can behave differently in admin and the portal until the frontend's
+          @nivaro/react pin is bumped and redeployed.
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ─── Component card ──────────────────────────────────────────────────────────
 
 interface CompStatus {
@@ -477,6 +536,8 @@ interface CompStatus {
   kind?: string
   reason?: string
   version?: string
+  /** @nivaro/react version: the admin build's (api) or the frontend's installed pin. */
+  react?: string
   environment?: string
   instance?: string
   health?: {
@@ -561,9 +622,10 @@ function ComponentCard({ component, onChanged }: { component: Component; onChang
       </div>
 
       {component.kind === 'api' && status?.reachable && (
-        <div className='gap-px grid grid-cols-2 border-b border-slate-100 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-5'>
+        <div className='gap-px grid grid-cols-2 border-b border-slate-100 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-6'>
           <Stat label='Version' value={status.version ?? '—'} mono />
           <Stat label='Instance key' value={status.instance ?? '—'} mono />
+          <Stat label='Shared code' value={status.react ? `react ${status.react}` : '—'} mono />
           <Stat label='Database' value={status.health?.db?.database ?? '—'} mono />
           <Stat
             label='DB / Redis'

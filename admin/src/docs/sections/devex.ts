@@ -1471,6 +1471,30 @@ export const devexDevTooling: DocSection = {
     {
       type: 'p',
       text: 'When the API is redeployed under an open tab, the update banner offers "What changed since <version>" — a link to the Changelog page scoped to the releases between the version the tab loaded against and the one now being served (`/changelog?since=&to=`). The page leads with that window and marks each release in it "New since you loaded". The notes come from `changelog.json`, generated from the release tags at build time.'
+    },
+    {
+      type: 'h2',
+      id: 'dev-tooling-shared-code',
+      text: 'Is the frontend on the same shared code as admin?'
+    },
+    {
+      type: 'p',
+      text: 'Admin and a headless frontend render the same `@nivaro/react` components but deploy on separate schedules, so a form that behaves differently in the two apps is usually two different shared-code versions. `GET /api/version` reports `react` — the `@nivaro/react` version the admin build carries — and a frontend built with the `nivaro_react` stamp in its `version.json` reports its installed pin. The Environments page compares every probed component of a tier and shows **Shared code aligned** or an amber **Shared code diverged** strip naming each version; the API card also carries a Shared code stat.'
+    },
+    {
+      type: 'pre',
+      code: `// vite.config.ts — stamp the pin into version.json
+this.emitFile({ type: 'asset', fileName: 'version.json',
+  source: JSON.stringify({ version: APP_VERSION, nivaro_react: installedReactVersion() }) })`
+    },
+    {
+      type: 'h2',
+      id: 'dev-tooling-dev-launcher',
+      text: 'pnpm dev attaches to what is already running'
+    },
+    {
+      type: 'p',
+      text: '`pnpm dev` runs `scripts/dev-preflight.mjs`: it asks each port first (Redis 6379, Inngest 8288, API 3055, admin 3056) and starts only the pieces nothing is listening on, naming what it attached to. It never stops a process it did not start — a hand-started API keeps serving, and edits still reload through its own watch. Orphaned watchers (`vite build --watch`, `tsc --watch`, `tsx watch` whose parent shell is gone) are reported with their pid because they rewrite `dist` from an old checkout; stopping one is your call. `pnpm dev:check` reports without launching; `pnpm dev:all` is the old unconditional launcher; `DEV_PREFLIGHT=off pnpm dev` skips the port check.'
     }
   ]
 }

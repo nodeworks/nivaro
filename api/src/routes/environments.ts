@@ -556,6 +556,10 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
         if (res.body && typeof res.body === 'object') {
           const v = (res.body as { version?: unknown }).version
           if (typeof v === 'string') out.version = v
+          // A frontend built on @nivaro/react stamps its installed pin so the
+          // Environments page can hold it against the API's admin build.
+          const r = (res.body as { nivaro_react?: unknown }).nivaro_react
+          if (typeof r === 'string') out.react = r
         }
         return { data: out }
       }

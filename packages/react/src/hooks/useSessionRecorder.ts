@@ -51,6 +51,17 @@ export interface ErrorReplayLink {
 const FLUSH_MS = 10_000
 const FLUSH_COUNT = 150
 /**
+ * Upload backpressure. Recording shares the page's six connections per
+ * origin: a multi-megabyte snapshot POST fired while a record page loads sits
+ * in the same queue as the reads that paint it. So uploads are single-flight
+ * and sequential, wait for a QUIET window (page loaded, no route change for
+ * QUIET_MS) and ride requestIdleCallback when the browser has one. The
+ * buffer never grows without bound: past HARD_FLUSH_COUNT events it uploads
+ * regardless, and hide / unmount / error capture always force a flush.
+ */
+const QUIET_MS = 3_000
+const HARD_FLUSH_COUNT = 600
+/**
  * Raw JSON bytes per upload. The server takes 8MB per chunk; a full snapshot
  * of a heavy page can be several MB on its own, so the buffer is cut by SIZE,
  * not count, and an oversized single event travels alone.
@@ -155,7 +166,8 @@ async function loadRrweb(): Promise<typeof import('rrweb')['record'] | null> {
 // user's console beside the replay. Capped so an error flood can't bloat the
 // recording; console.log deliberately excluded. Returns an undo function.
 function instrumentReplayContext(
-  addCustomEvent: (tag: string, payload: unknown) => void
+  addCustomEvent: (tag: string, payload: unknown) => void,
+  onRoute?: () => void
 ): () => void {
   let captured = 0
   const MAX_EVENTS = 500
@@ -190,6 +202,7 @@ function instrumentReplayContext(
     }
   }
   const routeEvent = () => {
+    onRoute?.()
     try {
       addCustomEvent('route', { path: window.location.pathname + window.location.search })
     } catch {
@@ -234,6 +247,9 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     startedAt: number
     prevWindow: unknown[]
     lastClip: { at: number; link: ErrorReplayLink | null } | null
+    lastNavAt: number
+    inFlight: Promise<void> | null
+    flushAfter: boolean
   }>({
     recordingId: null,
     buffer: [],
@@ -243,7 +259,10 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     dead: false,
     startedAt: 0,
     prevWindow: [],
-    lastClip: null
+    lastClip: null,
+    lastNavAt: 0,
+    inFlight: null,
+    flushAfter: false
   })
 
   useEffect(() => {
@@ -252,15 +271,53 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     const state = stateRef.current
     state.dead = false
 
-    async function flush() {
-      if (!client || state.dead || !state.recordingId || state.buffer.length === 0) return
+    const quiet = () =>
+      document.readyState === 'complete' && Date.now() - state.lastNavAt >= QUIET_MS
+
+    /**
+     * Single-flight: one upload at a time, chunks in seq order. A forced
+     * flush that lands mid-upload runs again once that upload settles; an
+     * unforced one just waits for the next tick.
+     */
+    function flush(force = false): Promise<void> {
+      if (state.inFlight) {
+        if (force) state.flushAfter = true
+        return state.inFlight
+      }
+      if (!client || state.dead || !state.recordingId || state.buffer.length === 0) {
+        return Promise.resolve()
+      }
+      if (!force && !quiet() && state.buffer.length < HARD_FLUSH_COUNT) return Promise.resolve()
       const events = state.buffer
       state.buffer = []
-      const outcome = await postEventChunks(client, state.recordingId, () => state.seq++, events)
-      if (outcome === 'closed') {
-        state.dead = true
-        state.stop?.()
-      }
+      const id = state.recordingId
+      state.inFlight = postEventChunks(client, id, () => state.seq++, events)
+        .then((outcome) => {
+          if (outcome === 'closed') {
+            state.dead = true
+            state.stop?.()
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          state.inFlight = null
+          if (state.flushAfter) {
+            state.flushAfter = false
+            void flush(true)
+          }
+        })
+      return state.inFlight
+    }
+
+    /** Timer / count-triggered flush: yield to page work first. */
+    function scheduleFlush() {
+      const ric = (
+        window as unknown as {
+          requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void
+        }
+      ).requestIdleCallback
+      if (ric) ric(() => void flush(), { timeout: FLUSH_MS })
+      else void flush()
     }
 
     async function startFull() {
@@ -270,28 +327,33 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       if (cancelled) return
       state.recordingId = started.data.id
       state.startedAt = Date.now()
+      state.lastNavAt = Date.now()
       state.stop =
         record({
           emit(event: unknown) {
             state.buffer.push(event)
-            if (state.buffer.length >= FLUSH_COUNT) void flush()
+            if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()
           },
           maskAllInputs: true,
           blockClass: 'nvr-no-record',
           checkoutEveryNms: 60_000
         }) ?? null
-      state.uninstrument = instrumentReplayContext((tag, payload) =>
-        (record as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(
-          tag,
-          payload
-        )
+      state.uninstrument = instrumentReplayContext(
+        (tag, payload) =>
+          (record as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(
+            tag,
+            payload
+          ),
+        () => {
+          state.lastNavAt = Date.now()
+        }
       )
       // A live full recording answers an error capture with itself + the
       // error's offset, after pushing whatever is still buffered.
       captureFn = async () => {
         if (!state.recordingId) return null
         const offset = Date.now() - state.startedAt
-        await flush().catch(() => {})
+        await flush(true).catch(() => {})
         return { recording_id: state.recordingId, offset_ms: offset }
       }
     }
@@ -360,8 +422,10 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     }
 
     void start()
-    const timer = setInterval(() => void flush(), FLUSH_MS)
-    const onHide = () => void flush()
+    const timer = setInterval(scheduleFlush, FLUSH_MS)
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') void flush(true)
+    }
     document.addEventListener('visibilitychange', onHide)
 
     return () => {
@@ -374,7 +438,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       state.stop?.()
       state.stop = null
       state.prevWindow = []
-      void flush().then(() => {
+      void flush(true).then(() => {
         if (client && state.recordingId) {
           void client.request(endSessionRecording(state.recordingId)).catch(() => {})
           state.recordingId = null

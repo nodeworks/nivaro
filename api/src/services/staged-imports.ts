@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
+import { runLongSql as runLong } from './run-long.js'
 import { parseServiceConfig, runServiceImport } from './staged-import-service.js'
 import { parseStagingColumns, resolveHeaderMap } from './staged-import-validation.js'
 
@@ -317,36 +318,7 @@ const STATEMENT_TIMEOUT_MS = Math.max(
 )
 
 async function runLongSql(sql: string): Promise<void> {
-  // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
-  const knexClient = (db as any).client
-  const Driver = knexClient._driver() as {
-    Request: new (sql: string, cb: (err: Error | null) => void) => unknown
-  }
-  const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
-  try {
-    await new Promise<void>((resolve, reject) => {
-      let settled = false
-      const done = (fn: () => void) => {
-        if (!settled) {
-          settled = true
-          fn()
-        }
-      }
-      const req = new Driver.Request(sql, (err: Error | null) => {
-        if (err) done(() => reject(err))
-      }) as {
-        on(ev: 'error', h: (e: Error) => void): unknown
-        once(ev: 'requestCompleted', h: () => void): unknown
-        setTimeout?: (ms: number) => void
-      }
-      req.setTimeout?.(STATEMENT_TIMEOUT_MS)
-      req.once('requestCompleted', () => done(() => resolve()))
-      req.on('error', (e) => done(() => reject(e)))
-      conn.execSqlBatch(req)
-    })
-  } finally {
-    await knexClient.releaseConnection(conn)
-  }
+  await runLong(sql, { timeoutMs: STATEMENT_TIMEOUT_MS })
 }
 
 interface TargetColumn {

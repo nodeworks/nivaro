@@ -46,3 +46,37 @@ function resolveVersion(): string {
 }
 
 export const NIVARO_VERSION = resolveVersion()
+
+/**
+ * The @nivaro/react version this build's admin SPA was compiled against.
+ *
+ * Admin and every headless frontend (efp-new) render the SAME shared
+ * components, but ship on separate schedules: admin rebuilds with every
+ * release, a frontend only when its `@nivaro/react` pin is bumped and
+ * redeployed. A record form that behaves differently in the two apps is,
+ * more often than not, the two apps running different shared code. The
+ * workspace manifest is copied into the release image beside the API, and
+ * admin is built from that same workspace, so its version IS the admin's
+ * shared-code version. `/api/version` reports it as `react`; a frontend's
+ * version.json reports its installed pin as `nivaro_react`; the Environments
+ * page compares the two.
+ */
+function resolveReactVersion(): string | null {
+  let dir = dirname(fileURLToPath(import.meta.url))
+  for (let i = 0; i < 5; i++) {
+    try {
+      const pkg = JSON.parse(
+        readFileSync(join(dir, 'packages', 'react', 'package.json'), 'utf8')
+      ) as { version?: string }
+      if (pkg.version) return pkg.version
+    } catch {
+      /* keep walking */
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+export const NIVARO_REACT_VERSION = resolveReactVersion()

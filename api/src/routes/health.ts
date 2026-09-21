@@ -6,7 +6,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { instanceKey } from '../services/settings-overrides.js'
-import { NIVARO_VERSION } from '../version.js'
+import { NIVARO_REACT_VERSION, NIVARO_VERSION } from '../version.js'
 
 let changelogCache: { generated_at?: string | null; releases: unknown[] } | null = null
 
@@ -23,6 +23,9 @@ export async function healthRoutes(app: FastifyInstance) {
   app.get('/version', async (_req, reply) => {
     return reply.send({
       version: NIVARO_VERSION,
+      // The shared-code (@nivaro/react) version the admin SPA carries — a
+      // headless frontend's version.json reports its own as `nivaro_react`.
+      react: NIVARO_REACT_VERSION,
       environment: config.NODE_ENV,
       instance: instanceKey(),
       cloud: !!process.env.CLOUD_META_DB_URL

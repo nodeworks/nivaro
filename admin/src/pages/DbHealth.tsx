@@ -62,13 +62,7 @@ function Unavailable({ reason }: { reason: string }) {
   return <p className='text-[12px] text-amber-600 dark:text-amber-400'>{reason}</p>
 }
 
-function MiniTable({
-  head,
-  rows
-}: {
-  head: string[]
-  rows: Array<Array<React.ReactNode>>
-}) {
+function MiniTable({ head, rows }: { head: string[]; rows: Array<Array<React.ReactNode>> }) {
   if (rows.length === 0) return <p className='text-[12px] text-slate-400'>Nothing to report.</p>
   return (
     <div className='overflow-x-auto'>
@@ -89,7 +83,10 @@ function MiniTable({
           {rows.map((r, i) => (
             <tr key={i} className='border-t border-slate-100 dark:border-border/60'>
               {r.map((c, j) => (
-                <td key={j} className='py-1.5 pr-4 align-top text-[12px] text-slate-600 dark:text-slate-300'>
+                <td
+                  key={j}
+                  className='py-1.5 pr-4 align-top text-[12px] text-slate-600 dark:text-slate-300'
+                >
                   {c}
                 </td>
               ))}
@@ -151,7 +148,9 @@ function parsePlan(xml: string): {
                   .replace(/[[\]]/g, '')
               : null
             const warns = [...child.querySelectorAll(':scope > Warnings > *')].map(
-              (w) => w.tagName + (w.getAttribute('ConvertIssue') ? `: ${w.getAttribute('ConvertIssue')}` : '')
+              (w) =>
+                w.tagName +
+                (w.getAttribute('ConvertIssue') ? `: ${w.getAttribute('ConvertIssue')}` : '')
             )
             ops.push({
               depth,
@@ -182,7 +181,8 @@ function parsePlan(xml: string): {
         return `${table} (${[eq, ineq].filter(Boolean).join(', ')})${incl ? ` INCLUDE (${incl})` : ''}`
       })
       const stWarnings = [...st.querySelectorAll(':scope > QueryPlan > Warnings > *')].map(
-        (w) => w.tagName + (w.getAttribute('ConvertIssue') ? ` (${w.getAttribute('ConvertIssue')})` : '')
+        (w) =>
+          w.tagName + (w.getAttribute('ConvertIssue') ? ` (${w.getAttribute('ConvertIssue')})` : '')
       )
       statements.push({
         text: st.getAttribute('StatementText') ?? '',
@@ -248,7 +248,10 @@ function PlanViewer({ xml }: { xml: string }) {
               </div>
             )}
             <div className='overflow-x-auto rounded-md border border-slate-200 dark:border-border'>
-              <table className='w-full text-[11.5px]' style={{ fontVariantNumeric: 'tabular-nums' }}>
+              <table
+                className='w-full text-[11.5px]'
+                style={{ fontVariantNumeric: 'tabular-nums' }}
+              >
                 <thead>
                   <tr className='border-b border-slate-100 text-left text-[10px] uppercase tracking-wide text-slate-400 dark:border-border'>
                     <th className='px-3 py-1.5 font-semibold'>Operator</th>
@@ -266,9 +269,20 @@ function PlanViewer({ xml }: { xml: string }) {
                       // biome-ignore lint/suspicious/noArrayIndexKey: positional tree rows
                       <tr key={oi}>
                         <td className='px-3 py-1.5'>
-                          <span style={{ paddingLeft: op.depth * 14 }} className='inline-flex items-center gap-1.5'>
-                            {op.depth > 0 && <span className='text-slate-300 dark:text-slate-600'>└</span>}
-                            <span className={scan ? 'font-medium text-amber-700 dark:text-amber-400' : 'font-medium'}>
+                          <span
+                            style={{ paddingLeft: op.depth * 14 }}
+                            className='inline-flex items-center gap-1.5'
+                          >
+                            {op.depth > 0 && (
+                              <span className='text-slate-300 dark:text-slate-600'>└</span>
+                            )}
+                            <span
+                              className={
+                                scan
+                                  ? 'font-medium text-amber-700 dark:text-amber-400'
+                                  : 'font-medium'
+                              }
+                            >
                               {op.physical}
                             </span>
                             {op.logical && op.logical !== op.physical && (
@@ -281,20 +295,33 @@ function PlanViewer({ xml }: { xml: string }) {
                             )}
                           </span>
                         </td>
-                        <td className='max-w-[260px] truncate px-3 py-1.5 font-mono text-[10.5px] text-slate-500 dark:text-slate-400' title={op.object ?? ''}>
+                        <td
+                          className='max-w-[260px] truncate px-3 py-1.5 font-mono text-[10.5px] text-slate-500 dark:text-slate-400'
+                          title={op.object ?? ''}
+                        >
                           {op.object ?? ''}
                         </td>
-                        <td className='px-3 py-1.5 text-right'>{formatNumber(Math.round(op.rows))}</td>
+                        <td className='px-3 py-1.5 text-right'>
+                          {formatNumber(Math.round(op.rows))}
+                        </td>
                         <td className='px-3 py-1.5 text-right'>{op.cost.toFixed(4)}</td>
                         <td className='px-3 py-1.5'>
                           <div className='flex items-center gap-1.5'>
                             <div className='h-1.5 w-full max-w-[70px] overflow-hidden rounded-full bg-slate-100 dark:bg-muted'>
                               <div
-                                className={pct > 50 ? 'h-full bg-red-400' : pct > 20 ? 'h-full bg-amber-400' : 'h-full bg-nvr-cyan'}
+                                className={
+                                  pct > 50
+                                    ? 'h-full bg-red-400'
+                                    : pct > 20
+                                      ? 'h-full bg-amber-400'
+                                      : 'h-full bg-nvr-cyan'
+                                }
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
-                            <span className='w-9 text-right text-[10.5px] text-slate-400'>{pct.toFixed(0)}%</span>
+                            <span className='w-9 text-right text-[10.5px] text-slate-400'>
+                              {pct.toFixed(0)}%
+                            </span>
                           </div>
                         </td>
                       </tr>
@@ -317,7 +344,6 @@ function PlanViewer({ xml }: { xml: string }) {
   )
 }
 
-
 /** #91 — memory by key prefix: a bounded SCAN + sampled MEMORY USAGE,
  *  extrapolated per prefix. Loaded on demand — it walks the keyspace. */
 function RedisMemoryByPrefix() {
@@ -333,7 +359,13 @@ function RedisMemoryByPrefix() {
             mem_fragmentation_ratio: string | null
             scanned: number
             truncated: boolean
-            prefixes: Array<{ prefix: string; keys: number; sampled: number; avg_bytes: number; est_bytes: number }>
+            prefixes: Array<{
+              prefix: string
+              keys: number
+              sampled: number
+              avg_bytes: number
+              est_bytes: number
+            }>
           }
           unavailable?: string
         }>('/ops-db/redis/memory')
@@ -341,7 +373,12 @@ function RedisMemoryByPrefix() {
     enabled: armed,
     staleTime: 60_000
   })
-  const fmtBytes = (n: number) => (n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`)
+  const fmtBytes = (n: number) =>
+    n >= 1_048_576
+      ? `${(n / 1_048_576).toFixed(1)} MB`
+      : n >= 1024
+        ? `${(n / 1024).toFixed(1)} KB`
+        : `${n} B`
   return (
     <div className='mt-3 border-t border-slate-100 pt-3 dark:border-border' data-redis-memory>
       {!armed ? (
@@ -357,7 +394,10 @@ function RedisMemoryByPrefix() {
       ) : q.data?.data ? (
         <div className='space-y-1.5 text-[12px]'>
           <p className='text-slate-500 dark:text-muted-foreground'>
-            {q.data.data.scanned.toLocaleString()} keys scanned{q.data.data.truncated ? ' (capped — estimates cover the sample)' : ''} · peak {q.data.data.used_memory_peak_human ?? '—'} · fragmentation {q.data.data.mem_fragmentation_ratio ?? '—'}
+            {q.data.data.scanned.toLocaleString()} keys scanned
+            {q.data.data.truncated ? ' (capped — estimates cover the sample)' : ''} · peak{' '}
+            {q.data.data.used_memory_peak_human ?? '—'} · fragmentation{' '}
+            {q.data.data.mem_fragmentation_ratio ?? '—'}
           </p>
           <table className='w-full text-[11.5px] tabular-nums'>
             <thead>
@@ -370,11 +410,19 @@ function RedisMemoryByPrefix() {
             </thead>
             <tbody>
               {q.data.data.prefixes.map((p) => (
-                <tr key={p.prefix} className='border-t border-slate-100 dark:border-border/60' data-redis-prefix={p.prefix}>
+                <tr
+                  key={p.prefix}
+                  className='border-t border-slate-100 dark:border-border/60'
+                  data-redis-prefix={p.prefix}
+                >
                   <td className='py-0.5 pr-2 font-mono'>{p.prefix}</td>
                   <td className='py-0.5 pr-2 text-right'>{p.keys.toLocaleString()}</td>
-                  <td className='py-0.5 pr-2 text-right text-slate-500'>{p.sampled ? fmtBytes(p.avg_bytes) : '—'}</td>
-                  <td className='py-0.5 text-right font-medium'>{p.sampled ? fmtBytes(p.est_bytes) : '—'}</td>
+                  <td className='py-0.5 pr-2 text-right text-slate-500'>
+                    {p.sampled ? fmtBytes(p.avg_bytes) : '—'}
+                  </td>
+                  <td className='py-0.5 text-right font-medium'>
+                    {p.sampled ? fmtBytes(p.est_bytes) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -392,24 +440,38 @@ export function DbHealthPage() {
   const runtime = useOps<Record<string, unknown>>('/ops-runtime/runtime')
   const roster = useOps<Array<Record<string, unknown>>>('/ops-runtime/roster')
   const caches = useOps<Array<{ name: string; description: string }>>('/ops-runtime/caches')
-  const degradation = useOps<Array<{ subsystem: string; status: string; impact_when_down: string }>>(
-    '/ops-runtime/degradation'
-  )
+  const degradation = useOps<
+    Array<{ subsystem: string; status: string; impact_when_down: string }>
+  >('/ops-runtime/degradation')
   const expensive = useOps<Array<Record<string, unknown>>>('/ops-db/expensive-sql')
   const unusedIdx = useOps<Array<Record<string, unknown>>>('/ops-db/unused-indexes')
   const longTran = useOps<Array<Record<string, unknown>>>('/ops-db/long-transactions')
+  const backups = useOps<Array<Record<string, unknown>>>('/ops-db/backup-tables')
   const tableHeat = useOps<Array<Record<string, unknown>>>('/ops-db/table-heat')
   const deadlocks = useOps<Array<Record<string, unknown>>>('/ops-db/deadlocks')
   const redis = useOps<Record<string, unknown>>('/ops-db/redis')
-  const poolDetail = useOps<{ used: number; max: number; held: Array<{ held_ms: number; hint: string | null }> }>('/ops-db/pool')
-  const velocity = useOps<Array<{ collection: string; action: string; day: string; n: number }>>('/ops-db/velocity')
-  const heat = useOps<Array<{ hour: number; path: string; avg_ms: number; n: number }>>('/ops-db/latency-heat')
+  const poolDetail = useOps<{
+    used: number
+    max: number
+    held: Array<{ held_ms: number; hint: string | null }>
+  }>('/ops-db/pool')
+  const velocity =
+    useOps<Array<{ collection: string; action: string; day: string; n: number }>>(
+      '/ops-db/velocity'
+    )
+  const heat =
+    useOps<Array<{ hour: number; path: string; avg_ms: number; n: number }>>('/ops-db/latency-heat')
   const inngest = useOps<{ base: string; recent_events: unknown[] }>('/ops-db/inngest')
   const danglingFks = useOps<{
     checked_relations: number
     dangling_relations: number
     total_dangling_rows: number
-    relations: Array<{ many_collection: string; many_field: string; one_collection: string; dangling: number }>
+    relations: Array<{
+      many_collection: string
+      many_field: string
+      one_collection: string
+      dangling: number
+    }>
   }>('/ops-db/dangling-fks')
   const storage = useOps<{
     current: Maybe<Record<string, unknown>>
@@ -419,7 +481,8 @@ export function DbHealthPage() {
 
   const bust = useMutation({
     mutationFn: (name: string) => api.post(`/ops-runtime/caches/${name}/bust`),
-    onSuccess: (_r, name) => toast.success(name === '__all__' ? 'All caches busted' : `Busted ${name}`),
+    onSuccess: (_r, name) =>
+      toast.success(name === '__all__' ? 'All caches busted' : `Busted ${name}`),
     onError: () => toast.error('Bust failed')
   })
   const dropIdx = useMutation({
@@ -433,10 +496,23 @@ export function DbHealthPage() {
         (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Drop failed'
       )
   })
+  const dropBackup = useMutation({
+    mutationFn: (table: string) => api.post('/ops-db/backup-tables/drop', { table }),
+    onSuccess: (_r, table) => {
+      toast.success(`Dropped ${table}`)
+      void qc.invalidateQueries({ queryKey: ['ops', '/ops-db/backup-tables'] })
+    },
+    onError: (e) =>
+      toast.error(
+        (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Drop failed'
+      )
+  })
   const [planXml, setPlanXml] = useState<string | null>(null)
   const explain = useMutation({
     mutationFn: (sql: string) =>
-      api.post<{ data: { plan: string | null } }>('/ops-db/explain', { sql }).then((r) => r.data.data),
+      api
+        .post<{ data: { plan: string | null } }>('/ops-db/explain', { sql })
+        .then((r) => r.data.data),
     onSuccess: (d) => {
       if (!d.plan) {
         toast.info('No plan returned for this statement')
@@ -445,20 +521,32 @@ export function DbHealthPage() {
       setPlanXml(d.plan)
     },
     onError: (e) =>
-      toast.error((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Explain failed')
+      toast.error(
+        (e as { response?: { data?: { error?: string } } }).response?.data?.error ??
+          'Explain failed'
+      )
   })
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null)
   const [fkFixing, setFkFixing] = useState<string | null>(null)
   const fkRepair = useMutation({
-    mutationFn: (v: { many_collection: string; many_field: string; one_collection: string; action: 'null_out' | 'trash_delete' }) =>
-      api.post<{ data: { repaired: number } }>('/ops-db/dangling-fks/repair', v).then((r) => r.data.data),
+    mutationFn: (v: {
+      many_collection: string
+      many_field: string
+      one_collection: string
+      action: 'null_out' | 'trash_delete'
+    }) =>
+      api
+        .post<{ data: { repaired: number } }>('/ops-db/dangling-fks/repair', v)
+        .then((r) => r.data.data),
     onSuccess: (d) => {
       toast.success(`Repaired ${d.repaired} row(s)`)
       setFkFixing(null)
       void qc.invalidateQueries({ queryKey: ['ops', '/ops-db/dangling-fks'] })
     },
     onError: (e) =>
-      toast.error((e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Repair failed')
+      toast.error(
+        (e as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Repair failed'
+      )
   })
   const [killTarget, setKillTarget] = useState<number | null>(null)
   const [killReason, setKillReason] = useState('')
@@ -514,11 +602,39 @@ export function DbHealthPage() {
           <Panel title='This process' sub='Memory, event-loop lag, connection pool (#234 · #114)'>
             {rt ? (
               <div className='grid grid-cols-2 gap-x-6 gap-y-2 text-[12.5px] sm:grid-cols-3'>
-                <div><span className='text-slate-400'>Uptime</span><br /><b>{Math.floor(rt.uptime_seconds / 3600)}h {Math.floor((rt.uptime_seconds % 3600) / 60)}m</b></div>
-                <div><span className='text-slate-400'>RSS</span><br /><b>{rt.rss_mb} MB</b></div>
-                <div><span className='text-slate-400'>Heap used</span><br /><b>{rt.heap_used_mb} MB</b></div>
-                <div><span className='text-slate-400'>Loop lag (1m max)</span><br /><b className={rt.event_loop_lag_ms.max_1m > 300 ? 'text-red-600' : ''}>{rt.event_loop_lag_ms.max_1m} ms</b></div>
-                <div><span className='text-slate-400'>Pool</span><br /><b className={rt.pool.pending_acquires > 0 ? 'text-amber-600' : ''}>{rt.pool.used}/{rt.pool.max} used{rt.pool.pending_acquires > 0 ? ` · ${rt.pool.pending_acquires} waiting` : ''}</b></div>
+                <div>
+                  <span className='text-slate-400'>Uptime</span>
+                  <br />
+                  <b>
+                    {Math.floor(rt.uptime_seconds / 3600)}h{' '}
+                    {Math.floor((rt.uptime_seconds % 3600) / 60)}m
+                  </b>
+                </div>
+                <div>
+                  <span className='text-slate-400'>RSS</span>
+                  <br />
+                  <b>{rt.rss_mb} MB</b>
+                </div>
+                <div>
+                  <span className='text-slate-400'>Heap used</span>
+                  <br />
+                  <b>{rt.heap_used_mb} MB</b>
+                </div>
+                <div>
+                  <span className='text-slate-400'>Loop lag (1m max)</span>
+                  <br />
+                  <b className={rt.event_loop_lag_ms.max_1m > 300 ? 'text-red-600' : ''}>
+                    {rt.event_loop_lag_ms.max_1m} ms
+                  </b>
+                </div>
+                <div>
+                  <span className='text-slate-400'>Pool</span>
+                  <br />
+                  <b className={rt.pool.pending_acquires > 0 ? 'text-amber-600' : ''}>
+                    {rt.pool.used}/{rt.pool.max} used
+                    {rt.pool.pending_acquires > 0 ? ` · ${rt.pool.pending_acquires} waiting` : ''}
+                  </b>
+                </div>
               </div>
             ) : (
               <Skeleton className='h-10 w-full' />
@@ -555,7 +671,9 @@ export function DbHealthPage() {
               {(caches.data?.data ?? []).map((c) => (
                 <div key={c.name} className='flex items-center gap-2'>
                   <div className='min-w-0 flex-1'>
-                    <code className='font-mono text-[11.5px] text-slate-700 dark:text-slate-200'>{c.name}</code>
+                    <code className='font-mono text-[11.5px] text-slate-700 dark:text-slate-200'>
+                      {c.name}
+                    </code>
                     <p className='truncate text-[11px] text-slate-400'>{c.description}</p>
                   </div>
                   <button
@@ -587,8 +705,12 @@ export function DbHealthPage() {
                     title={d.status}
                   />
                   <div>
-                    <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>{d.subsystem}</p>
-                    <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>{d.impact_when_down}</p>
+                    <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
+                      {d.subsystem}
+                    </p>
+                    <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                      {d.impact_when_down}
+                    </p>
                   </div>
                 </div>
               ))}
@@ -597,7 +719,10 @@ export function DbHealthPage() {
         </div>
 
         <div className='mt-5 space-y-5'>
-          <Panel title='Top expensive SQL' sub='Highest total CPU since the plan cache last cleared — includes legacy Directus load (#106)'>
+          <Panel
+            title='Top expensive SQL'
+            sub='Highest total CPU since the plan cache last cleared — includes legacy Directus load (#106)'
+          >
             {expensive.data?.unavailable ? (
               <Unavailable reason={expensive.data.unavailable} />
             ) : (
@@ -609,7 +734,10 @@ export function DbHealthPage() {
                   `${num(r.avg_cpu_ms)} ms`,
                   `${num(r.avg_elapsed_ms)} ms`,
                   <span key='s' className='flex items-center gap-2'>
-                    <code className='block max-w-[520px] truncate font-mono text-[11px]' title={String(r.statement_text ?? '')}>
+                    <code
+                      className='block max-w-[520px] truncate font-mono text-[11px]'
+                      title={String(r.statement_text ?? '')}
+                    >
                       {String(r.statement_text ?? '')}
                     </code>
                     {/^\s*(select|with)/i.test(String(r.statement_text ?? '')) && (
@@ -628,7 +756,10 @@ export function DbHealthPage() {
             )}
           </Panel>
 
-          <Panel title='Unused indexes' sub='Zero reads, heavy writes — drop candidates. Dropping is audited and limited to plain nonclustered indexes (#105)'>
+          <Panel
+            title='Unused indexes'
+            sub='Zero reads, heavy writes — drop candidates. Dropping is audited and limited to plain nonclustered indexes (#105)'
+          >
             {unusedIdx.data?.unavailable ? (
               <Unavailable reason={unusedIdx.data.unavailable} />
             ) : (
@@ -638,7 +769,9 @@ export function DbHealthPage() {
                   const key = `${r.table_name}.${r.index_name}`
                   return [
                     String(r.table_name),
-                    <code key='i' className='font-mono text-[11px]'>{String(r.index_name)}</code>,
+                    <code key='i' className='font-mono text-[11px]'>
+                      {String(r.index_name)}
+                    </code>,
                     num(r.reads),
                     num(r.writes),
                     `${num(r.size_mb)} MB`,
@@ -648,11 +781,20 @@ export function DbHealthPage() {
                           type='button'
                           className='rounded bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600 disabled:opacity-50'
                           disabled={dropIdx.isPending}
-                          onClick={() => dropIdx.mutate({ table: String(r.table_name), index: String(r.index_name) })}
+                          onClick={() =>
+                            dropIdx.mutate({
+                              table: String(r.table_name),
+                              index: String(r.index_name)
+                            })
+                          }
                         >
                           Drop it
                         </button>
-                        <button type='button' className='text-[11px] text-slate-400' onClick={() => setConfirmDrop(null)}>
+                        <button
+                          type='button'
+                          className='text-[11px] text-slate-400'
+                          onClick={() => setConfirmDrop(null)}
+                        >
                           Cancel
                         </button>
                       </span>
@@ -672,7 +814,83 @@ export function DbHealthPage() {
             )}
           </Panel>
 
-          <Panel title='Long transactions' sub='Sleeping sessions holding open transactions ≥ 5 min — the silent lock-holder trap (#289 · #290)'>
+          <Panel
+            title='Backup tables'
+            sub='Scratch copies left behind by one-off fixes (zz_…, …_backup, …_bak). Not registered as collections, referenced by no foreign key. Amber = older than the keep window'
+            right={
+              backups.data && 'total_mb' in backups.data ? (
+                <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  {num((backups.data as { total_mb?: number }).total_mb)} MB held
+                </span>
+              ) : undefined
+            }
+          >
+            {backups.data?.unavailable ? (
+              <Unavailable reason={backups.data.unavailable} />
+            ) : (
+              <MiniTable
+                head={['Table', 'Rows', 'Size', 'Age', 'Last read', '']}
+                rows={(backups.data?.data ?? []).map((r) => {
+                  const key = `backup:${r.name}`
+                  return [
+                    <code
+                      key='n'
+                      data-backup-table={String(r.name)}
+                      className='font-mono text-[11px]'
+                    >
+                      {String(r.name)}
+                    </code>,
+                    num(r.row_count),
+                    `${num(r.size_mb)} MB`,
+                    <span
+                      key='a'
+                      className={
+                        r.stale ? 'font-medium text-amber-700 dark:text-amber-400' : undefined
+                      }
+                    >
+                      {num(r.age_days)}d
+                    </span>,
+                    r.last_read
+                      ? new Date(String(r.last_read)).toLocaleDateString()
+                      : 'Not since restart',
+                    confirmDrop === key ? (
+                      <span key='c' className='flex items-center gap-1.5'>
+                        <button
+                          type='button'
+                          className='rounded bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600 disabled:opacity-50'
+                          disabled={dropBackup.isPending}
+                          onClick={() => dropBackup.mutate(String(r.name))}
+                        >
+                          Drop it
+                        </button>
+                        <button
+                          type='button'
+                          className='text-[11px] text-slate-400'
+                          onClick={() => setConfirmDrop(null)}
+                        >
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        key='d'
+                        type='button'
+                        className='rounded border border-slate-200 px-2 py-0.5 text-[11px] hover:bg-muted dark:border-border'
+                        onClick={() => setConfirmDrop(key)}
+                      >
+                        Drop…
+                      </button>
+                    )
+                  ]
+                })}
+              />
+            )}
+          </Panel>
+
+          <Panel
+            title='Long transactions'
+            sub='Sleeping sessions holding open transactions ≥ 5 min — the silent lock-holder trap (#289 · #290)'
+          >
             {longTran.data?.unavailable ? (
               <Unavailable reason={longTran.data.unavailable} />
             ) : (
@@ -684,7 +902,9 @@ export function DbHealthPage() {
                     String(sid),
                     String(r.login_name ?? ''),
                     String(r.host_name ?? ''),
-                    <span key='p' className='block max-w-[200px] truncate'>{String(r.program_name ?? '')}</span>,
+                    <span key='p' className='block max-w-[200px] truncate'>
+                      {String(r.program_name ?? '')}
+                    </span>,
                     `${r.idle_minutes}m`,
                     String(r.open_transaction_count),
                     killTarget === sid ? (
@@ -699,11 +919,17 @@ export function DbHealthPage() {
                           type='button'
                           className='rounded bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600 disabled:opacity-50'
                           disabled={!killReason.trim() || kill.isPending}
-                          onClick={() => kill.mutate({ session_id: sid, reason: killReason.trim() })}
+                          onClick={() =>
+                            kill.mutate({ session_id: sid, reason: killReason.trim() })
+                          }
                         >
                           KILL
                         </button>
-                        <button type='button' className='text-[11px] text-slate-400' onClick={() => setKillTarget(null)}>
+                        <button
+                          type='button'
+                          className='text-[11px] text-slate-400'
+                          onClick={() => setKillTarget(null)}
+                        >
                           Cancel
                         </button>
                       </span>
@@ -730,17 +956,22 @@ export function DbHealthPage() {
               ) : (
                 <MiniTable
                   head={['Table', 'Reads', 'Writes', 'Rows']}
-                  rows={(tableHeat.data?.data ?? []).slice(0, 15).map((r) => [
-                    String(r.table_name),
-                    num(r.reads),
-                    num(r.writes),
-                    num(r.row_count)
-                  ])}
+                  rows={(tableHeat.data?.data ?? [])
+                    .slice(0, 15)
+                    .map((r) => [
+                      String(r.table_name),
+                      num(r.reads),
+                      num(r.writes),
+                      num(r.row_count)
+                    ])}
                 />
               )}
             </Panel>
 
-            <Panel title='Redis' sub='Memory, keyspace, slowlog (#298) · memory by key prefix on demand (#91)'>
+            <Panel
+              title='Redis'
+              sub='Memory, keyspace, slowlog (#298) · memory by key prefix on demand (#91)'
+            >
               {redis.data?.unavailable ? (
                 <Unavailable reason={redis.data.unavailable} />
               ) : redis.data?.data ? (
@@ -769,18 +1000,29 @@ export function DbHealthPage() {
             </Panel>
           </div>
 
-          <Panel title='Storage runway' sub='Daily size snapshots project growth; the biggest tables are named (#291 · #155)'>
+          <Panel
+            title='Storage runway'
+            sub='Daily size snapshots project growth; the biggest tables are named (#291 · #155)'
+          >
             {(() => {
               const cur = storage.data?.data?.current
               const run = storage.data?.data?.runway
               const snaps = storage.data?.data?.snapshots ?? []
               const curData = (cur as Maybe<Record<string, unknown>>)?.data as
-                | { total_mb?: unknown; used_mb?: unknown; top_tables?: Array<Record<string, unknown>> }
+                | {
+                    total_mb?: unknown
+                    used_mb?: unknown
+                    top_tables?: Array<Record<string, unknown>>
+                  }
                 | undefined
               return (
                 <div className='space-y-3'>
                   <div className='flex flex-wrap gap-x-8 gap-y-2 text-[12.5px]'>
-                    <div><span className='text-slate-400'>DB used</span><br /><b>{num(curData?.used_mb)} MB</b> of {num(curData?.total_mb)} MB allocated</div>
+                    <div>
+                      <span className='text-slate-400'>DB used</span>
+                      <br />
+                      <b>{num(curData?.used_mb)} MB</b> of {num(curData?.total_mb)} MB allocated
+                    </div>
                     <div>
                       <span className='text-slate-400'>Growth</span>
                       <br />
@@ -793,11 +1035,9 @@ export function DbHealthPage() {
                   </div>
                   <MiniTable
                     head={['Table', 'Rows', 'Size']}
-                    rows={(curData?.top_tables ?? []).slice(0, 10).map((t) => [
-                      String(t.table_name),
-                      num(t.row_count),
-                      `${num(t.mb)} MB`
-                    ])}
+                    rows={(curData?.top_tables ?? [])
+                      .slice(0, 10)
+                      .map((t) => [String(t.table_name), num(t.row_count), `${num(t.mb)} MB`])}
                   />
                 </div>
               )
@@ -805,12 +1045,22 @@ export function DbHealthPage() {
           </Panel>
 
           <div className='grid gap-5 xl:grid-cols-2'>
-            <Panel title='Held connections' sub='Pool connections currently checked out, attributed to the request holding them (#304 · this replica)'>
+            <Panel
+              title='Held connections'
+              sub='Pool connections currently checked out, attributed to the request holding them (#304 · this replica)'
+            >
               <MiniTable
                 head={['Held for', 'Request']}
-                rows={((poolDetail.data?.data?.held ?? []) as Array<{ held_ms: number; hint: string | null }>).map((h) => [
+                rows={(
+                  (poolDetail.data?.data?.held ?? []) as Array<{
+                    held_ms: number
+                    hint: string | null
+                  }>
+                ).map((h) => [
                   `${(h.held_ms / 1000).toFixed(1)}s`,
-                  <code key='h' className='font-mono text-[11px]'>{h.hint ?? '(background job / cron)'}</code>
+                  <code key='h' className='font-mono text-[11px]'>
+                    {h.hint ?? '(background job / cron)'}
+                  </code>
                 ])}
               />
             </Panel>
@@ -820,14 +1070,18 @@ export function DbHealthPage() {
                 <Unavailable reason={inngest.data.unavailable} />
               ) : (
                 <p className='text-[12.5px]'>
-                  Reachable at <code className='font-mono text-[11.5px]'>{inngest.data?.data?.base}</code> ·{' '}
+                  Reachable at{' '}
+                  <code className='font-mono text-[11.5px]'>{inngest.data?.data?.base}</code> ·{' '}
                   {(inngest.data?.data?.recent_events ?? []).length} recent event(s)
                 </p>
               )}
             </Panel>
           </div>
 
-          <Panel title='Data velocity' sub='Rows created / changed per day per collection, last 14 days (#213)'>
+          <Panel
+            title='Data velocity'
+            sub='Rows created / changed per day per collection, last 14 days (#213)'
+          >
             {(() => {
               const rows = velocity.data?.data ?? []
               const byCol = new Map<string, { created: number; updated: number }>()
@@ -854,7 +1108,10 @@ export function DbHealthPage() {
             })()}
           </Panel>
 
-          <Panel title='Latency by hour' sub='Hour-of-day × route average latency, 7 days — the "slow every morning at 9" detector (#306)'>
+          <Panel
+            title='Latency by hour'
+            sub='Hour-of-day × route average latency, 7 days — the "slow every morning at 9" detector (#306)'
+          >
             {heat.data?.unavailable ? (
               <Unavailable reason={heat.data.unavailable} />
             ) : (
@@ -862,7 +1119,9 @@ export function DbHealthPage() {
                 head={['Hour (UTC)', 'Route', 'Avg', 'Requests']}
                 rows={(heat.data?.data ?? []).slice(0, 20).map((r) => [
                   `${String(r.hour).padStart(2, '0')}:00`,
-                  <code key='p' className='block max-w-[380px] truncate font-mono text-[11px]'>{String(r.path)}</code>,
+                  <code key='p' className='block max-w-[380px] truncate font-mono text-[11px]'>
+                    {String(r.path)}
+                  </code>,
                   `${Math.round(Number(r.avg_ms))} ms`,
                   num(r.n)
                 ])}
@@ -883,7 +1142,9 @@ export function DbHealthPage() {
                   const key = `${r.many_collection}.${r.many_field}`
                   return [
                     r.many_collection,
-                    <code key='c' className='font-mono text-[11px]'>{r.many_field}</code>,
+                    <code key='c' className='font-mono text-[11px]'>
+                      {r.many_field}
+                    </code>,
                     r.one_collection,
                     num(r.dangling),
                     fkFixing === key ? (
@@ -892,7 +1153,14 @@ export function DbHealthPage() {
                           type='button'
                           className='rounded border border-amber-300 px-2 py-0.5 text-[11px] text-amber-700 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-500/40 dark:text-amber-300'
                           disabled={fkRepair.isPending}
-                          onClick={() => fkRepair.mutate({ many_collection: r.many_collection, many_field: r.many_field, one_collection: r.one_collection, action: 'null_out' })}
+                          onClick={() =>
+                            fkRepair.mutate({
+                              many_collection: r.many_collection,
+                              many_field: r.many_field,
+                              one_collection: r.one_collection,
+                              action: 'null_out'
+                            })
+                          }
                         >
                           Null out
                         </button>
@@ -900,11 +1168,22 @@ export function DbHealthPage() {
                           type='button'
                           className='rounded bg-red-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-red-600 disabled:opacity-50'
                           disabled={fkRepair.isPending}
-                          onClick={() => fkRepair.mutate({ many_collection: r.many_collection, many_field: r.many_field, one_collection: r.one_collection, action: 'trash_delete' })}
+                          onClick={() =>
+                            fkRepair.mutate({
+                              many_collection: r.many_collection,
+                              many_field: r.many_field,
+                              one_collection: r.one_collection,
+                              action: 'trash_delete'
+                            })
+                          }
                         >
                           Trash rows
                         </button>
-                        <button type='button' className='text-[11px] text-slate-400' onClick={() => setFkFixing(null)}>
+                        <button
+                          type='button'
+                          className='text-[11px] text-slate-400'
+                          onClick={() => setFkFixing(null)}
+                        >
                           Cancel
                         </button>
                       </span>
@@ -924,7 +1203,10 @@ export function DbHealthPage() {
             )}
           </Panel>
 
-          <Panel title='Deadlocks' sub='Mined from the system_health session; the hourly sweep also raises an issue on fresh ones (#100)'>
+          <Panel
+            title='Deadlocks'
+            sub='Mined from the system_health session; the hourly sweep also raises an issue on fresh ones (#100)'
+          >
             {deadlocks.data?.unavailable ? (
               <Unavailable reason={deadlocks.data.unavailable} />
             ) : (
@@ -935,7 +1217,11 @@ export function DbHealthPage() {
                   String(r.victim ?? '—'),
                   <div key='s' className='space-y-1'>
                     {(r.statements as string[]).map((st, i) => (
-                      <code key={i} className='block max-w-[560px] truncate font-mono text-[11px]' title={st}>
+                      <code
+                        key={i}
+                        className='block max-w-[560px] truncate font-mono text-[11px]'
+                        title={st}
+                      >
                         {st}
                       </code>
                     ))}

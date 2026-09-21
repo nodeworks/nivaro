@@ -65,15 +65,20 @@ export const dbHealthDocs: DocSection = {
           'Dangling foreign keys',
           'Registered relations whose FK values point at rows that no longer exist, with guarded repair actions.'
         ],
-        ['Inngest', 'Whether the job runner answers, and how many recent events it reports.']
+        ['Inngest', 'Whether the job runner answers, and how many recent events it reports.'],
+        [
+          'Backup tables',
+          'Scratch copies a one-off fix left behind (zz_…, …_backup, …_bak): row count, size, age and the last time anything read them. Only tables that are not registered collections and that no foreign key references are listed; rows older than BACKUP_TABLE_STALE_DAYS (default 30) read amber.'
+        ]
       ]
     },
-    { type: 'h3', text: 'The two write actions, and their guardrails' },
+    { type: 'h3', text: 'The write actions, and their guardrails' },
     {
       type: 'ul',
       items: [
         'Drop an unused index — only plain nonclustered indexes qualify: the server re-checks the index at drop time and refuses primary keys, unique indexes, and clustered indexes outright. Every drop is audit-logged with the index name. Remember the usage counters reset when SQL Server restarts, so "zero reads" on a recently restarted server is weak evidence — check the uptime first.',
         'Kill a long transaction — requires a typed reason (the KILL button stays disabled without one), only works on user sessions (session id above 50), and refuses to kill the console’s own connection. The reason lands in the audit log alongside the session id.',
+        'Drop a backup table — two clicks, and only a table the listing itself returned qualifies: the listing is the allow-list, so a registered collection or a table some foreign key points at can never be dropped from here, whatever the name looks like. The drop is audit-logged with the row count and size it held.',
         'Dangling-FK repair offers two actions only: null out the broken reference (refused on NOT NULL columns) or delete the orphaned rows through the normal delete path, so trash, deletion guards, and hooks all apply. Repointing to a different record is deliberately not offered.'
       ]
     },
@@ -135,6 +140,10 @@ export const opsConsoleDocs: DocSection = {
     {
       type: 'p',
       text: 'The Ops Console lists what this build carries versus the migration ledger: pending migrations with their source (so the DDL a restart will run can be read first) and the newest applied ones with timestamps. Pending is normally empty — boot applies migrations — so a non-empty list means a restart is about to change the schema, or a replica is serving mid-deploy. API: GET /api/ops-runtime/migrations (#68).'
+    },
+    {
+      type: 'p',
+      text: 'Each applied migration also shows what it DID: the schema is listed before and after every run and the difference is stored beside the ledger (nivaro_migration_effects — tables, columns, indexes, foreign keys and procedures added or removed, with the duration). A migration whose row reads "no schema change" either found its objects already in place or only touched data; the ledger alone cannot tell those apart, which is why the row exists. Migrations that ran before this was tracked say so.'
     },
     { type: 'h2', id: 'ops-console-maintenance', text: 'Maintenance windows' },
     {

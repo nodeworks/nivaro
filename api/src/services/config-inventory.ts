@@ -183,6 +183,7 @@ export const DERIVED_TABLES: string[] = [
 export const RUNTIME_TABLES: string[] = [
   'nivaro_migrations',
   'nivaro_migrations_lock',
+  'nivaro_migration_effects',
   'nivaro_sessions',
   'nivaro_api_logs',
   'nivaro_page_views',

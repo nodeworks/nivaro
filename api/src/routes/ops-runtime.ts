@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
-import { db } from '../db/index.js'
 import { config } from '../config.js'
+import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { bustAllCaches, bustCache, listCaches } from '../services/cache-registry.js'
@@ -303,8 +303,12 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       const { db, migrationsDir } = await import('../db/index.js')
       const { readFile, readdir } = await import('node:fs/promises')
       const { join } = await import('node:path')
-      const [completed, pending] = (await db.migrate.list()) as [Array<{ name: string } | string>, Array<{ file: string } | string>]
-      const nameOf = (m: { name?: string; file?: string } | string) => (typeof m === 'string' ? m : (m.name ?? m.file ?? ''))
+      const [completed, pending] = (await db.migrate.list()) as [
+        Array<{ name: string } | string>,
+        Array<{ file: string } | string>
+      ]
+      const nameOf = (m: { name?: string; file?: string } | string) =>
+        typeof m === 'string' ? m : (m.name ?? m.file ?? '')
       const files = await readdir(migrationsDir).catch(() => [] as string[])
       const sourceFor = async (name: string) => {
         const base = name.replace(/\.(ts|js)$/, '')
@@ -318,10 +322,53 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
         const name = nameOf(m)
         pendingOut.push({ name, source: await sourceFor(name) })
       }
-      const applied = (await db('nivaro_migrations').orderBy('id', 'desc').limit(12).select('name', 'migration_time')) as Array<{ name: string; migration_time: unknown }>
-      return reply.send({ data: { pending: pendingOut, applied, completed_count: completed.length, carried_by_build: files.filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts')).length } })
+      const applied = (await db('nivaro_migrations')
+        .orderBy('id', 'desc')
+        .limit(12)
+        .select('name', 'migration_time')) as Array<{ name: string; migration_time: unknown }>
+      // What each applied migration actually changed. Absent for anything
+      // that ran before effects were recorded — "not recorded", never "nothing".
+      const effectRows = (await db('nivaro_migration_effects')
+        .whereIn(
+          'name',
+          applied.map((a) => a.name)
+        )
+        .where('direction', 'up')
+        .orderBy('id', 'desc')
+        .select('name', 'ran_at', 'duration_ms', 'schema_changed', 'summary', 'effects')
+        .catch(() => [])) as Array<Record<string, unknown>>
+      const effectByName = new Map<string, Record<string, unknown>>()
+      for (const r of effectRows)
+        if (!effectByName.has(String(r.name))) effectByName.set(String(r.name), r)
+      for (const a of applied as Array<Record<string, unknown>>) {
+        const e = effectByName.get(String(a.name))
+        a.effect = e
+          ? {
+              schema_changed: !!e.schema_changed,
+              summary: e.summary,
+              duration_ms: e.duration_ms,
+              detail: (() => {
+                try {
+                  return e.effects ? JSON.parse(String(e.effects)) : null
+                } catch {
+                  return null
+                }
+              })()
+            }
+          : null
+      }
+      return reply.send({
+        data: {
+          pending: pendingOut,
+          applied,
+          completed_count: completed.length,
+          carried_by_build: files.filter((f) => /\.(ts|js)$/.test(f) && !f.endsWith('.d.ts')).length
+        }
+      })
     } catch (err) {
-      return reply.send({ unavailable: err instanceof Error ? err.message : 'Migration listing failed' })
+      return reply.send({
+        unavailable: err instanceof Error ? err.message : 'Migration listing failed'
+      })
     }
   })
 
