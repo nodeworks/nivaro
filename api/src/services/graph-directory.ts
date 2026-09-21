@@ -41,6 +41,8 @@ export type DirectoryUser = {
   employee_id: string | null
   preferred_language: string | null
   account_enabled: boolean | null
+  /** Present only on reads that expand it (`findDirectoryUsers`). */
+  manager?: { id: string; email: string | null; upn: string | null } | null
 }
 
 export type DirectoryStatus = {
@@ -295,6 +297,7 @@ type GraphUser = {
   employeeId?: string | null
   preferredLanguage?: string | null
   accountEnabled?: boolean | null
+  manager?: { id?: string; mail?: string | null; userPrincipalName?: string | null } | null
 }
 
 function tenantId(): string | null {
@@ -565,7 +568,16 @@ function mapUser(g: GraphUser): DirectoryUser {
     business_phones: g.businessPhones ?? [],
     employee_id: g.employeeId ?? null,
     preferred_language: g.preferredLanguage ?? null,
-    account_enabled: typeof g.accountEnabled === 'boolean' ? g.accountEnabled : null
+    account_enabled: typeof g.accountEnabled === 'boolean' ? g.accountEnabled : null,
+    ...(g.manager?.id
+      ? {
+          manager: {
+            id: g.manager.id,
+            email: g.manager.mail ?? null,
+            upn: g.manager.userPrincipalName ?? null
+          }
+        }
+      : {})
   }
 }
 
@@ -613,21 +625,136 @@ export async function searchDirectoryUsers(q: string, top = 25): Promise<Directo
   return (body.value ?? []).map(mapUser)
 }
 
+/** Run `fn` over `items`, `width` at a time, keeping order. */
+async function pooled<T, R>(items: T[], width: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let cursor = 0
+  await Promise.all(
+    Array.from({ length: Math.min(width, items.length) }, async () => {
+      while (cursor < items.length) {
+        const i = cursor++
+        out[i] = await fn(items[i] as T)
+      }
+    })
+  )
+  return out
+}
+
+const chunk = <T>(items: T[], size: number): T[][] => {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+// Graph caps an `in` filter at 15 values.
+const IN_FILTER_MAX = 15
+const MANAGER_EXPAND = '$expand=manager($select=id,mail,userPrincipalName)'
+
+export interface DirectoryFindResult {
+  byId: Map<string, DirectoryUser>
+  /** Keyed by lower-cased mail AND lower-cased UPN. */
+  byAddress: Map<string, DirectoryUser>
+}
+
 /**
- * Every user in the tenant, paged 999 at a time — the way to check the whole
- * user table without one Graph call per person. A 5k-user tenant is six calls.
+ * The directory entries behind a known set of people — by Graph object id
+ * where one is stored, else by address (mail, then UPN for whatever mail did
+ * not answer). Asks only about the people named, so its cost follows the size
+ * of the user table rather than the size of the tenant: walking every user of
+ * a tenant with hundreds of thousands of accounts never reaches most of them.
+ * Each entry carries its manager.
  */
-export async function walkDirectoryUsers(): Promise<DirectoryUser[]> {
-  const out: DirectoryUser[] = []
-  let next: string | null = `/users?$select=${USER_SELECT}&$top=999`
-  let pages = 0
-  while (next && pages < 200) {
-    pages += 1
-    const res = await graphGet(next)
-    const body = (await res.json()) as { value?: GraphUser[]; '@odata.nextLink'?: string }
-    for (const g of body.value ?? []) out.push(mapUser(g))
-    const link = body['@odata.nextLink']
-    next = link ? link.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, '') : null
+export async function findDirectoryUsers(args: {
+  ids?: string[]
+  addresses?: string[]
+}): Promise<DirectoryFindResult> {
+  const byId = new Map<string, DirectoryUser>()
+  const byAddress = new Map<string, DirectoryUser>()
+  const keep = (g: GraphUser) => {
+    const u = mapUser(g)
+    byId.set(u.id.toLowerCase(), u)
+    if (u.email) byAddress.set(u.email.toLowerCase(), u)
+    if (u.upn) byAddress.set(u.upn.toLowerCase(), u)
+  }
+  const ask = async (field: 'id' | 'mail' | 'userPrincipalName', values: string[]) => {
+    await pooled(chunk(values, IN_FILTER_MAX), 4, async (group) => {
+      const filter = `${field} in (${group.map(odataString).join(',')})`
+      const res = await graphGet(
+        `/users?$filter=${encodeURIComponent(filter)}&$select=${USER_SELECT}&${MANAGER_EXPAND}&$top=999`
+      )
+      const body = (await res.json()) as { value?: GraphUser[] }
+      for (const g of body.value ?? []) keep(g)
+    })
+  }
+  const uniq = (values: string[] | undefined) => [
+    ...new Set((values ?? []).map((v) => v.trim()).filter(Boolean))
+  ]
+  await ask('id', uniq(args.ids))
+  const addresses = uniq(args.addresses)
+  await ask('mail', addresses)
+  await ask(
+    'userPrincipalName',
+    addresses.filter((a) => !byAddress.has(a.toLowerCase()))
+  )
+  return { byId, byAddress }
+}
+
+/**
+ * 96x96 profile photos for many people, 20 per Graph `$batch` call. Someone
+ * with no photo is simply absent from the result.
+ */
+export async function fetchDirectoryPhotos(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  type BatchResponse = {
+    id: string
+    status: number
+    headers?: Record<string, string>
+    body?: unknown
+  }
+  const run = async (group: string[]): Promise<string[]> => {
+    const { token } = await appToken()
+    let res: Response
+    try {
+      res = await fetch('https://graph.microsoft.com/v1.0/$batch', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requests: group.map((id) => ({
+            id,
+            method: 'GET',
+            url: `/users/${encodeURIComponent(id)}/photos/96x96/$value`
+          }))
+        }),
+        signal: AbortSignal.timeout(30000)
+      })
+    } catch (err) {
+      throw new DirectoryError(
+        `Microsoft Graph did not answer (${String(err).slice(0, 120)})`,
+        502,
+        'graph_unreachable'
+      )
+    }
+    if (!res.ok) {
+      throw new DirectoryError(`Microsoft Graph error ${res.status} on $batch`, 502, 'graph_error')
+    }
+    const body = (await res.json()) as { responses?: BatchResponse[] }
+    const throttled: string[] = []
+    for (const r of body.responses ?? []) {
+      if (r.status === 429) throttled.push(r.id)
+      if (r.status !== 200 || typeof r.body !== 'string') continue
+      // A binary body arrives base64-encoded.
+      const bytes = Math.floor((r.body.length * 3) / 4)
+      if (bytes === 0 || bytes > 200 * 1024) continue
+      const type = Object.entries(r.headers ?? {}).find(([k]) => k.toLowerCase() === 'content-type')
+      const mime = type?.[1]?.split(';')[0] || 'image/jpeg'
+      out.set(r.id, `data:${mime};base64,${r.body}`)
+    }
+    return throttled
+  }
+  const throttled = (await pooled(chunk([...new Set(ids)], 20), 3, run)).flat()
+  if (throttled.length > 0) {
+    await new Promise((resolve) => setTimeout(resolve, 5000))
+    for (const group of chunk(throttled, 20)) await run(group)
   }
   return out
 }

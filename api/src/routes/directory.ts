@@ -178,7 +178,7 @@ export async function directoryRoutes(app: FastifyInstance) {
             const s = await checkDirectory(app, {
               userIds: ids && ids.length > 0 ? ids : null,
               actorId: req.user?.id ?? null,
-              pullProfile: Boolean(req.body?.pull_profile),
+              pullProfile: req.body?.pull_profile !== false,
               notifyAdmins: false
             })
             run.progress({ checked: s.checked, disabled: s.disabled, missing: s.missing })

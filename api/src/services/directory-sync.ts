@@ -5,10 +5,8 @@ import {
   DirectoryError,
   type DirectoryUser,
   directoryStatus,
-  fetchDirectoryManager,
-  fetchDirectoryPhoto,
-  lookupDirectoryUser,
-  walkDirectoryUsers
+  fetchDirectoryPhotos,
+  findDirectoryUsers
 } from './graph-directory.js'
 import { isMachineAccount } from './machine-accounts.js'
 import { notifyUser } from './notification-channels.js'
@@ -24,8 +22,10 @@ import { queueOfficeGeocode } from './office-geocode.js'
 // separate, deliberate admin action and is never touched here; neither is a
 // suspension lifted — admins suspend on purpose too.
 //
-// Whole-table checks walk the tenant once (999 users per Graph call) instead
-// of one call per person; a handful of ids are looked up directly.
+// Every check asks the directory about the people in nivaro_users and nobody
+// else (15 per Graph call, by stored directory id, then mail, then UPN). The
+// tenant is never walked: it holds far more accounts than any walk reaches,
+// and everyone past the walk's end read as "not in the directory".
 
 export type DirectoryVerdict = 'active' | 'disabled' | 'missing'
 
@@ -72,10 +72,6 @@ type UserRow = {
   employee_id: string | null
   preferred_language: string | null
 }
-
-/** Integration / placeholder identities have no directory entry by design. */
-
-const LOOKUP_THRESHOLD = 25
 
 async function suspendSetting(): Promise<boolean> {
   const row = (await db('nivaro_settings').first('directory_sync_suspend')) as
@@ -183,31 +179,41 @@ export async function checkDirectory(
   const users = ((await q) as UserRow[]).filter((u) => !isMachineAccount(u))
   const subset = Boolean(opts.userIds && opts.userIds.length > 0)
 
-  // Resolve directory entries: a few ids → direct lookups, otherwise one walk.
+  const found = await findDirectoryUsers({
+    ids: users.map((u) => u.directory_id).filter((v): v is string => Boolean(v)),
+    addresses: users.map((u) => u.email)
+  })
   const entries = new Map<string, DirectoryUser | null>()
-  if (subset && users.length <= LOOKUP_THRESHOLD) {
-    for (const u of users) {
-      const byId = u.directory_id
-        ? await lookupDirectoryUser(u.directory_id).catch(() => null)
-        : null
-      entries.set(u.id, byId ?? (await lookupDirectoryUser(u.email)))
+  for (const u of users) {
+    entries.set(
+      u.id,
+      (u.directory_id ? found.byId.get(u.directory_id.toLowerCase()) : undefined) ??
+        found.byAddress.get(u.email.trim().toLowerCase()) ??
+        null
+    )
+  }
+
+  // Profile pull: photos 20 per Graph call, managers ride the entries, and the
+  // stored avatars are read once so an unchanged photo is not rewritten.
+  const photos = new Map<string, string>()
+  const avatars = new Map<string, string | null>()
+  const idByAddress = new Map<string, string>()
+  if (opts.pullProfile) {
+    const present = [...entries.values()].filter((e): e is DirectoryUser => Boolean(e))
+    for (const [id, uri] of await fetchDirectoryPhotos(present.map((e) => e.id))) {
+      photos.set(id.toLowerCase(), uri)
     }
-  } else {
-    const all = await walkDirectoryUsers()
-    const byKey = new Map<string, DirectoryUser>()
-    for (const e of all) {
-      byKey.set(`id:${e.id}`, e)
-      if (e.email) byKey.set(`mail:${e.email.toLowerCase()}`, e)
-      if (e.upn) byKey.set(`mail:${e.upn.toLowerCase()}`, e)
+    const ids = users.map((u) => u.id)
+    for (let i = 0; i < ids.length; i += 500) {
+      const rows = (await db('nivaro_users')
+        .whereIn('id', ids.slice(i, i + 500))
+        .select('id', 'avatar')) as Array<{ id: string; avatar: string | null }>
+      for (const r of rows) avatars.set(r.id, r.avatar)
     }
-    for (const u of users) {
-      entries.set(
-        u.id,
-        (u.directory_id ? byKey.get(`id:${u.directory_id}`) : undefined) ??
-          byKey.get(`mail:${u.email.toLowerCase()}`) ??
-          null
-      )
-    }
+    const everyone = (await db('nivaro_users')
+      .whereNotNull('email')
+      .select('id', 'email')) as Array<{ id: string; email: string }>
+    for (const r of everyone) idByAddress.set(r.email.trim().toLowerCase(), r.id)
   }
 
   const summary: DirectoryCheckSummary = {
@@ -249,15 +255,14 @@ export async function checkDirectory(
 
     if (opts.pullProfile && entry) {
       const prof = profileUpdates(u, entry)
-      const [manager, avatar] = await Promise.all([
-        fetchDirectoryManager(entry.id).catch(() => null),
-        fetchDirectoryPhoto(entry.id).catch(() => null)
-      ])
-      if (manager) {
-        const m = await nivaroUserForEntry(manager)
-        if (m && m.id !== u.id && m.id !== u.manager_id) prof.manager_id = m.id
+      const managerId = [entry.manager?.email, entry.manager?.upn]
+        .map((v) => (v ? idByAddress.get(v.toLowerCase()) : undefined))
+        .find(Boolean)
+      if (managerId && managerId !== u.id && managerId !== u.manager_id) {
+        prof.manager_id = managerId
       }
-      if (avatar) {
+      const avatar = photos.get(entry.id.toLowerCase())
+      if (avatar && avatar !== avatars.get(u.id)) {
         prof.avatar = avatar
         prof.avatar_updated_at = ranAt
       }
@@ -292,10 +297,14 @@ export async function checkDirectory(
         .update({ directory_status: verdict, directory_checked_at: ranAt })
     }
   }
-  for (const { id, updates } of perUser) {
-    await db('nivaro_users')
-      .where({ id })
-      .update({ ...updates, updated_at: ranAt })
+  for (let i = 0; i < perUser.length; i += 5) {
+    await Promise.all(
+      perUser.slice(i, i + 5).map(({ id, updates }) =>
+        db('nivaro_users')
+          .where({ id })
+          .update({ ...updates, updated_at: ranAt })
+      )
+    )
   }
 
   for (const c of summary.changes) {
@@ -367,6 +376,6 @@ export async function runDirectorySyncCron(app: FastifyInstance): Promise<string
   if (!row?.directory_sync_enabled) return 'skipped — directory sync is off in Settings'
   const status = await directoryStatus()
   if (!status.granted) return `skipped — ${status.reason ?? 'directory access not granted'}`
-  const s = await checkDirectory(app, { pullProfile: false, notifyAdmins: true })
-  return `${s.checked} checked · ${s.disabled} disabled · ${s.missing} missing · ${s.suspended} suspended`
+  const s = await checkDirectory(app, { pullProfile: true, notifyAdmins: true })
+  return `${s.checked} checked · ${s.profile_updated ?? 0} profiles refreshed · ${s.disabled} disabled · ${s.missing} missing · ${s.suspended} suspended`
 }
