@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-09-21T22:10:36.934Z",
+  "generated_at": "2026-09-21T23:25:34.910Z",
   "releases": [
+    {
+      "version": "0.1.325",
+      "tag": "v0.1.325",
+      "date": "2026-09-21T19:25:21-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "data-integrity",
+              "text": "inactive people — accounts that cannot act but are still linked to live work",
+              "hash": "0341eae1"
+            },
+            {
+              "section": "Added",
+              "scope": "users",
+              "text": "admin view of redacted and hidden accounts",
+              "hash": "60b65a1c"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.324",
       "tag": "v0.1.324",
-      "date": "2026-09-21T18:10:26-04:00",
+      "date": "2026-09-21T18:10:36-04:00",
       "sections": [
         {
           "label": "Added",
