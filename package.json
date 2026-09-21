@@ -19,6 +19,7 @@
     "release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release.mjs",
     "sdk:release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release-sdk.mjs",
     "react:release": "node scripts/release-react.mjs",
+    "release:chain": "node scripts/release-chain.mjs",
     "www:release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release-www.mjs",
     "sync-docs": "./api/node_modules/.bin/tsx scripts/sync-docs.ts",
     "docs:api": "node scripts/generate-api-docs.mjs",

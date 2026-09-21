@@ -1,0 +1,20 @@
+{
+  "mirror": "git@github.com:your-org/your-public-mirror.git",
+  "workflows_repo": "your-org/your-public-mirror",
+  "image": "your-namespace/nivaro",
+  "frontends": [
+    { "name": "portal", "path": "~/code/portal", "branch": "main", "build": "build" }
+  ],
+  "deployments": [
+    {
+      "name": "staging",
+      "path": "~/code/staging-deploy",
+      "branch": "main",
+      "prepare": ["bash scripts/sync-extension.sh", "pnpm build"],
+      "commit_paths": ["src/extensions"]
+    }
+  ],
+  "verify": [
+    { "name": "staging api", "url": "https://staging.example.com/api/version", "field": "version" }
+  ]
+}

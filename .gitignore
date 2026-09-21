@@ -41,3 +41,6 @@ api/extensions/*
 nivaro-cloud-plan.html
 *.tsbuildinfo
 .scratch-verify/
+
+# deployment-specific downstream repos for scripts/release-chain.mjs
+release-chain.config.json

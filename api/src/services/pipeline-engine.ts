@@ -6,7 +6,7 @@ import {
   resolvePipelineSubject,
   resolvePipelineSubjectsBatch
 } from './pipeline-subject.js'
-import { span } from './request-trace.js'
+import { markSpan, span } from './request-trace.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -667,7 +667,13 @@ export async function resolveStateOwnersBatch(
   }
 
   const stateIds = [...new Set(requests.map((r) => r.stateId))]
-  const groupData = await getOwnerGroupsForStates(stateIds, database)
+  // Spanned: on a cold cache this is the ~3,900-group fetch + filter parse,
+  // which sat outside every named span and read as "unaccounted".
+  const groupData = await span(
+    'owners:groups',
+    () => getOwnerGroupsForStates(stateIds, database),
+    `${stateIds.length} states`
+  )
   const groupsByState = new Map<string, OwnerGroup[]>()
   for (const [id, entry] of groupData) groupsByState.set(id, entry.groups)
 
@@ -686,8 +692,10 @@ export async function resolveStateOwnersBatch(
     if (metaHit && Date.now() - metaHit.at < OWNER_GROUP_CACHE_TTL) {
       templateByState = metaHit.templateByState
     } else {
-      const stateRows = (await selectInChunks(stateIds, 2000, (chunk) =>
-        database('nivaro_workflow_states').whereIn('id', chunk).select('id', 'template')
+      const stateRows = (await span('owners:state-templates', () =>
+        selectInChunks(stateIds, 2000, (chunk) =>
+          database('nivaro_workflow_states').whereIn('id', chunk).select('id', 'template')
+        )
       )) as Array<{ id: string; template: string }>
       templateByState = new Map(stateRows.map((r) => [String(r.id).toUpperCase(), r.template]))
       if (cacheable) fallbackMetaCache.set(stateCacheKey, { templateByState, at: Date.now() })
@@ -707,9 +715,11 @@ export async function resolveStateOwnersBatch(
     if (bindHit && Date.now() - bindHit.at < OWNER_GROUP_CACHE_TTL) {
       allBindings = bindHit.rows
     } else {
-      allBindings = (await database('nivaro_workflow_bindings')
-        .whereIn('collection', [...new Set(requests.map((r) => r.collection))])
-        .select('*')) as typeof allBindings
+      allBindings = (await span('owners:bindings', () =>
+        database('nivaro_workflow_bindings')
+          .whereIn('collection', [...new Set(requests.map((r) => r.collection))])
+          .select('*')
+      )) as typeof allBindings
       if (cacheable) bindingsCache.set(collectionsKey, { rows: allBindings, at: Date.now() })
     }
     const bindingRows = allBindings.filter(
@@ -842,9 +852,11 @@ export async function resolveStateOwnersBatch(
 
     let relations: RelationInfo[] = []
     try {
-      relations = (await database('nivaro_relations')
-        .where({ many_collection: collection })
-        .select('many_collection', 'many_field', 'one_collection')) as RelationInfo[]
+      relations = (await span('owners:relations', () =>
+        database('nivaro_relations')
+          .where({ many_collection: collection })
+          .select('many_collection', 'many_field', 'one_collection')
+      )) as RelationInfo[]
     } catch {
       relations = []
     }
@@ -896,6 +908,9 @@ export async function resolveStateOwnersBatch(
   }
 
   const winningMemo = new Map<string, OwnerGroup[]>()
+  // Pure CPU, no awaits — timed by hand because span() only wraps promises.
+  // `detail` carries the memo's hit shape: records in, distinct tuples matched.
+  const matchStarted = performance.now()
   for (const req of withGroups) {
     const prepared = preparedByState.get(req.stateId) ?? {
       candidates: [],
@@ -917,6 +932,13 @@ export async function resolveStateOwnersBatch(
     }
     winningGroupsByKey.set(req.key, winning)
     for (const g of winning) allGroupIds.add(g.id)
+  }
+  if (withGroups.length > 0) {
+    markSpan(
+      'owners:match',
+      performance.now() - matchStarted,
+      `${withGroups.length} records · ${winningMemo.size} tuples`
+    )
   }
 
   const groupUsersByGroup = new Map<string, ResolvedOwner[]>()
@@ -1011,8 +1033,12 @@ export async function resolveStateOwnersBatch(
   }
   const fallbackOwnerById = new Map<string, ResolvedOwner>()
   if (fallbackIdByKey.size > 0) {
-    const rows = (await selectInChunks([...new Set(fallbackIdByKey.values())], 2000, (chunk) =>
-      database('nivaro_users').whereIn('id', chunk).select('id', 'email', 'first_name', 'last_name')
+    const rows = (await span('owners:fallback-users', () =>
+      selectInChunks([...new Set(fallbackIdByKey.values())], 2000, (chunk) =>
+        database('nivaro_users')
+          .whereIn('id', chunk)
+          .select('id', 'email', 'first_name', 'last_name')
+      )
     )) as ResolvedOwner[]
     for (const row of rows) fallbackOwnerById.set(String(row.id).toUpperCase(), row)
   }
@@ -1045,7 +1071,9 @@ export async function resolveStateOwnersBatch(
   }
   const substitutions = opts.skipDelegation
     ? new Map<string, ResolvedOwner | null>()
-    : await buildDelegationSubstitutions([...allOwnerIds], database)
+    : await span('owners:delegation', () =>
+        buildDelegationSubstitutions([...allOwnerIds], database)
+      )
 
   for (const req of requests) {
     const owners = combinedByKey.get(req.key) ?? []

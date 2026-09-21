@@ -34,6 +34,9 @@
     "mdsi:fulfilment": "tsx extensions/efp-ops/scripts/mdsi-fulfilment.ts",
     "typecheck:extensions": "tsc -p extensions/tsconfig.json",
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
+    "owners:fingerprint": "tsx src/scripts/owner-fingerprint.ts",
+    "lint:merge-keys": "tsx extensions/efp-ops/scripts/lint-merge-keys.ts",
+    "imports:idempotence": "tsx extensions/efp-ops/scripts/check-import-idempotence.ts",
     "promote:config": "tsx extensions/efp-ops/scripts/promote-config.ts",
     "refresh:rehearsal": "tsx extensions/efp-ops/scripts/refresh-db-from-prod.ts",
     "sync:business-schema": "tsx extensions/efp-ops/scripts/sync-business-schema.ts",
@@ -55,6 +58,7 @@
     "priority:flag": "tsx extensions/efp-ops/scripts/priority-flag.ts",
     "retire:po-file-queue": "tsx extensions/efp-ops/scripts/retire-po-file-queue.ts",
     "new-user:roles": "tsx extensions/efp-ops/scripts/new-user-roles.ts",
+    "machine:accounts": "tsx extensions/efp-ops/scripts/machine-accounts.ts",
     "seed:project-type-values": "tsx extensions/efp-ops/scripts/project-type-values.ts",
     "golive:settings-check": "tsx extensions/efp-ops/scripts/check-prod-settings.ts"
   },
