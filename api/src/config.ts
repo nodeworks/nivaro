@@ -26,7 +26,16 @@ const schema = z.object({
   DB_PORT: z.coerce.number().optional(),
   // Connection pool ceiling per replica. A record page fans out ~100
   // concurrent reads; past this many they queue on the pool.
-  DB_POOL_MAX: z.coerce.number().int().min(2).max(200).default(25),
+  //
+  // Raised from 25 after measuring a queue read: the per-item work (SLA,
+  // owners, at-risk, extra fields, labels) runs concurrently and saturated the
+  // pool, so individually fast queries spent most of their time waiting for a
+  // connection — owner filter resolution measured 2176ms at 25 against 363ms
+  // at 60, for identical SQL taking 78-94ms per statement. This is a ceiling,
+  // not a reservation: the pool opens connections on demand and idle ones are
+  // reaped, so an instance that never fans out still holds `min` (2).
+  // Budget it per replica against the server's own connection limit.
+  DB_POOL_MAX: z.coerce.number().int().min(2).max(200).default(60),
   DB_DATABASE: requiredStr(),
   DB_USER: requiredStr(),
   DB_PASSWORD: requiredStr(),
