@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-09-21T20:29:51.259Z",
+  "generated_at": "2026-09-21T22:10:36.934Z",
   "releases": [
+    {
+      "version": "0.1.324",
+      "tag": "v0.1.324",
+      "date": "2026-09-21T18:10:26-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "forecasting",
+              "text": "approval-brief extension lines, 'add' proposals, split share sets",
+              "hash": "5bf9427c"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "directory",
+              "text": "ask the directory about our users instead of walking the tenant",
+              "hash": "500f3324"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "po:payment-terms script alias",
+              "hash": "a98e7770"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.323",
       "tag": "v0.1.323",
-      "date": "2026-09-21T16:29:40-04:00",
+      "date": "2026-09-21T16:29:51-04:00",
       "sections": [
         {
           "label": "Added",
