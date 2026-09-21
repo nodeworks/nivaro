@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-21T17:34:31.033Z",
+  "generated_at": "2026-09-21T18:16:48.945Z",
   "releases": [
+    {
+      "version": "0.1.321",
+      "tag": "v0.1.321",
+      "date": "2026-09-21T14:16:37-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "a reconcile crosses into the next year when its own has no open month",
+              "hash": "f4330468"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.320",
       "tag": "v0.1.320",
-      "date": "2026-09-21T13:34:16-04:00",
+      "date": "2026-09-21T13:34:31-04:00",
       "sections": [
         {
           "label": "Fixed",
