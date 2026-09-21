@@ -1,10 +1,93 @@
 {
-  "generated_at": "2026-09-21T00:44:06.353Z",
+  "generated_at": "2026-09-21T17:06:20.150Z",
   "releases": [
+    {
+      "version": "0.1.319",
+      "tag": "v0.1.319",
+      "date": "2026-09-21T13:06:02-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "proposals can target a category line of a split key",
+              "hash": "1b42409f"
+            },
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "plan grid with an optional per-key category split",
+              "hash": "429f382e"
+            },
+            {
+              "section": "Added",
+              "scope": "watch",
+              "text": "a watched row opens its parent record at that row",
+              "hash": "89fc0b38"
+            },
+            {
+              "section": "Added",
+              "scope": "items",
+              "text": "optional natural-key members",
+              "hash": "f6e82eaa"
+            },
+            {
+              "section": "Added",
+              "scope": "users",
+              "text": "state machine identities with account_kind",
+              "hash": "97a5b487"
+            },
+            {
+              "section": "Added",
+              "scope": "tooling",
+              "text": "owner fingerprint harness, MERGE key lint, verify helpers, release chain",
+              "hash": "95d91885"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "profile",
+              "text": "readable selected segment on the email-links card in dark hosts",
+              "hash": "1bac102a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "graphql",
+              "text": "accept legacy junction-leg and relation filters, make batch creates atomic",
+              "hash": "a17a499f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trash",
+              "text": "recalculate stored rollups after a restore",
+              "hash": "68dce65a"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "items",
+              "text": "format the junction-leg filter",
+              "hash": "bd1fc5ca"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.1.318",
       "tag": "v0.1.318",
-      "date": "2026-09-20T20:43:56-04:00",
+      "date": "2026-09-20T20:44:06-04:00",
       "sections": [
         {
           "label": "Performance",
