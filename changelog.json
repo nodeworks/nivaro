@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-21T17:06:20.150Z",
+  "generated_at": "2026-09-21T17:34:31.033Z",
   "releases": [
+    {
+      "version": "0.1.320",
+      "tag": "v0.1.320",
+      "date": "2026-09-21T13:34:16-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "grid",
+              "text": "plan grid fills its slot and the status label stays on one line",
+              "hash": "47c5883c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.319",
       "tag": "v0.1.319",
-      "date": "2026-09-21T13:06:02-04:00",
+      "date": "2026-09-21T13:06:20-04:00",
       "sections": [
         {
           "label": "Added",
