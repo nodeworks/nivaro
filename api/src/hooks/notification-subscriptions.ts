@@ -91,6 +91,36 @@ async function friendlyRowLabel(
   return own
 }
 
+/** The record a watched ROW belongs to — a watch on one line or one plan year
+ *  should land the person on that record with the row in view, not on the
+ *  row's own bare page. Null for a row with no parent. */
+async function parentOfRow(
+  collection: string,
+  item: string,
+  row: Record<string, unknown> | null
+): Promise<{ collection: string; id: string } | null> {
+  try {
+    const rels = await parentRelationsOf(collection)
+    if (rels.length === 0) return null
+    let src: Record<string, unknown> | null = row
+    if (!src || !rels.some((r) => src?.[r.fk] != null)) {
+      src =
+        ((await db(collection)
+          .where('id', item)
+          .first(...rels.map((r) => r.fk))
+          .catch(() => null)) as Record<string, unknown> | null) ?? null
+    }
+    for (const rel of rels) {
+      const raw = src?.[rel.fk]
+      const id = raw && typeof raw === 'object' && 'id' in raw ? (raw as { id: unknown }).id : raw
+      if (id != null && id !== '') return { collection: rel.parent, id: String(id) }
+    }
+  } catch {
+    /* falls back to the row itself */
+  }
+  return null
+}
+
 /** Child collection → parent M2O relations, so a write to a line rolls up to
  *  the parent record's watchers. 60s cache; relations change in Data Model. */
 const parentRelCache = new Map<
@@ -344,6 +374,12 @@ async function fireSubscriptionNotifications(
       // watch on a CHILD row (#11 — one forecast year, one PO line) names the
       // row AND the record it belongs to: "forecasts 2026 on CM26-79811".
       const friendly = recordScoped ? await friendlyRowLabel(collection, item, data) : null
+      // A watched row opens its parent record at that row (`?row=` — the
+      // record form jumps to the grid and flashes the line).
+      const rowParent = recordScoped && !viaChild ? await parentOfRow(collection, item, data) : null
+      const openCollection = rowParent?.collection ?? collection
+      const openItem = rowParent?.id ?? item
+      const rowQuery = rowParent ? `row=${encodeURIComponent(`${collection}:${item}`)}` : null
       const collectionLabel = collection.replace(/_/g, ' ')
       const label = friendly ? `Watching ${friendly}` : sub.label || `${collection} ${eventType}`
       const childLabel = viaChild ? viaChild.collection.replace(/_/g, ' ') : null
@@ -434,9 +470,22 @@ async function fireSubscriptionNotifications(
             timestamp: now,
             sender: actorUserId ?? null,
             message: message.slice(0, 500),
-            collection,
-            item,
+            collection: openCollection,
+            item: openItem,
             detail,
+            ...(rowParent
+              ? {
+                  target: JSON.stringify({
+                    kind: 'record',
+                    collection: openCollection,
+                    id: openItem,
+                    query: rowQuery,
+                    action: 'open'
+                  }),
+                  kind: 'record',
+                  action: 'open'
+                }
+              : {}),
             ...notificationRowMeta({ subject, category: 'watch', kind: 'record', action: 'open' })
           })
           .returning('*')
@@ -446,8 +495,8 @@ async function fireSubscriptionNotifications(
             id: notif?.id ?? null,
             subject: subject.slice(0, 255),
             message: message.slice(0, 200),
-            collection,
-            item,
+            collection: openCollection,
+            item: openItem,
             sender: actorUserId ?? null,
             timestamp: now
           })
@@ -466,11 +515,13 @@ async function fireSubscriptionNotifications(
         try {
           const { buildRecordCard } = await import('../services/mail-record-card.js')
           const { labelledChanges } = await import('../services/mail-types.js')
-          const card = item
-            ? await buildRecordCard(collection, item, { recipientUserId: sub.user }).catch(
+          const card = openItem
+            ? await buildRecordCard(openCollection, openItem, { recipientUserId: sub.user }).catch(
                 () => null
               )
             : null
+          if (card?.url && rowQuery)
+            card.url = `${card.url}${card.url.includes('?') ? '&' : '?'}${rowQuery}`
           let delta: Record<string, unknown> | null = null
           if (eventType === 'update' && data && previous) {
             delta = {}
@@ -484,7 +535,9 @@ async function fireSubscriptionNotifications(
             event: viaChild ? viaChild.event : eventType,
             actor_name: actorName,
             record_card: card,
-            record_url: card?.url ?? `${config.ADMIN_URL}/collections/${collection}/${item}`,
+            record_url:
+              card?.url ??
+              `${config.ADMIN_URL}/collections/${openCollection}/${openItem}${rowQuery ? `?${rowQuery}` : ''}`,
             friendly_id: friendly ?? card?.title ?? String(item),
             changes: bundle
               ? bundle.changes

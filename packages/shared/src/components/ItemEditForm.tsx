@@ -4590,6 +4590,62 @@ export function ItemEditForm({
     setTimeout(() => flashField(focusField), 600)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusField])
+  // `?row=<child collection>:<row id>` (a row-watch notification, an emailed
+  // link): open the grid that holds the row and bring the line into view.
+  const rowFocusDoneRef = useRef(false)
+  const jumpToFieldRef = useRef<(key: string) => boolean>(() => false)
+  jumpToFieldRef.current = jumpToField
+  useEffect(() => {
+    if (rowFocusDoneRef.current || isNew || typeof window === 'undefined') return
+    const raw = new URLSearchParams(window.location.search).get('row')
+    if (!raw) return
+    const cut = raw.indexOf(':')
+    if (cut < 1) return
+    const childCollection = raw.slice(0, cut)
+    const rowId = raw.slice(cut + 1)
+    const rel = o2mRelations.find((r) => r.many_collection === childCollection)
+    if (!rel?.one_field || !rel.many_field) return
+    rowFocusDoneRef.current = true
+    const detail = { collection: childCollection, field: rel.many_field, rowId }
+    // A record page paints over several seconds (mode, layout, grid rows) —
+    // keep looking for the row until it exists, then act once. Not cleared on
+    // re-run: the relation list re-settles while the record loads and the
+    // one-shot guard above would leave nothing scheduled.
+    let tries = 0
+    let jumped = false
+    const tick = window.setInterval(() => {
+      tries++
+      const rowEl = document.querySelector<HTMLElement>(
+        `[data-o2m-row="${childCollection}:${rowId}"]`
+      )
+      if (!rowEl) {
+        // The grid may sit on another step — ask for it once the form is up.
+        if (!jumped && tries >= 3) {
+          jumped = true
+          try {
+            jumpToFieldRef.current(rel.one_field as string)
+          } catch {
+            /* not on a step */
+          }
+        }
+        if (tries > 40) window.clearInterval(tick)
+        return
+      }
+      window.clearInterval(tick)
+      // Summary mode keeps sections folded with their content mounted but
+      // hidden — unfold the one that holds the row.
+      if (rowEl.offsetParent === null)
+        rowEl
+          .closest('[data-read-section]')
+          ?.querySelector<HTMLElement>('h3 button[aria-expanded="false"]')
+          ?.click()
+      window.setTimeout(
+        () => window.dispatchEvent(new CustomEvent('nvr:grid-open-row', { detail })),
+        250
+      )
+    }, 600)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [o2mRelations, isNew])
   // Per-container active tab: Map<containerId, tabKey>
   const [containerTabs, setContainerTabs] = useState<Map<number, string>>(() => new Map())
   const [containerVisited, setContainerVisited] = useState<Map<number, Set<string>>>(
