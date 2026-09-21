@@ -1361,10 +1361,7 @@ function applyFilters(
         // `_link` filters the JUNCTION row itself (a membership that carries
         // its own columns — a scope, a role, a date); every other key filters
         // the related record. Both must hold on the SAME link.
-        const { _link: linkFilter, ...rawTargetFilter } = innerFilter as Record<
-          string,
-          unknown
-        > & {
+        const { _link: linkFilter, ...rawTargetFilter } = innerFilter as Record<string, unknown> & {
           _link?: unknown
         }
         // A related collection that has its OWN relation of that name keeps it.
