@@ -28,6 +28,7 @@ import {
   closedThroughLabel,
   compareColumnClosed,
   extraSeriesValue,
+  SeriesFigurePopover,
   GridStatChip,
   monthLabel,
   monthLabelLong,
@@ -1280,7 +1281,17 @@ export function PlanGridField(props: {
                             isClosed(b.key, c) && closedTint
                           )}
                         >
-                          <Figure n={extraSeriesValue(s, b.key, c) ?? 0} muted />
+                          {Math.abs(extraSeriesValue(s, b.key, c) ?? 0) >= 0.005 ? (
+                            <SeriesFigurePopover
+                              series={s}
+                              value={extraSeriesValue(s, b.key, c) ?? 0}
+                              periodLabel={`${monthLabelLong(c)} ${b.key}`}
+                            >
+                              <Figure n={extraSeriesValue(s, b.key, c) ?? 0} muted />
+                            </SeriesFigurePopover>
+                          ) : (
+                            <Figure n={0} muted />
+                          )}
                         </td>
                       ))}
                       <td
@@ -1289,12 +1300,21 @@ export function PlanGridField(props: {
                           'px-3 py-0.5 text-right text-[11.5px] text-slate-500 dark:text-slate-400'
                         )}
                       >
-                        <Figure
-                          n={cents(
+                        <SeriesFigurePopover
+                          series={s}
+                          value={cents(
                             cols.reduce((a, c) => a + (extraSeriesValue(s, b.key, c) ?? 0), 0)
                           )}
-                          muted
-                        />
+                          periodLabel={String(b.key)}
+                          whole
+                        >
+                          <Figure
+                            n={cents(
+                              cols.reduce((a, c) => a + (extraSeriesValue(s, b.key, c) ?? 0), 0)
+                            )}
+                            muted
+                          />
+                        </SeriesFigurePopover>
                       </td>
                     </tr>
                   ))}

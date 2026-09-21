@@ -69,6 +69,13 @@ export interface CompareExtraSeries {
   /** One sentence on how the figures were placed — shown on hover. */
   hint?: string
   rows: Array<{ key: string | number; values: Record<string, number> }>
+  /** What the whole line adds up to. A period's figure is a SHARE of it, so
+   *  the sources below describe the line, not one period. */
+  total?: number
+  /** Heading over `details` — "Open on linked purchase orders". */
+  details_label?: string
+  /** The records the line is made of. With these the figure is clickable. */
+  details?: CompareDetailRow[]
 }
 
 /** Values the endpoint suggests for empty cells; the grid stages them only on
@@ -103,6 +110,108 @@ export interface CompareSeriesData {
 }
 
 /** The extra series' value for a (row, column), null when it has none. */
+/** A figure of an extra series, clickable when the endpoint says what the line
+ *  is made of: the period's share, the whole line, how it was placed, and the
+ *  records behind it. Without `details` it is plain text, as before. */
+export function SeriesFigurePopover(props: {
+  series: CompareExtraSeries
+  value: number
+  /** "October 2026" */
+  periodLabel: string
+  /** Total-column figure: the popover describes the whole row, not a period. */
+  whole?: boolean
+  children: React.ReactNode
+}) {
+  const { series: s, value, periodLabel, whole, children } = props
+  const [open, setOpen] = useState(false)
+  const details = s.details ?? []
+  if (details.length === 0 && s.total == null) return <>{children}</>
+  const total = s.total ?? null
+  const pct = total && total > 0.005 ? Math.round((value / total) * 1000) / 10 : null
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-compare-series-details={s.key}
+          data-tip=''
+          className='rounded px-0.5 underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:decoration-solid'
+        >
+          {children}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' sideOffset={6} className='w-[360px] p-0 text-[12px]'>
+        <div className='border-b border-slate-200 px-3 py-2 dark:border-border'>
+          <p className='text-[12.5px] font-semibold text-slate-900 dark:text-slate-100'>
+            {`${s.label} · ${periodLabel}`}
+          </p>
+          <dl className='mt-1 grid grid-cols-3 gap-2 tabular-nums'>
+            <div>
+              <dt className='text-[10.5px] text-slate-500 dark:text-slate-400'>
+                {whole ? 'This row' : 'This period'}
+              </dt>
+              <dd className='font-medium text-slate-800 dark:text-slate-100'>{fmtMoney(value)}</dd>
+            </div>
+            {total != null && (
+              <div>
+                <dt className='text-[10.5px] text-slate-500 dark:text-slate-400'>Whole line</dt>
+                <dd className='font-medium text-slate-800 dark:text-slate-100'>{fmtMoney(total)}</dd>
+              </div>
+            )}
+            {pct != null && (
+              <div>
+                <dt className='text-[10.5px] text-slate-500 dark:text-slate-400'>Share</dt>
+                <dd className='font-medium text-slate-800 dark:text-slate-100'>{`${pct}%`}</dd>
+              </div>
+            )}
+          </dl>
+          {s.hint ? (
+            <p className='mt-1.5 text-[11px] leading-4 text-slate-500 dark:text-slate-400'>{s.hint}</p>
+          ) : null}
+        </div>
+        {details.length > 0 ? (
+          <>
+            {s.details_label ? (
+              <p className='px-3 pt-1.5 text-[10.5px] font-medium text-slate-500 dark:text-slate-400'>
+                {s.details_label}
+              </p>
+            ) : null}
+            <ul className='max-h-[200px] overflow-y-auto overscroll-contain px-3 py-1' data-compare-series-list=''>
+              {details.map((d) => (
+                <li key={String(d.id)} className='py-1' data-compare-series-row={String(d.id)}>
+                  <div className='flex items-baseline gap-2'>
+                    <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
+                      {d.label}
+                      {d.sub ? (
+                        <span className='text-slate-500 dark:text-slate-400'>{` · ${d.sub}`}</span>
+                      ) : null}
+                    </span>
+                    <span className='tabular-nums text-slate-800 dark:text-slate-100'>
+                      {fmtMoney(d.amount)}
+                    </span>
+                  </div>
+                  {(d.date || (d.meta?.length ?? 0) > 0 || d.note) && (
+                    <p className='truncate text-[10.5px] text-slate-500 dark:text-slate-400'>
+                      {[d.date, ...(d.meta ?? []).map((x) => `${x.label} ${x.value}`), d.note]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className='border-t border-slate-100 px-3 py-1 text-[10.5px] tabular-nums text-slate-500 dark:border-border dark:text-slate-400'>
+              {`${details.length} ${details.length === 1 ? 'record' : 'records'}`}
+            </p>
+          </>
+        ) : (
+          <p className='px-3 py-2 text-slate-500 dark:text-slate-400'>Nothing listed behind this line.</p>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function extraSeriesValue(
   s: CompareExtraSeries,
   rowKey: unknown,
@@ -524,11 +633,17 @@ export function CompareCell(props: {
         <span
           key={s.key}
           data-compare-series={s.key}
-          data-tip={s.hint}
+          data-tip={s.details?.length ? '' : s.hint}
           className='flex items-baseline gap-1 text-[11px] leading-4 text-slate-500 dark:text-slate-400'
         >
           <span className='font-mono text-[9px] uppercase tracking-wide'>{s.label}</span>
-          <span className='tabular-nums'>{fmtMoney(v as number, compact)}</span>
+          <SeriesFigurePopover
+            series={s}
+            value={v as number}
+            periodLabel={`${columnLabel ?? column} ${String(rowKey)}`}
+          >
+            <span className='tabular-nums'>{fmtMoney(v as number, compact)}</span>
+          </SeriesFigurePopover>
         </span>
       ))}
     </div>
