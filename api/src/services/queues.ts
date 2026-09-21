@@ -7,7 +7,7 @@ import {
   parseActiveRules,
   referencedFields
 } from '../routes/at-risk.js'
-import { computeStatusBatch, type SlaInstanceRow } from '../routes/sla.js'
+import { computeStatusBatch, type SlaBatchEntry, type SlaInstanceRow } from '../routes/sla.js'
 import type { CMSRelation, User } from '../types.js'
 import {
   type ActiveAddendumInstance,
@@ -1904,8 +1904,15 @@ export async function resolveCollectionSource(
   // reuse the rows we already fetched above. Only valid when `binding` is truthy (the
   // only case `instances` was ever populated); when there's no binding we pass undefined
   // so computeStatusBatch falls back to its own query, matching prior behavior exactly.
-  const slaMap = ids.length
-    ? await span('queue:sla', () =>
+  // SLA is the single most expensive step (3.4s on the workflows queue) and it
+  // used to run to completion before anything else started, even though its
+  // result only NARROWS the id set when the source declares an `sla_filter` --
+  // which no source does today. So it is started here and awaited alongside
+  // owners / at-risk / extra fields below, turning a sum into a max.
+  // A source that DOES filter by SLA keeps the original serial behaviour
+  // exactly: it has to know the surviving ids before anything downstream runs.
+  const slaPromise: Promise<Record<string, SlaBatchEntry>> = ids.length
+    ? span('queue:sla', () =>
         computeStatusBatch(
           source.collection as string,
           ids,
@@ -1922,10 +1929,15 @@ export async function resolveCollectionSource(
             : undefined
         )
       )
-    : {}
-  ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
-  const afterSla = new Set(ids)
-  instances = instances.filter((i) => afterSla.has(i.item))
+    : Promise.resolve({})
+  const slaNarrows = !!source.sla_filter
+  let slaMap: Record<string, SlaBatchEntry> = {}
+  if (slaNarrows) {
+    slaMap = await slaPromise
+    ids = filterBySlaStatus(ids, slaMap, source.sla_filter)
+    const afterSla = new Set(ids)
+    instances = instances.filter((i) => afterSla.has(i.item))
+  }
 
   // Full-set light metadata BEFORE the ceiling — keeps stats exact when the
   // hydrated rows below get truncated. Skipped past BACKFILL_CEILING (memory
@@ -1941,6 +1953,15 @@ export async function resolveCollectionSource(
       sla_status: (slaMap[id]?.status as 'ok' | 'warning' | 'breached' | undefined) ?? null
     }))
   }
+  // Filled in below once the deferred SLA lands; idMeta is only read by the
+  // caller's stats pass, which happens after this function returns.
+  const fillIdMetaSla = () => {
+    if (!slaNarrows && idMeta) {
+      for (const m of idMeta) {
+        m.sla_status = (slaMap[m.item_id]?.status as 'ok' | 'warning' | 'breached' | undefined) ?? null
+      }
+    }
+  }
 
   const sanity = applySanityCeiling(ids, ceiling)
   ids = sanity.ids
@@ -1948,6 +1969,10 @@ export async function resolveCollectionSource(
   instances = instances.filter((i) => finalIdSet.has(i.item))
 
   if (ids.length === 0) {
+    if (!slaNarrows) {
+      slaMap = await slaPromise
+      fillIdMetaSla()
+    }
     return { items: [], matchedCount: sanity.matchedCount, truncated: sanity.truncated, idMeta }
   }
 
@@ -2020,7 +2045,7 @@ export async function resolveCollectionSource(
   const sendBackPromise = span('queue:send-backs', () =>
     sendBackBatch([...new Set(ownerRequests.map((r) => r.instanceId).filter(Boolean))])
   )
-  const [labels, ownersByItem, atRiskMap, extraResolved] = await Promise.all([
+  const [labels, ownersByItem, atRiskMap, extraResolved, slaResolved] = await Promise.all([
     span('queue:labels', () =>
       source.label_template
         ? renderTemplateLabels(sourceCollection, ids, source.label_template)
@@ -2096,8 +2121,13 @@ export async function resolveCollectionSource(
         )
         return { extraById, extraIdsById }
       }
-    )
+    ),
+    slaPromise
   ])
+  if (!slaNarrows) {
+    slaMap = slaResolved
+    fillIdMetaSla()
+  }
   const addendumMap = await addendumMapPromise
   const fulfilmentMap = await fulfilmentPromise.catch(() => null)
   const sendBackMap = await sendBackPromise.catch(() => new Map())
