@@ -1626,6 +1626,7 @@ export const upsertKeysGuide: DocSection = {
       items: [
         'Every key column must be present and non-empty in the create payload; otherwise the create inserts normally.',
         'The matched write runs as an update — update permission, row-level security, hooks, rules, validation and revision history all apply exactly as they do for PATCH.',
+        'A key ending in `?` is OPTIONAL: when the payload leaves it out (or sends it empty) the match looks for a row where that column IS NULL — `["project", "year", "category?"]` keeps one un-categorised row per project-year AND one row per category. Optional keys alone never identify a record; at least one required key must be present.',
         'Pair it with a unique index on the same columns when the database must enforce the key as well.',
         'Configure it in Data Model → the collection → Settings → "Natural key (upsert)".'
       ]
@@ -1921,6 +1922,36 @@ export const contentOpsGridPresets: DocSection = {
     {
       type: 'p',
       text: 'Spread remaining (`options.spread_remaining`) grew shape presets — Evenly, Front-loaded, Back-loaded, and "Like <previous key>" when the grid row one key below holds values (`presets` narrows the list) — skips columns the comparison series marks closed (the hint says how many), and has a grid-level twin in the toolbar ("spread across <keys>…", `across_rows: false` to hide it) that puts the remaining amount over every row\'s empty open cells, oldest row first, staging or writing per the grid\'s save mode.'
+    },
+    { type: 'h3', id: 'grid-row-split', text: 'Plan grid and category split (row_split)' },
+    {
+      type: 'p',
+      text: 'An inline-table grid that carries `options.row_split` (layout-local; grid ⚙ → Plan grid / row split) renders as a key × period plan grid instead of a row list: one block per key (a year), the plan and the comparison series as two lines named once in a frozen left column, full right-aligned figures that scroll horizontally, a frozen total. A block is EITHER one top-line row (the category column empty) or a set of category rows that add up to it, and the two can differ from key to key — so detail is optional and history stays valid. Cells are always editable (arrows, Enter, Tab, Escape, multi-cell paste) and every edit stages with the record\'s Save; the figure strip, sum cap, spread and comparison series configured on the same grid are reused.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "row_split": {
+    "key_field": "year",
+    "key_collection": "years",
+    "category_field": "category",
+    "category_collection": "categories",
+    "category_label_field": "name",
+    "categories": [1, 2],
+    "value_fields": ["january", "february", "…"],
+    "total_field": "total",
+    "split_endpoint": "/my-extension/split/$parent.id"
+  }
+}`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Splitting and merging go through `split_endpoint`, so the rules stay with the writer: `GET` returns `{categories: [{id, label, cap, forecast, left}], can_split, shares}`; `POST …/split {<key_field>, shares?, reason, preview?}` returns (preview) or writes the category rows; `POST …/merge {<key_field>, reason}` folds them back. The grid shows the preview with editable shares and surfaces a `blocked` sentence verbatim.',
+        'The comparison series may break its figures down by category: `rows[].by_category = { "<category id>" | "unclassified": { values, details } }`. Each category line compares against its own figures; an Unclassified line appears only when it holds something.',
+        'A closed period whose plan disagrees with what happened opens a reconcile: set the period to the actual and put the difference in the next open period, evenly over the open periods, in proportion to the plan already there, or nowhere — previewed, with a reason, staged like any edit. Nothing moves on its own.',
+        'Opening a record with `?row=<child collection>:<row id>` (what a row-watch notification links to) switches to the grid, unfolds its section and flashes the line.'
+      ]
     },
     { type: 'h3', text: 'Row lints' },
     {

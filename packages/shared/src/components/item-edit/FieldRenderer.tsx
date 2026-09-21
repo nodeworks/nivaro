@@ -22,7 +22,6 @@ import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { type CatalogModeConfig, CatalogPickerField } from './CatalogPickerField'
-import { type MembershipSetConfig, MembershipSetField } from './MembershipSetField'
 import {
   AddressAutocompleteField,
   ChecklistReadOnly,
@@ -39,6 +38,8 @@ import { parseJson, toLocalDatetime } from './helpers'
 import { InlineGridField } from './InlineGridField'
 import { InlineTableField, type RowLint } from './InlineTableField'
 import { M2MCombobox, M2MSingleSelectCombobox } from './M2MCombobox'
+import { type MembershipSetConfig, MembershipSetField } from './MembershipSetField'
+import { PlanGridField, type RowSplitConfig } from './PlanGrid'
 import {
   AddressField,
   applyInputMask,
@@ -860,6 +861,43 @@ export function FieldRenderer({
               parentCollection={collection}
               config={catalogMode}
               readOnly={field.readonly}
+            />
+          )
+        }
+        const rowSplit = opts.row_split as RowSplitConfig | undefined
+        if (
+          rowSplit?.key_field &&
+          rowSplit?.category_field &&
+          Array.isArray(rowSplit.value_fields)
+        ) {
+          const spread = opts.spread_remaining as { remaining?: unknown } | undefined
+          return (
+            <PlanGridField
+              relatedCollection={o2mCol}
+              manyField={o2mManyField}
+              parentId={itemId}
+              config={rowSplit}
+              compareSeries={
+                (opts.compare_series &&
+                typeof opts.compare_series === 'object' &&
+                typeof (opts.compare_series as { endpoint?: unknown }).endpoint === 'string'
+                  ? opts.compare_series
+                  : null) as import('./CompareSeries').CompareSeriesConfig | null
+              }
+              stats={
+                (Array.isArray(opts.stats) ? opts.stats : null) as
+                  | import('./InlineTableField').GridStatConfig[]
+                  | null
+              }
+              sumCap={
+                (opts.sum_cap && typeof opts.sum_cap === 'object' ? opts.sum_cap : null) as
+                  | import('./InlineTableField').GridSumCapConfig
+                  | null
+              }
+              remaining={typeof spread?.remaining === 'string' ? spread.remaining : null}
+              readOnly={field.readonly}
+              showHistory={showRowRevisions}
+              emptyLabel={field.label || undefined}
             />
           )
         }

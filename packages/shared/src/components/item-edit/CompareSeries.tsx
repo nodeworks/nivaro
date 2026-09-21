@@ -53,6 +53,13 @@ export interface CompareSeriesRow {
   key: string | number
   values: Record<string, number>
   details?: Record<string, CompareDetailRow[]>
+  /** The same figures broken down by the grid's category column (row_split
+   *  grids). Keys are category ids; whatever the endpoint could not place
+   *  sits under 'unclassified'. `values` stays the sum of every entry. */
+  by_category?: Record<
+    string,
+    { values: Record<string, number>; details?: Record<string, CompareDetailRow[]> }
+  >
 }
 
 /** An extra read-only line under the actual ('Committed' beside 'Actual'). */

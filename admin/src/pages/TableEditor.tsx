@@ -5648,7 +5648,9 @@ function UpsertKeysSection({ tableName }: { tableName: string }) {
           <code className='text-[10.5px]'>workflow, year</code>. A create whose payload matches an
           existing row on every key becomes an update of that row, so the collection stays
           one-row-per-key whether the write comes from a form grid, the REST API or a GraphQL
-          integration. Empty = plain inserts.
+          integration. End a column with <code className='text-[10.5px]'>?</code> to make it
+          optional — a create that leaves it blank matches the row where it is blank too. Empty =
+          plain inserts.
         </p>
       </div>
       <div className='space-y-2 px-4 py-3'>
@@ -13099,6 +13101,7 @@ function FieldSettingsPopover({
   const [sumCapLocal, setSumCapLocal] = useState<string>('')
   const [spreadLocal, setSpreadLocal] = useState<string>('')
   const [compareLocal, setCompareLocal] = useState<string>('')
+  const [rowSplitLocal, setRowSplitLocal] = useState<string>('')
   const [sortFieldOpen, setSortFieldOpen] = useState(false)
   const [groupedGroupField, setGroupedGroupField] = useState('')
   const [groupedOptionField, setGroupedOptionField] = useState('')
@@ -13525,6 +13528,7 @@ function FieldSettingsPopover({
         setSumCapLocal(opts.sum_cap ? JSON.stringify(opts.sum_cap, null, 2) : '')
         setSpreadLocal(opts.spread_remaining ? JSON.stringify(opts.spread_remaining, null, 2) : '')
         setCompareLocal(opts.compare_series ? JSON.stringify(opts.compare_series, null, 2) : '')
+        setRowSplitLocal(opts.row_split ? JSON.stringify(opts.row_split, null, 2) : '')
         setGroupedGroupField((opts.group_field as string) ?? '')
         setGroupedOptionField((opts.option_field as string) ?? '')
       } catch {
@@ -13760,6 +13764,20 @@ function FieldSettingsPopover({
                           ) as Record<string, unknown>
                         } catch {
                           return { compare_series: undefined } as Record<string, unknown>
+                        }
+                      })(),
+                      ...(() => {
+                        try {
+                          const parsed = rowSplitLocal.trim() ? JSON.parse(rowSplitLocal) : null
+                          return (
+                            parsed?.key_field &&
+                            parsed?.category_field &&
+                            Array.isArray(parsed?.value_fields)
+                              ? { row_split: parsed }
+                              : { row_split: undefined }
+                          ) as Record<string, unknown>
+                        } catch {
+                          return { row_split: undefined } as Record<string, unknown>
                         }
                       })()
                     })
@@ -15143,6 +15161,29 @@ function FieldSettingsPopover({
                       rows[{'{'}key, values, details{'}'}], closed_through, status, figures{'}'}).
                       Closed columns shade, the verdict leads the figure strip, each figure opens
                       the entries behind it.
+                    </p>
+                  </div>
+                )}
+                {iface === 'inline-table' && (
+                  <div className='space-y-1.5'>
+                    <Label className='text-[11px] text-slate-600'>Plan grid / row split (JSON)</Label>
+                    <Textarea
+                      value={rowSplitLocal}
+                      onChange={(e) => setRowSplitLocal(e.target.value)}
+                      placeholder={
+                        '{ "key_field": "year", "key_collection": "years", "category_field": "category", "category_collection": "categories", "category_label_field": "name", "categories": [1, 2], "value_fields": ["january", "february"], "total_field": "total", "split_endpoint": "/my-extension/split/$parent.id" }'
+                      }
+                      rows={4}
+                      className='font-mono text-[11px]'
+                    />
+                    <p className='text-[10px] text-slate-400'>
+                      Renders the rows as a key × period plan grid: one block per key, the plan and
+                      the comparison series as two labelled lines, full figures with horizontal
+                      scroll. A block is one top-line row (category empty) or a set of category rows
+                      that add up to it; splitting and merging go through split_endpoint (GET =
+                      categories, ceilings and shares; POST /split and /merge). Edits stage with
+                      the record's Save. Uses the figure strip, sum cap, spread and comparison
+                      series configured above.
                     </p>
                   </div>
                 )}
@@ -21138,6 +21179,7 @@ function FieldGroupsTab({
     'sum_cap',
     'spread_remaining',
     'compare_series',
+    'row_split',
     'picker_facets',
     'option_sort',
     'option_filter',
