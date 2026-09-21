@@ -1,6 +1,27 @@
 import { RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
+/** The cache facts a response carries; the widget render route returns just
+ *  these under `cache`, the execute route spreads them at the top level. */
+export interface CacheInfo {
+  cached?: boolean
+  cached_at?: string | null
+  age_seconds?: number | null
+  expires_in_seconds?: number | null
+  cache_ttl?: number | null
+}
+
+/** One line for a tooltip, where a full stamp will not fit. */
+export function cacheStampTip(c: CacheInfo): string {
+  const age = c.cached_at
+    ? Math.max(0, Math.round((Date.now() - Date.parse(c.cached_at)) / 1000))
+    : (c.age_seconds ?? null)
+  const when = age == null ? 'Cached' : `Updated ${relative(age)}`
+  return c.expires_in_seconds != null
+    ? `${when} — refreshes on its own in ${relative(c.expires_in_seconds).replace(' ago', '')}. Click to refresh now.`
+    : `${when}. Click to refresh now.`
+}
+
 /**
  * The envelope `POST /custom-queries/:slug/execute` returns. Older servers
  * answer with `data`/`cached` only, so every cache field is optional and the

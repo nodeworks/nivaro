@@ -69,7 +69,7 @@ import { useApiFetchConfig, useDrilldown, useOptionalNivaroClient } from '../con
 import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
-import { CacheStamp, type CustomQueryEnvelope } from './CacheStamp'
+import { CacheStamp, type CacheInfo, cacheStampTip, type CustomQueryEnvelope } from './CacheStamp'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { Button } from './ui/button'
 import {
@@ -1428,7 +1428,7 @@ export function WidgetSlot({
         )
         // Clickable only when the widget declares what record it describes and
         // a host provides the drill-down sheet — otherwise it stays inert text.
-        return canDrill ? (
+        const cell = canDrill ? (
           <button
             type='button'
             onClick={() => void openDrilldown()}
@@ -1440,6 +1440,29 @@ export function WidgetSlot({
           </button>
         ) : (
           strip
+        )
+        // A strip cell has no room for "Updated 3m ago · Refresh", and the
+        // drill target is already a button — so the age rides a tooltip and
+        // refresh is a hover-revealed icon rendered as a SIBLING (nesting it
+        // inside the drill button would be invalid and would also trigger the
+        // drill on click). Bottom-right: the copy affordance owns top-right.
+        const cacheInfo = renderData?.cache as CacheInfo | undefined
+        if (!cacheInfo?.cache_ttl) return cell
+        return (
+          <div className='group/cache relative h-full w-full' data-cache-stamp={cacheInfo.cached ? 'cached' : 'fresh'}>
+            {cell}
+            <button
+              type='button'
+              onClick={refreshWidget}
+              disabled={renderLoading}
+              data-cache-refresh
+              aria-label='Refresh this figure'
+              data-tip={cacheStampTip(cacheInfo)}
+              className='absolute bottom-1 right-1 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover/cache:opacity-100 focus-visible:opacity-100 disabled:opacity-50'
+            >
+              <RefreshCw className={`h-3 w-3 ${renderLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         )
       }
     }
