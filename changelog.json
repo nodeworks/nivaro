@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-21T18:16:48.945Z",
+  "generated_at": "2026-09-21T19:23:53.082Z",
   "releases": [
+    {
+      "version": "0.1.322",
+      "tag": "v0.1.322",
+      "date": "2026-09-21T15:23:42-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ui",
+              "text": "a popover opened inside a modal mounts inside that modal",
+              "hash": "078d2586"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.321",
       "tag": "v0.1.321",
-      "date": "2026-09-21T14:16:37-04:00",
+      "date": "2026-09-21T14:16:49-04:00",
       "sections": [
         {
           "label": "Added",
