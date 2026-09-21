@@ -70,3 +70,58 @@ describe('reconcilePatch', () => {
     expect(r.patch).toEqual({ january: 60 })
   })
 })
+
+describe('reconcilePatch across rows', () => {
+  const closedYear = { january: 100, february: 50 }
+  it('carries the leftover into the first open period of the next row', () => {
+    const r = reconcilePatch({
+      row: closedYear,
+      column: 'february',
+      actual: 20,
+      openColumns: ['january', 'february'],
+      mode: 'next',
+      targetRow: { january: 10, february: 0 }
+    })
+    expect(r.patch).toEqual({ february: 20 })
+    expect(r.targetPatch).toEqual({ january: 40 })
+    expect(r.moved).toBe(30)
+    expect(r.unabsorbed).toBe(0)
+  })
+  it('seeds a row that does not exist yet', () => {
+    const r = reconcilePatch({
+      row: closedYear,
+      column: 'january',
+      actual: 0,
+      openColumns: ['january', 'february'],
+      mode: 'weighted',
+      targetRow: {}
+    })
+    expect(r.patch).toEqual({ january: 0 })
+    expect(r.targetPatch).toEqual({ january: 50, february: 50 })
+  })
+  it('reports an overspend the next row cannot give back', () => {
+    const r = reconcilePatch({
+      row: closedYear,
+      column: 'january',
+      actual: 160,
+      openColumns: ['january'],
+      mode: 'next',
+      targetRow: { january: 25 }
+    })
+    expect(r.targetPatch).toEqual({ january: 0 })
+    expect(r.moved).toBe(-25)
+    expect(r.unabsorbed).toBe(-35)
+  })
+  it('keeps the closed column alone when nothing moves', () => {
+    const r = reconcilePatch({
+      row: closedYear,
+      column: 'january',
+      actual: 60,
+      openColumns: ['january'],
+      mode: 'none',
+      targetRow: {}
+    })
+    expect(r.patch).toEqual({ january: 60 })
+    expect(r.targetPatch).toBeUndefined()
+  })
+})

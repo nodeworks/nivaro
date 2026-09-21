@@ -95,6 +95,17 @@ interface PlanRow {
   isNew: boolean
 }
 
+/** Where a reconcile lands when its own row has no open column left. */
+interface CarryTarget {
+  key: string
+  cat: string | null
+  openColumns: string[]
+  /** The next key's row for the same line; null = staged as a new row. */
+  row: PlanRow | null
+  /** Why the difference cannot cross, in words — shown, never swallowed. */
+  blocked: string | null
+}
+
 interface Block {
   key: string
   mode: 'top' | 'split' | 'ghost'
@@ -158,6 +169,12 @@ export type ReconcileMode = 'next' | 'even' | 'weighted' | 'none'
  * What a reconcile writes. The closed column takes `actual`; the difference
  * goes to (or comes out of) open columns of the same row per `mode`. A column
  * never drops below zero — what could not be absorbed is reported. Pure.
+ *
+ * With `targetRow` the difference crosses into ANOTHER row (the next key, when
+ * this one has no open column left): `openColumns` and the weights are read
+ * from that row, and its changes come back as `targetPatch` — `patch` then
+ * holds the closed column alone. `targetRow: {}` is a row that does not exist
+ * yet.
  */
 export function reconcilePatch(args: {
   row: Record<string, unknown>
@@ -165,12 +182,23 @@ export function reconcilePatch(args: {
   actual: number
   openColumns: string[]
   mode: ReconcileMode
-}): { patch: Record<string, number>; moved: number; unabsorbed: number; targets: string[] } {
-  const { row, column, actual, openColumns, mode } = args
-  const remainder = cents(num(row[column]) - actual)
-  const patch: Record<string, number> = { [column]: cents(actual) }
+  targetRow?: Record<string, unknown>
+}): {
+  patch: Record<string, number>
+  targetPatch?: Record<string, number>
+  moved: number
+  unabsorbed: number
+  targets: string[]
+} {
+  const { column, actual, openColumns, mode } = args
+  const crossing = args.targetRow != null
+  const remainder = cents(num(args.row[column]) - actual)
+  const own: Record<string, number> = { [column]: cents(actual) }
+  // Where the difference lands: this row, or the one it crosses into.
+  const row = args.targetRow ?? args.row
+  const patch: Record<string, number> = crossing ? {} : own
   if (mode === 'none' || Math.abs(remainder) < 0.005 || openColumns.length === 0)
-    return { patch, moved: 0, unabsorbed: mode === 'none' ? 0 : remainder, targets: [] }
+    return { patch: own, moved: 0, unabsorbed: mode === 'none' ? 0 : remainder, targets: [] }
   let targets: string[]
   let weights: number[]
   if (mode === 'next') {
@@ -179,11 +207,16 @@ export function reconcilePatch(args: {
   } else if (mode === 'weighted') {
     targets = openColumns.filter((c) => num(row[c]) > 0.005)
     weights = targets.map((c) => num(row[c]))
+    // A row with nothing planned yet has no proportions to follow.
+    if (targets.length === 0 && crossing && remainder > 0) {
+      targets = openColumns
+      weights = targets.map(() => 1)
+    }
   } else {
     targets = openColumns
     weights = targets.map(() => 1)
   }
-  if (targets.length === 0) return { patch, moved: 0, unabsorbed: remainder, targets: [] }
+  if (targets.length === 0) return { patch: own, moved: 0, unabsorbed: remainder, targets: [] }
   const wSum = weights.reduce((a, b) => a + b, 0) || 1
   let left = remainder
   targets.forEach((c, i) => {
@@ -204,6 +237,14 @@ export function reconcilePatch(args: {
       left = cents(left + take)
     }
   }
+  if (crossing)
+    return {
+      patch: own,
+      targetPatch: patch,
+      moved: cents(remainder - left),
+      unabsorbed: left,
+      targets
+    }
   return { patch, moved: cents(remainder - left), unabsorbed: left, targets }
 }
 
@@ -489,15 +530,23 @@ export function PlanGridField(props: {
   // ── staging a change ────────────────────────────────────────────────────
   const [notice, setNotice] = useState<string | null>(null)
   const stage = useCallback(
-    (row: PlanRow, patch: Record<string, number>, reason?: string): boolean => {
+    (
+      row: PlanRow,
+      patch: Record<string, number>,
+      reason?: string,
+      // What a paired change takes off the same totals (a carry between rows)
+      // and whether this half must land first at save time.
+      pair?: { credit?: number; early?: boolean }
+    ): boolean => {
       if (!staging) return false
+      const credit = pair?.credit ?? 0
       const merged = { ...row.values, ...patch }
       const before = rowTotal(row.values)
       const after = rowTotal(merged)
-      if (after > before + 0.005) {
+      if (after - credit > before + 0.005) {
         if (sumCap) {
           const cap = evaluateNumeric(sumCap.cap, resolveToken)
-          const nextTotal = cents(gridTotal - before + after)
+          const nextTotal = cents(gridTotal - before + after - credit)
           if (cap != null && nextTotal > cap + 0.005) {
             setNotice(
               `${sumCap.message ?? `${sumCap.label ?? 'The total'} cannot exceed ${fmtFigure(cap)}`} — this would reach ${fmtFigure(nextTotal)}, ${fmtFigure(cents(nextTotal - cap))} over.`
@@ -508,7 +557,7 @@ export function PlanGridField(props: {
         if (row.cat != null) {
           const c = categoryFigures.find((x) => x.id === row.cat)
           if (c) {
-            const nextCat = cents(c.planned - before + after)
+            const nextCat = cents(c.planned - before + after - credit)
             if (nextCat > c.cap + 0.005) {
               setNotice(
                 `${c.label} would reach ${fmtFigure(nextCat)} — ${fmtFigure(cents(nextCat - c.cap))} over its ${fmtFigure(c.cap)}.`
@@ -520,7 +569,11 @@ export function PlanGridField(props: {
       }
       setNotice(null)
       if (row.id)
-        staging.queueEdit(rc, mf, row.id, reason ? { ...patch, _change_reason: reason } : patch)
+        staging.queueEdit(rc, mf, row.id, {
+          ...patch,
+          ...(reason ? { _change_reason: reason } : {}),
+          ...(pair?.early ? { __flush_early: true } : {})
+        })
       else if (row.pendingIndex != null)
         staging.updateRow(rc, mf, row.pendingIndex, {
           ...row.values,
@@ -533,15 +586,86 @@ export function PlanGridField(props: {
   )
 
   const addKey = useCallback(
-    (key: string | number, seed?: Record<string, number>, reason?: string) => {
+    (key: string | number, seed?: Record<string, number>, reason?: string, cat?: string | null) => {
       if (!staging) return
       staging.queueRow(rc, mf, {
         [config.key_field]: key,
+        ...(cat != null ? { [config.category_field]: /^\d+$/.test(cat) ? Number(cat) : cat } : {}),
         ...Object.fromEntries(cols.map((c) => [c, seed?.[c] ?? 0])),
         ...(reason ? { _change_reason: reason } : {})
       })
     },
-    [staging, rc, mf, config.key_field, cols]
+    [staging, rc, mf, config.key_field, config.category_field, cols]
+  )
+
+  // ── a reconcile that crosses into the next key ──────────────────────────
+  // Same cache entry the "Add" menu reads: the keys a row may name.
+  const { data: validKeys } = useQuery<Array<string | number>>({
+    queryKey: ['plan-grid-keys', config.key_collection],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string | number }> }>(
+          get(`/items/${config.key_collection}`, { fields: 'id', sort: '-id', limit: 200 })
+        )
+        .then((r) => (r.data ?? []).map((x) => x.id)),
+    enabled: !!config.key_collection && !!compare?.closed_through,
+    staleTime: 10 * 60_000
+  })
+  const carryFor = useCallback(
+    (key: string, cat: string | null): CarryTarget | null => {
+      const n = Number(key)
+      if (!Number.isInteger(n)) return null
+      const nextKey = String(n + 1)
+      const openColumns = cols.filter((c) => !isClosed(nextKey, c))
+      const b = blocks.find((x) => x.key === nextKey)
+      let row: PlanRow | null = null
+      let blocked: string | null = null
+      if (config.key_collection && validKeys && !validKeys.some((k) => String(k) === nextKey))
+        blocked = `${nextKey} is not set up yet`
+      else if (openColumns.length === 0) blocked = `${nextKey} has no open period either`
+      else if (b?.mode === 'split') {
+        if (cat == null) blocked = `${nextKey} is planned by category and this line is not`
+        else row = b.cats.find((r) => r.cat === cat) ?? null
+      } else if (b?.mode === 'top') {
+        if (cat != null) blocked = `${nextKey} is planned as one line and this one is by category`
+        else row = b.top
+      }
+      return { key: nextKey, cat, openColumns, row, blocked }
+    },
+    [cols, isClosed, blocks, config.key_collection, validKeys]
+  )
+  const reconcileStage = useCallback(
+    (
+      row: PlanRow,
+      patch: Record<string, number>,
+      reason?: string,
+      carry?: { target: CarryTarget; patch: Record<string, number> }
+    ): boolean => {
+      if (!carry || Object.keys(carry.patch).length === 0) return stage(row, patch, reason)
+      const srcDelta = cents(rowTotal({ ...row.values, ...patch }) - rowTotal(row.values))
+      const tRow = carry.target.row
+      const tgtDelta = cents(
+        rowTotal({ ...(tRow?.values ?? {}), ...carry.patch }) - rowTotal(tRow?.values ?? {})
+      )
+      // The half that LOWERS a total is staged first and flagged to save first;
+      // the other half is judged against the caps with that amount credited.
+      if (srcDelta <= 0) {
+        if (!tRow) {
+          // A new row takes no more than this one gives up, so the pair never
+          // raises a total — the caps have nothing to refuse.
+          if (tgtDelta > -srcDelta + 0.005) return false
+          if (!stage(row, patch, reason, { early: true })) return false
+          addKey(Number(carry.target.key), carry.patch, reason, carry.target.cat)
+          return true
+        }
+        if (!stage(tRow, carry.patch, reason, { credit: -srcDelta })) return false
+        return stage(row, patch, reason, { early: true })
+      }
+      if (!tRow) return stage(row, patch, reason)
+      if (!stage(row, patch, reason, { credit: -tgtDelta })) return false
+      return stage(tRow, carry.patch, reason, { early: true })
+    },
+    [stage, rowTotal, addKey]
   )
 
   const removeBlock = useCallback(
@@ -1133,7 +1257,8 @@ export function PlanGridField(props: {
                     isClosed={isClosed}
                     row={b.mode === 'top' ? b.top : null}
                     canReconcile={canEdit && b.mode === 'top'}
-                    onReconcile={stage}
+                    onReconcile={reconcileStage}
+                    carryFor={carryFor}
                   />
                 )}
                 {b.mode !== 'split' &&
@@ -1234,7 +1359,8 @@ export function PlanGridField(props: {
                           isClosed={isClosed}
                           row={r}
                           canReconcile={canEdit}
-                          onReconcile={stage}
+                          onReconcile={reconcileStage}
+                          carryFor={carryFor}
                           indent
                         />
                       )}
@@ -1253,7 +1379,8 @@ export function PlanGridField(props: {
                     isClosed={isClosed}
                     row={null}
                     canReconcile={false}
-                    onReconcile={stage}
+                    onReconcile={reconcileStage}
+                    carryFor={carryFor}
                     indent
                     plain
                   />
@@ -1505,7 +1632,13 @@ function ActualLine(props: {
   isClosed: (key: string, col: string) => boolean
   row: PlanRow | null
   canReconcile: boolean
-  onReconcile: (row: PlanRow, patch: Record<string, number>, reason?: string) => boolean
+  onReconcile: (
+    row: PlanRow,
+    patch: Record<string, number>,
+    reason?: string,
+    carry?: { target: CarryTarget; patch: Record<string, number> }
+  ) => boolean
+  carryFor?: (key: string, cat: string | null) => CarryTarget | null
   indent?: boolean
   /** No comparison against a plan (the unclassified line). */
   plain?: boolean
@@ -1523,6 +1656,7 @@ function ActualLine(props: {
     row,
     canReconcile,
     onReconcile,
+    carryFor,
     plain
   } = props
   const total = cents(cols.reduce((a, c) => a + actualFor(blockKey, cat, c).value, 0))
@@ -1567,7 +1701,8 @@ function ActualLine(props: {
                         row,
                         column: c,
                         openColumns: cols.filter((x) => !isClosed(blockKey, x)),
-                        onApply: (patch, reason) => onReconcile(row, patch, reason)
+                        carry: carryFor?.(blockKey, cat) ?? null,
+                        onApply: (patch, reason, carry) => onReconcile(row, patch, reason, carry)
                       }
                     : null
                 }
@@ -1608,7 +1743,13 @@ function ActualPopover(props: {
     row: PlanRow
     column: string
     openColumns: string[]
-    onApply: (patch: Record<string, number>, reason: string) => boolean
+    /** Offered only when `openColumns` is empty. */
+    carry: CarryTarget | null
+    onApply: (
+      patch: Record<string, number>,
+      reason: string,
+      carry?: { target: CarryTarget; patch: Record<string, number> }
+    ) => boolean
   } | null
 }) {
   const { title, compare, actualName, actual, planned, closed, plain, details, tone, reconcile } =
@@ -1618,6 +1759,17 @@ function ActualPopover(props: {
   const [reason, setReason] = useState('')
   const plan = planLabel(compare)
   const diff = cents(planned - actual)
+  // This row has no open period left: the difference may cross into the next key.
+  const carry =
+    reconcile && reconcile.openColumns.length === 0 && reconcile.carry && !reconcile.carry.blocked
+      ? reconcile.carry
+      : null
+  const carryBlocked =
+    reconcile && reconcile.openColumns.length === 0 ? (reconcile.carry?.blocked ?? null) : null
+  const targetValues: Record<string, unknown> = carry
+    ? (carry.row?.values ?? {})
+    : (reconcile?.row.values ?? {})
+  const targetOpen = carry ? carry.openColumns : (reconcile?.openColumns ?? [])
   const result = useMemo(
     () =>
       reconcile
@@ -1625,25 +1777,27 @@ function ActualPopover(props: {
             row: reconcile.row.values,
             column: reconcile.column,
             actual,
-            openColumns: reconcile.openColumns,
-            mode
+            openColumns: carry ? carry.openColumns : reconcile.openColumns,
+            mode,
+            ...(carry ? { targetRow: carry.row?.values ?? {} } : {})
           })
         : null,
-    [reconcile, actual, mode]
+    [reconcile, carry, actual, mode]
   )
-  const weightedPossible =
-    !!reconcile && reconcile.openColumns.some((c) => num(reconcile.row.values[c]) > 0.005)
+  const landed = result ? (result.targetPatch ?? result.patch) : {}
+  const weightedPossible = targetOpen.some((c) => num(targetValues[c]) > 0.005)
   const defaultReason = useMemo(() => {
     const base = `Reconciled ${title} to ${actualName.toLowerCase()} (${fmtFigure(actual)})`
     if (!result || Math.abs(result.moved) < 0.005) return base
-    const where =
+    const where = `${
       result.targets.length === 1
         ? monthLabelLong(result.targets[0])
         : `${result.targets.length} open periods`
+    }${carry ? ` ${carry.key}` : ''}`
     return result.moved > 0
       ? `${base} — moved ${fmtFigure(result.moved)} to ${where}`
       : `${base} — took ${fmtFigure(-result.moved)} from ${where}`
-  }, [title, actualName, actual, result])
+  }, [title, actualName, actual, result, carry])
   useEffect(() => {
     if (open) setReason(defaultReason)
   }, [open, defaultReason])
@@ -1651,19 +1805,23 @@ function ActualPopover(props: {
     ? [
         {
           key: 'next',
-          label: reconcile.openColumns[0]
-            ? `Next open period (${monthLabel(reconcile.openColumns[0])})`
+          label: targetOpen[0]
+            ? `Next open period (${monthLabel(targetOpen[0])}${carry ? ` ${carry.key}` : ''})`
             : 'Next open period',
-          disabled: reconcile.openColumns.length === 0
+          disabled: targetOpen.length === 0
         },
         {
           key: 'even',
-          label: 'Evenly over every open period',
-          disabled: reconcile.openColumns.length === 0
+          label: carry
+            ? `Evenly over ${carry.key}'s open periods`
+            : 'Evenly over every open period',
+          disabled: targetOpen.length === 0
         },
         {
           key: 'weighted',
-          label: `In proportion to the ${plan.toLowerCase()} already there`,
+          label: carry
+            ? `In proportion to the ${plan.toLowerCase()} already in ${carry.key}`
+            : `In proportion to the ${plan.toLowerCase()} already there`,
           disabled: !weightedPossible
         },
         { key: 'none', label: 'Nowhere — drop it from the plan' }
@@ -1776,6 +1934,24 @@ function ActualPopover(props: {
                 </label>
               ))}
             </div>
+            {carry && mode !== 'none' && (
+              <p
+                className='mt-1.5 text-[11.5px] text-slate-600 dark:text-slate-300'
+                data-plan-reconcile-carry={carry.key}
+              >
+                {carry.row
+                  ? `Every period of this row is closed, so it goes to ${carry.key}.`
+                  : `Every period of this row is closed and ${carry.key} has no row for this line — one is added, and shows as pending until you save.`}
+              </p>
+            )}
+            {carryBlocked && (
+              <p
+                className='mt-1.5 text-[11.5px] text-amber-700 dark:text-amber-300'
+                data-plan-reconcile-blocked
+              >
+                {`Every period of this row is closed, and ${carryBlocked} — the difference can only be dropped from here.`}
+              </p>
+            )}
             {result.targets.length > 0 && (
               <p
                 className='mt-1.5 text-[11.5px] tabular-nums text-slate-600 dark:text-slate-300'
@@ -1785,7 +1961,7 @@ function ActualPopover(props: {
                   .slice(0, 6)
                   .map(
                     (c) =>
-                      `${monthLabel(c)} ${fmtFigure(num(reconcile.row.values[c]))} → ${fmtFigure(result.patch[c])}`
+                      `${monthLabel(c)}${carry ? ` ${carry.key}` : ''} ${fmtFigure(num(targetValues[c]))} → ${fmtFigure(landed[c])}`
                   )
                   .join(' · ')}
                 {result.targets.length > 6 ? ` · +${result.targets.length - 6} more` : ''}
@@ -1808,8 +1984,16 @@ function ActualPopover(props: {
                 type='button'
                 data-plan-reconcile-apply
                 onClick={() => {
-                  if (reconcile.onApply(result.patch, reason.trim() || defaultReason)) {
-                    toast.success('Reconcile staged — Save to keep it')
+                  const crossed =
+                    carry && result.targetPatch && Object.keys(result.targetPatch).length > 0
+                      ? { target: carry, patch: result.targetPatch }
+                      : undefined
+                  if (reconcile.onApply(result.patch, reason.trim() || defaultReason, crossed)) {
+                    toast.success(
+                      crossed
+                        ? `Reconcile staged across ${title.split(' ').pop()} and ${carry?.key} — Save to keep it`
+                        : 'Reconcile staged — Save to keep it'
+                    )
                     setOpen(false)
                   }
                 }}

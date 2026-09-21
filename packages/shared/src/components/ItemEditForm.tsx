@@ -6097,6 +6097,33 @@ export function ItemEditForm({
       // lines; keeping everything would duplicate the saved ones).
       remainingO2MRowsRef.current = new Map()
       const remainingO2MRows = remainingO2MRowsRef.current
+      // ── Early edits ───────────────────────────────────────────────────────
+      // A staged edit flagged `__flush_early` is the GIVING half of a move
+      // between two rows (an amount carried from one row into another, or into
+      // a row that does not exist yet). It lands before any new row and before
+      // the other edits, so a cap over the rows' combined total never sees the
+      // receiving half alone. A failure here is left for the normal pass below,
+      // which retries it and reports it.
+      const earlyDone = new Set<string>()
+      for (const key of editO2MKeys) {
+        const [rc] = key.split('.')
+        for (const [rowId, changes] of pendingO2MEdits.get(key) ?? new Map()) {
+          if (!changes.__flush_early) continue
+          if (Object.keys(changes).some((k) => k.startsWith('__nested_ops_'))) continue
+          const body = Object.fromEntries(
+            Object.entries(changes as Record<string, unknown>).filter(([k]) => !k.startsWith('__'))
+          )
+          if (Object.keys(body).length === 0) continue
+          if (changeReasonRef.current && !body._change_reason)
+            body._change_reason = changeReasonRef.current
+          const ok = await client
+            .request(patch(`/items/${rc}/${rowId}`, body))
+            .then(() => true)
+            .catch(() => false)
+          if (ok) earlyDone.add(`${key}:${rowId}`)
+        }
+      }
+
       for (const key of newO2MKeys) {
         const stepId = `o2m:new:${key}`
         const [rc, mf] = key.split('.')
@@ -6263,10 +6290,12 @@ export function ItemEditForm({
               k.startsWith('__nested_ops_')
             )
             const cleanChanges = Object.fromEntries(
-              Object.entries(changes).filter(([k]) => !k.startsWith('__nested_ops_'))
+              Object.entries(changes).filter(
+                ([k]) => !k.startsWith('__nested_ops_') && k !== '__flush_early'
+              )
             )
             let rowPatchFailed = false
-            if (Object.keys(cleanChanges).length > 0) {
+            if (Object.keys(cleanChanges).length > 0 && !earlyDone.has(`${key}:${rowId}`)) {
               // The row's own reason (prefilled by the action that staged it)
               // beats the one collected for the save as a whole.
               if (changeReasonRef.current && !cleanChanges._change_reason)
