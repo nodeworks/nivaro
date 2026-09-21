@@ -1032,6 +1032,37 @@ export const dataIntegrityGuide: DocSection = {
           '`{field, rule, proposal_id, choice?}` applies one proposal (the server re-derives the list and matches by id); `{undo: writes}` reverses a previous apply. Without proposal_id the legacy one-click fix runs (clear / regenerate / re-derive).'
         ]
       ]
+    },
+    { type: 'h2', id: 'inactive-people', text: 'Inactive people' },
+    {
+      type: 'p',
+      text: 'The third tab answers "who is still named on live work but can no longer act?" — accounts that are suspended, redacted, anonymised or import placeholders, and what still points at them. Sources are discovered from the schema: every foreign key from a business collection into the users table, every junction or M2A leg that can hold a user, plus owner-group seats, team places, manually added record owners and open tasks. It opens on the narrowest question (assignments on records in an open workflow, and seats) and widens by switch to closed records, created-by / updated-by stamps, and the person\'s own saved sets.'
+    },
+    {
+      type: 'p',
+      text: 'Expand a person to see each link type with its count. Record links list the records and can be handed to an active person — each write goes through the items service as you, so permissions, hooks and revisions apply, and a junction link the successor already holds is removed rather than doubled. Seats and team places list the pipeline, state, scope and who else holds the place; one with nobody else who can act is flagged, and any selection can be handed on or removed. Machine accounts (integration, bot, service) are never listed.'
+    },
+    {
+      type: 'table',
+      head: ['Endpoint', 'Purpose'],
+      rows: [
+        [
+          '`GET /api/inactive-user-links?fresh=1`',
+          'The scan: sources, people, per-source counts (admin; cached 2 minutes).'
+        ],
+        [
+          '`GET /api/inactive-user-links/:userId/records?source=`',
+          'Records behind one link type; platform sources also return described `entries`.'
+        ],
+        [
+          '`POST /api/inactive-user-links/:userId/reassign`',
+          '`{source, to, ids?}` — hand records, seats, places or tasks to an active account (500 per call).'
+        ],
+        [
+          '`POST /api/inactive-user-links/:userId/remove`',
+          '`{source, ids}` — take the account off seats, team places or manual owner rows with no successor.'
+        ]
+      ]
     }
   ]
 }

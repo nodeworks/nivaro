@@ -86,6 +86,7 @@ import { healthRoutes } from './health.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
+import { inactiveUserLinkRoutes } from './inactive-user-links.js'
 import { inboundMappingsRoutes, inboundRoutes } from './inbound-mappings.js'
 import { indexAdvisorRoutes } from './index-advisor.js'
 import { integrationContractRoutes } from './integration-contracts.js'
@@ -271,6 +272,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(announcementRoutes, { prefix: '/announcements' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
+  await app.register(inactiveUserLinkRoutes, { prefix: '/inactive-user-links' })
   await app.register(delegationRoutes)
   await app.register(myWorkRoutes)
   await app.register(accessRequestRoutes)

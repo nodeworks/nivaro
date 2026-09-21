@@ -33,6 +33,8 @@ export {
   useAvailableBulkActions,
   useBuiltinGate
 } from './components/bulk/BulkActionButtons'
+export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
+export { CacheStamp, cacheStampTip } from './components/CacheStamp'
 export { CellCopyLayer } from './components/CellCopyLayer'
 export type {
   CollectionBrowserColumn,
@@ -148,6 +150,7 @@ export {
   type ApiRequestLogFilters,
   InboundCallersView
 } from './components/monitoring/ApiRequestLog'
+export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
 export type {
   BellLaneTab,
   BellNotification,
@@ -213,9 +216,6 @@ export {
   useScopeDimensions
 } from './components/pipeline/teamScopes'
 export { QualityRulesView } from './components/QualityRulesView'
-export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
-export { cacheStampTip } from './components/CacheStamp'
-export { CacheStamp } from './components/CacheStamp'
 export type { QueryWidgetStat } from './components/QueryStatStrip'
 export { QueryStatStrip } from './components/QueryStatStrip'
 export type { QueryTableColumn, QueryTableConfig } from './components/QueryTable'
