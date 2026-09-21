@@ -882,7 +882,9 @@ export function PlanGridField(props: {
       >
         <table
           className='border-separate border-spacing-0 text-[12px] tabular-nums'
-          style={{ width: tableWidth, tableLayout: 'fixed' }}
+          // Fills the slot; the months share any spare room, and the minimum keeps
+          // full figures readable (the wrapper scrolls below it).
+          style={{ width: '100%', minWidth: tableWidth, tableLayout: 'fixed' }}
         >
           <colgroup>
             <col style={{ width: LABEL_W }} />

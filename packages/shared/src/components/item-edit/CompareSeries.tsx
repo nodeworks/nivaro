@@ -902,7 +902,9 @@ export function CompareStripChips(props: { data: CompareSeriesData | null | unde
           className='flex max-w-[420px] items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 dark:border-border dark:bg-card'
         >
           <span className={cn('h-2 w-2 shrink-0 rounded-full', TONE_DOT[data.status.tone])} aria-hidden='true' />
-          <span className='text-[12px] font-semibold text-slate-800 dark:text-slate-100'>{data.status.label}</span>
+          <span className='shrink-0 whitespace-nowrap text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
+            {data.status.label}
+          </span>
           {data.status.reason && (
             <span className='min-w-0 truncate text-[11px] text-slate-500 dark:text-muted-foreground'>
               {data.status.reason}
