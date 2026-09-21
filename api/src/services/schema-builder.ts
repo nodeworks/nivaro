@@ -469,6 +469,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                 gqlFields[f.field] = {
                   type: relType,
                   description: f.note ?? undefined,
+                  // The legacy API accepted list arguments on every relation,
+                  // to-one included (`core_category(limit: -1) { id }`), and
+                  // integrations send them. A to-one has nothing to page, so
+                  // they are accepted and ignored rather than rejected.
+                  args: NESTED_LIST_ARGS,
                   resolve: async (source: unknown) => {
                     const parent = source as Record<string, unknown>
                     const fkVal = parent[col]
@@ -603,10 +608,16 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   fields: (): Record<string, { type: GraphQLInputType }> => {
                     const inner = filterRegistry.get(m2mOtherCollection)
                     if (!inner) return { _exists: { type: GraphQLBoolean } }
+                    const own = innerFieldsOf(inner)
+                    // Legacy junction shape: `{<junction fk>: {…target filter…}}`.
+                    // Offered only when the related collection has no field of
+                    // that name, which would otherwise change meaning.
+                    const leg = m2mInfo.fkToOther
                     return {
                       _some: { type: inner },
                       _none: { type: inner },
-                      ...innerFieldsOf(inner)
+                      ...own,
+                      ...(leg && !(leg in own) ? { [leg]: { type: inner } } : {})
                     }
                   }
                 })
@@ -643,10 +654,26 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             // ── M2O FK field ─────────────────────────────────────────────────
             const m2oTarget = m2oMap.get(fkey)
             if (m2oTarget) {
-              // Primary: filter by FK value (e.g. author_id: { _eq: "uuid" })
-              f[field.field] = { type: filterOpsForField(field.field, field.type) }
-              // Alias: nested relation filter (e.g. author: { first_name: { _eq: ... } })
+              // One key, both shapes: operators compare the FK value
+              // (`author: {_eq: "uuid"}`) and the related record's own fields
+              // filter through the relation (`author: {first_name: {_eq: …}}`
+              // — the legacy API's shape, which items.ts already compiles).
+              const opsType = filterOpsForField(field.field, field.type)
               const relFilter = filterRegistry.get(m2oTarget)
+              if (relFilter) {
+                const m2oWrapper = new GraphQLInputObjectType({
+                  name: `${colName}_${field.field}_m2o_filter`,
+                  fields: (): Record<string, { type: GraphQLInputType }> => ({
+                    ...innerFieldsOf(relFilter),
+                    ...innerFieldsOf(opsType)
+                  })
+                })
+                relationWrapperTypes.push(m2oWrapper)
+                f[field.field] = { type: m2oWrapper }
+              } else {
+                f[field.field] = { type: opsType }
+              }
+              // Alias kept for callers written against it.
               if (relFilter) {
                 const alias = field.field.endsWith('_id')
                   ? field.field.slice(0, -3)
@@ -854,6 +881,22 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           }
           return results
         } catch (e) {
+          // All or nothing, as the legacy batch was: a caller that gets an
+          // error retries the WHOLE batch, so rows that landed before the
+          // failure would come back as duplicates. Undone through deleteOne so
+          // rollups and activity follow; a row that cannot be undone is named.
+          const stuck: unknown[] = []
+          for (const made of [...results].reverse()) {
+            const id = (made as { id?: unknown } | null)?.id
+            if (id == null) continue
+            try {
+              await deleteOne(ctx.user, name, String(id))
+            } catch {
+              stuck.push(id)
+            }
+          }
+          if (stuck.length > 0 && e instanceof Error)
+            e.message += ` — and ${stuck.length} row(s) created before the failure could not be removed: ${stuck.join(', ')}`
           wrapError(e)
         }
       }

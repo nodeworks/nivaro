@@ -1164,6 +1164,26 @@ function implicitSome(nested: Record<string, unknown>): Record<string, unknown> 
   return { _some: nested }
 }
 
+/** The legacy API filtered a to-many alias through its JUNCTION row:
+ *  `purchase_orders: {purchase_order: {number: {_in: [...]}}}`, where
+ *  `purchase_order` is the junction's FK to the related record. That key names
+ *  the related record itself, so its contents fold into the target filter; an
+ *  operator-only value (`{_eq: 5}`) compares the related record's id. */
+function unwrapJunctionLeg(
+  filter: Record<string, unknown>,
+  fkToOther: string
+): Record<string, unknown> {
+  const leg = filter[fkToOther]
+  if (!leg || typeof leg !== 'object' || Array.isArray(leg)) return filter
+  const { [fkToOther]: _drop, ...rest } = filter
+  const legObj = leg as Record<string, unknown>
+  const keys = Object.keys(legObj)
+  const opsOnly =
+    keys.length > 0 && keys.every((k) => k.startsWith('_') && k !== '_and' && k !== '_or')
+  const folded = opsOnly ? { id: legObj } : legObj
+  return Object.keys(rest).length === 0 ? folded : { _and: [rest, folded] }
+}
+
 /** Compile a Directus-style filter onto an existing knex query for
  *  `collection` — the same compiler readItems uses, for callers that build
  *  their own base query (the GraphQL nested-list resolvers). */
@@ -1341,9 +1361,19 @@ function applyFilters(
         // `_link` filters the JUNCTION row itself (a membership that carries
         // its own columns — a scope, a role, a date); every other key filters
         // the related record. Both must hold on the SAME link.
-        const { _link: linkFilter, ...targetFilter } = innerFilter as Record<string, unknown> & {
+        const { _link: linkFilter, ...rawTargetFilter } = innerFilter as Record<
+          string,
+          unknown
+        > & {
           _link?: unknown
         }
+        // A related collection that has its OWN relation of that name keeps it.
+        const legIsOwnField = otherRels.some(
+          (r) => r.many_collection === otherCollection && r.many_field === fkToOther
+        )
+        const targetFilter = legIsOwnField
+          ? rawTargetFilter
+          : unwrapJunctionLeg(rawTargetFilter, fkToOther)
         const junctionRels = relCache.get(junction) ?? []
 
         const subFn = function (this: QB) {
