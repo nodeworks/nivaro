@@ -79,7 +79,8 @@ export interface CompareProposal {
   reason: string
   /** Stored as the change reason on every row the apply touches. */
   change_reason?: string
-  rows: Array<{ key: string | number; values: Record<string, number> }>
+  /** `category` places a row on that split line of the key; absent = the key's single line. */
+  rows: Array<{ key: string | number; category?: string | number; values: Record<string, number> }>
 }
 
 export interface CompareSeriesData {

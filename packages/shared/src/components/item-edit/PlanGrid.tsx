@@ -694,13 +694,23 @@ export function PlanGridField(props: {
     for (const pr of p.rows) {
       const key = String(pr.key)
       const b = blocks.find((x) => x.key === key)
-      if (b?.mode === 'split') continue
+      // A split key takes figures only on the line the proposal names.
+      if ((b?.mode === 'split') !== (pr.category != null)) continue
       const open = Object.fromEntries(
         Object.entries(pr.values).filter(
           ([c, v]) => cols.includes(c) && !isClosed(key, c) && num(v) > 0
         )
       )
-      if (b?.top) {
+      const line =
+        pr.category != null ? b?.cats.find((r) => String(r.cat) === String(pr.category)) : null
+      if (pr.category != null) {
+        if (!line) continue
+        const patch = Object.fromEntries(
+          Object.entries(open).filter(([c]) => num(line.values[c]) === 0)
+        )
+        if (Object.keys(patch).length && stage(line, patch, p.change_reason))
+          cells += Object.keys(patch).length
+      } else if (b?.top) {
         const patch = Object.fromEntries(
           Object.entries(open).filter(([c]) => num(b.top?.values[c]) === 0)
         )

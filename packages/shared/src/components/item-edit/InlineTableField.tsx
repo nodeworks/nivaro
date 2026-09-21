@@ -2991,6 +2991,8 @@ export function InlineTableField({
       let touched = 0
       const pendingEdits = staging?.getPendingEdits(relatedCollection, manyField) ?? new Map()
       for (const pr of p.rows) {
+        // Category lines belong to the plan grid; this grid has one row per key.
+        if (pr.category != null) continue
         const saved = rows.find((r) => String(r[key]) === String(pr.key))
         const pendingIdx = pendingRows.findIndex((r) => String(r[key]) === String(pr.key))
         const base = saved
