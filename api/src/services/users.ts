@@ -249,13 +249,27 @@ export async function listUsers(
     directory?: boolean
     /** Management surfaces only — pickers must never see suspended users. */
     includeSuspended?: boolean
+    /** Admin audit view: ONLY the accounts every other listing hides
+     *  (redacted flag, anonymised 'Redacted_…' emails, 'legacy-…' import
+     *  placeholders). Suspended rows ride along — most hidden rows are. */
+    hiddenOnly?: boolean
     /** Column subset (intersected with the caller's projection; id always
      *  rides). A banner that needs three columns of 500 users should not
      *  pull 300 KB of the full projection. */
     fields?: string[]
   } = {}
 ) {
-  const { limit = 25, offset = 0, search, sort, filter, directory, includeSuspended, fields } = opts
+  const {
+    limit = 25,
+    offset = 0,
+    search,
+    sort,
+    filter,
+    directory,
+    includeSuspended,
+    hiddenOnly,
+    fields
+  } = opts
 
   // Suspended users are excluded by default so every dropdown reading this
   // endpoint inherits the filter (same pattern as is_redacted). Existing
@@ -265,7 +279,7 @@ export async function listUsers(
     // placeholder is never a valid assignee, contact or mention. Admin listings
     // keep them (that is where they are managed).
     if (directory) qb.whereNull('account_kind')
-    if (includeSuspended) return
+    if (includeSuspended || hiddenOnly) return
     qb.where((inner) => {
       inner.where('status', '!=', 'suspended').orWhereNull('status')
     })
@@ -307,6 +321,15 @@ export async function listUsers(
   // email-prefix rows per page, which blanked whole pages and inflated the
   // page count because the server still returned and counted them.
   const applyHiddenAccountFilter = (qb: Knex.QueryBuilder) => {
+    if (hiddenOnly) {
+      qb.where((inner) => {
+        inner
+          .where('is_redacted', true)
+          .orWhereRaw(`email like 'legacy-%'`)
+          .orWhereRaw(`email like 'Redacted\\_%' escape '\\'`)
+      })
+      return
+    }
     qb.where('is_redacted', false)
       .whereRaw(`email not like 'legacy-%'`)
       .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
@@ -320,7 +343,13 @@ export async function listUsers(
     fields && fields.length > 0
       ? ['id', ...projection.filter((c) => c !== 'id' && fields.includes(c))]
       : [...projection]
-  const listQ = db<User>('nivaro_users').select(directory ? [...narrowed, 'preferences'] : narrowed)
+  const listQ = db<User>('nivaro_users').select(
+    directory
+      ? [...narrowed, 'preferences']
+      : hiddenOnly
+        ? [...narrowed, 'is_redacted', 'redacted_at']
+        : narrowed
+  )
   applyHiddenAccountFilter(listQ)
   applySuspendedFilter(listQ)
   // Directory callers get search + sort only: an arbitrary caller-supplied
@@ -364,9 +393,24 @@ export async function listUsers(
           r.timezone = tz
           return r
         })
-      : rows.map((u) => parsePreferences(u)),
+      : rows.map((u) => {
+          const r = parsePreferences(u)
+          if (hiddenOnly) (r as unknown as Record<string, unknown>).hidden_kind = hiddenKindOf(r)
+          return r
+        }),
     total: Number(count)
   }
+}
+
+/** Why an account is left out of every ordinary listing. */
+function hiddenKindOf(u: {
+  email?: string | null
+  is_redacted?: unknown
+}): 'redacted' | 'anonymised' | 'placeholder' {
+  const email = String(u.email ?? '')
+  if (/^legacy-/i.test(email)) return 'placeholder'
+  if (u.is_redacted === true || u.is_redacted === 1) return 'redacted'
+  return 'anonymised'
 }
 
 export async function updateUser(

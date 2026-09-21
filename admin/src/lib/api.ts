@@ -101,6 +101,8 @@ export type User = {
   directory_checked_at?: string | null
   /** NULL = a person; otherwise the row is a machine identity. */
   account_kind?: 'integration' | 'bot' | 'service' | 'placeholder' | null
+  /** Only on the Users page's 'Redacted / hidden' view. */
+  hidden_kind?: 'redacted' | 'anonymised' | 'placeholder'
 }
 
 export interface Workspace {

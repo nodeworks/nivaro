@@ -45,6 +45,18 @@ function initials(user: User): string {
   return user.email.slice(0, 2).toUpperCase()
 }
 
+const HIDDEN_KIND_LABEL = {
+  redacted: 'Redacted',
+  anonymised: 'Anonymised',
+  placeholder: 'Placeholder'
+} as const
+const HIDDEN_KIND_TIP = {
+  redacted: 'Redacted by a retention policy — hidden from every list and picker',
+  anonymised: 'Email scrubbed by the nightly anonymiser; the redacted flag was never set',
+  placeholder:
+    'Stand-in kept so old records still name someone — the real account was removed or holds this email elsewhere'
+} as const
+
 export function UsersPage() {
   const { user: authUser } = useAuth()
   const navigate = useNavigate()
@@ -84,9 +96,11 @@ export function UsersPage() {
             search: search || undefined,
             sort: sort || undefined,
             filter:
-              statusFilter || directoryFilter
+              (statusFilter && statusFilter !== 'hidden') || directoryFilter
                 ? JSON.stringify({
-                    ...(statusFilter ? { status: { _eq: statusFilter } } : {}),
+                    ...(statusFilter && statusFilter !== 'hidden'
+                      ? { status: { _eq: statusFilter } }
+                      : {}),
                     ...(directoryFilter === 'departed'
                       ? { directory_status: { _in: ['disabled', 'missing'] } }
                       : directoryFilter
@@ -95,7 +109,9 @@ export function UsersPage() {
                   })
                 : undefined,
             // Management surface — the default picker-safe list hides suspended.
-            include_suspended: true
+            include_suspended: true,
+            // Audit view: only the accounts every other listing leaves out.
+            hidden: statusFilter === 'hidden' ? 'only' : undefined
           }
         })
         .then((r) => r.data)
@@ -265,6 +281,16 @@ export function UsersPage() {
                   className='rounded-full bg-violet-50 px-1.5 py-px text-[10px] font-medium capitalize text-violet-700 dark:bg-violet-400/10 dark:text-violet-300'
                 >
                   {user.account_kind}
+                </span>
+              )}
+              {user.hidden_kind && user.hidden_kind !== user.account_kind && (
+                <span
+                  data-hidden-kind={user.hidden_kind}
+                  title={HIDDEN_KIND_TIP[user.hidden_kind]}
+                  className='rounded-full bg-slate-100 px-1.5 py-px text-[10px] font-medium text-slate-600 dark:bg-white/10 dark:text-slate-300'
+                >
+                  {HIDDEN_KIND_LABEL[user.hidden_kind]}
+                  {user.redacted_at ? ` · ${new Date(user.redacted_at).toLocaleDateString()}` : ''}
                 </span>
               )}
             </p>
@@ -495,7 +521,8 @@ export function UsersPage() {
               options: [
                 { label: 'Active', value: 'active' },
                 { label: 'Inactive', value: 'inactive' },
-                { label: 'Suspended', value: 'suspended' }
+                { label: 'Suspended', value: 'suspended' },
+                { label: 'Redacted / hidden', value: 'hidden' }
               ]
             },
             {
