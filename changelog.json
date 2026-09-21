@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-21T19:23:53.082Z",
+  "generated_at": "2026-09-21T20:29:51.259Z",
   "releases": [
+    {
+      "version": "0.1.323",
+      "tag": "v0.1.323",
+      "date": "2026-09-21T16:29:40-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grid",
+              "text": "a comparison series can explain its figures in a popover",
+              "hash": "3c78f1cd"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.322",
       "tag": "v0.1.322",
-      "date": "2026-09-21T15:23:42-04:00",
+      "date": "2026-09-21T15:23:53-04:00",
       "sections": [
         {
           "label": "Fixed",
