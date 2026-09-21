@@ -8,6 +8,8 @@ export interface User {
   external_id: string | null
   role: string | null
   status: 'active' | 'inactive' | 'suspended'
+  /** NULL = a person. See services/machine-accounts.ts. */
+  account_kind?: 'integration' | 'bot' | 'service' | 'placeholder' | null
   static_token: string | null
   last_access: Date | null
   last_page: string | null

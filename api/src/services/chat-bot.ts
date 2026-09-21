@@ -6,6 +6,7 @@ import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { getAiClient } from './ai-client.js'
 import { parseRoom } from './chat.js'
+import { BOT_EMAIL } from './machine-accounts.js'
 
 /**
  * Chat AI bot — "@bot what state is REQ-1234".
@@ -36,8 +37,6 @@ export function clearChatBotCache(): void {
   botNameCache = null
 }
 
-const BOT_EMAIL = 'chat-bot@nivaro.local'
-
 export async function botUserId(): Promise<string> {
   const existing = await db('nivaro_users').where({ email: BOT_EMAIL }).first('id')
   if (existing) return String(existing.id)
@@ -48,7 +47,8 @@ export async function botUserId(): Promise<string> {
     first_name: 'Assistant',
     // Suspended by design: hidden from listUsers, pickers, presence — the bot
     // exists only as a message sender.
-    status: 'suspended'
+    status: 'suspended',
+    account_kind: 'bot'
   })
   return id
 }

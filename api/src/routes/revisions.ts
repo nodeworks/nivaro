@@ -4,6 +4,7 @@ import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chunkArray } from '../services/db-batch.js'
 import { updateOne } from '../services/items.js'
+import { isMachineAccount } from '../services/machine-accounts.js'
 import { can } from '../services/permissions.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
 
@@ -430,7 +431,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
         'u.first_name',
         'u.last_name',
         'u.email',
-        'u.status'
+        'u.account_kind'
       )) as Array<Record<string, unknown>>
     const wanted = new Set(fields)
     const out: Record<
@@ -458,8 +459,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
           ? 'import'
           : !row.user_id
             ? 'system'
-            : /@nivaro\.local$|@invalid\.local$/.test(email) ||
-                String(row.status ?? '') === 'suspended'
+            : isMachineAccount({ account_kind: row.account_kind as string | null, email })
               ? 'integration'
               : 'user'
         const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))

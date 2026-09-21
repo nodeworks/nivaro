@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { ForbiddenError, readOne } from '../services/items.js'
+import { isMachineAccount } from '../services/machine-accounts.js'
 import { can } from '../services/permissions.js'
 
 /**
@@ -35,6 +36,7 @@ function classifyVia(r: {
   actor: string | null
   email: string | null
   legacy_id: number | null
+  account_kind?: string | null
 }): string {
   const c = (r.comment ?? '').toLowerCase()
   const a = (r.action ?? '').toLowerCase()
@@ -44,7 +46,7 @@ function classifyVia(r: {
   if (a.startsWith('import') || /import/.test(c)) return 'import'
   if (c === 'reforecast' || c.includes('replay')) return 'automation'
   const email = (r.email ?? '').toLowerCase()
-  if (email.endsWith('@nivaro.local') || email.includes('integration')) return 'integration'
+  if (isMachineAccount({ account_kind: r.account_kind, email })) return 'integration'
   if (a.includes(':')) return 'integration' // extension-namespaced action
   if (!r.actor) return 'automation'
   return 'manual'
@@ -238,7 +240,8 @@ export async function provenanceTraceRoutes(app: FastifyInstance) {
           'a.timestamp',
           'u.first_name',
           'u.last_name',
-          'u.email'
+          'u.email',
+          'u.account_kind'
         )) as Array<{
         id: number
         delta: string | null
@@ -251,6 +254,7 @@ export async function provenanceTraceRoutes(app: FastifyInstance) {
         first_name: string | null
         last_name: string | null
         email: string | null
+        account_kind: string | null
       }>
 
       const entries: Array<{

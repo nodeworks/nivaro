@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { isMachineAccount } from '../services/machine-accounts.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 
@@ -44,7 +45,8 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
           'a.timestamp',
           'u.first_name',
           'u.last_name',
-          'u.email'
+          'u.email',
+          'u.account_kind'
         )) as Array<{
         id: number
         delta: string | null
@@ -57,6 +59,7 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
         first_name: string | null
         last_name: string | null
         email: string | null
+        account_kind: string | null
       }>
 
       /** Lineage: WHERE a value came from, not just who. Classified from the
@@ -68,6 +71,7 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
         actor: string | null
         email: string | null
         legacy_id: number | null
+        account_kind?: string | null
       }): { kind: string; label: string | null } => {
         const c = (r.comment ?? '').toLowerCase()
         if (r.legacy_id != null || c === 'legacy-import') {
@@ -78,7 +82,7 @@ export async function fieldHistoryRoutes(app: FastifyInstance) {
           return { kind: 'import', label: 'Forecast history import' }
         if (c.includes('replay')) return { kind: 'automation', label: 'Flow replay' }
         const email = (r.email ?? '').toLowerCase()
-        if (email.endsWith('@nivaro.local') || email.includes('integration')) {
+        if (isMachineAccount({ account_kind: r.account_kind, email })) {
           return { kind: 'integration', label: null }
         }
         if (!r.actor) return { kind: 'automation', label: null }

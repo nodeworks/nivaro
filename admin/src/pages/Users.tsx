@@ -256,8 +256,17 @@ export function UsersPage() {
             }
           />
           <div>
-            <p className='text-[13px] font-medium text-slate-800'>
+            <p className='flex items-center gap-1.5 text-[13px] font-medium text-slate-800'>
               {[user.first_name, user.last_name].filter(Boolean).join(' ') || '—'}
+              {user.account_kind && (
+                <span
+                  data-account-kind={user.account_kind}
+                  title='Not a person — never offered in pickers, never checked against the directory or retention'
+                  className='rounded-full bg-violet-50 px-1.5 py-px text-[10px] font-medium capitalize text-violet-700 dark:bg-violet-400/10 dark:text-violet-300'
+                >
+                  {user.account_kind}
+                </span>
+              )}
             </p>
             <p className='text-[11px] text-slate-400'>{user.email}</p>
           </div>

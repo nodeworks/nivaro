@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import { writeRevision } from '../services/revisions.js'
 import { getUser, listUsers, updateUser } from '../services/users.js'
@@ -128,7 +129,8 @@ export async function usersRoutes(app: FastifyInstance) {
           'manager_id',
           'delegate_id',
           'delegate_expires_at',
-          'is_out_of_office'
+          'is_out_of_office',
+          'account_kind'
         ]
       : [
           'first_name',
@@ -146,6 +148,15 @@ export async function usersRoutes(app: FastifyInstance) {
     const filtered = Object.fromEntries(
       Object.entries(body).filter(([k]) => (allowed as string[]).includes(k))
     )
+    if ('account_kind' in filtered) {
+      const kind = filtered.account_kind
+      if (kind === '' || kind === null) filtered.account_kind = null
+      else if (!isAccountKind(kind)) {
+        return reply
+          .code(400)
+          .send({ error: `account_kind must be one of ${ACCOUNT_KINDS.join(', ')}, or null` })
+      }
+    }
     const previousUser = await getUser(id)
     const user = await updateUser(id, filtered)
     const activityId = await logActivity({

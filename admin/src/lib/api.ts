@@ -99,6 +99,8 @@ export type User = {
   redacted_at?: string | null
   directory_status?: 'active' | 'disabled' | 'missing' | null
   directory_checked_at?: string | null
+  /** NULL = a person; otherwise the row is a machine identity. */
+  account_kind?: 'integration' | 'bot' | 'service' | 'placeholder' | null
 }
 
 export interface Workspace {

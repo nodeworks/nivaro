@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { execCustomQuerySql } from './custom-query-exec.js'
+import { isMachineAccount } from './machine-accounts.js'
 
 export const DEFAULT_REDACT_FIELDS = [
   'first_name',
@@ -64,7 +65,7 @@ export async function executeRetentionPolicy(
   )
   const activeIds = new Set(activeRows.map((r) => String(r.uid).toUpperCase()))
 
-  let query = db('nivaro_users').select('id', 'email').where('is_redacted', false)
+  let query = db('nivaro_users').select('id', 'email', 'account_kind').where('is_redacted', false)
   if (exclusionEmails.length > 0) query = query.whereNotIn('email', exclusionEmails)
   if (exclusionRoles.length > 0) query = query.whereNotIn('role', exclusionRoles)
   // Users under an active legal hold are exempt from every retention action.
@@ -74,8 +75,13 @@ export async function executeRetentionPolicy(
       .whereNull('released_at')
   )
 
-  const allUsers: Array<{ id: string; email: string }> = await query
-  const candidates = allUsers.filter((u) => !activeIds.has(String(u.id).toUpperCase()))
+  const allUsers: Array<{ id: string; email: string; account_kind: string | null }> = await query
+  // Machine identities are never retention candidates: an integration that has
+  // been quiet for a quarter is idle, not departed, and redacting or suspending
+  // it breaks the next call it makes.
+  const candidates = allUsers.filter(
+    (u) => !isMachineAccount(u) && !activeIds.has(String(u.id).toUpperCase())
+  )
   const affectedIds = candidates.map((r) => r.id)
 
   if (dryRun || policy.dry_run_mode) {

@@ -10,6 +10,7 @@ import {
   lookupDirectoryUser,
   walkDirectoryUsers
 } from './graph-directory.js'
+import { isMachineAccount } from './machine-accounts.js'
 import { notifyUser } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
 
@@ -53,6 +54,7 @@ export interface DirectoryCheckSummary {
 type UserRow = {
   id: string
   email: string
+  account_kind: string | null
   first_name: string | null
   last_name: string | null
   status: string | null
@@ -72,7 +74,6 @@ type UserRow = {
 }
 
 /** Integration / placeholder identities have no directory entry by design. */
-const NEVER_CHECK = /@(nivaro\.local|invalid\.local)$/i
 
 const LOOKUP_THRESHOLD = 25
 
@@ -158,6 +159,7 @@ export async function checkDirectory(
     .select(
       'id',
       'email',
+      'account_kind',
       'first_name',
       'last_name',
       'status',
@@ -176,7 +178,9 @@ export async function checkDirectory(
       'preferred_language'
     )
   if (opts.userIds && opts.userIds.length > 0) q = q.whereIn('id', opts.userIds)
-  const users = ((await q) as UserRow[]).filter((u) => !NEVER_CHECK.test(u.email))
+  // A machine identity has no directory entry by design — reading its absence
+  // as "left the company" would suspend the integration it belongs to.
+  const users = ((await q) as UserRow[]).filter((u) => !isMachineAccount(u))
   const subset = Boolean(opts.userIds && opts.userIds.length > 0)
 
   // Resolve directory entries: a few ids → direct lookups, otherwise one walk.

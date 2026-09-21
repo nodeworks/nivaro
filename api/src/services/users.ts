@@ -188,7 +188,8 @@ const USER_COLS = [
   'is_out_of_office',
   'created_at',
   'directory_status',
-  'directory_checked_at'
+  'directory_checked_at',
+  'account_kind'
 ] as const
 
 // preferences is nvarchar JSON — parse on read, stringify on write so callers
@@ -260,6 +261,10 @@ export async function listUsers(
   // endpoint inherits the filter (same pattern as is_redacted). Existing
   // references still display — single-user reads don't go through here.
   const applySuspendedFilter = (qb: Knex.QueryBuilder) => {
+    // The person directory is for picking PEOPLE: an integration identity or a
+    // placeholder is never a valid assignee, contact or mention. Admin listings
+    // keep them (that is where they are managed).
+    if (directory) qb.whereNull('account_kind')
     if (includeSuspended) return
     qb.where((inner) => {
       inner.where('status', '!=', 'suspended').orWhereNull('status')
@@ -379,6 +384,7 @@ export async function updateUser(
       | 'delegate_id'
       | 'delegate_expires_at'
       | 'is_out_of_office'
+      | 'account_kind'
     >
   >
 ) {

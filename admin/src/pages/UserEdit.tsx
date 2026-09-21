@@ -101,7 +101,11 @@ export function UserEditPage() {
       first_name: (fd.get('first_name') as string) || null,
       last_name: (fd.get('last_name') as string) || null,
       role: role === '__none__' ? null : role || null,
-      status: fd.get('status') as User['status']
+      status: fd.get('status') as User['status'],
+      account_kind:
+        (fd.get('account_kind') as string) === '__person__'
+          ? null
+          : (fd.get('account_kind') as User['account_kind'])
     })
   }
 
@@ -256,6 +260,30 @@ export function UserEditPage() {
                         <SelectItem value='suspended'>Suspended</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div className='space-y-1.5 sm:col-span-2'>
+                    <Label htmlFor='edit-account-kind'>Account type</Label>
+                    <Select name='account_kind' defaultValue={user.account_kind ?? '__person__'}>
+                      <SelectTrigger id='edit-account-kind' data-account-kind-select>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='__person__'>Person</SelectItem>
+                        <SelectItem value='integration'>
+                          Integration — an external system writes as it
+                        </SelectItem>
+                        <SelectItem value='service'>Service login</SelectItem>
+                        <SelectItem value='bot'>Bot</SelectItem>
+                        <SelectItem value='placeholder'>
+                          Placeholder — kept so old references resolve
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                      Anything but Person is left out of people pickers, is never checked against
+                      the company directory or retention policies, and its edits read as
+                      "integration" in field history.
+                    </p>
                   </div>
                 </div>
               </div>
