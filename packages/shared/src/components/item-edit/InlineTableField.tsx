@@ -2959,7 +2959,8 @@ export function InlineTableField({
     }
   })
   const visibleProposals = useMemo(
-    () => (compareData?.proposals ?? []).filter((p) => !dismissedProposals.has(p.id)),
+    // `add` proposals need the plan grid's per-period arithmetic; the flat grid only fills.
+    () => (compareData?.proposals ?? []).filter((p) => p.mode !== 'add' && !dismissedProposals.has(p.id)),
     [compareData?.proposals, dismissedProposals]
   )
   /** Dismiss = remembered in this browser; an APPLIED proposal only hides for

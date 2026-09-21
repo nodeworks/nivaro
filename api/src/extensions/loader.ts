@@ -19,6 +19,7 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
 import { registerDigestSection } from '../services/daily-digest.js'
+import { registerBriefLine } from '../services/approval-brief-lines.js'
 import {
   type ExtensionEventHandler,
   publishExtensionEvent,
@@ -200,6 +201,10 @@ export interface ExtensionContext {
     register(def: ValidatorDef): void
   }
   /** Register custom flow operation types and triggers. */
+  approvalBrief: {
+    /** One short line on the transition confirm's approval brief for records of `collection`. */
+    registerLine(collection: string, fn: import('../services/approval-brief-lines.js').BriefLineProvider): void
+  }
   digest: {
     /** Add a per-user section to the daily action digest email. */
     registerSection(fn: import('../services/daily-digest.js').DigestSectionProvider): void
@@ -557,6 +562,7 @@ async function loadExtension(
     | 'events'
     | 'chatBot'
     | 'digest'
+    | 'approvalBrief'
     | 'readiness'
     | 'integrity'
     | 'mail'
@@ -838,6 +844,13 @@ async function loadExtension(
           validatorRegistry.register(def)
         }
       },
+      approvalBrief: {
+        registerLine: (collection, fn) => {
+          note('approvalBrief')
+          own('approval_brief_lines', collection)
+          registerBriefLine(extId, collection, fn)
+        }
+      },
       digest: {
         registerSection: (fn) => {
           note('digest')
@@ -1005,6 +1018,7 @@ export async function loadExtensions(
     | 'events'
     | 'chatBot'
     | 'digest'
+    | 'approvalBrief'
     | 'readiness'
     | 'integrity'
     | 'mail'
@@ -1147,6 +1161,7 @@ export async function loadCloudExtensions(
     | 'importParsers'
     | 'validators'
     | 'digest'
+    | 'approvalBrief'
     | 'readiness'
     | 'integrity'
     | 'mail'
@@ -1203,6 +1218,9 @@ export async function loadCloudExtensions(
         events: {
           publish: (eventType, payload) => publishExtensionEvent(extId, eventType, payload),
           on: (eventType, fn) => registerExtensionEventHandler(extId, eventType, fn)
+        },
+        approvalBrief: {
+          registerLine: (collection, fn) => registerBriefLine(ext.id ?? 'extension', collection, fn)
         },
         digest: {
           registerSection: (fn) => registerDigestSection(fn)
@@ -1397,6 +1415,7 @@ export async function scanNewExtensions(
     | 'importParsers'
     | 'validators'
     | 'digest'
+    | 'approvalBrief'
     | 'readiness'
     | 'integrity'
     | 'mail'

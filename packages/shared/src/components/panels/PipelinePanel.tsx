@@ -1242,6 +1242,7 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
             comments: number
             addendums: { count: number; cost_impact: number }
             edited_by: string[]
+            lines?: Array<{ label: string; text: string; tone?: 'ok' | 'warn' | 'danger' | 'neutral' }>
           } | null
         }>(get(`/pipelines/instance/${collection}/${item}/approval-brief`))
         .then((r) => r.data),
@@ -1316,6 +1317,26 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
           )}
         </div>
       )}
+      {(data.lines ?? []).map((l) => (
+        <p
+          key={`${l.label}:${l.text}`}
+          data-brief-line={l.label}
+          className='mt-1 text-slate-500 dark:text-muted-foreground'
+        >
+          <span className='font-medium text-slate-700 dark:text-foreground'>{l.label}</span>{' '}
+          <span
+            className={
+              l.tone === 'danger'
+                ? 'text-red-700 dark:text-red-300'
+                : l.tone === 'warn'
+                  ? 'text-amber-700 dark:text-amber-300'
+                  : ''
+            }
+          >
+            {l.text}
+          </span>
+        </p>
+      ))}
     </div>
   )
 }

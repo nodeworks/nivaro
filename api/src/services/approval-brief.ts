@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { briefLinesFor, type BriefLine } from './approval-brief-lines.js'
 import { getLabels } from './queues.js'
 
 /**
@@ -24,6 +25,8 @@ export interface ApprovalBrief {
   comments: number
   addendums: { count: number; cost_impact: number }
   edited_by: string[]
+  /** One-line facts registered by extensions for this collection (approval-brief-lines.ts). */
+  lines: BriefLine[]
 }
 
 const IGNORED = new Set(['date_updated', 'user_updated', 'changed', 'last_state_change'])
@@ -191,6 +194,7 @@ export async function buildApprovalBrief(
       count: addendums.length,
       cost_impact: addendums.reduce((sum, a) => sum + (Number(a.cost_impact) || 0), 0)
     },
-    edited_by: editorNames
+    edited_by: editorNames,
+    lines: await briefLinesFor(collection, String(item))
   }
 }

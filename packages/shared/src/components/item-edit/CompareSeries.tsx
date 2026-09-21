@@ -88,6 +88,12 @@ export interface CompareProposal {
   change_reason?: string
   /** `category` places a row on that split line of the key; absent = the key's single line. */
   rows: Array<{ key: string | number; category?: string | number; values: Record<string, number> }>
+  /**
+   * `fill` (default): figures land on EMPTY open periods only. `add`: figures are
+   * added to what the open periods already hold (a negative figure takes away,
+   * never below zero) — for a total that moved, not a plan that is missing.
+   */
+  mode?: 'fill' | 'add'
 }
 
 export interface CompareSeriesData {

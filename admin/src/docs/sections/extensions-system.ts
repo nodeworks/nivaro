@@ -119,6 +119,11 @@ export const extContext: DocSection = {
           'notifyUser',
           'Function',
           "notifyUser(userId, {subject, message, category?, collection?, item?}) — deliver through the full channel stack (inbox, socket, push, optional email) honouring the recipient's notification rules. Never insert nivaro_notifications rows directly."
+        ],
+        [
+          'approvalBrief',
+          'Object',
+          "approvalBrief.registerLine(collection, async ({collection, item}) => ({label, text, tone?}) | null) — one short line on the transition confirm's approval brief for records of that collection: a fact the approver should see before the click that the record's own history cannot supply. A provider that throws, returns null or takes longer than 4 seconds is dropped for that brief."
         ]
       ]
     },

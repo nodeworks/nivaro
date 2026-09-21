@@ -29,6 +29,7 @@
     "forecast:new-model": "tsx extensions/efp-ops/scripts/forecast-new-model.ts",
     "forecast:guardrails": "tsx extensions/efp-ops/scripts/forecast-guardrails.ts",
     "forecast:split": "tsx extensions/efp-ops/scripts/forecast-split.ts",
+    "forecast:insights": "tsx extensions/efp-ops/scripts/forecast-insights.ts",
     "ai:chat-guide": "tsx extensions/efp-ops/scripts/ai-chat-guide.ts",
     "retire:workflow-task": "tsx extensions/efp-ops/scripts/retire-workflow-task.ts",
     "pipeline:row-menu": "tsx extensions/efp-ops/scripts/row-menu-transitions.ts",

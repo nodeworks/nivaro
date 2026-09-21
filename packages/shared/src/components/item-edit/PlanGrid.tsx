@@ -138,6 +138,8 @@ interface SplitPreview {
     values: Record<string, number>
   }>
   blocked: string | null
+  /** Other defensible ways to divide the plan (0–1 per category id) the endpoint can offer. */
+  share_sets?: Array<{ key: string; label: string; hint?: string; shares: Record<string, number> }>
 }
 
 const UNCLASSIFIED = 'unclassified'
@@ -821,28 +823,36 @@ export function PlanGridField(props: {
       const b = blocks.find((x) => x.key === key)
       // A split key takes figures only on the line the proposal names.
       if ((b?.mode === 'split') !== (pr.category != null)) continue
+      const adding = p.mode === 'add'
       const open = Object.fromEntries(
         Object.entries(pr.values).filter(
-          ([c, v]) => cols.includes(c) && !isClosed(key, c) && num(v) > 0
+          ([c, v]) => cols.includes(c) && !isClosed(key, c) && (adding ? num(v) !== 0 : num(v) > 0)
         )
       )
+      // `add`: on top of what the period holds, never below zero.
+      const onto = (held: Record<string, unknown> | undefined) =>
+        Object.fromEntries(
+          Object.entries(open)
+            .map(([c, v]) => [c, Math.max(0, cents(num(held?.[c]) + num(v)))] as [string, number])
+            .filter(([c, v]) => Math.abs(v - num(held?.[c])) >= 0.005)
+        )
       const line =
         pr.category != null ? b?.cats.find((r) => String(r.cat) === String(pr.category)) : null
       if (pr.category != null) {
         if (!line) continue
-        const patch = Object.fromEntries(
-          Object.entries(open).filter(([c]) => num(line.values[c]) === 0)
-        )
+        const patch = adding
+          ? onto(line.values)
+          : Object.fromEntries(Object.entries(open).filter(([c]) => num(line.values[c]) === 0))
         if (Object.keys(patch).length && stage(line, patch, p.change_reason))
           cells += Object.keys(patch).length
       } else if (b?.top) {
-        const patch = Object.fromEntries(
-          Object.entries(open).filter(([c]) => num(b.top?.values[c]) === 0)
-        )
+        const patch = adding
+          ? onto(b.top.values)
+          : Object.fromEntries(Object.entries(open).filter(([c]) => num(b.top?.values[c]) === 0))
         if (Object.keys(patch).length && stage(b.top, patch, p.change_reason))
           cells += Object.keys(patch).length
-      } else if (Object.keys(open).length) {
-        addKey(pr.key, open, p.change_reason)
+      } else if (Object.keys(open).length && !(adding && Object.values(open).every((v) => num(v) < 0))) {
+        addKey(pr.key, adding ? onto(undefined) : open, p.change_reason)
         cells += Object.keys(open).length
       }
     }
@@ -850,7 +860,12 @@ export function PlanGridField(props: {
       toast.success(
         `${p.label}: ${cells} ${cells === 1 ? 'figure' : 'figures'} staged — Save to keep them`
       )
-    else toast.message('Nothing to fill — those periods already hold a figure')
+    else
+      toast.message(
+        p.mode === 'add'
+          ? 'Nothing to move — no open period could take it'
+          : 'Nothing to fill — those periods already hold a figure'
+      )
     hideProposal(p, false)
   }
 
@@ -2327,6 +2342,34 @@ function SplitPane(props: {
           className='mt-2 h-16 animate-pulse rounded'
           style={{ background: 'hsl(var(--nvr-skeleton))' }}
         />
+      )}
+      {preview && (preview.share_sets?.length ?? 0) > 1 && (
+        <div className='mt-2 flex flex-wrap items-center gap-1' data-plan-share-sets>
+          <span className='text-[11px] text-slate-500 dark:text-slate-400'>Shares from</span>
+          {preview.share_sets?.map((set) => {
+            const pct = Object.fromEntries(
+              Object.entries(set.shares).map(([id, v]) => [id, Math.round(v * 1000) / 10])
+            )
+            const on = JSON.stringify(pct) === sharesKey
+            return (
+              <button
+                key={set.key}
+                type='button'
+                data-plan-share-set={set.key}
+                aria-pressed={on}
+                data-tip={set.hint ?? ''}
+                onClick={() => setShares(pct)}
+                className={`h-6 rounded-md border px-1.5 text-[11px] font-medium ${
+                  on
+                    ? 'border-transparent bg-nvr-cyan text-white'
+                    : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+                }`}
+              >
+                {set.label}
+              </button>
+            )
+          })}
+        </div>
       )}
       {preview && (
         <table className='mt-2 w-full text-[12px] tabular-nums'>
