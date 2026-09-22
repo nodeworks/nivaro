@@ -6,6 +6,11 @@
  * The record's OWN instance (open first, else newest) — addendum overlays are
  * the browser's job, not the projection's. Filter twin: `filter={"$state":
  * {"_in": ["started"]}}`, the same EXISTS the conditions path already compiles.
+ *
+ * `$state` deliberately bypasses column narrowing: a policy field list can
+ * never name a virtual field, and the same state is already visible to any
+ * reader through the conditions filter and /pipelines/instance — so honouring
+ * the narrowing would hide it from exactly the roles it is configured for.
  */
 import type { Knex } from 'knex'
 import { db, dbRead } from '../db/index.js'
@@ -25,7 +30,9 @@ export interface RecordState {
 
 export function splitStateField(fields: string[]): { fields: string[]; wantsState: boolean } {
   const wantsState = fields.includes(STATE_FIELD)
-  return { fields: wantsState ? fields.filter((f) => f !== STATE_FIELD) : fields, wantsState }
+  // A copy on both branches — callers append to the result (an explicit
+  // projection has to carry 'id'), which must never reach the caller's array.
+  return { fields: fields.filter((f) => f !== STATE_FIELD), wantsState }
 }
 
 interface InstanceRow {
@@ -59,12 +66,18 @@ export function pickInstance<T extends InstanceRow>(rows: T[]): T | undefined {
   })[0]
 }
 
-export function stateKeysFromOps(ops: Record<string, unknown>): {
-  include: string[]
-  exclude: string[]
-} {
+/**
+ * Reads every shape a caller writes: the operator object
+ * (`{_in: [...]}`), and the bare forms `"started"` / `["started"]`, which the
+ * rest of the filter grammar accepts as `_eq` / `_in` and which would otherwise
+ * parse to nothing at all.
+ */
+export function stateKeysFromOps(value: unknown): { include: string[]; exclude: string[] } {
   const str = (v: unknown) =>
     (Array.isArray(v) ? v : [v]).filter((x): x is string => typeof x === 'string' && x.length > 0)
+  if (typeof value === 'string' || Array.isArray(value)) return { include: str(value), exclude: [] }
+  if (!value || typeof value !== 'object') return { include: [], exclude: [] }
+  const ops = value as Record<string, unknown>
   return {
     include: [...str(ops._eq), ...str(ops._in)],
     exclude: [...str(ops._neq), ...str(ops._nin)]
@@ -79,13 +92,25 @@ type StateInstanceRow = InstanceRow & {
   is_terminal: unknown
 }
 
+/**
+ * `nivaro_workflow_instances.item` is a string mirror of the record id, and
+ * uuid-keyed collections have it written in both casings (an uppercase MSSQL
+ * read-back one way, a lowercase randomUUID the other). The SQL match is
+ * case-insensitive under the server collation — this keeps the JS join
+ * agreeing with it instead of silently resolving to null.
+ */
+const itemKey = (v: unknown) => String(v).toLowerCase()
+
 /** Sets `row.$state` to the record's state, or null when it runs no pipeline. */
 export async function attachRecordState(
   collection: string,
   rows: Record<string, unknown>[]
 ): Promise<void> {
   if (rows.length === 0) return
+  // Values go to SQL as the record renders them; only the JS join normalizes.
   const ids = rows.map((r) => String(r.id))
+  // dbRead: a projection over history, so it belongs on the read replica with
+  // the list read it decorates (dbRead aliases db where none is configured).
   const instances = (await selectInChunks(ids, 1500, (chunk) =>
     dbRead('nivaro_workflow_instances as i')
       .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
@@ -106,9 +131,10 @@ export async function attachRecordState(
 
   const byItem = new Map<string, StateInstanceRow[]>()
   for (const i of instances) {
-    const list = byItem.get(i.item)
+    const key = itemKey(i.item)
+    const list = byItem.get(key)
     if (list) list.push(i)
-    else byItem.set(i.item, [i])
+    else byItem.set(key, [i])
   }
 
   const chosen = new Map<string, StateInstanceRow>()
@@ -134,7 +160,7 @@ export async function attachRecordState(
   }
 
   for (const row of rows) {
-    const c = chosen.get(String(row.id))
+    const c = chosen.get(itemKey(row.id))
     row[STATE_FIELD] = c
       ? ({
           key: c.key,
@@ -150,12 +176,14 @@ export async function attachRecordState(
 }
 
 /** filter={"$state": {...}} — EXISTS on the instance in the given key set. */
-export function applyStateFilter(
-  q: Knex.QueryBuilder,
-  collection: string,
-  ops: Record<string, unknown>
-): void {
-  const { include, exclude } = stateKeysFromOps(ops)
+export function applyStateFilter(q: Knex.QueryBuilder, collection: string, value: unknown): void {
+  const { include, exclude } = stateKeysFromOps(value)
+  // A filter narrows. One we cannot read is a caller error, and answering it
+  // with every row in the collection is the one answer that must not happen.
+  if (include.length === 0 && exclude.length === 0) {
+    q.whereRaw('1 = 0')
+    return
+  }
   const exists = (keys: string[]) =>
     function (this: Knex.QueryBuilder) {
       this.select(db.raw('1'))

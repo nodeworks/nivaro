@@ -1229,9 +1229,12 @@ function applyFilters(
   for (const [key, value] of Object.entries(filter)) {
     // ── Pipeline state ───────────────────────────────────────────────────────
     // filter={"$state":{"_in":["started"]}} — the same EXISTS the conditions
-    // path compiles, so a reader never needs a mirrored state column.
-    if (key === STATE_FIELD && value && typeof value === 'object') {
-      applyStateFilter(q, collection, value as Record<string, unknown>)
+    // path compiles, so a reader never needs a mirrored state column. The key
+    // alone claims the branch: every other value shape (a bare string, an
+    // array, null) is this filter too, and letting one fall through would hand
+    // `$state` to the column machinery as an "Invalid column name" 500.
+    if (key === STATE_FIELD) {
+      applyStateFilter(q, collection, value)
       continue
     }
 
