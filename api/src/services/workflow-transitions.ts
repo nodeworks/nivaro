@@ -892,7 +892,10 @@ export async function applyTransition(opts: {
     const { blockedError } = await runTransitionActions({
       transition,
       instance,
-      newStateObj: targetStateObj ? { key: targetStateObj.key, label: targetStateObj.label } : null,
+      // The full row, matching the 'post' phase call below — a blocking
+      // action's Liquid scope must see the same `state` shape a post one
+      // does (external_label included), not a hand-narrowed {key, label}.
+      newStateObj: targetStateObj ?? null,
       userId: opts.userId ?? null,
       phase: 'blocking'
     })
