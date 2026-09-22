@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
+import { WhoWouldHearCard } from '@/components/who-would-hear'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -538,6 +539,7 @@ export default function NotificationBench() {
             )}
           </div>
         </div>
+        <WhoWouldHearCard />
       </div>
     </div>
   )

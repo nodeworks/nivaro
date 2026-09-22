@@ -8,6 +8,7 @@ import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { originFields } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
 import {
@@ -316,6 +317,66 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   if (!ownerFilterCheckRegistered) {
     ownerFilterCheckRegistered = true
     registerReadinessCheck({
+      id: 'state-mirror-drift',
+      label: 'Every mirrored state column agrees with its pipeline instance',
+      group: 'Data',
+      description:
+        'A binding with a state_field mirrors the instance state into a record column (through state_field_map) for legacy readers and procs. "Is it canceled" gets two answers when the two disagree — this compares them for every state and repairs the column from the instance.',
+      run: async () => {
+        const { stateMirrorDrift } = await import('../services/state-mirror.js')
+        const r = await stateMirrorDrift()
+        const drifted = r.filter((d) => d.drifted > 0)
+        const checked = r.reduce((n, d) => n + d.checked, 0)
+        const mapErrors = r.flatMap((d) =>
+          d.map_errors.map(
+            (e) =>
+              `${d.collection} state_field_map: "${e.key}" → ${e.value}, which is not a ${e.target} id — that state can never be mirrored; fix the map first`
+          )
+        )
+        if (mapErrors.length > 0)
+          return {
+            status: 'fail',
+            detail: `${mapErrors.length} state_field_map entr${mapErrors.length === 1 ? 'y points' : 'ies point'} at a value the column cannot hold.`,
+            blockers: [
+              ...mapErrors,
+              ...drifted.flatMap((d) =>
+                d.by_state
+                  .slice(0, 6)
+                  .map(
+                    (s) =>
+                      `${d.collection}.${d.state_field}: ${s.count} in ${s.label} read "${s.found}" (expected "${s.expected}")`
+                  )
+              )
+            ]
+          }
+        if (drifted.length === 0)
+          return {
+            status: 'pass',
+            detail: `${checked.toLocaleString()} records across ${r.length} mirrored binding(s) — every state column agrees with its instance.`
+          }
+        return {
+          status: 'warn',
+          detail: `${drifted.reduce((n, d) => n + d.drifted, 0).toLocaleString()} record(s) whose state column disagrees with the pipeline.`,
+          blockers: drifted.flatMap((d) =>
+            d.by_state
+              .slice(0, 6)
+              .map(
+                (s) =>
+                  `${d.collection}.${d.state_field}: ${s.count} in ${s.label} read "${s.found}" (expected "${s.expected}")`
+              )
+          )
+        }
+      },
+      remediation: {
+        label: 'Rewrite the drifted state columns from the pipeline',
+        run: async () => {
+          const { repairStateMirror } = await import('../services/state-mirror.js')
+          const r = await repairStateMirror()
+          return { detail: `${r.repaired} state column(s) rewritten from their instance.` }
+        }
+      }
+    })
+    registerReadinessCheck({
       id: 'owner-filter-shapes',
       label: 'Every owner-group filter names a dimension on its template',
       group: 'Configuration',
@@ -612,7 +673,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           to_state: initial.id,
           user: req.user?.id ?? null,
           comment: 'bulk-start (missing instance)',
-          timestamp: new Date()
+          timestamp: new Date(),
+          ...(await originFields('nivaro_workflow_history', 'machine'))
         })
         started++
       } catch {
@@ -774,7 +836,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           transition: null,
           user: req.user?.id ?? null,
           comment: `instance-migration → ${target.label}`,
-          timestamp: new Date()
+          timestamp: new Date(),
+          ...(await originFields('nivaro_workflow_history', 'machine'))
         })
         await syncStateField(inst.collection, inst.item, target).catch(() => {})
         await syncMaterializedQueueItem(inst.collection, inst.item).catch(() => {})
@@ -2023,7 +2086,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           to_state: finalStateId,
           user: req.user?.id ?? null,
           comment: 'Auto-advanced via skip criteria',
-          timestamp: new Date()
+          timestamp: new Date(),
+          ...(await originFields('nivaro_workflow_history', 'machine'))
         })
       }
     }

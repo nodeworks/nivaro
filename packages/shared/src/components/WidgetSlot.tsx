@@ -68,8 +68,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useDrilldown, useOptionalNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
+import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
-import { CacheStamp, type CacheInfo, cacheStampTip, type CustomQueryEnvelope } from './CacheStamp'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { Button } from './ui/button'
 import {
@@ -161,16 +161,34 @@ export interface InputBinding {
   binding_value: string
 }
 
+/**
+ * "needs Project" — the widget is scoped to an input the record does not have
+ * yet (#536). Distinct from a real empty result, which renders the dash.
+ */
+function AwaitingValue({ awaiting, dark }: { awaiting: string; dark?: boolean }) {
+  return (
+    <span
+      className={`text-[12px] font-normal italic ${dark ? 'text-slate-400' : 'text-slate-400 dark:text-slate-500'}`}
+      data-widget-awaiting={awaiting}
+      data-tip={`Waiting for ${awaiting} — this figure is scoped to it and shows once it is set`}
+    >
+      needs {awaiting}
+    </span>
+  )
+}
+
 function StripCell({
   label,
   value,
   display,
-  loading
+  loading,
+  awaiting
 }: {
   label: string
   value?: unknown
   display: Record<string, unknown>
   loading?: boolean
+  awaiting?: string | null
 }) {
   const prefix = (display.prefix ?? '') as string
   const suffix = (display.suffix ?? '') as string
@@ -186,6 +204,8 @@ function StripCell({
       <span className='mt-1 leading-tight truncate max-w-[220px]'>
         {loading ? (
           <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
+        ) : awaiting && value == null ? (
+          <AwaitingValue awaiting={awaiting} />
         ) : (
           <span className='text-[13px] font-semibold tabular-nums text-slate-900 dark:text-slate-100'>
             {prefix}
@@ -202,12 +222,14 @@ function StripDisplay({
   data,
   label,
   loading,
-  widgetConfig
+  widgetConfig,
+  awaiting
 }: {
   data: Record<string, unknown> | null
   label: string
   loading?: boolean
   widgetConfig?: Record<string, unknown> | null
+  awaiting?: string | null
 }) {
   const wrapper = 'h-full flex items-stretch divide-x divide-slate-200 dark:divide-border'
 
@@ -227,6 +249,7 @@ function StripDisplay({
             value={v.value}
             display={v.display ?? {}}
             loading={false}
+            awaiting={awaiting}
           />
         ))}
       </div>
@@ -257,7 +280,13 @@ function StripDisplay({
   const display = (data.display ?? {}) as Record<string, unknown>
   return (
     <div className={wrapper}>
-      <StripCell label={label} value={data.value} display={display} loading={false} />
+      <StripCell
+        label={label}
+        value={data.value}
+        display={display}
+        loading={false}
+        awaiting={awaiting}
+      />
     </div>
   )
 }
@@ -327,7 +356,14 @@ interface WidgetDef {
   config: ({ compact_style?: string } & Record<string, unknown>) | null
 }
 
-function StatDisplay({ data }: { data: Record<string, unknown> }) {
+function StatDisplay({
+  data,
+  awaiting
+}: {
+  data: Record<string, unknown>
+  awaiting?: string | null
+}) {
+  if (awaiting && data.value == null) return <AwaitingValue awaiting={awaiting} />
   const display = (data.display ?? {}) as Record<string, unknown>
   const prefix = (display.prefix ?? '') as string
   const suffix = (display.suffix ?? '') as string
@@ -346,13 +382,15 @@ function PillSection({
   value,
   display,
   dark,
-  loading
+  loading,
+  awaiting
 }: {
   label: string
   value?: unknown
   display: Record<string, unknown>
   dark: boolean
   loading?: boolean
+  awaiting?: string | null
 }) {
   const prefix = (display.prefix ?? '') as string
   const suffix = (display.suffix ?? '') as string
@@ -371,6 +409,8 @@ function PillSection({
           <span
             className={`animate-pulse inline-block h-3 w-14 rounded ${dark ? 'bg-slate-600' : 'bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'}`}
           />
+        ) : awaiting && value == null ? (
+          <AwaitingValue awaiting={awaiting} dark={dark} />
         ) : (
           <>
             {prefix && (
@@ -396,13 +436,15 @@ function PillDisplay({
   label,
   style,
   loading,
-  widgetConfig
+  widgetConfig,
+  awaiting
 }: {
   data: Record<string, unknown> | null
   label: string
   style: 'pill-dark' | 'pill-light'
   loading?: boolean
   widgetConfig?: Record<string, unknown> | null
+  awaiting?: string | null
 }) {
   const dark = style === 'pill-dark'
   const base = dark
@@ -427,6 +469,7 @@ function PillDisplay({
             display={v.display ?? {}}
             dark={dark}
             loading={false}
+            awaiting={awaiting}
           />
         ))}
       </div>
@@ -459,7 +502,14 @@ function PillDisplay({
   const display = (data.display ?? {}) as Record<string, unknown>
   return (
     <div className={base}>
-      <PillSection label={label} value={data.value} display={display} dark={dark} loading={false} />
+      <PillSection
+        label={label}
+        value={data.value}
+        display={display}
+        dark={dark}
+        loading={false}
+        awaiting={awaiting}
+      />
     </div>
   )
 }
@@ -1365,6 +1415,22 @@ export function WidgetSlot({
         >)
       : renderData
 
+  // Inputs the server reported as missing (#536) → the record field they
+  // bind to, humanized: `project_id` bound to `project.project_id` reads
+  // "Project". Null when the render ran for real.
+  const awaitingLabel = (() => {
+    const keys = (renderData as { awaiting?: unknown } | null)?.awaiting
+    if (!Array.isArray(keys) || keys.length === 0) return null
+    const names = keys.map((k) => {
+      const b = inputBindings.find((x) => x.key === k && x.binding_type === 'item_field')
+      const base = String(b?.binding_value ?? k)
+        .split('.')[0]
+        .replace(/_id$/, '')
+      return base.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
+    })
+    return [...new Set(names)].join(', ')
+  })()
+
   // review_list/rollup have no meaning for a record that doesn't exist yet
   // (no rows to reach via the relation path) — render nothing rather than
   // surfacing the render endpoint's 400 for a missing record_id. Mirrors the
@@ -1424,6 +1490,7 @@ export function WidgetSlot({
             label={label || widget!.name}
             loading={renderLoading}
             widgetConfig={widget!.config}
+            awaiting={awaitingLabel}
           />
         )
         // Clickable only when the widget declares what record it describes and
@@ -1449,7 +1516,10 @@ export function WidgetSlot({
         const cacheInfo = renderData?.cache as CacheInfo | undefined
         if (!cacheInfo?.cache_ttl) return cell
         return (
-          <div className='group/cache relative h-full w-full' data-cache-stamp={cacheInfo.cached ? 'cached' : 'fresh'}>
+          <div
+            className='group/cache relative h-full w-full'
+            data-cache-stamp={cacheInfo.cached ? 'cached' : 'fresh'}
+          >
             {cell}
             <button
               type='button'
@@ -1484,6 +1554,7 @@ export function WidgetSlot({
             style={compactStyle as 'pill-dark' | 'pill-light'}
             loading={renderLoading}
             widgetConfig={widget!.config}
+            awaiting={awaitingLabel}
           />
         )
         return canDrill ? (
@@ -1520,10 +1591,10 @@ export function WidgetSlot({
             <>
               {(widget.widget_type === 'stat' ||
                 (widget.widget_type === 'custom-query' && 'value' in renderData)) && (
-                <StatDisplay data={renderData} />
+                <StatDisplay data={renderData} awaiting={awaitingLabel} />
               )}
               {widget.widget_type === 'report_widget' && displayRenderData && (
-                <StatDisplay data={displayRenderData} />
+                <StatDisplay data={displayRenderData} awaiting={awaitingLabel} />
               )}
               {widget.widget_type === 'custom-query' && 'values' in renderData && (
                 <MultiStatDisplay data={renderData} />
@@ -1604,13 +1675,30 @@ export function WidgetSlot({
       <>
         {(widget.widget_type === 'stat' ||
           (widget.widget_type === 'custom-query' && 'value' in renderData)) && (
-          <StatDisplay data={renderData} />
+          <StatDisplay data={renderData} awaiting={awaitingLabel} />
         )}
-        {widget.widget_type === 'custom-query' && 'values' in renderData && (
-          <MultiStatDisplay data={renderData} />
-        )}
+        {widget.widget_type === 'custom-query' &&
+          'values' in renderData &&
+          (awaitingLabel ? (
+            <p
+              className='text-[12px] text-slate-500 dark:text-slate-400'
+              data-widget-awaiting={awaitingLabel}
+            >
+              Set {awaitingLabel} on this record to see {title || 'this'}.
+            </p>
+          ) : (
+            <MultiStatDisplay data={renderData} />
+          ))}
         {widget.widget_type === 'list' && <ListDisplay data={renderData} />}
-        {widget.widget_type === 'custom-query' && 'rows' in renderData && (
+        {awaitingLabel && widget.widget_type === 'custom-query' && 'rows' in renderData && (
+          <p
+            className='text-[12px] text-slate-500 dark:text-slate-400'
+            data-widget-awaiting={awaitingLabel}
+          >
+            Set {awaitingLabel} on this record to see {title || 'this'}.
+          </p>
+        )}
+        {!awaitingLabel && widget.widget_type === 'custom-query' && 'rows' in renderData && (
           <QueryTable
             rows={(renderData.rows ?? []) as Array<Record<string, unknown>>}
             config={(widget.config as { table?: QueryTableConfig })?.table}

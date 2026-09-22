@@ -47,6 +47,14 @@ export async function accessExplainRoutes(app: FastifyInstance): Promise<void> {
       const result = await explainAccess(user, actingAdmin, collection, id)
       // trash_id is an admin affordance — strip it for everyone else.
       if (!actingAdmin) for (const r of result.reasons) delete r.trash_id
+      // ?act=1 (#519): the whole answer — can see, can change, available,
+      // owns the current step — from the same resolver audits and coverage use.
+      if ((req.query as { act?: string } | undefined)?.act === '1') {
+        const { canActOn } = await import('../services/record-access.js')
+        const full = (await db('nivaro_users').where({ id: user.id }).first()) ?? user
+        const act = await canActOn(full as typeof user, collection, id, { actingAdmin })
+        return reply.send({ data: { ...result, act } })
+      }
       return reply.send({ data: result })
     } catch (err) {
       if (err instanceof UnknownCollectionError)

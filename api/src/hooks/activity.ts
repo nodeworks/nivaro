@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { logActivity } from '../services/activity.js'
+import { originForWrite } from '../services/note-authorship.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
 import { fireWebhooks } from '../services/webhook-dispatch.js'
 import { hooks } from './registry.js'
@@ -68,6 +69,7 @@ export function registerActivityHooks() {
       // A create's provenance note ("import:<template>:<file>") rides the same
       // slot an update's change reason does.
       comment: ctx.changeReason,
+      origin: originForWrite(ctx.user, ctx.changeReason),
       req: ctx.req
     })
     if (level === 'all' && activityId && ctx.result && ctx.keys?.[0] != null) {
@@ -95,6 +97,7 @@ export function registerActivityHooks() {
       collection: ctx.collection,
       item: ctx.keys?.[0] != null ? String(ctx.keys[0]) : undefined,
       comment: ctx.changeReason,
+      origin: originForWrite(ctx.user, ctx.changeReason),
       req: ctx.req
     })
     if (level === 'all' && activityId && ctx.result && ctx.keys?.[0] != null) {
@@ -124,6 +127,7 @@ export function registerActivityHooks() {
       user: ctx.user?.id,
       collection: ctx.collection,
       item: ctx.keys?.[0] != null ? String(ctx.keys[0]) : undefined,
+      origin: originForWrite(ctx.user, null),
       req: ctx.req
     })
     if (level === 'all' && activityId && ctx.previousData && ctx.keys?.[0] != null) {

@@ -1,15 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { applyRowFilter, can, getRowFilter } from './permissions.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
-import {
-  applyScopeHops,
-  getUserScopes,
-  listScopeDimensions,
-  resolveRecordDimensionIds,
-  type ScopeHop,
-  scopeHopsFor
-} from './user-scopes.js'
+import { compileAccessGates, explainIds, visibleIds } from './record-access.js'
 
 // ─── Access audit runner ─────────────────────────────────────────────────────
 // "Can every stakeholder still see their record?" Data edits (a region
@@ -230,11 +222,10 @@ export async function runAccessAudit(auditId: number, runId: number): Promise<vo
     for (const u of checkUsers) checkedPairs += pairs.get(u.id)?.size ?? 0
     await patchRun({ checked_records: allItemIds.size, checked_pairs: checkedPairs })
 
-    const dims = await listScopeDimensions()
-    const dimTargets = new Set(dims.map((d) => d.target_collection))
-    const isReferenceTable = dimTargets.has(collection)
-
     // ── 3. Per-user set-based visibility check + reason attribution ───────
+    // The gates come from services/record-access.ts — the same compiler the
+    // record's denied panel (access-explain) uses, so an audit finding and
+    // the panel a stakeholder sees can never disagree (#519).
     const findings: Finding[] = []
     let truncated = false
     for (const u of checkUsers) {
@@ -242,168 +233,15 @@ export async function runAccessAudit(auditId: number, runId: number): Promise<vo
       const byItem = pairs.get(u.id)
       if (!byItem || byItem.size === 0) continue
       const ids = [...byItem.keys()]
-      const asUser = { id: u.id, role: u.role } as User
-
-      const permitted = await can(asUser, 'read', collection)
-      if (!permitted) {
-        for (const id of ids) {
-          findings.push({
-            item_id: id,
-            user: u.id,
-            subject: [...(byItem.get(id) ?? [])].join(', '),
-            reasons: [
-              {
-                type: 'permission',
-                message: 'Role has no read permission on this collection'
-              }
-            ]
-          })
-          if (findings.length >= FINDINGS_CAP) {
-            truncated = true
-            break
-          }
-        }
-        continue
-      }
-
-      const rowFilter = await getRowFilter(asUser, 'read', collection)
-      const scopes = (await getUserScopes(u.id)).filter(
-        (s) => s.mode === 'restrict' && s.values.length > 0
-      )
-      const scopeGates: Array<{
-        dimension: string
-        label: string
-        allowed: string
-        hops: ScopeHop[]
-        target: string
-        displayField: string
-        apply: (q: import('knex').Knex.QueryBuilder) => void
-      }> = []
-      let strictDeny: string | null = null
-      for (const s of scopes) {
-        const dim = dims.find((d) => d.name === s.dimension)
-        if (!dim) continue
-        if (isReferenceTable && dim.target_collection !== collection) continue
-        const hops = await scopeHopsFor(dim, collection)
-        if (!hops) {
-          if (dim.strict) strictDeny = dim.label
-          continue
-        }
-        let allowed = ''
-        try {
-          const labelField = dim.display_field || 'name'
-          const rows = (await db(dim.target_collection)
-            .whereIn('id', s.values as never)
-            .limit(6)
-            .select(db.raw('?? as label', [labelField]))) as Array<{ label: unknown }>
-          allowed = rows.map((r) => String(r.label)).join(', ')
-          if (s.values.length > 6) allowed += ', …'
-        } catch {
-          allowed = s.values.slice(0, 6).map(String).join(', ')
-        }
-        scopeGates.push({
-          dimension: dim.name,
-          label: dim.label,
-          allowed,
-          hops,
-          target: dim.target_collection,
-          displayField: dim.display_field || 'name',
-          apply: (q) => {
-            if (hops.length === 0) void q.whereIn(`${collection}.id`, s.values as never)
-            else applyScopeHops(q, collection, hops, s.values)
-          }
-        })
-      }
-      if (rowFilter == null && scopeGates.length === 0 && !strictDeny) continue
-
+      const gates = await compileAccessGates({ id: u.id, role: u.role } as User, collection)
       for (const chunk of chunks(ids, CHUNK)) {
         if (truncated) break
-        let visible = new Set<string>()
-        if (!strictDeny) {
-          const q = db(collection).whereIn(`${collection}.id`, chunk)
-          if (rowFilter) applyRowFilter(q, rowFilter, asUser)
-          for (const g of scopeGates) g.apply(q)
-          visible = new Set(
-            ((await q.select(`${collection}.id`)) as Array<{ id: unknown }>).map((r) =>
-              String(r.id)
-            )
-          )
-        }
+        const visible = await visibleIds(gates, chunk)
         const violating = chunk.filter((id) => !visible.has(id))
         if (violating.length === 0) continue
-
-        // Which gate hid each id? Re-run each gate ALONE over the violating set.
-        const reasonMap = new Map<string, Finding['reasons']>()
-        for (const id of violating) reasonMap.set(id, [])
-        if (strictDeny) {
-          for (const id of violating) {
-            reasonMap.get(id)!.push({
-              type: 'scope_strict',
-              dimension_label: strictDeny,
-              message: `${strictDeny} filter is strict and this collection has no ${strictDeny} link`
-            })
-          }
-        } else {
-          if (rowFilter) {
-            const q = db(collection).whereIn(`${collection}.id`, violating)
-            applyRowFilter(q, rowFilter, asUser)
-            const pass = new Set(
-              ((await q.select(`${collection}.id`)) as Array<{ id: unknown }>).map((r) =>
-                String(r.id)
-              )
-            )
-            for (const id of violating) {
-              if (!pass.has(id))
-                reasonMap.get(id)!.push({
-                  type: 'row_filter',
-                  message: "Hidden by the role's row-level security filter"
-                })
-            }
-          }
-          for (const g of scopeGates) {
-            const q = db(collection).whereIn(`${collection}.id`, violating)
-            g.apply(q)
-            const pass = new Set(
-              ((await q.select(`${collection}.id`)) as Array<{ id: unknown }>).map((r) =>
-                String(r.id)
-              )
-            )
-            const failed = violating.filter((id) => !pass.has(id))
-            if (failed.length === 0) continue
-            // What the RECORD is linked to along this dimension — the other
-            // half of the story ("record's Zone: West · you're limited to…").
-            const recVals = await resolveRecordDimensionIds(collection, failed, g.hops)
-            const targetIds = [...new Set([...recVals.values()].flat())]
-            const targetLabels = new Map<string, string>()
-            if (targetIds.length > 0) {
-              try {
-                const rows = (await db(g.target)
-                  .whereIn('id', targetIds as never)
-                  .select('id', db.raw('?? as label', [g.displayField]))) as Array<{
-                  id: unknown
-                  label: unknown
-                }>
-                for (const r of rows) targetLabels.set(String(r.id), String(r.label ?? r.id))
-              } catch {
-                for (const id of targetIds) targetLabels.set(id, id)
-              }
-            }
-            for (const id of failed) {
-              const vals = (recVals.get(id) ?? []).map((v) => targetLabels.get(v) ?? v)
-              reasonMap.get(id)!.push({
-                type: 'scope',
-                dimension: g.dimension,
-                dimension_label: g.label,
-                // Structured — the findings table shows these in their own
-                // "Record's value" column instead of a run-on sentence.
-                record_values: vals.slice(0, 8),
-                message: `${g.label} filter excludes it · allowed: ${g.allowed || '(none)'}`
-              })
-            }
-          }
-        }
+        const reasonMap = await explainIds(gates, violating)
         for (const id of violating) {
-          const reasons = reasonMap.get(id)!
+          const reasons = reasonMap.get(id) ?? []
           if (reasons.length === 0) {
             reasons.push({
               type: 'unknown',

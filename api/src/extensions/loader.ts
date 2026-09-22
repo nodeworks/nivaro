@@ -113,6 +113,8 @@ export interface ExtensionContext {
     collection?: string
     item?: string | number
     comment?: string
+    /** person | machine | import | integration — default: machine with no user (#518). */
+    origin?: 'person' | 'machine' | 'import' | 'integration'
   }): Promise<number | null>
   /**
    * Deliver a notification through the full channel stack — inbox row, live
@@ -707,7 +709,9 @@ async function loadExtension(
           user: entry.user ?? null,
           collection: entry.collection,
           item: entry.item != null ? String(entry.item) : undefined,
-          comment: entry.comment
+          comment: entry.comment,
+          // An extension row with no acting user is the extension itself (#518).
+          origin: entry.origin ?? (entry.user ? 'person' : 'machine')
         })
       },
       auth: { authenticate, requireAuth, requireAdmin },
@@ -1278,7 +1282,8 @@ export async function loadCloudExtensions(
             user: entry.user ?? null,
             collection: entry.collection,
             item: entry.item != null ? String(entry.item) : undefined,
-            comment: entry.comment
+            comment: entry.comment,
+            origin: entry.origin ?? (entry.user ? 'person' : 'machine')
           }),
         auth: { authenticate, requireAuth, requireAdmin },
         hooks: {

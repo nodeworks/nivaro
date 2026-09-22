@@ -1,11 +1,11 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import {
-  coerceBool,
   type OwnerResolutionRequest,
   resolveStateOwnersBatch
 } from './pipeline-engine.js'
 import { getLabels } from './queues.js'
+import { unavailabilityOf } from './record-access.js'
 
 /**
  * Coverage gaps — records whose ENTIRE resolved owner set cannot act.
@@ -75,26 +75,9 @@ function displayName(u: { first_name?: string | null; last_name?: string | null;
   return [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || 'Unknown'
 }
 
+/** The same availability rule the record-access resolver applies (#519). */
 function unavailabilityReason(u: UserRow): UnavailableOwner['reason'] | null {
-  if (coerceBool(u.is_redacted)) return 'redacted'
-  if (u.status === 'suspended') return 'suspended'
-  if (u.status != null && u.status !== 'active') return 'inactive'
-  // Post-delegation OOO: substitution already ran, so still-OOO means the
-  // delegate chain failed (none set, expired, or the delegate is unavailable
-  // themselves — resolution substitutes one hop only).
-  if (
-    coerceBool(u.is_out_of_office) &&
-    (!u.delegate_id || (u.delegate_expires_at && new Date(u.delegate_expires_at) < new Date()))
-  ) {
-    return 'ooo_no_delegate'
-  }
-  if (coerceBool(u.is_out_of_office) && u.delegate_id) {
-    // Delegate configured but the resolved owner is still this person —
-    // resolution would have substituted a working delegate, so the delegate
-    // did not resolve. Same gap, same label.
-    return 'ooo_no_delegate'
-  }
-  return null
+  return unavailabilityOf(u)
 }
 
 export async function buildCoverageGapReport(): Promise<CoverageGapReport> {

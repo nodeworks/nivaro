@@ -13,7 +13,8 @@ import {
   PanelBottomOpen,
   Rows3,
   SquarePen,
-  X
+  X,
+  Zap
 } from 'lucide-react'
 import type React from 'react'
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -287,7 +288,7 @@ interface O2MRevisionEntry {
 /** Per (row, field): who last changed it and when — the cell-history entry. */
 type CellProvenance = Record<
   string,
-  Record<string, { at: string; who: string; revision_id: number }>
+  Record<string, { at: string; who: string; revision_id: number; reason?: string | null }>
 >
 
 const NON_DISPLAY_TYPES = new Set([
@@ -2960,7 +2961,10 @@ export function InlineTableField({
   })
   const visibleProposals = useMemo(
     // `add` proposals need the plan grid's per-period arithmetic; the flat grid only fills.
-    () => (compareData?.proposals ?? []).filter((p) => p.mode !== 'add' && !dismissedProposals.has(p.id)),
+    () =>
+      (compareData?.proposals ?? []).filter(
+        (p) => p.mode !== 'add' && !dismissedProposals.has(p.id)
+      ),
     [compareData?.proposals, dismissedProposals]
   )
   /** Dismiss = remembered in this browser; an APPLIED proposal only hides for
@@ -7273,6 +7277,46 @@ export function InlineTableField({
             )}
           </button>
           {bulkAdding && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+          {(() => {
+            // #522: which kind of grid this is was coherent but invisible —
+            // a person could not tell whether the line they just changed was
+            // already saved or waiting for the record's Save.
+            const staged = (isNew || isPendingMode) && !!staging
+            if (!staged)
+              return (
+                <span
+                  className='inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-[10.5px] text-slate-400 dark:text-slate-500'
+                  data-grid-save-mode='live'
+                  data-tip='Every change to a line here is saved the moment you make it — no Save needed'
+                >
+                  <Zap className='h-3 w-3' aria-hidden='true' />
+                  Saves as you go
+                </span>
+              )
+            const waiting = pendingRows.length + pendingEdits.size + pendingDeletes.size
+            return (
+              <span
+                className={cn(
+                  'inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-[10.5px]',
+                  waiting > 0
+                    ? 'bg-[#fffbeb] font-medium text-[#92400e] dark:bg-[#3a2e14] dark:text-[#f5d58a]'
+                    : 'text-slate-400 dark:text-slate-500'
+                )}
+                data-grid-save-mode='staged'
+                data-grid-waiting={waiting}
+                data-tip={
+                  isNew
+                    ? 'Lines are kept with this new record and saved when you create it'
+                    : 'Changes to lines here wait for the record’s Save — Cancel discards them'
+                }
+              >
+                <Clock className='h-3 w-3' aria-hidden='true' />
+                {waiting > 0
+                  ? `${waiting} line change${waiting === 1 ? '' : 's'} wait for Save`
+                  : 'Saved with the record'}
+              </span>
+            )
+          })()}
           {presetSwitcher}
           {showRowRevisions && !isNew && (
             <button
@@ -7952,7 +7996,9 @@ export function InlineTableField({
                                   ? cellProvenance[id]?.[c.field]
                                   : undefined
                               const provTip = prov
-                                ? `${c.label || titleCase(c.field)} · changed ${formatRelative(prov.at)} by ${prov.who}`
+                                ? `${c.label || titleCase(c.field)} · changed ${formatRelative(prov.at)} by ${prov.who}${
+                                    prov.reason ? `\nReason: “${prov.reason}”` : ''
+                                  }`
                                 : undefined
                               return (
                                 <td
@@ -7981,6 +8027,16 @@ export function InlineTableField({
                                   data-tip={provTip}
                                 >
                                   {ci === 0 && firstLeadCell === 'data' && sinceTick(id)}
+                                  {prov?.reason && (
+                                    // #513: a change made FOR a stated reason carries a
+                                    // corner mark, like a spreadsheet comment — the
+                                    // reason itself rides the cell's tip.
+                                    <span
+                                      aria-hidden='true'
+                                      data-cell-reason
+                                      className='pointer-events-none absolute left-0 top-0 h-0 w-0 border-r-[6px] border-t-[6px] border-r-transparent border-t-nvr-cyan'
+                                    />
+                                  )}
                                   {prov && (
                                     <button
                                       type='button'

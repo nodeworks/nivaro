@@ -724,7 +724,11 @@ function ExplainAccessBar() {
   const [userId, setUserId] = useState<string | null>(null)
   const [collection, setCollection] = useState('')
   const [recordId, setRecordId] = useState('')
-  const [result, setResult] = useState<{ access: boolean; reasons: Array<{ type: string; message: string }> } | null>(null)
+  const [result, setResult] = useState<{
+    access: boolean
+    reasons: Array<{ type: string; message: string }>
+    act?: { can_act: boolean; summary: string }
+  } | null>(null)
   const { data: users = [] } = useQuery<Array<{ id: string; first_name: string | null; last_name: string | null; email: string }>>({
     queryKey: ['explain-user-search', userQ],
     queryFn: () =>
@@ -740,9 +744,15 @@ function ExplainAccessBar() {
   const explain = useMutation({
     mutationFn: () =>
       api
-        .get<{ data: { access: boolean; reasons: Array<{ type: string; message: string }> } }>(
+        .get<{
+          data: {
+            access: boolean
+            reasons: Array<{ type: string; message: string }>
+            act?: { can_act: boolean; summary: string }
+          }
+        }>(
           `/access-explain/${collection.trim()}/${recordId.trim()}`,
-          { params: { user_id: userId } }
+          { params: { user_id: userId, act: '1' } }
         )
         .then((r) => r.data.data),
     onSuccess: setResult,
@@ -806,6 +816,14 @@ function ExplainAccessBar() {
         {result && (
           <span className={cn('text-[12.5px] font-medium', result.access ? 'text-emerald-600' : 'text-red-600')}>
             {result.access ? 'CAN see it' : 'CANNOT see it'}
+          </span>
+        )}
+        {result?.act && (
+          <span
+            className='text-[12.5px] text-slate-600 dark:text-slate-300'
+            data-explain-act={result.act.can_act ? 'yes' : 'no'}
+          >
+            · {result.act.summary}
           </span>
         )}
       </div>

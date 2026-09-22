@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { chunkArray } from '../services/db-batch.js'
 import { updateOne } from '../services/items.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
+import { originOfRow } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
 
@@ -307,7 +308,11 @@ export async function revisionsRoutes(app: FastifyInstance) {
       .pluck('id')) as Array<string | number>
     const ids = currentIds.map(String)
     if (!ids.length) return reply.send({ data: {} })
-    type Entry = { at: string; who: string; revision_id: number }
+    // #513: the WHY rides with the who/when — the change reason typed with
+    // the save (only a person's; import stamps and machine markers are not
+    // reasons). Historic rows without `origin` fall back to the text markers.
+    type Entry = { at: string; who: string; revision_id: number; reason?: string | null }
+    const actOrigin = await db.schema.hasColumn('nivaro_activity', 'origin').catch(() => false)
     const out: Record<string, Record<string, Entry>> = {}
     // Where each row CAME from: the create activity's comment, which an
     // import stamps as "import:<template>:<file id>". Only rows with a
@@ -362,7 +367,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
           'u.last_name',
           'u.email as user_email',
           'r.id as revision_id',
-          'r.delta'
+          'r.delta',
+          'a.comment',
+          ...(actOrigin ? ['a.origin'] : [])
         )) as Array<Record<string, unknown>>
       for (const row of part) {
         let delta: Record<string, unknown> | null = null
@@ -386,10 +393,15 @@ export async function revisionsRoutes(app: FastifyInstance) {
           // Rows arrive newest first — the first sighting of a field wins.
           if (bucket[field]) continue
           const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
+          const comment = String(row.comment ?? '').trim()
           bucket[field] = {
             at: Number.isNaN(ts.getTime()) ? String(row.timestamp) : ts.toISOString(),
             who,
-            revision_id: Number(row.revision_id)
+            revision_id: Number(row.revision_id),
+            reason:
+              comment && originOfRow({ origin: row.origin, comment }) === 'person'
+                ? comment.slice(0, 500)
+                : null
           }
         }
       }

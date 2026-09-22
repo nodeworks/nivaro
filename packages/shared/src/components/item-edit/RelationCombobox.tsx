@@ -4,7 +4,7 @@ import type { CSSProperties } from 'react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient, useStaleFieldReporter } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import { useOnlineUsers } from '../../lib/use-online-users'
 import { UserAvatar } from '../UserAvatar'
 
@@ -22,6 +22,7 @@ function labelInitials(label: string): string {
       .toUpperCase() || '?'
   )
 }
+
 import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 
@@ -634,9 +635,121 @@ export function RelationCombobox({
                   })
               )}
             </div>
+            {!isLoadingOptions && (
+              <PickerNarrowingNote
+                collection={collection}
+                search={debouncedQuery}
+                filter={combinedFilter}
+                narrowedLabels={narrowedBy?.labels ?? []}
+                auto={(data ?? []).length === 0 && !!debouncedQuery}
+              />
+            )}
           </div>,
           portalEl
         )}
+    </div>
+  )
+}
+
+// ─── PickerNarrowingNote (#537) ────────────────────────────────────────────────
+
+interface Narrowing {
+  shown: number
+  by_field_filter: number
+  by_exclusions: number
+  scopes: string[]
+  row_filter: boolean
+}
+
+/**
+ * "Missing something?" under a picker's options. A narrowed list used to look
+ * exactly like an absent record; this asks the server which curation hid
+ * matches — in counts only for rows the viewer may read, and by NAME only for
+ * scope / role narrowing (never a count of rows the viewer cannot see).
+ * Fires on its own when a search finds nothing; otherwise on click.
+ */
+function PickerNarrowingNote({
+  collection,
+  search,
+  filter,
+  narrowedLabels,
+  auto
+}: {
+  collection: string
+  search: string
+  filter: Record<string, unknown> | undefined
+  narrowedLabels: string[]
+  auto: boolean
+}) {
+  const client = useNivaroClient()
+  const [asked, setAsked] = useState(false)
+  const filterKey = filter ? JSON.stringify(filter) : ''
+  const { data, isFetching } = useQuery<Narrowing>({
+    queryKey: ['picker-narrowing', collection, search, filterKey],
+    queryFn: () =>
+      client
+        .request<{ data: Narrowing }>(
+          post('/picker-narrowing', { collection, search, filter: filter ?? null })
+        )
+        .then((r) => r.data),
+    enabled: asked || auto,
+    staleTime: 30_000,
+    retry: false
+  })
+  if (!asked && !auto)
+    return (
+      <button
+        type='button'
+        onClick={(e) => {
+          e.stopPropagation()
+          setAsked(true)
+        }}
+        className='w-full border-t border-border px-3 py-1.5 text-left text-[11px] text-muted-foreground hover:text-foreground'
+        data-picker-narrowing-ask
+      >
+        Missing something?
+      </button>
+    )
+  if (isFetching && !data)
+    return (
+      <p className='border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground'>
+        Checking what narrows this list…
+      </p>
+    )
+  if (!data) return null
+  const lines: string[] = []
+  const what = search ? `match “${search}”` : 'exist'
+  if (data.by_field_filter > 0)
+    lines.push(
+      `${data.by_field_filter.toLocaleString()} more ${what} but this field only offers ${
+        narrowedLabels.length
+          ? `records that fit ${narrowedLabels.join(' · ')}`
+          : 'records its filter allows'
+      }.`
+    )
+  if (data.by_exclusions > 0)
+    lines.push(
+      `${data.by_exclusions.toLocaleString()} ${data.by_exclusions === 1 ? 'is' : 'are'} hidden from pickers by an admin.`
+    )
+  if (data.scopes.length > 0)
+    lines.push(`Your ${data.scopes.join(', ')} access narrows what you can pick here.`)
+  if (data.row_filter) lines.push('Your role only sees some of these records.')
+  if (lines.length === 0)
+    lines.push(
+      search
+        ? `Nothing else you can see matches “${search}”.`
+        : 'Nothing narrows this list — every record you can see is offered.'
+    )
+  return (
+    <div
+      className='space-y-0.5 border-t border-border px-3 py-1.5 text-[11px] leading-4 text-muted-foreground'
+      data-picker-narrowing
+      data-picker-narrowing-field={data.by_field_filter}
+      data-picker-narrowing-excluded={data.by_exclusions}
+    >
+      {lines.map((l) => (
+        <p key={l}>{l}</p>
+      ))}
     </div>
   )
 }

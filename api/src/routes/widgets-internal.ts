@@ -150,6 +150,8 @@ async function renderWidget(
     if (aggregation === 'none') {
       const idInput = config.id_input as string | undefined
       const idVal = idInput ? inputs[idInput] : inputs[field]
+      if (idInput && (idVal == null || idVal === ''))
+        return { value: null, display: config.display ?? {}, awaiting: [idInput] }
       const row = idVal
         ? await db(collection).where('id', idVal).select(field).first()
         : await query.select(field).first()
@@ -315,7 +317,7 @@ async function renderWidget(
       if (bound == null || bound === '') {
         // A configured scope with no value yet must NEVER fall back to
         // unscoped data — report the gap and render nothing.
-        return { ...base, awaiting_filter: true, data: null }
+        return { ...base, awaiting_filter: true, awaiting: [filterField], data: null }
       }
       entityFilters.push({ field: filterField, values: [bound as string | number] })
     }
@@ -364,6 +366,10 @@ async function renderWidget(
 
     const params: Record<string, unknown> = {}
     let unresolvedParam = false
+    // Which inputs the widget is still waiting on — the client says "waiting
+    // for Project" rather than rendering the same dash a real empty result
+    // gets (#536: no data vs not configured were indistinguishable).
+    const awaiting: string[] = []
     for (const b of paramBindings) {
       const v = inputs[b.input_key]
       const paramKey =
@@ -374,7 +380,10 @@ async function renderWidget(
           : b.default_value != null && b.default_value !== ''
             ? b.default_value
             : null
-      if (resolved == null) unresolvedParam = true
+      if (resolved == null) {
+        unresolvedParam = true
+        if (b.input_key && !awaiting.includes(b.input_key)) awaiting.push(b.input_key)
+      }
       params[paramKey] = resolved
     }
     // A bound param with no value (and no default) means the widget is scoped
@@ -393,6 +402,7 @@ async function renderWidget(
         | undefined
       if (vf && vf.length > 0) {
         return {
+          awaiting,
           values: vf.map((f) => ({
             value: null,
             label: f.label ?? f.field,
@@ -400,7 +410,7 @@ async function renderWidget(
           }))
         }
       }
-      return { rows: [] }
+      return { awaiting, rows: [] }
     }
 
     // Use execSqlBatch directly — Knex MSSQL's execSql wraps in sp_executesql

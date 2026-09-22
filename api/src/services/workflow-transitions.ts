@@ -1,3 +1,4 @@
+import { originFields } from './note-authorship.js'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
@@ -914,7 +915,13 @@ export async function applyTransition(opts: {
     to_state: newState,
     user: opts.userId ?? null,
     comment: await annotateDelegateComment(opts.userId ?? null, opts.comment ?? null),
-    timestamp: new Date()
+    timestamp: new Date(),
+    // #518: an auto transition (or one no person drove) is the machine's
+    // entry, whatever its comment happens to say.
+    ...(await originFields(
+      'nivaro_workflow_history',
+      opts.source === 'auto' || !opts.userId ? 'machine' : 'person'
+    ))
   })
 
   // Transitions never pass through the generic collection-write hook — keep

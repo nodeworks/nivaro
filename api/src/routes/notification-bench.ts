@@ -97,6 +97,41 @@ const SAMPLES: Array<{
 export async function notificationBenchRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
+  // #526/#525 — start from a write: who would be told, how, and why everyone
+  // else was not. Owners of a transition's new state come back SHOWN vs TOLD.
+  app.post<{
+    Body: {
+      collection?: string
+      item?: string
+      event?: string
+      changed_fields?: string[]
+      to_state?: string | null
+      actor_id?: string | null
+    }
+  }>('/who', async (req, reply) => {
+    const b = req.body ?? {}
+    const collection = String(b.collection ?? '')
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || /^(nivaro|directus)_/i.test(collection))
+      return reply.code(400).send({ error: 'Invalid collection' })
+    if (!b.item) return reply.code(400).send({ error: 'item is required' })
+    const event = ['create', 'update', 'delete', 'transition'].includes(String(b.event))
+      ? (b.event as 'create' | 'update' | 'delete' | 'transition')
+      : 'update'
+    const { whoWouldHear } = await import('../services/notification-audience.js')
+    return {
+      data: await whoWouldHear({
+        collection,
+        item: String(b.item),
+        event,
+        changed_fields: Array.isArray(b.changed_fields)
+          ? b.changed_fields.filter((f) => /^[A-Za-z0-9_]+$/.test(String(f))).slice(0, 50)
+          : [],
+        to_state: b.to_state ?? null,
+        actor_id: b.actor_id ?? req.user!.id
+      })
+    }
+  })
+
   app.get('/catalog', async () => ({
     data: {
       categories: NOTIFY_CATEGORIES.map((c) => ({ value: c, label: NOTIFY_CATEGORY_LABELS[c] })),

@@ -8,6 +8,25 @@ export function setPulseApp(app: FastifyInstance): void {
   _pulseApp = app
 }
 
+// The origin column arrives with migration 340; until an instance has run it,
+// writing the key would fail every activity insert. Probe once per process.
+let hasOriginCol: Promise<boolean> | null = null
+async function originColumn(
+  origin: string | null | undefined,
+  comment: string | undefined
+): Promise<Record<string, string>> {
+  hasOriginCol ??= (async () => {
+    try {
+      return await db.schema.hasColumn('nivaro_activity', 'origin')
+    } catch {
+      return false
+    }
+  })()
+  if (!(await hasOriginCol)) return {}
+  const o = origin ?? (/^import:/i.test(String(comment ?? '').trim()) ? 'import' : null)
+  return o ? { origin: o } : {}
+}
+
 export async function logActivity(opts: {
   action: string
   user: string | null | undefined
@@ -15,6 +34,8 @@ export async function logActivity(opts: {
   item?: string
   comment?: string
   req?: FastifyRequest
+  /** Who wrote it — person | machine | import | integration (#518). */
+  origin?: string | null
 }): Promise<number | null> {
   try {
     const rows = (await db('nivaro_activity')
@@ -24,6 +45,7 @@ export async function logActivity(opts: {
         collection: opts.collection ?? null,
         item: opts.item ?? null,
         comment: opts.comment ?? null,
+        ...(await originColumn(opts.origin, opts.comment)),
         ip: opts.req?.ip ?? null,
         user_agent: opts.req?.headers['user-agent'] ?? null,
         timestamp: new Date()

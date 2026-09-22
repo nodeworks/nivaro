@@ -7,6 +7,7 @@ import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
 import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
+import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
@@ -338,6 +339,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(extensionsRoutes, { prefix: '/extensions' })
   await app.register(itemsRoutes, { prefix: '/items' })
   await app.register(accessExplainRoutes)
+  await app.register(pickerNarrowingRoutes)
   await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })
   await app.register(usersRoutes, { prefix: '/users' })
