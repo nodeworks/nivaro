@@ -4,11 +4,13 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   checkRecord,
+  compareIntegrityWriters,
   readRecordResult,
   runConformance,
   storeRecordResult,
   summarizeAllCollections
 } from '../services/config-conformance.js'
+import { integrityCheckById } from '../services/integrity-checks.js'
 import {
   AUTO_APPLY_KINDS,
   aiProposal,
@@ -18,9 +20,9 @@ import {
   type ProposalWrite,
   proposeFixes
 } from '../services/integrity-proposals.js'
-import { integrityCheckById } from '../services/integrity-checks.js'
 import { readOne, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 import {
   gridRuleConfigsFor,
   parentContextFrom,
@@ -509,8 +511,47 @@ async function rederiveGridLines(
   return { applied, failed, rows: rows.length }
 }
 
+let agreementCheckRegistered = false
+
 export async function configConformanceRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+
+  // #529 — do the three integrity writers agree? Runs the cached live path
+  // and the fresh sweep path over the newest records of every laid-out
+  // collection and names every finding one produced and the other did not.
+  app.get<{ Querystring: { per?: string } }>('/writers-agree', async (req) => {
+    const per = Number(req.query.per) || 20
+    return { data: await compareIntegrityWriters({ perCollection: per }) }
+  })
+  if (!agreementCheckRegistered) {
+    agreementCheckRegistered = true
+    registerReadinessCheck({
+      id: 'integrity-writers-agree',
+      label: 'Integrity findings agree across the write hook, the live check and the sweep',
+      group: 'Data',
+      description:
+        'Three paths write integrity findings and are reconciled afterwards. This evaluates the same records through the cached live path and the fresh sweep path and reports any finding only one of them produced.',
+      run: async () => {
+        const r = await compareIntegrityWriters({ perCollection: 5 })
+        if (r.disagreements.length === 0) {
+          return {
+            status: 'pass',
+            detail: `${r.records} records across ${r.collections} collections — ${r.findings_live} findings, identical on both paths.`
+          }
+        }
+        return {
+          status: 'warn',
+          detail: `${r.disagreements.length} finding(s) differ between the live path and the sweep over ${r.records} records — stale compiled config or lookups on this process.`,
+          blockers: r.disagreements
+            .slice(0, 12)
+            .map(
+              (d) =>
+                `${d.collection}/${d.item_id} ${d.field} ${d.rule} — only from the ${d.only_in} path`
+            )
+        }
+      }
+    })
+  }
 
   // #37 — route ONE finding to a person as a task on the record (+ a
   // notification), from the sweep page. Same shape the record banner's
@@ -521,15 +562,38 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
       const finding = (await db('nivaro_conformance_findings as f')
         .join('nivaro_conformance_runs as r', 'r.id', 'f.run')
         .where('f.id', Number(req.params.id))
-        .first('f.id', 'f.item_id', 'f.item_label', 'f.field', 'f.rule', 'f.message', 'r.collection')) as
-        | { id: number; item_id: string; item_label: string | null; field: string | null; rule: string; message: string | null; collection: string }
+        .first(
+          'f.id',
+          'f.item_id',
+          'f.item_label',
+          'f.field',
+          'f.rule',
+          'f.message',
+          'r.collection'
+        )) as
+        | {
+            id: number
+            item_id: string
+            item_label: string | null
+            field: string | null
+            rule: string
+            message: string | null
+            collection: string
+          }
         | undefined
       if (!finding) return reply.code(404).send({ error: 'Finding not found' })
       const userId = String(req.body?.user_id ?? '').trim()
       if (!userId) return reply.code(400).send({ error: 'user_id is required' })
-      const assignee = (await db('nivaro_users').where('id', userId).first('id', 'status')) as { id: string; status: string | null } | undefined
-      if (!assignee || assignee.status === 'suspended') return reply.code(400).send({ error: 'That user cannot take a task' })
-      const title = `Data integrity: ${finding.message ?? `${finding.field ?? ''} (${finding.rule})`}`.slice(0, 500)
+      const assignee = (await db('nivaro_users').where('id', userId).first('id', 'status')) as
+        | { id: string; status: string | null }
+        | undefined
+      if (!assignee || assignee.status === 'suspended')
+        return reply.code(400).send({ error: 'That user cannot take a task' })
+      const title =
+        `Data integrity: ${finding.message ?? `${finding.field ?? ''} (${finding.rule})`}`.slice(
+          0,
+          500
+        )
       const note = String(req.body?.note ?? '').trim()
       await db('nivaro_tasks').insert({
         collection: finding.collection,
@@ -782,7 +846,8 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
       .filter((r) => IDENT.test(r.collection))
       .map((r) => {
         const s = summaries.get(r.collection)
-        if (!s || s.required + s.validation + s.cascade + s.row_rules + s.external === 0) return null
+        if (!s || s.required + s.validation + s.cascade + s.row_rules + s.external === 0)
+          return null
         return { display_name: r.display_name, ...s }
       })
       .filter(Boolean)

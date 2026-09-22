@@ -40,6 +40,8 @@
     "owners:fingerprint": "tsx src/scripts/owner-fingerprint.ts",
     "lint:merge-keys": "tsx extensions/efp-ops/scripts/lint-merge-keys.ts",
     "imports:idempotence": "tsx extensions/efp-ops/scripts/check-import-idempotence.ts",
+    "procs:callers": "tsx extensions/efp-ops/scripts/proc-callers.ts",
+    "procs:golden": "tsx extensions/efp-ops/scripts/proc-golden.ts",
     "promote:config": "tsx extensions/efp-ops/scripts/promote-config.ts",
     "refresh:rehearsal": "tsx extensions/efp-ops/scripts/refresh-db-from-prod.ts",
     "sync:business-schema": "tsx extensions/efp-ops/scripts/sync-business-schema.ts",

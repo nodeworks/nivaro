@@ -1030,8 +1030,22 @@ export const dataIntegrityGuide: DocSection = {
         [
           '`POST /api/config-conformance/record/:collection/:id/fix`',
           '`{field, rule, proposal_id, choice?}` applies one proposal (the server re-derives the list and matches by id); `{undo: writes}` reverses a previous apply. Without proposal_id the legacy one-click fix runs (clear / regenerate / re-derive).'
+        ],
+        [
+          '`GET /api/config-conformance/writers-agree?per_collection=`',
+          'Admin. Re-checks a sample of records through BOTH integrity paths — the cached live check the form banner uses and a fresh compile of the same checks — and lists any record where they disagree. Zero disagreements is the expected answer; the readiness check `integrity-writers-agree` runs it nightly.'
         ]
       ]
+    },
+    { type: 'h3', text: 'Two writers, one answer' },
+    {
+      type: 'p',
+      text: 'The record banner and the collection sweep are two code paths over one compiled check set, and a compile cache sits in between. `writers-agree` is the proof they still say the same thing: it evaluates the newest records per collection through each path and reports every finding one produced and the other did not. A disagreement means a stale compile or a check that reads request state — a defect to fix, never a finding to remediate.'
+    },
+    { type: 'h3', text: 'What changed my number?' },
+    {
+      type: 'p',
+      text: "Every rollup header chip (the Σ line under a total on the record form) carries a **What changed it** section: the events that moved the figure in the last 24 hours, 7 days or 30 days — child rows added, changed, removed, moved in from or out to another parent, with who, when, the old → new value and the delta each event contributed, plus a net across the window and an estimate of the value at the start of it. Rows an import created carry an `import` tag. Backed by `GET /api/lineage/:collection/:id/:field/changes?hours=|since=`, which reads revision deltas and trash entries of the contributing collection and applies the rollup's own source filter, so a line the total never counted never appears in its trail."
     },
     { type: 'h2', id: 'inactive-people', text: 'Inactive people' },
     {

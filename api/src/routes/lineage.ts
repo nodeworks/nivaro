@@ -30,6 +30,44 @@ interface LineageRow {
 }
 
 export async function lineageRoutes(app: FastifyInstance): Promise<void> {
+  // #510 — what changed this number since <when>: every contributing-row
+  // event with who / old / new / delta, netted against the value now. The
+  // caller must read the parent AND (for a rollup) the child collection —
+  // per-row labels and editors disclose more than the total does.
+  app.get<{
+    Params: { collection: string; item: string; field: string }
+    Querystring: { since?: string; hours?: string }
+  }>('/:collection/:item/:field/changes', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, item, field } = req.params
+    if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection) || !IDENT.test(field)) {
+      return reply.code(400).send({ error: 'Invalid collection or field' })
+    }
+    if (!(await can(req.user!, 'read', collection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+    const hours = Math.min(24 * 365, Math.max(1, Number(req.query.hours) || 24))
+    const since = req.query.since
+      ? new Date(req.query.since)
+      : new Date(Date.now() - hours * 3600_000)
+    if (Number.isNaN(since.getTime())) return reply.code(400).send({ error: 'Bad since' })
+    const fieldRow = (await db('nivaro_fields')
+      .where({ collection, field })
+      .first('computed_type', 'computed_formula')) as
+      | { computed_type: string | null; computed_formula: string | null }
+      | undefined
+    if (fieldRow?.computed_type === 'rollup') {
+      const cfg = parseRollupFormula(fieldRow.computed_formula)
+      for (const src of cfg?.sources ?? []) {
+        if (!(await can(req.user!, 'read', src.related_collection))) {
+          return reply
+            .code(403)
+            .send({ error: `You can read the total but not ${src.related_collection}` })
+        }
+      }
+    }
+    const { numberTrail } = await import('../services/number-trail.js')
+    return reply.send({ data: await numberTrail(collection, item, field, since) })
+  })
+
   app.get<{ Params: { collection: string; item: string; field: string } }>(
     '/:collection/:item/:field',
     { preHandler: requireAuth },

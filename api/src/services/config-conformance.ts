@@ -1,7 +1,11 @@
-import { type IntegrityCheck, integrityCheckCounts, integrityChecksFor } from './integrity-checks.js'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import { RowRuleLookupCache } from './field-rules.js'
+import {
+  type IntegrityCheck,
+  integrityCheckCounts,
+  integrityChecksFor
+} from './integrity-checks.js'
 import { getLabels } from './queues.js'
 import {
   type GridRuleConfig,
@@ -577,7 +581,15 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
   const entry = (collection: string): CollectionCheckSummary => {
     let e = out.get(collection)
     if (!e) {
-      e = { collection, required: 0, validation: 0, cascade: 0, row_rules: 0, external: 0, skipped: 0 }
+      e = {
+        collection,
+        required: 0,
+        validation: 0,
+        cascade: 0,
+        row_rules: 0,
+        external: 0,
+        skipped: 0
+      }
       out.set(collection, e)
     }
     return e
@@ -1015,7 +1027,12 @@ async function evaluateRows(
         checks.external.map(async (chk) => {
           try {
             const found = await chk.run(rowIds.map((id) => String(id)))
-            return found.map((f) => ({ item_id: String(f.item_id), field: chk.field, rule: chk.id, message: f.message }))
+            return found.map((f) => ({
+              item_id: String(f.item_id),
+              field: chk.field,
+              rule: chk.id,
+              message: f.message
+            }))
           } catch (err) {
             console.warn(`conformance check ${chk.id} skipped for ${collection}:`, err)
             return []
@@ -1024,7 +1041,13 @@ async function evaluateRows(
       )
     ).flat()
 
-  const [m2m, cas, disp, rr, ext] = await Promise.all([m2mRequired(), cascades(), display(), rowRules(), external()])
+  const [m2m, cas, disp, rr, ext] = await Promise.all([
+    m2mRequired(),
+    cascades(),
+    display(),
+    rowRules(),
+    external()
+  ])
   return [...scalar, ...m2m, ...cas, ...disp, ...rr, ...ext]
 }
 
@@ -1137,6 +1160,92 @@ export async function checkRecord(
   if (!row) return null
   const findings = await evaluateRows(checks, [row], physical, liveCache())
   return { findings, ms: Date.now() - t0 }
+}
+
+/**
+ * Do the three integrity writers agree? (#529)
+ *
+ * Findings are written by the after-write hook, the on-load live check and
+ * the collection sweep, then reconciled into the latest run's rows. The
+ * reconciliation exists because they COULD diverge — the live path compiles
+ * checks through a 5-minute stale-while-revalidate cache and a 60s row-rule
+ * lookup cache; the sweep compiles fresh and keeps a per-chunk cache. All
+ * three share `evaluateRows`, so the only possible disagreement is stale
+ * compiled config or stale lookups. This runs BOTH paths — cached-live and
+ * fresh-sweep — over the same rows and reports every finding one produced
+ * and the other did not, per collection. Empty = they agree right now.
+ */
+export async function compareIntegrityWriters(opts: { perCollection?: number } = {}): Promise<{
+  collections: number
+  records: number
+  findings_live: number
+  findings_sweep: number
+  disagreements: Array<{
+    collection: string
+    item_id: string
+    field: string
+    rule: string
+    only_in: 'live' | 'sweep'
+  }>
+}> {
+  const per = Math.max(1, Math.min(200, opts.perCollection ?? 20))
+  const layouts = (await db('nivaro_collection_layouts')
+    .where('layout_type', 'grouped')
+    .where('is_active', true)
+    .distinct('collection')) as Array<{ collection: string }>
+  const out = {
+    collections: 0,
+    records: 0,
+    findings_live: 0,
+    findings_sweep: 0,
+    disagreements: [] as Array<{
+      collection: string
+      item_id: string
+      field: string
+      rule: string
+      only_in: 'live' | 'sweep'
+    }>
+  }
+  const key = (f: RecordFinding) => `${f.item_id}|${f.field}|${f.rule}`
+  for (const { collection } of layouts) {
+    if (!(await hasChecks(collection).catch(() => false))) continue
+    const live = await compileChecksCached(collection)
+    const fresh = await buildCompiled(collection)
+    // Select the union of both bundles' columns so neither path is starved.
+    const selectable = [...new Set([...live.selectable, ...fresh.selectable])]
+    const rows = (await db(collection)
+      .orderBy('id', 'desc')
+      .limit(per)
+      .select(selectable)) as Array<Record<string, unknown>>
+    if (rows.length === 0) continue
+    out.collections++
+    out.records += rows.length
+    const a = await evaluateRows(live.checks, rows, live.physical, liveCache())
+    const b = await evaluateRows(fresh.checks, rows, fresh.physical, new RowRuleLookupCache(db))
+    out.findings_live += a.length
+    out.findings_sweep += b.length
+    const setA = new Set(a.map(key))
+    const setB = new Set(b.map(key))
+    for (const f of a)
+      if (!setB.has(key(f)))
+        out.disagreements.push({
+          collection,
+          item_id: String(f.item_id),
+          field: f.field,
+          rule: f.rule,
+          only_in: 'live'
+        })
+    for (const f of b)
+      if (!setA.has(key(f)))
+        out.disagreements.push({
+          collection,
+          item_id: String(f.item_id),
+          field: f.field,
+          rule: f.rule,
+          only_in: 'sweep'
+        })
+  }
+  return out
 }
 
 /**
