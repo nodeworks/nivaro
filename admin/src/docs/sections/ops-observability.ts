@@ -134,6 +134,11 @@ export const opsConsoleDocs: DocSection = {
         'Heavy jobs yield (#75) — a job marked heavy waits while the connection pool is hot (80% checked out or acquires queued), in five-second steps for up to ten minutes, before taking its serialized turn; interactive requests win the morning rush.'
       ]
     },
+    { type: 'h3', text: 'Gated jobs' },
+    {
+      type: 'p',
+      text: 'A job that no-ops behind a deployment flag says so on the Background Jobs page: a green `<FLAG> on` badge when the flag names it, an amber `<FLAG> off · inert` badge when every tick returns without doing anything. Extensions declare it with `cron.annotate(id, { gate: { flag, enabled } })`; a readiness check can still add up the coverage, but the per-job truth sits beside the job.'
+    },
     { type: 'h2', id: 'ops-console-logs', text: 'Log tail and log alert rules' },
     {
       type: 'ul',

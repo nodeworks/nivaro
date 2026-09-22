@@ -232,6 +232,11 @@ GET  /api/comments/related?collection=&item=               // entries carry prov
       type: 'p',
       text: 'An external API row carries `mock_config` keyed by instance name (NIVARO_INSTANCE, else NODE_ENV): `{ "<instance>": { "enabled": true, "rules": [{ "method": "GET", "path": "/orders/*", "status": 200, "body": {…}, "delay_ms": 0 }], "fallback": { "status": 418, "body": {…} } } }`. While enabled on THIS instance, every `callExternalApi` answers from the first matching rule (exact path, or a prefix ending in `*`), then the fallback, else `200 {"mock": true}` — nothing leaves the process, the call still logs with a `[mock]` marker and the result carries `mock: true`. The API list shows a MOCK badge, the editor has a Mock mode card, and the readiness check `external-api-mock-mode` warns while any API is mocked here.'
     },
+    { type: 'h3', text: 'Test endpoints, day to day' },
+    {
+      type: 'p',
+      text: 'Every external API also carries `endpoint_environment` — read off the host this instance actually calls (its per-instance override wins): `test` when a host label is uat, stg, staging, sandbox, sbx, test, qa, dev, preprod or nonprod, `local` for loopback, else `live`. The API list shows a TEST badge with the label that decided it, and Integration Health leads with one strip naming every enabled integration on this instance that is mocked or pointed at a test host — fine before cutover, and the list that should read empty on go-live night. A heuristic, so an operator who names a live host `test-` gets a badge to read past, never a block.'
+    },
     { type: 'h2', id: 'integration-events-instances', text: 'Per-instance credentials and hosts' },
     {
       type: 'p',

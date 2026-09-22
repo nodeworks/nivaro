@@ -54,6 +54,19 @@ export async function usersRoutes(app: FastifyInstance) {
     return reply.send(result)
   })
 
+  // #512 — why an account is suspended, from whatever wrote it (directory
+  // sync, retention, offboarding, a merge, an admin edit). Admin-only: the
+  // reason can name a policy or a colleague.
+  app.get<{ Params: { id: string } }>(
+    '/:id/suspension',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { suspensionReason } = await import('../services/account-status.js')
+      const reason = await suspensionReason(req.params.id)
+      return reply.send({ data: reason })
+    }
+  )
+
   // Avatar as a data URI — deliberately its own endpoint so the nvarchar(max)
   // column never rides the directory listings. Authenticated: any user may
   // see any colleague's photo (same trust level as the name beside it).

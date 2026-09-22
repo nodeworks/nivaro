@@ -448,7 +448,7 @@ export const securityUserScopes: DocSection = {
     },
     {
       type: 'p',
-      text: 'Editing a user\'s RESTRICTED values on their admin page stages the change behind an impact preview: for the biggest collections that route to the dimension it shows how many records are visible now vs after the change, and — because a wrong pick is a quiet total denial — how many records would be GAINED and LOST, naming the newest five of each by their display label. Nothing is written until Apply.'
+      text: "Editing a user's RESTRICTED values on their admin page stages the change behind an impact preview: for the biggest collections that route to the dimension it shows how many records are visible now vs after the change, and — because a wrong pick is a quiet total denial — how many records would be GAINED and LOST, naming the newest five of each by their display label. Nothing is written until Apply."
     },
     { type: 'h3', text: 'Dimensions' },
     {
@@ -499,6 +499,11 @@ GET/PUT /api/user-scopes/:userId            # admin: both modes { dimension, mod
 GET  /api/access-requests?status=pending|granted|denied  # admin — rows carry reasons + plan
 POST /api/access-requests/:id/resolve { decision: 'grant' | 'deny' }
      # → { status, applied: [...], remaining: [...] }  (status stays 'pending' when something still blocks)`
+    },
+    { type: 'h2', id: 'security-suspended-why', text: 'Why an account is suspended' },
+    {
+      type: 'p',
+      text: "A suspended account's page leads with the reason and the mechanism that wrote it: directory sync (the account is gone from or disabled in the company directory), a retention policy (named, with the inactivity window — every user it touches now gets its own activity row), offboarding, an account merge, or an administrator's edit (from the revision that flipped the status). The person who hit \"we couldn't sign you in\" is told an administrator can see the reason on their account page. `GET /api/users/:id/suspension` returns the same fact; a legacy account redacted by the old nightly job is recognised from its Redacted_ address."
     }
   ]
 }

@@ -113,6 +113,16 @@ export async function executeRetentionPolicy(
         }
 
         await trx('nivaro_users').where({ id: user.id }).update(updates)
+        // One row PER USER, so "why is this account suspended" has an answer
+        // (#512) — the policy-level row below cannot say who it touched.
+        await trx('nivaro_activity').insert({
+          action: 'user-retention-suspend',
+          user: triggeredBy ?? null,
+          collection: 'nivaro_users',
+          item: String(user.id),
+          timestamp: new Date(),
+          comment: `${policy.action === 'suspend_only' ? 'Suspended' : 'Redacted and suspended'} by retention policy "${policy.name}" — no activity for ${policy.inactivity_threshold_months} months`
+        })
       } catch (err) {
         errors.push(`user ${user.id}: ${String(err)}`)
       }

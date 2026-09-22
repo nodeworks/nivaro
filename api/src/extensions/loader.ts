@@ -18,8 +18,8 @@ import { type HookAction, hooks } from '../hooks/registry.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
-import { registerDigestSection } from '../services/daily-digest.js'
 import { registerBriefLine } from '../services/approval-brief-lines.js'
+import { registerDigestSection } from '../services/daily-digest.js'
 import {
   type ExtensionEventHandler,
   publishExtensionEvent,
@@ -53,6 +53,7 @@ import {
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
+import { runLongSql } from '../services/run-long.js'
 
 export type FlowOpRegistration = Omit<RegisteredOp, never>
 export type FlowTriggerRegistration = RegisteredTrigger
@@ -97,6 +98,15 @@ export interface ExtensionContext {
    * automatically namespaced with the extension id (`<extId>:<action>`) so
    * extension activity is distinguishable from core activity. Never throws.
    */
+  /**
+   * Long-running SQL outside knex.raw's 15s request timeout — an EXEC of a
+   * legacy procedure, a scan over a 16M-row activity table. One statement,
+   * its own timeout (default one hour), rows back. Bind nothing: the batch is
+   * sent as text, so only interpolate values you built yourself.
+   */
+  sql: {
+    runLong<T = Record<string, unknown>>(sql: string, opts?: { timeoutMs?: number }): Promise<T[]>
+  }
   logActivity(entry: {
     action: string
     user?: string | null
@@ -144,7 +154,13 @@ export interface ExtensionContext {
     /** Attach a description / heavy / idempotent flag to one of this extension's jobs after scheduling. */
     annotate(
       id: string,
-      meta: { description?: string; heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown' }
+      meta: {
+        description?: string
+        heavy?: boolean
+        idempotent?: 'safe' | 'unsafe' | 'unknown'
+        /** The deployment flag this job no-ops behind, and whether it currently lets the job run. */
+        gate?: { flag: string; enabled: boolean }
+      }
     ): void
   }
   /** Register custom bulk actions that appear in the collection browser action bar. */
@@ -203,7 +219,10 @@ export interface ExtensionContext {
   /** Register custom flow operation types and triggers. */
   approvalBrief: {
     /** One short line on the transition confirm's approval brief for records of `collection`. */
-    registerLine(collection: string, fn: import('../services/approval-brief-lines.js').BriefLineProvider): void
+    registerLine(
+      collection: string,
+      fn: import('../services/approval-brief-lines.js').BriefLineProvider
+    ): void
   }
   digest: {
     /** Add a per-user section to the daily action digest email. */
@@ -556,6 +575,7 @@ async function loadExtension(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'sql'
     | 'notifyUser'
     | 'auth'
     | 'flows'
@@ -676,6 +696,9 @@ async function loadExtension(
           () => undefined,
           () => undefined
         )
+      },
+      sql: {
+        runLong: (sql, opts) => runLongSql(sql, opts)
       },
       logActivity: (entry) => {
         note('activity')
@@ -1012,6 +1035,7 @@ export async function loadExtensions(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'sql'
     | 'notifyUser'
     | 'auth'
     | 'flows'
@@ -1144,6 +1168,7 @@ export async function loadCloudExtensions(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'sql'
     | 'notifyUser'
     | 'auth'
     | 'flows'
@@ -1244,6 +1269,9 @@ export async function loadCloudExtensions(
             () => undefined,
             () => undefined
           ),
+        sql: {
+          runLong: (sql, opts) => runLongSql(sql, { ...opts, knex: ctx.database as never })
+        },
         logActivity: (entry) =>
           logActivity({
             action: `${extId}:${entry.action}`,
@@ -1398,6 +1426,7 @@ export async function scanNewExtensions(
     | 'hooks'
     | 'cron'
     | 'logActivity'
+    | 'sql'
     | 'notifyUser'
     | 'auth'
     | 'flows'

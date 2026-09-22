@@ -42,6 +42,49 @@ function initials(user: User): string {
   return user.email.slice(0, 2).toUpperCase()
 }
 
+interface SuspensionReason {
+  source: string
+  text: string
+  at: string | null
+  by: { id: string; name: string } | null
+}
+
+/** Why this account cannot sign in — the answer the admin gets asked for (#512). */
+function SuspensionBanner({ userId, suspended }: { userId: string; suspended: boolean }) {
+  const { data } = useQuery<SuspensionReason | null>({
+    queryKey: ['user-suspension', userId],
+    queryFn: () => api.get(`/users/${userId}/suspension`).then((r) => r.data.data),
+    enabled: suspended
+  })
+  if (!suspended || !data) return null
+  const SOURCE_LABEL: Record<string, string> = {
+    directory: 'Directory sync',
+    retention: 'Retention policy',
+    offboarding: 'Offboarding',
+    merge: 'Account merge',
+    admin: 'Administrator',
+    'legacy-redaction': 'Legacy redaction job',
+    unknown: 'Unknown'
+  }
+  return (
+    <div
+      className='mb-5 rounded-lg border border-[#e9c46a] bg-[#fbefd9] px-4 py-3 text-[12.5px] text-[#6b4300] dark:border-[#7a5a14] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
+      data-suspension-reason={data.source}
+    >
+      <p className='font-medium'>
+        Cannot sign in — {SOURCE_LABEL[data.source] ?? data.source}
+        {data.at ? ` · ${new Date(data.at).toLocaleString()}` : ''}
+        {data.by ? ` · by ${data.by.name}` : ''}
+      </p>
+      <p className='mt-0.5'>{data.text}</p>
+      <p className='mt-1 text-[11.5px] opacity-80'>
+        Set Status back to Active below to restore access; a redacted account also needs its details
+        re-entered.
+      </p>
+    </div>
+  )
+}
+
 export function UserEditPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -194,6 +237,13 @@ export function UserEditPage() {
                     </div>
                   </div>
                 </div>
+
+                <SuspensionBanner
+                  userId={String(id)}
+                  suspended={
+                    user.status === 'suspended' || !!(user as { is_redacted?: boolean }).is_redacted
+                  }
+                />
 
                 <div className='grid gap-4 sm:grid-cols-2'>
                   <div className='space-y-1.5'>

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { type EndpointVerdict, endpointEnvironment } from '../services/endpoint-environment.js'
+import { mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
 
 /**
  * Integration health — one answer to "is the ERP integration ok?".
@@ -27,8 +29,24 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
     const since = new Date(Date.now() - 24 * 3600 * 1000)
 
     const [apis, aggAll, agg24, lastFailures, deadLetterCount, flowRuns] = await Promise.all([
-      db('nivaro_external_apis').select('id', 'name', 'base_url', 'auth_type') as Promise<
-        Array<{ id: number; name: string; base_url: string | null; auth_type: string | null }>
+      db('nivaro_external_apis').select(
+        'id',
+        'name',
+        'base_url',
+        'auth_type',
+        'enabled',
+        'mock_config',
+        'instance_overrides'
+      ) as Promise<
+        Array<{
+          id: number
+          name: string
+          base_url: string | null
+          auth_type: string | null
+          enabled: boolean | number | null
+          mock_config: string | null
+          instance_overrides: string | null
+        }>
       >,
       // Last activity per api+status, all time — "when did this last work"
       // must not be blank just because the last success predates the window.
@@ -87,6 +105,10 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
         name: string
         base_url: string | null
         auth_type: string | null
+        enabled: boolean
+        /** #534 — where the effective host points, and whether this instance mocks it. */
+        endpoint_environment: EndpointVerdict
+        mock_active: boolean
         totals: Record<string, number>
         last_success_at: string | null
         last_activity_at: string | null
@@ -100,8 +122,15 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
       }
     >()
     for (const api of apis) {
+      const effective = resolveInstanceRow(api as never) as { base_url?: string | null }
       byApi.set(api.id, {
-        ...api,
+        id: api.id,
+        name: api.name,
+        base_url: api.base_url,
+        auth_type: api.auth_type,
+        enabled: !!api.enabled,
+        endpoint_environment: endpointEnvironment(effective.base_url ?? api.base_url),
+        mock_active: mockConfigFor(api as never) != null,
         totals: {},
         last_success_at: null,
         last_activity_at: null,

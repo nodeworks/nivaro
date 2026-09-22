@@ -3,6 +3,7 @@ import { load as yamlLoad } from 'js-yaml'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { endpointEnvironment } from '../services/endpoint-environment.js'
 import {
   contractTargets,
   runContracts,
@@ -255,6 +256,10 @@ function serializeForRead(row: ExternalApiRow) {
       >(row.instance_overrides)
     ),
     current_instance: instanceKey(),
+    // #534 — where the effective host points (this instance's override wins).
+    endpoint_environment: endpointEnvironment(
+      (resolveInstanceRow(row as never) as { base_url?: string | null }).base_url ?? row.base_url
+    ),
     created_at: row.created_at,
     updated_at: row.updated_at
   }

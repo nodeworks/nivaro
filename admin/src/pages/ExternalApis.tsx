@@ -143,6 +143,32 @@ export function ExternalApisPage() {
                         mock
                       </span>
                     )}
+                    {(() => {
+                      const env = (
+                        a as {
+                          endpoint_environment?: { environment: string; reason: string | null }
+                        }
+                      ).endpoint_environment
+                      if (!env || env.environment === 'live' || env.environment === 'unknown')
+                        return null
+                      return (
+                        <span
+                          className={
+                            env.environment === 'test'
+                              ? 'ml-2 rounded bg-[#fbefd9] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#8f5400] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
+                              : 'ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-500/15 dark:text-slate-300'
+                          }
+                          data-tip={
+                            env.environment === 'test'
+                              ? `The host this instance calls looks like a test endpoint (${env.reason}). Traffic after go-live would land there.`
+                              : 'Points at a local address'
+                          }
+                          data-endpoint-env={env.environment}
+                        >
+                          {env.environment}
+                        </span>
+                      )
+                    })()}
                   </TableCell>
                   <TableCell className='font-mono text-[12px] text-slate-500 max-w-[280px] truncate'>
                     {a.base_url}

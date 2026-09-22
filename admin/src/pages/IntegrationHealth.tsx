@@ -21,6 +21,12 @@ interface ApiHealth {
   last_activity_at: string | null
   window_24h: Record<string, number>
   last_failure: { error: string | null; at: string; collection: string; item: string } | null
+  enabled?: boolean
+  endpoint_environment?: {
+    environment: 'test' | 'live' | 'local' | 'unknown'
+    reason: string | null
+  }
+  mock_active?: boolean
 }
 
 interface CronEntry {
@@ -125,6 +131,32 @@ export function IntegrationHealthPage() {
           </div>
         ) : (
           <>
+            {(() => {
+              const off = data.apis.filter(
+                (a) =>
+                  a.enabled !== false &&
+                  (a.endpoint_environment?.environment === 'test' || a.mock_active)
+              )
+              if (off.length === 0) return null
+              return (
+                <div
+                  className='mb-4 rounded-lg border border-[#e9c46a] bg-[#fbefd9] px-4 py-2.5 text-[12px] text-[#6b4300] dark:border-[#7a5a14] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
+                  data-integration-test-endpoints={off.length}
+                >
+                  <span className='font-medium'>
+                    {off.length} enabled integration{off.length === 1 ? '' : 's'} not pointed at a
+                    live endpoint on this instance:
+                  </span>{' '}
+                  {off
+                    .map(
+                      (a) =>
+                        `${a.name} (${a.mock_active ? 'mock rules' : `test host — ${a.endpoint_environment?.reason ?? ''}`})`
+                    )
+                    .join(' · ')}
+                  . Fine before cutover; on go-live night this list should be empty.
+                </div>
+              )
+            })()}
             <div className='mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3'>
               {data.apis.map((a) => {
                 const v = verdict(a)
@@ -141,7 +173,22 @@ export function IntegrationHealthPage() {
                     )}
                   >
                     <div className='mb-2 flex items-center justify-between'>
-                      <span className='text-[13px] font-medium'>{a.name}</span>
+                      <span className='text-[13px] font-medium'>
+                        {a.name}
+                        {a.endpoint_environment?.environment === 'test' && (
+                          <span
+                            className='ml-2 rounded bg-[#fbefd9] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#8f5400] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
+                            title={`Test endpoint: ${a.endpoint_environment.reason ?? ''}`}
+                          >
+                            test
+                          </span>
+                        )}
+                        {a.mock_active && (
+                          <span className='ml-2 rounded bg-[#fbefd9] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#8f5400] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'>
+                            mock
+                          </span>
+                        )}
+                      </span>
                       <span className={cn('text-[12px] font-semibold', v.cls)}>{v.label}</span>
                     </div>
                     <div className='space-y-1 text-[11.5px] text-muted-foreground'>

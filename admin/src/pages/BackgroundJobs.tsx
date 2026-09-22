@@ -26,6 +26,7 @@ interface CronEntry {
   idempotent?: 'safe' | 'unsafe' | 'unknown'
   description?: string | null
   supports_dry_run?: boolean
+  gate?: { flag: string; enabled: boolean } | null
   after?: string | null
   errors_7d: number
   last: {
@@ -237,14 +238,20 @@ export default function BackgroundJobs() {
   }
   // #32 — dry run: the job's own report of what a tick would do, shown inline.
   const [dryRunning, setDryRunning] = useState<string | null>(null)
-  const [dryReport, setDryReport] = useState<{ id: string; report: unknown; ms: number } | null>(null)
+  const [dryReport, setDryReport] = useState<{ id: string; report: unknown; ms: number } | null>(
+    null
+  )
   const dryRun = async (id: string) => {
     setDryRunning(id)
     try {
-      const r = await api.post<{ data: { report: unknown; duration_ms: number } }>(`/cron/${id}/dry-run`)
+      const r = await api.post<{ data: { report: unknown; duration_ms: number } }>(
+        `/cron/${id}/dry-run`
+      )
       setDryReport({ id, report: r.data.data.report, ms: r.data.data.duration_ms })
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Dry run failed'
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        'Dry run failed'
       toast.error(msg, { duration: 8000 })
     } finally {
       setDryRunning(null)
@@ -257,7 +264,9 @@ export default function BackgroundJobs() {
       toast.success(after ? `${id} now runs after ${after}` : `${id} back on its own schedule`)
       void registry.refetch()
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Could not chain'
+      const msg =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        'Could not chain'
       toast.error(msg)
     }
   }
@@ -317,6 +326,23 @@ export default function BackgroundJobs() {
                   title='Re-running sends mail or mutates — run-now duplicates its effects'
                 >
                   re-run unsafe
+                </span>
+              )}
+              {c.gate && (
+                <span
+                  data-cron-gate={c.gate.enabled ? 'on' : 'off'}
+                  className={
+                    c.gate.enabled
+                      ? 'ml-1.5 rounded bg-[#e4f4ec] px-1 py-px font-sans text-[9.5px] font-semibold uppercase tracking-wide text-[#1c7449] dark:bg-[#133326] dark:text-[#6fd6a0]'
+                      : 'ml-1.5 rounded bg-[#fbefd9] px-1 py-px font-sans text-[9.5px] font-semibold uppercase tracking-wide text-[#8f5400] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
+                  }
+                  title={
+                    c.gate.enabled
+                      ? `${c.gate.flag} names this job — it runs on schedule`
+                      : `${c.gate.flag} does not name this job — every tick returns without doing anything`
+                  }
+                >
+                  {c.gate.enabled ? `${c.gate.flag} on` : `${c.gate.flag} off · inert`}
                 </span>
               )}
               <p className='mt-0.5 max-w-[46ch] whitespace-normal font-sans text-[11px] leading-snug text-slate-500 dark:text-muted-foreground'>
@@ -528,14 +554,21 @@ export default function BackgroundJobs() {
     >
       <div className='mb-1.5 flex items-center justify-between'>
         <span className='font-medium text-slate-800 dark:text-foreground'>
-          Dry run of <code className='font-mono text-[11px]'>{dryReport.id}</code> · {fmtDur(dryReport.ms)} · nothing written
+          Dry run of <code className='font-mono text-[11px]'>{dryReport.id}</code> ·{' '}
+          {fmtDur(dryReport.ms)} · nothing written
         </span>
-        <button type='button' onClick={() => setDryReport(null)} className='text-[11px] text-slate-500 hover:text-slate-800 dark:text-muted-foreground'>
+        <button
+          type='button'
+          onClick={() => setDryReport(null)}
+          className='text-[11px] text-slate-500 hover:text-slate-800 dark:text-muted-foreground'
+        >
           Close
         </button>
       </div>
       <pre className='max-h-72 overflow-auto whitespace-pre-wrap rounded bg-white p-2 font-mono text-[11px] text-slate-700 dark:bg-background dark:text-slate-200'>
-        {typeof dryReport.report === 'string' ? dryReport.report : JSON.stringify(dryReport.report, null, 2)}
+        {typeof dryReport.report === 'string'
+          ? dryReport.report
+          : JSON.stringify(dryReport.report, null, 2)}
       </pre>
     </div>
   )

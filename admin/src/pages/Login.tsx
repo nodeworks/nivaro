@@ -245,10 +245,7 @@ function TokenLoginFallback() {
   }
   return (
     <form onSubmit={submit} className='mt-5 border-t border-slate-200 pt-4'>
-      <label
-        htmlFor='login-token'
-        className='mb-1.5 block text-[12px] font-medium text-slate-600'
-      >
+      <label htmlFor='login-token' className='mb-1.5 block text-[12px] font-medium text-slate-600'>
         Access token
       </label>
       <input
@@ -285,7 +282,13 @@ export function LoginPage() {
     oidc: { enabled: boolean; label: string }
     saml: { enabled: boolean; label: string }
     /** Additional admin-configured OIDC providers (#538). */
-    sso?: Array<{ id: number; key: string; label: string; logo_url?: string | null; button_color?: string | null }>
+    sso?: Array<{
+      id: number
+      key: string
+      label: string
+      logo_url?: string | null
+      button_color?: string | null
+    }>
   } | null>(null)
   useEffect(() => {
     fetch('/api/auth/providers')
@@ -596,7 +599,7 @@ export function LoginPage() {
               {error && tab === 'microsoft' && (
                 <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
                   {error === 'suspended'
-                    ? 'Your account is suspended. Contact an administrator to have it restored.'
+                    ? 'Your account is suspended — usually because the directory no longer lists it, a retention rule ran, or an administrator set it. Ask an administrator: the reason is shown on your account page, and they can restore access.'
                     : 'Authentication failed. Please try again or contact IT support.'}
                 </div>
               )}

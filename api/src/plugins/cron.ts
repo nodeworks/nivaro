@@ -21,6 +21,8 @@ export interface CronEntry {
   idempotent?: 'safe' | 'unsafe' | 'unknown'
   /** Plain-language purpose — what the job does and what it touches. */
   description?: string
+  /** #504 — a job that no-ops behind a deployment flag, and whether that flag currently lets it run. */
+  gate?: { flag: string; enabled: boolean }
   /** #198 — a paused cron's ticks return immediately. */
   paused?: boolean
   /** #32 — the job registered a dry-run handler (report, no writes). */
@@ -85,7 +87,11 @@ function raiseCronIssue(message: string, severity: 'medium' | 'high'): void {
 async function poolOccupancy(): Promise<{ used: number; max: number; pending: number } | null> {
   try {
     const { db } = await import('../db/index.js')
-    const pool = (db.client as { pool?: { numUsed: () => number; numPendingAcquires: () => number; max?: number } }).pool
+    const pool = (
+      db.client as {
+        pool?: { numUsed: () => number; numPendingAcquires: () => number; max?: number }
+      }
+    ).pool
     if (!pool) return null
     return { used: pool.numUsed(), max: pool.max ?? 10, pending: pool.numPendingAcquires() }
   } catch {
@@ -184,13 +190,19 @@ export class CronManager {
    *  schedule() call site. */
   annotate(
     id: string,
-    meta: { heavy?: boolean; idempotent?: 'safe' | 'unsafe' | 'unknown'; description?: string }
+    meta: {
+      heavy?: boolean
+      idempotent?: 'safe' | 'unsafe' | 'unknown'
+      description?: string
+      gate?: { flag: string; enabled: boolean }
+    }
   ): void {
     const e = this.entries.get(id)
     if (!e) return
     if (meta.heavy !== undefined) e.heavy = meta.heavy
     if (meta.idempotent) e.idempotent = meta.idempotent
     if (meta.description) e.description = meta.description
+    if (meta.gate) e.gate = meta.gate
   }
   private runSerialized(heavy: boolean, work: () => Promise<void>): Promise<void> {
     if (!heavy) return work()
@@ -453,7 +465,8 @@ export class CronManager {
         job,
         heavy,
         idempotent,
-        description
+        description,
+        gate
       }) => ({
         id,
         expression,
@@ -464,6 +477,7 @@ export class CronManager {
         heavy,
         idempotent,
         description,
+        gate,
         paused: this.pausedIds.has(id),
         // list() rebuilds entries — every annotate()/option field must be
         // copied here or the registry silently drops it (the first cron bug).

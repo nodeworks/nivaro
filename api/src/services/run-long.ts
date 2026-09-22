@@ -7,9 +7,9 @@ import { db } from '../db/index.js'
  * 1. TIMEOUT. knex.raw rides tedious' connection-level requestTimeout (15s).
  *    Past it tedious sends an attention and the batch is cancelled mid-flight:
  *    an index build over a big table, a bulk load or an import procedure never
- *    fits. `runLongSql` gives ONE statement its own request timeout instead of
- *    raising the global one, where a hung query would hold a pool connection
- *    for an hour.
+ *    fits. `runLongSql` gives ONE statement its own request timeout — none by
+ *    default, a budget when the caller is answering a request — instead of
+ *    raising the global one for every query in the process.
  *
  * 2. SCOPE. knex.raw sends every statement through sp_executesql, which gives
  *    a #temp table its own scope and DROPS it on return — so a temp table can
@@ -24,10 +24,17 @@ import { db } from '../db/index.js'
  * request input. Other dialects have neither limit and fall through to raw.
  */
 
-const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000
+/**
+ * Twenty minutes — the cron budget (Rob, 2026-09-21). A nightly proc over
+ * sixteen million activity rows, an index build or a redaction sweep runs to
+ * completion inside it; anything still going at twenty minutes is stuck, not
+ * slow, and cancelling it beats holding a pool connection till morning.
+ * Callers on a request path pass their own, shorter budget; 0 = no timeout.
+ */
+const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000
 
 export interface RunLongOptions {
-  /** Request timeout for this statement. Default one hour. */
+  /** Request timeout for this statement. Default 20 minutes; 0 = none. */
   timeoutMs?: number
   /** Knex instance to borrow the connection from. Default the app's. */
   knex?: Knex
