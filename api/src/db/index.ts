@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import knex from 'knex'
 import { config } from '../config.js'
+import { isMigrationLockedError } from './migration-lock.js'
 import { recordEffects } from './migration-effects.js'
 import { getTenantDb } from './tenant-context.js'
 
@@ -257,7 +258,7 @@ async function releaseMigrationLock(): Promise<void> {
  */
 export async function runMigrationsSafely(): Promise<[number, string[]]> {
   if (!config.MIGRATION_SAFE_MODE) {
-    return db.migrate.latest() as Promise<[number, string[]]>
+    return migrateLatestFreeingStaleLock()
   }
   const acquired = await acquireMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS)
   if (!acquired) {
@@ -266,9 +267,44 @@ export async function runMigrationsSafely(): Promise<[number, string[]]> {
     )
   }
   try {
-    return (await db.migrate.latest()) as [number, string[]]
+    return await migrateLatestFreeingStaleLock()
   } finally {
     await releaseMigrationLock()
+  }
+}
+
+/**
+ * knex takes a row lock in nivaro_migrations_lock for the batch and frees it
+ * in a finally — which a SIGTERM/SIGKILL mid-migration never reaches. The
+ * lock then outlives its process, and EVERY later boot of every instance on
+ * that database dies "Migration table is already locked" until someone runs
+ * migrate:unlock by hand (2026-09-22: dev API down for an hour, staging one
+ * deploy away from the same). A genuine in-progress migration on another
+ * instance is the only reason to wait, so wait MIGRATION_LOCK_STALE_MS for it,
+ * then free the lock loudly and run. The migrations themselves are guarded
+ * (hasTable / IF NOT EXISTS), so a second runner re-applies nothing.
+ */
+async function migrateLatestFreeingStaleLock(): Promise<[number, string[]]> {
+  const started = Date.now()
+  const budget = config.MIGRATION_LOCK_STALE_MS
+  for (;;) {
+    try {
+      return (await db.migrate.latest()) as [number, string[]]
+    } catch (err) {
+      if (!isMigrationLockedError(err)) throw err
+      const waited = Date.now() - started
+      if (waited >= budget) {
+        console.warn(
+          `Migration table locked for ${Math.round(waited / 1000)}s with no migration finishing — a prior process died mid-migration. Freeing the stale lock and running pending migrations.`
+        )
+        await db.migrate.forceFreeMigrationsLock()
+        return (await db.migrate.latest()) as [number, string[]]
+      }
+      console.warn(
+        `Migration table is locked — another instance may be migrating; retrying in 5s (${Math.round((budget - waited) / 1000)}s before the lock is treated as stale)`
+      )
+      await new Promise((r) => setTimeout(r, 5000))
+    }
   }
 }
 

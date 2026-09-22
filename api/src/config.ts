@@ -60,6 +60,10 @@ const schema = z.object({
     .transform((v) => v === 'true')
     .default('false'),
   MIGRATION_LOCK_TIMEOUT_MS: z.coerce.number().default(60_000),
+  // knex's own migration-table lock outlives a process killed mid-migration
+  // (SIGTERM skips the finally). A boot that finds it locked waits this long
+  // for a real migration elsewhere to finish, then frees it and proceeds.
+  MIGRATION_LOCK_STALE_MS: z.coerce.number().default(120_000),
 
   // Deploy preflight — comma-separated extension ids this deployment REQUIRES.
   // An instance that boots without one of them looks healthy while silently
