@@ -1,10 +1,87 @@
 {
-  "generated_at": "2026-09-22T13:09:37.869Z",
+  "generated_at": "2026-09-22T16:22:05.086Z",
   "releases": [
+    {
+      "version": "0.1.327",
+      "tag": "v0.1.327",
+      "date": "2026-09-22T12:21:54-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "index nivaro_workflow_history (instance, to_state)",
+              "hash": "28ae7aba"
+            },
+            {
+              "section": "Added",
+              "scope": "items",
+              "text": "$state virtual read field + filter",
+              "hash": "38014fb8"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "external_label on states — the name outside systems receive",
+              "hash": "9028028f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "workflows",
+              "text": "blocking-phase transition actions see the full state row",
+              "hash": "dd652992"
+            },
+            {
+              "section": "Fixed",
+              "scope": "workflows",
+              "text": "carry the full state row into the transition-event payload builder",
+              "hash": "c4e32334"
+            },
+            {
+              "section": "Fixed",
+              "scope": "migrations",
+              "text": "334 builds its index outside the batch transaction",
+              "hash": "025c9665"
+            },
+            {
+              "section": "Fixed",
+              "scope": "bell",
+              "text": "the badge counts every unread notification, FYI included",
+              "hash": "13189b03"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "$state filter reads every value shape, and never widens",
+              "hash": "970131ae"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "state:views script alias",
+              "hash": "76dc0906"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.1.326",
       "tag": "v0.1.326",
-      "date": "2026-09-22T09:09:27-04:00",
+      "date": "2026-09-22T09:09:38-04:00",
       "sections": [
         {
           "label": "Added",
