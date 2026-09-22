@@ -16,6 +16,11 @@ import {
   addendumSummaryBatch
 } from './addendum-summary.js'
 import { getCollection, getRelations } from './collections.js'
+import {
+  matchesColumnFilterOp,
+  parseColumnFilterOp,
+  sortOptionValues
+} from './column-filter-ops.js'
 import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
@@ -27,11 +32,6 @@ import {
   addendumRecordPath,
   loadAddendums
 } from './pipeline-subject.js'
-import {
-  matchesColumnFilterOp,
-  parseColumnFilterOp,
-  sortOptionValues
-} from './column-filter-ops.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
 
@@ -739,15 +739,37 @@ export function sortItems(
   return [...items].sort((a, b) => {
     const av = sortValue(a, key, weights)
     const bv = sortValue(b, key, weights)
-    if (av == null && bv == null) return 0
+    if (av == null && bv == null) return stableTie(a, b, key)
     if (av == null) return 1
     if (bv == null) return -1
     const cmp =
       typeof av === 'number' && typeof bv === 'number'
         ? av - bv
         : String(av).localeCompare(String(bv))
-    return desc ? -cmp : cmp
+    if (cmp !== 0) return desc ? -cmp : cmp
+    return stableTie(a, b, key)
   })
+}
+
+/**
+ * #503: equal sort keys used to keep whatever order the resolvers produced,
+ * and -priority caps age at `age_hour_cap` — so every record past the cap
+ * tied, and two identical requests seconds apart could page the same rows
+ * differently (a real user could see a row twice or never). Ties now break
+ * on time-invariant facts: for priority the raw age (older first, uncapped),
+ * then collection + item id — never on arrival order.
+ */
+function stableTie(a: QueueItem, b: QueueItem, key: string): number {
+  if (key === 'priority') {
+    const ag = (b.aging_hours ?? -1) - (a.aging_hours ?? -1)
+    if (ag !== 0) return ag
+  }
+  const c = a.collection.localeCompare(b.collection)
+  if (c !== 0) return c
+  const an = Number(a.item_id)
+  const bn = Number(b.item_id)
+  if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn
+  return String(a.item_id).localeCompare(String(b.item_id))
 }
 
 /** Distinct values a column actually holds, so its filter offers what is
@@ -1957,7 +1979,8 @@ export async function resolveCollectionSource(
   const fillIdMetaSla = () => {
     if (!slaNarrows && idMeta) {
       for (const m of idMeta) {
-        m.sla_status = (slaMap[m.item_id]?.status as 'ok' | 'warning' | 'breached' | undefined) ?? null
+        m.sla_status =
+          (slaMap[m.item_id]?.status as 'ok' | 'warning' | 'breached' | undefined) ?? null
       }
     }
   }

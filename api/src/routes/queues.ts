@@ -1,10 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { builtinAllowed } from '../services/bulk-actions.js'
 import { db } from '../db/index.js'
 import { enqueueQueueMaterializationBackfill } from '../functions/queue-materialization-jobs.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { builtinAllowed } from '../services/bulk-actions.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
+import { breachedCountsByQueue } from '../services/queue-materialization-read.js'
 import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../services/queues.js'
 import {
   computeAvailableExtraFields,
@@ -17,7 +18,6 @@ import {
   validateAggregates,
   validateColumnFormats
 } from '../services/queues.js'
-import { breachedCountsByQueue } from '../services/queue-materialization-read.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 
 // Format-only validation for extra_fields entries used as SQL column identifiers in
@@ -1237,13 +1237,30 @@ export async function queuesRoutes(app: FastifyInstance) {
       filters: parsedFilters,
       ...(paginationRequested ? { page, limit } : {})
     })
+    // #502: an empty view says WHY — nothing yours vs filtered out vs a
+    // source this role cannot read looked identical before.
+    const empty =
+      result.total === 0
+        ? await import('../services/queue-empty.js')
+            .then((m) =>
+              m.explainEmptyQueue(
+                id,
+                req.user!,
+                !!req.isAdmin,
+                scope as QueueScope,
+                parsedFilters as Record<string, unknown> | undefined
+              )
+            )
+            .catch(() => null)
+        : null
     return reply.send({
       data: result.items,
       stats: result.stats,
       filtered_stats: result.filteredStats,
       available_values: result.availableValues,
       truncated: result.truncated,
-      total: result.total
+      total: result.total,
+      ...(empty ? { empty } : {})
     })
   })
 

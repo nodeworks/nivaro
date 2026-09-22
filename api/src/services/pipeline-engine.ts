@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import {
@@ -329,10 +330,99 @@ const bindingsCache = new Map<
   }
 >()
 
+// Bumped on every bust: a fetch that STARTED before an admin edit must not
+// write its (pre-edit) rows into the cache after the bust cleared it.
+let ownerCacheGen = 0
+
 export function bustOwnerGroupCache(): void {
+  ownerCacheGen++
   ownerGroupCache.clear()
   fallbackMetaCache.clear()
   bindingsCache.clear()
+}
+
+/**
+ * #480: owner groups carry ~2MB of `filters` JSON (4,005 rows, nvarchar =
+ * UTF-16, the same dotted paths repeated per row) and the transfer — not
+ * finding the rows — was the cost: an index on (state) changed nothing. The
+ * default connection asks SQL Server for the whole set as ONE gzip blob
+ * (`COMPRESS((… FOR JSON PATH))`): 2.6s → 0.45s, ~240KB on the wire, rows
+ * verified identical to the plain read (fingerprint-checked). Any other
+ * connection, or any failure, falls back to the plain select.
+ */
+async function fetchOwnerGroupRows(states: string[], database: typeof db): Promise<OwnerGroup[]> {
+  const plain = async (ids: string[]) =>
+    (await database<OwnerGroup>('nivaro_pipeline_owner_groups')
+      .whereIn('state', ids)
+      .orderBy('sort')
+      .orderBy('is_default')) as OwnerGroup[]
+  const out: OwnerGroup[] = []
+  for (let i = 0; i < states.length; i += 1000) {
+    const ids = states.slice(i, i + 1000)
+    if (database !== db) {
+      out.push(...(await plain(ids)))
+      continue
+    }
+    try {
+      const res = (await db.raw(
+        `SELECT COMPRESS((SELECT * FROM nivaro_pipeline_owner_groups WHERE state IN (${ids
+          .map(() => '?')
+          .join(',')}) ORDER BY sort, is_default FOR JSON PATH, INCLUDE_NULL_VALUES)) AS z`,
+        ids
+      )) as Array<{ z: Buffer | null }>
+      const z = res[0]?.z
+      out.push(...(z ? (JSON.parse(gunzipSync(z).toString('utf16le')) as OwnerGroup[]) : []))
+    } catch {
+      out.push(...(await plain(ids)))
+    }
+  }
+  // Chunks each come back ordered; restore the global order the plain read gave.
+  if (states.length > 1000)
+    out.sort(
+      (a, b) =>
+        (a.sort ?? 0) - (b.sort ?? 0) || Number(!!a.is_default) - Number(!!b.is_default)
+    )
+  return out
+}
+
+let refreshing: Promise<void> | null = null
+const refreshQueue = new Set<string>()
+function refreshOwnerGroupsBehind(stateIds: string[]): void {
+  for (const id of stateIds) refreshQueue.add(id)
+  if (refreshing) return
+  refreshing = (async () => {
+    try {
+      while (refreshQueue.size > 0) {
+        const batch = [...refreshQueue]
+        refreshQueue.clear()
+        // Drop the expired entries so the fetch below treats them as missing.
+        const keep = new Map(batch.map((id) => [id, ownerGroupCache.get(id)]))
+        for (const id of batch) ownerGroupCache.delete(id)
+        try {
+          await getOwnerGroupsForStates(batch, db)
+        } catch {
+          // Refresh failed — put the last-known-good entries back.
+          for (const [id, v] of keep) if (v && !ownerGroupCache.has(id)) ownerGroupCache.set(id, v)
+        }
+      }
+    } finally {
+      refreshing = null
+    }
+  })()
+}
+
+/**
+ * Warm the owner-group cache for every state of every BOUND template (#481) —
+ * called at boot so the first queue read after a deploy does not pay the
+ * fetch. Returns the number of states warmed.
+ */
+export async function warmOwnerGroupCache(): Promise<number> {
+  const rows = (await db('nivaro_workflow_states as s')
+    .whereIn('s.template', db('nivaro_workflow_bindings').select('template'))
+    .select('s.id')) as Array<{ id: string }>
+  const ids = rows.map((r) => String(r.id))
+  for (let i = 0; i < ids.length; i += 200) await getOwnerGroupsForStates(ids.slice(i, i + 200), db)
+  return ids.length
 }
 
 /**
@@ -346,23 +436,30 @@ async function getOwnerGroupsForStates(
 ): Promise<Map<string, { groups: OwnerGroup[]; prepared: PreparedOwnerGroups }>> {
   const out = new Map<string, { groups: OwnerGroup[]; prepared: PreparedOwnerGroups }>()
   const cacheable = database === db
+  const gen = ownerCacheGen
   const missing: string[] = []
+  const expired: string[] = []
   const now = Date.now()
   for (const id of stateIds) {
     const hit = cacheable ? ownerGroupCache.get(id) : undefined
     if (hit && now - hit.at < OWNER_GROUP_CACHE_TTL) {
       out.set(id, { groups: hit.groups, prepared: hit.prepared })
+    } else if (hit) {
+      // #481: an EXPIRED entry is served as-is and refreshed behind the
+      // request — the first reader after every expiry used to pay the whole
+      // ~3s group fetch. Admin edits bust the cache (clear), so a stale
+      // answer here is never older than one TTL of untouched config.
+      out.set(id, { groups: hit.groups, prepared: hit.prepared })
+      expired.push(id)
     } else {
       missing.push(id)
     }
   }
+  if (expired.length > 0) refreshOwnerGroupsBehind(expired)
   if (missing.length > 0) {
     let rows: OwnerGroup[]
     try {
-      rows = (await database<OwnerGroup>('nivaro_pipeline_owner_groups')
-        .whereIn('state', missing)
-        .orderBy('sort')
-        .orderBy('is_default')) as OwnerGroup[]
+      rows = await fetchOwnerGroupRows(missing, database)
     } catch (err) {
       // Stale-while-revalidate (#331): a refresh failure serves each state's
       // last-known-good groups (extended one TTL) instead of dropping owner
@@ -392,7 +489,7 @@ async function getOwnerGroupsForStates(
       const groups = byState.get(id) ?? []
       const prepared = prepareOwnerGroups(groups)
       out.set(id, { groups, prepared })
-      if (cacheable) ownerGroupCache.set(id, { groups, prepared, at: now })
+      if (cacheable && gen === ownerCacheGen) ownerGroupCache.set(id, { groups, prepared, at: now })
     }
   }
   return out

@@ -51,10 +51,10 @@ import {
 import { useDebounced } from '../../hooks/useDebounced'
 import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { del, get, patch, post, put } from '../../lib/commands'
-import { evaluateExpression } from '../../lib/expression'
 import { describeDateFilter, parseDateFilter } from '../../lib/date-filter'
-import { describeNumberFilter, parseNumberFilter } from '../../lib/number-filter'
+import { evaluateExpression } from '../../lib/expression'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
+import { describeNumberFilter, parseNumberFilter } from '../../lib/number-filter'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
@@ -750,6 +750,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // Inputs stay bound to filterValues (instant UI); the items query keys off
   // this trailing copy so text filters don't fire a request per keystroke.
   const debouncedFilterValues = useDebounced(filterValues, 350)
+  const filtersSettled = JSON.stringify(debouncedFilterValues) === JSON.stringify(filterValues)
+  const firstFetchedRef = useRef(false)
 
   const apiFilters = (() => {
     const out: Record<string, unknown> = {}
@@ -952,6 +954,8 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     }
     truncated: boolean
     total: number
+    /** #502: why a view came back empty — nothing yours / filtered / unreadable. */
+    empty?: { reason: string; message: string; unreadable: string[]; queue_total: number | null }
   }>({
     queryKey: [
       'queue-items',
@@ -975,11 +979,48 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
       ),
     // Wait for display_config AND scope seeding so the first fetch uses the
     // configured defaults and already carries the viewer's restricted filters.
-    enabled: !!queueId && displayReady && scopeGateOpen,
+    // #477: the key reads the DEBOUNCED filters (350ms) while seeding writes
+    // the live ones — the gate opened before the debounce caught up, so the
+    // first fetch went out WITHOUT the seeded scope and refired ~350ms later
+    // with it (3.3s + 8.7s of work for one page). The first fetch now also
+    // waits for the debounced copy to settle; later typing still debounces.
+    enabled:
+      !!queueId && displayReady && scopeGateOpen && (firstFetchedRef.current || filtersSettled),
     // Keep the previous page rendered while a sort/filter/page change refetches —
     // swapping to skeletons collapsed the table height and jittered the page.
     placeholderData: (prev) => prev
   })
+
+  if (data && !firstFetchedRef.current) firstFetchedRef.current = true
+  // Lifecycle trace (#477) — every items fetch this worklist makes, with the
+  // gate state and filters it went out with, on window.__nvrQueueTrace. A
+  // refetch within 2s of the first is logged as a duplicate first fetch.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: records once per landed fetch; the rest is read at that moment
+  useEffect(() => {
+    if (typeof window === 'undefined' || !dataUpdatedAt) return
+    const w = window as unknown as { __nvrQueueTrace?: Array<Record<string, unknown>> }
+    if (!w.__nvrQueueTrace) w.__nvrQueueTrace = []
+    const trace = w.__nvrQueueTrace
+    const entry = {
+      queue: queueId,
+      at: dataUpdatedAt,
+      scope,
+      sort,
+      filters: JSON.stringify(debouncedFilterValues),
+      page
+    }
+    const first = trace.find((t) => t.queue === queueId)
+    trace.push(entry)
+    if (trace.length > 50) trace.shift()
+    if (
+      first &&
+      first !== entry &&
+      dataUpdatedAt - Number(first.at) < 2000 &&
+      trace.filter((t) => t.queue === queueId).length === 2
+    )
+      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic (#477)
+      console.warn('[queue] duplicate first fetch', { first, second: entry })
+  }, [dataUpdatedAt])
 
   const showLoading = (isLoading && !data) || !displayReady || (!scopeGateOpen && !data)
   // True while a sort/filter/page change is in flight over kept-previous data —
@@ -3385,8 +3426,19 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
                   emptyMessage={
                     <EmptyState
                       icon={Inbox}
-                      title='Nothing in this queue'
-                      detail='Records land here when they match the queue sources — a state change or new record can appear at any moment.'
+                      title={
+                        data?.empty?.reason === 'not_permitted'
+                          ? 'You cannot read this queue’s records'
+                          : data?.empty?.reason === 'scope_mine'
+                            ? 'Nothing waiting on you'
+                            : data?.empty?.reason === 'filters'
+                              ? 'No record matches these filters'
+                              : 'Nothing in this queue'
+                      }
+                      detail={
+                        data?.empty?.message ??
+                        'Records land here when they match the queue sources — a state change or new record can appear at any moment.'
+                      }
                     />
                   }
                   sort={sort}

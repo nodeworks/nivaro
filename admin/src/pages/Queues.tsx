@@ -1007,6 +1007,21 @@ function SourceRow({
           </Button>
         )}
       </div>
+      {source.type === 'collection' && source.sla_filter && (
+        // #491: the source-level SLA filter is the one setting that puts a
+        // source back on the slow path — every record's SLA must be known
+        // before owners / at-risk / extra columns can start. Say so here,
+        // where it is set, instead of leaving a slower queue unexplained.
+        <p
+          className='mx-4 mt-3 rounded-md bg-[#fffbeb] px-3 py-2 text-[12px] leading-5 text-[#92400e] dark:bg-[#3a2e14] dark:text-[#f5d58a]'
+          data-queue-sla-filter-note
+        >
+          This source only lists records whose SLA is {source.sla_filter}. That filter has to
+          compute every record's SLA before anything else in the source can load, so this source
+          resolves noticeably slower than one without it. To narrow by SLA without that cost,
+          leave this empty and use the SLA filter on the queue itself.
+        </p>
+      )}
       {source.type === 'collection' && (
         <div className='grid gap-x-8 gap-y-5 p-4 md:grid-cols-2'>
           {/* Which items appear: narrowing (states + field filters) */}

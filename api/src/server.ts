@@ -1287,6 +1287,12 @@ export async function buildServer() {
       // Warm the compiled integrity checks for every laid-out collection so
       // the FIRST record form after a boot gets a sub-second live check
       // instead of paying the ~6s compile. Best-effort, never awaited.
+      // Owner groups for every bound template (#481): the first queue read
+      // after a deploy used to fetch ~1.9MB of group filters cold (~3s).
+      void import('./services/pipeline-engine.js')
+        .then((m) => m.warmOwnerGroupCache())
+        .then((n) => app.log.info(`owners: warmed owner groups for ${n} state(s)`))
+        .catch(() => {})
       void import('./services/config-conformance.js')
         .then((m) => m.warmCompiledChecks())
         .then((n) => app.log.info(`integrity: warmed checks for ${n} collection(s)`))

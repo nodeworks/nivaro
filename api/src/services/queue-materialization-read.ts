@@ -3,10 +3,10 @@ import { db } from '../db/index.js'
 import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
 import { getSlaScheduleSync } from './business-hours.js'
+import { parseColumnFilterOp } from './column-filter-ops.js'
 import { parseJson } from './pipeline-engine.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { normalizeDisplayConfig } from './queues.js'
-import { parseColumnFilterOp } from './column-filter-ops.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
 // path cannot (or intentionally does not) serve correctly: sla_status/
@@ -157,15 +157,24 @@ export function filterAndOrderNarrowRows(
   return [...out].sort((a, b) => {
     const va = val(a)
     const vb = val(b)
-    // Nulls last regardless of direction — sortItems' convention.
-    if (va == null && vb == null) return 0
+    // Nulls last regardless of direction — sortItems' convention. Ties break
+    // on time-invariant facts (#503), same rule as sortItems' stableTie.
+    const tie = () => {
+      if (key === 'priority') {
+        const ag = (b.aging_hours ?? -1) - (a.aging_hours ?? -1)
+        if (ag !== 0) return ag
+      }
+      return a.collection.localeCompare(b.collection) || a.id - b.id
+    }
+    if (va == null && vb == null) return tie()
     if (va == null) return 1
     if (vb == null) return -1
     const cmp =
       typeof va === 'number' && typeof vb === 'number'
         ? va - vb
         : String(va).localeCompare(String(vb))
-    return desc ? -cmp : cmp
+    if (cmp !== 0) return desc ? -cmp : cmp
+    return tie()
   })
 }
 
@@ -673,6 +682,7 @@ export async function fetchMaterializedQueueItems(
     const countRow = (await base.clone().count('* as n').first()) as { n: number }
     total = Number(countRow.n)
 
+    let idOrdered = false
     if (sortKey === 'label' || sortKey === 'state' || sortKey === 'collection') {
       base.orderBy(`qi.${sortKey}`, desc ? 'desc' : 'asc')
     } else if (sortKey === 'aging_hours' || sortKey === 'sla_status') {
@@ -697,10 +707,15 @@ export async function fetchMaterializedQueueItems(
         [path, path]
       )
     } else {
-      // MSSQL requires ORDER BY when OFFSET/FETCH is present but no real sort was
-      // requested — same fallback used in services/items.ts.
-      base.orderByRaw('(SELECT NULL)')
+      // MSSQL requires ORDER BY when OFFSET/FETCH is present; (SELECT NULL)
+      // left pages nondeterministic — the cache row id is stable (#503).
+      base.orderBy('qi.id', 'asc')
+      idOrdered = true
     }
+    // Ties on the requested key break on the cache row id, so two identical
+    // requests page identically (#503). Never twice — MSSQL rejects a column
+    // repeated in ORDER BY (error 169).
+    if (!idOrdered) base.orderBy('qi.id', 'asc')
 
     const limit = options.limit ?? total
     const rowsQuery = base.clone().select(FULL_ROW_COLUMNS)
