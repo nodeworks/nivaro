@@ -1211,6 +1211,17 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
   }
 
   let data: FlowData = { ...ctx.payload, $trigger: ctx.trigger }
+  // #535 — how far the run got. A condition that rejects still ends the run
+  // 'success', so without these a flow that stopped MATCHING looks exactly
+  // like one that matched: ops_run counts operations executed, `matched`
+  // means something other than a condition ran, halted_at names the op whose
+  // reject branch ended the chain.
+  const progress = { ops: 0, matched: false, halted: null as string | null }
+  const note = (op: { key: string; type: string }, status: string, ended: boolean) => {
+    progress.ops++
+    if (op.type !== 'condition' && status !== 'reject') progress.matched = true
+    if (status === 'reject' && ended) progress.halted = op.key
+  }
 
   try {
     const opMap = new Map(operations.map((op) => [op.id, op]))
@@ -1238,6 +1249,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
           )
           ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Operation fired async, continuing')
           ctx.trace?.push({ key: op.key, name: op.name, type: op.type, status: 'async' })
+          note(op, 'async', false)
           currentId = op.resolve ?? null
         } else {
           const result = await runOperation(op, d, ctx)
@@ -1254,6 +1266,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
             preview: result.output[`$preview_${op.key}`]
           })
           currentId = result.status === 'resolve' ? op.resolve : op.reject
+          note(op, result.status, currentId == null)
         }
       }
       return d
@@ -1276,6 +1289,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
           status: result.status,
           preview: result.output[`$preview_${op.key}`]
         })
+        note(op, result.status, result.status === 'reject')
         if (result.status === 'reject') break
       }
     }
@@ -1286,7 +1300,10 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
         status: 'success',
         completed_at: new Date(),
         duration_ms: Date.now() - startMs,
-        output: JSON.stringify(data)
+        output: JSON.stringify(data),
+        ops_run: progress.ops,
+        matched: progress.matched,
+        halted_at: progress.halted
       })
       .catch((err) =>
         ctx.log.warn({ err, flowId: ctx.flowId }, 'Failed to record flow run success')

@@ -9,6 +9,12 @@ import {
   classifyTables,
   diffSnapshots
 } from '../services/config-inventory.js'
+import {
+  diffSinceSnapshot,
+  listConfigSnapshots,
+  snapshotAtOrBefore,
+  takeConfigSnapshot
+} from '../services/config-snapshots.js'
 import { NIVARO_VERSION } from '../version.js'
 
 /**
@@ -71,6 +77,36 @@ export async function configDiffRoutes(app: FastifyInstance) {
         counts
       }
     })
+  })
+
+  // #523 — the stored nightly snapshots and "what drifted since".
+  app.get('/config-diff/history', { preHandler: requireAdmin }, async () => ({
+    data: await listConfigSnapshots()
+  }))
+  app.post('/config-diff/history', { preHandler: requireAdmin }, async (req) => {
+    const meta = await takeConfigSnapshot('manual', req.user?.id ?? null)
+    await logActivity({
+      action: 'config-snapshot-store',
+      user: req.user?.id ?? null,
+      comment: `${meta.tables} tables, ${meta.rows} rows`
+    })
+    return { data: meta }
+  })
+  app.get('/config-diff/since', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as { id?: string; at?: string }
+    let id = q.id ? Number(q.id) : null
+    if (!id) {
+      const at = q.at ? new Date(q.at) : new Date(Date.now() - 7 * 86_400_000)
+      if (Number.isNaN(at.getTime())) return reply.code(400).send({ error: 'at must be a date' })
+      id = await snapshotAtOrBefore(at)
+    }
+    if (!id)
+      return reply.code(404).send({
+        error: 'No stored snapshot yet — the nightly job stores one at 04:40, or store one now.'
+      })
+    const d = await diffSinceSnapshot(id)
+    if (!d) return reply.code(404).send({ error: 'Snapshot not found' })
+    return { data: d }
   })
 
   app.get('/config-diff/snapshot', { preHandler: requireAdmin }, async (req, reply) => {

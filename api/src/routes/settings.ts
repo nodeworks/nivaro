@@ -38,6 +38,7 @@ const allowedSettingsKeys = [
   'session_recording_enabled',
   'error_replay_enabled',
   'session_recording_retention_days',
+  'erp_submission_payload_retention_days',
   'two_factor_enabled',
   'presence_sweep_interval',
   'presence_ping_interval',

@@ -103,12 +103,21 @@ function TriggerBadge({ trigger }: { trigger: string }) {
   )
 }
 
+// #535 — silence verdicts against each flow's own cadence (GET /flows/health).
+interface FlowHealthRow {
+  id: string
+  verdict: 'ok' | 'quiet' | 'stopped' | 'idle' | 'young' | 'disabled'
+  silent_days: number | null
+  reason: string
+}
+
 // ─── List row ─────────────────────────────────────────────────────────────────
 // Clicking a row opens the flow editor directly — export/delete ride the row
 // as hover actions (they used to live on a detail panel behind an extra click).
 
 function FlowRow({
   flow,
+  health,
   pendingDelete,
   isDeleting,
   onOpen,
@@ -119,6 +128,7 @@ function FlowRow({
   onConfirmDelete
 }: {
   flow: Flow
+  health?: FlowHealthRow
   pendingDelete: boolean
   isDeleting: boolean
   onOpen: () => void
@@ -146,6 +156,17 @@ function FlowRow({
             {flow.name}
           </span>
           <TriggerBadge trigger={flow.trigger} />
+          {health && (health.verdict === 'quiet' || health.verdict === 'stopped') && (
+            <span
+              className='inline-flex items-center gap-1 rounded bg-[#fbefd9] px-1.5 py-px text-[10px] font-medium text-[#8f5400] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
+              title={health.reason}
+              data-flow-silent={health.verdict}
+            >
+              {health.verdict === 'quiet'
+                ? `quiet ${health.silent_days}d`
+                : `stopped ${health.silent_days}d`}
+            </span>
+          )}
         </div>
         <div className='flex items-center gap-2 pl-3.5'>
           <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
@@ -399,6 +420,12 @@ export function FlowsPage() {
     }
   }
 
+  const { data: healthRows } = useQuery({
+    queryKey: ['flows-health'],
+    queryFn: () => api.get<{ data: FlowHealthRow[] }>('/flows/health').then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const healthById = new Map((healthRows ?? []).map((h) => [String(h.id).toUpperCase(), h]))
   const { data, isLoading } = useQuery({
     queryKey: ['flows'],
     queryFn: () => api.get('/flows').then((r) => r.data)
@@ -549,6 +576,7 @@ export function FlowsPage() {
             <ul className='divide-y divide-slate-100 dark:divide-border'>
               {filtered.map((flow) => (
                 <FlowRow
+                  health={healthById.get(String(flow.id).toUpperCase())}
                   key={flow.id}
                   flow={flow}
                   pendingDelete={pendingDelete === flow.id}

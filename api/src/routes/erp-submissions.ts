@@ -215,6 +215,25 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
   // #80 — payload archive search: "where did this REQ id go". Text LIKE over
   // the stored payload/response/error/external_ref, admin-only (the bodies
   // carry other records' data). Static path — registered BEFORE /:c/:i.
+  // #528 — how much the push log weighs and what the retention pass will blank.
+  app.get('/storage', { preHandler: requireAdmin }, async () => {
+    const { erpSubmissionStorage } = await import('../services/erp-retention.js')
+    return { data: await erpSubmissionStorage() }
+  })
+  app.post('/storage/prune', { preHandler: requireAdmin }, async (req) => {
+    const { pruneErpSubmissionPayloads } = await import('../services/erp-retention.js')
+    const r = await pruneErpSubmissionPayloads()
+    await logActivity({
+      action: 'erp-payload-prune',
+      user: req.user?.id,
+      collection: 'nivaro_erp_submissions',
+      comment: r.days
+        ? `${r.blanked} rows older than ${r.days}d blanked${r.more ? ' (more remain)' : ''}`
+        : 'retention off — nothing blanked'
+    })
+    return { data: r }
+  })
+
   app.get('/search', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as {
       q?: string

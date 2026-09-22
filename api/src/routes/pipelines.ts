@@ -16,6 +16,7 @@ import {
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 import {
   evaluateTransitionRequirements,
   IDENTIFIER_RE
@@ -309,8 +310,35 @@ function validateRequirements(value: unknown): string | null {
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
+let ownerFilterCheckRegistered = false
 
 export async function pipelinesRoutes(app: FastifyInstance) {
+  if (!ownerFilterCheckRegistered) {
+    ownerFilterCheckRegistered = true
+    registerReadinessCheck({
+      id: 'owner-filter-shapes',
+      label: 'Every owner-group filter names a dimension on its template',
+      group: 'Configuration',
+      description:
+        'Owner-group filters are stored as a list of {field, op, value} (or a field-keyed map) — never positionally. A filter naming a field that is not a dimension on the template can never match, so its seat silently owns nothing.',
+      run: async () => {
+        const { lintOwnerFilters } = await import('../services/owner-filter-lint.js')
+        const r = await lintOwnerFilters()
+        if (r.findings.length === 0)
+          return {
+            status: 'pass',
+            detail: `${r.groups} owner groups — every filter field is a dimension on its template; none stored positionally.`
+          }
+        return {
+          status: 'warn',
+          detail: `${r.findings.length} owner-group filter(s) cannot match a record.`,
+          blockers: r.findings
+            .slice(0, 12)
+            .map((f) => `${f.group_name ?? f.group_id} (${f.state}): ${f.kind} — ${f.detail}`)
+        }
+      }
+    })
+  }
   // Owner-group config is cached in pipeline-engine (60s) — any successful
   // mutation through this router that touches groups/users/bindings busts it,
   // one hook so no mutation site can be missed (same pattern as the central

@@ -86,6 +86,35 @@ export const dbHealthDocs: DocSection = {
         'Dangling-FK repair offers two actions only: null out the broken reference (refused on NOT NULL columns) or delete the orphaned rows through the normal delete path, so trash, deletion guards, and hooks all apply. Repointing to a different record is deliberately not offered.'
       ]
     },
+    { type: 'h2', id: 'config-since', text: 'Environment Config — what drifted since' },
+    {
+      type: 'p',
+      text: 'The `config-snapshot` job stores a gzipped snapshot of every configuration table each night at 04:40 (secrets already stripped, pruned to the newest 30). Environment Config → **What drifted since…** picks any stored night and compares the live rows against it with the same engine the file upload uses — added, removed and changed rows per table, field by field. Nights identical to the one before are dimmed: a run of identical hashes is the answer "nothing drifted". **Store a snapshot now** takes one on demand. API: `GET /config-diff/history`, `POST /config-diff/history`, `GET /config-diff/since?id=|at=`.'
+    },
+    { type: 'h2', id: 'layout-drift', text: 'Layout drift' },
+    {
+      type: 'p',
+      text: "Every layout mutation snapshots the state before it, so the newest version against the current rows is exactly **what the last save changed**. Table Editor → Version history shows that diff first and any version's diff on demand (assignments keyed by field, since the save route re-inserts rows; groups by id), with warnings for the shapes that meant damage before — column widths nulled wholesale, slot flags flipped off together, half the fields gone. The readiness check `layout-drift` sweeps every layout for those shapes. API: `GET /collection-layouts/:id/versions/:v`, `…/versions/:v|newest/diff?against=current|<v>`, `GET /collection-layouts/drift`."
+    },
+    {
+      type: 'h2',
+      id: 'custom-query-dependents',
+      text: 'Custom queries — used by, and procedure shape'
+    },
+    {
+      type: 'p',
+      text: 'The query editor\'s **Used by** card lists everything that references the query by slug or id — page widgets, record widgets, report widgets and catalog presets, metric and anomaly definitions, flow operations, other queries. Below it, **Procedure shape** checks each `INSERT … EXEC` in the wrapper against the procedure\'s real first result set: INSERT … EXEC binds by position, so the declared column COUNT must equal what the procedure returns; names are shown but never fail the check. SQL Server cannot describe a procedure that builds temp tables inside — those read "cannot be described", and the last failing run on this process (a shape error) is the honest fallback. The readiness check `custom-query-shapes` runs the same comparison over every wrapper. API: `GET /custom-queries/:id/dependents`, `GET /custom-queries/shape-report`.'
+    },
+    { type: 'h2', id: 'dead-columns', text: 'Dead columns' },
+    {
+      type: 'p',
+      text: 'Columns a model change left behind are registered in `api/src/db/dead-columns.ts` with the date the last writer stopped, what replaced them and whether they can be dropped yet. `pnpm --filter @nivaro/api run dead-columns:check` greps every source tree and fails when code still names a column marked droppable; the readiness check `dead-columns` reports droppable columns still present on the database (the dropping migration has not run there) and lists what still blocks the retiring ones. `GET /ops-db/dead-columns` is the same view. Migration 336 dropped the first one, `nivaro_queues.view_mode`.'
+    },
+    { type: 'h2', id: 'erp-payload-retention', text: 'ERP push payload retention' },
+    {
+      type: 'p',
+      text: 'Every ERP push stores its payload and response. Settings → `erp_submission_payload_retention_days` (default 90; blank or 0 keeps forever) makes the daily retention pass blank both on rows older than the window — status, attempts, last error, external reference and change signature stay, so history and the push-only-when-changed gate are untouched. `GET /erp-submissions/storage` reports rows, bytes, the oldest row still carrying bytes and how many the next pass will blank; `POST /erp-submissions/storage/prune` runs it now.'
+    },
     { type: 'h2', id: 'cache-health', text: 'Cache health (custom queries)' },
     {
       type: 'p',

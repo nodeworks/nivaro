@@ -69,6 +69,27 @@ export function recordCacheOutcome(
   stats.set(slug, s)
 }
 
+/**
+ * The newest execution error per slug (in-process, per replica) — the honest
+ * fallback for wrappers whose result set the DMV cannot describe (#531): an
+ * INSERT … EXEC shape mismatch fails loudly at run time, so the last failing
+ * run IS the shape test.
+ */
+const lastErrors = new Map<string, { at: string; message: string }>()
+
+export function recordQueryError(slug: string, message: string): void {
+  lastErrors.set(slug, { at: new Date().toISOString(), message: message.slice(0, 600) })
+}
+
+export function lastQueryError(slug: string): { at: string; message: string } | null {
+  return lastErrors.get(slug) ?? null
+}
+
+export function lastQueryRun(slug: string): { at: string | null; outcome: CacheOutcome | null } {
+  const s = stats.get(slug)
+  return { at: s?.last_run_at ?? null, outcome: s?.last_outcome ?? null }
+}
+
 export interface CacheStatRow extends SlugStats {
   runs: number
   hit_rate: number | null

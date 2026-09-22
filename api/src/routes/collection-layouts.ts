@@ -5,10 +5,17 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
-import { restoreLayoutVersion, snapshotLayoutVersion } from '../services/layout-versions.js'
+import {
+  diffLayoutVersions,
+  getLayoutVersion,
+  layoutDriftSweep,
+  restoreLayoutVersion,
+  snapshotLayoutVersion
+} from '../services/layout-versions.js'
 import { generatePdfFromLayout } from '../services/pdf-layout.js'
 import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layout-themes.js'
 import { can } from '../services/permissions.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
 
 type LayoutConditions = { role_ids?: string[] } | null
@@ -285,7 +292,31 @@ function pickBestLayout(
   return fallbackPool.find((l) => l.is_active) ?? fallbackPool[0] ?? null
 }
 
+let driftCheckRegistered = false
+
 export async function collectionLayoutsRoutes(app: FastifyInstance) {
+  if (!driftCheckRegistered) {
+    driftCheckRegistered = true
+    registerReadinessCheck({
+      id: 'layout-drift',
+      label: 'No layout lost widths, flags or half its fields in its last save',
+      group: 'Configuration',
+      description:
+        'Every layout mutation snapshots the state before it, so the newest version against the current rows is exactly what the last save changed. This names the shapes that meant damage before: column widths nulled wholesale, slot flags flipped off together, most assignments gone.',
+      run: async () => {
+        const hits = await layoutDriftSweep()
+        if (hits.length === 0)
+          return { status: 'pass', detail: "Every layout's last save looks like an ordinary edit." }
+        return {
+          status: 'warn',
+          detail: `${hits.length} layout(s) changed in a data-losing shape on their last save — open Table Editor → Version history → "What the last save changed" to restore.`,
+          blockers: hits
+            .slice(0, 10)
+            .map((h) => `${h.collection} · ${h.name} (#${h.layout_id}): ${h.warnings[0]}`)
+        }
+      }
+    })
+  }
   // Preview-as-role (#86): which layout a member of a role would resolve, and
   // which fields their permissions hide — answered with the SAME pickBestLayout
   // + getAllowedFields the live path uses (a parallel evaluator would drift).
@@ -1669,6 +1700,32 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       )
     return reply.send({ data: rows })
   })
+
+  // GET /collection-layouts/:id/versions/:versionId — the snapshot itself
+  // (the 09-16 col_span recovery had to read the row via SQL; never again).
+  app.get('/:id/versions/:versionId', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, versionId } = req.params as { id: string; versionId: string }
+    const v = await getLayoutVersion(Number(id), Number(versionId))
+    if (!v) return reply.code(404).send({ error: 'Version not found' })
+    return reply.send({ data: v })
+  })
+
+  // GET /collection-layouts/:id/versions/:versionId/diff?against=current|<versionId>
+  // — what changed between a version and now (or another version); with
+  // versionId 'newest' this is "what did the last save change" (#521).
+  app.get('/:id/versions/:versionId/diff', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, versionId } = req.params as { id: string; versionId: string }
+    const { against } = req.query as { against?: string }
+    const from = versionId === 'newest' ? ('newest' as const) : Number(versionId)
+    const to = !against || against === 'current' ? ('current' as const) : Number(against)
+    const d = await diffLayoutVersions(Number(id), from, to)
+    if (!d) return reply.code(404).send({ error: 'Version not found' })
+    return reply.send({ data: d })
+  })
+
+  // GET /collection-layouts/drift — every layout whose last save shows a
+  // data-losing shape (widths nulled wholesale, half the fields gone).
+  app.get('/drift', { preHandler: requireAdmin }, async () => ({ data: await layoutDriftSweep() }))
 
   // POST /collection-layouts/:id/versions/:versionId/restore — id-preserving,
   // captures a 'before restore' version first so the restore is reversible.

@@ -1374,10 +1374,101 @@ function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => vo
                 </p>
               )}
             </section>
+            <RegistryHistory id={id} />
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+// #530 — every registry version this database has seen for the extension:
+// when a hook, cron, check or operation first appeared or went away.
+interface RegistryVersion {
+  version: number
+  app_version: string | null
+  first_seen_at: string
+  last_seen_at: string
+  boots: number
+  diff: { added: Record<string, string[]>; removed: Record<string, string[]>; total: number }
+}
+
+function RegistryHistory({ id }: { id: string }) {
+  const { data = [] } = useQuery<RegistryVersion[]>({
+    queryKey: ['extension-registry-history', id],
+    queryFn: () => api.get(`/extensions/${id}/registry/history`).then((r) => r.data.data)
+  })
+  const [openV, setOpenV] = useState<number | null>(null)
+  const when = (iso: string) =>
+    new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  if (data.length === 0) return null
+  return (
+    <section data-registry-history>
+      <h3 className='text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+        Registry versions{' '}
+        <span className='font-mono text-[10px] font-normal text-slate-400'>{data.length}</span>
+      </h3>
+      <p className='mt-0.5 text-[11.5px] text-muted-foreground'>
+        A new version is recorded whenever a boot registers something different from the boot
+        before.
+      </p>
+      <ul className='mt-1 space-y-1'>
+        {data.map((v, i) => {
+          const isLatest = i === 0
+          const open = openV === v.version
+          return (
+            <li
+              key={v.version}
+              className='rounded border border-slate-200 px-2 py-1 dark:border-border'
+              data-registry-version={v.version}
+            >
+              <button
+                type='button'
+                onClick={() => setOpenV(open ? null : v.version)}
+                className='flex w-full items-baseline gap-2 text-left text-[11.5px]'
+              >
+                <span className='font-mono font-medium'>v{v.version}</span>
+                <span className='text-slate-500'>
+                  {when(v.first_seen_at)}
+                  {v.first_seen_at.slice(0, 10) !== v.last_seen_at.slice(0, 10)
+                    ? ` → ${when(v.last_seen_at)}`
+                    : ''}
+                  {' · '}
+                  {v.boots} boot{v.boots === 1 ? '' : 's'}
+                  {v.app_version ? ` · app ${v.app_version}` : ''}
+                </span>
+                <span className='ml-auto text-[10.5px] text-slate-400'>
+                  {isLatest ? 'current · ' : ''}
+                  {v.diff.total === 0
+                    ? i === data.length - 1
+                      ? 'first seen'
+                      : 'no change'
+                    : `${v.diff.total} change${v.diff.total === 1 ? '' : 's'}`}
+                </span>
+              </button>
+              {open && v.diff.total > 0 && (
+                <div className='mt-1 space-y-0.5 border-t border-slate-100 pt-1 font-mono text-[10.5px] dark:border-border/60'>
+                  {Object.entries(v.diff.added).flatMap(([k, list]) =>
+                    list.map((x) => (
+                      <p key={`+${k}${x}`} className='text-[#1c7449] dark:text-[#6fd6a0]'>
+                        + {k}: {x}
+                      </p>
+                    ))
+                  )}
+                  {Object.entries(v.diff.removed).flatMap(([k, list]) =>
+                    list.map((x) => (
+                      <p key={`-${k}${x}`} className='text-[#9c2f47] dark:text-[#f08aa1]'>
+                        − {k}: {x}
+                      </p>
+                    ))
+                  )}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }
 

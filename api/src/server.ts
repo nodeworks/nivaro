@@ -416,6 +416,24 @@ export async function buildServer() {
       callExternalApi
     })
     await loadScheduledFlows(app)
+    // #530 — fingerprint what each extension registered this boot; a changed
+    // ledger becomes a new version so "when did this check appear?" has an answer.
+    void (async () => {
+      const { extensionRegistry, describeExtensionRegistry } = await import(
+        './extensions/loader.js'
+      )
+      const { recordRegistryVersion } = await import('./services/extension-registry-versions.js')
+      for (const id of extensionRegistry.keys()) {
+        const desc = await describeExtensionRegistry(id, app.cron).catch(() => null)
+        if (!desc) continue
+        const r = await recordRegistryVersion(id, desc)
+        if (r?.changed)
+          app.log.info(
+            { extension: id, version: r.version },
+            '[extension-registry] new registry version'
+          )
+      }
+    })().catch((err) => app.log.warn({ err }, '[extension-registry] versioning failed'))
   }
 
   // ─── Cloud extensions ─────────────────────────────────────────────────────
@@ -526,6 +544,17 @@ export async function buildServer() {
           }
           await purgeExpiredTrash()
           await purgeExpiredRecordings().catch(() => {})
+          // #528 — ERP push payloads/responses past the configured window lose their bytes, never their history.
+          await import('./services/erp-retention.js')
+            .then((m) => m.pruneErpSubmissionPayloads())
+            .then((r) => {
+              if (r.blanked)
+                app.log.info(
+                  { blanked: r.blanked, days: r.days, more: r.more },
+                  '[retention] erp submission payloads blanked'
+                )
+            })
+            .catch((err) => app.log.warn({ err }, '[retention] erp payload prune failed'))
           await pruneAiCalls().catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
@@ -1333,6 +1362,16 @@ export async function buildServer() {
           .catch(() => {})
       })
 
+      // #523 — one stored config snapshot a day, so "what drifted since Friday"
+      // is a question the compare page can answer without an uploaded file.
+      app.cron.schedule('config-snapshot', '40 4 * * *', async () => {
+        const { takeConfigSnapshot } = await import('./services/config-snapshots.js')
+        const meta = await takeConfigSnapshot('cron')
+        app.log.info(
+          { tables: meta.tables, rows: meta.rows, same: meta.same_as_previous },
+          '[config-snapshot] stored'
+        )
+      })
       app.cron.schedule('readiness-snapshot', '50 6 * * *', async () => {
         const { runReadinessChecks } = await import('./services/readiness.js')
         const report = await runReadinessChecks()

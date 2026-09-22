@@ -7,6 +7,8 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { inngest } from '../plugins/inngest.js'
 import { logActivity } from '../services/activity.js'
 import { executeFlow } from '../services/flow-executor.js'
+import { flowHealth } from '../services/flow-health.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 
 interface Flow {
   id: string
@@ -510,8 +512,39 @@ export async function webhookFlowRoute(app: FastifyInstance) {
 
 // ─── Admin routes ─────────────────────────────────────────────────────────────
 
+let flowHealthCheckRegistered = false
+
 export async function flowsRoutes(app: FastifyInstance) {
+  if (!flowHealthCheckRegistered) {
+    flowHealthCheckRegistered = true
+    registerReadinessCheck({
+      id: 'flows-silent',
+      label: 'No active flow has silently stopped matching or firing',
+      group: 'Configuration',
+      description:
+        'A condition that rejects every run still ends the run "success". Each active flow is judged against its own cadence: quiet = still fires but nothing has matched for 3× its usual gap; stopped = no run at all for that long.',
+      run: async () => {
+        const rows = await flowHealth()
+        const bad = rows.filter((r) => r.verdict === 'quiet' || r.verdict === 'stopped')
+        if (bad.length === 0) {
+          const judged = rows.filter((r) => r.verdict === 'ok').length
+          return {
+            status: 'pass',
+            detail: `${judged} active flow(s) with a cadence are matching on schedule.`
+          }
+        }
+        return {
+          status: 'warn',
+          detail: `${bad.length} flow(s) have gone silent against their own history.`,
+          blockers: bad.slice(0, 10).map((r) => `${r.name} — ${r.verdict}: ${r.reason}`)
+        }
+      }
+    })
+  }
   app.addHook('preHandler', requireAdmin)
+
+  // #535 — per-flow silence verdicts against each flow's own cadence.
+  app.get('/health', async () => ({ data: await flowHealth() }))
 
   app.get('/', async (_req, reply) => {
     const flows = await db<Flow>('nivaro_flows').orderBy('updated_at', 'desc')

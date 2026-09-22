@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { customQueryDependents, shapeChecks } from '../services/custom-query-dependents.js'
 import {
   buildFinalParams,
   execCustomQuerySql,
@@ -9,12 +10,13 @@ import {
   type ParamDef,
   type ParamType
 } from '../services/custom-query-exec.js'
-import { recordCacheOutcome } from '../services/query-cache-stats.js'
+import { recordCacheOutcome, recordQueryError } from '../services/query-cache-stats.js'
 import {
   bustFreshnessInference,
   parseFreshnessSources,
   queryFreshness
 } from '../services/query-freshness.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 import { markSpan } from '../services/request-trace.js'
 import { getUserScopes, listScopeDimensions } from '../services/user-scopes.js'
 
@@ -255,7 +257,77 @@ export function capturedPlanFor(id: number) {
   return capturedPlans.get(id) ?? null
 }
 
+async function shapeReport(): Promise<
+  Array<{
+    id: number
+    slug: string
+    name: string
+    enabled: boolean
+    checks: Awaited<ReturnType<typeof shapeChecks>>
+  }>
+> {
+  const rows = (await db('nivaro_custom_queries')
+    .select('id', 'slug', 'name', 'enabled', 'sql_text')
+    .where('sql_text', 'like', '%EXEC%')) as Array<
+    Pick<CustomQueryRow, 'id' | 'slug' | 'name' | 'enabled' | 'sql_text'>
+  >
+  const out: Array<{
+    id: number
+    slug: string
+    name: string
+    enabled: boolean
+    checks: Awaited<ReturnType<typeof shapeChecks>>
+  }> = []
+  for (const r of rows) {
+    const checks = await shapeChecks(r.sql_text ?? '', r.slug)
+    if (checks.length)
+      out.push({ id: r.id, slug: r.slug, name: r.name, enabled: !!r.enabled, checks })
+  }
+  return out
+}
+
+let shapeCheckRegistered = false
+
 export async function customQueriesRoutes(app: FastifyInstance) {
+  if (!shapeCheckRegistered) {
+    shapeCheckRegistered = true
+    registerReadinessCheck({
+      id: 'custom-query-shapes',
+      label: 'Custom-query wrappers match the procedures they run',
+      group: 'Configuration',
+      description:
+        "An INSERT … EXEC wrapper declares the columns it expects; when the procedure is redeployed with a different result set the wrapper fails and, on a pooled connection, can take its siblings down with it. Compares every wrapper's declared list to the procedure's real first result set.",
+      run: async () => {
+        const report = await shapeReport()
+        const bad = report.filter(
+          (r) =>
+            r.enabled &&
+            r.checks.some((c) => c.status === 'mismatch' || c.status === 'mismatch_observed')
+        )
+        const unknown = report.filter(
+          (r) => r.enabled && r.checks.every((c) => c.status === 'unknown')
+        )
+        if (bad.length === 0) {
+          return {
+            status: 'pass',
+            detail: `${report.length} wrapper(s) checked — every describable column list matches${unknown.length ? `; ${unknown.length} run procedures SQL Server cannot describe (temp tables inside) and had no failing run on this process` : ''}.`
+          }
+        }
+        return {
+          status: 'fail',
+          detail: `${bad.length} enabled wrapper(s) declare columns their procedure no longer returns.`,
+          blockers: bad.slice(0, 12).map((r) => {
+            const c = r.checks.find(
+              (x) => x.status === 'mismatch' || x.status === 'mismatch_observed'
+            )!
+            if (c.status === 'mismatch_observed')
+              return `${r.slug} → ${c.procedure}: last run failed with a shape error (${c.last_error?.message.slice(0, 120)})`
+            return `${r.slug} → ${c.procedure} into ${c.target}: declares ${c.declared.length} column(s), the procedure returns ${c.actual?.length ?? '?'}${c.missing.length ? ` (short: ${c.missing.join(', ')})` : ''}${c.extra.length ? ` (extra from proc: ${c.extra.join(', ')})` : ''}`
+          })
+        }
+      }
+    })
+  }
   // ── Admin CRUD ──────────────────────────────────────────────────────────
 
   // #476 — cache observability: hits, misses, bypasses, what each TTL saves,
@@ -303,6 +375,31 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     const rows = (await db('nivaro_custom_queries').orderBy('name', 'asc')) as CustomQueryRow[]
     return { data: rows.map(serialize) }
   })
+
+  // #531 — who depends on a query, and does its wrapper still match the
+  // procedure it EXECs. The shape half is what would have caught the
+  // stale `#b` column list before it took every sibling wrapper down.
+  app.get<{ Params: { id: string } }>(
+    '/:id/dependents',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = (await db('nivaro_custom_queries')
+        .where({ id: Number(req.params.id) })
+        .first()) as CustomQueryRow | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const [dependents, shape] = await Promise.all([
+        customQueryDependents(row.id, row.slug),
+        shapeChecks(row.sql_text ?? '', row.slug)
+      ])
+      return { data: { dependents, shape } }
+    }
+  )
+
+  // Every enabled INSERT … EXEC wrapper against its procedure's real result
+  // set — the readiness scorecard's view, also handy as one page.
+  app.get('/shape-report', { preHandler: requireAdmin }, async () => ({
+    data: await shapeReport()
+  }))
 
   app.get<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const row = (await db('nivaro_custom_queries')
@@ -792,6 +889,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         rows = await execCustomQuerySql(query.sql_text, finalParams)
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Query execution failed'
+        recordQueryError(slug, message)
         return reply.code(400).send({ error: message })
       }
       // #90 — a slow run captures its plan right after (fire-and-forget), so

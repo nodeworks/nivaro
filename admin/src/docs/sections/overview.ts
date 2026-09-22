@@ -262,6 +262,11 @@ export const userFlows: DocSection = {
         '**Level** — `info`, `warn`, `error`, or `debug`. Log output appears in the API process stdout (visible in `pnpm dev:api`).'
       ]
     },
+    { type: 'h2', id: 'flow-silence', text: 'Flows that go quiet' },
+    {
+      type: 'p',
+      text: "A condition that rejects still ends its run as a success, so a flow that has stopped **matching** looked exactly like one with nothing to do. Every run now records how many operations executed, whether anything beyond a condition ran, and which operation's reject branch ended it. `GET /flows/health` judges each active flow against its own history — the median gap between the days it matched over the last 90 — and reports **quiet** (still fires, nothing has matched for three times its usual gap, floor seven days), **stopped** (no run at all for that long: the trigger itself went silent), **young** (matched on fewer than three days — no cadence yet) or **ok**. The Flows list carries an amber `quiet Nd` / `stopped Nd` badge and the readiness check `flows-silent` runs the same verdicts."
+    },
     { type: 'h2', id: 'flow-status', text: 'Status' },
     {
       type: 'p',
@@ -364,6 +369,11 @@ export const userExtensions: DocSection = {
     {
       type: 'p',
       text: 'Drop a new build at `api/extensions/<id>.next` and the row shows **Staged build**. Promote validates the staged entry module (it must import cleanly and export the same `id`), swaps it into `api/extensions/<id>`, and keeps the previous build at `api/extensions/<id>.prev`; **Roll back** reverses the swap and parks the promoted build at `.next` again. The running process keeps serving the build it loaded — hooks and crons cannot be torn down mid-flight — so either action takes effect on the **next restart**. Parked `.next` / `.prev` folders are never loaded as extensions of their own. Both actions are activity-logged.'
+    },
+    { type: 'h2', id: 'extension-registry-versions', text: 'Registry versions' },
+    {
+      type: 'p',
+      text: 'After every load the API fingerprints what each extension registered — hooks, crons, flow operations and triggers, mail types, readiness and integrity checks, bulk and item actions, digest sections, settings keys — and stores it as a **registry version**. A boot that registers the same set touches the version (last seen, boot count); a different set becomes a new version. The registry sheet lists them newest first with what each one added or removed against the one before, so "when did this check appear?" is a lookup. Volatile facts (next run, paused, staged builds) never mint a version. API: `GET /extensions/:id/registry/history`.'
     },
     { type: 'h2', id: 'extension-settings-compare', text: 'Settings across environments' },
     {

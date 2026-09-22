@@ -177,7 +177,6 @@ export interface QueueRow {
   owner: string
   is_shared: boolean | number
   role_id: string | null
-  view_mode: 'table' | 'kanban' | 'both'
   is_active: boolean | number
   materialized: boolean | number
   claims_enabled: boolean | number

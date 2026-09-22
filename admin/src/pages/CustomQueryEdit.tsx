@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -70,6 +70,158 @@ function slugify(name: string): string {
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
+
+interface DependentRow {
+  surface: string
+  id: unknown
+  name: string
+  link: string | null
+  detail: string | null
+}
+interface ShapeRow {
+  procedure: string
+  target: string
+  declared: string[]
+  actual: string[] | null
+  note: string | null
+  missing: string[]
+  extra: string[]
+  order_differs: boolean
+  status: 'ok' | 'mismatch' | 'mismatch_observed' | 'unknown'
+  last_error: { at: string; message: string } | null
+}
+
+/** #531 — who depends on this query, and does its wrapper still fit its procedure. */
+function DependentsCard({ id }: { id: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['custom-queries', id, 'dependents'],
+    queryFn: () =>
+      api
+        .get<{ data: { dependents: DependentRow[]; shape: ShapeRow[] } }>(
+          `/custom-queries/${id}/dependents`
+        )
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const groups = new Map<string, DependentRow[]>()
+  for (const d of data?.dependents ?? [])
+    groups.set(d.surface, [...(groups.get(d.surface) ?? []), d])
+  const tone = (s: ShapeRow['status']) =>
+    s === 'ok'
+      ? 'bg-[#e4f4ec] text-[#1c7449]'
+      : s === 'unknown'
+        ? 'bg-slate-100 text-slate-600'
+        : 'bg-[#fae6eb] text-[#9c2f47]'
+  const word = (s: ShapeRow['status']) =>
+    s === 'ok'
+      ? 'matches'
+      : s === 'mismatch'
+        ? 'column count differs'
+        : s === 'mismatch_observed'
+          ? 'last run failed on shape'
+          : 'cannot be described'
+  return (
+    <div className='rounded-xl border border-slate-200 bg-white p-6' data-cq-dependents>
+      <h2 className='mb-1 text-[13px] font-semibold text-slate-900'>Used by</h2>
+      <p className='mb-3 text-[11.5px] text-slate-500'>
+        Everything that references this query by slug or id. Change its output and these are what
+        break.
+      </p>
+      {isLoading && <Skeleton className='h-10 w-full' />}
+      {data && groups.size === 0 && (
+        <p className='text-[12px] text-slate-400'>Nothing references this query yet.</p>
+      )}
+      {[...groups.entries()].map(([surface, rows]) => (
+        <div key={surface} className='mb-2'>
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+            {surface}
+          </p>
+          <ul className='mt-0.5 space-y-px'>
+            {rows.map((r) => (
+              <li
+                key={`${surface}-${String(r.id)}`}
+                className='flex items-baseline gap-2 text-[12px]'
+                data-cq-dependent
+              >
+                {r.link ? (
+                  <Link
+                    to={r.link}
+                    className='truncate text-nvr-navy underline decoration-slate-300 hover:decoration-nvr-cyan'
+                  >
+                    {r.name}
+                  </Link>
+                ) : (
+                  <span className='truncate text-slate-800'>{r.name}</span>
+                )}
+                {r.detail && (
+                  <span className='shrink-0 font-mono text-[10.5px] text-slate-400'>
+                    {r.detail}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {data && data.shape.length > 0 && (
+        <div className='mt-4 border-t border-slate-100 pt-3'>
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+            Procedure shape
+          </p>
+          <p className='mb-2 text-[11.5px] text-slate-500'>
+            INSERT … EXEC binds by position — the declared column count has to equal what the
+            procedure returns.
+          </p>
+          <ul className='space-y-1.5'>
+            {data.shape.map((c) => (
+              <li
+                key={`${c.target}-${c.procedure}`}
+                className='text-[12px]'
+                data-cq-shape={c.status}
+              >
+                <div className='flex flex-wrap items-center gap-2'>
+                  <span className='font-mono text-[11.5px] text-slate-800'>{c.procedure}</span>
+                  <span className='text-slate-400'>→</span>
+                  <span className='font-mono text-[11.5px] text-slate-600'>{c.target}</span>
+                  <span
+                    className={`rounded px-1.5 py-px text-[10.5px] font-medium ${tone(c.status)}`}
+                  >
+                    {word(c.status)}
+                  </span>
+                  <span className='text-[11px] text-slate-500'>
+                    {c.declared.length} declared{c.actual ? ` · ${c.actual.length} returned` : ''}
+                  </span>
+                </div>
+                {c.status === 'mismatch' && (
+                  <p className='mt-0.5 text-[11.5px] text-[#9c2f47]'>
+                    {c.missing.length > 0 && `Declared but not returned: ${c.missing.join(', ')}. `}
+                    {c.extra.length > 0 && `Returned but not declared: ${c.extra.join(', ')}.`}
+                  </p>
+                )}
+                {c.status === 'ok' && c.order_differs && (
+                  <p className='mt-0.5 text-[11px] text-slate-500'>
+                    Same count, different names — fine for INSERT … EXEC, but worth a look:{' '}
+                    {c.actual?.join(', ')}
+                  </p>
+                )}
+                {c.status === 'mismatch_observed' && c.last_error && (
+                  <p className='mt-0.5 font-mono text-[11px] text-[#9c2f47]'>
+                    {c.last_error.message.slice(0, 240)}
+                  </p>
+                )}
+                {c.status === 'unknown' && c.note && (
+                  <p className='mt-0.5 text-[11px] text-slate-400'>
+                    {c.note} A failing run would show here.
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function CustomQueryEditPage() {
   const { id } = useParams<{ id: string }>()
@@ -658,6 +810,8 @@ export function CustomQueryEditPage() {
                 </div>
               </div>
             </div>
+
+            {!isNew && id && <DependentsCard id={id} />}
 
             {/* Params */}
             <div className='rounded-xl border border-slate-200 bg-white p-6'>

@@ -453,6 +453,15 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data: await describeExtensionRegistry(id, app.cron) })
   })
 
+  // #530 — every registry version this database has seen for the extension,
+  // newest first, each with what it added/removed against the one before.
+  app.get('/:id/registry/history', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
+    const { registryHistory } = await import('../services/extension-registry-versions.js')
+    return reply.send({ data: await registryHistory(id) })
+  })
+
   // ── Staged builds (#76) — validate, promote, roll back <id>.next / .prev ──
   app.get('/:id/staged', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }

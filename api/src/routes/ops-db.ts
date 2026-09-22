@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
+import { DEAD_COLUMNS } from '../db/dead-columns.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 
 /**
  * DB observability (Ops batch A): DMV-backed panels for the /db-health admin
@@ -56,7 +58,46 @@ export function poolStats(): {
   }
 }
 
+async function deadColumnsLive() {
+  const out: Array<(typeof DEAD_COLUMNS)[number] & { present: boolean }> = []
+  for (const d of DEAD_COLUMNS) {
+    const present = await db.schema.hasColumn(d.table, d.column).catch(() => false)
+    out.push({ ...d, present })
+  }
+  return out
+}
+
+let deadColumnsCheckRegistered = false
+
 export async function opsDbRoutes(app: FastifyInstance) {
+  if (!deadColumnsCheckRegistered) {
+    deadColumnsCheckRegistered = true
+    registerReadinessCheck({
+      id: 'dead-columns',
+      label: 'Dead columns are dropped or on their way out',
+      group: 'Configuration',
+      description:
+        'Columns a model change left behind (registered in db/dead-columns.ts). A droppable one still present means its migration has not run here; a retiring one names the code that still touches it.',
+      run: async () => {
+        const live = await deadColumnsLive()
+        const lingering = live.filter((d) => d.status === 'drop' && d.present)
+        const retiring = live.filter((d) => d.status === 'retire' && d.present)
+        if (lingering.length === 0)
+          return {
+            status: 'pass',
+            detail: `${live.length} registered; none droppable is still present${retiring.length ? `; ${retiring.length} retiring (code still names them)` : ''}.`
+          }
+        return {
+          status: 'warn',
+          detail: `${lingering.length} droppable dead column(s) still present — the dropping migration has not run on this database.`,
+          blockers: lingering.map(
+            (d) =>
+              `${d.table}.${d.column} — dead since ${d.since}, dropped by ${d.dropped_by ?? 'no migration yet'}`
+          )
+        }
+      }
+    })
+  }
   app.addHook('preHandler', requireAdmin)
 
   // #100 — deadlock graphs mined from the system_health XE ring buffer.
@@ -220,6 +261,9 @@ export async function opsDbRoutes(app: FastifyInstance) {
           AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys f WHERE f.referenced_object_id = t.object_id)
         ORDER BY t.create_date`
     )) as Array<Record<string, unknown>>
+
+  // #505 — the dead-column registry against the live schema.
+  app.get('/dead-columns', async () => ({ data: await deadColumnsLive() }))
 
   app.get('/backup-tables', async (_req, reply) => {
     const result = await dmv(listBackupTables)

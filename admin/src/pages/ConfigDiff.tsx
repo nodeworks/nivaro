@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ChevronDown,
@@ -297,6 +297,149 @@ function TableDiffRow({
   )
 }
 
+interface StoredSnapshotMeta {
+  id: number
+  taken_at: string
+  version: string | null
+  environment: string | null
+  tables: number
+  rows: number
+  content_hash: string
+  bytes: number
+  trigger: string
+  same_as_previous: boolean
+}
+
+/**
+ * #523 — "what drifted since <night>". The nightly `config-snapshot` cron
+ * stores one gzipped snapshot a day; this diffs the live rows against any
+ * of them, no file round trip.
+ */
+function SincePanel() {
+  const qc = useQueryClient()
+  const [pick, setPick] = useState<number | null>(null)
+  const { data: history = [] } = useQuery<StoredSnapshotMeta[]>({
+    queryKey: ['config-snapshots'],
+    queryFn: () =>
+      api.get<{ data: StoredSnapshotMeta[] }>('/config-diff/history').then((r) => r.data.data)
+  })
+  const target =
+    pick ??
+    (() => {
+      const weekAgo = Date.now() - 7 * 86_400_000
+      const atOrBefore = history.find((h) => Date.parse(h.taken_at) <= weekAgo)
+      return (atOrBefore ?? history[history.length - 1])?.id ?? null
+    })()
+  const {
+    data: since,
+    isFetching,
+    error
+  } = useQuery<SnapshotDiff & { since: StoredSnapshotMeta }>({
+    queryKey: ['config-since', target],
+    queryFn: () =>
+      api
+        .get<{ data: SnapshotDiff & { since: StoredSnapshotMeta } }>(
+          `/config-diff/since?id=${target}`
+        )
+        .then((r) => r.data.data),
+    enabled: target != null
+  })
+  const store = useMutation({
+    mutationFn: () => api.post('/config-diff/history'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['config-snapshots'] })
+  })
+  const when = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    })
+  return (
+    <section
+      className='mb-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
+      data-config-since
+    >
+      <div className='flex flex-wrap items-center gap-3'>
+        <div className='min-w-0 flex-1'>
+          <h2 className='text-[13px] font-semibold'>What drifted since…</h2>
+          <p className='text-[12px] text-muted-foreground'>
+            A snapshot of every configuration table is stored each night at 04:40. Pick a night; the
+            live rows are compared against it.
+          </p>
+        </div>
+        <Button
+          variant='outline'
+          size='sm'
+          onClick={() => store.mutate()}
+          disabled={store.isPending}
+          data-config-store-now
+        >
+          {store.isPending ? 'Storing…' : 'Store a snapshot now'}
+        </Button>
+      </div>
+      {history.length === 0 ? (
+        <p className='mt-3 text-[12px] text-muted-foreground'>
+          No stored snapshots yet — the first lands tonight, or store one now.
+        </p>
+      ) : (
+        <>
+          <div className='mt-3 flex flex-wrap gap-1' data-config-since-list>
+            {history.map((h) => (
+              <button
+                key={h.id}
+                type='button'
+                onClick={() => setPick(h.id)}
+                title={`${h.tables} tables · ${h.rows.toLocaleString()} rows · ${h.version ?? ''}${h.same_as_previous ? ' · identical to the night before' : ''}`}
+                className={`rounded-md border px-2 py-0.5 text-[11.5px] tabular-nums ${
+                  h.id === target
+                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+                } ${h.same_as_previous ? 'opacity-60' : ''}`}
+              >
+                {when(h.taken_at)}
+                {h.trigger === 'manual' && (
+                  <span className='ml-1 text-[10px] text-slate-400'>manual</span>
+                )}
+              </button>
+            ))}
+          </div>
+          {isFetching && <p className='mt-3 text-[12px] text-muted-foreground'>Comparing…</p>}
+          {error && <p className='mt-3 text-[12px] text-red-600'>{(error as Error).message}</p>}
+          {since && !isFetching && (
+            <div className='mt-3'>
+              <p className='text-[12px]' data-config-since-summary>
+                Since {when(since.since.taken_at)}:{' '}
+                <span className='font-medium text-green-700 dark:text-green-400'>
+                  {since.totals.added} added
+                </span>
+                ,{' '}
+                <span className='font-medium text-red-700 dark:text-red-400'>
+                  {since.totals.removed} removed
+                </span>
+                ,{' '}
+                <span className='font-medium text-amber-700 dark:text-amber-400'>
+                  {since.totals.changed} changed
+                </span>{' '}
+                across {since.totals.tables_differing} table
+                {since.totals.tables_differing === 1 ? '' : 's'}
+                {since.totals.tables_differing === 0 && ' — nothing drifted.'}
+              </p>
+              {since.tables.length > 0 && (
+                <div className='mt-2 overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
+                  {since.tables.map((t) => (
+                    <TableDiffRow key={t.table} diff={t} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 export function ConfigDiffPage() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -440,6 +583,8 @@ export function ConfigDiffPage() {
             {compare.error.message}
           </div>
         )}
+
+        <SincePanel />
 
         {!diff ? (
           <div className='rounded-lg border border-slate-200 bg-white p-8 text-center dark:border-border dark:bg-card'>

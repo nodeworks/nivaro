@@ -42,6 +42,7 @@
     "imports:idempotence": "tsx extensions/efp-ops/scripts/check-import-idempotence.ts",
     "procs:callers": "tsx extensions/efp-ops/scripts/proc-callers.ts",
     "procs:golden": "tsx extensions/efp-ops/scripts/proc-golden.ts",
+    "dead-columns:check": "tsx src/scripts/dead-columns-check.ts",
     "promote:config": "tsx extensions/efp-ops/scripts/promote-config.ts",
     "refresh:rehearsal": "tsx extensions/efp-ops/scripts/refresh-db-from-prod.ts",
     "sync:business-schema": "tsx extensions/efp-ops/scripts/sync-business-schema.ts",

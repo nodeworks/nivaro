@@ -229,7 +229,13 @@ export async function runCustomQueryBySlug(
     defs = []
   }
   const finalParams = buildFinalParams(defs, incoming)
-  return execCustomQuerySql(query.sql_text, finalParams)
+  try {
+    return await execCustomQuerySql(query.sql_text, finalParams)
+  } catch (err) {
+    const { recordQueryError } = await import('./query-cache-stats.js')
+    recordQueryError(slug, err instanceof Error ? err.message : String(err))
+    throw err
+  }
 }
 
 /**

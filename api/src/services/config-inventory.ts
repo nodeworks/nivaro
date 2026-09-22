@@ -184,6 +184,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_migrations',
   'nivaro_migrations_lock',
   'nivaro_migration_effects',
+  'nivaro_config_snapshots',
+  'nivaro_extension_registry_versions',
   'nivaro_sessions',
   'nivaro_api_logs',
   'nivaro_page_views',

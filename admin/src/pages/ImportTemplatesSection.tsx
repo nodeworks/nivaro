@@ -1909,6 +1909,194 @@ function isKnownSectionPath(path: string): boolean {
   return path.startsWith('header_map') || path.startsWith('line_map') || path.startsWith('reimport')
 }
 
+// #527 — replay the template over files it already imported, with the saved
+// rules or the CURRENT unsaved draft, so a rule change is judged on real
+// files before it is saved. Nothing is written.
+interface PastFile {
+  file_id: string
+  name: string | null
+  filename: string | null
+  filesize: number | null
+  uploaded_on: string | null
+  available: boolean
+  used_at: string
+  records: number
+}
+interface ReplayResult {
+  file: { id: string; name: string }
+  saved: {
+    values: Record<string, unknown>
+    lines: Array<{ values: Record<string, unknown> }>
+    issues: ImportParseResponse['issues']
+    rows: number
+  }
+  proposed: {
+    values: Record<string, unknown>
+    lines: Array<{ values: Record<string, unknown> }>
+    issues: ImportParseResponse['issues']
+    rows: number
+  } | null
+  changes: {
+    values: Array<{ field: string; saved: unknown; proposed: unknown }>
+    lines: { saved: number; proposed: number; changed_rows: number }
+    issues: { saved: number; proposed: number }
+  } | null
+}
+
+function ReplayPanel({
+  templateId,
+  collection,
+  draft
+}: {
+  templateId: string
+  collection: string
+  draft: TemplateDraft
+}) {
+  const { data: files = [], isLoading } = useQuery<PastFile[]>({
+    queryKey: ['import-template-past-files', templateId],
+    queryFn: () =>
+      api
+        .get<{ data: PastFile[] }>(`/import-templates/${templateId}/past-files`)
+        .then((r) => r.data.data)
+  })
+  const [picked, setPicked] = useState<string | null>(null)
+  const [withDraft, setWithDraft] = useState(true)
+  const [result, setResult] = useState<ReplayResult | null>(null)
+  const replay = useMutation({
+    mutationFn: async () => {
+      if (!picked) throw new Error('Pick a file')
+      const body: Record<string, unknown> = { file_id: picked }
+      if (withDraft)
+        body.config = {
+          collection,
+          file_types: draft.file_types,
+          sheet_match: draft.sheet_match || null,
+          header_row: draft.header_row,
+          header_map: draft.header_map,
+          line_map: draft.line_map,
+          attach_file_field: draft.attach_file_field || null
+        }
+      const res = await api.post<{ data: ReplayResult }>(
+        `/import-templates/${templateId}/replay`,
+        body
+      )
+      return res.data.data
+    },
+    onSuccess: setResult,
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { error?: string } } }
+      toast.error(e.response?.data?.error ?? 'Replay failed')
+    }
+  })
+  const fmt = (v: unknown) =>
+    v == null || v === '' ? '∅' : typeof v === 'object' ? JSON.stringify(v).slice(0, 60) : String(v)
+  return (
+    <div className='space-y-3' data-import-replay>
+      <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Files this template already imported. Replay one with the saved rules, or with the rules as
+        they stand in this editor, and see what would come out differently. Nothing is created.
+      </p>
+      {isLoading && <p className='text-[12px] text-slate-400'>Looking for past files…</p>}
+      {!isLoading && files.length === 0 && (
+        <p className='text-[12px] text-slate-400'>
+          No past files yet — a file lands here once a record is created through this template.
+        </p>
+      )}
+      {files.length > 0 && (
+        <div className='max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-slate-200 p-1 dark:border-border'>
+          {files.map((f) => (
+            <button
+              key={f.file_id}
+              type='button'
+              disabled={!f.available}
+              onClick={() => setPicked(f.file_id)}
+              data-import-past-file={f.file_id}
+              className={`flex w-full items-baseline gap-2 rounded px-2 py-1 text-left text-[12px] ${
+                picked === f.file_id
+                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                  : 'hover:bg-slate-50 dark:hover:bg-muted'
+              } disabled:opacity-50`}
+            >
+              <span className='min-w-0 flex-1 truncate'>{f.name ?? f.file_id}</span>
+              <span className='shrink-0 text-[11px] text-slate-400'>
+                {f.records} record{f.records === 1 ? '' : 's'} ·{' '}
+                {new Date(f.used_at).toLocaleDateString()}
+                {!f.available && ' · file gone'}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className='flex flex-wrap items-center gap-3'>
+        <label className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
+          <input
+            type='checkbox'
+            checked={withDraft}
+            onChange={(e) => setWithDraft(e.target.checked)}
+            data-import-replay-draft
+          />
+          Compare against the rules in this editor
+        </label>
+        <Button
+          size='sm'
+          variant='outline'
+          disabled={!picked || replay.isPending}
+          onClick={() => replay.mutate()}
+          data-import-replay-run
+        >
+          {replay.isPending ? 'Replaying…' : 'Replay'}
+        </Button>
+      </div>
+      {result && (
+        <div
+          className='rounded-md border border-slate-200 p-3 text-[12px] dark:border-border'
+          data-import-replay-result
+        >
+          <p className='font-medium text-slate-800 dark:text-slate-100'>
+            {result.file.name} — {result.saved.rows} rows · {result.saved.lines.length} lines ·{' '}
+            {result.saved.issues.length} issue{result.saved.issues.length === 1 ? '' : 's'} with the
+            saved rules
+          </p>
+          {result.changes && (
+            <div className='mt-2'>
+              {result.changes.values.length === 0 &&
+              result.changes.lines.changed_rows === 0 &&
+              result.changes.lines.saved === result.changes.lines.proposed ? (
+                <p className='text-[#1c7449] dark:text-[#6fd6a0]'>
+                  The editor's rules produce exactly the same result for this file.
+                </p>
+              ) : (
+                <>
+                  <p className='text-[#8f5400] dark:text-[#f1b95c]'>
+                    With the editor's rules: {result.changes.values.length} header field
+                    {result.changes.values.length === 1 ? '' : 's'} differ,{' '}
+                    {result.changes.lines.changed_rows} of{' '}
+                    {Math.max(result.changes.lines.saved, result.changes.lines.proposed)} lines
+                    differ
+                    {result.changes.lines.saved !== result.changes.lines.proposed
+                      ? ` (${result.changes.lines.saved} → ${result.changes.lines.proposed} lines)`
+                      : ''}
+                    , issues {result.changes.issues.saved} → {result.changes.issues.proposed}.
+                  </p>
+                  {result.changes.values.length > 0 && (
+                    <ul className='mt-1 space-y-px font-mono text-[11px]'>
+                      {result.changes.values.slice(0, 20).map((c) => (
+                        <li key={c.field} className='text-slate-700 dark:text-slate-200'>
+                          {c.field}: {fmt(c.saved)} → {fmt(c.proposed)}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ImportTemplatesSection({ collection }: { collection: string }) {
   const qc = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -2340,6 +2528,14 @@ export function ImportTemplatesSection({ collection }: { collection: string }) {
 
         <Section title='Test'>
           <TestPanel key={selectedId ?? '__new__'} collection={collection} draft={draft} />
+          {selectedId && (
+            <div className='mt-4 border-t border-slate-200 pt-4 dark:border-border'>
+              <h3 className='mb-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
+                Replay a past file
+              </h3>
+              <ReplayPanel templateId={selectedId} collection={collection} draft={draft} />
+            </div>
+          )}
         </Section>
 
         <div className='flex items-center justify-end gap-2 pb-2'>

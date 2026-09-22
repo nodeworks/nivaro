@@ -5,7 +5,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getRelations } from '../services/collections.js'
 import { chunkArray, selectInChunks } from '../services/db-batch.js'
-import { uploadFileBuffer } from '../services/files.js'
+import { getFile, readFileBuffer, type StoredFile, uploadFileBuffer } from '../services/files.js'
 import { IMPORT_ROW_CAP, readSpreadsheet } from '../services/import-spreadsheet.js'
 import type {
   CreateMiss,
@@ -1513,5 +1513,185 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         m2m: result.m2m
       }
     })
+  })
+
+  // ── Replay against past files (#527) ─────────────────────────────────────
+  // The test panel runs a template over a file you upload; these run it over
+  // files ALREADY imported through it (the `import:<name>:<file id>` stamps
+  // the prefill path writes on created rows), with the saved rules or a
+  // proposed unsaved config — so "does this rule change alter past outcomes"
+  // is answered before the save, on real files. Nothing is written.
+  const runAgainstBuffer = async (
+    collection: string,
+    config: ReturnType<typeof templateRowToConfig>,
+    buffer: Buffer,
+    filename: string
+  ) => {
+    const { rows, issues: sheetIssues } = readSpreadsheet(buffer, filename, config)
+    let applyLineFieldRules: ((draft: Record<string, unknown>) => Promise<void>) | undefined
+    let childCollection: string | null = null
+    if (config.line_map) {
+      childCollection = await resolveLineChildCollection(collection, config.line_map.target_field)
+      if (childCollection) {
+        const resolvedChildCollection = childCollection
+        applyLineFieldRules = (draft) => applyFieldRules(resolvedChildCollection, draft)
+      }
+    }
+    const m2mMap = await resolveM2mAliasFields(collection)
+    const lookupIssues: ImportIssue[] = []
+    const result = await runImportPipeline({
+      config,
+      rows,
+      lookup: makeLookupFetcher((message) =>
+        lookupIssues.push({ severity: 'error', rule: 'lookup', message })
+      ),
+      applyLineFieldRules,
+      m2mFields: new Set(m2mMap.keys())
+    })
+    return {
+      values: result.values,
+      lines: result.lines,
+      m2m: result.m2m,
+      issues: [...sheetIssues, ...result.issues, ...lookupIssues],
+      rows: rows.length
+    }
+  }
+
+  app.get('/:id/past-files', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const template = (await db('nivaro_import_templates').where({ id }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!template) return reply.code(404).send({ error: 'Not found' })
+    const stamp = `import:${String(template.name ?? '')}:`
+    const like = `${stamp.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+    // The prefill path stamps every LINE it creates (and the header record when
+    // one is created) — so both the parent and the line child collection carry
+    // the stamps, and the (collection, item, timestamp) index makes each read a seek.
+    const cfg = templateRowToConfig(template)
+    const collections = [String(template.collection)]
+    if (cfg.line_map) {
+      const child = await resolveLineChildCollection(
+        String(template.collection),
+        cfg.line_map.target_field
+      )
+      if (child) collections.push(child)
+    }
+    const rows = (await db('nivaro_activity as a')
+      .select('a.comment', 'a.timestamp', 'a.item', 'a.user')
+      .whereIn('a.collection', collections)
+      .andWhere('a.comment', 'like', like)
+      .orderBy('a.timestamp', 'desc')
+      .limit(400)) as Array<{ comment: string; timestamp: Date; item: string; user: string | null }>
+    const seen = new Map<string, { file_id: string; first_used_at: string; records: Set<string> }>()
+    for (const r of rows) {
+      const fileId = r.comment.slice(stamp.length).trim()
+      if (!/^[0-9a-f-]{36}$/i.test(fileId)) continue // run-N stamps have no file
+      const e = seen.get(fileId) ?? {
+        file_id: fileId,
+        first_used_at: new Date(r.timestamp).toISOString(),
+        records: new Set<string>()
+      }
+      e.records.add(String(r.item))
+      seen.set(fileId, e)
+    }
+    const ids = [...seen.keys()].slice(0, 30)
+    const files = ids.length
+      ? ((await db('nivaro_files')
+          .select('id', 'title', 'filename_download', 'filesize', 'uploaded_on')
+          .whereIn('id', ids)) as Array<Record<string, unknown>>)
+      : []
+    const byId = new Map(files.map((f) => [String(f.id).toLowerCase(), f]))
+    return {
+      data: ids.map((fid) => {
+        const f = byId.get(fid.toLowerCase())
+        const e = seen.get(fid)!
+        return {
+          file_id: fid,
+          name: f ? String(f.title ?? f.filename_download ?? fid) : null,
+          filename: f ? String(f.filename_download ?? '') : null,
+          filesize: f ? Number(f.filesize ?? 0) : null,
+          uploaded_on: f?.uploaded_on ? new Date(f.uploaded_on as string).toISOString() : null,
+          available: !!f,
+          used_at: e.first_used_at,
+          records: e.records.size
+        }
+      })
+    }
+  })
+
+  app.post('/:id/replay', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as { file_id?: string; config?: unknown }
+    if (!body.file_id || !/^[0-9a-f-]{36}$/i.test(body.file_id))
+      return reply.code(400).send({ error: 'file_id (uuid) is required' })
+    const template = (await db('nivaro_import_templates').where({ id }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!template) return reply.code(404).send({ error: 'Not found' })
+    const file = (await getFile(body.file_id)) as StoredFile | undefined
+    if (!file) return reply.code(404).send({ error: 'File not found' })
+    let buffer: Buffer
+    try {
+      buffer = await readFileBuffer(file)
+    } catch (e) {
+      return reply.code(404).send({
+        error: `Stored object not found — the bytes are not on this machine (${(e as Error).message})`
+      })
+    }
+    const collection = String(template.collection)
+    const filename = String(file.filename_download ?? file.title ?? 'file')
+    const saved = await runAgainstBuffer(
+      collection,
+      templateRowToConfig(template),
+      buffer,
+      filename
+    )
+    let proposed: Awaited<ReturnType<typeof runAgainstBuffer>> | null = null
+    let changes: {
+      values: Array<{ field: string; saved: unknown; proposed: unknown }>
+      lines: { saved: number; proposed: number; changed_rows: number }
+      issues: { saved: number; proposed: number }
+    } | null = null
+    if (body.config) {
+      const { config, errors } = normalizeImportTemplateConfig(body.config)
+      if (errors.length)
+        return reply.code(400).send({ error: 'Invalid template config', details: errors })
+      proposed = await runAgainstBuffer(collection, config, buffer, filename)
+      const fields = new Set([...Object.keys(saved.values), ...Object.keys(proposed.values)])
+      const values: Array<{ field: string; saved: unknown; proposed: unknown }> = []
+      for (const f of fields)
+        if (JSON.stringify(saved.values[f] ?? null) !== JSON.stringify(proposed.values[f] ?? null))
+          values.push({
+            field: f,
+            saved: saved.values[f] ?? null,
+            proposed: proposed.values[f] ?? null
+          })
+      let changedRows = 0
+      const n = Math.max(saved.lines.length, proposed.lines.length)
+      for (let i = 0; i < n; i++)
+        if (
+          JSON.stringify(saved.lines[i]?.values ?? null) !==
+          JSON.stringify(proposed.lines[i]?.values ?? null)
+        )
+          changedRows++
+      changes = {
+        values,
+        lines: {
+          saved: saved.lines.length,
+          proposed: proposed.lines.length,
+          changed_rows: changedRows
+        },
+        issues: { saved: saved.issues.length, proposed: proposed.issues.length }
+      }
+    }
+    await logActivity({
+      action: 'import-template-replay',
+      user: req.user?.id,
+      collection: 'nivaro_import_templates',
+      item: String(id),
+      comment: `${filename} · ${saved.rows} rows${changes ? ` · proposed config: ${changes.values.length} header, ${changes.lines.changed_rows} line changes` : ''}`
+    })
+    return { data: { file: { id: file.id, name: filename }, saved, proposed, changes } }
   })
 }

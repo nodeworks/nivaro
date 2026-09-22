@@ -14988,10 +14988,10 @@ function FieldSettingsPopover({
                     <p className='text-[10px] text-slate-400'>
                       Replaces the grid with a full-catalog picker: every item of the child's
                       "item_field" M2O target renders under sections grouped by "section_by";
-                      entering a quantity creates the child row. Empty = normal grid. A
-                      "section_by" through a to-many alias ("categories.name") lists an item
-                      under every category it links to; "section_filter" then scopes the
-                      categories themselves (and the items to those categories).
+                      entering a quantity creates the child row. Empty = normal grid. A "section_by"
+                      through a to-many alias ("categories.name") lists an item under every category
+                      it links to; "section_filter" then scopes the categories themselves (and the
+                      items to those categories).
                     </p>
                   </div>
                 )}
@@ -15166,7 +15166,9 @@ function FieldSettingsPopover({
                 )}
                 {iface === 'inline-table' && (
                   <div className='space-y-1.5'>
-                    <Label className='text-[11px] text-slate-600'>Plan grid / row split (JSON)</Label>
+                    <Label className='text-[11px] text-slate-600'>
+                      Plan grid / row split (JSON)
+                    </Label>
                     <Textarea
                       value={rowSplitLocal}
                       onChange={(e) => setRowSplitLocal(e.target.value)}
@@ -15181,9 +15183,9 @@ function FieldSettingsPopover({
                       the comparison series as two labelled lines, full figures with horizontal
                       scroll. A block is one top-line row (category empty) or a set of category rows
                       that add up to it; splitting and merging go through split_endpoint (GET =
-                      categories, ceilings and shares; POST /split and /merge). Edits stage with
-                      the record's Save. Uses the figure strip, sum cap, spread and comparison
-                      series configured above.
+                      categories, ceilings and shares; POST /split and /merge). Edits stage with the
+                      record's Save. Uses the figure strip, sum cap, spread and comparison series
+                      configured above.
                     </p>
                   </div>
                 )}
@@ -19555,6 +19557,23 @@ function LayoutVersionsSection({ layoutId }: { layoutId: number }) {
     onError: () => toast.error('Restore failed')
   })
 
+  // #521 — what the last save changed (newest version vs the current rows),
+  // and any version's diff on demand. Warnings name the data-losing shapes.
+  const [diffFor, setDiffFor] = useState<number | 'newest' | null>(null)
+  const { data: diff, isLoading: diffLoading } = useQuery({
+    queryKey: ['layout-version-diff', layoutId, diffFor],
+    queryFn: () =>
+      api
+        .get<{ data: LayoutDiffDto }>(
+          `/collection-layouts/${layoutId}/versions/${diffFor}/diff?against=current`
+        )
+        .then((r) => r.data.data),
+    enabled: open && diffFor != null
+  })
+  useEffect(() => {
+    if (open && diffFor == null && versions.length > 0) setDiffFor('newest')
+  }, [open, versions.length, diffFor])
+
   return (
     <div className='border-t border-slate-200 pt-2 dark:border-border'>
       <button
@@ -19566,36 +19585,168 @@ function LayoutVersionsSection({ layoutId }: { layoutId: number }) {
         <span className='text-slate-400'>{open ? '▾' : '▸'}</span>
       </button>
       {open && (
-        <div className='mt-2 max-h-48 space-y-1 overflow-y-auto'>
-          {versions.length === 0 ? (
-            <p className='text-[11px] text-slate-400'>
-              No versions yet — one is captured before every save.
-            </p>
-          ) : (
-            versions.map((v) => (
-              <div
-                key={v.id}
-                className='flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1 text-[11px] dark:border-border/60'
-              >
-                <span className='min-w-0 truncate'>
-                  <span className='font-medium'>v{v.version}</span>{' '}
-                  <span className='text-slate-400'>
-                    {v.note} · {new Date(v.created_at).toLocaleString()}
-                    {v.created_by_name ? ` · ${v.created_by_name}` : ''}
-                  </span>
-                </span>
-                <button
-                  type='button'
-                  disabled={restore.isPending}
-                  onClick={() => restore.mutate(v.id)}
-                  className='shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
-                >
-                  Restore
-                </button>
+        <>
+          {versions.length > 0 && (
+            <div
+              className='mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-border dark:bg-muted/40'
+              data-layout-diff
+            >
+              <div className='flex items-center justify-between gap-2'>
+                <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-500'>
+                  {diffFor === 'newest'
+                    ? 'What the last save changed'
+                    : `v${versions.find((v) => v.id === diffFor)?.version ?? '?'} → now`}
+                </p>
+                {diffFor !== 'newest' && (
+                  <button
+                    type='button'
+                    onClick={() => setDiffFor('newest')}
+                    className='text-[10.5px] text-slate-500 underline'
+                  >
+                    last save
+                  </button>
+                )}
               </div>
-            ))
+              {diffLoading && <p className='mt-1 text-[11px] text-slate-400'>Comparing…</p>}
+              {diff && <LayoutDiffBody diff={diff} />}
+            </div>
           )}
-        </div>
+          <div className='mt-2 max-h-48 space-y-1 overflow-y-auto'>
+            {versions.length === 0 ? (
+              <p className='text-[11px] text-slate-400'>
+                No versions yet — one is captured before every save.
+              </p>
+            ) : (
+              versions.map((v) => (
+                <div
+                  key={v.id}
+                  className='flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1 text-[11px] dark:border-border/60'
+                >
+                  <span className='min-w-0 truncate'>
+                    <span className='font-medium'>v{v.version}</span>{' '}
+                    <span className='text-slate-400'>
+                      {v.note} · {new Date(v.created_at).toLocaleString()}
+                      {v.created_by_name ? ` · ${v.created_by_name}` : ''}
+                    </span>
+                  </span>
+                  <span className='flex shrink-0 gap-1'>
+                    <button
+                      type='button'
+                      onClick={() => setDiffFor(v.id)}
+                      data-layout-version-diff={v.version}
+                      className={`rounded border px-1.5 py-0.5 text-[10.5px] ${diffFor === v.id ? 'border-nvr-cyan text-nvr-navy dark:text-nvr-cyan' : 'border-slate-200 hover:bg-slate-50 dark:border-border dark:hover:bg-muted'}`}
+                    >
+                      Diff
+                    </button>
+                    <button
+                      type='button'
+                      disabled={restore.isPending}
+                      onClick={() => restore.mutate(v.id)}
+                      className='rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
+                    >
+                      Restore
+                    </button>
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+interface LayoutDiffChange {
+  field: string
+  from: unknown
+  to: unknown
+}
+interface LayoutDiffEntity {
+  key: string
+  label: string
+  changes: LayoutDiffChange[]
+}
+interface LayoutDiffDto {
+  from: { version: number | null; created_at: string | null; note: string | null }
+  layout: LayoutDiffChange[]
+  groups: { added: string[]; removed: string[]; changed: LayoutDiffEntity[] }
+  assignments: { added: string[]; removed: string[]; changed: LayoutDiffEntity[] }
+  warnings: string[]
+  total: number
+}
+
+function fmtDiffValue(v: unknown): string {
+  if (v == null || v === '') return '∅'
+  if (typeof v === 'object') {
+    const s = JSON.stringify(v)
+    return s.length > 60 ? `${s.slice(0, 57)}…` : s
+  }
+  return String(v)
+}
+
+function LayoutDiffBody({ diff }: { diff: LayoutDiffDto }) {
+  const [showAll, setShowAll] = useState(false)
+  if (diff.total === 0) {
+    return (
+      <p className='mt-1 text-[11px] text-slate-500'>
+        Nothing differs from that version — the layout is exactly as it was saved.
+      </p>
+    )
+  }
+  const rows: Array<{ kind: string; text: string }> = []
+  for (const c of diff.layout)
+    rows.push({
+      kind: 'layout',
+      text: `${c.field}: ${fmtDiffValue(c.from)} → ${fmtDiffValue(c.to)}`
+    })
+  for (const g of diff.groups.added) rows.push({ kind: 'group +', text: g })
+  for (const g of diff.groups.removed) rows.push({ kind: 'group −', text: g })
+  for (const g of diff.groups.changed)
+    rows.push({
+      kind: 'group',
+      text: `${g.label}: ${g.changes.map((c) => `${c.field} ${fmtDiffValue(c.from)} → ${fmtDiffValue(c.to)}`).join(' · ')}`
+    })
+  for (const a of diff.assignments.added) rows.push({ kind: 'field +', text: a })
+  for (const a of diff.assignments.removed) rows.push({ kind: 'field −', text: a })
+  for (const a of diff.assignments.changed)
+    rows.push({
+      kind: 'field',
+      text: `${a.label}: ${a.changes.map((c) => `${c.field} ${fmtDiffValue(c.from)} → ${fmtDiffValue(c.to)}`).join(' · ')}`
+    })
+  const shown = showAll ? rows : rows.slice(0, 12)
+  return (
+    <div className='mt-1'>
+      {diff.warnings.map((w) => (
+        <p
+          key={w}
+          className='mb-1 rounded bg-[#fae6eb] px-1.5 py-1 text-[11px] text-[#9c2f47] dark:bg-[#3d1621] dark:text-[#f08aa1]'
+          data-layout-diff-warning
+        >
+          {w}
+        </p>
+      ))}
+      <p className='text-[11px] text-slate-500'>
+        {diff.total} change{diff.total === 1 ? '' : 's'}
+        {diff.from.created_at ? ` since ${new Date(diff.from.created_at).toLocaleString()}` : ''}
+      </p>
+      <ul className='mt-1 space-y-px'>
+        {shown.map((r, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: ordered diff rows
+          <li key={i} className='flex gap-2 text-[11px]'>
+            <span className='w-14 shrink-0 font-mono text-[10px] text-slate-400'>{r.kind}</span>
+            <span className='min-w-0 break-words text-slate-700 dark:text-slate-200'>{r.text}</span>
+          </li>
+        ))}
+      </ul>
+      {rows.length > 12 && (
+        <button
+          type='button'
+          onClick={() => setShowAll((v) => !v)}
+          className='mt-1 text-[10.5px] text-slate-500 underline'
+        >
+          {showAll ? 'Show fewer' : `Show all ${rows.length}`}
+        </button>
       )}
     </div>
   )

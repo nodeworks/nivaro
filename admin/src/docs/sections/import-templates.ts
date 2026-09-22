@@ -302,6 +302,11 @@ const { data: created } = await cms.request(
     {
       type: 'warn',
       text: 'Lookup collections are never `nivaro_*` system tables, with exactly one deliberate exception — the `$users` sentinel (see above) — the fetcher otherwise blocks them the same way the Data Import Queue blocks system collections as import targets. Parse and test panel resolve lookups without a per-viewer read check on the lookup collection itself, since templates are admin-authored — the same curation-not-security precedent as picker_filter and widget feeds.'
+    },
+    { type: 'h2', id: 'import-template-replay', text: 'Replay a past file' },
+    {
+      type: 'p',
+      text: 'Under the Test panel, **Replay a past file** lists the files this template already imported (the `import:<template>:<file>` stamps the prefill path writes on created rows, on the header record and on every line) and runs the template over one of them again — with the saved rules, or with the rules as they currently stand in the editor. The result names how many header fields and lines would come out differently and how the issue count moves, so a rule change is judged on real files before it is saved. Nothing is created. API: `GET /import-templates/:id/past-files`, `POST /import-templates/:id/replay {file_id, config?}`.'
     }
   ]
 }

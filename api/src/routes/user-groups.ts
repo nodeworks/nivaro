@@ -2,13 +2,14 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { ownerFilterEntries } from '../services/owner-filter-lint.js'
 import {
-  resolveStateOwnersBatch,
-  type OwnerResolutionRequest
+  type OwnerResolutionRequest,
+  resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
-import { computeStatusBatch } from './sla.js'
 import { getLabels } from '../services/queues.js'
 import { listUsers } from '../services/users.js'
+import { computeStatusBatch } from './sla.js'
 
 function parseJson(val: unknown): unknown {
   if (val == null) return null
@@ -471,46 +472,22 @@ export async function userGroupsRoutes(app: FastifyInstance) {
         template_id: string
         template_name: string
       }>
-      // Legacy owner groups key filters POSITIONALLY, current ones by dimension
-      // id — the two collide, so the dims table alone mislabels. Infer the
-      // dimension from the VALUE domain first; the table is the fallback.
+      // Filters are stored as a LIST `[{field, op, value}]` or a MAP
+      // `{field: value}` — never positionally. (An earlier reading iterated
+      // the list with Object.entries, saw keys '0','1','2', looked them up as
+      // dimension IDS and then inferred labels from the value domain to cover
+      // the miss — the "positional keys" of #514 were array indices.) A
+      // field maps to its dimension's label through nivaro_pipeline_owner_dimensions.field.
       const dimRows = (await db('nivaro_pipeline_owner_dimensions').select(
-        'id',
+        'field',
         'label'
       )) as Array<{
-        id: number
+        field: string
         label: string
       }>
-      const dimLabel = new Map(dimRows.map((d) => [String(d.id), d.label]))
-      const [zoneNames, regionNames, ptNames] = await Promise.all([
-        db('divisions')
-          .pluck('short_name')
-          .catch(() => [] as string[]),
-        db('regions')
-          .pluck('short_name')
-          .catch(() => [] as string[]),
-        db('project_types')
-          .pluck('name')
-          .catch(() => [] as string[])
-      ])
-      const zoneSet = new Set((zoneNames as string[]).map(String))
-      const regionSet = new Set((regionNames as string[]).map(String))
-      const ptSet = new Set((ptNames as string[]).map(String))
-      const inferDim = (values: Set<string>): string | null => {
-        const arr = [...values]
-        if (arr.length === 0) return null
-        const frac = (set: Set<string>) => arr.filter((v) => set.has(v)).length / arr.length
-        if (frac(zoneSet) >= 0.8) return 'Zone'
-        if (frac(regionSet) >= 0.8) return 'Region'
-        if (frac(ptSet) >= 0.8) return 'Project Type'
-        if (
-          arr.filter((v) => /^\d{5,7}$/.test(v) || /^[A-Z0-9 _-]*\d[A-Z0-9 _-]*$/.test(v)).length /
-            arr.length >=
-          0.8
-        )
-          return 'Project'
-        return null
-      }
+      const dimLabel = new Map(dimRows.map((d) => [d.field, d.label]))
+      const labelFor = (field: string): string =>
+        dimLabel.get(field) ?? field.split('.').slice(-2, -1)[0]?.replace(/_/g, ' ') ?? field
       const cellAgg = new Map<
         string,
         {
@@ -541,28 +518,15 @@ export async function userGroupsRoutes(app: FastifyInstance) {
           cellAgg.set(key, agg)
         }
         agg.count += 1
-        const filters = (parseJson(c.filters) ?? {}) as Record<string, unknown>
-        for (const [k, v] of Object.entries(filters)) {
-          const raw = v !== null && typeof v === 'object' ? (v as { value?: unknown }).value : v
-          if (raw == null || raw === '') continue
-          const label = dimLabel.get(String(k)) ?? `Dimension ${k}`
+        for (const { field, value } of ownerFilterEntries(parseJson(c.filters))) {
+          if (value == null || value === '') continue
+          const label = labelFor(field)
           if (!agg.dims.has(label)) agg.dims.set(label, new Set())
-          agg.dims.get(label)!.add(String(raw))
+          agg.dims.get(label)!.add(String(value))
         }
       }
       const cells = [...cellAgg.values()]
         .sort((a, b) => b.count - a.count)
-        .map((a) => {
-          // Re-key each dim bucket by its inferred name, merging collisions.
-          const rekeyed = new Map<string, Set<string>>()
-          for (const [label, vals] of a.dims.entries()) {
-            const inferred = inferDim(vals) ?? label
-            if (!rekeyed.has(inferred)) rekeyed.set(inferred, new Set())
-            for (const v of vals) rekeyed.get(inferred)!.add(v)
-          }
-          a.dims = rekeyed
-          return a
-        })
         .map((a) => ({
           template_id: a.template_id,
           template_name: a.template_name,
