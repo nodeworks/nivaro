@@ -16,12 +16,22 @@ import { runLongSql } from '../../services/run-long.js'
  * directus_activity (16M rows, a replication article), needs the same
  * index from the DBA; this migration cannot touch it.
  */
-export async function up(knex: Knex): Promise<void> {
+/**
+ * Outside knex's batch transaction: runLongSql builds the index on its OWN
+ * pooled connection (an hour-long request the 15s knex.raw timeout cannot
+ * carry). Borrowing the batch transaction's connection for that and handing
+ * it back left the batch's COMMIT with no BEGIN (error 3902 on the first
+ * multi-migration run, 2026-09-22) — so this migration opts out of it, and
+ * never passes the transaction knex into runLongSql.
+ */
+export const config = { transaction: false }
+
+export async function up(_knex: Knex): Promise<void> {
   await runLongSql(
     `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_nivaro_activity_user_timestamp')
        CREATE INDEX ix_nivaro_activity_user_timestamp
          ON nivaro_activity ([user], [timestamp] DESC)`,
-    { knex, timeoutMs: 60 * 60 * 1000 }
+    { timeoutMs: 60 * 60 * 1000 }
   )
 }
 
