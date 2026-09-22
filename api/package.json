@@ -65,6 +65,7 @@
     "retire:po-file-queue": "tsx extensions/efp-ops/scripts/retire-po-file-queue.ts",
     "new-user:roles": "tsx extensions/efp-ops/scripts/new-user-roles.ts",
     "machine:accounts": "tsx extensions/efp-ops/scripts/machine-accounts.ts",
+    "state:views": "tsx extensions/efp-ops/scripts/state-views.ts",
     "seed:project-type-values": "tsx extensions/efp-ops/scripts/project-type-values.ts",
     "golive:settings-check": "tsx extensions/efp-ops/scripts/check-prod-settings.ts"
   },
