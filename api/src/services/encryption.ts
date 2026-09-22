@@ -56,19 +56,27 @@ export function decryptValue(stored: string): string {
 
 // ─── Encrypted-field lookup (30s cache) ──────────────────────────────────────
 
-const fieldCache = new Map<string, { fields: string[]; at: number }>()
+// The cache holds the PROMISE, not the result: a page read decrypts its rows
+// with Promise.all, so 25 rows meant 25 simultaneous misses — each one issued
+// the same nivaro_fields query before the first had answered (1.6s of a 2.1s
+// list read, caught by the trace's N+1 counter). Sharing the in-flight
+// promise makes the 25 one. A failed lookup is evicted so the next call retries.
+const fieldCache = new Map<string, { fields: Promise<string[]>; at: number }>()
 const CACHE_TTL_MS = 30_000
 
 export async function getEncryptedFields(collection: string): Promise<string[]> {
   const hit = fieldCache.get(collection)
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.fields
 
-  const rows = (await db('nivaro_fields')
-    .where({ collection })
-    .where('is_encrypted', true)
-    .select('field')) as Array<{ field: string }>
-  const fields = rows.map((r) => r.field)
+  const fields = (async () => {
+    const rows = (await db('nivaro_fields')
+      .where({ collection })
+      .where('is_encrypted', true)
+      .select('field')) as Array<{ field: string }>
+    return rows.map((r) => r.field)
+  })()
   fieldCache.set(collection, { fields, at: Date.now() })
+  fields.catch(() => fieldCache.delete(collection))
   return fields
 }
 

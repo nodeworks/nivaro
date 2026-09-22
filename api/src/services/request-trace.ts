@@ -33,6 +33,20 @@ export interface TraceSpan {
   /** Offset from request start, so the UI can lay spans out as a waterfall. */
   at: number
   detail?: string
+  /** Round trips the phase made (#506) — at ~37ms each, the count IS the latency. */
+  queries?: number
+  /** The one statement shape this phase ran over and over (#507): an N+1. */
+  repeat?: { sql: string; n: number; ms: number }
+  /** `select *` against tables holding an nvarchar(max) column (#483). */
+  wide?: Array<{ table: string; n: number }>
+}
+
+/** One statement the request ran, kept for the slow-SQL list and plan capture (#509). */
+export interface TraceStatement {
+  sql: string
+  bindings: unknown[]
+  ms: number
+  n: number
 }
 
 export interface TraceRecord {
@@ -45,6 +59,23 @@ export interface TraceRecord {
   total_ms: number
   spans: TraceSpan[]
   ts: string
+  /** Round trips the whole request made (#506). */
+  queries: number
+  /** Time spent waiting on the database, summed over statements. */
+  sql_ms: number
+  /** Heaviest statement shapes by total time, with call counts. */
+  top_sql: TraceStatement[]
+  /** `select *` reads of nvarchar(max)-bearing tables, per table (#483). */
+  wide: Array<{ table: string; n: number }>
+}
+
+interface RanStatement {
+  sql: string
+  bindings: unknown[]
+  ms: number
+  /** Offset from request start. */
+  at: number
+  wideTable: string | null
 }
 
 interface TraceContext {
@@ -54,6 +85,11 @@ interface TraceContext {
   /** Per-request id — the AI call log groups a tool loop's calls under it. */
   id: string
   userId?: string
+  /** Every statement this request ran, in completion order (capped). */
+  statements: RanStatement[]
+  /** Statements started but not yet answered, by knex query uid. */
+  inflight: Map<string, { sql: string; bindings: unknown[]; start: number }>
+  queries: number
 }
 
 const als = new AsyncLocalStorage<TraceContext>()
@@ -68,7 +104,15 @@ const buffer: TraceRecord[] = []
 export function beginTrace(urlHint?: string): void {
   // enterWith (rather than als.run) is what lets a Fastify onRequest hook scope
   // the context for the whole request without wrapping the handler chain.
-  als.enterWith({ start: performance.now(), spans: [], urlHint, id: randomUUID() })
+  als.enterWith({
+    start: performance.now(),
+    spans: [],
+    urlHint,
+    id: randomUUID(),
+    statements: [],
+    inflight: new Map(),
+    queries: 0
+  })
 }
 
 /** Stamp the resolved user onto the current request's trace (authenticate calls it). */
@@ -102,13 +146,151 @@ export async function span<T>(phase: string, fn: () => Promise<T>, detail?: stri
   const ctx = als.getStore()
   if (!ctx) return fn()
   const start = performance.now()
+  const q0 = ctx.queries
+  const s0 = ctx.statements.length
   try {
     return await fn()
   } finally {
     // Recorded in `finally` so a phase that throws still shows its cost — the
     // slow thing and the failing thing are often the same thing.
-    ctx.spans.push({ seq: 0, phase, ms: performance.now() - start, at: start - ctx.start, detail })
+    const rec: TraceSpan = {
+      seq: 0,
+      phase,
+      ms: performance.now() - start,
+      at: start - ctx.start,
+      detail
+    }
+    const queries = ctx.queries - q0
+    if (queries > 0) {
+      rec.queries = queries
+      // Statements answered while this phase ran. Concurrent phases share the
+      // window, which over-attributes by design — the count still names the
+      // shape that repeated, which is what an N+1 hunt needs.
+      const ran = ctx.statements.slice(s0)
+      const repeat = repeatedShape(ran)
+      if (repeat) rec.repeat = repeat
+      const wide = wideByTable(ran)
+      if (wide.length) rec.wide = wide
+    }
+    ctx.spans.push(rec)
   }
+}
+
+/** Below this many identical statements a phase is a loop, not an N+1. */
+const REPEAT_MIN = 5
+
+function repeatedShape(ran: RanStatement[]): TraceSpan['repeat'] | undefined {
+  const groups = new Map<string, { n: number; ms: number }>()
+  for (const r of ran) {
+    const g = groups.get(r.sql) ?? { n: 0, ms: 0 }
+    g.n++
+    g.ms += r.ms
+    groups.set(r.sql, g)
+  }
+  let best: { sql: string; n: number; ms: number } | null = null
+  for (const [sql, g] of groups)
+    if (g.n >= REPEAT_MIN && (!best || g.n > best.n)) best = { sql, ...g }
+  return best ? { sql: best.sql, n: best.n, ms: Math.round(best.ms) } : undefined
+}
+
+function wideByTable(ran: RanStatement[]): Array<{ table: string; n: number }> {
+  const counts = new Map<string, number>()
+  for (const r of ran) if (r.wideTable) counts.set(r.wideTable, (counts.get(r.wideTable) ?? 0) + 1)
+  return [...counts].map(([table, n]) => ({ table, n })).sort((a, b) => b.n - a.n)
+}
+
+// ─── Query accounting (#506 / #507 / #483) ───────────────────────────────────
+//
+// knex emits `query` when a statement is sent and `query-response` /
+// `query-error` when it answers, both carrying the query's uid. Inside a traced
+// request every statement is counted and timed; outside one the listeners
+// return immediately. Kept per request, never global — a global counter would
+// attribute one request's queries to another under concurrency.
+
+/** How many statements a request keeps in full. Past this only the count grows. */
+const STATEMENT_CAP = 400
+/** Statement text kept per entry — enough to read the shape, not a 20KB body. */
+const SQL_CAP = 600
+
+/** Tables carrying an nvarchar(max) column; `select *` on these is the #483 class. */
+let wideTables: Set<string> = new Set()
+export function setWideTables(tables: Iterable<string>): void {
+  wideTables = new Set([...tables].map((t) => t.toLowerCase()))
+}
+
+const SELECT_STAR = /^\s*select\s+(?:top\s*\(?[@\w]+\)?\s+)?\*\s+from\s+\[?([A-Za-z0-9_]+)\]?/i
+
+function wideTableOf(sql: string): string | null {
+  const m = SELECT_STAR.exec(sql)
+  if (!m) return null
+  const t = m[1].toLowerCase()
+  return wideTables.has(t) ? t : null
+}
+
+interface KnexQueryEvent {
+  __knexQueryUid?: string
+  sql?: string
+  bindings?: unknown[]
+}
+
+/**
+ * Attach to a knex instance once. Safe to call for several instances (the
+ * read replica, a tenant db) — each statement is attributed to whichever
+ * request's context it ran under.
+ */
+export function attachQueryTracing(client: {
+  on: (ev: string, fn: (...a: unknown[]) => void) => unknown
+}): void {
+  client.on('query', (q: unknown) => {
+    const ctx = als.getStore()
+    if (!ctx) return
+    const ev = q as KnexQueryEvent
+    ctx.queries++
+    if (!ev.__knexQueryUid || typeof ev.sql !== 'string') return
+    ctx.inflight.set(ev.__knexQueryUid, {
+      sql: ev.sql,
+      bindings: Array.isArray(ev.bindings) ? ev.bindings : [],
+      start: performance.now()
+    })
+  })
+  const settle = (q: unknown) => {
+    const ctx = als.getStore()
+    if (!ctx) return
+    const ev = q as KnexQueryEvent
+    const uid = ev.__knexQueryUid
+    if (!uid) return
+    const started = ctx.inflight.get(uid)
+    if (!started) return
+    ctx.inflight.delete(uid)
+    if (ctx.statements.length >= STATEMENT_CAP) return
+    const sql = started.sql.length > SQL_CAP ? `${started.sql.slice(0, SQL_CAP)}…` : started.sql
+    ctx.statements.push({
+      sql,
+      bindings: started.bindings.slice(0, 40),
+      ms: performance.now() - started.start,
+      at: started.start - ctx.start,
+      wideTable: wideTableOf(started.sql)
+    })
+  }
+  client.on('query-response', (_res: unknown, q: unknown) => settle(q))
+  client.on('query-error', (_err: unknown, q: unknown) => settle(q))
+}
+
+/** Statement shapes by total time, with call counts. */
+function topStatements(ran: RanStatement[], limit: number): TraceStatement[] {
+  const groups = new Map<string, TraceStatement>()
+  for (const r of ran) {
+    const g = groups.get(r.sql)
+    if (g) {
+      g.n++
+      g.ms += r.ms
+      if (r.ms > g.ms / g.n && g.bindings.length === 0) g.bindings = r.bindings
+    } else groups.set(r.sql, { sql: r.sql, bindings: r.bindings, ms: r.ms, n: 1 })
+  }
+  return [...groups.values()]
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, limit)
+    .map((g) => ({ ...g, ms: Math.round(g.ms * 10) / 10 }))
 }
 
 /** Record a phase that was measured elsewhere (e.g. an existing timing). */
@@ -179,7 +361,11 @@ export function finishTrace(meta: {
       ms: Math.round(s.ms * 10) / 10,
       at: Math.round(s.at)
     })),
-    ts: new Date().toISOString()
+    ts: new Date().toISOString(),
+    queries: ctx.queries,
+    sql_ms: Math.round(ctx.statements.reduce((n, r) => n + r.ms, 0)),
+    top_sql: topStatements(ctx.statements, 8),
+    wide: wideByTable(ctx.statements)
   })
   while (buffer.length > CAPACITY) buffer.shift()
 }

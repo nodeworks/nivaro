@@ -256,6 +256,57 @@ export async function opsDbRoutes(app: FastifyInstance) {
     return reply.send({ data: { dropped: table } })
   })
 
+  // #508 — redundant indexes: an index whose key list is a strict PREFIX of
+  // another index on the same table answers no query the wider one cannot,
+  // and taxes every write on the busiest junctions (workflows_regions
+  // carried `(workflows_id)` beside `(workflows_id, id)`). Reported with each
+  // index's write count and size; the drop goes through the unused-index
+  // endpoint, which re-checks it is a plain nonclustered index.
+  app.get('/redundant-indexes', async (_req, reply) => {
+    const result = await dmv(async () => {
+      const rows = (await db.raw(`
+        WITH keys AS (
+          SELECT i.object_id, i.index_id, i.name, i.is_unique, i.is_primary_key, i.type_desc, i.has_filter,
+                 STUFF((SELECT ',' + c.name
+                          FROM sys.index_columns ic
+                          JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                         WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.key_ordinal > 0
+                         ORDER BY ic.key_ordinal FOR XML PATH('')), 1, 1, '') AS key_list,
+                 (SELECT COUNT(*) FROM sys.index_columns ic
+                   WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 1) AS includes
+            FROM sys.indexes i
+           WHERE i.index_id > 0 AND i.type_desc = 'NONCLUSTERED'
+        )
+        SELECT t.name AS table_name, a.name AS index_name, a.key_list AS keys,
+               b.name AS covered_by, b.key_list AS covered_keys,
+               ISNULL(us.user_updates, 0) AS writes, ISNULL(us.user_seeks + us.user_scans + us.user_lookups, 0) AS reads,
+               CAST(SUM(ps.used_page_count) * 8.0 / 1024 AS decimal(10,2)) AS size_mb
+          FROM keys a
+          JOIN keys b ON b.object_id = a.object_id AND b.index_id <> a.index_id
+                     AND LEN(b.key_list) > LEN(a.key_list)
+                     AND LEFT(b.key_list, LEN(a.key_list) + 1) = a.key_list + ','
+                     -- a FILTERED index covers only the rows its predicate keeps
+                     AND b.has_filter = 0
+          JOIN sys.tables t ON t.object_id = a.object_id
+          LEFT JOIN sys.dm_db_index_usage_stats us ON us.object_id = a.object_id AND us.index_id = a.index_id AND us.database_id = DB_ID()
+          LEFT JOIN sys.dm_db_partition_stats ps ON ps.object_id = a.object_id AND ps.index_id = a.index_id
+         WHERE a.is_unique = 0 AND a.is_primary_key = 0 AND a.includes = 0 AND a.has_filter = 0
+         GROUP BY t.name, a.name, a.key_list, b.name, b.key_list, us.user_updates, us.user_seeks, us.user_scans, us.user_lookups
+         ORDER BY ISNULL(us.user_updates, 0) DESC
+      `)) as Array<Record<string, unknown>>
+      // One row per redundant index — the widest covering index is enough to name.
+      const seen = new Map<string, Record<string, unknown>>()
+      for (const r of rows) {
+        const k = `${r.table_name}.${r.index_name}`
+        const prev = seen.get(k)
+        if (!prev || String(r.covered_keys).length > String(prev.covered_keys).length)
+          seen.set(k, r)
+      }
+      return [...seen.values()]
+    })
+    return reply.send(result)
+  })
+
   // #289 — sessions holding open transactions while idle.
   app.get('/long-transactions', async (_req, reply) => {
     const result = await dmv(async () => {
@@ -326,8 +377,10 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #114 — connection pool right now, with #304 leak attribution: which
   // requests are holding connections and for how long.
   app.get('/pool', async (_req, reply) => {
-    const { heldConnections } = await import('../services/pool-attribution.js')
-    return reply.send({ data: { ...poolStats(), held: heldConnections() } })
+    const { heldConnections, poolPressure } = await import('../services/pool-attribution.js')
+    return reply.send({
+      data: { ...poolStats(), held: heldConnections(), pressure: poolPressure() }
+    })
   })
 
   // #213 — data velocity: rows created/changed per day per collection.

@@ -849,18 +849,19 @@ export async function buildServer() {
         }
       })
 
-      // Pool monitor (#114): sustained pending acquires = saturation, which
-      // reads as "randomly slow" everywhere else.
+      // Pool monitor (#114 / #493): saturation reads as "randomly slow"
+      // everywhere else. Judged over the last five minutes of acquire waits
+      // and pool samples, not a point read that lands between bursts.
       app.cron.schedule('pool-monitor', '*/5 * * * *', async () => {
-        const { poolStats } = await import('./routes/ops-db.js')
+        const { poolPressure } = await import('./services/pool-attribution.js')
         const { trackError } = await import('./services/error-tracking.js')
-        const p = poolStats()
-        if (p.pending_acquires >= 5 && p.free === 0) {
+        const p = poolPressure()
+        if (p.acquires >= 50 && (p.wait_p95_ms >= 500 || p.saturated_pct >= 25)) {
           await trackError({
             source: 'server',
             route: 'pool-monitor',
             severity: 'high',
-            message: `DB connection pool saturated: ${p.used}/${p.max} in use, ${p.pending_acquires} requests waiting`
+            message: `DB connection pool under pressure: p95 acquire wait ${p.wait_p95_ms}ms, every connection busy ${p.saturated_pct}% of the last ${p.window_s}s (peak ${p.peak_used}/${p.max} in use, ${p.peak_pending} waiting)`
           })
         }
       })

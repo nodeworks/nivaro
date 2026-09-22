@@ -1,6 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
-import { beginTrace, finishTrace } from '../services/request-trace.js'
+import { _staticDb, db, dbRead } from '../db/index.js'
+import {
+  attachQueryTracing,
+  beginTrace,
+  finishTrace,
+  setWideTables
+} from '../services/request-trace.js'
 
 /**
  * Scopes a phase-timing context to every /api/* request. Pairs with
@@ -12,6 +18,43 @@ import { beginTrace, finishTrace } from '../services/request-trace.js'
  * context. Non-/api paths (the admin SPA, static assets) are left alone.
  */
 export const requestTracePlugin = fp(async (app: FastifyInstance) => {
+  // Round-trip accounting (#506/#507/#483): every statement a traced request
+  // runs is counted and timed off knex's query events. Both pools — the
+  // replica shares the request context, so its statements count too.
+  const clients = new Set<unknown>()
+  for (const k of [_staticDb, dbRead]) {
+    const client = (k as unknown as { client?: { on?: unknown } }).client
+    if (client && typeof client.on === 'function' && !clients.has(client)) {
+      clients.add(client)
+      attachQueryTracing(client as Parameters<typeof attachQueryTracing>[0])
+    }
+  }
+
+  // Which tables carry an nvarchar(max) column — a `select *` on one of those
+  // drags the blob across the wire whether or not the caller reads it (the
+  // owner-group `filters` JSON is the case that motivated #483). Refreshed
+  // every ten minutes; a schema without such columns just yields no flags.
+  async function loadWideTables(): Promise<void> {
+    try {
+      const rows = (await db.raw(`
+        SELECT DISTINCT t.name AS name
+          FROM sys.columns c
+          JOIN sys.tables t ON t.object_id = c.object_id
+          JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+         WHERE c.max_length = -1 AND ty.name IN ('nvarchar', 'varchar', 'varbinary')
+      `)) as Array<{ name: string }> | undefined
+      if (Array.isArray(rows)) setWideTables(rows.map((r) => r.name))
+    } catch {
+      /* not mssql, or no catalog access — the lint simply stays quiet */
+    }
+  }
+  app.addHook('onReady', async () => {
+    void loadWideTables()
+    const t = setInterval(() => void loadWideTables(), 10 * 60_000)
+    t.unref()
+    app.addHook('onClose', async () => clearInterval(t))
+  })
+
   app.addHook('onRequest', async (req) => {
     const path = (req.raw.url ?? req.url).split('?')[0]
     if (!path.startsWith('/api/')) return

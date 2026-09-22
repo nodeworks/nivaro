@@ -67,6 +67,10 @@ export const dbHealthDocs: DocSection = {
         ],
         ['Inngest', 'Whether the job runner answers, and how many recent events it reports.'],
         [
+          'Redundant indexes',
+          'An index whose key list is a strict prefix of another index on the same table — it answers nothing the wider one cannot and taxes every write. Filtered and unique coverers are never counted as covering. Drop goes through the same guarded path as unused indexes.'
+        ],
+        [
           'Backup tables',
           'Scratch copies a one-off fix left behind (zz_…, …_backup, …_bak): row count, size, age and the last time anything read them. Only tables that are not registered collections and that no foreign key references are listed; rows older than BACKUP_TABLE_STALE_DAYS (default 30) read amber.'
         ]
@@ -81,6 +85,11 @@ export const dbHealthDocs: DocSection = {
         'Drop a backup table — two clicks, and only a table the listing itself returned qualifies: the listing is the allow-list, so a registered collection or a table some foreign key points at can never be dropped from here, whatever the name looks like. The drop is audit-logged with the row count and size it held.',
         'Dangling-FK repair offers two actions only: null out the broken reference (refused on NOT NULL columns) or delete the orphaned rows through the normal delete path, so trash, deletion guards, and hooks all apply. Repointing to a different record is deliberately not offered.'
       ]
+    },
+    { type: 'h3', text: 'Pool pressure' },
+    {
+      type: 'p',
+      text: 'The process panel reports the connection pool over the last five minutes, not at the instant you looked: p50 / p95 / max time a request WAITED for a connection, and the share of the window with every connection busy. Identical 80ms statements once read 2.2s because that wait was invisible — no query timing shows it. The pool-monitor job raises an issue when the p95 wait passes 500ms or the pool sits full for a quarter of the window.'
     },
     {
       type: 'note',

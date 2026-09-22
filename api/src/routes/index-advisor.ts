@@ -14,6 +14,8 @@ import { execCustomQuerySql } from '../services/custom-query-exec.js'
  */
 
 const IDENT = /^[A-Za-z0-9_]+$/
+/** A column list — one identifier, or a comma-joined pair for a composite key. */
+const COLS = /^[A-Za-z0-9_]+(,[A-Za-z0-9_]+)?$/
 
 interface Suggestion {
   table: string
@@ -123,7 +125,52 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     for (const b of bindings)
       add(b.collection, b.state_field, 'workflow state mirror (state filters)')
 
-    const suggestions: Suggestion[] = []
+    // #475 — the (collection, item) pair. Every correlated "which instance /
+    // state / revision does this record have" lookup filters on both columns;
+    // nivaro_workflow_instances carried only its PK and scanned 115k rows per
+    // check (16.4s → 1.5s on the project-360 hub once migration 331 added
+    // the pair). Any table with both columns and no index LEADING on the pair
+    // — in either order — is the same shape waiting to be found.
+    const pairTables = (await db.raw(`
+      SELECT t.name AS table_name, c2.name AS item_col
+      FROM sys.tables t
+      JOIN sys.columns c1 ON c1.object_id = t.object_id AND c1.name = 'collection'
+      JOIN sys.columns c2 ON c2.object_id = t.object_id AND c2.name IN ('item', 'item_id')
+    `)) as Array<{ table_name: string; item_col: string }>
+    const leadingPairs = (await db.raw(`
+      SELECT t.name AS table_name, c1.name AS k1, c2.name AS k2
+      FROM sys.indexes i
+      JOIN sys.tables t ON t.object_id = i.object_id
+      JOIN sys.index_columns ic1 ON ic1.object_id = i.object_id AND ic1.index_id = i.index_id AND ic1.key_ordinal = 1
+      JOIN sys.columns c1 ON c1.object_id = ic1.object_id AND c1.column_id = ic1.column_id
+      JOIN sys.index_columns ic2 ON ic2.object_id = i.object_id AND ic2.index_id = i.index_id AND ic2.key_ordinal = 2
+      JOIN sys.columns c2 ON c2.object_id = ic2.object_id AND c2.column_id = ic2.column_id
+      WHERE i.index_id > 0
+    `)) as Array<{ table_name: string; k1: string; k2: string }>
+    const pairIndexed = new Set(
+      leadingPairs.map((r) => `${r.table_name}.${r.k1},${r.k2}`.toLowerCase())
+    )
+    const pairSuggestions: Suggestion[] = []
+    for (const pt of pairTables) {
+      const table = pt.table_name
+      const rows = rowCount.get(table.toLowerCase()) ?? 0
+      if (rows < MIN_ROWS) continue
+      const a = `${table}.collection,${pt.item_col}`.toLowerCase()
+      const b = `${table}.${pt.item_col},collection`.toLowerCase()
+      if (pairIndexed.has(a) || pairIndexed.has(b)) continue
+      const column = `collection,${pt.item_col}`
+      pairSuggestions.push({
+        table,
+        column,
+        rows,
+        reasons: [
+          `correlated (collection, ${pt.item_col}) record lookup — no index leads on the pair`
+        ],
+        create_sql: createIndexSql(table, column)
+      })
+    }
+
+    const suggestions: Suggestion[] = [...pairSuggestions]
     for (const [key, reasons] of candidates) {
       const [table, column] = key.split('.')
       const rows = rowCount.get(table) ?? 0
@@ -134,7 +181,7 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
         column,
         rows,
         reasons: [...reasons],
-        create_sql: `CREATE NONCLUSTERED INDEX idx_${table}_${column} ON [${table}] ([${column}])`
+        create_sql: createIndexSql(table, column)
       })
     }
     suggestions.sort((a, z) => z.rows - a.rows)
@@ -147,7 +194,7 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     const b = req.body as { table?: string; column?: string }
     const table = String(b.table ?? '')
     const column = String(b.column ?? '')
-    if (!IDENT.test(table) || !IDENT.test(column)) {
+    if (!IDENT.test(table) || !COLS.test(column)) {
       return reply.code(400).send({ error: 'Invalid identifier' })
     }
     const { startJobRun } = await import('../services/job-runs.js')
@@ -179,7 +226,7 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     const b = req.body as { items?: Array<{ table?: string; column?: string }> }
     const items = (Array.isArray(b.items) ? b.items : [])
       .map((i) => ({ table: String(i.table ?? ''), column: String(i.column ?? '') }))
-      .filter((i) => IDENT.test(i.table) && IDENT.test(i.column))
+      .filter((i) => IDENT.test(i.table) && COLS.test(i.column))
       .slice(0, 100)
     if (items.length === 0) return reply.code(400).send({ error: 'No valid items' })
 
@@ -221,11 +268,23 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
   })
 }
 
+function indexName(table: string, column: string): string {
+  return `idx_${table}_${column.replace(/,/g, '_')}`.slice(0, 120)
+}
+
+function createIndexSql(table: string, column: string): string {
+  const cols = column
+    .split(',')
+    .map((c) => `[${c}]`)
+    .join(', ')
+  return `CREATE NONCLUSTERED INDEX ${indexName(table, column)} ON [${table}] (${cols})`
+}
+
 async function createIndex(table: string, column: string): Promise<string> {
-  const name = `idx_${table}_${column}`.slice(0, 120)
+  const name = indexName(table, column)
   await execCustomQuerySql(
     `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${name}')
-     CREATE NONCLUSTERED INDEX [${name}] ON [${table}] ([${column}])`,
+     ${createIndexSql(table, column)}`,
     {}
   )
   return name

@@ -45,6 +45,33 @@ export async function traceRoutes(app: FastifyInstance) {
     return reply.send({ data: { ...trace, unaccounted_ms: unaccountedMs(trace) } })
   })
 
+  // #509 — the estimated plan for one of a trace's statements, replayed
+  // through sp_executesql with the SAME bindings, so it is the plan the route
+  // got, not the plan a literal rewrite would get.
+  app.post('/traces/:id/explain', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { index } = (req.body ?? {}) as { index?: number }
+    const trace = getTrace(id)
+    if (!trace) return reply.code(404).send({ error: 'Trace not found' })
+    const stmt = trace.top_sql[Number(index) || 0]
+    if (!stmt) return reply.code(404).send({ error: 'No such statement on this trace' })
+    if (!/^\s*select\b/i.test(stmt.sql)) {
+      return reply.code(400).send({ error: 'Only SELECT statements are explained' })
+    }
+    if (stmt.sql.endsWith('…')) {
+      return reply
+        .code(400)
+        .send({ error: 'Statement was truncated when captured — too long to replay' })
+    }
+    const { planForStatement } = await import('../services/custom-query-exec.js')
+    try {
+      const result = await planForStatement(stmt.sql, stmt.bindings)
+      return reply.send({ data: { ...result, sql: stmt.sql, bindings: stmt.bindings } })
+    } catch (err) {
+      return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+
   app.delete('/traces', { preHandler: requireAdmin }, async (_req, reply) => {
     clearTraces()
     return reply.send({ data: { cleared: true } })
