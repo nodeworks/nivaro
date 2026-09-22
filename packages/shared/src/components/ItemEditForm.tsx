@@ -9566,7 +9566,10 @@ export function ItemEditForm({
                                     // "reloading" on scroll-up.
                                     <div
                                       ref={headerStripRef}
-                                      className={`shrink-0 items-center overflow-x-auto border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4 ${headerCondensed ? 'hidden' : 'flex'}`}
+                                      // Chips keep their width and WRAP: flex used to shrink every
+                                      // chip to fit one line, truncating labels and figures on a
+                                      // narrow window ("Requisition A", "$23,129…").
+                                      className={`shrink-0 flex-wrap items-stretch border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4 ${headerCondensed ? 'hidden' : 'flex'}`}
                                     >
                                       {[
                                         ...headerWidgets.map((w) => ({
@@ -9653,7 +9656,7 @@ export function ItemEditForm({
                                             return (
                                               <div
                                                 key={w.field}
-                                                className='group relative self-stretch border-r border-slate-200 dark:border-border'
+                                                className='group relative shrink-0 self-stretch border-r border-b border-slate-200 dark:border-border'
                                               >
                                                 <WidgetSlot
                                                   widgetId={w.widgetId}
@@ -9824,7 +9827,7 @@ export function ItemEditForm({
                                               // widget stat cell already stretches to full height — a
                                               // centred field chip is shorter, so its label landed a few
                                               // pixels lower and the two read as misaligned.
-                                              className='group relative flex flex-col justify-start self-stretch border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                                              className='group relative flex shrink-0 flex-col justify-start self-stretch border-r border-b border-slate-200 dark:border-border px-4 py-2 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                                             >
                                               <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
                                                 {f.label}
