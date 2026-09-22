@@ -70,6 +70,8 @@ interface WorkflowState {
   stage_visibility: string
   owners_not_required?: boolean | number
   description: string | null
+  /** The state's name for outside systems — migration 341. NULL = same as label. */
+  external_label?: string | null
 }
 
 interface WorkflowTransition {
@@ -213,6 +215,13 @@ function coerceBool(val: unknown): boolean {
   if (typeof val === 'boolean') return val
   if (val === 1 || val === '1' || val === 'true') return true
   return false
+}
+
+/** Trimmed, capped, blank → NULL — the state's name for outside systems. */
+export function normalizeExternalLabel(v: unknown): string | null {
+  if (v == null) return null
+  const s = String(v).trim()
+  return s ? s.slice(0, 255) : null
 }
 
 function formatState(s: WorkflowState) {
@@ -1111,6 +1120,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'stage_visibility'
       | 'owners_not_required'
       | 'description'
+      | 'external_label'
     >
     if (!body.key?.trim()) return reply.code(400).send({ error: 'key is required' })
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
@@ -1129,6 +1139,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       owners_not_required: body.owners_not_required ? 1 : 0,
       stage_visibility: body.stage_visibility ?? 'always',
       description: body.description ? String(body.description).slice(0, 1000) : null,
+      external_label: normalizeExternalLabel(body.external_label),
       sort: body.sort ?? 0
     })
     const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
@@ -1180,6 +1191,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
               ? String(body.description).slice(0, 1000)
               : null
             : state.description,
+        external_label:
+          body.external_label !== undefined
+            ? normalizeExternalLabel(body.external_label)
+            : state.external_label,
         sort: body.sort ?? state.sort
       })
     const updated = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()

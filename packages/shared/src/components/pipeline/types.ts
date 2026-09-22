@@ -233,6 +233,8 @@ export type PipelineState = {
   sort: number
   skip_criteria?: SkipCriteria | null
   stage_visibility: 'always' | 'hide' | 'hide_unless_active'
+  /** The state's name for outside systems — migration 341. NULL = same as label. */
+  external_label?: string | null
 }
 
 export type TransitionRequirement = {

@@ -376,6 +376,7 @@ interface StateFormData {
   owners_not_required: boolean
   stage_visibility: 'always' | 'hide' | 'hide_unless_active'
   description: string
+  external_label: string
 }
 
 function StateForm({
@@ -384,7 +385,10 @@ function StateForm({
   onCancel,
   saving
 }: {
-  initial: Partial<StateFormData>
+  // external_label rides a real state row (PipelineState) too, whose column
+  // is nullable — the form's own draft stays a plain string (never null, so
+  // the controlled input always has a value).
+  initial: Omit<Partial<StateFormData>, 'external_label'> & { external_label?: string | null }
   onSave: (data: StateFormData) => void
   onCancel: () => void
   saving?: boolean
@@ -399,7 +403,8 @@ function StateForm({
     skip_if_no_owners: initial.skip_if_no_owners ?? false,
     owners_not_required: initial.owners_not_required ?? false,
     stage_visibility: (initial as Partial<StateFormData>).stage_visibility ?? 'always',
-    description: initial.description ?? ''
+    description: initial.description ?? '',
+    external_label: initial.external_label ?? ''
   })
 
   const set = <K extends keyof StateFormData>(k: K, v: StateFormData[K]) =>
@@ -438,6 +443,22 @@ function StateForm({
             className='h-8 font-mono text-[12px]'
           />
         </div>
+      </div>
+
+      <div>
+        <label className='mb-1 block text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+          External label
+        </label>
+        <input
+          value={form.external_label}
+          onChange={(e) => set('external_label', e.target.value)}
+          placeholder={form.label || 'Same as the label'}
+          className='h-9 w-full rounded-md border border-slate-200 bg-background px-2 text-[13px] dark:border-border'
+          data-state-external-label
+        />
+        <p className='mt-1 text-[11px] text-slate-500'>
+          What integrations receive for this state. Blank = the label above.
+        </p>
       </div>
 
       <div className='space-y-1.5'>
