@@ -126,7 +126,7 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
           type='button'
           disabled={!canOpen}
           className={cn(
-            'group relative flex min-w-0 flex-col justify-start px-4 py-2 text-left shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors',
+            'group relative flex flex-[1_0_auto] min-w-[128px] flex-col justify-start px-4 py-2 text-left shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors',
             canOpen
               ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-white/[0.025]'
               : 'cursor-default'

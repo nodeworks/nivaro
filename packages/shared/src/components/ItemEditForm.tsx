@@ -9566,13 +9566,13 @@ export function ItemEditForm({
                                     // "reloading" on scroll-up.
                                     <div
                                       ref={headerStripRef}
-                                      // A tile band: equal-width tiles on an auto-fill grid, so a
-                                      // narrow window wraps whole tiles onto a second row instead of
-                                      // squeezing every chip. Each tile draws its own top + left
-                                      // hairline (box-shadow); the band clips the outer ones, so
-                                      // there are dividers between tiles and nothing hanging at a
-                                      // row's end. Same idiom as the meta grids on the detail panels.
-                                      className={`shrink-0 grid-cols-[repeat(auto-fill,minmax(150px,1fr))] overflow-hidden bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] ${headerCondensed ? 'hidden' : 'grid'}`}
+                                      // A stat band. Tiles start at their content width and GROW to
+                                      // fill the row, so the band always spans the record — 14 tiles
+                                      // spread across a wide window, and on a narrow one whole tiles
+                                      // wrap onto a second row that fills the width too. Each tile
+                                      // draws its own top + left hairline; the band clips the outer
+                                      // ones, so dividers are continuous and nothing hangs.
+                                      className={`shrink-0 flex-wrap items-stretch overflow-hidden bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] ${headerCondensed ? 'hidden' : 'flex'}`}
                                     >
                                       {[
                                         ...headerWidgets.map((w) => ({
@@ -9659,7 +9659,7 @@ export function ItemEditForm({
                                             return (
                                               <div
                                                 key={w.field}
-                                                className={`group relative min-w-0 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] ${isBtnGroup ? '[grid-column:span_2]' : ''}`}
+                                                className='group relative flex-[1_0_auto] min-w-0 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))]'
                                               >
                                                 <WidgetSlot
                                                   widgetId={w.widgetId}
@@ -9830,7 +9830,7 @@ export function ItemEditForm({
                                               // widget stat cell already stretches to full height — a
                                               // centred field chip is shorter, so its label landed a few
                                               // pixels lower and the two read as misaligned.
-                                              className='group relative flex min-w-0 flex-col justify-start px-4 py-2 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'
+                                              className='group relative flex flex-[1_0_auto] min-w-[128px] flex-col justify-start px-4 py-2 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'
                                             >
                                               <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
                                                 {f.label}
@@ -9981,7 +9981,7 @@ export function ItemEditForm({
                                           )
                                         })}
                                       {!isNew && itemId && (
-                                        <div className='flex min-w-0 items-center justify-end px-4 py-2 [grid-column:span_1/-1] shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))]'>
+                                        <div className='ml-auto flex items-center px-4 py-2 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))]'>
                                           <ExternalRequestsChip
                                             collection={collection}
                                             itemId={String(itemId)}
