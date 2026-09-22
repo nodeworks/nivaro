@@ -1,10 +1,76 @@
 {
-  "generated_at": "2026-09-21T23:25:34.910Z",
+  "generated_at": "2026-09-22T13:09:37.869Z",
   "releases": [
+    {
+      "version": "0.1.326",
+      "tag": "v0.1.326",
+      "date": "2026-09-22T09:09:27-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "one access resolver, notes as sources, structural authorship, legible narrowing",
+              "hash": "e84ddef7"
+            },
+            {
+              "section": "Added",
+              "scope": "config",
+              "text": "drift made visible — query dependents, layout diffs, stored config snapshots, registry versions, flow silence, dead columns",
+              "hash": "7cefb9db"
+            },
+            {
+              "section": "Added",
+              "scope": "integrity",
+              "text": "number trail, writers-agree check, proc caller + golden scripts hooks",
+              "hash": "bed77428"
+            },
+            {
+              "section": "Added",
+              "scope": "identity",
+              "text": "suspension reasons, gated-job badges, test-endpoint badges, activity user index, 20-minute cron SQL budget",
+              "hash": "7ff8307e"
+            },
+            {
+              "section": "Added",
+              "scope": "caching",
+              "text": "batched virtual rollups, definition cache, cache health, staleness in business terms",
+              "hash": "31a2da55"
+            },
+            {
+              "section": "Added",
+              "scope": "diagnostics",
+              "text": "round trips and N+1s in traces, plans from the cache, pool pressure, index reviews",
+              "hash": "96444f7a"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "release, dev and ops hygiene — dev launcher, long SQL, migration effects, backup tables, recorder backpressure, shared-code check",
+              "hash": "237b14e8"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "queues",
+              "text": "compressed owner groups, warm cache, one first fetch, stable pages",
+              "hash": "c5c69759"
+            }
+          ]
+        }
+      ],
+      "count": 8
+    },
     {
       "version": "0.1.325",
       "tag": "v0.1.325",
-      "date": "2026-09-21T19:25:21-04:00",
+      "date": "2026-09-21T19:25:34-04:00",
       "sections": [
         {
           "label": "Added",
