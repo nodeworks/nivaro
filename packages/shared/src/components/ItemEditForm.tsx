@@ -9566,10 +9566,13 @@ export function ItemEditForm({
                                     // "reloading" on scroll-up.
                                     <div
                                       ref={headerStripRef}
-                                      // Chips keep their width and WRAP: flex used to shrink every
-                                      // chip to fit one line, truncating labels and figures on a
-                                      // narrow window ("Requisition A", "$23,129…").
-                                      className={`shrink-0 flex-wrap items-stretch border-slate-100 border-slate-200 dark:border-border bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] px-4 ${headerCondensed ? 'hidden' : 'flex'}`}
+                                      // A tile band: equal-width tiles on an auto-fill grid, so a
+                                      // narrow window wraps whole tiles onto a second row instead of
+                                      // squeezing every chip. Each tile draws its own top + left
+                                      // hairline (box-shadow); the band clips the outer ones, so
+                                      // there are dividers between tiles and nothing hanging at a
+                                      // row's end. Same idiom as the meta grids on the detail panels.
+                                      className={`shrink-0 grid-cols-[repeat(auto-fill,minmax(150px,1fr))] overflow-hidden bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] ${headerCondensed ? 'hidden' : 'grid'}`}
                                     >
                                       {[
                                         ...headerWidgets.map((w) => ({
@@ -9656,7 +9659,7 @@ export function ItemEditForm({
                                             return (
                                               <div
                                                 key={w.field}
-                                                className='group relative shrink-0 self-stretch border-r border-b border-slate-200 dark:border-border'
+                                                className={`group relative min-w-0 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] ${isBtnGroup ? '[grid-column:span_2]' : ''}`}
                                               >
                                                 <WidgetSlot
                                                   widgetId={w.widgetId}
@@ -9702,7 +9705,7 @@ export function ItemEditForm({
                                                 key='__owners__'
                                                 className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                                               >
-                                                <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+                                                <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
                                                   {f.label}
                                                 </span>
                                                 <div className='mt-1'>
@@ -9827,9 +9830,9 @@ export function ItemEditForm({
                                               // widget stat cell already stretches to full height — a
                                               // centred field chip is shorter, so its label landed a few
                                               // pixels lower and the two read as misaligned.
-                                              className='group relative flex shrink-0 flex-col justify-start self-stretch border-r border-b border-slate-200 dark:border-border px-4 py-2 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                                              className='group relative flex min-w-0 flex-col justify-start px-4 py-2 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'
                                             >
-                                              <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+                                              <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
                                                 {f.label}
                                               </span>
                                               <span
@@ -9978,7 +9981,7 @@ export function ItemEditForm({
                                           )
                                         })}
                                       {!isNew && itemId && (
-                                        <div className='ml-auto self-center py-2 pl-3'>
+                                        <div className='flex min-w-0 items-center justify-end px-4 py-2 [grid-column:span_1/-1] shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))]'>
                                           <ExternalRequestsChip
                                             collection={collection}
                                             itemId={String(itemId)}

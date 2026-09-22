@@ -126,15 +126,15 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
           type='button'
           disabled={!canOpen}
           className={cn(
-            'group relative flex flex-col justify-start border-r border-slate-200 px-4 py-2 text-left min-w-0 transition-colors dark:border-border',
+            'group relative flex min-w-0 flex-col justify-start px-4 py-2 text-left shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors',
             canOpen
-              ? 'cursor-pointer hover:bg-white/60 dark:hover:bg-white/[0.025]'
+              ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-white/[0.025]'
               : 'cursor-default'
           )}
           data-tip={canOpen ? `Which ${countLabel} contribute` : undefined}
           data-header-summary={field}
         >
-          <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+          <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
             {config.label}
           </span>
           <span
