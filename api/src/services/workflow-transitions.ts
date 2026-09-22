@@ -40,6 +40,8 @@ export interface WorkflowState {
   skip_criteria: string | null
   skip_if_no_owners: boolean | number
   stage_visibility: string | null
+  /** The state's name for outside systems — migration 341. NULL = same as label. */
+  external_label: string | null
 }
 
 export interface WorkflowTransition {
@@ -407,7 +409,7 @@ const MACHINE_COMMENT =
 
 async function buildTransitionEventPayload(args: {
   instance: Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'template'>
-  newStateObj: Pick<WorkflowState, 'id' | 'key' | 'label'> | null
+  newStateObj: WorkflowState | null
   prevStateObj: Pick<WorkflowState, 'key' | 'label'> | null
   transitionId: string | null
   transitionLabel: string
