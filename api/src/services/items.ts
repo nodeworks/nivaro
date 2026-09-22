@@ -24,6 +24,12 @@ import { enforceContracts } from './integration-contracts.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import {
+  applyStateFilter,
+  attachRecordState,
+  STATE_FIELD,
+  splitStateField
+} from './record-state.js'
 import { span } from './request-trace.js'
 import {
   computeRollupTotal,
@@ -939,7 +945,13 @@ async function expandRelations(
     }
     if (fkSet.size === 0) continue
 
-    const { direct: subDirect, nested: subNested } = parseFieldExpansion(subFields)
+    const { direct: subDirect0, nested: subNested } = parseFieldExpansion(subFields)
+
+    // `related.$state` — a projection, not a column. Out before selectCols is
+    // built; 'id' is always selected below, which is all the attach needs.
+    const subState = splitStateField(subDirect0)
+    const subDirect = subState.fields
+    delete subNested[STATE_FIELD]
 
     // Column-level permission filtering
     let selectCols: string[] =
@@ -977,6 +989,8 @@ async function expandRelations(
 
     // Decrypt encrypted fields on expanded items
     relItems = await Promise.all(relItems.map((r) => decryptItemFields(relCollection, r)))
+
+    if (subState.wantsState) await attachRecordState(relCollection, relItems)
 
     // Recurse for deeper expansion
     if (Object.keys(subNested).length > 0) {
@@ -1213,6 +1227,14 @@ function applyFilters(
   rels: CMSRelation[]
 ): void {
   for (const [key, value] of Object.entries(filter)) {
+    // ── Pipeline state ───────────────────────────────────────────────────────
+    // filter={"$state":{"_in":["started"]}} — the same EXISTS the conditions
+    // path compiles, so a reader never needs a mirrored state column.
+    if (key === STATE_FIELD && value && typeof value === 'object') {
+      applyStateFilter(q, collection, value as Record<string, unknown>)
+      continue
+    }
+
     // ── Logical combinators ──────────────────────────────────────────────────
     if (key === '_and' && Array.isArray(value)) {
       q.where((sub) => {
@@ -1928,7 +1950,16 @@ export async function readItems(
   const { fields = ['*'], filter = {}, sort = [], limit = 25, offset = 0, page, search } = query
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
-  const { direct: directFields, nested: nestedFieldMap } = parseFieldExpansion(fields)
+  const { direct: directFields0, nested: nestedFieldMap } = parseFieldExpansion(fields)
+
+  // `$state` is a projection over the pipeline tables, not a column: take it out
+  // before the column machinery (narrowing, alias strip, SELECT) ever sees it.
+  // Split here rather than after field narrowing so a role with an explicit
+  // policy field list — which can never name a virtual field — still gets it.
+  const stateSplit = splitStateField(directFields0)
+  const directFields = stateSplit.fields
+  delete nestedFieldMap[STATE_FIELD]
+  if (stateSplit.wantsState && directFields.length === 0) directFields.push('id')
 
   const effectiveOffset = page ? (page - 1) * limit : offset
   let selectFields =
@@ -1950,6 +1981,12 @@ export async function readItems(
     } else {
       selectFields = selectFields.filter((f) => !sensitiveCols.includes(f))
     }
+  }
+
+  // `$state` is keyed by the record id, so an explicit projection that asks for
+  // it must carry one — `fields=name,$state` would otherwise match nothing.
+  if (stateSplit.wantsState && selectFields[0] !== '*' && !selectFields.includes('id')) {
+    selectFields = ['id', ...selectFields]
   }
 
   // Strip alias field names (O2M AND M2M) — they have no physical column
@@ -2161,6 +2198,11 @@ export async function readItems(
       ),
     `${data.length} rows`
   )
+
+  // `$state` — one instance ⨝ states read for the whole page, opt-in only.
+  if (stateSplit.wantsState && data.length > 0) {
+    await span('record-state', () => attachRecordState(collection, data), `${data.length} rows`)
+  }
 
   // Expand M2O relations for dotted fields (e.g. 'category.name', 'category.*')
   if (Object.keys(nestedFieldMap).length > 0 && data.length > 0) {
@@ -2381,7 +2423,14 @@ export async function readOne(
   }
 
   const baseFields = allowedFields ?? ['*']
-  const { direct: directFields, nested: nestedFieldMap } = parseFieldExpansion(fields ?? baseFields)
+  const { direct: directFields0, nested: nestedFieldMap } = parseFieldExpansion(
+    fields ?? baseFields
+  )
+
+  // `$state` — see readItems: split before the column machinery runs.
+  const oneState = splitStateField(directFields0)
+  const directFields = oneState.fields
+  delete nestedFieldMap[STATE_FIELD]
 
   let selectCols =
     allowedFields === null
@@ -2389,6 +2438,12 @@ export async function readOne(
         ? ['*']
         : directFields
       : directFields.filter((f) => f === '*' || allowedFields.includes(f))
+
+  // The state read is keyed by the record id — an explicit projection that asks
+  // for `$state` must carry one.
+  if (oneState.wantsState && selectCols[0] !== '*' && !selectCols.includes('id')) {
+    selectCols = ['id', ...selectCols]
+  }
 
   // Strip O2M/M2M alias names from explicit selects — readItems has done this
   // for years, readOne didn't, so `?fields=id,<alias>` 500'd with "Invalid
@@ -2434,6 +2489,7 @@ export async function readOne(
     item = await decryptItemFields(collection, item)
     await applyInheritedFields(collection, [item])
     await applyReadComputedFields(collection, [item])
+    if (oneState.wantsState) await attachRecordState(collection, [item])
     if (Object.keys(nestedFieldMap).length > 0) {
       await expandRelations(user, [item], collection, nestedFieldMap, 0, workspaceId)
     }
