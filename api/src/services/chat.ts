@@ -267,7 +267,10 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
   ])
 
   const byRoom = new Map(memberships.map((m) => [m.room, m]))
-  const candidates = new Set<string>([GLOBAL_ROOM, ...byRoom.keys(), ...dmRooms])
+  // General is OPT-IN like any open channel (2026-09-22): it lists only once
+  // the person has joined it from the directory. Every open room would
+  // otherwise page the whole company on every message.
+  const candidates = new Set<string>([...byRoom.keys(), ...dmRooms])
 
   // Archived channels drop out of the sidebar even for members.
   for (const room of [...candidates]) {
@@ -429,8 +432,23 @@ function* chunked<T>(items: T[], size = 500): Generator<T[]> {
 // ── Channel directory ───────────────────────────────────────────────────────
 
 export interface DirectoryChannel extends ChatChannel {
+  /** The room key a client joins/opens — `ch:<key>`, or `global` for General. */
+  room: string
   joined: boolean
   members: number
+}
+
+/** General as a directory row: id 0, never a nivaro_chat_channels row. */
+const GENERAL_DIRECTORY_ROW: ChatChannel = {
+  id: 0,
+  key: 'general',
+  name: 'General',
+  topic: 'Everyone — join to see it in your sidebar',
+  visibility: 'open',
+  role: null,
+  created_by: null,
+  is_archived: false,
+  is_direct: false
 }
 
 /**
@@ -440,7 +458,11 @@ export interface DirectoryChannel extends ChatChannel {
 export async function listDirectory(user: User, search?: string): Promise<DirectoryChannel[]> {
   // Group DMs are conversations, not channels — the directory never lists
   // them (members see them in the sidebar via their membership rows).
-  const all = [...(await channels()).values()].filter((c) => !c.is_archived && !c.is_direct)
+  const all = [
+    GENERAL_DIRECTORY_ROW,
+    ...[...(await channels()).values()].filter((c) => !c.is_archived && !c.is_direct)
+  ]
+  const roomOf = (c: ChatChannel) => (c === GENERAL_DIRECTORY_ROW ? GLOBAL_ROOM : `ch:${c.key}`)
   const mine = new Set(
     (await db('nivaro_chat_memberships').where('user', user.id).pluck('room')) as string[]
   )
@@ -448,7 +470,7 @@ export async function listDirectory(user: User, search?: string): Promise<Direct
   const visible = all.filter((c) => {
     if (c.visibility === 'open') return true
     // Same rule as canSeeRoom: membership admits you regardless of kind.
-    if (mine.has(`ch:${c.key}`)) return true
+    if (mine.has(roomOf(c))) return true
     if (c.visibility === 'role') return !!user.role && String(c.role ?? '') === String(user.role)
     return false
   })
@@ -464,10 +486,7 @@ export async function listDirectory(user: User, search?: string): Promise<Direct
   const counts = new Map<string, number>()
   if (filtered.length > 0) {
     const rows = (await db('nivaro_chat_memberships')
-      .whereIn(
-        'room',
-        filtered.map((c) => `ch:${c.key}`)
-      )
+      .whereIn('room', filtered.map(roomOf))
       .groupBy('room')
       .select('room')
       .count({ n: 'id' })) as Array<{ room: string; n: number }>
@@ -477,8 +496,14 @@ export async function listDirectory(user: User, search?: string): Promise<Direct
   return filtered
     .map((c) => ({
       ...c,
-      joined: mine.has(`ch:${c.key}`),
-      members: counts.get(`ch:${c.key}`) ?? 0
+      room: roomOf(c),
+      joined: mine.has(roomOf(c)),
+      members: counts.get(roomOf(c)) ?? 0
     }))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .sort((a, b) => {
+      // General leads; the rest alphabetical.
+      if (a.room === GLOBAL_ROOM) return -1
+      if (b.room === GLOBAL_ROOM) return 1
+      return a.name.localeCompare(b.name)
+    })
 }

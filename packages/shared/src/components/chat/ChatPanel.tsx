@@ -2168,10 +2168,10 @@ export function ChatRoomList({
                   >
                     {r.muted ? <Bell className='h-3 w-3' /> : <BellOff className='h-3 w-3' />}
                   </button>
-                  {r.kind === 'channel' && r.joined && (
+                  {(r.kind === 'channel' || r.kind === 'global') && r.joined && (
                     <button
                       type='button'
-                      title='Leave channel'
+                      title={r.kind === 'global' ? 'Leave General' : 'Leave channel'}
                       onClick={() => leave.mutate(r.room)}
                       className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted'
                     >
@@ -2316,8 +2316,8 @@ export function ChatChannelBrowser({
               {search ? `No channel matches “${search}”` : 'No channels yet'}
             </p>
             <p className='mt-1 text-[11.5px] leading-relaxed text-slate-400'>
-              Channels are shared rooms anyone can join. Record conversations appear on their own
-              once someone posts on a record.
+              Channels and General are shared rooms you join to follow. Record conversations appear
+              on their own once someone posts on a record.
             </p>
           </div>
         )}
@@ -2344,7 +2344,7 @@ export function ChatChannelBrowser({
             {c.joined ? (
               <button
                 type='button'
-                onClick={() => onOpen(`ch:${c.key}`, c.name, channelMeta(c))}
+                onClick={() => onOpen(c.room, c.name, channelMeta(c))}
                 className='shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-muted'
               >
                 Open
@@ -2353,8 +2353,8 @@ export function ChatChannelBrowser({
               <button
                 type='button'
                 onClick={() =>
-                  join.mutate(`ch:${c.key}`, {
-                    onSuccess: () => onOpen(`ch:${c.key}`, c.name, channelMeta(c))
+                  join.mutate(c.room, {
+                    onSuccess: () => onOpen(c.room, c.name, channelMeta(c))
                   })
                 }
                 className={cn('shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium', th.action)}
@@ -2977,7 +2977,9 @@ export function ChatPanel({
           <ChatChannelBrowser
             onOpen={(room, label, channel) => {
               setSettingsOpen(false)
-              setActiveRoom({ room, label, channel })
+              // General rides the directory with id 0 — it has no channel row,
+              // so no settings/members surface behind it.
+              setActiveRoom({ room, label, channel: channel.id > 0 ? channel : undefined })
               setTab('chat')
             }}
           />

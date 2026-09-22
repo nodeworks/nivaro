@@ -316,19 +316,8 @@ export function useChatRooms() {
         channel: r.channel ?? null
       }
     })
-    if (!out.some((r) => r.room === cfg.globalRoom)) {
-      out.push({
-        room: cfg.globalRoom,
-        label: cfg.globalLabel,
-        kind: 'global',
-        lastMessage: null,
-        unread: 0,
-        muted: false,
-        notify_mode: 'all',
-        joined: true,
-        channel: null
-      })
-    }
+    // General is opt-in (joined from the directory) — no synthetic row when
+    // the server left it out.
     return out.sort((a, b) => {
       if (a.kind === 'global') return -1
       if (b.kind === 'global') return 1
@@ -349,6 +338,8 @@ export function useChatRooms() {
 export interface DirectoryChannel {
   id: number
   key: string
+  /** Room key to join/open — `ch:<key>`, or `global` for General. */
+  room: string
   name: string
   topic: string | null
   visibility: 'open' | 'role' | 'private'
@@ -381,11 +372,13 @@ export function useRoomMembership() {
     void qc.invalidateQueries({ queryKey: ['nvr-chat-directory'] })
   }
   const join = useMutation({
-    mutationFn: (room: string) => client.request(post(`/chat/rooms/${encodeURIComponent(room)}/join`)),
+    mutationFn: (room: string) =>
+      client.request(post(`/chat/rooms/${encodeURIComponent(room)}/join`)),
     onSuccess: refresh
   })
   const leave = useMutation({
-    mutationFn: (room: string) => client.request(del(`/chat/rooms/${encodeURIComponent(room)}/join`)),
+    mutationFn: (room: string) =>
+      client.request(del(`/chat/rooms/${encodeURIComponent(room)}/join`)),
     onSuccess: refresh
   })
   const setMuted = useMutation({
@@ -485,11 +478,22 @@ export function useUserSearch(search: string, enabled: boolean) {
     queryKey: ['nvr-chat-user-search', search],
     queryFn: async () => {
       const res = (await client.request(
-        get<{ data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string | null }> }>(
-          '/users',
-          { limit: 20, ...(search.trim() ? { search: search.trim() } : {}) }
-        )
-      )) as { data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string | null }> }
+        get<{
+          data: Array<{
+            id: string
+            first_name: string | null
+            last_name: string | null
+            email: string | null
+          }>
+        }>('/users', { limit: 20, ...(search.trim() ? { search: search.trim() } : {}) })
+      )) as {
+        data: Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+        }>
+      }
       return res.data ?? []
     },
     enabled,
@@ -531,10 +535,24 @@ export function useCreateChannel() {
  */
 let prevUnread = 0
 const prevByRoom = new Map<string, number>()
+/**
+ * A room whose messages are addressed to ME: a DM, or a group DM (a private
+ * channel rendered as a conversation). Channels and General never chirp or
+ * toast per message — the bell counter is their only signal; @mentions there
+ * arrive as notifications through notifyUser like everything else.
+ */
+function isConversation(r: RoomInfo): boolean {
+  return r.kind === 'dm' || (r.kind === 'channel' && !!r.channel?.is_direct)
+}
+
 export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
   const cfg = useChatConfig()
   useEffect(() => {
-    const grew = totalUnread > prevUnread
+    // Without rooms the hook only knows the total — keep the old behaviour.
+    const conversationUnread = rooms
+      ? rooms.filter(isConversation).reduce((n, r) => n + r.unread, 0)
+      : totalUnread
+    const grew = conversationUnread > prevUnread
     if (cfg.sound && grew) playChirp()
 
     if (rooms) {
@@ -543,7 +561,7 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
       const seeded = prevByRoom.size > 0
       for (const r of rooms) {
         const before = prevByRoom.get(r.room) ?? 0
-        if (seeded && !r.muted && r.unread > before) {
+        if (seeded && !r.muted && isConversation(r) && r.unread > before) {
           const last = r.lastMessage
           const who = last?.sender_name ? String(last.sender_name).trim() : null
           toast(
@@ -552,7 +570,9 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
               : `New message in ${r.label}${who ? ` — ${who}` : ''}`,
             {
               description: last?.message
-                ? String(last.message).replace(/<[^>]*>/g, '').slice(0, 90)
+                ? String(last.message)
+                    .replace(/<[^>]*>/g, '')
+                    .slice(0, 90)
                 : undefined,
               duration: 4000,
               // Reading the message is the whole reason the toast exists, so
@@ -575,7 +595,7 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
       }
     }
 
-    prevUnread = totalUnread
+    prevUnread = conversationUnread
   }, [totalUnread, cfg.sound, rooms])
 }
 
@@ -852,9 +872,9 @@ export function useChatSearch(q: string) {
   const { data, isLoading } = useQuery({
     queryKey: ['nvr-chat-search', q],
     queryFn: async () => {
-      const res = (await client.request(
-        get<{ data: ChatSearchHit[] }>('/chat/search', { q })
-      )) as { data: ChatSearchHit[] }
+      const res = (await client.request(get<{ data: ChatSearchHit[] }>('/chat/search', { q }))) as {
+        data: ChatSearchHit[]
+      }
       return res.data ?? []
     },
     enabled: q.trim().length >= 2,

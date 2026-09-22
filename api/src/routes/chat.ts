@@ -362,7 +362,9 @@ export async function chatRoutes(app: FastifyInstance) {
   app.post<{ Params: { room: string } }>('/rooms/:room/join', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
-    await upsertMembership(String(req.user!.id), room, {})
+    // Joining starts the read watermark NOW — a room's whole history is not
+    // something the newcomer has to catch up on (General holds years of it).
+    await upsertMembership(String(req.user!.id), room, { last_read_at: new Date() })
     return { data: { room, joined: true } }
   })
 
