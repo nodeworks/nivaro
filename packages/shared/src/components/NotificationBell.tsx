@@ -140,7 +140,9 @@ export function NotificationBell({
   // never reads zero against a real inbox.
   const attention = counts?.attention ?? unread
   const lanes = counts?.lanes ?? { critical: 0, needs_you: 0, fyi: 0 }
-  const badge = attention + extraBadge
+  // The badge is EVERY unread row — an FYI you have not seen is still unread.
+  // Red when a critical one is among them; `attention` only sizes the tab.
+  const badge = unread + extraBadge
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications', 'bell', app ?? null, tab],
@@ -240,7 +242,13 @@ export function NotificationBell({
     { key: 'fyi', label: 'FYI', count: lanes.fyi },
     { key: 'all', label: 'All', count: null }
   ]
-  const toggle = () => setOpen((o) => !o)
+  // Open on the lane that actually holds unread rows: nothing needs you but
+  // FYI does → land on FYI instead of an empty Needs-you list.
+  const toggle = () =>
+    setOpen((o) => {
+      if (!o && tab === 'attention' && attention === 0 && lanes.fyi > 0) setTab('fyi')
+      return !o
+    })
 
   return (
     <div ref={rootRef} className='relative' data-nvr-notification-bell>
@@ -254,7 +262,7 @@ export function NotificationBell({
             buttonClassName ??
             'relative rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-muted'
           }
-          aria-label={badge ? `Notifications (${badge} need you)` : 'Notifications'}
+          aria-label={badge ? `Notifications (${badge} unread)` : 'Notifications'}
         >
           <Bell className='h-4 w-4' strokeWidth={1.8} />
           {badge > 0 && (
