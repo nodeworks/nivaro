@@ -3,7 +3,10 @@ import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { cachedDefinition } from '../services/definition-cache.js'
 import { can } from '../services/permissions.js'
+import { recordCacheOutcome } from '../services/query-cache-stats.js'
+import { queryFreshness } from '../services/query-freshness.js'
 import {
   type DateRange,
   type EntityFilter,
@@ -337,7 +340,9 @@ async function renderWidget(
         input_key: string
         default_value?: string
       }>) ?? []
-    const cq = await db('nivaro_custom_queries').where({ id: queryId }).first()
+    const cq = await cachedDefinition(`custom-query:${String(queryId)}`, () =>
+      db('nivaro_custom_queries').where({ id: queryId }).first()
+    )
     if (!cq) throw new Error('Custom query not found')
     // Mirror the access gate from POST /custom-queries/:slug/run
     const VALID_ACCESS = new Set(['admin', 'authenticated', 'public'])
@@ -438,11 +443,15 @@ async function renderWidget(
           const parsed = parseJson(hit)
           // Entries are {cached_at, rows}; a bare array predates that shape.
           const isLegacy = Array.isArray(parsed)
-          const entry = isLegacy ? null : (parsed as { cached_at?: string; rows?: unknown[] } | null)
+          const entry = isLegacy
+            ? null
+            : (parsed as { cached_at?: string; rows?: unknown[] } | null)
           cachedRows = isLegacy ? (parsed as unknown[]) : (entry?.rows ?? null)
           const cachedAt = isLegacy ? null : (entry?.cached_at ?? null)
           if (cachedRows) {
             const expiresIn = await redis.ttl(cacheKey).catch(() => -1)
+            recordCacheOutcome(cq.slug, 'hit', { cacheTtl })
+            const fresh = await queryFreshness(cq).catch(() => null)
             cacheInfo = {
               cached: true,
               cached_at: cachedAt,
@@ -450,7 +459,10 @@ async function renderWidget(
                 ? Math.max(0, Math.round((Date.now() - Date.parse(cachedAt)) / 1000))
                 : null,
               expires_in_seconds: expiresIn >= 0 ? expiresIn : null,
-              cache_ttl: cacheTtl
+              cache_ttl: cacheTtl,
+              data_changed_at: fresh?.data_changed_at ?? null,
+              freshness_sources: fresh?.sources ?? [],
+              stale: !!(fresh?.data_changed_at && cachedAt && fresh.data_changed_at > cachedAt)
             }
           }
         }
@@ -459,48 +471,55 @@ async function renderWidget(
       }
     }
 
+    const execStarted = Date.now()
     // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
     const knexClient = (db as any).client
     const Driver = knexClient._driver() as {
       Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
     }
     const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
-    const rows: unknown[] = cachedRows ?? await new Promise<unknown[]>((resolve, reject) => {
-      let settled = false
-      const done = (fn: () => void) => {
-        if (!settled) {
-          settled = true
-          fn()
+    const rows: unknown[] =
+      cachedRows ??
+      (await new Promise<unknown[]>((resolve, reject) => {
+        let settled = false
+        const done = (fn: () => void) => {
+          if (!settled) {
+            settled = true
+            fn()
+          }
         }
-      }
-      const req = new Driver.Request(resolvedSql, (err: Error | null) => {
-        if (err) done(() => reject(err))
-      }) as {
-        on(
-          ev: 'row',
-          h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
-        ): unknown
-        on(ev: 'error', h: (e: Error) => void): unknown
-        once(ev: 'requestCompleted', h: () => void): unknown
-        setTimeout?: (ms: number) => void
-      }
-      // Heavy report procs outlive the connection-level 15s requestTimeout —
-      // same per-request escape hatch custom-query-exec.ts uses (a Budget
-      // Breakdown render was timing out at 15s and surfacing as a sticky
-      // "Render failed" on the record page).
-      req.setTimeout?.(120_000)
-      const collected: unknown[] = []
-      req.on('row', (cols) => {
-        const row: Record<string, unknown> = {}
-        for (const col of cols) row[col.metadata.colName] = col.value
-        collected.push(row)
-      })
-      req.once('requestCompleted', () => done(() => resolve(collected)))
-      req.on('error', (e) => done(() => reject(e)))
-      conn.execSqlBatch(req)
-    }).finally(() => knexClient.releaseConnection(conn))
+        const req = new Driver.Request(resolvedSql, (err: Error | null) => {
+          if (err) done(() => reject(err))
+        }) as {
+          on(
+            ev: 'row',
+            h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
+          ): unknown
+          on(ev: 'error', h: (e: Error) => void): unknown
+          once(ev: 'requestCompleted', h: () => void): unknown
+          setTimeout?: (ms: number) => void
+        }
+        // Heavy report procs outlive the connection-level 15s requestTimeout —
+        // same per-request escape hatch custom-query-exec.ts uses (a Budget
+        // Breakdown render was timing out at 15s and surfacing as a sticky
+        // "Render failed" on the record page).
+        req.setTimeout?.(120_000)
+        const collected: unknown[] = []
+        req.on('row', (cols) => {
+          const row: Record<string, unknown> = {}
+          for (const col of cols) row[col.metadata.colName] = col.value
+          collected.push(row)
+        })
+        req.once('requestCompleted', () => done(() => resolve(collected)))
+        req.on('error', (e) => done(() => reject(e)))
+        conn.execSqlBatch(req)
+      }).finally(() => knexClient.releaseConnection(conn)))
     if (!cachedRows) {
       const cachedAt = new Date().toISOString()
+      recordCacheOutcome(cq.slug, cacheTtl > 0 ? (refresh ? 'bypass' : 'miss') : 'uncached', {
+        execMs: Date.now() - execStarted,
+        cacheTtl
+      })
       if (cacheTtl > 0 && redis) {
         try {
           await redis.setex(cacheKey, cacheTtl, JSON.stringify({ cached_at: cachedAt, rows }))
@@ -508,14 +527,19 @@ async function renderWidget(
           /* a cache write must never fail a render */
         }
       }
-      if (cacheTtl > 0)
+      if (cacheTtl > 0) {
+        const fresh = await queryFreshness(cq).catch(() => null)
         cacheInfo = {
           cached: false,
           cached_at: cachedAt,
           age_seconds: 0,
           expires_in_seconds: cacheTtl,
-          cache_ttl: cacheTtl
+          cache_ttl: cacheTtl,
+          data_changed_at: fresh?.data_changed_at ?? null,
+          freshness_sources: fresh?.sources ?? [],
+          stale: false
         }
+      }
     }
     const valueFields = config.value_fields as
       | Array<{ field: string; label?: string; prefix?: string; suffix?: string; format?: string }>
@@ -532,7 +556,11 @@ async function renderWidget(
     const valueField = config.value_field as string | undefined
     if (valueField) {
       const firstRow = (rows[0] ?? {}) as Record<string, unknown>
-      return { value: firstRow[valueField] ?? null, display: config.display ?? {}, cache: cacheInfo }
+      return {
+        value: firstRow[valueField] ?? null,
+        display: config.display ?? {},
+        cache: cacheInfo
+      }
     }
     return { rows, display: config.display ?? {}, cache: cacheInfo }
   }
@@ -754,9 +782,11 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
   app.post('/:id/render', async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as Record<string, unknown>
-    const widget = await db('nivaro_widgets')
-      .where({ id: Number(id) })
-      .first()
+    const widget = await cachedDefinition(`widget:${Number(id)}`, () =>
+      db('nivaro_widgets')
+        .where({ id: Number(id) })
+        .first()
+    )
     if (!widget) return reply.code(404).send({ error: 'Not found' })
 
     // Start with client-resolved inputs as the base
@@ -843,9 +873,11 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     const buttonIndex = Number(body.button_index ?? 0)
     const inputs = (body.inputs as Record<string, unknown>) ?? {}
 
-    const widget = await db('nivaro_widgets')
-      .where({ id: Number(id) })
-      .first()
+    const widget = await cachedDefinition(`widget:${Number(id)}`, () =>
+      db('nivaro_widgets')
+        .where({ id: Number(id) })
+        .first()
+    )
     if (!widget) return reply.code(404).send({ error: 'Not found' })
     const config = (parseJson(widget.config) ?? {}) as Record<string, unknown>
     const buttons = (config.buttons as Array<Record<string, unknown>>) ?? []

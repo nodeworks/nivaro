@@ -1,9 +1,7 @@
-import { VisualQueryBuilder } from '@/components/visual-query-builder'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
-import { useRef, useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,8 +16,10 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { VisualQueryBuilder } from '@/components/visual-query-builder'
 import { api } from '@/lib/api'
 import { formatSql } from '@/lib/format-sql'
+import { useGoBack } from '@/lib/nav'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +41,7 @@ type QueryForm = {
   cache_ttl: number
   enabled: boolean
   warm_daily: boolean
+  freshness_sources: string
   params: ParamDef[]
   scope_params: string
 }
@@ -55,6 +56,7 @@ type CustomQuery = {
   cache_ttl: number
   enabled: boolean
   warm_daily?: boolean
+  freshness_sources?: Array<{ table: string; column: string }> | null
   params: ParamDef[] | null
   scope_params: string | null
 }
@@ -84,6 +86,7 @@ export function CustomQueryEditPage() {
     access: 'authenticated',
     cache_ttl: 0,
     warm_daily: false,
+    freshness_sources: '',
     enabled: true,
     params: [],
     scope_params: ''
@@ -105,8 +108,16 @@ export function CustomQueryEditPage() {
         ...prev,
         sql_text: p.sql_text ?? prev.sql_text,
         name: p.name ?? prev.name,
-        slug: (p.name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
-        params: (p.params ?? []).map((name) => ({ name, type: 'string' as ParamType, required: false, default: '' }))
+        slug: (p.name ?? '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, ''),
+        params: (p.params ?? []).map((name) => ({
+          name,
+          type: 'string' as ParamType,
+          required: false,
+          default: ''
+        }))
       }))
     } catch {
       /* malformed handoff — blank form */
@@ -159,6 +170,9 @@ export function CustomQueryEditPage() {
         access: data.access ?? 'authenticated',
         cache_ttl: data.cache_ttl ?? 0,
         warm_daily: !!data.warm_daily,
+        freshness_sources: data.freshness_sources?.length
+          ? JSON.stringify(data.freshness_sources)
+          : '',
         enabled: data.enabled ?? true,
         params: data.params ?? [],
         scope_params: data.scope_params ?? ''
@@ -232,7 +246,9 @@ export function CustomQueryEditPage() {
       toast.success('Query executed')
     },
     onError: (err: unknown) => {
-      setLastRunError(((err as { response?: { data?: { error?: string } } })?.response?.data?.error) ?? String(err))
+      setLastRunError(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? String(err)
+      )
       const e = err as { response?: { data?: unknown } }
       setTestResult(JSON.stringify(e.response?.data ?? String(err), null, 2))
       toast.error('Execution failed')
@@ -293,6 +309,9 @@ export function CustomQueryEditPage() {
       access: form.access,
       cache_ttl: form.cache_ttl,
       warm_daily: form.warm_daily,
+      freshness_sources: form.freshness_sources.trim()
+        ? (JSON.parse(form.freshness_sources) as Array<{ table: string; column: string }>)
+        : null,
       scope_params: form.scope_params.trim() ? form.scope_params.trim() : null,
       enabled: form.enabled,
       params: form.params
@@ -471,7 +490,9 @@ export function CustomQueryEditPage() {
                           // otherwise serve the stale shape until TTL expiry.
                           void api
                             .post<{ data: { dropped: number } }>(`/custom-queries/${id}/bust-cache`)
-                            .then((r) => toast.success(`${r.data.data.dropped} cached result(s) dropped`))
+                            .then((r) =>
+                              toast.success(`${r.data.data.dropped} cached result(s) dropped`)
+                            )
                             .catch(() => toast.error('Cache bust failed'))
                         }}
                       >
@@ -510,7 +531,10 @@ export function CustomQueryEditPage() {
                         setForm((p) => ({ ...p, cache_ttl: Number(e.target.value) || 0 }))
                       }
                     />
-                    <label className='mt-1.5 flex items-center gap-2 text-[12px] text-slate-600' data-cq-warm>
+                    <label
+                      className='mt-1.5 flex items-center gap-2 text-[12px] text-slate-600'
+                      data-cq-warm
+                    >
                       <Switch
                         checked={form.warm_daily}
                         onCheckedChange={(v) => setForm((p) => ({ ...p, warm_daily: !!v }))}
@@ -537,6 +561,27 @@ export function CustomQueryEditPage() {
                     allowance is injected (or intersected with their request) before the SQL runs —
                     this is how a raw-SQL query honors User Scopes. translate: "id" passes target
                     ids, "display" passes the dimension's display values (e.g. zone short names).
+                  </p>
+                </div>
+
+                <div className='space-y-1.5'>
+                  <Label htmlFor='cq-fresh'>Freshness sources (JSON, optional)</Label>
+                  <textarea
+                    id='cq-fresh'
+                    data-cq-freshness
+                    value={form.freshness_sources}
+                    onChange={(e) => setForm((p) => ({ ...p, freshness_sources: e.target.value }))}
+                    rows={2}
+                    spellCheck={false}
+                    placeholder='[{"table": "invoices", "column": "changed"}]'
+                    className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 font-mono text-[12px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:border-border dark:bg-background'
+                  />
+                  <p className='text-[11px] text-slate-400'>
+                    Which tables' newest write says whether a cached figure is stale in business
+                    terms: the cache stamp reads "invoices changed 4m ago — newer than this figure"
+                    instead of only "Updated 3m ago". Blank = inferred from the SQL (tables named
+                    after FROM / JOIN, or inside the procedure an EXEC names, that carry a timestamp
+                    column).
                   </p>
                 </div>
 
@@ -694,7 +739,7 @@ export function CustomQueryEditPage() {
 
             {/* Test execute — runs the CURRENT editor SQL (draft execution),
                 so it works before saving and on brand-new queries. */}
-            {(
+            {
               <div className='rounded-xl border border-slate-200 bg-white p-6'>
                 <div className='mb-4 flex items-center justify-between'>
                   <div>
@@ -722,14 +767,21 @@ export function CustomQueryEditPage() {
                         title='The plan captured the last time a saved run of this query was slow (this replica)'
                         onClick={() => {
                           void api
-                            .get<{ data: (PlanData & { captured_at: string; duration_ms: number }) | null; threshold_ms: number }>(`/custom-queries/${id}/last-plan`)
+                            .get<{
+                              data: (PlanData & { captured_at: string; duration_ms: number }) | null
+                              threshold_ms: number
+                            }>(`/custom-queries/${id}/last-plan`)
                             .then((r) => {
                               if (!r.data.data) {
-                                toast.message(`No slow run captured yet — plans are kept for runs over ${Math.round(r.data.threshold_ms / 1000)}s`)
+                                toast.message(
+                                  `No slow run captured yet — plans are kept for runs over ${Math.round(r.data.threshold_ms / 1000)}s`
+                                )
                                 return
                               }
                               setPlan(r.data.data)
-                              toast.success(`Plan from a ${(r.data.data.duration_ms / 1000).toFixed(1)}s run at ${new Date(r.data.data.captured_at).toLocaleTimeString()}`)
+                              toast.success(
+                                `Plan from a ${(r.data.data.duration_ms / 1000).toFixed(1)}s run at ${new Date(r.data.data.captured_at).toLocaleTimeString()}`
+                              )
                             })
                             .catch(() => toast.error('Could not load the captured plan'))
                         }}
@@ -756,7 +808,9 @@ export function CustomQueryEditPage() {
                           {p.required && <span className='text-red-500'> *</span>}
                         </Label>
                         <Input
-                          type={p.type === 'date' ? 'date' : p.type === 'number' ? 'number' : 'text'}
+                          type={
+                            p.type === 'date' ? 'date' : p.type === 'number' ? 'number' : 'text'
+                          }
                           value={testValues[p.name] ?? p.default ?? ''}
                           onChange={(e) =>
                             setTestValues((prev) => ({ ...prev, [p.name]: e.target.value }))
@@ -821,14 +875,21 @@ export function CustomQueryEditPage() {
                       <tbody className='divide-y divide-slate-50 dark:divide-border/40'>
                         {plan.operators.map((o, i) => (
                           // biome-ignore lint/suspicious/noArrayIndexKey: plan rows are positional
-                          <tr key={i} className={o.op.includes('Scan') ? 'bg-amber-50/50 dark:bg-amber-500/5' : ''}>
+                          <tr
+                            key={i}
+                            className={
+                              o.op.includes('Scan') ? 'bg-amber-50/50 dark:bg-amber-500/5' : ''
+                            }
+                          >
                             <td className='px-3 py-1.5 font-medium text-slate-700 dark:text-foreground'>
                               {o.op}
                             </td>
                             <td className='px-3 py-1.5 font-mono text-[11px] text-slate-500'>
                               {o.object ?? '—'}
                             </td>
-                            <td className='px-3 py-1.5 text-right'>{o.est_rows.toLocaleString()}</td>
+                            <td className='px-3 py-1.5 text-right'>
+                              {o.est_rows.toLocaleString()}
+                            </td>
                             <td className='px-3 py-1.5 text-right'>{o.cost.toFixed(4)}</td>
                           </tr>
                         ))}
@@ -837,7 +898,7 @@ export function CustomQueryEditPage() {
                   </div>
                 )}
               </div>
-            )}
+            }
           </div>
         )}
       </div>

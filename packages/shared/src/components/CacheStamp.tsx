@@ -9,6 +9,11 @@ export interface CacheInfo {
   age_seconds?: number | null
   expires_in_seconds?: number | null
   cache_ttl?: number | null
+  /** Newest write to the tables this figure reads — staleness in business terms. */
+  data_changed_at?: string | null
+  freshness_sources?: Array<{ table: string; column: string; changed_at: string | null }>
+  /** True when the data changed AFTER this cached figure was computed. */
+  stale?: boolean
 }
 
 /** One line for a tooltip, where a full stamp will not fit. */
@@ -17,9 +22,24 @@ export function cacheStampTip(c: CacheInfo): string {
     ? Math.max(0, Math.round((Date.now() - Date.parse(c.cached_at)) / 1000))
     : (c.age_seconds ?? null)
   const when = age == null ? 'Cached' : `Updated ${relative(age)}`
-  return c.expires_in_seconds != null
-    ? `${when} — refreshes on its own in ${relative(c.expires_in_seconds).replace(' ago', '')}. Click to refresh now.`
-    : `${when}. Click to refresh now.`
+  const base =
+    c.expires_in_seconds != null
+      ? `${when} — refreshes on its own in ${relative(c.expires_in_seconds).replace(' ago', '')}. Click to refresh now.`
+      : `${when}. Click to refresh now.`
+  return c.stale ? `${base} ${staleText(c)}` : base
+}
+
+/** Human name for the table a freshness fact points at. */
+const tableLabel = (t: string) => t.replace(/_/g, ' ')
+
+/** "invoices changed 4m ago — newer than this figure" */
+export function staleText(c: CacheInfo): string {
+  const src = (c.freshness_sources ?? [])
+    .filter((s) => s.changed_at && c.cached_at && s.changed_at > c.cached_at)
+    .sort((a, b) => (b.changed_at ?? '').localeCompare(a.changed_at ?? ''))[0]
+  if (!src?.changed_at) return 'Data changed since this was computed.'
+  const age = Math.max(0, Math.round((Date.now() - Date.parse(src.changed_at)) / 1000))
+  return `${tableLabel(src.table)} changed ${relative(age)} — newer than this figure.`
 }
 
 /**
@@ -35,6 +55,9 @@ export interface CustomQueryEnvelope {
   expires_in_seconds?: number | null
   cache_ttl?: number | null
   executed_at?: string | null
+  data_changed_at?: string | null
+  freshness_sources?: Array<{ table: string; column: string; changed_at: string | null }>
+  stale?: boolean
 }
 
 const relative = (seconds: number): string => {
@@ -99,6 +122,23 @@ export function CacheStamp({
             : 'Updated just now'
           : `Updated ${relative(ageSeconds)}`}
       </span>
+      {envelope.stale ? (
+        <span
+          data-cache-stale
+          className='rounded bg-[#fef3c7] px-1 py-px text-[10.5px] font-medium text-amber-800 dark:bg-[#4a3a10] dark:text-amber-200'
+          data-tip={staleText(envelope)}
+        >
+          {staleText(envelope).replace(/ — newer than this figure\.$/, '')}
+        </span>
+      ) : envelope.cached && envelope.data_changed_at ? (
+        <span
+          data-cache-current
+          className='text-[10.5px] text-muted-foreground'
+          data-tip={`No write to ${(envelope.freshness_sources ?? []).map((s) => tableLabel(s.table)).join(', ') || 'its sources'} since this was computed`}
+        >
+          · current
+        </span>
+      ) : null}
       {onRefresh ? (
         <button
           type='button'

@@ -22,6 +22,152 @@ type CustomQuery = {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+interface CacheStatRow {
+  id: number | null
+  name: string
+  slug: string
+  cache_ttl: number
+  enabled: boolean
+  runs: number
+  hits: number
+  misses: number
+  bypasses: number
+  uncached_runs: number
+  hit_rate: number | null
+  avg_exec_ms: number | null
+  exec_ms_max: number
+  saved_ms: number
+  last_run_at: string | null
+  advice: string | null
+}
+
+const ms = (v: number | null | undefined) =>
+  v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
+
+/**
+ * What each TTL actually buys (#476): hits × average execution, per query,
+ * since this API process started — and the queries that never cache but take
+ * seconds, which nothing surfaced before.
+ */
+function CacheHealthCard() {
+  const [open, setOpen] = useState(true)
+  const { data } = useQuery({
+    queryKey: ['custom-queries', 'cache-stats'],
+    queryFn: () =>
+      api
+        .get<{ data: { since: string; rows: CacheStatRow[]; silent: CacheStatRow[] } }>(
+          '/custom-queries/cache-stats'
+        )
+        .then((r) => r.data.data),
+    refetchInterval: 30_000
+  })
+  const rows = data?.rows ?? []
+  const advised = rows.filter((r) => r.advice)
+  const totalSaved = rows.reduce((n, r) => n + r.saved_ms, 0)
+  if (!data) return null
+  return (
+    <section
+      className='mb-6 rounded-xl border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-cache-health
+    >
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        className='flex w-full items-center gap-3 px-5 py-3 text-left'
+      >
+        <span className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+          Cache health
+        </span>
+        <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+          since {new Date(data.since).toLocaleString()} · {rows.length} queries ran ·{' '}
+          {ms(totalSaved)} of execution spared by caching
+          {advised.length ? ` · ${advised.length} worth a look` : ''}
+        </span>
+        <span className='ml-auto text-[11px] text-slate-400'>{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className='border-t border-slate-100 dark:border-border'>
+          {advised.length > 0 && (
+            <ul className='space-y-1 border-b border-slate-100 px-5 py-3 dark:border-border'>
+              {advised.map((r) => (
+                <li
+                  key={r.slug}
+                  className='text-[12px] text-amber-800 dark:text-amber-300'
+                  data-cache-advice={r.slug}
+                >
+                  <span className='font-medium'>{r.name}</span> — {r.advice}
+                </li>
+              ))}
+            </ul>
+          )}
+          <table className='w-full text-left text-[12px]'>
+            <thead>
+              <tr className='border-b border-slate-100 bg-slate-50 text-[11px] text-slate-500 dark:border-border dark:bg-background dark:text-muted-foreground'>
+                <th className='px-5 py-2 font-medium'>Query</th>
+                <th className='px-3 py-2 text-right font-medium'>TTL</th>
+                <th className='px-3 py-2 text-right font-medium'>Runs</th>
+                <th className='px-3 py-2 text-right font-medium'>Hit rate</th>
+                <th className='px-3 py-2 text-right font-medium'>Avg exec</th>
+                <th className='px-3 py-2 text-right font-medium'>Max</th>
+                <th className='px-3 py-2 text-right font-medium'>Spared</th>
+                <th className='px-5 py-2 text-right font-medium'>Last run</th>
+              </tr>
+            </thead>
+            <tbody className='divide-y divide-slate-100 dark:divide-border'>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={8} className='px-5 py-4 text-[12px] text-slate-400'>
+                    No query has run since this API process started.
+                  </td>
+                </tr>
+              )}
+              {rows.map((r) => (
+                <tr key={r.slug} data-cache-row={r.slug}>
+                  <td className='px-5 py-1.5'>
+                    <span className='font-medium text-slate-800 dark:text-foreground'>
+                      {r.name}
+                    </span>
+                    <span className='ml-2 font-mono text-[11px] text-slate-400'>{r.slug}</span>
+                  </td>
+                  <td
+                    className={`px-3 py-1.5 text-right tabular-nums ${r.cache_ttl === 0 ? 'text-amber-700 dark:text-amber-400' : ''}`}
+                  >
+                    {r.cache_ttl === 0 ? 'off' : `${r.cache_ttl}s`}
+                  </td>
+                  <td className='px-3 py-1.5 text-right tabular-nums'>{r.runs}</td>
+                  <td className='px-3 py-1.5 text-right tabular-nums'>
+                    {r.hit_rate == null ? '—' : `${Math.round(r.hit_rate * 100)}%`}
+                    {r.bypasses ? (
+                      <span className='ml-1 text-[10.5px] text-slate-400'>
+                        ({r.bypasses} refresh)
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className='px-3 py-1.5 text-right tabular-nums'>{ms(r.avg_exec_ms)}</td>
+                  <td className='px-3 py-1.5 text-right tabular-nums'>
+                    {r.exec_ms_max ? ms(r.exec_ms_max) : '—'}
+                  </td>
+                  <td className='px-3 py-1.5 text-right tabular-nums'>
+                    {r.saved_ms ? ms(r.saved_ms) : '—'}
+                  </td>
+                  <td className='px-5 py-1.5 text-right text-slate-400'>
+                    {r.last_run_at ? new Date(r.last_run_at).toLocaleTimeString() : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(data.silent?.length ?? 0) > 0 && (
+            <p className='px-5 py-2 text-[11px] text-slate-400'>
+              Not run since boot: {data.silent.map((q) => q.name).join(', ')}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function CustomQueriesPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -65,6 +211,7 @@ export function CustomQueriesPage() {
       </div>
 
       <div className='p-8'>
+        <CacheHealthCard />
         {isLoading ? (
           <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
             <div className='divide-y divide-slate-100'>

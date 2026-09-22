@@ -86,6 +86,15 @@ export const dbHealthDocs: DocSection = {
         'Dangling-FK repair offers two actions only: null out the broken reference (refused on NOT NULL columns) or delete the orphaned rows through the normal delete path, so trash, deletion guards, and hooks all apply. Repointing to a different record is deliberately not offered.'
       ]
     },
+    { type: 'h2', id: 'cache-health', text: 'Cache health (custom queries)' },
+    {
+      type: 'p',
+      text: 'Custom Queries → the Cache health card shows, per query, how it has been answered since this API process started: cache hits, misses, viewer refreshes and uncached runs, the average and maximum execution time, and what the cache spared — hits × average execution. It names the queries worth a look: never cached but seconds a run, cached but rarely hit (parameters vary per viewer, or the TTL is shorter than the gap between views), or refreshed more than read. Fourteen of thirty-three budget queries sat at a TTL of 0 — four of them the slowest — and nothing surfaced that before.'
+    },
+    {
+      type: 'p',
+      text: 'A cached figure also carries its staleness in business terms. Each query names — or has inferred from its SQL and the procedure it EXECs — the tables whose newest write decides whether the figure is still true; the stamp reads "invoices changed 4m ago — newer than this figure" (amber) or "· current" beside "Updated 3m ago". Declare the sources on the query as `[{"table": "invoices", "column": "changed"}]` when the inference picks the wrong tables.'
+    },
     { type: 'h3', text: 'Pool pressure' },
     {
       type: 'p',

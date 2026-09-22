@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { logActivity, logActivityThrottled } from '../services/activity.js'
 import {
   buildFinalParams,
   execCustomQuerySql,
@@ -7,8 +9,12 @@ import {
   type ParamDef,
   type ParamType
 } from '../services/custom-query-exec.js'
-import { authenticate, requireAdmin } from '../middleware/authenticate.js'
-import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { recordCacheOutcome } from '../services/query-cache-stats.js'
+import {
+  bustFreshnessInference,
+  parseFreshnessSources,
+  queryFreshness
+} from '../services/query-freshness.js'
 import { markSpan } from '../services/request-trace.js'
 import { getUserScopes, listScopeDimensions } from '../services/user-scopes.js'
 
@@ -61,6 +67,9 @@ function serialize(row: CustomQueryRow) {
     access: row.access,
     warm_daily: !!row.warm_daily,
     scope_params: (row as { scope_params?: string | null }).scope_params ?? null,
+    freshness_sources: parseFreshnessSources(
+      (row as { freshness_sources?: string | null }).freshness_sources
+    ),
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -175,7 +184,8 @@ export function parsePlanXml(xml: string) {
   const ops: Array<{ op: string; object: string | null; est_rows: number; cost: number }> = []
   const relOpRe = /<RelOp\b([^>]*)>/g
   let m: RegExpExecArray | null = relOpRe.exec(xml)
-  const attr = (attrs: string, name: string) => attrs.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? null
+  const attr = (attrs: string, name: string) =>
+    attrs.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? null
   while (m) {
     const attrs = m[1]
     // The nearest following <Object …> names the table/index this operator touches.
@@ -186,7 +196,7 @@ export function parsePlanXml(xml: string) {
     ops.push({
       op: attr(attrs, 'PhysicalOp') ?? 'Unknown',
       object: table
-        ? `${table.replace(/[\[\]]/g, '')}${index ? ` (${index.replace(/[\[\]]/g, '')})` : ''}`
+        ? `${table.replace(/[[\]]/g, '')}${index ? ` (${index.replace(/[[\]]/g, '')})` : ''}`
         : null,
       est_rows: Math.round(Number(attr(attrs, 'EstimateRows') ?? 0)),
       cost: Number(attr(attrs, 'EstimatedTotalSubtreeCost') ?? 0)
@@ -197,7 +207,7 @@ export function parsePlanXml(xml: string) {
   const miRe = /<MissingIndex\b([^>]*)>([\s\S]*?)<\/MissingIndex>/g
   let mi: RegExpExecArray | null = miRe.exec(xml)
   while (mi) {
-    const tbl = attr(mi[1], 'Table')?.replace(/[\[\]]/g, '')
+    const tbl = attr(mi[1], 'Table')?.replace(/[[\]]/g, '')
     const cols = Array.from(mi[2].matchAll(/Name="\[([^\]]+)\]"/g)).map((c) => c[1])
     if (tbl) missing.push(`${tbl}: ${cols.join(', ')}`)
     mi = miRe.exec(xml)
@@ -209,15 +219,33 @@ export function parsePlanXml(xml: string) {
 // memory): when a slug execute takes longer than SLOW_PLAN_MS the plan is
 // fetched right after, so the editor can show WHY without re-running it.
 const SLOW_PLAN_MS = Number(process.env.CUSTOM_QUERY_SLOW_PLAN_MS ?? 5000)
-const capturedPlans = new Map<number, { at: number; duration_ms: number; params: Record<string, unknown>; plan: ReturnType<typeof parsePlanXml> }>()
+const capturedPlans = new Map<
+  number,
+  {
+    at: number
+    duration_ms: number
+    params: Record<string, unknown>
+    plan: ReturnType<typeof parsePlanXml>
+  }
+>()
 const capturing = new Set<number>()
-function captureSlowPlan(id: number, sqlText: string, params: Record<string, unknown>, durationMs: number): void {
+function captureSlowPlan(
+  id: number,
+  sqlText: string,
+  params: Record<string, unknown>,
+  durationMs: number
+): void {
   if (capturing.has(id)) return
   capturing.add(id)
   void explainSqlPlan(sqlText, params)
     .then((xml) => {
       if (!xml) return
-      capturedPlans.set(id, { at: Date.now(), duration_ms: durationMs, params, plan: parsePlanXml(xml) })
+      capturedPlans.set(id, {
+        at: Date.now(),
+        duration_ms: durationMs,
+        params,
+        plan: parsePlanXml(xml)
+      })
       markSpan('custom-query:plan-captured', durationMs, `query ${id}`)
     })
     .catch(() => {})
@@ -229,6 +257,47 @@ export function capturedPlanFor(id: number) {
 
 export async function customQueriesRoutes(app: FastifyInstance) {
   // ── Admin CRUD ──────────────────────────────────────────────────────────
+
+  // #476 — cache observability: hits, misses, bypasses, what each TTL saves,
+  // and the queries that never cache but take seconds. Since this process
+  // booted, this replica only.
+  app.get('/cache-stats', { preHandler: requireAdmin }, async () => {
+    const { cacheStats } = await import('../services/query-cache-stats.js')
+    const { since, rows } = cacheStats()
+    const defs = (await db('nivaro_custom_queries').select(
+      'id',
+      'name',
+      'slug',
+      'cache_ttl',
+      'enabled'
+    )) as Array<{ id: number; name: string; slug: string; cache_ttl: number; enabled: boolean }>
+    const bySlug = new Map(defs.map((d) => [d.slug, d]))
+    const seen = new Set<string>()
+    const merged = rows.map((r) => {
+      seen.add(r.slug)
+      const d = bySlug.get(r.slug)
+      return {
+        ...r,
+        id: d?.id ?? null,
+        name: d?.name ?? r.slug,
+        cache_ttl: d?.cache_ttl ?? r.cache_ttl,
+        enabled: d?.enabled ?? true
+      }
+    })
+    // Queries that never ran since boot still belong in the picture (a TTL
+    // of 0 on a query nobody has hit yet is still a TTL of 0).
+    const silent = defs
+      .filter((d) => !seen.has(d.slug) && d.enabled)
+      .map((d) => ({
+        id: d.id,
+        name: d.name,
+        slug: d.slug,
+        cache_ttl: d.cache_ttl,
+        enabled: d.enabled,
+        runs: 0
+      }))
+    return { data: { since, rows: merged, silent } }
+  })
 
   app.get('/', { preHandler: requireAdmin }, async () => {
     const rows = (await db('nivaro_custom_queries').orderBy('name', 'asc')) as CustomQueryRow[]
@@ -314,6 +383,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       access: string
       warm_daily: boolean
       scope_params: Record<string, unknown> | string | null
+      freshness_sources: Array<{ table: string; column: string }> | null
     }>
   }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id)
@@ -342,6 +412,17 @@ export async function customQueriesRoutes(app: FastifyInstance) {
             ? body.scope_params
             : JSON.stringify(body.scope_params)
     }
+    if (body.freshness_sources !== undefined) {
+      const cleaned = parseFreshnessSources(
+        body.freshness_sources == null ? null : JSON.stringify(body.freshness_sources)
+      )
+      if (body.freshness_sources != null && !cleaned) {
+        return reply.code(400).send({ error: 'freshness_sources must be [{table, column}]' })
+      }
+      patch.freshness_sources = cleaned && cleaned.length ? JSON.stringify(cleaned) : null
+      bustFreshnessInference()
+    }
+    if (body.sql_text !== undefined) bustFreshnessInference()
 
     await db('nivaro_custom_queries').where({ id }).update(patch)
     // Staleness guard: any change to the SQL, params, or slug invalidates every
@@ -438,12 +519,26 @@ export async function customQueriesRoutes(app: FastifyInstance) {
    * response carries a flat operator summary plus the raw plan XML.
    */
   // #90 — the plan captured for this query's last SLOW run on this replica.
-  app.get<{ Params: { id: string } }>('/:id/last-plan', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = Number(req.params.id)
-    if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
-    const cap = capturedPlanFor(id)
-    return { data: cap ? { captured_at: new Date(cap.at).toISOString(), duration_ms: cap.duration_ms, params: cap.params, ...cap.plan } : null, threshold_ms: SLOW_PLAN_MS }
-  })
+  app.get<{ Params: { id: string } }>(
+    '/:id/last-plan',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
+      const cap = capturedPlanFor(id)
+      return {
+        data: cap
+          ? {
+              captured_at: new Date(cap.at).toISOString(),
+              duration_ms: cap.duration_ms,
+              params: cap.params,
+              ...cap.plan
+            }
+          : null,
+        threshold_ms: SLOW_PLAN_MS
+      }
+    }
+  )
 
   app.post<{
     Body: { sql_text?: string; params?: ParamDef[]; values?: Record<string, unknown> }
@@ -668,6 +763,8 @@ export async function customQueriesRoutes(app: FastifyInstance) {
             const rows = Array.isArray(parsed) ? (parsed as unknown[]) : (entry?.rows ?? [])
             const cachedAt = Array.isArray(parsed) ? null : (entry?.cached_at ?? null)
             const expiresIn = await app.redis.ttl(cacheKey).catch(() => -1)
+            recordCacheOutcome(slug, 'hit', { cacheTtl: query.cache_ttl })
+            const fresh = await queryFreshness(query).catch(() => null)
             return {
               data: rows,
               cached: true,
@@ -677,7 +774,10 @@ export async function customQueriesRoutes(app: FastifyInstance) {
                 : null,
               expires_in_seconds: expiresIn >= 0 ? expiresIn : null,
               cache_ttl: query.cache_ttl,
-              executed_at: cachedAt
+              executed_at: cachedAt,
+              data_changed_at: fresh?.data_changed_at ?? null,
+              freshness_sources: fresh?.sources ?? [],
+              stale: !!(fresh?.data_changed_at && cachedAt && fresh.data_changed_at > cachedAt)
             }
           }
         } catch (err) {
@@ -697,7 +797,13 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       // #90 — a slow run captures its plan right after (fire-and-forget), so
       // the editor can explain it without re-running the query.
       const execMs = Date.now() - execStarted
-      if (execMs >= SLOW_PLAN_MS) captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
+      if (execMs >= SLOW_PLAN_MS)
+        captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
+      recordCacheOutcome(
+        slug,
+        query.cache_ttl > 0 ? (wantsRefresh ? 'bypass' : 'miss') : 'uncached',
+        { execMs, cacheTtl: query.cache_ttl }
+      )
 
       // Cache the result, stamped so a viewer can be told how old it is.
       const cachedAt = new Date().toISOString()
@@ -722,6 +828,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         user: req.user?.id,
         req
       })
+      const fresh = query.cache_ttl > 0 ? await queryFreshness(query).catch(() => null) : null
       return {
         data: rows,
         cached: false,
@@ -729,7 +836,10 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         age_seconds: 0,
         expires_in_seconds: query.cache_ttl > 0 ? query.cache_ttl : null,
         cache_ttl: query.cache_ttl,
-        executed_at: cachedAt
+        executed_at: cachedAt,
+        data_changed_at: fresh?.data_changed_at ?? null,
+        freshness_sources: fresh?.sources ?? [],
+        stale: false
       }
     }
   )

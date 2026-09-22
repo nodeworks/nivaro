@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { selectInChunks } from './db-batch.js'
 
 function parseJson<T>(v: string | null | undefined): T | null {
   if (!v) return null
@@ -442,6 +443,224 @@ export async function computeRollupTotal(
   )
   if (values.every((v) => v == null)) return null
   return values.reduce((sum: number, v) => sum + (v ?? 0), 0)
+}
+
+/** MSSQL caps bound parameters near 2100; ids travel in chunks of this size. */
+const BATCH_CHUNK = 1500
+
+/** Reduce a source's per-parent value list by its aggregate (shared by both batch paths). */
+function reduceAggregate(agg: string, values: number[]): number | null {
+  if (values.length === 0) return agg === 'count' ? 0 : null
+  switch (agg) {
+    case 'count':
+      return values.length
+    case 'distinct_count':
+      return new Set(values).size
+    case 'avg':
+      return values.reduce((a, b) => a + b, 0) / values.length
+    case 'min':
+      return Math.min(...values)
+    case 'max':
+      return Math.max(...values)
+    case 'median': {
+      const sorted = [...values].sort((a, b) => a - b)
+      const mid = Math.floor(sorted.length / 2)
+      return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+    }
+    default:
+      return values.reduce((a, b) => a + b, 0)
+  }
+}
+
+/**
+ * One source's value for MANY parents at once. Plain aggregates become one
+ * GROUP BY per chunk of ids; formula sources fetch every child row of the
+ * chunk, resolve each one-hop reference once for the union, and reduce per
+ * parent in JS. Recursive, weighted-average and any shape this cannot batch
+ * fall back to the per-parent path — correctness first, then round trips.
+ * Missing parents read null (count: 0), exactly as the single-id path does.
+ */
+async function computeRollupValueBatch(
+  cfg: RollupSource,
+  ids: unknown[],
+  hostCollection?: string
+): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>()
+  const fallback = async () => {
+    for (const id of ids) out.set(String(id), await computeRollupValue(cfg, id, hostCollection))
+    return out
+  }
+  if (!cfg.related_collection || !cfg.fk_field || !ROLLUP_AGGREGATES.has(cfg.aggregate)) {
+    for (const id of ids) out.set(String(id), null)
+    return out
+  }
+  if (cfg.aggregate !== 'count' && !cfg.value_field && !cfg.value_formula) {
+    for (const id of ids) out.set(String(id), null)
+    return out
+  }
+  if (cfg.recursive && hostCollection === cfg.related_collection) return fallback()
+  if (cfg.aggregate === 'weighted_avg') return fallback()
+
+  try {
+    const fk = cfg.fk_field
+    const keyOf = (v: unknown) => String(v)
+    const empty = cfg.aggregate === 'count' ? 0 : null
+
+    if (cfg.value_formula) {
+      const refs = [...cfg.value_formula.matchAll(FORMULA_REF_RE)].map((m) => m[1])
+      if (refs.length === 0) {
+        for (const id of ids) out.set(keyOf(id), null)
+        return out
+      }
+      const direct = [...new Set(refs.filter((r) => !r.includes('.')))]
+      const dotted = [...new Set(refs.filter((r) => r.includes('.')))]
+      const hopFks = [...new Set(dotted.map((d) => d.split('.')[0]))]
+      const rows = await selectInChunks(
+        ids,
+        BATCH_CHUNK,
+        (chunk) =>
+          db(cfg.related_collection)
+            .whereIn(fk, chunk as Knex.Value[])
+            .modify((q) => applyRollupFilter(q, cfg.filter))
+            .select(['id', fk, ...direct, ...hopFks]) as Promise<Array<Record<string, unknown>>>
+      )
+      const hopValues = new Map<string, Map<string, Record<string, unknown>>>()
+      for (const hop of hopFks) {
+        const rel = (await db('nivaro_relations')
+          .where({ many_collection: cfg.related_collection, many_field: hop })
+          .first()) as { one_collection: string | null } | undefined
+        if (!rel?.one_collection) continue
+        const cols = [
+          ...new Set(dotted.filter((d) => d.startsWith(`${hop}.`)).map((d) => d.split('.')[1]))
+        ]
+        const hopIds = [...new Set(rows.map((r) => r[hop]).filter((v) => v != null))]
+        const related = await selectInChunks(
+          hopIds,
+          BATCH_CHUNK,
+          (chunk) =>
+            db(rel.one_collection as string)
+              .whereIn('id', chunk as Knex.Value[])
+              .select(['id', ...cols]) as Promise<Array<Record<string, unknown>>>
+        )
+        hopValues.set(hop, new Map(related.map((r) => [String(r.id), r])))
+      }
+      const perParent = new Map<string, number[]>()
+      for (const row of rows) {
+        const values: Record<string, number> = {}
+        for (const d of direct) values[d] = Number(row[d] ?? 0) || 0
+        for (const path of dotted) {
+          const [hop, col] = path.split('.')
+          const hit = row[hop] != null ? hopValues.get(hop)?.get(String(row[hop])) : undefined
+          values[path] = Number(hit?.[col] ?? 0) || 0
+        }
+        const v = evalNumericFormula(cfg.value_formula, values)
+        if (v == null) continue
+        const k = keyOf(row[fk])
+        const list = perParent.get(k) ?? []
+        list.push(v)
+        perParent.set(k, list)
+      }
+      for (const id of ids) {
+        const k = keyOf(id)
+        out.set(
+          k,
+          perParent.has(k) ? reduceAggregate(cfg.aggregate, perParent.get(k) ?? []) : empty
+        )
+      }
+      return out
+    }
+
+    if (cfg.aggregate === 'median' || cfg.aggregate === 'distinct_count') {
+      const rows = await selectInChunks(
+        ids,
+        BATCH_CHUNK,
+        (chunk) =>
+          db(cfg.related_collection)
+            .whereIn(fk, chunk as Knex.Value[])
+            .modify((q) => applyRollupFilter(q, cfg.filter))
+            .select([fk, cfg.value_field]) as Promise<Array<Record<string, unknown>>>
+      )
+      const perParent = new Map<string, number[]>()
+      for (const row of rows) {
+        const n = Number(row[cfg.value_field])
+        if (!Number.isFinite(n)) continue
+        const k = keyOf(row[fk])
+        const list = perParent.get(k) ?? []
+        list.push(n)
+        perParent.set(k, list)
+      }
+      for (const id of ids) {
+        const k = keyOf(id)
+        const list = perParent.get(k)
+        // The single-id path: distinct_count of nothing is 0, median of nothing is null.
+        out.set(
+          k,
+          list
+            ? reduceAggregate(cfg.aggregate, list)
+            : cfg.aggregate === 'distinct_count'
+              ? 0
+              : null
+        )
+      }
+      return out
+    }
+
+    // sum / avg / min / max / count — one GROUP BY per chunk.
+    const agg = cfg.aggregate as 'sum' | 'avg' | 'min' | 'max' | 'count'
+    const grouped = await selectInChunks(
+      ids,
+      BATCH_CHUNK,
+      (chunk) =>
+        db(cfg.related_collection)
+          .whereIn(fk, chunk as Knex.Value[])
+          .modify((q) => applyRollupFilter(q, cfg.filter))
+          .groupBy(fk)
+          .select(fk)
+          .modify((q) => {
+            if (agg === 'count') q.count('* as v')
+            else q[agg](`${cfg.value_field} as v`)
+          }) as Promise<Array<Record<string, unknown>>>
+    )
+    const byKey = new Map(grouped.map((r) => [keyOf(r[fk]), r.v]))
+    for (const id of ids) {
+      const k = keyOf(id)
+      const v = byKey.get(k)
+      out.set(k, v != null ? Number(v) : empty)
+    }
+    return out
+  } catch {
+    for (const id of ids) out.set(String(id), null)
+    return out
+  }
+}
+
+/**
+ * `computeRollupTotal` for a whole page of parents: one batched read per
+ * source instead of one per parent per source (a 25-row list read of
+ * workflows ran the PO-junction aggregate 25 times, ~1.2s of a 2.1s request).
+ * Same null rule as the single-id total: sources that answer null contribute
+ * 0, all-null is null.
+ */
+export async function computeRollupTotalBatch(
+  cfg: NormalizedRollup,
+  ids: unknown[],
+  hostCollection?: string
+): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>()
+  const wanted = ids.filter((id) => id != null)
+  if (wanted.length === 0) return out
+  const perSource = await Promise.all(
+    cfg.sources.map((source) => computeRollupValueBatch(source, wanted, hostCollection))
+  )
+  for (const id of wanted) {
+    const k = String(id)
+    const values = perSource.map((m) => m.get(k) ?? null)
+    out.set(
+      k,
+      values.every((v) => v == null) ? null : values.reduce((s: number, v) => s + (v ?? 0), 0)
+    )
+  }
+  return out
 }
 
 // ─── Contributor map (stored-rollup recalc) ───────────────────────────────────

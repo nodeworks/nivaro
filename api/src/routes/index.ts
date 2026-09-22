@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
+import { bustDefinitionCache } from '../services/definition-cache.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
 import { accessAuditsRoutes } from './access-audits.js'
@@ -234,8 +235,14 @@ export async function registerRoutes(app: FastifyInstance) {
   // call at every mutation site — no site can be missed.
   const META_ROUTES =
     /^\/api\/(data-model|collections|field-config|collection-layouts|field-groups)\b/
+  // Definition rows (widgets, custom queries) are cached per id for renders
+  // (#494); a write to their editors drops that cache the same way.
+  const DEFINITION_ROUTES = /^\/api\/(widgets-internal|custom-queries)\b/
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
+    if (DEFINITION_ROUTES.test(req.url) && !/\/(render|action|execute|run)\b/.test(req.url)) {
+      bustDefinitionCache()
+    }
     if (META_ROUTES.test(req.url)) {
       clearMetadataCache()
       bustSectionLockCache()

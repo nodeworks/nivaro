@@ -27,6 +27,7 @@ import { broadcastCollectionUpdate } from './realtime.js'
 import { span } from './request-trace.js'
 import {
   computeRollupTotal,
+  computeRollupTotalBatch,
   matchesParentFilter,
   type NormalizedRollup,
   parseRollupFormula,
@@ -447,22 +448,30 @@ async function applyReadComputedFields(
     for (const f of readFields) {
       item[f.field] = evalFormula(f.computed_formula as string, item)
     }
+  }
 
-    // Rollup fields aggregate related items. N+1 over items × rollup fields is
-    // acceptable for now; each rollup runs its own query per item. Fields with
-    // computed_store are written at write time and already sit on the row —
-    // recomputing them here would be redundant and defeats the point of storing.
-    for (const f of rollupFields) {
-      if (f.computed_store === true || f.computed_store === 1) continue
-      const cfg = parseRollupFormula(f.computed_formula as string)
-      if (!cfg) {
-        item[f.field] = null
-        continue
-      }
-      // A parent the rollup does not apply to keeps whatever the row holds.
-      if (cfg.parent_filter && !matchesParentFilter(item, cfg.parent_filter)) continue
-      item[f.field] = await computeRollupTotal(cfg, item.id, collection)
+  // Virtual rollups aggregate related rows — batched per FIELD across the
+  // page (one grouped read per source), not per item. Fields with
+  // computed_store are written at write time and already sit on the row —
+  // recomputing them here would be redundant and defeats the point of storing.
+  for (const f of rollupFields) {
+    if (f.computed_store === true || f.computed_store === 1) continue
+    const cfg = parseRollupFormula(f.computed_formula as string)
+    if (!cfg) {
+      for (const item of items) item[f.field] = null
+      continue
     }
+    // A parent the rollup does not apply to keeps whatever the row holds.
+    const targets = cfg.parent_filter
+      ? items.filter((item) => matchesParentFilter(item, cfg.parent_filter))
+      : items
+    if (targets.length === 0) continue
+    const totals = await computeRollupTotalBatch(
+      cfg,
+      targets.map((item) => item.id),
+      collection
+    )
+    for (const item of targets) item[f.field] = totals.get(String(item.id)) ?? null
   }
 }
 
@@ -2624,9 +2633,7 @@ async function findUpsertTarget(
   try {
     const q = db(collection).where(where)
     for (const k of nullKeys) q.whereNull(k)
-    const row = (await q.orderBy('id').first('id')) as
-      | { id: string | number }
-      | undefined
+    const row = (await q.orderBy('id').first('id')) as { id: string | number } | undefined
     return row?.id ?? null
   } catch {
     return null
