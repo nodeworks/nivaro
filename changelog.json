@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-09-22T18:44:20.979Z",
+  "generated_at": "2026-09-22T19:36:47.289Z",
   "releases": [
+    {
+      "version": "0.1.329",
+      "tag": "v0.1.329",
+      "date": "2026-09-22T15:36:36-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "chat",
+              "text": "General is opt-in, only conversations toast",
+              "hash": "a69aa8ba"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "record header",
+              "text": "restore the px-4 gutter so the stat band lines up with the form body",
+              "hash": "ad1d6850"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record header",
+              "text": "the field strip is a stat band that fills its rows",
+              "hash": "69f808ef"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record header",
+              "text": "the field strip is a tile band",
+              "hash": "69a99c5c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record header",
+              "text": "the sub-header field strip wraps instead of squeezing",
+              "hash": "82fb2cbe"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.328",
       "tag": "v0.1.328",
-      "date": "2026-09-22T14:44:05-04:00",
+      "date": "2026-09-22T14:44:21-04:00",
       "sections": [
         {
           "label": "Fixed",
