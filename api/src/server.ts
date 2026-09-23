@@ -1538,14 +1538,10 @@ export async function buildServer() {
         'integration-reconcile',
         '*/15 * * * *',
         async () => {
-          const { runIntegrationReconcile } = await import('./services/integration-reconcile.js')
-          const r = await runIntegrationReconcile()
-          if (r.missing > 0 || r.overdue > 0) {
-            app.log.warn(
-              { missing: r.missing, overdue: r.overdue, superseded: r.superseded },
-              'integration reconcile found unmet obligations'
-            )
-          }
+          const { runIntegrationReconcileForCron } = await import(
+            './services/integration-reconcile.js'
+          )
+          await runIntegrationReconcileForCron(app)
         },
         {
           heavy: true,

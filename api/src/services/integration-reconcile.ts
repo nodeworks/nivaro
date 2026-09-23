@@ -14,6 +14,7 @@
  * the only thing in the system that can find one.
  */
 import type { Knex } from 'knex'
+import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import {
@@ -126,9 +127,12 @@ export function decideReconcile(opts: {
   return { item, outcome: 'none', reason: null, obligation_id: null }
 }
 
-async function graceFor(api: string): Promise<{ ack: number; skip: number }> {
+async function graceFor(
+  api: string,
+  database: Knex = db
+): Promise<{ ack: number; skip: number }> {
   try {
-    const row = (await db('nivaro_external_apis')
+    const row = (await database('nivaro_external_apis')
       .where({ name: api })
       .first('ack_grace_minutes', 'skip_grace_minutes')) as
       | { ack_grace_minutes: number | null; skip_grace_minutes: number | null }
@@ -145,12 +149,13 @@ async function graceFor(api: string): Promise<{ ack: number; skip: number }> {
 /** Newest ledger row per item for one kind, in one query. */
 async function latestByItem(
   def: ObligationKindDef,
-  items: string[]
+  items: string[],
+  database: Knex = db
 ): Promise<Map<string, LedgerRowForSweep>> {
   const out = new Map<string, LedgerRowForSweep>()
   if (items.length === 0) return out
   const rows = (await selectInChunks(items, 1000, (chunk) =>
-    db('nivaro_integration_obligations')
+    database('nivaro_integration_obligations')
       .where({ api: def.api, kind: def.kind, collection: def.collection })
       .whereIn('item', chunk)
       .orderBy('id', 'desc')
@@ -159,6 +164,44 @@ async function latestByItem(
   // Ordered id DESC, so the first row per item is its newest.
   for (const r of rows) if (!out.has(r.item)) out.set(r.item, r)
   return out
+}
+
+/**
+ * Duplicate obligations for one record/kind (spec §2.2): only the NEWEST row
+ * for an item is the current truth. An older row still sitting in an OPEN
+ * outcome — orphaned by a crash between open and resolve, or any path that
+ * opened more than one row for the same item — is neither "the latest" (so
+ * it can never age into `overdue` on its own) nor reached by the item-level
+ * supersede in `reconcileKind` (the item is still expected, so that loop
+ * skips it). Superseded here instead, scoped to the items this sweep is
+ * already looking at, and never the newest row itself — what happens to
+ * that one is decided by `decideReconcile`.
+ */
+async function supersedeOlderOpenRows(
+  def: ObligationKindDef,
+  database: Knex,
+  items: string[],
+  latest: Map<string, LedgerRowForSweep>
+): Promise<number> {
+  if (items.length === 0) return 0
+  const rows = (await selectInChunks(items, 1000, (chunk) =>
+    database('nivaro_integration_obligations')
+      .where({ api: def.api, kind: def.kind, collection: def.collection })
+      .whereIn('item', chunk)
+      .whereIn('outcome', OPEN_OUTCOMES)
+      .select('id', 'item')
+  )) as Array<{ id: number; item: string }>
+  let superseded = 0
+  for (const r of rows) {
+    const newestId = latest.get(String(r.item))?.id
+    if (newestId == null || r.id === newestId) continue
+    superseded++
+    await resolveObligation(r.id, {
+      outcome: 'superseded',
+      reason: `superseded by obligation ${newestId}`
+    })
+  }
+  return superseded
 }
 
 export async function reconcileKind(
@@ -176,11 +219,12 @@ export async function reconcileKind(
   const expectedRows = await def.expect(database)
   const truncated = expectedRows.length > EXPECT_CEILING
   const rows = truncated ? expectedRows.slice(0, EXPECT_CEILING) : expectedRows
-  const grace = await graceFor(def.api)
+  const grace = await graceFor(def.api, database)
   const skipGrace = def.grace_minutes ?? grace.skip
 
   const byItem = new Map(rows.map((r) => [String(r.item), r]))
-  const latest = await latestByItem(def, [...byItem.keys()])
+  const items = [...byItem.keys()]
+  const latest = await latestByItem(def, items, database)
 
   let missing = 0
   let overdue = 0
@@ -216,6 +260,8 @@ export async function reconcileKind(
     }
   }
 
+  superseded += await supersedeOlderOpenRows(def, database, items, latest)
+
   // Anything open for this kind whose item is no longer expected has been
   // overtaken by events.
   const openRows = (await database('nivaro_integration_obligations')
@@ -240,9 +286,20 @@ export async function runIntegrationReconcile(): Promise<{
   overdue: number
   superseded: number
   errors: string[]
+  /** How many of `kinds` threw out of `expect()` — distinct from a kind that
+   *  merely truncated (its own `expect()` succeeded, just capped): that one
+   *  also adds a line to `errors`, but it is not a failure. */
+  failed: number
 }> {
   const defs = allObligationKinds()
-  const totals = { kinds: defs.length, missing: 0, overdue: 0, superseded: 0, errors: [] as string[] }
+  const totals = {
+    kinds: defs.length,
+    missing: 0,
+    overdue: 0,
+    superseded: 0,
+    errors: [] as string[],
+    failed: 0
+  }
   for (const def of defs) {
     try {
       const r = await reconcileKind(def, db)
@@ -252,6 +309,7 @@ export async function runIntegrationReconcile(): Promise<{
       if (r.truncated) totals.errors.push(`${def.kind}: expectation set truncated at ${EXPECT_CEILING}`)
     } catch (err) {
       // One kind's broken query must never hide the other twelve.
+      totals.failed++
       totals.errors.push(`${def.kind}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
@@ -265,10 +323,42 @@ export async function dryRunIntegrationReconcile(): Promise<unknown> {
     try {
       const rows = await def.expect(db)
       out.push({ kind: def.kind, expected: rows.length })
-    } catch (err) {
+    } catch {
       out.push({ kind: def.kind, expected: -1 })
-      void err
     }
   }
   return { kinds: out.length, behind: out }
+}
+
+/**
+ * The cron entry point — `server.ts` calls only this, so the visibility
+ * logic lives with the sweep instead of being copied into the registration
+ * site. Logs every entry of `errors` (a truncated kind included — it is
+ * still worth a line, just not a failure), and when EVERY registered kind's
+ * own `expect()` threw, throws itself — so `cron.ts`'s job-run wrapper marks
+ * the tick failed instead of a total-outage night reading identical to a
+ * quiet, healthy one. A tick with zero registered kinds is not a failure.
+ */
+export async function runIntegrationReconcileForCron(app: FastifyInstance): Promise<{
+  kinds: number
+  missing: number
+  overdue: number
+  superseded: number
+  errors: string[]
+  failed: number
+}> {
+  const r = await runIntegrationReconcile()
+  if (r.missing > 0 || r.overdue > 0) {
+    app.log.warn(
+      { missing: r.missing, overdue: r.overdue, superseded: r.superseded },
+      'integration reconcile found unmet obligations'
+    )
+  }
+  for (const e of r.errors) {
+    app.log.warn({ err: e }, 'integration reconcile: a kind reported an error')
+  }
+  if (r.kinds > 0 && r.failed === r.kinds) {
+    throw new Error(`integration reconcile: every registered kind failed — ${r.errors.join('; ')}`)
+  }
+  return r
 }
