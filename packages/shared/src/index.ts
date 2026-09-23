@@ -107,6 +107,8 @@ export type {
   ImportRunStatus,
   ImportStats
 } from './components/imports/types'
+export type { IntegrationObligationsViewProps } from './components/integrations/IntegrationObligationsView'
+export { IntegrationObligationsView } from './components/integrations/IntegrationObligationsView'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export {
   ChangeReasonDialog,
@@ -305,6 +307,11 @@ export {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from './lib/notification-target'
+export type { ObligationFilterState } from './lib/obligation-filters'
+export {
+  obligationQueryParams,
+  toneForOutcome
+} from './lib/obligation-filters'
 export { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from './lib/open-in-tabs'
 export * from './lib/queue-grouping'
 export {
