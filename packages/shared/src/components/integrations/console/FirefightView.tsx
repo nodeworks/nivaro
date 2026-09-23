@@ -62,19 +62,30 @@ export function FirefightView({ onOpenRecord, onJumpTab, focusSignal }: Firefigh
   )
   const errored = problems.filter((s) => s.error).length
 
+  // Where an explain action leads, or null when this host cannot open it
+  // (a host maps admin-only paths to null; no onJumpTab = no tab to move to).
+  const explainTarget = (action: SignalAction) => {
+    const p = action.payload ?? {}
+    if (p.api_id != null) return onJumpTab ? { kind: 'tab' as const } : null
+    if (p.flow != null) {
+      const path = `/flows/${p.flow}`
+      const url = nav.consoleUrl ? nav.consoleUrl(path) : path
+      return url ? { kind: 'url' as const, url } : null
+    }
+    return onJumpTab ? { kind: 'tab' as const } : null
+  }
+
   const onExplain = (action: SignalAction, row: RowView) => {
     const p = action.payload ?? {}
+    const target = explainTarget(action)
+    if (!target) return
     if (p.api_id != null) {
       onJumpTab?.('partners', { apiId: Number(p.api_id) })
       return
     }
-    if (p.flow != null) {
-      const path = `/flows/${p.flow}`
-      const url = nav.consoleUrl ? nav.consoleUrl(path) : path
-      if (url) {
-        if (/^https?:/.test(url)) window.open(url, '_blank', 'noopener')
-        else nav.navigate(url)
-      }
+    if (target.kind === 'url') {
+      if (/^https?:/.test(target.url)) window.open(target.url, '_blank', 'noopener')
+      else nav.navigate(target.url)
       return
     }
     onJumpTab?.('inbound', { ...p, row: row.key })
@@ -216,6 +227,7 @@ export function FirefightView({ onOpenRecord, onJumpTab, focusSignal }: Firefigh
               }
               onOpenRecord={onOpenRecord}
               onExplain={onExplain}
+              canExplain={(a) => explainTarget(a) != null}
             />
           ))}
         </div>

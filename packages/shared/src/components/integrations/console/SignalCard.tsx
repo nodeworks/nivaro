@@ -7,7 +7,13 @@ import { ageOf, agoText, exactTime, TONE_FILL, TONE_SOFT, TONE_TEXT } from './to
 import type { ActionResult, RowView, SignalAction, SignalView } from './types'
 
 /** Actions the server runs for many rows at once — a group can bulk these. */
-const BULKABLE: ReadonlyArray<SignalAction['kind']> = ['retry_submission', 'resend', 'extension']
+const BULKABLE: ReadonlyArray<SignalAction['kind']> = ['retry_submission', 'extension']
+
+const canBulk = (r: RowView) => r.actions.some((a) => BULKABLE.includes(a.kind))
+
+/** A retry's id is the row's own submission, so retries group by kind; an
+ *  extension action is a distinct operation per id. */
+const bulkKey = (a: SignalAction) => (a.kind === 'extension' ? actionKey(a) : a.kind)
 
 const actionKey = (a: SignalAction) => `${a.kind}:${a.id ?? ''}`
 
@@ -18,6 +24,8 @@ export interface SignalCardProps {
   onOpenRecord?: (collection: string, id: string) => void
   /** An 'explain' action — the frame decides where it leads. */
   onExplain?: (action: SignalAction, row: RowView) => void
+  /** False hides an explain action the host has nowhere to open. */
+  canExplain?: (action: SignalAction) => boolean
 }
 
 export function oldestSeen(s: SignalView): string | null {
@@ -31,7 +39,8 @@ export function SignalCard({
   expanded,
   onToggle,
   onOpenRecord,
-  onExplain
+  onExplain,
+  canExplain
 }: SignalCardProps) {
   const critical = signal.severity === 'critical'
   const tone = critical ? 'negative' : 'warning'
@@ -116,6 +125,7 @@ export function SignalCard({
                 rows={signal.rows}
                 onOpenRecord={onOpenRecord}
                 onExplain={onExplain}
+                canExplain={canExplain}
               />
               {signal.count > signal.shown && (
                 <p className='px-4 pb-3 text-[12px] text-muted-foreground'>
@@ -151,12 +161,14 @@ function RowList({
   signal,
   rows,
   onOpenRecord,
-  onExplain
+  onExplain,
+  canExplain
 }: {
   signal: SignalView
   rows: RowView[]
   onOpenRecord?: (collection: string, id: string) => void
   onExplain?: (action: SignalAction, row: RowView) => void
+  canExplain?: (action: SignalAction) => boolean
 }) {
   const act = useSignalAction()
   const [results, setResults] = useState<Record<string, ActionResult>>({})
@@ -233,6 +245,7 @@ function RowList({
       }
       onAction={(a) => onAction(a, r)}
       onOpenRecord={onOpenRecord}
+      canExplain={canExplain}
     />
   )
 
@@ -243,29 +256,28 @@ function RowList({
   return (
     <div className='pb-1'>
       {groups.map((g) => {
-        const bulkable = g.rows.some((r) => r.actions.some((a) => BULKABLE.includes(a.kind)))
-        const inGroup = g.rows.filter((r) => selected.has(r.key))
-        const all = inGroup.length === g.rows.length
-        // Actions every selected row offers — the only ones safe to bulk.
-        const shared =
-          inGroup.length === 0
-            ? []
-            : inGroup[0].actions.filter(
-                (a) =>
-                  BULKABLE.includes(a.kind) &&
-                  // A retry's id is the row's own submission; only an
-                  // extension action must match by id.
-                  inGroup.every((r) =>
-                    r.actions.some(
-                      (b) => b.kind === a.kind && (a.kind !== 'extension' || b.id === a.id)
-                    )
-                  )
-              )
-        const sharedKinds = [
-          ...new Map(
-            shared.map((a) => [a.kind === 'extension' ? actionKey(a) : a.kind, a])
-          ).values()
-        ]
+        // Only rows with a bulk-able action can be selected — select-all and
+        // "all selected" are judged against that subset.
+        const eligible = g.rows.filter(canBulk)
+        const bulkable = eligible.length > 0
+        const inGroup = eligible.filter((r) => selected.has(r.key))
+        const all = bulkable && inGroup.length === eligible.length
+        // One button per action the selection offers, run on exactly the
+        // selected rows that offer it — a group mixing retries and extension
+        // actions gets a button for each.
+        const bulk = new Map<string, { action: SignalAction; rows: RowView[] }>()
+        for (const r of inGroup) {
+          const seen = new Set<string>()
+          for (const a of r.actions) {
+            if (!BULKABLE.includes(a.kind)) continue
+            const k = bulkKey(a)
+            if (seen.has(k)) continue
+            seen.add(k)
+            const b = bulk.get(k) ?? { action: a, rows: [] }
+            b.rows.push(r)
+            bulk.set(k, b)
+          }
+        }
         return (
           <div key={g.key} data-ic-group={g.key} className='mt-2 first:mt-1'>
             <div className='flex min-h-9 items-center gap-2.5 bg-muted/60 px-4 py-1.5'>
@@ -279,7 +291,7 @@ function RowList({
                   onChange={(e) =>
                     setSelected((s) => {
                       const n = new Set(s)
-                      for (const r of g.rows) {
+                      for (const r of eligible) {
                         if (e.target.checked) n.add(r.key)
                         else n.delete(r.key)
                       }
@@ -296,22 +308,21 @@ function RowList({
                 {g.rows.length}
               </span>
               <span className='ml-auto flex items-center gap-1'>
-                {inGroup.length > 0 &&
-                  sharedKinds.map((a) => (
-                    <button
-                      key={actionKey(a)}
-                      type='button'
-                      data-ic-bulk-action={a.kind}
-                      onClick={() => {
-                        // Each row carries its own id for a retry — the server
-                        // resolves them per row, so one action shape is enough.
-                        void run(a, inGroup)
-                      }}
-                      className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground hover:bg-muted'
-                    >
-                      {a.label} {inGroup.length}
-                    </button>
-                  ))}
+                {[...bulk.entries()].map(([k, b]) => (
+                  <button
+                    key={k}
+                    type='button'
+                    data-ic-bulk-action={b.action.kind}
+                    onClick={() => {
+                      // Each row carries its own id for a retry — the server
+                      // resolves them per row, so one action shape is enough.
+                      void run(b.action, b.rows)
+                    }}
+                    className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground hover:bg-muted'
+                  >
+                    {b.action.label} {b.rows.length}
+                  </button>
+                ))}
                 <SnoozeMenu
                   signal={signal.id}
                   signalLabel={signal.label}
@@ -343,7 +354,8 @@ function SignalRowView({
   selected,
   onSelect,
   onAction,
-  onOpenRecord
+  onOpenRecord,
+  canExplain
 }: {
   signal: SignalView
   row: RowView
@@ -354,11 +366,15 @@ function SignalRowView({
   onSelect: (on: boolean) => void
   onAction: (a: SignalAction) => void
   onOpenRecord?: (collection: string, id: string) => void
+  canExplain?: (action: SignalAction) => boolean
 }) {
   const since = row.since ?? row.first_seen
   // 'open' duplicates the record link — show it as a button only when the
   // row has no record to link.
-  const buttons = row.actions.filter((a) => !(a.kind === 'open' && row.record))
+  const buttons = row.actions.filter(
+    (a) =>
+      !(a.kind === 'open' && row.record) && !(a.kind === 'explain' && canExplain?.(a) === false)
+  )
   return (
     <li data-ic-row={row.key} className='flex gap-3 px-4 py-2.5'>
       {selectable && (
@@ -368,7 +384,7 @@ function SignalRowView({
           onChange={(e) => onSelect(e.target.checked)}
           aria-label={`Select ${row.title}`}
           className='mt-1 h-3.5 w-3.5 shrink-0 accent-[rgb(var(--nvr-cyan-rgb))]'
-          disabled={!row.actions.some((a) => BULKABLE.includes(a.kind))}
+          disabled={!canBulk(row)}
         />
       )}
       <div className='min-w-0 flex-1'>
@@ -482,10 +498,26 @@ function RowMeta({
 
 function SnoozedList({ signal }: { signal: SignalView }) {
   const { remove } = useSnooze()
+  // A group or whole-signal snooze covers several rows under ONE id —
+  // removing it wakes them all, so the button has to say so.
+  const covered = new Map<number, RowView[]>()
+  for (const r of signal.snoozed) {
+    if (!r.snooze) continue
+    const list = covered.get(r.snooze.id) ?? []
+    list.push(r)
+    covered.set(r.snooze.id, list)
+  }
+  const scopeOf = (rows: RowView[]) => {
+    const groups = new Set(rows.map((x) => x.group ?? ''))
+    return groups.size === 1 && rows[0].group
+      ? `everything in ${rows[0].group_label ?? rows[0].group}`
+      : `all of “${signal.label}”`
+  }
   return (
     <ul className='divide-y divide-border border-t border-border bg-muted/30'>
       {signal.snoozed.map((r) => {
         const s = r.snooze
+        const shared = s ? (covered.get(s.id) ?? []) : []
         const until = s?.until_change
           ? 'until it changes'
           : s?.until
@@ -502,6 +534,7 @@ function SnoozedList({ signal }: { signal: SignalView }) {
               <p className='truncate text-[12.5px] text-foreground'>{r.title}</p>
               <p className='text-[11.5px] text-muted-foreground'>
                 Snoozed {until}
+                {shared.length > 1 ? ` with ${scopeOf(shared)}` : ''}
                 {s?.note ? ` — “${s.note}”` : ''}
               </p>
             </div>
@@ -509,11 +542,17 @@ function SnoozedList({ signal }: { signal: SignalView }) {
               <button
                 type='button'
                 data-ic-unsnooze={s.id}
+                data-ic-unsnooze-count={shared.length}
+                data-tip={
+                  shared.length > 1
+                    ? `This snooze covers ${shared.length} problems (${scopeOf(shared)}) — they all come back`
+                    : undefined
+                }
                 disabled={remove.isPending && remove.variables === s.id}
                 onClick={() => remove.mutate(s.id)}
                 className='h-7 shrink-0 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-60'
               >
-                Unsnooze
+                {shared.length > 1 ? `Unsnooze all ${shared.length}` : 'Unsnooze'}
               </button>
             )}
           </li>
