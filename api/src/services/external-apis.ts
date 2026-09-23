@@ -242,7 +242,11 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
 
 // ─── Auth resolution ──────────────────────────────────────────────────────────
 
-async function resolveAuth(
+/** Exported so the /external-apis test route authenticates EXACTLY like a
+ *  real call — its own copy required `client_id` and never sent
+ *  `token_headers`, so every header-credential (SAT-style) API answered 401
+ *  from the Test button while the flow path worked. */
+export async function resolveAuth(
   authType: AuthType,
   cfg: Record<string, unknown> | null
 ): Promise<{ headers: Record<string, string>; queryParams: Record<string, string> }> {

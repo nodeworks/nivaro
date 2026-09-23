@@ -12,6 +12,7 @@ import {
 import {
   instanceOverrideFor,
   mockConfigFor,
+  resolveAuth,
   resolveInstanceRow,
   writeApiCallLog
 } from '../services/external-apis.js'
@@ -411,72 +412,7 @@ function mergeAuthConfig(
   return out
 }
 
-// ─── Auth resolution for test calls ─────────────────────────────────────────
-
-interface ResolvedAuth {
-  headers: Record<string, string>
-  queryParams: Record<string, string>
-}
-
-async function resolveAuth(
-  authType: AuthType,
-  cfg: Record<string, unknown> | null
-): Promise<ResolvedAuth> {
-  const headers: Record<string, string> = {}
-  const queryParams: Record<string, string> = {}
-
-  switch (authType) {
-    case 'bearer': {
-      const c = cfg as unknown as BearerConfig | null
-      if (c?.token) headers.Authorization = `Bearer ${c.token}`
-      break
-    }
-    case 'api_key': {
-      const c = cfg as unknown as ApiKeyConfig | null
-      if (c?.value) {
-        const paramName = c.param_name || c.key
-        if (c.in === 'query') {
-          if (paramName) queryParams[paramName] = c.value
-        } else if (paramName) {
-          headers[paramName] = c.value
-        }
-      }
-      break
-    }
-    case 'basic': {
-      const c = cfg as unknown as BasicConfig | null
-      if (c?.username != null) {
-        const encoded = Buffer.from(`${c.username}:${c.password ?? ''}`).toString('base64')
-        headers.Authorization = `Basic ${encoded}`
-      }
-      break
-    }
-    case 'oauth2_cc': {
-      const c = cfg as unknown as OAuth2CCConfig | null
-      if (c?.token_url && c.client_id) {
-        const tokenRes = await fetch(c.token_url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            grant_type: 'client_credentials',
-            client_id: c.client_id,
-            client_secret: c.client_secret ?? '',
-            ...(c.scope ? { scope: c.scope } : {})
-          })
-        })
-        const tokenBody = (await tokenRes.json()) as { access_token?: string }
-        if (tokenBody.access_token) {
-          headers.Authorization = `Bearer ${tokenBody.access_token}`
-        }
-      }
-      break
-    }
-    default:
-      break
-  }
-
-  return { headers, queryParams }
-}
+// Auth for test calls comes from the service's resolveAuth (see its export note).
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
 

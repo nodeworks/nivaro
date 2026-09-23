@@ -455,6 +455,11 @@ export interface ResponseSuccessConfig {
 
 const DEFAULT_SUCCESS_KEYS = ['status', 'api_status', 'result']
 const DEFAULT_SUCCESS_VALUES = new Set(['OK', 'SUCCESS', 'SUCCEEDED', 'ACCEPTED'])
+/** Boolean acknowledgements — `{"status": true}` / `{"success": true}` /
+ *  `{"ok": true}`. A partner that answers `status: true` said yes just as
+ *  loudly as one that answers `"OK"`; only the string form was recognized
+ *  before, so those pushes parked at `pending` after a real success. */
+const DEFAULT_SUCCESS_BOOL_KEYS = ['status', 'success', 'ok']
 
 export function detectBodyAcceptance(
   cfg: ResponseSuccessConfig | null | undefined,
@@ -470,8 +475,10 @@ export function detectBodyAcceptance(
     })
   }
   if (body == null || typeof body !== 'object' || Array.isArray(body)) return false
+  const obj = body as Record<string, unknown>
+  if (DEFAULT_SUCCESS_BOOL_KEYS.some((k) => obj[k] === true)) return true
   return DEFAULT_SUCCESS_KEYS.some((k) => {
-    const v = (body as Record<string, unknown>)[k]
+    const v = obj[k]
     return typeof v === 'string' && DEFAULT_SUCCESS_VALUES.has(v.trim().toUpperCase())
   })
 }
