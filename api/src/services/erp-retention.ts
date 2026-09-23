@@ -29,6 +29,22 @@ export async function pruneErpSubmissionPayloads(): Promise<{
   const days = await erpPayloadRetentionDays()
   if (!days) return { days: null, blanked: 0, more: false }
   const cutoff = new Date(Date.now() - days * 86_400_000)
+  // Attempt history (migration 347) holds the same bytes per retry — same window.
+  for (let i = 0; i < MAX_BATCHES; i++) {
+    const res = (await db
+      .raw(
+        `UPDATE TOP (${BATCH}) nivaro_erp_submission_attempts
+            SET payload = NULL, response = NULL
+          WHERE recorded_at < ?
+            AND (payload IS NOT NULL OR response IS NOT NULL)`,
+        [cutoff]
+      )
+      .catch(() => 0)) as unknown
+    const n = Array.isArray(res)
+      ? Number(res[0] ?? 0)
+      : Number((res as { rowCount?: number })?.rowCount ?? 0)
+    if (!(n >= BATCH)) break
+  }
   let blanked = 0
   for (let i = 0; i < MAX_BATCHES; i++) {
     const res = (await db.raw(

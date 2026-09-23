@@ -335,6 +335,128 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     }
   )
 
+  // Every attempt of one submission, oldest first (migration 347). Attempts
+  // made before history was kept have no row; the submission itself always
+  // stands in for its newest attempt, and `unrecorded` says how many earlier
+  // ones are gone.
+  app.get<{ Params: { id: string } }>(
+    '/:id/attempts',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Invalid id' })
+      const row = (await db('nivaro_erp_submissions').where({ id }).first()) as
+        | ErpSubmissionRow
+        | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      if (!(await can(req.user!, 'read', row.collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const stored = (await db('nivaro_erp_submission_attempts')
+        .where({ submission_id: id })
+        .orderBy('attempt', 'asc')
+        .catch(() => [])) as Array<{
+        attempt: number
+        status: string
+        http_status: number | null
+        payload: string | null
+        response: string | null
+        error: string | null
+        source: string
+        recorded_at: Date
+      }>
+      const toAttempt = (a: (typeof stored)[number]) => {
+        const p = parseJson<StoredPayload>(a.payload)
+        return {
+          attempt: a.attempt,
+          status: a.status,
+          http_status: a.http_status,
+          error: a.error,
+          source: a.source,
+          at: a.recorded_at,
+          endpoint_path: p?.endpoint_path ?? null,
+          payload: p?.body ?? null,
+          response: parseJson(a.response) ?? a.response ?? null
+        }
+      }
+      const attempts = stored.map(toAttempt)
+      const newest = Math.max(1, row.attempts ?? 1)
+      if (!attempts.some((a) => a.attempt === newest)) {
+        const current = serialize(row)
+        attempts.push({
+          attempt: newest,
+          status: current.status,
+          http_status: null,
+          error: current.last_error,
+          source: 'current',
+          at: row.updated_at ?? row.created_at,
+          endpoint_path: current.endpoint_path,
+          payload: current.payload,
+          response: current.response
+        })
+      }
+      // Attempts that predate this history: the per-call log (retries and
+      // transition sends always write one) usually still holds them. Match
+      // on the same API, the submission's time window and an identical body.
+      if (attempts.length < newest) {
+        const sentBody = serialize(row).payload
+        const canon = (v: unknown) => {
+          try {
+            return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v)
+          } catch {
+            return String(v)
+          }
+        }
+        const want = sentBody != null ? canon(sentBody) : null
+        const from = new Date(new Date(row.created_at).getTime() - 10_000)
+        const to = new Date(new Date(row.updated_at ?? row.created_at).getTime() + 10_000)
+        const logs = want
+          ? ((await db('nivaro_external_api_logs')
+              .where({ api_id: row.external_api })
+              .whereIn('triggered_by', ['erp-submission', 'transition-action'])
+              .whereBetween('created_at', [from, to])
+              .orderBy('id', 'desc')
+              .limit(50)
+              .select('request_body', 'response_status', 'response_body', 'error', 'created_at')
+              .catch(() => [])) as Array<{
+              request_body: string | null
+              response_status: number | null
+              response_body: string | null
+              error: string | null
+              created_at: Date
+            }>)
+          : []
+        const near = (t: Date) =>
+          attempts.some((a) => Math.abs(new Date(a.at).getTime() - new Date(t).getTime()) < 5_000)
+        const taken = new Set(attempts.map((a) => a.attempt))
+        let next = newest
+        for (const log of logs) {
+          if (!log.request_body || canon(log.request_body) !== want || near(log.created_at))
+            continue
+          while (next >= 1 && taken.has(next)) next--
+          if (next < 1) break
+          const failed = log.error != null || (log.response_status ?? 0) >= 400
+          attempts.push({
+            attempt: next,
+            status: failed ? 'failed' : 'sent',
+            http_status: log.response_status,
+            error:
+              log.error ?? (failed && log.response_status ? `HTTP ${log.response_status}` : null),
+            source: 'call-log',
+            at: log.created_at,
+            endpoint_path: serialize(row).endpoint_path,
+            payload: sentBody,
+            response: parseJson(log.response_body) ?? log.response_body ?? null
+          })
+          taken.add(next)
+        }
+        attempts.sort((a, b) => a.attempt - b.attempt)
+      }
+      const unrecorded = Math.max(0, newest - attempts.length)
+      return { data: { attempts: attempts.reverse(), total: newest, unrecorded } }
+    }
+  )
+
   // Retry a submission — re-sends the same stored payload
   app.post<{ Params: { id: string } }>(
     '/:id/retry',

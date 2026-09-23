@@ -112,6 +112,11 @@ export async function applySendOutcome(opts: {
   const extra = Object.fromEntries(
     Object.entries(opts.extra ?? {}).filter(([k]) => !OWNED_COLUMNS.has(k))
   )
+  const attempted = opts.attempted !== false
+  // The submission row is about to be overwritten — keep what it held as the
+  // previous attempt when nobody recorded that attempt yet (its first send
+  // went straight onto the row).
+  const prior = attempted ? await captureSubmissionRow(opts.submissionId, opts.priorAttempts) : null
   await db('nivaro_erp_submissions')
     .where({ id: opts.submissionId })
     .update({
@@ -126,4 +131,87 @@ export async function applySendOutcome(opts: {
       updated_at: new Date(),
       ...extra
     })
+  if (attempted) {
+    await recordAttempt({
+      submission_id: opts.submissionId,
+      attempt: opts.priorAttempts + 1,
+      status: opts.outcome.status,
+      http_status: opts.outcome.http_status ?? null,
+      payload: prior?.payload ?? null,
+      response: serializeResponseBody(opts.outcome.response),
+      error: opts.outcome.error,
+      source: 'send',
+      recorded_at: new Date()
+    })
+  }
+}
+
+interface AttemptRow {
+  submission_id: number
+  attempt: number
+  status: string
+  http_status: number | null
+  payload: string | null
+  response: string | null
+  error: string | null
+  source: 'send' | 'captured'
+  recorded_at: Date
+}
+
+async function recordAttempt(row: AttemptRow): Promise<void> {
+  try {
+    await db('nivaro_erp_submission_attempts').insert({
+      ...row,
+      error: row.error ? row.error.slice(0, 2000) : null
+    })
+  } catch {
+    /* attempt history is bookkeeping — never fail a send because of it */
+  }
+}
+
+/**
+ * Snapshot the submission row as attempt `priorAttempts` when that attempt
+ * has no history row yet. Returns the row's stored payload either way, so the
+ * next attempt records what it re-sent.
+ */
+async function captureSubmissionRow(
+  submissionId: number,
+  priorAttempts: number
+): Promise<{ payload: string | null } | null> {
+  try {
+    const row = (await db('nivaro_erp_submissions')
+      .where({ id: submissionId })
+      .first('payload', 'response', 'status', 'last_error', 'updated_at', 'created_at')) as
+      | {
+          payload: string | null
+          response: string | null
+          status: string
+          last_error: string | null
+          updated_at: Date | null
+          created_at: Date | null
+        }
+      | undefined
+    if (!row) return null
+    if (priorAttempts >= 1) {
+      const have = await db('nivaro_erp_submission_attempts')
+        .where({ submission_id: submissionId, attempt: priorAttempts })
+        .first('id')
+      if (!have) {
+        await recordAttempt({
+          submission_id: submissionId,
+          attempt: priorAttempts,
+          status: row.status,
+          http_status: null,
+          payload: row.payload,
+          response: row.response,
+          error: row.last_error,
+          source: 'captured',
+          recorded_at: row.updated_at ?? row.created_at ?? new Date()
+        })
+      }
+    }
+    return { payload: row.payload }
+  } catch {
+    return null
+  }
 }

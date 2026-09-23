@@ -59,6 +59,132 @@ function StatusPill({ status }: { status: string }) {
   )
 }
 
+interface SubmissionAttempt {
+  attempt: number
+  status: string
+  http_status: number | null
+  error: string | null
+  source: string
+  at: string
+  endpoint_path: string | null
+  payload: unknown
+  response: unknown
+}
+
+function CodeBlock({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div>
+      <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+        {label}
+      </p>
+      {value ? (
+        <pre className='max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[10.5px] leading-relaxed text-slate-700 dark:bg-black/20 dark:text-slate-300'>
+          {value}
+        </pre>
+      ) : (
+        <p className='text-[11.5px] italic text-slate-400'>Nothing stored</p>
+      )}
+    </div>
+  )
+}
+
+function AttemptItem({ a, latest }: { a: SubmissionAttempt; latest: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <li
+      className='rounded-md border border-slate-200 dark:border-border'
+      data-erp-attempt={a.attempt}
+    >
+      <button
+        type='button'
+        onClick={() => setOpen(!open)}
+        className='flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left'
+      >
+        <span className='w-16 shrink-0 text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+          Attempt {a.attempt}
+        </span>
+        <StatusPill status={a.status} />
+        {a.http_status != null && (
+          <span className='shrink-0 font-mono text-[10.5px] text-slate-500 dark:text-slate-400'>
+            HTTP {a.http_status}
+          </span>
+        )}
+        {latest && (
+          <span className='shrink-0 rounded bg-slate-100 px-1 text-[10px] text-slate-500 dark:bg-muted dark:text-slate-400'>
+            latest
+          </span>
+        )}
+        <span className='min-w-0 flex-1 truncate text-[11px] text-red-600 dark:text-red-400'>
+          {a.error ?? ''}
+        </span>
+        <span
+          className='shrink-0 text-[11px] text-slate-400'
+          title={new Date(a.at).toLocaleString()}
+        >
+          {new Date(a.at).toLocaleString()}
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform',
+            open && 'rotate-180'
+          )}
+        />
+      </button>
+      {open && (
+        <div className='space-y-2 border-t border-slate-100 px-2.5 py-2 dark:border-border'>
+          {a.error && (
+            <p className='rounded bg-red-50 px-2 py-1.5 text-[11.5px] text-red-700 dark:bg-red-500/10 dark:text-red-400'>
+              {a.error}
+            </p>
+          )}
+          <CodeBlock label='Request' value={pretty(a.payload)} />
+          <CodeBlock label='Response' value={pretty(a.response)} />
+        </div>
+      )}
+    </li>
+  )
+}
+
+function AttemptHistory({ submissionId }: { submissionId: number }) {
+  const client = useNivaroClient()
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['erp-submission-attempts', submissionId],
+    queryFn: () =>
+      client
+        .request<{ data: { attempts: SubmissionAttempt[]; total: number; unrecorded: number } }>(
+          get(`/erp-submissions/${submissionId}/attempts`)
+        )
+        .then((r) => r.data),
+    staleTime: 15_000
+  })
+  return (
+    <div data-erp-attempts>
+      <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+        Attempt history
+      </p>
+      {isLoading ? (
+        <div className='h-8 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]' />
+      ) : isError || !data ? (
+        <p className='text-[11.5px] italic text-slate-400'>Could not load the attempt history.</p>
+      ) : (
+        <>
+          <ul className='space-y-1.5'>
+            {data.attempts.map((a, i) => (
+              <AttemptItem key={a.attempt} a={a} latest={i === 0} />
+            ))}
+          </ul>
+          {data.unrecorded > 0 && (
+            <p className='mt-1.5 text-[11px] text-slate-400' data-erp-attempts-unrecorded>
+              {data.unrecorded} earlier attempt{data.unrecorded !== 1 ? 's were' : ' was'} made
+              before attempt history was kept — only the outcome count survives.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function RequestRow({
   sub,
   onRetry,
@@ -124,28 +250,12 @@ function RequestRow({
               {sub.last_error}
             </p>
           )}
-          {payload && (
-            <div>
-              <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                Request payload
-              </p>
-              <pre className='max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[10.5px] leading-relaxed text-slate-700 dark:bg-black/20 dark:text-slate-300'>
-                {payload}
-              </pre>
-            </div>
-          )}
-          <div>
-            <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-              Response
-            </p>
-            {response ? (
-              <pre className='max-h-48 overflow-auto rounded bg-slate-50 p-2 font-mono text-[10.5px] leading-relaxed text-slate-700 dark:bg-black/20 dark:text-slate-300'>
-                {response}
-              </pre>
-            ) : (
-              <p className='text-[11.5px] italic text-slate-400'>No response body stored</p>
-            )}
-          </div>
+          <CodeBlock
+            label={sub.attempts > 1 ? 'Latest request' : 'Request payload'}
+            value={payload}
+          />
+          <CodeBlock label={sub.attempts > 1 ? 'Latest response' : 'Response'} value={response} />
+          {sub.attempts > 1 && <AttemptHistory submissionId={sub.id} />}
           {sub.status === 'failed' && (
             <Button size='sm' variant='outline' disabled={retrying} onClick={() => onRetry(sub.id)}>
               {retrying ? (
@@ -164,8 +274,9 @@ function RequestRow({
 
 /**
  * Item-header chip summarizing every external (ERP) request this record has
- * sent — badge counts by outcome, click for the full request/response log.
- * Renders nothing when the record has no submissions. Shares the
+ * sent — badge counts by outcome, click for the full request/response log
+ * (each request drills into every attempt). Always renders: a skeleton while
+ * loading, a quiet 'No external requests' when nothing was sent. Shares the
  * ['erp-submissions', collection, item] cache with ErpFailureBanner, so
  * transition writebacks refresh both.
  */
@@ -179,7 +290,7 @@ export function ExternalRequestsChip({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['erp-submissions', collection, String(itemId)],
     queryFn: () =>
       client
@@ -199,6 +310,7 @@ export function ExternalRequestsChip({
       if (status && status !== 'failed') toast.success('Submission retried successfully')
       else toast.error('Retry failed — expand the request for the error')
       void qc.invalidateQueries({ queryKey: ['erp-submissions', collection, String(itemId)] })
+      void qc.invalidateQueries({ queryKey: ['erp-submission-attempts'] })
       // Same server-side sync as ErpFailureBanner's retry — the submission's
       // linked obligation moves right away (propagateSubmissionStatus), so
       // IntegrationStatusBanner needs to hear about it too.
@@ -210,7 +322,29 @@ export function ExternalRequestsChip({
   })
 
   const subs = data ?? []
-  if (subs.length === 0) return null
+  if (isLoading) {
+    return (
+      <span
+        className='flex shrink-0 items-center gap-1.5 self-center rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400 dark:border-border'
+        data-nvr-external-requests='loading'
+      >
+        <Satellite className='h-3.5 w-3.5 opacity-60' />
+        <span className='h-2.5 w-16 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]' />
+      </span>
+    )
+  }
+  if (subs.length === 0) {
+    return (
+      <span
+        className='flex shrink-0 items-center gap-1.5 self-center rounded-md border border-dashed border-slate-200 px-2 py-1 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'
+        data-nvr-external-requests='none'
+        data-tip='Nothing from this record has been sent to an outside system yet. Every push to a connected system will be listed here.'
+      >
+        <Satellite className='h-3.5 w-3.5 opacity-60' />
+        No external requests
+      </span>
+    )
+  }
   const ok = subs.filter((s) => s.status === 'accepted').length
   const failed = subs.filter((s) => s.status === 'failed').length
   const pending = subs.length - ok - failed

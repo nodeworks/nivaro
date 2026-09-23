@@ -199,6 +199,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_comment_mentions',
   'nivaro_tasks',
   'nivaro_erp_submissions',
+  'nivaro_erp_submission_attempts',
   'nivaro_flow_runs',
   'nivaro_external_api_logs',
   'nivaro_issues',
