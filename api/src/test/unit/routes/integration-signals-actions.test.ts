@@ -8,11 +8,17 @@ import {
 
 describe('planActionTargets', () => {
   const rows = [
-    { key: 'a', title: 'A', actions: [{ kind: 'retry_submission' as const, label: 'Retry', id: '10' }] },
+    {
+      key: 'a',
+      title: 'A',
+      actions: [{ kind: 'retry_submission' as const, label: 'Retry', id: '10' }]
+    },
     { key: 'b', title: 'B', actions: [{ kind: 'open' as const, label: 'Open' }] }
   ]
   it('only targets rows that actually offer the requested action', () => {
-    expect(planActionTargets(rows, ['a', 'b', 'zzz'], { kind: 'retry_submission', label: 'Retry' })).toEqual({
+    expect(
+      planActionTargets(rows, ['a', 'b', 'zzz'], { kind: 'retry_submission', label: 'Retry' })
+    ).toEqual({
       targets: [rows[0]],
       skipped: [
         { key: 'b', ok: false, message: 'This row does not offer that action' },
@@ -44,11 +50,13 @@ describe('validateSnoozeScope', () => {
   it('rejects until_change without a row_key (group or whole-signal scope)', () => {
     expect(validateSnoozeScope({ until_change: true })).toEqual({
       ok: false,
-      error: '"Until it changes" applies to a single row — pick a date for a group or the whole signal'
+      error:
+        '"Until it changes" applies to a single row — pick a date for a group or the whole signal'
     })
     expect(validateSnoozeScope({ until_change: true, row_key: null })).toEqual({
       ok: false,
-      error: '"Until it changes" applies to a single row — pick a date for a group or the whole signal'
+      error:
+        '"Until it changes" applies to a single row — pick a date for a group or the whole signal'
     })
   })
   it('accepts until_change scoped to a single row, and anything when until_change is unset', () => {
@@ -71,6 +79,8 @@ describe('fillRecordLabels', () => {
       [{ rows, snoozed: [] }],
       async (_c, ids) => new Map(ids.map((id) => [id, `R-${id}`]))
     )
-    expect(rows.every((r) => (r.record as { label?: string }).label === `R-${r.record.id}`)).toBe(true)
+    expect(rows.every((r) => (r.record as { label?: string }).label === `R-${r.record.id}`)).toBe(
+      true
+    )
   })
 })
