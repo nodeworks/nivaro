@@ -22,7 +22,11 @@ import {
   evaluateTransitionRequirements,
   IDENTIFIER_RE
 } from '../services/transition-requirements.js'
-import { TransitionBlockedError } from '../services/workflow-actions.js'
+import {
+  pickRerunAction,
+  runTransitionActions,
+  TransitionBlockedError
+} from '../services/workflow-actions.js'
 import {
   type ConditionRule,
   evalConditionRule,
@@ -2263,6 +2267,63 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           new_state: newStateObj ? formatState(newStateObj as unknown as WorkflowState) : null
         }
       })
+    }
+  )
+
+  // Re-run ONE push (erp_submit) action of a transition for a record WITHOUT
+  // moving its state — the Integrations console "resend to this partner"
+  // affordance, generic for any partner. runTransitionActions never touches
+  // nivaro_workflow_instances/nivaro_workflow_history — only the record's own
+  // collection (writebacks), nivaro_erp_submissions and the obligation
+  // ledger — so this can never advance or roll back the pipeline.
+  app.post(
+    '/instance/:collection/:item/actions/rerun',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { collection, item } = req.params as { collection: string; item: string }
+      const b = (req.body ?? {}) as { transition_id?: string; action_index?: number }
+      const t = (await db('nivaro_workflow_transitions')
+        .where({ id: b.transition_id })
+        .first('id', 'label', 'actions', 'to_state')) as
+        | { id: string; label: string; actions: string | null; to_state: string }
+        | undefined
+      if (!t) return reply.code(404).send({ error: 'Transition not found' })
+      const pick = pickRerunAction(t.actions, Number(b.action_index))
+      if (!pick.ok) return reply.code(400).send({ error: pick.error })
+      const inst = await db('nivaro_workflow_instances')
+        .where({ collection, item: String(item) })
+        .first('current_state')
+      // Re-render the action's `state` scope from the record's CURRENT state
+      // (never `t.to_state`) — a re-run is not the transition happening again,
+      // so the payload must reflect where the record actually sits.
+      const state = inst?.current_state
+        ? await db('nivaro_workflow_states').where({ id: inst.current_state }).first('key', 'label')
+        : null
+      const before = (await db('nivaro_erp_submissions')
+        .where({ collection, item: String(item) })
+        .max('id as m')
+        .first()) as { m: number | null }
+      await runTransitionActions({
+        transition: t,
+        instance: { collection, item: String(item) },
+        newStateObj: state ? { key: state.key, label: state.label } : null,
+        userId: req.user?.id ?? null,
+        onlyIndex: Number(b.action_index)
+      })
+      const sub = await db('nivaro_erp_submissions')
+        .where({ collection, item: String(item) })
+        .where('id', '>', before?.m ?? 0)
+        .orderBy('id', 'desc')
+        .first('id', 'status', 'last_error')
+      await logActivity({
+        action: 'transition-action-rerun',
+        collection,
+        item: String(item),
+        user: req.user?.id,
+        req,
+        comment: `${t.label} action #${b.action_index} → ${sub ? sub.status : 'no push (guard or push_when skipped it)'}`
+      })
+      return reply.send({ data: { submission: sub ?? null } })
     }
   )
 

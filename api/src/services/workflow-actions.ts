@@ -209,6 +209,26 @@ function parseActions(raw: string | null | undefined): TransitionActionDef[] {
   }
 }
 
+/**
+ * Pick a single action off a transition's `actions` JSON for a targeted
+ * re-run (the Integrations console "resend this push" affordance) — only a
+ * push (`erp_submit`) may be re-run this way; `create_record` mutates other
+ * collections and re-running it on demand would duplicate those rows.
+ */
+export function pickRerunAction(
+  actionsJson: string | null,
+  index: number
+): { ok: true; action: { type: string } & Record<string, unknown> } | { ok: false; error: string } {
+  const all = parseActions(actionsJson) as unknown as Array<
+    { type: string } & Record<string, unknown>
+  >
+  const a = Number.isInteger(index) ? all[index] : undefined
+  if (!a) return { ok: false, error: 'No action at that position' }
+  if (a.type !== 'erp_submit')
+    return { ok: false, error: 'Only push (erp_submit) actions can be re-run' }
+  return { ok: true, action: a }
+}
+
 // nivaro_users is the ONLY system collection reachable from context queries —
 // submissions routinely need requester/contact emails. Fields are always an
 // explicit identifier-checked list, never *.
@@ -548,14 +568,20 @@ export async function runTransitionActions(opts: {
    *  returns blockedError), 'post' runs the rest. Default runs everything —
    *  legacy callers keep their behavior. */
   phase?: 'blocking' | 'post'
+  /** Run ONLY `parseActions(actions)[onlyIndex]`, ignoring `phase` — a
+   *  targeted re-run of one push action ("resend this to the partner") with
+   *  the instance's state left untouched by the caller. */
+  onlyIndex?: number
 }): Promise<{ blockedError: string | null }> {
   const all = parseActions(opts.transition.actions)
   const actions =
-    opts.phase === 'blocking'
-      ? all.filter((a) => a.blocking === true)
-      : opts.phase === 'post'
-        ? all.filter((a) => a.blocking !== true)
-        : all
+    opts.onlyIndex != null
+      ? all.filter((_, i) => i === opts.onlyIndex)
+      : opts.phase === 'blocking'
+        ? all.filter((a) => a.blocking === true)
+        : opts.phase === 'post'
+          ? all.filter((a) => a.blocking !== true)
+          : all
   if (actions.length === 0) return { blockedError: null }
 
   const { collection, item } = opts.instance
