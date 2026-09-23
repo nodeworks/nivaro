@@ -36,54 +36,27 @@ export async function up(knex: Knex): Promise<void> {
       // sent | skipped | failed | pending | overdue | missing | superseded
       t.string('outcome', 20).notNullable()
       t.string('reason', 500).nullable()
-      // FK to nivaro_erp_submissions, NO ACTION — that's the fix for the
-      // multi-cascade-path risk (MSSQL error 1785), not a reason to go
-      // FK-free. Same shape as nivaro_queue_items.source_id (migration 128):
-      // nivaro_erp_submissions already cascades into nivaro_external_apis,
-      // so this FK stays NO ACTION rather than CASCADE, but it IS a real
-      // constraint.
-      t.integer('submission_id')
-        .nullable()
-        .references('id')
-        .inTable('nivaro_erp_submissions')
-        .onDelete('NO ACTION')
+      // No FK: nivaro_erp_submissions already cascades into
+      // nivaro_external_apis, and a second cascade path is MSSQL error 1785.
+      t.integer('submission_id').nullable()
       t.string('signature', 64).nullable()
       t.text('detail').nullable()
       t.dateTime('resolved_at').nullable()
-      // No FK: a deleted user must never block a ledger write.
+      // No FK either — a deleted user must never block a ledger write.
       t.uuid('resolved_by').nullable()
       t.dateTime('notified_at').nullable()
       t.dateTime('created_at').notNullable().defaultTo(knex.fn.now())
       t.index(['api', 'outcome', 'due_at'], 'ix_integration_obligations_api_outcome_due')
+      t.index(['collection', 'item', 'kind'], 'ix_integration_obligations_record')
     })
   }
-
-  // knex's schema builder has no way to put DESC on an index column, so
-  // ix_integration_obligations_record (collection, item, kind, id DESC) is
-  // raw SQL, guarded independently of the table's own existence check —
-  // same pattern as migrations 159/181/331/342.
-  await knex.raw(`
-    IF NOT EXISTS (
-      SELECT 1 FROM sys.indexes
-      WHERE name = 'ix_integration_obligations_record'
-        AND object_id = OBJECT_ID('nivaro_integration_obligations')
-    )
-      CREATE INDEX ix_integration_obligations_record
-        ON nivaro_integration_obligations (collection, item, kind, id DESC)
-  `)
 
   // Cross-link the two tables so a submission's status change can move the
   // obligation it belongs to (pending → sent on accept, → failed on reject).
   if (await knex.schema.hasTable('nivaro_erp_submissions')) {
     if (!(await knex.schema.hasColumn('nivaro_erp_submissions', 'obligation_id'))) {
       await knex.schema.alterTable('nivaro_erp_submissions', (t) => {
-        // No FK, deliberately: the daily retention pass prunes `sent` /
-        // `superseded` obligations after 180 days (spec §3), and a reverse
-        // FK here would make every prune fail — or force nulling out
-        // submissions first, on every purge, forever. Indexed instead, so a
-        // submission's status change can still find its obligation fast.
         t.bigInteger('obligation_id').nullable()
-        t.index('obligation_id', 'ix_erp_submissions_obligation_id')
       })
     }
     // transient | rate_limited | auth | validation — decides whether an
@@ -98,14 +71,7 @@ export async function up(knex: Knex): Promise<void> {
   if (await knex.schema.hasTable('nivaro_external_apis')) {
     if (!(await knex.schema.hasColumn('nivaro_external_apis', 'owner_user'))) {
       await knex.schema.alterTable('nivaro_external_apis', (t) => {
-        // FK to nivaro_users, NO ACTION — the standard rule for any FK into
-        // nivaro_users: never CASCADE a person's delete into unrelated
-        // config rows.
-        t.uuid('owner_user')
-          .nullable()
-          .references('id')
-          .inTable('nivaro_users')
-          .onDelete('NO ACTION')
+        t.uuid('owner_user').nullable()
       })
     }
     // How long a 2xx may sit unacknowledged before it reads as overdue.
@@ -125,47 +91,16 @@ export async function up(knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
-  await knex.raw(`
-    IF EXISTS (
-      SELECT 1 FROM sys.indexes
-      WHERE name = 'ix_erp_submissions_obligation_id'
-        AND object_id = OBJECT_ID('nivaro_erp_submissions')
-    )
-      DROP INDEX ix_erp_submissions_obligation_id ON nivaro_erp_submissions
-  `)
-
-  for (const col of ['skip_grace_minutes', 'ack_grace_minutes']) {
+  for (const col of ['skip_grace_minutes', 'ack_grace_minutes', 'owner_user']) {
     if (await knex.schema.hasColumn('nivaro_external_apis', col)) {
       await knex.schema.alterTable('nivaro_external_apis', (t) => t.dropColumn(col))
     }
   }
-  // owner_user carries an FK to nivaro_users — MSSQL's DROP COLUMN only
-  // auto-drops the column's own default constraint, never a foreign key, so
-  // the constraint has to go first or the column drop fails outright.
-  if (await knex.schema.hasColumn('nivaro_external_apis', 'owner_user')) {
-    await knex.schema.alterTable('nivaro_external_apis', (t) => {
-      t.dropForeign('owner_user')
-      t.dropColumn('owner_user')
-    })
-  }
-
   for (const col of ['error_class', 'obligation_id']) {
     if (await knex.schema.hasColumn('nivaro_erp_submissions', col)) {
       await knex.schema.alterTable('nivaro_erp_submissions', (t) => t.dropColumn(col))
     }
   }
-
-  // The FK on submission_id needs no separate DROP CONSTRAINT here — the
-  // whole table goes away below, and DROP TABLE takes every constraint
-  // defined on it with it.
-  await knex.raw(`
-    IF EXISTS (
-      SELECT 1 FROM sys.indexes
-      WHERE name = 'ix_integration_obligations_record'
-        AND object_id = OBJECT_ID('nivaro_integration_obligations')
-    )
-      DROP INDEX ix_integration_obligations_record ON nivaro_integration_obligations
-  `)
   if (await knex.schema.hasTable('nivaro_integration_obligations')) {
     await knex.schema.dropTable('nivaro_integration_obligations')
   }
