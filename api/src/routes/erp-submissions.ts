@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
 import { detectBodyAcceptance, serializeResponseBody } from '../services/workflow-actions.js'
@@ -23,6 +24,7 @@ interface ErpSubmissionRow {
   last_error: string | null
   payload: string | null
   response: string | null
+  obligation_id: number | null
   created_at: Date
   updated_at: Date
 }
@@ -56,6 +58,7 @@ function serialize(row: ErpSubmissionRow) {
     endpoint_path: stored?.endpoint_path ?? null,
     payload: stored?.body ?? null,
     response: parseJson(row.response) ?? row.response ?? null,
+    obligation_id: row.obligation_id ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -353,6 +356,12 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           last_error: outcome.error,
           updated_at: new Date()
         })
+      await propagateSubmissionStatus({
+        submissionId: id,
+        status: outcome.status,
+        error: outcome.error,
+        obligationId: row.obligation_id
+      })
 
       const updated = (await db('nivaro_erp_submissions').where({ id }).first()) as ErpSubmissionRow
 
@@ -415,6 +424,15 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
               last_error: outcome.error,
               updated_at: new Date()
             })
+          // A fourth writer of `status`, alongside /retry, the PATCH override
+          // and the automatic sweep — moves the obligation the same way they
+          // do, so a bulk-recovered submission cannot leave one behind.
+          await propagateSubmissionStatus({
+            submissionId: id,
+            status: outcome.status,
+            error: outcome.error,
+            obligationId: row.obligation_id
+          })
           results.push({ id, status: outcome.status, error: outcome.error ?? undefined })
         } catch (err) {
           results.push({
@@ -458,6 +476,12 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     const patch: Record<string, unknown> = { status, updated_at: new Date() }
     if (external_ref !== undefined) patch.external_ref = external_ref
     await db('nivaro_erp_submissions').where({ id }).update(patch)
+    await propagateSubmissionStatus({
+      submissionId: id,
+      status,
+      error: null,
+      obligationId: row.obligation_id
+    })
 
     const updated = (await db('nivaro_erp_submissions').where({ id }).first()) as ErpSubmissionRow
 
@@ -533,6 +557,12 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
         last_error: outcome.error,
         updated_at: new Date()
       })
+    await propagateSubmissionStatus({
+      submissionId: row.id,
+      status: outcome.status,
+      error: outcome.error,
+      obligationId: row.obligation_id
+    })
   }
   return { attempted, landed }
 }

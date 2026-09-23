@@ -218,6 +218,41 @@ export async function resolveObligation(
   }
 }
 
+export type SkipReasonKind =
+  | 'guard'
+  | 'not_configured'
+  | 'skip_when_empty'
+  | 'skip_unless_any'
+  | 'push_when'
+  | 'template_error'
+  | 'flow_condition'
+
+/**
+ * The one place a non-`sent` outcome is put into words. The board, the record
+ * banner, the Notes thread and the digest all read this column, so wording
+ * lives here rather than at six call sites that would drift apart.
+ */
+export function skipReason(kind: SkipReasonKind, detail: string): string {
+  const d = String(detail ?? '').trim()
+  const text =
+    kind === 'guard'
+      ? `guard unmet: ${d}`
+      : kind === 'not_configured'
+        ? `not configured: ${d} missing on the action`
+        : kind === 'skip_when_empty'
+          ? `skip_when_empty: ${d} empty`
+          : kind === 'skip_unless_any'
+            ? `skip_unless_any: none of ${d} is set`
+            : kind === 'push_when'
+              ? `push_when: ${d}`
+              : kind === 'template_error'
+                ? `payload template error: ${d}`
+                : kind === 'flow_condition'
+                  ? `flow condition rejected at "${d}"`
+                  : `${kind}: ${d}`
+  return text.length > 500 ? `${text.slice(0, 499)}…` : text
+}
+
 /** The decision-point entry point: attribute the context to a kind and open
  *  a `pending` row. Returns null when no kind claims it — which is how an
  *  unregistered integration stays exactly as silent as it is today. */
