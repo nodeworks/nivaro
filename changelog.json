@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-23T18:49:43.752Z",
+  "generated_at": "2026-09-23T19:14:28.180Z",
   "releases": [
+    {
+      "version": "0.1.333",
+      "tag": "v0.1.333",
+      "date": "2026-09-23T15:14:11-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "erp-submissions",
+              "text": "per-attempt request/response history; external requests chip always shows",
+              "hash": "afa3e14c"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www/docs.html",
+              "hash": "f4cb02d6"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.332",
       "tag": "v0.1.332",
-      "date": "2026-09-23T14:49:33-04:00",
+      "date": "2026-09-23T14:49:43-04:00",
       "sections": [
         {
           "label": "Fixed",
