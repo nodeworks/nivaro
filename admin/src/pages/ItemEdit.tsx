@@ -653,8 +653,11 @@ export function ItemEditPage() {
   // ── Extra panels injected into ItemEditForm's scroll area ─────────────────
   const extraTopContent = (
     <>
-      {/* ErpStatusBadge removed — ItemEditForm's ErpFailureBanner is the
-          persistent submission-status surface now; the pill was redundant. */}
+      {/* ErpStatusBadge removed — ItemEditForm's banner stack carries the
+          submission status now: IntegrationStatusBanner says whether each
+          partner was told, and ErpFailureBanner (mounted directly under it)
+          keeps the payload/response view and the Retry button. The pill
+          was redundant with both. */}
       {id && !isNew && <ApprovalPanel collection={collection!} item={id} />}
       {id && !isNew && relevantHierarchies.length > 0 && (
         <Card>

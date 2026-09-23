@@ -199,6 +199,12 @@ export function ExternalRequestsChip({
       if (status && status !== 'failed') toast.success('Submission retried successfully')
       else toast.error('Retry failed — expand the request for the error')
       void qc.invalidateQueries({ queryKey: ['erp-submissions', collection, String(itemId)] })
+      // Same server-side sync as ErpFailureBanner's retry — the submission's
+      // linked obligation moves right away (propagateSubmissionStatus), so
+      // IntegrationStatusBanner needs to hear about it too.
+      void qc.invalidateQueries({
+        queryKey: ['integration-obligations', 'record', collection, String(itemId)]
+      })
     },
     onError: () => toast.error('Retry failed')
   })

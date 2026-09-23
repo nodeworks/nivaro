@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import {
@@ -120,6 +120,19 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
   })
   const [page, setPage] = useState(1)
 
+  // `filters.api` starts from the `api` prop but is user-editable from
+  // there (a tile click or "Clear partner" toggles it) — a stray re-render
+  // must never stomp on that. Only re-seed when the CALLER scopes this
+  // instance to a different partner, tracked against the last value we
+  // seeded from rather than the prop's identity every render.
+  const seededApiRef = useRef(api ?? null)
+  useEffect(() => {
+    const next = api ?? null
+    if (next === seededApiRef.current) return
+    seededApiRef.current = next
+    setFilters((f) => ({ ...f, api: next }))
+  }, [api])
+
   const {
     data: summary,
     isLoading: summaryLoading,
@@ -217,7 +230,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                   type='button'
                   aria-pressed={filters.api === a.api}
                   onClick={() => toggleApi(a.api)}
-                  title={
+                  data-tip={
                     filters.api === a.api
                       ? 'Showing only this partner — click to show all'
                       : undefined
@@ -345,7 +358,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
             onClick={() =>
               setFilters((f) => ({ api: null, kind: null, ageHours: null, outcome: f.outcome }))
             }
-            className='text-[11px] text-slate-400 underline decoration-dotted hover:text-slate-600 dark:hover:text-slate-200'
+            className='text-[11px] text-slate-400 underline decoration-dotted hover:text-slate-600 dark:text-muted-foreground dark:hover:text-slate-200'
           >
             Clear partner/kind/age
           </button>
@@ -426,7 +439,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                             'h-1.5 w-1.5 rounded-full',
                             accent
                               ? 'bg-[color:var(--obt)] dark:bg-[color:var(--obtd)]'
-                              : 'bg-slate-400'
+                              : 'bg-slate-400 dark:bg-slate-600'
                           )}
                         />
                         {TILE_LABEL[r.outcome] ?? r.outcome}

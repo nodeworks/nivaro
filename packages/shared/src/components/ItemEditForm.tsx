@@ -168,6 +168,7 @@ import {
   AddendumPanel,
   CommentPanel,
   CustomActionButtons,
+  ErpFailureBanner,
   ExternalRequestsChip,
   ItemActionButtons,
   ItemLockBanner,
@@ -10106,6 +10107,17 @@ export function ItemEditForm({
                                       stack still costs a 16px gap. */}
                                     {!isNew && itemId && (
                                       <IntegrationStatusBanner
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    )}
+                                    {/* Same empty-sibling rule — ErpFailureBanner renders
+                                      null with no submissions, and it answers a different
+                                      question than the obligation line above it: this is
+                                      the payload/response debugging view and the Retry
+                                      button, not "was the partner told". */}
+                                    {!isNew && itemId && (
+                                      <ErpFailureBanner
                                         collection={collection}
                                         itemId={String(itemId)}
                                       />
