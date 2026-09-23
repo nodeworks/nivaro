@@ -264,6 +264,13 @@ export interface ExtensionContext {
         typeof import('../services/integration-obligations.js').resolveObligation
       >[1]
     ): Promise<void>
+    /** Register an integration signal (one kind of problem) on the
+     *  Integrations console's Firefight list; evaluated every 5 minutes. */
+    registerSignal(def: import('../services/integration-signals.js').IntegrationSignal): void
+    /** Register an action a signal row may offer (kind 'extension', id = def.id). */
+    registerSignalAction(
+      def: import('../services/integration-signals.js').SignalActionHandler
+    ): void
   }
   integrity: {
     /** Register a Data Integrity check the conformance sweep, the record
@@ -941,6 +948,19 @@ async function loadExtension(
         resolveObligation: async (id, patch) => {
           const { resolveObligation } = await import('../services/integration-obligations.js')
           return resolveObligation(id, patch)
+        },
+        registerSignal: (def) => {
+          note('integrations')
+          own('integration_signals', `${def.id} · ${def.label}`)
+          void import('../services/integration-signals.js').then(({ registerIntegrationSignal }) =>
+            registerIntegrationSignal(def, ext.id ?? 'extension')
+          )
+        },
+        registerSignalAction: (def) => {
+          void import('../services/integration-signals.js').then(
+            ({ registerIntegrationSignalAction }) =>
+              registerIntegrationSignalAction(def, ext.id ?? 'extension')
+          )
         }
       },
       integrity: {
@@ -1319,6 +1339,18 @@ export async function loadCloudExtensions(
           resolveObligation: async (id, patch) => {
             const { resolveObligation } = await import('../services/integration-obligations.js')
             return resolveObligation(id, patch)
+          },
+          registerSignal: (def) => {
+            void import('../services/integration-signals.js').then(
+              ({ registerIntegrationSignal }) =>
+                registerIntegrationSignal(def, ext.id ?? 'extension')
+            )
+          },
+          registerSignalAction: (def) => {
+            void import('../services/integration-signals.js').then(
+              ({ registerIntegrationSignalAction }) =>
+                registerIntegrationSignalAction(def, ext.id ?? 'extension')
+            )
           }
         },
         integrity: {
