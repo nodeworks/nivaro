@@ -11,7 +11,12 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { listObligationKinds, summariseObligations } from '../services/integration-obligations.js'
+import { registerIntegrationNoteSources } from '../services/integration-notes.js'
+import {
+  allObligationKinds,
+  listObligationKinds,
+  summariseObligations
+} from '../services/integration-obligations.js'
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 
@@ -85,8 +90,33 @@ function registerIntegrationObligationsReadiness(): void {
   })
 }
 
+// The Notes-thread note source, one relatedNoteRegistry provider per
+// collection that has an obligation kind. Registered from THIS plugin (same
+// "never server.ts's self-hosted-only onReady" reasoning as the readiness
+// check above), but unlike the readiness check it can't just register a
+// static definition and defer the DB read to a later "run" callback — it
+// needs allObligationKinds() to already be POPULATED at the moment it
+// builds the provider list, and this plugin registers before
+// loadExtensions()/loadCloudExtensions() run (routes/index.ts registers at
+// line ~294, both extension loaders run afterward in server.ts). So the
+// registration itself is deferred with `app.addHook('onReady', ...)` — the
+// same pattern routes/sync-jobs.ts already uses — which fires once, after
+// the WHOLE app's plugin tree (every extension loader included) has
+// finished registering, regardless of which plugin scope added the hook and
+// regardless of cloud vs self-hosted mode, since this plugin itself
+// registers unconditionally.
+let noteSourcesRegistered = false
+function registerIntegrationObligationsNoteSources(app: FastifyInstance): void {
+  if (noteSourcesRegistered) return
+  noteSourcesRegistered = true
+  app.addHook('onReady', async () => {
+    registerIntegrationNoteSources(allObligationKinds().map((k) => k.collection))
+  })
+}
+
 export async function integrationObligationsRoutes(app: FastifyInstance): Promise<void> {
   registerIntegrationObligationsReadiness()
+  registerIntegrationObligationsNoteSources(app)
 
   // The board: admin-only, matching /integration-health.
   app.get('/integration-obligations/summary', { preHandler: requireAdmin }, async () => {
