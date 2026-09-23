@@ -25,8 +25,54 @@ import {
   type SignalRow,
   signalOwner
 } from '../services/integration-signals.js'
+import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 
 const STALE_MS = 15 * 60_000
+const LABEL_CACHE_MS = 60_000
+
+/**
+ * Every open/snoozed row across the whole snapshot may carry a `record` with
+ * no `label` yet — the signal evaluators only know collection+id. One batched
+ * lookup per collection (never per row), cached 60s keyed `collection:id` so
+ * the page's own auto-refresh doesn't re-resolve the same friendly ids on
+ * every poll. Mutates the rows in place; `openRows()` already builds a fresh
+ * object per request, so there's no snapshot to corrupt.
+ */
+const recordLabelCache = new Map<string, { label: string; at: number }>()
+
+export async function fillRecordLabels(
+  signals: Array<{ rows: SignalRow[]; snoozed: SignalRow[] }>,
+  resolve: (collection: string, ids: string[]) => Promise<Map<string, string>> = resolveFriendlyIds,
+  now = Date.now()
+): Promise<void> {
+  const missing = new Map<string, Set<string>>()
+  const records: Array<NonNullable<SignalRow['record']>> = []
+  for (const s of signals) {
+    for (const r of [...s.rows, ...s.snoozed]) {
+      if (!r.record || r.record.label) continue
+      records.push(r.record)
+      const cached = recordLabelCache.get(`${r.record.collection}:${r.record.id}`)
+      if (cached && now - cached.at < LABEL_CACHE_MS) continue
+      if (!missing.has(r.record.collection)) missing.set(r.record.collection, new Set())
+      missing.get(r.record.collection)?.add(r.record.id)
+    }
+  }
+  for (const [collection, ids] of missing) {
+    try {
+      const resolved = await resolve(collection, [...ids])
+      for (const [id, label] of resolved) {
+        recordLabelCache.set(`${collection}:${id}`, { label, at: now })
+      }
+    } catch {
+      // A broken collection lookup leaves those rows unlabeled this round —
+      // the plain "open" action beside them still works either way.
+    }
+  }
+  for (const rec of records) {
+    const cached = recordLabelCache.get(`${rec.collection}:${rec.id}`)
+    if (cached) rec.label = cached.label
+  }
+}
 
 export function planActionTargets(
   rows: SignalRow[],
@@ -173,6 +219,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       (m, r) => (!m || new Date(r.ran_at) > m ? new Date(r.ran_at) : m),
       null
     )
+    await fillRecordLabels(signals)
     return {
       data: {
         checked_at: checked?.toISOString() ?? null,

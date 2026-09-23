@@ -3,7 +3,7 @@ import { ChevronDown, Loader2, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
-import { cn, formatRelative } from '../../../lib/utils'
+import { cn, formatRelative, titleCase } from '../../../lib/utils'
 import { Button } from '../../ui/button'
 
 /**
@@ -24,6 +24,19 @@ export interface ErpSubmission {
   response: unknown
   created_at: string
   updated_at: string
+  collection: string
+  item: string
+  /** The record's friendly (human-facing) id — present only where the
+   *  caller batch-resolved it (the partner detail's cross-record listing).
+   *  A record page hosting its OWN External requests dialog already IS that
+   *  record, so it never needs this badge and doesn't send it. */
+  record_label?: string
+}
+
+/** "Workflows · CR26-80361" — never the raw "workflows/371425" pair. */
+function recordBadgeLabel(collection: string, label: string): string {
+  const word = titleCase(collection).replace(/s$/, '')
+  return `${word} · ${label}`
 }
 
 function pretty(v: unknown): string | null {
@@ -216,6 +229,14 @@ export function SubmissionRow({
         <span className='min-w-0 flex-1 truncate font-mono text-[11.5px] text-slate-500 dark:text-slate-400'>
           {sub.endpoint_path ?? '—'}
         </span>
+        {sub.record_label && (
+          <span
+            className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+            data-tip={`${sub.collection}/${sub.item}`}
+          >
+            {recordBadgeLabel(sub.collection, sub.record_label)}
+          </span>
+        )}
         {sub.external_ref && (
           <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
             {sub.external_ref}

@@ -10,6 +10,7 @@ import {
   detectDefaultBodyRejection,
   serializeResponseBody
 } from '../services/workflow-actions.js'
+import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -301,6 +302,18 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     >
     // Where the term sits — payload / response / error — so the row says why it matched.
     const lower = term.toLowerCase()
+    // A partner's submissions span every collection it's pushed for — one
+    // friendly-id lookup per collection covers the whole result page.
+    const idsByCollection = new Map<string, Set<string>>()
+    for (const r of rows) {
+      if (!idsByCollection.has(r.collection)) idsByCollection.set(r.collection, new Set())
+      idsByCollection.get(r.collection)?.add(String(r.item))
+    }
+    const recordLabels = new Map<string, string>()
+    for (const [collection, ids] of idsByCollection) {
+      const resolved = await resolveFriendlyIds(collection, [...ids])
+      for (const [id, label] of resolved) recordLabels.set(`${collection}:${id}`, label)
+    }
     const data = rows.map((r) => {
       const matched: string[] = []
       if ((r.payload ?? '').toLowerCase().includes(lower)) matched.push('payload')
@@ -313,7 +326,12 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           .includes(lower)
       )
         matched.push('item')
-      return { ...serialize(r), external_api_name: r.external_api_name ?? null, matched }
+      return {
+        ...serialize(r),
+        external_api_name: r.external_api_name ?? null,
+        record_label: recordLabels.get(`${r.collection}:${r.item}`) ?? String(r.item),
+        matched
+      }
     })
     return reply.send({ data, limit, days })
   })

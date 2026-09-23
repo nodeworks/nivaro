@@ -1,4 +1,3 @@
-import { originFields } from './note-authorship.js'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
@@ -6,8 +5,10 @@ import { logActivity } from './activity.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
 import { ensureAutoWatch } from './auto-watch.js'
+import { selectInChunks } from './db-batch.js'
 import { latestPeopleComment } from './latest-comment.js'
 import { buildRecordCard } from './mail-record-card.js'
+import { originFields } from './note-authorship.js'
 import { resolveStateOwners } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -17,6 +18,7 @@ import {
   resolvePipelineSubject
 } from './pipeline-subject.js'
 import { syncMaterializedQueueItem } from './queue-materialization.js'
+import { getLabels } from './queues.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
@@ -837,6 +839,86 @@ export async function resolveFriendlyId(collection: string, item: string): Promi
     /* fall through to the internal id */
   }
   return String(item)
+}
+
+/**
+ * Batched sibling of {@link resolveFriendlyId} — for a whole page of rows
+ * from ONE collection, never a query per row. Addendums group their PARENTS
+ * by collection too, so a screen full of addendums against one template
+ * still costs a single lookup per parent collection. Never throws; every
+ * requested id is present in the returned map, falling back to the raw id
+ * when nothing resolves it.
+ */
+export async function resolveFriendlyIds(
+  collection: string,
+  items: string[]
+): Promise<Map<string, string>> {
+  const ids = [...new Set(items.map(String))]
+  const out = new Map<string, string>()
+  for (const id of ids) out.set(id, id)
+  if (ids.length === 0) return out
+
+  if (collection === ADDENDUM_COLLECTION) {
+    try {
+      const infos = await loadAddendums(ids)
+      const parentIdsByCollection = new Map<string, Set<string>>()
+      for (const info of infos.values()) {
+        if (!info.parentCollection || !info.parentId) continue
+        if (!parentIdsByCollection.has(info.parentCollection)) {
+          parentIdsByCollection.set(info.parentCollection, new Set())
+        }
+        parentIdsByCollection.get(info.parentCollection)?.add(info.parentId)
+      }
+      const parentLabels = new Map<string, string>()
+      for (const [parentCollection, parentIds] of parentIdsByCollection) {
+        const resolved = await resolveFriendlyIds(parentCollection, [...parentIds])
+        for (const [pid, label] of resolved) parentLabels.set(`${parentCollection}:${pid}`, label)
+      }
+      for (const [id, info] of infos) {
+        const parentLabel =
+          info.parentCollection && info.parentId
+            ? (parentLabels.get(`${info.parentCollection}:${info.parentId}`) ?? info.parentId)
+            : null
+        out.set(id, addendumLabel(info, parentLabel))
+      }
+    } catch {
+      /* every id already defaults to itself */
+    }
+    return out
+  }
+
+  try {
+    const rt = (await db('nivaro_chat_room_types')
+      .where({ collection, is_active: true })
+      .first()) as { match_field?: string | null } | undefined
+    const field = rt?.match_field
+    if (field && field !== 'id' && IDENT_RE.test(field)) {
+      const rows = (await selectInChunks(ids, 1000, (chunk) =>
+        db(collection).whereIn('id', chunk).select('id', field)
+      )) as Array<Record<string, unknown>>
+      for (const row of rows) {
+        const key = ids.find((id) => String(id).toUpperCase() === String(row.id).toUpperCase())
+        if (!key) continue
+        const v = row[field]
+        if (v !== null && v !== undefined && v !== '') out.set(key, String(v))
+      }
+      return out
+    }
+  } catch {
+    /* fall through to display labels */
+  }
+
+  try {
+    const labels = await getLabels(new Map([[collection, new Set(ids)]]))
+    for (const id of ids) {
+      const label = labels[`${collection}:${id}`]
+      if (label) out.set(id, label)
+    }
+  } catch {
+    /* ids already default to themselves */
+  }
+
+  return out
 }
 
 export interface ApplyTransitionResult {

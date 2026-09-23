@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SignalRow } from '../../../services/integration-signals.js'
 import {
   failureStreak,
+  formatInboundCaller,
   isAuthFailure,
   uniqueByKey
 } from '../../../services/integration-signals-core.js'
@@ -31,6 +32,27 @@ describe('isAuthFailure', () => {
     expect(isAuthFailure(403, null)).toBe(true)
     expect(isAuthFailure(null, 'Token exchange failed (HTTP 401): invalid_client')).toBe(true)
     expect(isAuthFailure(500, 'boom')).toBe(false)
+  })
+})
+
+describe('formatInboundCaller', () => {
+  it('names the person over a bare uuid', () => {
+    const names = new Map([['u1', 'Robert Lee']])
+    expect(formatInboundCaller('u1', null, names, new Map())).toBe('Robert Lee')
+  })
+
+  it('falls back to the uuid when nobody resolved a name', () => {
+    expect(formatInboundCaller('u1', null, new Map(), new Map())).toBe('User u1')
+  })
+
+  it('falls back to unknown with neither a user nor a key', () => {
+    expect(formatInboundCaller(null, null, new Map(), new Map())).toBe('User unknown')
+  })
+
+  it('keeps the key number and adds its name when it has one', () => {
+    const keys = new Map([[7, 'MDSi service account']])
+    expect(formatInboundCaller('u1', 7, new Map(), keys)).toBe('API key #7 (MDSi service account)')
+    expect(formatInboundCaller('u1', 9, new Map(), keys)).toBe('API key #9')
   })
 })
 

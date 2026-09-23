@@ -49,6 +49,25 @@ export function uniqueByKey(rows: SignalRow[]): SignalRow[] {
   return out
 }
 
+/**
+ * "User <uuid>" means nothing to an operator — name the person, or their
+ * email when they have none. An API key keeps its numeric handle (that's
+ * what the retry/snooze actions key on) and gains its label when it has one.
+ */
+export function formatInboundCaller(
+  userId: string | null,
+  apiKeyId: number | null,
+  userNames: Map<string, string>,
+  keyNames: Map<number, string>
+): string {
+  if (apiKeyId != null) {
+    const name = keyNames.get(apiKeyId)
+    return name ? `API key #${apiKeyId} (${name})` : `API key #${apiKeyId}`
+  }
+  if (userId) return userNames.get(userId) ?? `User ${userId}`
+  return 'User unknown'
+}
+
 export function registerCoreIntegrationSignals(): void {
   registerIntegrationSignal({
     id: 'core:partner-failing',
@@ -271,12 +290,48 @@ export function registerCoreIntegrationSignals(): void {
         errors: number
         last_error_at: Date | null
       }>
-      const out: SignalRow[] = []
-      for (const r of rows) {
+      const flagged = rows.filter((r) => {
         const calls = Number(r.calls)
         const errors = Number(r.errors)
-        if (calls < thresholds.min_calls || (errors / calls) * 100 < thresholds.error_pct) continue
-        const who = r.api_key_id ? `API key #${r.api_key_id}` : `User ${r.user_id ?? 'unknown'}`
+        return calls >= thresholds.min_calls && (errors / calls) * 100 >= thresholds.error_pct
+      })
+      // Two lookups total, however many distinct callers are flagged — never
+      // one query per row.
+      const userIds = [...new Set(flagged.map((r) => r.user_id).filter((v): v is string => !!v))]
+      const keyIds = [
+        ...new Set(flagged.map((r) => r.api_key_id).filter((v): v is number => v != null))
+      ]
+      const userNames = new Map<string, string>()
+      if (userIds.length > 0) {
+        const users = (await db('nivaro_users')
+          .whereIn('id', userIds)
+          .select('id', 'first_name', 'last_name', 'email')) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+        }>
+        for (const u of users) {
+          const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+          const label = name || u.email
+          if (label) userNames.set(String(u.id), label)
+        }
+      }
+      const keyNames = new Map<number, string>()
+      if (keyIds.length > 0) {
+        const keys = (await db('nivaro_api_keys')
+          .whereIn('id', keyIds)
+          .select('id', 'name')) as Array<{
+          id: number
+          name: string | null
+        }>
+        for (const k of keys) if (k.name) keyNames.set(Number(k.id), k.name)
+      }
+      const out: SignalRow[] = []
+      for (const r of flagged) {
+        const calls = Number(r.calls)
+        const errors = Number(r.errors)
+        const who = formatInboundCaller(r.user_id, r.api_key_id, userNames, keyNames)
         out.push({
           key: r.api_key_id ? `key:${r.api_key_id}` : `user:${r.user_id ?? 'none'}`,
           title: `${who}: ${Math.round((errors / calls) * 100)}% of calls failing`,
