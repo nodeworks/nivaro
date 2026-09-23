@@ -90,11 +90,11 @@ async function buildCards(onlyId?: number) {
     'instance_overrides',
     'owner_user'
   )
-  if (onlyId) q = q.where({ id: onlyId })
+  if (onlyId != null) q = q.where({ id: onlyId })
   const apis = (await q) as ApiRow[]
   const calls = (await db('nivaro_outbound_log')
     .where('created_at', '>=', since7)
-    .modify((x) => (onlyId ? x.where({ api_id: onlyId }) : x))
+    .modify((x) => (onlyId != null ? x.where({ api_id: onlyId }) : x))
     .select('api_id', 'ok', 'status', 'error', 'duration_ms', 'created_at')) as Array<{
     api_id: number
     ok: boolean | number
@@ -232,6 +232,9 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
 
   app.get('/integration-partners/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id)
+    if (!Number.isInteger(id) || id <= 0) {
+      return reply.code(400).send({ error: 'Invalid id' })
+    }
     const [card] = await buildCards(id)
     if (!card) return reply.code(404).send({ error: 'Not found' })
     const calls = await db('nivaro_outbound_log')

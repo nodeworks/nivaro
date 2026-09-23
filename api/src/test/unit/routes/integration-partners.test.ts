@@ -1,5 +1,25 @@
-import { describe, expect, it } from 'vitest'
-import { healthWord, hourBuckets, percentile } from '../../../routes/integration-partners.js'
+import Fastify from 'fastify'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// Same route-harness idiom as transition-role-gating.test.ts /
+// integration-obligations.test.ts: mock the admin gate + db module before
+// importing the route so `/integration-partners/:id`'s id-validation branch
+// is reachable with no real auth/DB stack. `db` is a bare stub — the
+// validation tests below reject before `buildCards()` ever calls it.
+vi.mock('../../../middleware/authenticate.js', () => ({
+  requireAdmin: vi.fn(async (req: { user?: { id: string }; isAdmin?: boolean }) => {
+    req.user = { id: 'test-admin' }
+    req.isAdmin = true
+  })
+}))
+vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+
+import {
+  healthWord,
+  hourBuckets,
+  integrationPartnersRoutes,
+  percentile
+} from '../../../routes/integration-partners.js'
 
 describe('percentile', () => {
   it('nearest-rank on a sorted list', () => {
@@ -72,5 +92,49 @@ describe('hourBuckets', () => {
       ['2026-09-23T11', 0, 1],
       ['2026-09-23T12', 1, 0]
     ])
+  })
+})
+
+function buildApp() {
+  const app = Fastify({ logger: false })
+  app.register(integrationPartnersRoutes)
+  return app
+}
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
+
+// Review round 1: `Number(params.id)` was never validated, so a non-numeric
+// id (NaN) or `0` — both falsy — made `buildCards`'s old `if (onlyId)` filter
+// checks skip entirely, silently returning the FIRST partner's card as a 200
+// instead of rejecting the request. Every case here resolves before
+// `buildCards()` ever touches the mocked `db` stub, so these are true
+// isolated unit tests of the validation branch, not integration tests of the
+// query path.
+describe('GET /integration-partners/:id — id validation', () => {
+  it('rejects a non-numeric id with 400', async () => {
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/abc' })
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toEqual({ error: 'Invalid id' })
+  })
+
+  it('rejects id=0 with 400 — 0 is falsy but not a valid id', async () => {
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/0' })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects a negative id with 400', async () => {
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/-1' })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects a non-integer id with 400', async () => {
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/1.5' })
+    expect(res.statusCode).toBe(400)
   })
 })
