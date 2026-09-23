@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
 import {
+  allObligationKinds,
   bustObligationsEpochCache,
   clearObligationKinds,
   registerObligationKind
@@ -87,7 +88,13 @@ describe('decideReconcile', () => {
   it('never churns a failed row — remediation owns it', () => {
     const d = decideReconcile({
       expected,
-      latest: { id: 4, outcome: 'failed', reason: 'HTTP 500', due_at: minsAgo(600), resolved_at: null },
+      latest: {
+        id: 4,
+        outcome: 'failed',
+        reason: 'HTTP 500',
+        due_at: minsAgo(600),
+        resolved_at: null
+      },
       now,
       ...grace
     })
@@ -97,7 +104,13 @@ describe('decideReconcile', () => {
   it('flags a sent row whose expectation still holds — it did not take', () => {
     const d = decideReconcile({
       expected,
-      latest: { id: 5, outcome: 'sent', reason: null, due_at: minsAgo(600), resolved_at: minsAgo(600) },
+      latest: {
+        id: 5,
+        outcome: 'sent',
+        reason: null,
+        due_at: minsAgo(600),
+        resolved_at: minsAgo(600)
+      },
       now,
       ...grace
     })
@@ -119,7 +132,13 @@ describe('decideReconcile', () => {
   it('leaves a closed row alone when the expectation is gone', () => {
     const d = decideReconcile({
       expected: null,
-      latest: { id: 6, outcome: 'sent', reason: null, due_at: minsAgo(600), resolved_at: minsAgo(600) },
+      latest: {
+        id: 6,
+        outcome: 'sent',
+        reason: null,
+        due_at: minsAgo(600),
+        resolved_at: minsAgo(600)
+      },
       now,
       ...grace
     })
@@ -203,7 +222,9 @@ describe('runIntegrationReconcile / dryRunIntegrationReconcile / runIntegrationR
   it('runIntegrationReconcileForCron completes without throwing and never warns', async () => {
     mockedDb().mockClear()
     const warn = vi.fn()
-    const fakeApp = { log: { warn } } as unknown as Parameters<typeof runIntegrationReconcileForCron>[0]
+    const fakeApp = { log: { warn } } as unknown as Parameters<
+      typeof runIntegrationReconcileForCron
+    >[0]
     const r = await runIntegrationReconcileForCron(fakeApp)
     expect(r).toEqual({ kinds: 0, missing: 0, overdue: 0, superseded: 0, errors: [], failed: 0 })
     expect(warn).not.toHaveBeenCalled()
@@ -230,7 +251,9 @@ describe('runIntegrationReconcileForCron — total-failure visibility', () => {
     })
     mockedDb().mockClear()
     const warn = vi.fn()
-    const fakeApp = { log: { warn } } as unknown as Parameters<typeof runIntegrationReconcileForCron>[0]
+    const fakeApp = { log: { warn } } as unknown as Parameters<
+      typeof runIntegrationReconcileForCron
+    >[0]
 
     const r = await runIntegrationReconcileForCron(fakeApp)
 
@@ -262,7 +285,9 @@ describe('runIntegrationReconcileForCron — total-failure visibility', () => {
     })
     mockedDb().mockClear()
     const warn = vi.fn()
-    const fakeApp = { log: { warn } } as unknown as Parameters<typeof runIntegrationReconcileForCron>[0]
+    const fakeApp = { log: { warn } } as unknown as Parameters<
+      typeof runIntegrationReconcileForCron
+    >[0]
 
     await expect(runIntegrationReconcileForCron(fakeApp)).rejects.toThrow(
       /every registered kind failed/
@@ -322,7 +347,9 @@ describe('runIntegrationReconcileForCron — total-failure visibility', () => {
     }) as never)
 
     const warn = vi.fn()
-    const fakeApp = { log: { warn } } as unknown as Parameters<typeof runIntegrationReconcileForCron>[0]
+    const fakeApp = { log: { warn } } as unknown as Parameters<
+      typeof runIntegrationReconcileForCron
+    >[0]
 
     const r = await runIntegrationReconcileForCron(fakeApp)
 
@@ -330,11 +357,74 @@ describe('runIntegrationReconcileForCron — total-failure visibility', () => {
     expect(r.missing).toBe(0)
     expect(r.overdue).toBe(0)
     expect(r.superseded).toBe(0)
-    expect(r.errors).toEqual(['wf.big: expectation set truncated at 20000'])
+    expect(r.errors).toHaveLength(1)
+    expect(r.errors[0]).toMatch(/^wf\.big: expectation set truncated at 20000 \(20000 reconciled\)/)
+    expect(r.errors[0]).toMatch(/supersede was skipped for this kind/)
     expect(warn).toHaveBeenCalledWith(
-      { err: 'wf.big: expectation set truncated at 20000' },
+      { err: r.errors[0] },
       'integration reconcile: a kind reported an error'
     )
+  })
+})
+
+describe('I1 — a truncated kind never supersedes on a partial view', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('skips the "no longer expected" supersede entirely when the expectation set was capped', async () => {
+    clearObligationKinds()
+    // Over the ceiling, and every entry names item '1' — so `byItem` holds
+    // exactly one expectation while the ledger holds an OPEN row for a
+    // DIFFERENT item ('2'), which is precisely the item the cap hid. The old
+    // loop would have closed it as "the record moved on"; it must not.
+    registerObligationKind({
+      ...base,
+      kind: 'wf.capped',
+      expect: async () => Array.from({ length: 20_001 }, () => ({ item: '1', due_at: now }))
+    })
+
+    const apiChain = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue({ ack_grace_minutes: 60, skip_grace_minutes: 30 })
+    }
+    apiChain.where.mockReturnValue(apiChain)
+
+    const rowsByCall = [
+      // latestByItem: item '1' already has a `failed` row → decideReconcile 'none'
+      [{ id: 1, item: '1', outcome: 'failed', reason: 'x', due_at: now, resolved_at: null }],
+      // supersedeOlderOpenRows (scoped to the items we could see): same row,
+      // which IS the newest for its item, so nothing is superseded.
+      [{ id: 1, item: '1' }]
+    ]
+    let call = 0
+    const obligationsChain = {
+      where: vi.fn(),
+      whereIn: vi.fn(),
+      orderBy: vi.fn(),
+      update: vi.fn().mockResolvedValue(1),
+      select: vi.fn(() => Promise.resolve(rowsByCall[call++] ?? []))
+    }
+    obligationsChain.where.mockReturnValue(obligationsChain)
+    obligationsChain.whereIn.mockReturnValue(obligationsChain)
+    obligationsChain.orderBy.mockReturnValue(obligationsChain)
+
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_apis') return apiChain
+      if (table === 'nivaro_integration_obligations') return obligationsChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const r = await reconcileKind(
+      allObligationKinds().find((d) => d.kind === 'wf.capped') as never,
+      db as unknown as Knex,
+      now
+    )
+
+    expect(r.truncated).toBe(true)
+    expect(r.superseded).toBe(0)
+    // Exactly two selects: latestByItem and the scoped orphan scan. A third
+    // would be the unscoped open-row scan this fix removes for capped kinds.
+    expect(call).toBe(2)
+    expect(obligationsChain.update).not.toHaveBeenCalled()
   })
 })
 
@@ -358,7 +448,14 @@ describe('reconcileKind — duplicate/orphan open rows for one item are supersed
       whereIn: vi.fn(),
       orderBy: vi.fn(),
       select: vi.fn().mockResolvedValue([
-        { id: 20, item: '1', outcome: 'failed', reason: 'HTTP 500', due_at: now, resolved_at: null }
+        {
+          id: 20,
+          item: '1',
+          outcome: 'failed',
+          reason: 'HTTP 500',
+          due_at: now,
+          resolved_at: null
+        }
       ])
     }
     latestChain.where.mockReturnValue(latestChain)
@@ -368,6 +465,7 @@ describe('reconcileKind — duplicate/orphan open rows for one item are supersed
     const orphanChain = {
       where: vi.fn(),
       whereIn: vi.fn(),
+      orderBy: vi.fn(),
       select: vi.fn().mockResolvedValue([
         { id: 20, item: '1' },
         { id: 15, item: '1' }
@@ -375,6 +473,7 @@ describe('reconcileKind — duplicate/orphan open rows for one item are supersed
     }
     orphanChain.where.mockReturnValue(orphanChain)
     orphanChain.whereIn.mockReturnValue(orphanChain)
+    orphanChain.orderBy.mockReturnValue(orphanChain)
 
     const updateChain = { where: vi.fn(), update: vi.fn().mockResolvedValue(1) }
     updateChain.where.mockReturnValue(updateChain)
@@ -382,12 +481,14 @@ describe('reconcileKind — duplicate/orphan open rows for one item are supersed
     const finalChain = {
       where: vi.fn(),
       whereIn: vi.fn(),
+      orderBy: vi.fn(),
       // Row 15 no longer shows up here — it was just superseded above, so a
       // fresh open-row scan for this kind would not find it either.
       select: vi.fn().mockResolvedValue([{ id: 20, item: '1' }])
     }
     finalChain.where.mockReturnValue(finalChain)
     finalChain.whereIn.mockReturnValue(finalChain)
+    finalChain.orderBy.mockReturnValue(finalChain)
 
     const obligationsQueue: unknown[] = [latestChain, orphanChain, updateChain, finalChain]
     mockedDb().mockImplementation(((table: string) => {
@@ -482,9 +583,15 @@ describe('reconcileKind threads the obligations epoch into expect()', () => {
     // Nothing expected (expectFn returns []), so the only remaining db touch
     // is the unconditional "anything open no longer expected" scan at the
     // end of reconcileKind.
-    const obligationsChain = { where: vi.fn(), whereIn: vi.fn(), select: vi.fn().mockResolvedValue([]) }
+    const obligationsChain = {
+      where: vi.fn(),
+      whereIn: vi.fn(),
+      orderBy: vi.fn(),
+      select: vi.fn().mockResolvedValue([])
+    }
     obligationsChain.where.mockReturnValue(obligationsChain)
     obligationsChain.whereIn.mockReturnValue(obligationsChain)
+    obligationsChain.orderBy.mockReturnValue(obligationsChain)
 
     const fakeDatabase = vi.fn().mockImplementation((table: string) => {
       if (table === 'nivaro_settings') return settingsChain

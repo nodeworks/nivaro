@@ -15,17 +15,18 @@
  * keeping its original reason. That is the wrong-guard detector, and it is
  * the only thing in the system that can find one.
  */
-import type { Knex } from 'knex'
+
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import {
+  allObligationKinds,
   type ExpectedObligation,
+  getObligationsEpoch,
   type ObligationKindDef,
   type ObligationOutcome,
   OPEN_OUTCOMES,
-  allObligationKinds,
-  getObligationsEpoch,
   recordObligation,
   resolveObligation
 } from './integration-obligations.js'
@@ -130,10 +131,7 @@ export function decideReconcile(opts: {
   return { item, outcome: 'none', reason: null, obligation_id: null }
 }
 
-async function graceFor(
-  api: string,
-  database: Knex = db
-): Promise<{ ack: number; skip: number }> {
+async function graceFor(api: string, database: Knex = db): Promise<{ ack: number; skip: number }> {
   try {
     const row = (await database('nivaro_external_apis')
       .where({ name: api })
@@ -192,6 +190,7 @@ async function supersedeOlderOpenRows(
       .where({ api: def.api, kind: def.kind, collection: def.collection })
       .whereIn('item', chunk)
       .whereIn('outcome', OPEN_OUTCOMES)
+      .orderBy('id', 'asc')
       .select('id', 'item')
   )) as Array<{ id: number; item: string }>
   let superseded = 0
@@ -268,17 +267,31 @@ export async function reconcileKind(
 
   // Anything open for this kind whose item is no longer expected has been
   // overtaken by events.
-  const openRows = (await database('nivaro_integration_obligations')
-    .where({ api: def.api, kind: def.kind, collection: def.collection })
-    .whereIn('outcome', OPEN_OUTCOMES)
-    .select('id', 'item')) as Array<{ id: number; item: string }>
-  for (const r of openRows) {
-    if (byItem.has(String(r.item))) continue
-    superseded++
-    await resolveObligation(r.id, {
-      outcome: 'superseded',
-      reason: 'the expectation no longer holds — the record moved on'
-    })
+  //
+  // SKIPPED ENTIRELY when the expectation set was truncated: `byItem` then
+  // holds only the first EXPECT_CEILING expectations, while this loop scans
+  // EVERY open row for the kind — so items past the cap are still genuinely
+  // expected but would be closed here as "the record moved on", which is
+  // false, and which closes them to alerting, to the board's unmet tiles and
+  // to remediation. Worse, `expect()` carries no ordering contract, so the
+  // slice is not stable between ticks: consecutive sweeps would supersede one
+  // half and re-open the other as `missing`, alternating. A truncated kind
+  // reports its truncation (runIntegrationReconcile adds it to `errors`) and
+  // reconciles only what it could see.
+  if (!truncated) {
+    const openRows = (await database('nivaro_integration_obligations')
+      .where({ api: def.api, kind: def.kind, collection: def.collection })
+      .whereIn('outcome', OPEN_OUTCOMES)
+      .orderBy('id', 'asc')
+      .select('id', 'item')) as Array<{ id: number; item: string }>
+    for (const r of openRows) {
+      if (byItem.has(String(r.item))) continue
+      superseded++
+      await resolveObligation(r.id, {
+        outcome: 'superseded',
+        reason: 'the expectation no longer holds — the record moved on'
+      })
+    }
   }
 
   return { kind: def.kind, missing, overdue, superseded, expected: rows.length, truncated }
@@ -303,7 +316,8 @@ export async function runIntegrationReconcile(): Promise<{
   // install (Phase 1, dormant-safe) — the sweep must touch the database not
   // at all in that case, so incident tracking is skipped along with
   // everything else when there is nothing to reconcile.
-  const healthBefore = defs.length > 0 ? await (await import('./integration-incidents.js')).currentApiHealth() : []
+  const healthBefore =
+    defs.length > 0 ? await (await import('./integration-incidents.js')).currentApiHealth() : []
 
   const totals = {
     kinds: defs.length,
@@ -319,7 +333,13 @@ export async function runIntegrationReconcile(): Promise<{
       totals.missing += r.missing
       totals.overdue += r.overdue
       totals.superseded += r.superseded
-      if (r.truncated) totals.errors.push(`${def.kind}: expectation set truncated at ${EXPECT_CEILING}`)
+      if (r.truncated) {
+        totals.errors.push(
+          `${def.kind}: expectation set truncated at ${EXPECT_CEILING} (${r.expected} reconciled) — ` +
+            'the "no longer expected" supersede was skipped for this kind, so nothing past the cap ' +
+            'was closed on a partial view'
+        )
+      }
     } catch (err) {
       // One kind's broken query must never hide the other twelve.
       totals.failed++

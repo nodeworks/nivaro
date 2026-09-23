@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import {
+  isRoutableRecord,
   type ObligationFilterState,
   obligationQueryParams,
   toneForOutcome
@@ -125,11 +126,7 @@ function SendNowButton({ obligationId }: { obligationId: number }) {
           : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
       )}
     >
-      {send.isPending ? (
-        <Loader2 className='h-3 w-3 animate-spin' />
-      ) : (
-        <Send className='h-3 w-3' />
-      )}
+      {send.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <Send className='h-3 w-3' />}
       {armed ? 'Confirm?' : 'Send now'}
     </button>
   )
@@ -471,12 +468,26 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                 const canSend =
                   remediationEnabled &&
                   (r.outcome === 'failed' || r.outcome === 'missing' || r.outcome === 'overdue')
+                // Not every row points at a record a person can open: an
+                // inbound kind's "record" is the API log itself and its item
+                // is a bucket key (`/graphql@2026-09-23T14`), which no route
+                // resolves. Those rows simply do not offer a click, rather
+                // than offering one that lands on an error page.
+                const routable = isRoutableRecord(r.collection)
                 return (
                   <tr
                     key={r.id}
                     data-obligation-row={r.id}
-                    className='cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 dark:border-border/60 dark:hover:bg-muted'
-                    onClick={() => nav.open({ collection: r.collection, itemId: r.item })}
+                    data-obligation-routable={routable ? '1' : '0'}
+                    className={cn(
+                      'border-b border-slate-100 last:border-0 dark:border-border/60',
+                      routable && 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
+                    )}
+                    onClick={
+                      routable
+                        ? () => nav.open({ collection: r.collection, itemId: r.item })
+                        : undefined
+                    }
                   >
                     <td className='px-3 py-1.5 font-medium text-slate-700 dark:text-slate-200'>
                       {r.collection} · {r.item}

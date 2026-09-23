@@ -202,9 +202,6 @@ export async function resolveTargetUrl(
       case 'record':
       case 'sla':
       case 'approval':
-      // An integration obligation is always about a record — same URL shape
-      // as 'record', it just carries a different label to the reader.
-      case 'integration':
         if (spec.collection && spec.id != null)
           return withFocus(await recordLink(spec.collection, spec.id, opts))
         if (spec.collection)
@@ -213,6 +210,17 @@ export async function resolveTargetUrl(
             `/collections/${spec.collection}`
           )
         return spec.kind === 'approval' ? linkTo('approvals', {}, opts) : null
+      // An integration obligation is USUALLY about a record — the same URL
+      // shape as 'record' then, it just carries a different label to the
+      // reader. But not every kind's item is a record id: an inbound kind
+      // derived from the API log carries a `nivaro_` collection and a BUCKET
+      // KEY, and a `nivaro_` table is never a registered collection, so a
+      // record link built from that pair lands on an error page. Those go to
+      // the board, which is where such a row actually lives.
+      case 'integration':
+        if (spec.collection && spec.id != null && !/^nivaro_/i.test(spec.collection))
+          return withFocus(await recordLink(spec.collection, spec.id, opts))
+        return linkTo('integrations', {}, opts)
       case 'task':
         return linkTo('tasks', {}, opts)
       case 'access_request':

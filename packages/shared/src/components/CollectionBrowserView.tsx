@@ -6978,7 +6978,7 @@ export function CollectionBrowserView({
                               key={key}
                               style={pinStyle(key)}
                               className={baseTh}
-                              data-integrations-filter={curVal}
+                              data-integration-filter={curVal}
                             >
                               <SimpleSelectXs
                                 ariaLabel='Integrations filter'

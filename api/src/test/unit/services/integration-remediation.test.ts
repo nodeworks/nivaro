@@ -23,10 +23,11 @@ import {
   registerObligationKind
 } from '../../../services/integration-obligations.js'
 import {
-  RETRYABLE_CLASSES,
   classifyError,
   isClosedOutcome,
   nextRetryAt,
+  RETRYABLE_CLASSES,
+  refireRefusal,
   remediationEnabled,
   runMissingRefirePass,
   runRetryPass,
@@ -126,9 +127,11 @@ const mockedDb = () => vi.mocked(db as unknown as (table: string) => unknown)
 
 function settingsChain(enabled: boolean | null) {
   const chain = {
-    first: vi.fn().mockResolvedValue(
-      enabled === null ? undefined : { integration_remediation_enabled: enabled }
-    )
+    first: vi
+      .fn()
+      .mockResolvedValue(
+        enabled === null ? undefined : { integration_remediation_enabled: enabled }
+      )
   }
   return chain
 }
@@ -193,6 +196,7 @@ function chain(overrides: Record<string, unknown> = {}) {
   const c: Record<string, unknown> = {
     where: vi.fn(),
     whereIn: vi.fn(),
+    whereRaw: vi.fn(),
     whereNotNull: vi.fn(),
     whereNull: vi.fn(),
     orderBy: vi.fn(),
@@ -203,10 +207,35 @@ function chain(overrides: Record<string, unknown> = {}) {
     first: vi.fn().mockResolvedValue(undefined),
     ...overrides
   }
-  for (const k of ['where', 'whereIn', 'whereNotNull', 'whereNull', 'orderBy', 'join', 'leftJoin', 'limit']) {
+  for (const k of [
+    'where',
+    'whereIn',
+    'whereRaw',
+    'whereNotNull',
+    'whereNull',
+    'orderBy',
+    'join',
+    'leftJoin',
+    'limit'
+  ]) {
     if (!(k in overrides)) (c[k] as ReturnType<typeof vi.fn>).mockReturnValue(c)
   }
   return c
+}
+
+/** The one shape the sweep may repeat: opted in, not a person's to send, and
+ *  naming the endpoint whose body it would be repeating. */
+function refireableKind(overrides: Record<string, unknown> = {}) {
+  return {
+    api: 'Partner',
+    kind: 'outbound',
+    collection: 'workflows',
+    label: 'x',
+    safe_to_refire: true,
+    endpoint_path: '/orders',
+    expect: async () => [],
+    ...overrides
+  } as Parameters<typeof registerObligationKind>[0]
 }
 
 describe('sendNow — gate on', () => {
@@ -227,11 +256,17 @@ describe('sendNow — gate on', () => {
   })
 
   it('reports "nothing to re-send" for a missing obligation with no prior submission to repeat', async () => {
+    registerObligationKind(refireableKind())
     const settings = settingsChain(true)
     const obligations = chain({
-      first: vi
-        .fn()
-        .mockResolvedValue({ id: 1, api: 'Partner', collection: 'workflows', item: '1', submission_id: null })
+      first: vi.fn().mockResolvedValue({
+        id: 1,
+        api: 'Partner',
+        kind: 'outbound',
+        collection: 'workflows',
+        item: '1',
+        submission_id: null
+      })
     })
     const priorLookup = chain({ first: vi.fn().mockResolvedValue(undefined) })
     mockedDb().mockImplementation(((table: string) => {
@@ -245,12 +280,82 @@ describe('sendNow — gate on', () => {
     expect(r.detail).toMatch(/nothing to re-send/)
   })
 
-  it('a `missing` obligation WITH a prior request to repeat clones it into a fresh row, rather than resending the prior directly', async () => {
+  it('C1 — refuses a missing row whose kind never opted in, and never looks for a prior request', async () => {
+    registerObligationKind({
+      api: 'Partner',
+      kind: 'state',
+      collection: 'workflows',
+      label: 'x',
+      endpoint_path: '/push',
+      expect: async () => []
+    })
     const settings = settingsChain(true)
     const obligations = chain({
-      first: vi
-        .fn()
-        .mockResolvedValue({ id: 1, api: 'Partner', collection: 'workflows', item: '1', submission_id: null })
+      first: vi.fn().mockResolvedValue({
+        id: 1,
+        api: 'Partner',
+        kind: 'state',
+        collection: 'workflows',
+        item: '1',
+        submission_id: null
+      })
+    })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return obligations
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const r = await sendNow(1, 'user-1')
+    expect(r.detail).toMatch(/^not re-sent: this kind is never re-fired automatically/)
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it('C1 — refuses a missing row whose send belongs to a person, even when it opted in', async () => {
+    registerObligationKind({
+      api: 'Partner',
+      kind: 'manual_push',
+      collection: 'workflows',
+      label: 'x',
+      human: true,
+      safe_to_refire: true,
+      endpoint_path: '/manage-order',
+      expect: async () => []
+    })
+    const settings = settingsChain(true)
+    const obligations = chain({
+      first: vi.fn().mockResolvedValue({
+        id: 1,
+        api: 'Partner',
+        kind: 'manual_push',
+        collection: 'workflows',
+        item: '1',
+        submission_id: null
+      })
+    })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return obligations
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const r = await sendNow(1, 'user-1')
+    expect(r.detail).toMatch(/belongs to a person/)
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it('a `missing` obligation WITH a prior request to repeat clones it into a fresh row, rather than resending the prior directly', async () => {
+    registerObligationKind(refireableKind())
+    const settings = settingsChain(true)
+    const obligations = chain({
+      first: vi.fn().mockResolvedValue({
+        id: 1,
+        api: 'Partner',
+        kind: 'outbound',
+        collection: 'workflows',
+        item: '1',
+        submission_id: null
+      })
     })
     const priorLookup = chain({ first: vi.fn().mockResolvedValue({ id: 77 }) })
     const priorRow = {
@@ -433,7 +538,7 @@ describe('runMissingRefirePass — gate on', () => {
   beforeEach(() => clearObligationKinds())
   afterEach(() => vi.clearAllMocks())
 
-  it('queues a kind that declares itself unsafe to re-fire, and never even looks for a prior submission', async () => {
+  it('C1 — a kind that never opted in is not read at all: no query, no send, no write', async () => {
     registerObligationKind({
       api: 'Partner',
       kind: 'inbound',
@@ -443,47 +548,81 @@ describe('runMissingRefirePass — gate on', () => {
       expect: async () => []
     })
     const settings = settingsChain(true)
-    const missingRows = chain({
-      select: vi
-        .fn()
-        .mockResolvedValue([{ id: 10, api: 'Partner', kind: 'inbound', collection: 'workflows', item: '1' }])
-    })
-    const updateChain = { where: vi.fn(), update: vi.fn().mockResolvedValue(1) }
-    updateChain.where.mockReturnValue(updateChain)
-    const obligationsQueue: unknown[] = [missingRows, updateChain]
-
     mockedDb().mockImplementation(((table: string) => {
       if (table === 'nivaro_settings') return settings
-      if (table === 'nivaro_integration_obligations') {
-        const next = obligationsQueue.shift()
-        if (!next) throw new Error('unscripted extra call on nivaro_integration_obligations')
-        return next
-      }
       throw new Error(`unexpected table: ${table}`)
     }) as never)
 
     const r = await runMissingRefirePass()
 
-    expect(r).toEqual({ refired: 0, queued: 1 })
+    // Nothing opted in, so the obligations table is never even touched —
+    // which is also what stops a queue of un-refireable rows from starving
+    // the re-fireable ones out of every batch.
+    expect(r).toEqual({ refired: 0, queued: 0 })
     expect(sendPayload).not.toHaveBeenCalled()
-    const patch = updateChain.update.mock.calls[0][0] as Record<string, unknown>
-    expect(patch.outcome).toBe('failed')
-    expect(patch.reason).toMatch(/^gave up: this kind is never re-fired/)
   })
 
-  it('re-fires from the most recent prior request for the same record + API when the kind allows it — by CLONING it into a fresh row', async () => {
-    registerObligationKind({
-      api: 'Partner',
-      kind: 'outbound',
-      collection: 'workflows',
-      label: 'x',
-      expect: async () => []
-    })
+  it('C1 — a kind whose send belongs to a person is never re-fired, even having opted in', async () => {
+    registerObligationKind(
+      refireableKind({ kind: 'manual_push', human: true, endpoint_path: '/manage-order' })
+    )
+    const settings = settingsChain(true)
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    expect(await runMissingRefirePass()).toEqual({ refired: 0, queued: 0 })
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it('C1 — an opted-in kind that cannot name its endpoint is never re-fired', async () => {
+    registerObligationKind(refireableKind({ endpoint_path: null }))
+    const settings = settingsChain(true)
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    expect(await runMissingRefirePass()).toEqual({ refired: 0, queued: 0 })
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it("C1 — scopes the prior-request lookup to the kind's own endpoint", async () => {
+    registerObligationKind(refireableKind())
     const settings = settingsChain(true)
     const missingRows = chain({
       select: vi
         .fn()
-        .mockResolvedValue([{ id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }])
+        .mockResolvedValue([
+          { id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }
+        ])
+    })
+    const priorLookup = chain({ first: vi.fn().mockResolvedValue(undefined) })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return missingRows
+      if (table === 'nivaro_erp_submissions as es') return priorLookup
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    await runMissingRefirePass()
+
+    expect(priorLookup.whereRaw).toHaveBeenCalledWith(
+      "JSON_VALUE(es.payload, '$.endpoint_path') = ?",
+      ['/orders']
+    )
+  })
+
+  it('re-fires from the most recent prior request for the same record + API when the kind allows it — by CLONING it into a fresh row', async () => {
+    registerObligationKind(refireableKind())
+    const settings = settingsChain(true)
+    const missingRows = chain({
+      select: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }
+        ])
     })
     const priorLookup = chain({ first: vi.fn().mockResolvedValue({ id: 77 }) })
     // ONE chain object serves BOTH calls db('nivaro_erp_submissions') makes
@@ -540,7 +679,11 @@ describe('runMissingRefirePass — gate on', () => {
     })
     // The prior row itself is never written to.
     expect(priorRow.update).not.toHaveBeenCalled()
-    expect(sendPayload).toHaveBeenCalledWith(7, { endpoint_path: '/orders', body: { a: 1 } }, undefined)
+    expect(sendPayload).toHaveBeenCalledWith(
+      7,
+      { endpoint_path: '/orders', body: { a: 1 } },
+      undefined
+    )
     // Both the send outcome and the obligation move against the NEW row's
     // id (999) — never 77, the prior obligation's own submission.
     expect(applySendOutcome).toHaveBeenCalledWith({
@@ -558,19 +701,15 @@ describe('runMissingRefirePass — gate on', () => {
   })
 
   it("RULING — never mutates the prior obligation's own submission row: it stays byte-unchanged, and the new row links to the re-firing obligation, not the old one", async () => {
-    registerObligationKind({
-      api: 'Partner',
-      kind: 'outbound',
-      collection: 'workflows',
-      label: 'x',
-      expect: async () => []
-    })
+    registerObligationKind(refireableKind())
     const settings = settingsChain(true)
     // The MISSING obligation being re-fired.
     const missingRows = chain({
       select: vi
         .fn()
-        .mockResolvedValue([{ id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }])
+        .mockResolvedValue([
+          { id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }
+        ])
     })
     // The prior submission (id 77) belongs to some OTHER, already-`sent`
     // obligation — refireFromPrior reads it but must never write to it.
@@ -625,29 +764,25 @@ describe('runMissingRefirePass — gate on', () => {
     )
   })
 
-  it('queues a missing obligation with no prior request to repeat, without ever calling sendPayload', async () => {
-    registerObligationKind({
-      api: 'Partner',
-      kind: 'outbound',
-      collection: 'workflows',
-      label: 'x',
-      expect: async () => []
-    })
+  it('C1 — a missing obligation with no prior request to repeat is LEFT missing: counted, never rewritten to failed', async () => {
+    registerObligationKind(refireableKind())
     const settings = settingsChain(true)
     const missingRows = chain({
       select: vi
         .fn()
-        .mockResolvedValue([{ id: 12, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '3' }])
+        .mockResolvedValue([
+          { id: 12, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '3' }
+        ])
     })
     const priorLookup = chain({ first: vi.fn().mockResolvedValue(undefined) })
-    const updateChain = { where: vi.fn(), update: vi.fn().mockResolvedValue(1) }
-    updateChain.where.mockReturnValue(updateChain)
-    const obligationsQueue: unknown[] = [missingRows, updateChain]
+    const obligationsQueue: unknown[] = [missingRows]
 
     mockedDb().mockImplementation(((table: string) => {
       if (table === 'nivaro_settings') return settings
       if (table === 'nivaro_integration_obligations') {
         const next = obligationsQueue.shift()
+        // A second call would be a WRITE — `missing` must stay `missing`, so
+        // any extra call on this table is the regression this test exists for.
         if (!next) throw new Error('unscripted extra call on nivaro_integration_obligations')
         return next
       }
@@ -659,8 +794,45 @@ describe('runMissingRefirePass — gate on', () => {
 
     expect(r).toEqual({ refired: 0, queued: 1 })
     expect(sendPayload).not.toHaveBeenCalled()
-    const patch = updateChain.update.mock.calls[0][0] as Record<string, unknown>
-    expect(patch.outcome).toBe('failed')
-    expect(patch.reason).toMatch(/^gave up: no earlier request to repeat/)
+  })
+})
+
+// ─── C1: the opt-in rule itself, stated once ────────────────────────────────
+
+describe('refireRefusal — re-firing is opt-in on three counts', () => {
+  const base = {
+    api: 'Partner',
+    kind: 'k',
+    collection: 'workflows',
+    label: 'x',
+    expect: async () => []
+  }
+
+  it('refuses a kind that is no longer registered', () => {
+    expect(refireRefusal(undefined)).toMatch(/no longer registered/)
+  })
+
+  it('refuses a kind that did not opt in — absent is NO, not "unset"', () => {
+    expect(refireRefusal({ ...base })).toMatch(/never re-fired automatically/)
+    expect(refireRefusal({ ...base, safe_to_refire: false })).toMatch(
+      /never re-fired automatically/
+    )
+  })
+
+  it('refuses a kind whose send belongs to a person, whatever it says about re-firing', () => {
+    expect(
+      refireRefusal({ ...base, human: true, safe_to_refire: true, endpoint_path: '/x' })
+    ).toMatch(/belongs to a person/)
+  })
+
+  it('refuses an opted-in kind that cannot name the endpoint its body belongs to', () => {
+    expect(refireRefusal({ ...base, safe_to_refire: true })).toMatch(/does not name the endpoint/)
+    expect(refireRefusal({ ...base, safe_to_refire: true, endpoint_path: '  ' })).toMatch(
+      /does not name the endpoint/
+    )
+  })
+
+  it("allows only the full shape: opted in, not a person's, endpoint named", () => {
+    expect(refireRefusal({ ...base, safe_to_refire: true, endpoint_path: '/orders' })).toBeNull()
   })
 })

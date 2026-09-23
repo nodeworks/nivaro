@@ -24,7 +24,12 @@
  *    fresh `nivaro_erp_submissions` row rather than rewritten in place.
  */
 import { db } from '../db/index.js'
-import { getObligationKind, resolveObligation } from './integration-obligations.js'
+import {
+  allObligationKinds,
+  getObligationKind,
+  type ObligationKindDef,
+  resolveObligation
+} from './integration-obligations.js'
 
 export type ErrorClass =
   | 'transient'
@@ -101,24 +106,64 @@ export async function remediationEnabled(): Promise<boolean> {
   }
 }
 
-/** The most recent request ever made for this record on this API — what
- *  "re-fire" and "send now on a `missing` row" both mean when there is no
- *  submission tied to the obligation itself. Shared by `sendNow` (a person
- *  clicked Send now on a `missing` row) and `runMissingRefirePass` (the
- *  sweep did the same thing automatically), so the two can never disagree
- *  about what counts as "the last thing we sent". */
+/**
+ * The most recent request ever made for this record on this API AND THIS
+ * ENDPOINT — what "re-fire" and "send now on a `missing` row" both mean when
+ * there is no submission tied to the obligation itself. Shared by `sendNow`
+ * (a person clicked Send now on a `missing` row) and `runMissingRefirePass`
+ * (the sweep did the same thing automatically), so the two can never
+ * disagree about what counts as "the last thing we sent".
+ *
+ * The endpoint filter is not optional and not a refinement: several kinds
+ * routinely share one API (MWF alone carries the state push, the
+ * requisition-id push, the PO-number push and the completion push), and
+ * (api, collection, item) alone would happily hand a `wf.state` re-fire the
+ * rename hook's body — a request that carries no state at all. `endpoint_path`
+ * is what the payload column stores alongside the body, and what the kinds'
+ * own `expect()` queries already anchor on.
+ */
 async function mostRecentSubmissionFor(
   api: string,
   collection: string,
-  item: string
+  item: string,
+  endpointPath: string
 ): Promise<{ id: number } | undefined> {
+  const endpoint = String(endpointPath ?? '').trim()
+  if (endpoint === '') return undefined
   return (await db('nivaro_erp_submissions as es')
     .join('nivaro_external_apis as api', 'api.id', 'es.external_api')
     .where('es.collection', collection)
     .where('es.item', String(item))
     .where('api.name', api)
+    .whereRaw("JSON_VALUE(es.payload, '$.endpoint_path') = ?", [endpoint])
     .orderBy('es.id', 'desc')
     .first('es.id')) as { id: number } | undefined
+}
+
+/**
+ * May the sweep — or Send now on a `missing` row — repeat an earlier request
+ * for this kind by itself? Opt-in on three counts, all of which must hold:
+ *
+ *  - the kind declares `safe_to_refire: true`. Absent is NO. Repeating bytes
+ *    is only correct where the body cannot have gone stale.
+ *  - the kind is not a person's to send (`human`). An obligation whose whole
+ *    point is that a human pushes it must never be pushed by a sweep.
+ *  - the kind names its `endpoint_path`, so the request repeated is provably
+ *    the same SHAPE of request and not a sibling push's body.
+ *
+ * Returns the sentence for the ledger when the answer is no, so the board and
+ * the Send-now button say the same thing for the same reason.
+ */
+export function refireRefusal(def: ObligationKindDef | undefined): string | null {
+  if (!def) return 'this kind is no longer registered — a person needs to look'
+  if (def.human) return 'this send belongs to a person — open the record and push it there'
+  if (def.safe_to_refire !== true) {
+    return 'this kind is never re-fired automatically — repeating the stored request could send stale data'
+  }
+  if (!String(def.endpoint_path ?? '').trim()) {
+    return 'this kind does not name the endpoint it sends to, so an earlier request cannot be repeated safely'
+  }
+  return null
 }
 
 /**
@@ -147,13 +192,21 @@ async function resendSubmission(
   const sub = (await db('nivaro_erp_submissions')
     .where({ id: submissionId })
     .first('external_api', 'payload', 'external_ref', 'attempts')) as
-    | { external_api: number; payload: string | null; external_ref: string | null; attempts: number }
+    | {
+        external_api: number
+        payload: string | null
+        external_ref: string | null
+        attempts: number
+      }
     | undefined
   if (!sub) return { detail: 'the original request is no longer stored' }
 
   let stored: { endpoint_path: string; body: Record<string, unknown> }
   try {
-    stored = JSON.parse(sub.payload ?? '') as { endpoint_path: string; body: Record<string, unknown> }
+    stored = JSON.parse(sub.payload ?? '') as {
+      endpoint_path: string
+      body: Record<string, unknown>
+    }
     if (!stored?.endpoint_path) throw new Error('no endpoint_path')
   } catch {
     return { detail: 'the original request is not readable' }
@@ -212,7 +265,10 @@ async function refireFromPrior(
 
   let stored: { endpoint_path: string; body: Record<string, unknown> }
   try {
-    stored = JSON.parse(prior.payload ?? '') as { endpoint_path: string; body: Record<string, unknown> }
+    stored = JSON.parse(prior.payload ?? '') as {
+      endpoint_path: string
+      body: Record<string, unknown>
+    }
     if (!stored?.endpoint_path) throw new Error('no endpoint_path')
   } catch {
     return { detail: 'the original request is not readable' }
@@ -276,12 +332,18 @@ async function refireFromPrior(
 /**
  * A person clicked "Send now" on one obligation. When the obligation has a
  * submission of its own, that gets re-sent (the ordinary failed/overdue
- * case). When it does not — a `missing` obligation, by definition, since
- * nothing was ever attempted for it — the most recent request for the same
- * record + API is CLONED into a fresh row (`refireFromPrior`; the request
- * itself belongs to some other obligation's history, which must never be
- * rewritten), so the button does something sensible for every outcome it is
- * shown on (failed, overdue, missing).
+ * case) — that row is this obligation's OWN evidence of what it tried, so
+ * repeating it is exactly what the button says.
+ *
+ * When it does not — a `missing` obligation, by definition, since nothing
+ * was ever attempted for it — the only thing available to repeat is some
+ * OTHER obligation's request, and whether that is safe is a property of the
+ * kind, not of who clicked: `refireRefusal` decides, identically here and in
+ * the automatic sweep. A person clicking a button does not make a stale
+ * `efp_state` fresh, and does not turn a Fusion requisition into something
+ * the button should create behind the owner's back. When it is allowed, the
+ * prior request is CLONED into a fresh row (`refireFromPrior`) rather than
+ * rewritten, because it is someone else's history.
  */
 export async function sendNow(
   obligationId: number,
@@ -292,8 +354,15 @@ export async function sendNow(
   }
   const row = (await db('nivaro_integration_obligations')
     .where({ id: obligationId })
-    .first('id', 'api', 'collection', 'item', 'submission_id')) as
-    | { id: number; api: string; collection: string; item: string; submission_id: number | null }
+    .first('id', 'api', 'kind', 'collection', 'item', 'submission_id')) as
+    | {
+        id: number
+        api: string
+        kind: string
+        collection: string
+        item: string
+        submission_id: number | null
+      }
     | undefined
   if (!row) return { detail: 'no such obligation' }
 
@@ -301,7 +370,16 @@ export async function sendNow(
     return resendSubmission(obligationId, row.submission_id, userId)
   }
 
-  const prior = await mostRecentSubmissionFor(row.api, row.collection, row.item)
+  const def = getObligationKind(row.api, row.kind)
+  const refusal = refireRefusal(def)
+  if (refusal) return { detail: `not re-sent: ${refusal}` }
+
+  const prior = await mostRecentSubmissionFor(
+    row.api,
+    row.collection,
+    row.item,
+    String(def?.endpoint_path ?? '')
+  )
   if (!prior) {
     return { detail: 'nothing to re-send — this send has never run for this record' }
   }
@@ -374,20 +452,34 @@ export async function runRetryPass(): Promise<{ retried: number; gaveUp: number 
  * ever made for the same record on the same API — the same standing-in rule
  * `sendNow` uses when a person clicks Send now on a `missing` row.
  *
- * A kind that declares itself unsafe to re-fire (`safe_to_refire: false`) is
- * never touched — an inbound partner request is the clearest case, it is
- * theirs to re-send, not ours. Either way, ONE attempt, then the row becomes
- * `failed` with a reason saying so if it did not land: a missing obligation
- * that cannot be handled automatically is exactly the kind of thing that
- * should reach a person rather than loop.
+ * Re-firing is OPT-IN (`refireRefusal`): a kind is repeated only when it
+ * says `safe_to_refire: true`, is not a person's to send, and names the
+ * endpoint its body belongs to. Everything else is QUEUED — which here means
+ * LEFT ALONE, still `missing`, for a person. It is deliberately not rewritten
+ * to `failed`: `missing` is the one outcome that says "the trigger never
+ * fired", which is the most diagnostic thing the ledger knows, and laundering
+ * it into `failed` would both lose that and flip the readiness check's only
+ * FAIL tier to a warning without anything being fixed.
  */
 export async function runMissingRefirePass(): Promise<{ refired: number; queued: number }> {
   if (!(await remediationEnabled())) return { refired: 0, queued: 0 }
 
+  // Only the kinds that opted in are even READ. Selecting the oldest 25
+  // `missing` rows regardless and then refusing most of them would starve
+  // the re-fireable ones out of every batch forever, since a refused row is
+  // deliberately left exactly where it is (no write, so it never ages out of
+  // the front of the queue). Nothing opted in = no database work at all.
+  const refireable = allObligationKinds().filter((d) => refireRefusal(d) === null)
+  if (refireable.length === 0) return { refired: 0, queued: 0 }
+
   const rows = (await db('nivaro_integration_obligations')
     .where({ outcome: 'missing' })
     .whereNull('resolved_at')
+    .where((qb) => {
+      for (const d of refireable) qb.orWhere({ api: d.api, kind: d.kind })
+    })
     .orderBy('due_at', 'asc')
+    .orderBy('id', 'asc')
     .limit(25)
     .select('id', 'api', 'kind', 'collection', 'item')) as Array<{
     id: number
@@ -401,22 +493,20 @@ export async function runMissingRefirePass(): Promise<{ refired: number; queued:
   let queued = 0
   for (const r of rows) {
     const def = getObligationKind(r.api, r.kind)
-    if (def?.safe_to_refire === false) {
+    if (refireRefusal(def)) {
+      // Left `missing` on purpose — see the note above. No write at all, so
+      // the row keeps its own due_at age and its original reason.
       queued++
-      await resolveObligation(r.id, {
-        outcome: 'failed',
-        reason: 'gave up: this kind is never re-fired automatically — a person needs to look'
-      })
       continue
     }
-    const prior = await mostRecentSubmissionFor(r.api, r.collection, r.item)
+    const prior = await mostRecentSubmissionFor(
+      r.api,
+      r.collection,
+      r.item,
+      String(def?.endpoint_path ?? '')
+    )
     if (!prior) {
       queued++
-      await resolveObligation(r.id, {
-        outcome: 'failed',
-        reason:
-          'gave up: no earlier request to repeat — this send has never run for this record, so a person must start it'
-      })
       continue
     }
     await refireFromPrior(r.id, prior.id, null)

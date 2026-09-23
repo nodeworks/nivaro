@@ -8,8 +8,8 @@
  * feature exists to stop. So the mapping lives here and every writer calls it.
  */
 import { db } from '../db/index.js'
-import { classifyError } from './integration-remediation.js'
 import { resolveObligation } from './integration-obligations.js'
+import { classifyError } from './integration-remediation.js'
 
 export type SubmissionStatus = 'submitted' | 'pending' | 'accepted' | 'rejected' | 'failed'
 
@@ -84,6 +84,13 @@ const OWNED_COLUMNS = new Set([
  * automatic sweep's `retry_count`/`next_retry_at`), so a send attempt is
  * ever only ONE write to the row, not one from here plus a second from the
  * caller.
+ *
+ * `attempted: false` is for the ONE caller that records an outcome without
+ * having made an attempt — `PATCH /erp-submissions/:id/status`, where an
+ * admin writes down what a partner told us some other way (a webhook, a
+ * phone call). That route never contacts anyone, so counting it as an
+ * attempt would silently spend a rung of the retry ladder every time someone
+ * corrected a status.
  */
 export async function applySendOutcome(opts: {
   submissionId: number
@@ -97,6 +104,8 @@ export async function applySendOutcome(opts: {
   priorExternalRef: string | null
   priorAttempts: number
   extra?: Record<string, unknown>
+  /** Default true: this outcome came from a request we actually made. */
+  attempted?: boolean
 }): Promise<void> {
   const { serializeResponseBody } = await import('./workflow-actions.js')
   const failed = opts.outcome.status === 'failed' || opts.outcome.status === 'rejected'
@@ -109,7 +118,7 @@ export async function applySendOutcome(opts: {
       status: opts.outcome.status,
       response: serializeResponseBody(opts.outcome.response),
       external_ref: opts.outcome.external_ref ?? opts.priorExternalRef,
-      attempts: opts.priorAttempts + 1,
+      attempts: opts.attempted === false ? opts.priorAttempts : opts.priorAttempts + 1,
       last_error: opts.outcome.error,
       error_class: failed
         ? classifyError(opts.outcome.http_status ?? null, opts.outcome.response, opts.outcome.error)

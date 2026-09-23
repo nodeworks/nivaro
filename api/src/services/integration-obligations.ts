@@ -28,13 +28,7 @@ export type ObligationOutcome =
   | 'missing'
   | 'superseded'
 
-export type ObligationTrigger =
-  | 'transition'
-  | 'hook'
-  | 'flow'
-  | 'cron'
-  | 'reconcile'
-  | 'manual'
+export type ObligationTrigger = 'transition' | 'hook' | 'flow' | 'cron' | 'reconcile' | 'manual'
 
 /** Outcomes that still want something to happen. */
 export const OPEN_OUTCOMES: ObligationOutcome[] = ['pending', 'failed', 'overdue', 'missing']
@@ -83,8 +77,32 @@ export interface ObligationKindDef {
    *  the beginning of time. Required, not optional: a kind that ignores it
    *  is exactly the flooding this parameter exists to prevent. */
   expect(database: Knex, opts: { epoch: Date }): Promise<ExpectedObligation[]>
-  /** Phase 2 only: may the sweep re-fire a `missing` row by itself? */
+  /**
+   * Phase 2 only: may the sweep re-fire a `missing` row by itself?
+   *
+   * OPT-IN, deliberately: absent or false means never. A re-fire repeats the
+   * BYTES of an earlier request, so it is only ever correct for a kind whose
+   * stored body cannot go stale (an id that is what it always was). A
+   * state-carrying kind would re-assert an old state, and a kind a person is
+   * supposed to trigger would act for them — both are worse than leaving the
+   * row `missing` for someone to look at.
+   */
   safe_to_refire?: boolean
+  /**
+   * This kind's obligation belongs to a PERSON — the send is theirs to make
+   * (a button on the record), not the sweep's. Never auto-re-fired whatever
+   * `safe_to_refire` says.
+   */
+  human?: boolean
+  /**
+   * The endpoint this kind's send goes to, as stored in
+   * `nivaro_erp_submissions.payload.endpoint_path`. Required before the
+   * sweep may re-fire anything: several kinds share one API, and "the most
+   * recent request for this record" without an endpoint filter can just as
+   * easily be a DIFFERENT push's body. A kind that cannot name its endpoint
+   * is never re-fired.
+   */
+  endpoint_path?: string | null
 }
 
 const registry = new Map<string, ObligationKindDef>()
@@ -186,7 +204,9 @@ export async function recordObligation(opts: {
       .returning('id')) as Array<number | { id: number }>
     const first = inserted[0]
     // tedious hands an OBJECT back from .returning on this stack.
-    return typeof first === 'object' && first !== null ? Number(first.id) : Number(first ?? 0) || null
+    return typeof first === 'object' && first !== null
+      ? Number(first.id)
+      : Number(first ?? 0) || null
   } catch (err) {
     warnOnce(err)
     return null
@@ -286,9 +306,9 @@ export async function resolveApiName(database: Knex, idOrName: string): Promise<
   const cached = apiNameCache.get(s)
   if (cached && Date.now() - cached.at < API_NAME_TTL_MS) return cached.name
   try {
-    const row = (await database('nivaro_external_apis').where({ id: Number(s) }).first('name')) as
-      | { name: string }
-      | undefined
+    const row = (await database('nivaro_external_apis')
+      .where({ id: Number(s) })
+      .first('name')) as { name: string } | undefined
     const name = row?.name ?? s
     apiNameCache.set(s, { name, at: Date.now() })
     return name
@@ -322,7 +342,9 @@ export async function getObligationsEpoch(database: Knex): Promise<Date> {
       .first('integration_obligations_epoch')) as
       | { integration_obligations_epoch: Date | string | null }
       | undefined
-    const epoch = row?.integration_obligations_epoch ? new Date(row.integration_obligations_epoch) : new Date()
+    const epoch = row?.integration_obligations_epoch
+      ? new Date(row.integration_obligations_epoch)
+      : new Date()
     epochCache = { epoch, at: Date.now() }
     return epoch
   } catch {

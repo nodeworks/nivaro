@@ -42,9 +42,12 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../routes/erp-submissions.js', () => ({ sendPayload: vi.fn() }))
 
 import { db } from '../../../db/index.js'
-import { integrationObligationsRoutes } from '../../../routes/integration-obligations.js'
-import { clearObligationKinds } from '../../../services/integration-obligations.js'
 import { sendPayload } from '../../../routes/erp-submissions.js'
+import { integrationObligationsRoutes } from '../../../routes/integration-obligations.js'
+import {
+  clearObligationKinds,
+  registerObligationKind
+} from '../../../services/integration-obligations.js'
 
 function buildApp() {
   const app = Fastify({ logger: false })
@@ -104,7 +107,10 @@ describe('POST /integration-obligations/:id/send', () => {
     mockedDb().mockReturnValue(settingsChain(true) as unknown as ReturnType<typeof db>)
     const app = buildApp()
 
-    const res = await app.inject({ method: 'POST', url: '/integration-obligations/not-a-number/send' })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/integration-obligations/not-a-number/send'
+    })
 
     expect(res.statusCode).toBe(404)
   })
@@ -158,21 +164,40 @@ describe('POST /integration-obligations/:id/send', () => {
   })
 
   it('200 — an open obligation with nothing of its own to re-send, and no prior request to repeat, is reported honestly', async () => {
+    // The kind has to have opted in before "is there a prior request?" is
+    // even asked — C1 — so this is the shape that reaches that question.
+    registerObligationKind({
+      api: 'Partner',
+      kind: 'push',
+      collection: 'workflows',
+      label: 'x',
+      safe_to_refire: true,
+      endpoint_path: '/orders',
+      expect: async () => []
+    })
     const settings = settingsChain(true)
     // The route's own pre-check reads {id, outcome}; sendNow's own lookup
-    // reads {id, api, collection, item, submission_id} on the SAME table —
-    // one chain answering both is fine, the mock ignores the column list.
+    // reads {id, api, kind, collection, item, submission_id} on the SAME
+    // table — one chain answering both is fine, the mock ignores the columns.
     const obligations = obligationChain({
       id: 1,
       outcome: 'missing',
       api: 'Partner',
+      kind: 'push',
       collection: 'workflows',
       item: '1',
       submission_id: null
     })
-    const priorLookup = { join: vi.fn(), where: vi.fn(), orderBy: vi.fn(), first: vi.fn().mockResolvedValue(undefined) }
+    const priorLookup = {
+      join: vi.fn(),
+      where: vi.fn(),
+      whereRaw: vi.fn(),
+      orderBy: vi.fn(),
+      first: vi.fn().mockResolvedValue(undefined)
+    }
     priorLookup.join.mockReturnValue(priorLookup)
     priorLookup.where.mockReturnValue(priorLookup)
+    priorLookup.whereRaw.mockReturnValue(priorLookup)
     priorLookup.orderBy.mockReturnValue(priorLookup)
     mockedDb().mockImplementation(((table: string) => {
       if (table === 'nivaro_settings') return settings
@@ -186,6 +211,38 @@ describe('POST /integration-obligations/:id/send', () => {
 
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body).data.detail).toMatch(/nothing to re-send/)
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it('200 — C1: a missing obligation whose kind never opted in is refused, in words, without sending', async () => {
+    registerObligationKind({
+      api: 'Partner',
+      kind: 'state',
+      collection: 'workflows',
+      label: 'x',
+      expect: async () => []
+    })
+    const settings = settingsChain(true)
+    const obligations = obligationChain({
+      id: 1,
+      outcome: 'missing',
+      api: 'Partner',
+      kind: 'state',
+      collection: 'workflows',
+      item: '1',
+      submission_id: null
+    })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return obligations
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    const app = buildApp()
+
+    const res = await app.inject({ method: 'POST', url: '/integration-obligations/1/send' })
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body).data.detail).toMatch(/^not re-sent: /)
     expect(sendPayload).not.toHaveBeenCalled()
   })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { skipReason } from '../../../services/integration-obligations.js'
 import { outcomeForSubmission } from '../../../services/erp-submission-status.js'
+import { skipReason } from '../../../services/integration-obligations.js'
 
 describe('skipReason', () => {
   it('names the guard rule that refused', () => {
@@ -8,12 +8,14 @@ describe('skipReason', () => {
   })
 
   it('names the empty context gate', () => {
-    expect(skipReason('skip_when_empty', 'mwf_link')).toBe('skip_when_empty: mwf_link empty')
+    expect(skipReason('skip_when_empty', 'partner_link')).toBe(
+      'skip_when_empty: partner_link empty'
+    )
   })
 
   it('names every reference that was checked and unset', () => {
-    expect(skipReason('skip_unless_any', 'context.mwf_link.0.mwf_id, record.mwf_id')).toBe(
-      'skip_unless_any: none of context.mwf_link.0.mwf_id, record.mwf_id is set'
+    expect(skipReason('skip_unless_any', 'context.partner_link.0.ref, record.partner_ref')).toBe(
+      'skip_unless_any: none of context.partner_link.0.ref, record.partner_ref is set'
     )
   })
 

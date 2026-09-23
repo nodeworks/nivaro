@@ -467,12 +467,12 @@ describe('resolveApiName', () => {
   })
 
   it("resolves a numeric id to the row's name", async () => {
-    const chain = { where: vi.fn(), first: vi.fn().mockResolvedValue({ name: 'Fusion IIP' }) }
+    const chain = { where: vi.fn(), first: vi.fn().mockResolvedValue({ name: 'ERP Gateway' }) }
     chain.where.mockReturnValue(chain)
     mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
 
     const name = await resolveApiName(db, '9101')
-    expect(name).toBe('Fusion IIP')
+    expect(name).toBe('ERP Gateway')
     expect(chain.where).toHaveBeenCalledWith({ id: 9101 })
   })
 

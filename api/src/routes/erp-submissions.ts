@@ -497,7 +497,11 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         response: parseJson(row.response) ?? row.response ?? null
       },
       priorExternalRef: row.external_ref,
-      priorAttempts: row.attempts
+      priorAttempts: row.attempts,
+      // …and for the same reason it is not an ATTEMPT: nothing was sent, so
+      // counting one here would silently spend a rung of the retry ladder
+      // every time an admin corrected a status.
+      attempted: false
     })
     // applySendOutcome's own `?? priorExternalRef` fallback cannot express
     // "clear it to null" — null there reads as "no new info", which is
@@ -592,9 +596,7 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
         // Exponential-ish backoff: base * 2^retries, capped at a day.
         next_retry_at: ok
           ? null
-          : new Date(
-              now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000
-            )
+          : new Date(now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000)
       }
     })
     await propagateSubmissionStatus({

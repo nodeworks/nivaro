@@ -34,3 +34,19 @@ export function toneForOutcome(outcome: string): 'danger' | 'warning' | 'neutral
   if (outcome === 'sent') return 'positive'
   return 'neutral'
 }
+
+/**
+ * Does an obligation row point at a record a person can open?
+ *
+ * Most do — the row's (collection, item) is a real record. But a kind may
+ * derive its expectation from something that is not a record at all: an
+ * inbound kind reads the API log, so its collection is `nivaro_api_logs` and
+ * its item is a BUCKET KEY (`workflows:371396`, `/graphql@2026-09-23T14`).
+ * A `nivaro_` table is never a registered collection, so a record link built
+ * from that pair cannot resolve — such a row is shown, and simply is not
+ * clickable. The server applies the same test when it picks a
+ * notification's target (services/integration-alerts.ts).
+ */
+export function isRoutableRecord(collection: string): boolean {
+  return !!collection && !/^nivaro_/i.test(collection)
+}

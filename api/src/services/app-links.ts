@@ -32,6 +32,10 @@ export type LinkKind =
   | 'issues'
   | 'imports'
   | 'dashboard'
+  /** The integrations board (obligations + per-API health). Admin-only
+   *  today; a portal that grows one registers its own route like any other
+   *  kind. */
+  | 'integrations'
 
 export type LinkParams = Record<string, string | number | null | undefined>
 
@@ -58,7 +62,8 @@ const ADMIN_ROUTES: Record<LinkKind, string> = {
   profile: '/profile',
   issues: '/issues',
   imports: '/imports',
-  dashboard: '/dashboards/{id}'
+  dashboard: '/dashboards/{id}',
+  integrations: '/integration-health'
 }
 
 let registered: LinkRegistration | null = null

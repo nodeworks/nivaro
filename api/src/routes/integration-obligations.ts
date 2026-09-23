@@ -26,11 +26,26 @@ const MAX_LIMIT = 200
 const RECORD_CAP = 50
 const SUMMARY_ID_CAP = 500
 
-// The core integration-obligations readiness check. WARN once any
-// overdue/missing row exists; FAIL only once a `missing` row — one whose
-// trigger never fired at all — has sat unmet for more than a day, since
-// `overdue` has already been through the reconcile sweep's own grace
-// window and being old is not itself worse.
+// The core integration-obligations readiness check. WARN once ANY unmet row
+// exists — failed, overdue or missing, the same three outcomes the alerting
+// path calls unmet (integration-alerts.ts's UNMET). A hundred failed pushes
+// is not a healthy deployment, and a scorecard that reports one as PASS is
+// worse than no scorecard.
+//
+// FAIL on either of the two things only a person can move:
+//   - a `missing` row — one whose trigger never fired at all — unmet for
+//     more than a day, and
+//   - a `failed` row remediation has GIVEN UP on ("gave up: …") and is older
+//     than a day: the retry ladder is spent, so nothing automatic will touch
+//     it again.
+// `overdue` alone stays a warning: it has already been through the reconcile
+// sweep's own grace window, and being old is not itself worse.
+//
+// The query is deliberately UNBOUNDED in time. Open outcomes are never
+// pruned (pruneObligations deletes `sent`/`superseded` only), so a 40-day-old
+// unmet obligation is still unmet — a 30-day window would turn the scorecard
+// green precisely for the deployment that has been ignoring it longest. The
+// wording therefore claims no window.
 //
 // Registered from the route plugin (same pattern as
 // registerIntegrationReadiness() in routes/external-apis.ts), NOT from
@@ -47,14 +62,14 @@ function registerIntegrationObligationsReadiness(): void {
     label: 'Integration obligations',
     group: 'Integrations',
     description:
-      'Messages a partner should have received and has not. Overdue or missing in the last 24 hours is a warning; a "missing" message — one whose trigger never fired at all — unmet for over a day is a failure.',
+      'Messages a partner should have received and has not. Any failed, overdue or missing message is a warning; a "missing" message — one whose trigger never fired at all — or one remediation has given up on, unmet for over a day, is a failure.',
     run: async () => {
       if (listObligationKinds().length === 0) {
         return { status: 'pass', detail: 'no obligation kinds registered' }
       }
       const day = new Date(Date.now() - 86_400_000)
       const rows = (await db('nivaro_integration_obligations')
-        .whereIn('outcome', ['overdue', 'missing'])
+        .whereIn('outcome', ['failed', 'overdue', 'missing'])
         .select('api', 'kind', 'outcome')
         .count({ c: '*' })
         .min({ oldest: 'due_at' })
@@ -66,11 +81,23 @@ function registerIntegrationObligationsReadiness(): void {
         oldest: Date | null
       }>
       if (rows.length === 0) {
-        return { status: 'pass', detail: 'Every obligation is met or in flight.' }
+        return { status: 'pass', detail: 'No open failed, overdue or missing obligations.' }
       }
       const total = rows.reduce((a, r) => a + Number(r.c), 0)
       const staleMissing = rows.filter(
         (r) => r.outcome === 'missing' && r.oldest && new Date(r.oldest) < day
+      )
+      // The retry ladder writes its surrender onto the row's reason, which
+      // the grouped query above cannot see — one narrow count answers it.
+      const gaveUp = Number(
+        (
+          (await db('nivaro_integration_obligations')
+            .where({ outcome: 'failed' })
+            .where('reason', 'like', 'gave up:%')
+            .where('due_at', '<', day)
+            .count({ c: '*' })
+            .first()) as { c?: number | string } | undefined
+        )?.c ?? 0
       )
       const blockers = rows.map(
         (r) =>
@@ -78,15 +105,23 @@ function registerIntegrationObligationsReadiness(): void {
             r.oldest ? ` (oldest ${new Date(r.oldest).toISOString().slice(0, 16)})` : ''
           }`
       )
-      return staleMissing.length > 0
+      if (gaveUp > 0) {
+        blockers.push(`${gaveUp} failed obligation(s) remediation gave up on, older than 24 hours`)
+      }
+      const failReasons: string[] = []
+      if (staleMissing.length > 0) {
+        failReasons.push(`${staleMissing.length} "missing" group(s) older than 24 hours`)
+      }
+      if (gaveUp > 0) failReasons.push(`${gaveUp} given up on and older than 24 hours`)
+      return failReasons.length > 0
         ? {
             status: 'fail',
-            detail: `${total} unmet obligation(s); ${staleMissing.length} "missing" group(s) older than 24 hours.`,
+            detail: `${total} unmet obligation(s); ${failReasons.join('; ')}.`,
             blockers
           }
         : {
             status: 'warn',
-            detail: `${total} unmet obligation(s) in the last 24 hours.`,
+            detail: `${total} unmet obligation(s) — failed, overdue or missing.`,
             blockers
           }
     }
@@ -312,9 +347,7 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       // still OPEN (incl. `missing`, which sendNow handles by re-firing the
       // most recent request for the record) reaches sendNow below.
       if (isClosedOutcome(row.outcome)) {
-        return reply
-          .code(409)
-          .send({ error: `already ${row.outcome} — there is nothing to send` })
+        return reply.code(409).send({ error: `already ${row.outcome} — there is nothing to send` })
       }
       const r = await sendNow(id, req.user?.id ?? null)
       await logActivity({

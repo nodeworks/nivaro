@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { obligationQueryParams, toneForOutcome } from '../obligation-filters'
+import { isRoutableRecord, obligationQueryParams, toneForOutcome } from '../obligation-filters'
 
 describe('obligationQueryParams', () => {
   it('omits every unset filter rather than sending empty values', () => {
@@ -48,5 +48,21 @@ describe('toneForOutcome', () => {
   it('reads a landed send as positive and anything else as neutral', () => {
     expect(toneForOutcome('sent')).toBe('positive')
     expect(toneForOutcome('superseded')).toBe('neutral')
+  })
+})
+
+describe('isRoutableRecord', () => {
+  it('an ordinary collection is a record a person can open', () => {
+    expect(isRoutableRecord('workflows')).toBe(true)
+    expect(isRoutableRecord('inventory_request')).toBe(true)
+  })
+
+  it('a nivaro_ table is never a registered collection, so its rows are not clickable', () => {
+    expect(isRoutableRecord('nivaro_api_logs')).toBe(false)
+    expect(isRoutableRecord('NIVARO_API_LOGS')).toBe(false)
+  })
+
+  it('an empty collection is not routable either', () => {
+    expect(isRoutableRecord('')).toBe(false)
   })
 })

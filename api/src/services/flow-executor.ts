@@ -1332,6 +1332,14 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
       }
     }
 
+    // `__http_status` is bookkeeping between the push op and the obligation
+    // resolve below — never part of the flow's own data. Read once here and
+    // removed, so it reaches neither the stored run output nor the data this
+    // function hands back to its caller (a parent flow merging a sub-flow's
+    // result, most of all).
+    const pushStatus = typeof data.__http_status === 'number' ? data.__http_status : null
+    delete data.__http_status
+
     await db('nivaro_flow_runs')
       .where({ id: runId })
       .update({
@@ -1366,7 +1374,6 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
       const haltedOp =
         progress.halted != null ? operations.find((o) => o.key === progress.halted) : undefined
       const halt = haltedOp?.type === 'condition' ? flowHaltReason(progress.halted) : null
-      const pushStatus = typeof data.__http_status === 'number' ? data.__http_status : null
       const landed = pushStatus == null ? progress.matched : pushStatus >= 200 && pushStatus < 300
       await resolveObligation(obligationId, {
         outcome: halt ? 'skipped' : landed ? 'pending' : 'failed',

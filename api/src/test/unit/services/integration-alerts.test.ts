@@ -9,11 +9,16 @@ vi.mock('../../../services/workflow-transitions.js', () => ({
 vi.mock('../../../services/notification-channels.js', () => ({
   notifyUser: vi.fn().mockResolvedValue({ id: 1, decision: null, lane: 'needs_you' })
 }))
+// Capturing the digest provider is the only way to reach
+// buildIntegrationDigestSection, which is deliberately not exported.
+vi.mock('../../../services/daily-digest.js', () => ({ registerDigestSection: vi.fn() }))
 
 import { db } from '../../../db/index.js'
+import { registerDigestSection } from '../../../services/daily-digest.js'
 import {
   alertUnmetObligations,
   dedupeCutoff,
+  registerIntegrationDigest,
   setApp,
   shouldNotify
 } from '../../../services/integration-alerts.js'
@@ -179,3 +184,92 @@ describe('alertUnmetObligations', () => {
 // integration-reconcile.test.ts's "runIntegrationReconcile writes nothing …
 // db not called" assertions — that suite never calls setApp(), so
 // alertUnmetObligations() returns before its first db() call there.
+
+// ─── I3: the digest obeys the SAME switch the immediate alert does ─────────
+
+describe('the daily digest section', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  /** The provider daily-digest.ts would call once per user. */
+  function digestProvider(): (userId: string) => Promise<unknown> {
+    registerIntegrationDigest()
+    const fn = vi.mocked(registerDigestSection).mock.calls.at(-1)?.[0]
+    if (!fn) throw new Error('no digest section was registered')
+    return fn as (userId: string) => Promise<unknown>
+  }
+
+  it('returns nothing — and reads no obligations at all — while notifications are off', async () => {
+    const settingsChain = makeChain({ first: { integration_notifications_enabled: false } })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settingsChain
+      // Any other table here means the gate did not come first.
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    await expect(digestProvider()('AAAAAAAA-0000-0000-0000-000000000001')).resolves.toBeNull()
+  })
+})
+
+// ─── I5: a row whose "record" is not one links to the board, not a 404 ─────
+
+describe('the notification target', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('carries no record id when the collection has no record route — the board is the destination', async () => {
+    setApp(fakeApp)
+    const inboundRow = {
+      ...row,
+      kind: 'inbound',
+      collection: 'nivaro_api_logs',
+      // A bucket key, not a record id — `/collections/nivaro_api_logs/…`
+      // cannot resolve, so a record target would land on an error page.
+      item: '/graphql@2026-09-23T14'
+    }
+    const settingsChain = makeChain({ first: { integration_notifications_enabled: true } })
+    const obligationsChain = makeChain({ select: [inboundRow], update: 1 })
+    const apisChain = makeChain({
+      select: [{ name: 'Partner', owner_user: 'aaaaaaaa-0000-0000-0000-000000000001' }]
+    })
+    const instancesChain = makeChain({ select: [] })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settingsChain
+      if (table === 'nivaro_integration_obligations') return obligationsChain
+      if (table === 'nivaro_external_apis') return apisChain
+      if (table === 'nivaro_workflow_instances') return instancesChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    await alertUnmetObligations()
+
+    expect(notifyUser).toHaveBeenCalledTimes(1)
+    const opts = vi.mocked(notifyUser).mock.calls[0][2]
+    expect(opts.target).toEqual({ kind: 'integration', action: 'review' })
+  })
+
+  it('still targets the record itself for an ordinary collection', async () => {
+    setApp(fakeApp)
+    const settingsChain = makeChain({ first: { integration_notifications_enabled: true } })
+    const obligationsChain = makeChain({ select: [row], update: 1 })
+    const apisChain = makeChain({
+      select: [{ name: 'Partner', owner_user: 'aaaaaaaa-0000-0000-0000-000000000001' }]
+    })
+    const instancesChain = makeChain({ select: [] })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settingsChain
+      if (table === 'nivaro_integration_obligations') return obligationsChain
+      if (table === 'nivaro_external_apis') return apisChain
+      if (table === 'nivaro_workflow_instances') return instancesChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    await alertUnmetObligations()
+
+    const opts = vi.mocked(notifyUser).mock.calls[0][2]
+    expect(opts.target).toEqual({
+      kind: 'record',
+      collection: 'workflows',
+      id: '10',
+      action: 'review'
+    })
+  })
+})

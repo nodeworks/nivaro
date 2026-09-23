@@ -1692,8 +1692,7 @@ export function SettingsPage() {
         .integration_notifications_enabled
     )
     setIntegrationRemediationEnabled(
-      !!(settings as { integration_remediation_enabled?: boolean })
-        .integration_remediation_enabled
+      !!(settings as { integration_remediation_enabled?: boolean }).integration_remediation_enabled
     )
     setRevisionRetentionCount(settings.revision_retention_count ?? '')
     const s = settings as Record<string, unknown>
@@ -3163,11 +3162,17 @@ export function SettingsPage() {
                       </p>
                       <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                         Off by default. When on: Send now (from the record banner or the integration
-                        board) actually re-sends; a failure whose cause looks transient retries
+                        board) actually re-sends; and a failure whose cause looks transient retries
                         itself on a 1/5/30/120-minute ladder, up to five attempts, before it is
-                        handed to a person; and a message the sweep found was never sent at all is
-                        re-fired once. A validation failure — one repetition cannot fix — is never
-                        retried automatically either way.
+                        handed to a person. A validation failure — one repetition cannot fix — is
+                        never retried automatically either way.
+                      </p>
+                      <p className='mt-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                        A message that was never sent at all is only re-fired for the kinds marked
+                        safe to repeat — ones whose stored request cannot have gone stale. A send
+                        that carries a state, and any send a person is meant to make themselves (the
+                        Fusion push), is never repeated automatically: it stays on the board,
+                        waiting for someone.
                       </p>
                     </div>
                     <Switch

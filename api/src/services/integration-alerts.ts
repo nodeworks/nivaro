@@ -196,6 +196,19 @@ async function apiOwnerMap(): Promise<Map<string, string | null>> {
 
 const recordKey = (collection: string, item: string) => `${collection}::${item}`
 
+/**
+ * Does this obligation point at a record a person can actually open?
+ *
+ * Not every kind's `item` is a record id. An inbound kind derived from the
+ * API log carries `collection: 'nivaro_api_logs'` and a BUCKET KEY for an
+ * item (`workflows:371396`, `/graphql@2026-09-23T14`) — a `nivaro_` table is
+ * never a registered collection, so a record link built from that pair lands
+ * on an error page. Those rows link to the board instead, which is where the
+ * row actually lives. */
+function isRoutableRecord(collection: string): boolean {
+  return !!collection && !/^nivaro_/i.test(collection)
+}
+
 export async function alertUnmetObligations(): Promise<{ notified: number }> {
   const app = _app
   if (!app) return { notified: 0 }
@@ -246,10 +259,11 @@ export async function alertUnmetObligations(): Promise<{ notified: number }> {
       continue
     }
 
+    const routable = isRoutableRecord(r.collection)
     const { resolveFriendlyId } = await import('./workflow-transitions.js')
-    const label = await resolveFriendlyId(r.collection, r.item).catch(
-      () => `${r.collection} #${r.item}`
-    )
+    const label = routable
+      ? await resolveFriendlyId(r.collection, r.item).catch(() => `${r.collection} #${r.item}`)
+      : `${r.kind} · ${r.item}`
     const why = r.reason
       ? `${r.api} was never told — ${r.reason}`
       : `${r.api} has not received this — it is ${r.outcome}.`
@@ -266,7 +280,13 @@ export async function alertUnmetObligations(): Promise<{ notified: number }> {
         // record target with no action, or one only an owner reads as
         // "theirs", would leave the API owner (who may not own the record)
         // sitting in the FYI lane, which spec §2.4.4 does not want.
-        target: { kind: 'record', collection: r.collection, id: r.item, action: 'review' },
+        //
+        // A row whose "record" is not one (an inbound bucket key) carries no
+        // record id at all: `kind: 'integration'` without one resolves to the
+        // board, rather than to a record URL that cannot open.
+        target: routable
+          ? { kind: 'record', collection: r.collection, id: r.item, action: 'review' }
+          : { kind: 'integration', action: 'review' },
         source: { kind: 'integration', label: `${r.api} · ${r.kind}`, id: r.id },
         why
       }
@@ -332,19 +352,29 @@ async function integrationsForUser(userId: string): Promise<ObligationAlertRow[]
 }
 
 async function buildIntegrationDigestSection(userId: string): Promise<DigestSection | null> {
+  // The SAME gate `alertUnmetObligations` checks, for the same reason: a
+  // deployment that has not turned integration notifications on must not be
+  // told about its backlog through the back door of the daily digest. Off is
+  // off on every path, not only the one that sends immediately.
+  if (!(await notificationsEnabled())) return null
+
   const mine = await integrationsForUser(userId)
   if (mine.length === 0) return null
 
   const { resolveFriendlyId } = await import('./workflow-transitions.js')
+  const board = `${config.ADMIN_URL.replace(/\/$/, '')}/integration-health`
   const lines: DigestLine[] = []
   for (const r of mine.slice(0, DIGEST_LIMIT)) {
-    const label = await resolveFriendlyId(r.collection, r.item).catch(
-      () => `${r.collection} #${r.item}`
-    )
+    // Same rule as the alert target above: a bucket key is not a record, so
+    // its line points at the board rather than at a URL that cannot open.
+    const routable = isRoutableRecord(r.collection)
+    const label = routable
+      ? await resolveFriendlyId(r.collection, r.item).catch(() => `${r.collection} #${r.item}`)
+      : `${r.kind} · ${r.item}`
     lines.push({
       text: `${r.api} — ${label}: ${r.outcome}`,
       sub: r.reason,
-      url: `${config.ADMIN_URL}/collections/${r.collection}/${r.item}`
+      url: routable ? `${config.ADMIN_URL}/collections/${r.collection}/${r.item}` : board
     })
   }
   return { title: 'Integrations waiting on a human', lines }
