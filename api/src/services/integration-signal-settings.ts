@@ -57,6 +57,7 @@ export function validateSettingPatch(
   const values: Record<string, string> = {}
   for (const [k, v] of Object.entries(patch)) {
     if (k === 'enabled') {
+      if (typeof v !== 'boolean') return { ok: false, error: 'enabled must be true or false' }
       values[k] = v ? 'true' : 'false'
       continue
     }
@@ -90,6 +91,9 @@ export interface SnoozeRow {
   group_key: string | null
   until: Date | null
   until_change_hash: string | null
+  /** Optional — only `loadActiveSnoozes` populates it (the matching logic
+   *  above never reads it, so a caller that doesn't select it stays valid). */
+  note?: string | null
 }
 
 export function isSnoozed(row: SignalRow, signal: string, snoozes: SnoozeRow[], now: Date): SnoozeRow | null {
@@ -108,6 +112,6 @@ export function isSnoozed(row: SignalRow, signal: string, snoozes: SnoozeRow[], 
 export async function loadActiveSnoozes(): Promise<SnoozeRow[]> {
   return (await db('nivaro_integration_signal_snoozes')
     .where((q) => q.whereNull('until').orWhere('until', '>', new Date()))
-    .select('id', 'signal', 'row_key', 'group_key', 'until', 'until_change_hash')
+    .select('id', 'signal', 'row_key', 'group_key', 'until', 'until_change_hash', 'note')
     .catch(() => [])) as SnoozeRow[]
 }

@@ -157,6 +157,9 @@ async function businessDaysAgo(n: number): Promise<Date> {
   return d
 }
 
+/** Same helper evaluate() receives — exported for the settings preview route. */
+export const businessDaysAgoForPreview = businessDaysAgo
+
 function withBudget<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms)

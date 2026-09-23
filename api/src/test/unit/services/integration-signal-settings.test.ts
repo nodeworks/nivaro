@@ -39,6 +39,14 @@ describe('validateSettingPatch', () => {
     expect(validateSettingPatch(sig, { nope: 1 }).ok).toBe(false)
     expect(validateSettingPatch(sig, { severity: 'loud' }).ok).toBe(false)
   })
+  it('rejects a non-boolean enabled value instead of coercing it', () => {
+    expect(validateSettingPatch(sig, { enabled: 'false' })).toEqual({
+      ok: false,
+      error: 'enabled must be true or false'
+    })
+    expect(validateSettingPatch(sig, { enabled: 1 }).ok).toBe(false)
+    expect(validateSettingPatch(sig, { enabled: true })).toEqual({ ok: true, values: { enabled: 'true' } })
+  })
 })
 
 describe('stableRowHash', () => {

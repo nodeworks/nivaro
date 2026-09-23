@@ -408,6 +408,12 @@ export async function buildServer() {
     // Core email types must exist before extensions add theirs.
     const { registerCoreMailTypes } = await import('./services/mail-types.js')
     registerCoreMailTypes()
+    // Core integration signals (spec 2026-09-23 §3.1) must exist before an
+    // extension's own registerIntegrationSignal calls run.
+    {
+      const { registerCoreIntegrationSignals } = await import('./services/integration-signals-core.js')
+      registerCoreIntegrationSignals()
+    }
     await loadExtensions({
       app,
       database: db,
@@ -1509,6 +1515,25 @@ export async function buildServer() {
             const { dryRunIntegrationReconcile } = await import('./services/integration-reconcile.js')
             return dryRunIntegrationReconcile()
           }
+        }
+      )
+
+      // Integrations console (spec 2026-09-23 §3): evaluates every registered
+      // signal and writes the snapshot the console reads. Never sends to a
+      // partner — this is entirely a read-side sweep, same posture as the
+      // reconcile job above.
+      app.cron.schedule(
+        'integration-signals',
+        '*/5 * * * *',
+        async () => {
+          const { runSignalsCycle } = await import('./services/integration-signals.js')
+          await runSignalsCycle()
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            'Evaluates every integration signal (partners failing, failed pushes, never-sent and overdue obligations, inbound errors, imports, flow failures, extension signals) and writes the snapshot the Integrations console reads. Never sends to a partner.'
         }
       )
 

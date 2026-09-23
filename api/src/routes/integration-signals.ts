@@ -1,0 +1,300 @@
+/**
+ * Integrations console — admin HTTP surface over the signal registry
+ * (spec 2026-09-23 §4). Reads the SNAPSHOT the `integration-signals` cron
+ * writes; only /refresh evaluates on demand (used by "Refresh now" and
+ * verification, never by the page's own load).
+ */
+import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { db } from '../db/index.js'
+import { requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
+import {
+  bustSignalSettings,
+  isSnoozed,
+  loadActiveSnoozes,
+  resolveThresholds,
+  stableRowHash,
+  validateSettingPatch
+} from '../services/integration-signal-settings.js'
+import {
+  getIntegrationSignal,
+  getSignalAction,
+  listIntegrationSignals,
+  runSignalsCycle,
+  signalOwner,
+  type SignalAction,
+  type SignalRow
+} from '../services/integration-signals.js'
+
+const STALE_MS = 15 * 60_000
+
+export function planActionTargets(
+  rows: SignalRow[],
+  keys: string[],
+  action: Pick<SignalAction, 'kind' | 'id' | 'label'>
+): { targets: SignalRow[]; skipped: Array<{ key: string; ok: false; message: string }> } {
+  const byKey = new Map(rows.map((r) => [r.key, r]))
+  const targets: SignalRow[] = []
+  const skipped: Array<{ key: string; ok: false; message: string }> = []
+  for (const k of keys) {
+    const r = byKey.get(k)
+    if (!r) {
+      skipped.push({ key: k, ok: false, message: 'No longer open' })
+      continue
+    }
+    const offers = r.actions.some(
+      (a) => a.kind === action.kind && (action.kind !== 'extension' || a.id === action.id)
+    )
+    if (!offers) skipped.push({ key: k, ok: false, message: 'This row does not offer that action' })
+    else targets.push(r)
+  }
+  return { targets, skipped }
+}
+
+function authHeaders(req: FastifyRequest): Record<string, string> {
+  const h: Record<string, string> = {}
+  if (req.headers.authorization) h.authorization = String(req.headers.authorization)
+  if (req.headers.cookie) h.cookie = String(req.headers.cookie)
+  return h
+}
+
+async function openRows(signal: string): Promise<Array<SignalRow & { first_seen: string }>> {
+  const rows = (await db('nivaro_integration_signal_rows')
+    .where({ signal })
+    .whereNull('cleared_at')
+    .orderBy('first_seen', 'asc')
+    .select('payload', 'first_seen')) as Array<{ payload: string; first_seen: Date }>
+  return rows.map((r) => ({ ...(JSON.parse(r.payload) as SignalRow), first_seen: new Date(r.first_seen).toISOString() }))
+}
+
+export async function integrationSignalsRoutes(app: FastifyInstance) {
+  const { registerReadinessCheck } = await import('../services/readiness.js')
+  registerReadinessCheck({
+    id: 'integration-signals-fresh',
+    label: 'Integration signals are being checked',
+    group: 'Integrations',
+    run: async () => {
+      const r = (await db('nivaro_integration_signal_runs').max('ran_at as m').first()) as { m: Date | null } | undefined
+      if (!r?.m) return { status: 'warn', detail: 'No evaluation has run yet' }
+      const age = Date.now() - new Date(r.m).getTime()
+      return age > STALE_MS
+        ? { status: 'fail', detail: `Last evaluation ${Math.round(age / 60000)} min ago — the integration-signals job may be stopped` }
+        : { status: 'pass', detail: `Last evaluation ${Math.round(age / 60000)} min ago` }
+    }
+  })
+
+  app.get('/integration-signals', { preHandler: requireAdmin }, async (req) => {
+    const tab = (req.query as { tab?: string }).tab
+    const snoozes = await loadActiveSnoozes()
+    const now = new Date()
+    const lastRuns = (await db.raw(
+      `SELECT r.signal, r.ran_at, r.count, r.error FROM nivaro_integration_signal_runs r
+        WHERE r.id IN (SELECT MAX(id) FROM nivaro_integration_signal_runs GROUP BY signal)`
+    )) as Array<{ signal: string; ran_at: Date; count: number; error: string | null }>
+    const runBy = new Map(lastRuns.map((r) => [r.signal, r]))
+    const signals = []
+    for (const s of listIntegrationSignals().filter((x) => !tab || x.tab === tab)) {
+      const settings = await resolveThresholds(s)
+      if (!settings.enabled) continue
+      const run = runBy.get(s.id)
+      const all = await openRows(s.id)
+      const rows = []
+      const snoozed = []
+      for (const r of all) {
+        const sn = isSnoozed(r, s.id, snoozes, now)
+        if (sn) {
+          snoozed.push({
+            ...r,
+            snooze: {
+              id: sn.id,
+              until: sn.until ? new Date(sn.until).toISOString() : null,
+              until_change: !!sn.until_change_hash,
+              note: sn.note ?? null
+            }
+          })
+        } else rows.push(r)
+      }
+      signals.push({
+        id: s.id,
+        label: s.label,
+        description: s.description,
+        tab: s.tab,
+        severity: settings.severity,
+        count: run ? Math.max(Number(run.count) - snoozed.length, rows.length) : rows.length,
+        error: run?.error ?? null,
+        last_run: run ? new Date(run.ran_at).toISOString() : null,
+        thresholds: s.thresholds,
+        settings,
+        rows,
+        snoozed,
+        shown: rows.length
+      })
+    }
+    const checked = lastRuns.reduce<Date | null>(
+      (m, r) => (!m || new Date(r.ran_at) > m ? new Date(r.ran_at) : m),
+      null
+    )
+    return {
+      data: {
+        checked_at: checked?.toISOString() ?? null,
+        stale: !checked || now.getTime() - checked.getTime() > STALE_MS,
+        signals
+      }
+    }
+  })
+
+  app.post('/integration-signals/refresh', { preHandler: requireAdmin }, async () => ({
+    data: await runSignalsCycle()
+  }))
+
+  app.post('/integration-signals/snoozes', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body as {
+      signal?: string
+      row_key?: string | null
+      group_key?: string | null
+      until?: string | null
+      until_change?: boolean
+      note?: string | null
+    }
+    if (!b?.signal || !getIntegrationSignal(b.signal)) return reply.code(400).send({ error: 'Unknown signal' })
+    if (!b.until && !b.until_change) return reply.code(400).send({ error: 'until or until_change is required' })
+    let hash: string | null = null
+    if (b.until_change) {
+      const target = (await openRows(b.signal)).find((r) =>
+        b.row_key ? r.key === b.row_key : b.group_key ? r.group === b.group_key : true
+      )
+      if (!target) return reply.code(404).send({ error: 'Nothing open to snooze' })
+      hash = stableRowHash(target)
+    }
+    const [ins] = await db('nivaro_integration_signal_snoozes')
+      .insert({
+        signal: b.signal,
+        row_key: b.row_key ?? null,
+        group_key: b.group_key ?? null,
+        until: b.until ? new Date(b.until) : null,
+        until_change_hash: hash,
+        note: b.note?.slice(0, 500) ?? null,
+        created_by: req.user?.id ?? null,
+        created_at: new Date()
+      })
+      .returning('id')
+    const id = typeof ins === 'object' ? (ins as { id: number }).id : ins
+    await logActivity({
+      action: 'integration-signal-snooze',
+      collection: 'nivaro_integration_signal_snoozes',
+      item: String(id),
+      user: req.user?.id,
+      req,
+      comment: `${b.signal} ${b.row_key ?? b.group_key ?? '(whole signal)'} ${b.until ? `until ${b.until}` : 'until it changes'}${b.note ? ` — ${b.note}` : ''}`
+    })
+    return { data: { id } }
+  })
+
+  app.delete('/integration-signals/snoozes/:id', { preHandler: requireAdmin }, async (req) => {
+    const id = Number((req.params as { id: string }).id)
+    await db('nivaro_integration_signal_snoozes').where({ id }).del()
+    await logActivity({
+      action: 'integration-signal-unsnooze',
+      collection: 'nivaro_integration_signal_snoozes',
+      item: String(id),
+      user: req.user?.id,
+      req
+    })
+    return { data: { id } }
+  })
+
+  app.get('/integration-signals/settings', { preHandler: requireAdmin }, async () => ({
+    data: await Promise.all(
+      listIntegrationSignals().map(async (s) => ({
+        id: s.id,
+        label: s.label,
+        description: s.description,
+        tab: s.tab,
+        thresholds: s.thresholds,
+        settings: await resolveThresholds(s)
+      }))
+    )
+  }))
+
+  app.patch('/integration-signals/settings/:signal', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { signal: string }).signal
+    const s = getIntegrationSignal(id)
+    if (!s) return reply.code(404).send({ error: 'Unknown signal' })
+    const v = validateSettingPatch(s, (req.body ?? {}) as Record<string, unknown>)
+    if (!v.ok) return reply.code(400).send({ error: v.error })
+    for (const [key, value] of Object.entries(v.values)) {
+      const hit = await db('nivaro_integration_signal_settings').where({ signal: id, key }).first('id')
+      const row = { value, updated_by: req.user?.id ?? null, updated_at: new Date() }
+      if (hit) await db('nivaro_integration_signal_settings').where({ id: hit.id }).update(row)
+      else await db('nivaro_integration_signal_settings').insert({ signal: id, key, ...row })
+    }
+    bustSignalSettings()
+    await logActivity({
+      action: 'integration-signal-settings',
+      collection: 'nivaro_integration_signal_settings',
+      item: id,
+      user: req.user?.id,
+      req,
+      comment: Object.entries(v.values).map(([k, x]) => `${k}=${x}`).join(', ')
+    })
+    return { data: await resolveThresholds(s) }
+  })
+
+  app.get('/integration-signals/settings/:signal/preview', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = (req.params as { signal: string }).signal
+    const s = getIntegrationSignal(id)
+    if (!s) return reply.code(404).send({ error: 'Unknown signal' })
+    const v = validateSettingPatch(s, (req.query ?? {}) as Record<string, unknown>)
+    if (!v.ok) return reply.code(400).send({ error: v.error })
+    const base = await resolveThresholds(s)
+    const thresholds = { ...base.thresholds }
+    for (const [k, x] of Object.entries(v.values)) if (k !== 'severity' && k !== 'enabled') thresholds[k] = Number(x)
+    try {
+      const { businessDaysAgoForPreview } = await import('../services/integration-signals.js')
+      const out = await s.evaluate({ thresholds, businessDaysAgo: businessDaysAgoForPreview })
+      return { data: { count: out.count, error: null } }
+    } catch (err) {
+      return { data: { count: null, error: err instanceof Error ? err.message : String(err) } }
+    }
+  })
+
+  app.post('/integration-signals/actions', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body as { signal?: string; row_keys?: string[]; action?: SignalAction }
+    if (!b?.signal || !Array.isArray(b.row_keys) || !b.action) {
+      return reply.code(400).send({ error: 'signal, row_keys and action are required' })
+    }
+    if (b.row_keys.length > 200) return reply.code(400).send({ error: 'At most 200 rows per action' })
+    const { targets, skipped } = planActionTargets(await openRows(b.signal), b.row_keys, b.action)
+    const results: Array<{ key: string; ok: boolean; message: string }> = [...skipped]
+    if (b.action.kind === 'retry_submission') {
+      for (const r of targets) {
+        const a = r.actions.find((x) => x.kind === 'retry_submission')
+        const res = await app.inject({
+          method: 'POST',
+          url: `/api/erp-submissions/${a?.id}/retry`,
+          headers: authHeaders(req)
+        })
+        const status = (JSON.parse(res.body || '{}') as { data?: { status?: string; last_error?: string } }).data
+        const ok = res.statusCode < 300 && status?.status !== 'failed'
+        results.push({ key: r.key, ok, message: ok ? `Retried — ${status?.status}` : status?.last_error ?? `HTTP ${res.statusCode}` })
+      }
+    } else if (b.action.kind === 'extension') {
+      const handler = b.action.id ? getSignalAction(b.action.id) : undefined
+      if (!handler || handler.owner !== signalOwner(b.signal)) {
+        return reply.code(400).send({ error: 'That action does not belong to this signal' })
+      }
+      results.push(...(await handler.def.run({ rows: targets, userId: req.user?.id ?? null, authHeaders: authHeaders(req) })))
+    } else {
+      return reply.code(400).send({ error: 'Open and explain run in the browser' })
+    }
+    await logActivity({
+      action: 'integration-signal-action',
+      collection: 'nivaro_integration_signal_rows',
+      item: b.signal,
+      user: req.user?.id,
+      req,
+      comment: `${b.action.kind}${b.action.id ? `:${b.action.id}` : ''} on ${targets.length} row(s) · ${results.filter((r) => r.ok).length} ok`
+    })
+    return { data: results }
+  })
+}
