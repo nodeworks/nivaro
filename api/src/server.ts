@@ -411,7 +411,9 @@ export async function buildServer() {
     // Core integration signals (spec 2026-09-23 §3.1) must exist before an
     // extension's own registerIntegrationSignal calls run.
     {
-      const { registerCoreIntegrationSignals } = await import('./services/integration-signals-core.js')
+      const { registerCoreIntegrationSignals } = await import(
+        './services/integration-signals-core.js'
+      )
       registerCoreIntegrationSignals()
     }
     await loadExtensions({
@@ -1530,7 +1532,12 @@ export async function buildServer() {
           await runSignalsCycle()
         },
         {
-          heavy: true,
+          // NOT heavy: heavy jobs serialize through one global slot, and
+          // queueing behind an unrelated heavy job would make this 5-minute
+          // read-only sweep fall stale for a reason the staleness check has
+          // no way to explain (integration-signals-fresh would just say the
+          // job "may be stopped").
+          heavy: false,
           idempotent: 'safe',
           description:
             'Evaluates every integration signal (partners failing, failed pushes, never-sent and overdue obligations, inbound errors, imports, flow failures, extension signals) and writes the snapshot the Integrations console reads. Never sends to a partner.'

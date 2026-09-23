@@ -21,9 +21,9 @@ import {
   getSignalAction,
   listIntegrationSignals,
   runSignalsCycle,
-  signalOwner,
   type SignalAction,
-  type SignalRow
+  type SignalRow,
+  signalOwner
 } from '../services/integration-signals.js'
 
 const STALE_MS = 15 * 60_000
@@ -51,6 +51,37 @@ export function planActionTargets(
   return { targets, skipped }
 }
 
+/**
+ * A row_keys body from the browser can carry the same key twice (a
+ * double-click, a stale client re-post) — deduping BEFORE planActionTargets
+ * (and before the 200-row cap) is what stops that from retrying the same
+ * submission, or firing the same extension action, twice.
+ */
+export function dedupeRowKeys(rowKeys: unknown[]): string[] {
+  return [...new Set(rowKeys.filter((k): k is string => typeof k === 'string'))]
+}
+
+/**
+ * "Until it changes" hashes ONE row's stable payload — applied at group or
+ * whole-signal scope, the snooze route would hash whichever open row happens
+ * to come back first and then compare EVERY other row in that scope against
+ * that one row's hash, silently hiding only the rows that happen to be
+ * identical to it. Refuse the combination instead of guessing.
+ */
+export function validateSnoozeScope(b: {
+  until_change?: boolean
+  row_key?: string | null
+}): { ok: true } | { ok: false; error: string } {
+  if (b.until_change && !b.row_key) {
+    return {
+      ok: false,
+      error:
+        '"Until it changes" applies to a single row — pick a date for a group or the whole signal'
+    }
+  }
+  return { ok: true }
+}
+
 function authHeaders(req: FastifyRequest): Record<string, string> {
   const h: Record<string, string> = {}
   if (req.headers.authorization) h.authorization = String(req.headers.authorization)
@@ -64,7 +95,10 @@ async function openRows(signal: string): Promise<Array<SignalRow & { first_seen:
     .whereNull('cleared_at')
     .orderBy('first_seen', 'asc')
     .select('payload', 'first_seen')) as Array<{ payload: string; first_seen: Date }>
-  return rows.map((r) => ({ ...(JSON.parse(r.payload) as SignalRow), first_seen: new Date(r.first_seen).toISOString() }))
+  return rows.map((r) => ({
+    ...(JSON.parse(r.payload) as SignalRow),
+    first_seen: new Date(r.first_seen).toISOString()
+  }))
 }
 
 export async function integrationSignalsRoutes(app: FastifyInstance) {
@@ -74,11 +108,16 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
     label: 'Integration signals are being checked',
     group: 'Integrations',
     run: async () => {
-      const r = (await db('nivaro_integration_signal_runs').max('ran_at as m').first()) as { m: Date | null } | undefined
+      const r = (await db('nivaro_integration_signal_runs').max('ran_at as m').first()) as
+        | { m: Date | null }
+        | undefined
       if (!r?.m) return { status: 'warn', detail: 'No evaluation has run yet' }
       const age = Date.now() - new Date(r.m).getTime()
       return age > STALE_MS
-        ? { status: 'fail', detail: `Last evaluation ${Math.round(age / 60000)} min ago — the integration-signals job may be stopped` }
+        ? {
+            status: 'fail',
+            detail: `Last evaluation ${Math.round(age / 60000)} min ago — the integration-signals job may be stopped`
+          }
         : { status: 'pass', detail: `Last evaluation ${Math.round(age / 60000)} min ago` }
     }
   })
@@ -156,13 +195,17 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       until_change?: boolean
       note?: string | null
     }
-    if (!b?.signal || !getIntegrationSignal(b.signal)) return reply.code(400).send({ error: 'Unknown signal' })
-    if (!b.until && !b.until_change) return reply.code(400).send({ error: 'until or until_change is required' })
+    if (!b?.signal || !getIntegrationSignal(b.signal))
+      return reply.code(400).send({ error: 'Unknown signal' })
+    if (!b.until && !b.until_change)
+      return reply.code(400).send({ error: 'until or until_change is required' })
+    const scoped = validateSnoozeScope(b)
+    if (!scoped.ok) return reply.code(400).send({ error: scoped.error })
     let hash: string | null = null
     if (b.until_change) {
-      const target = (await openRows(b.signal)).find((r) =>
-        b.row_key ? r.key === b.row_key : b.group_key ? r.group === b.group_key : true
-      )
+      // scoped above guarantees row_key is set here — never a group/signal
+      // scope, so this can only ever match the ONE row it's snoozing.
+      const target = (await openRows(b.signal)).find((r) => r.key === b.row_key)
       if (!target) return reply.code(404).send({ error: 'Nothing open to snooze' })
       hash = stableRowHash(target)
     }
@@ -216,55 +259,69 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
     )
   }))
 
-  app.patch('/integration-signals/settings/:signal', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = (req.params as { signal: string }).signal
-    const s = getIntegrationSignal(id)
-    if (!s) return reply.code(404).send({ error: 'Unknown signal' })
-    const v = validateSettingPatch(s, (req.body ?? {}) as Record<string, unknown>)
-    if (!v.ok) return reply.code(400).send({ error: v.error })
-    for (const [key, value] of Object.entries(v.values)) {
-      const hit = await db('nivaro_integration_signal_settings').where({ signal: id, key }).first('id')
-      const row = { value, updated_by: req.user?.id ?? null, updated_at: new Date() }
-      if (hit) await db('nivaro_integration_signal_settings').where({ id: hit.id }).update(row)
-      else await db('nivaro_integration_signal_settings').insert({ signal: id, key, ...row })
+  app.patch(
+    '/integration-signals/settings/:signal',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = (req.params as { signal: string }).signal
+      const s = getIntegrationSignal(id)
+      if (!s) return reply.code(404).send({ error: 'Unknown signal' })
+      const v = validateSettingPatch(s, (req.body ?? {}) as Record<string, unknown>)
+      if (!v.ok) return reply.code(400).send({ error: v.error })
+      for (const [key, value] of Object.entries(v.values)) {
+        const hit = await db('nivaro_integration_signal_settings')
+          .where({ signal: id, key })
+          .first('id')
+        const row = { value, updated_by: req.user?.id ?? null, updated_at: new Date() }
+        if (hit) await db('nivaro_integration_signal_settings').where({ id: hit.id }).update(row)
+        else await db('nivaro_integration_signal_settings').insert({ signal: id, key, ...row })
+      }
+      bustSignalSettings()
+      await logActivity({
+        action: 'integration-signal-settings',
+        collection: 'nivaro_integration_signal_settings',
+        item: id,
+        user: req.user?.id,
+        req,
+        comment: Object.entries(v.values)
+          .map(([k, x]) => `${k}=${x}`)
+          .join(', ')
+      })
+      return { data: await resolveThresholds(s) }
     }
-    bustSignalSettings()
-    await logActivity({
-      action: 'integration-signal-settings',
-      collection: 'nivaro_integration_signal_settings',
-      item: id,
-      user: req.user?.id,
-      req,
-      comment: Object.entries(v.values).map(([k, x]) => `${k}=${x}`).join(', ')
-    })
-    return { data: await resolveThresholds(s) }
-  })
+  )
 
-  app.get('/integration-signals/settings/:signal/preview', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = (req.params as { signal: string }).signal
-    const s = getIntegrationSignal(id)
-    if (!s) return reply.code(404).send({ error: 'Unknown signal' })
-    const v = validateSettingPatch(s, (req.query ?? {}) as Record<string, unknown>)
-    if (!v.ok) return reply.code(400).send({ error: v.error })
-    const base = await resolveThresholds(s)
-    const thresholds = { ...base.thresholds }
-    for (const [k, x] of Object.entries(v.values)) if (k !== 'severity' && k !== 'enabled') thresholds[k] = Number(x)
-    try {
-      const { businessDaysAgoForPreview } = await import('../services/integration-signals.js')
-      const out = await s.evaluate({ thresholds, businessDaysAgo: businessDaysAgoForPreview })
-      return { data: { count: out.count, error: null } }
-    } catch (err) {
-      return { data: { count: null, error: err instanceof Error ? err.message : String(err) } }
+  app.get(
+    '/integration-signals/settings/:signal/preview',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = (req.params as { signal: string }).signal
+      const s = getIntegrationSignal(id)
+      if (!s) return reply.code(404).send({ error: 'Unknown signal' })
+      const v = validateSettingPatch(s, (req.query ?? {}) as Record<string, unknown>)
+      if (!v.ok) return reply.code(400).send({ error: v.error })
+      const base = await resolveThresholds(s)
+      const thresholds = { ...base.thresholds }
+      for (const [k, x] of Object.entries(v.values))
+        if (k !== 'severity' && k !== 'enabled') thresholds[k] = Number(x)
+      try {
+        const { businessDaysAgoForPreview } = await import('../services/integration-signals.js')
+        const out = await s.evaluate({ thresholds, businessDaysAgo: businessDaysAgoForPreview })
+        return { data: { count: out.count, error: null } }
+      } catch (err) {
+        return { data: { count: null, error: err instanceof Error ? err.message : String(err) } }
+      }
     }
-  })
+  )
 
   app.post('/integration-signals/actions', { preHandler: requireAdmin }, async (req, reply) => {
     const b = req.body as { signal?: string; row_keys?: string[]; action?: SignalAction }
     if (!b?.signal || !Array.isArray(b.row_keys) || !b.action) {
       return reply.code(400).send({ error: 'signal, row_keys and action are required' })
     }
-    if (b.row_keys.length > 200) return reply.code(400).send({ error: 'At most 200 rows per action' })
-    const { targets, skipped } = planActionTargets(await openRows(b.signal), b.row_keys, b.action)
+    const keys = dedupeRowKeys(b.row_keys)
+    if (keys.length > 200) return reply.code(400).send({ error: 'At most 200 rows per action' })
+    const { targets, skipped } = planActionTargets(await openRows(b.signal), keys, b.action)
     const results: Array<{ key: string; ok: boolean; message: string }> = [...skipped]
     if (b.action.kind === 'retry_submission') {
       for (const r of targets) {
@@ -274,16 +331,30 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
           url: `/api/erp-submissions/${a?.id}/retry`,
           headers: authHeaders(req)
         })
-        const status = (JSON.parse(res.body || '{}') as { data?: { status?: string; last_error?: string } }).data
+        const status = (
+          JSON.parse(res.body || '{}') as { data?: { status?: string; last_error?: string } }
+        ).data
         const ok = res.statusCode < 300 && status?.status !== 'failed'
-        results.push({ key: r.key, ok, message: ok ? `Retried — ${status?.status}` : status?.last_error ?? `HTTP ${res.statusCode}` })
+        results.push({
+          key: r.key,
+          ok,
+          message: ok
+            ? `Retried — ${status?.status}`
+            : (status?.last_error ?? `HTTP ${res.statusCode}`)
+        })
       }
     } else if (b.action.kind === 'extension') {
       const handler = b.action.id ? getSignalAction(b.action.id) : undefined
       if (!handler || handler.owner !== signalOwner(b.signal)) {
         return reply.code(400).send({ error: 'That action does not belong to this signal' })
       }
-      results.push(...(await handler.def.run({ rows: targets, userId: req.user?.id ?? null, authHeaders: authHeaders(req) })))
+      results.push(
+        ...(await handler.def.run({
+          rows: targets,
+          userId: req.user?.id ?? null,
+          authHeaders: authHeaders(req)
+        }))
+      )
     } else {
       return reply.code(400).send({ error: 'Open and explain run in the browser' })
     }
