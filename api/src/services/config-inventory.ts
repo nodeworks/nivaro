@@ -61,6 +61,7 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_external_apis',
   'nivaro_external_api_endpoints',
   'nivaro_external_api_schemas',
+  'nivaro_integration_signal_settings',
   // imports
   'nivaro_import_definitions',
   'nivaro_import_templates',
@@ -200,6 +201,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tasks',
   'nivaro_erp_submissions',
   'nivaro_erp_submission_attempts',
+  'nivaro_integration_signal_rows',
+  'nivaro_integration_signal_runs',
+  'nivaro_integration_signal_snoozes',
+  'nivaro_integration_signal_subscriptions',
   'nivaro_flow_runs',
   'nivaro_external_api_logs',
   'nivaro_issues',
