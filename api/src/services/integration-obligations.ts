@@ -371,6 +371,39 @@ export function summariseObligations(
 const PRUNE_BATCH = 5000
 const PRUNE_MAX_BATCHES = 40
 
+// ─── Ask AI ─────────────────────────────────────────────────────────────────
+
+/** The ledger as the model should see it: the outcome and the SENTENCE, no
+ *  ids or internal columns it could misread as a record key. Pure — the
+ *  `integration_status` tool call fetches the rows, this only reshapes them,
+ *  so it is unit-testable without a database. */
+export function summariseObligationsForAi(
+  rows: Array<{
+    api: string
+    kind: string
+    outcome: string
+    reason: string | null
+    due_at: Date | string
+    trigger: string
+  }>
+): Array<{
+  api: string
+  kind: string
+  outcome: string
+  reason: string | null
+  due_at: string
+  trigger: string
+}> {
+  return rows.map((r) => ({
+    api: r.api,
+    kind: r.kind,
+    outcome: r.outcome,
+    reason: r.reason ?? null,
+    due_at: new Date(r.due_at).toISOString(),
+    trigger: r.trigger
+  }))
+}
+
 /** Retention: a landed obligation is history after 180 days. Deletes ONLY
  *  `sent` / `superseded` rows — `skipped` keeps its reason as the
  *  wrong-guard detector's evidence, and `failed` / `overdue` / `missing` /

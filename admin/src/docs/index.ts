@@ -18,6 +18,7 @@ export * from './sections/field-display.js'
 export * from './sections/field-rules.js'
 export * from './sections/graphql.js'
 export * from './sections/import-templates.js'
+export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/live-ops.js'
 export * from './sections/low-code.js'
@@ -200,6 +201,7 @@ import {
   graphqlSubscriptions
 } from './sections/graphql.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
+import { integrationObligations } from './sections/integration-obligations.js'
 import {
   integrationsConnector,
   integrationsCrossTriggers,
@@ -721,6 +723,7 @@ export const navSections: NavGroup[] = [
     label: 'Integration & Sync',
     items: [
       integrationsErp,
+      integrationObligations,
       integrationsEvents,
       integrationsSyncJobs,
       integrationsConnector,

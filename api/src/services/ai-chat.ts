@@ -48,6 +48,7 @@ export interface ToolTraceEntry {
 
 const MAX_ROUNDS = 12
 const MAX_ROWS = 50
+const MAX_OBLIGATION_ROWS = 40
 
 const FILTER_DOC =
   'Filter shape: {"field": {"_op": value}} with _op one of _eq,_neq,_gt,_gte,_lt,_lte,_contains,_ncontains,_starts_with,_ends_with,_in,_nin,_null,_nnull. ' +
@@ -95,6 +96,19 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
         limit: { type: 'number', description: `Max ${MAX_ROWS}` }
       },
       required: ['collection']
+    }
+  },
+  {
+    name: 'integration_status',
+    description:
+      'Why an external system was or was not told about a record. Returns every obligation on the record: which partner, what kind of message, whether it was sent, skipped, failed or never attempted, and the reason. Use this for "why did X not get Y" instead of guessing from the record\'s own fields.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        collection: { type: 'string', description: "The record's collection." },
+        id: { type: 'string', description: 'The record id.' }
+      },
+      required: ['collection', 'id']
     }
   },
   {
@@ -629,6 +643,49 @@ export async function executeChatTool(
       }
     }
 
+    case 'integration_status': {
+      const collection = assertBusinessCollection(input.collection)
+      const id = String(input.id ?? '').trim()
+      if (!id) throw new Error('id is required')
+      // Same gate as the per-record route (routes/integration-obligations.ts):
+      // read permission on the RECORD's collection, not admin — the ledger
+      // has to answer for whoever the record belongs to, not just operators.
+      if (!(await can(user, 'read', collection))) throw new Error('No read access')
+      const rows = (await db('nivaro_integration_obligations')
+        .where({ collection, item: id })
+        // Rides ix_integration_obligations_record (collection, item, kind, id
+        // DESC) — same order the per-record route uses, for the same reason:
+        // an index on due_at would not serve this.
+        .orderBy('id', 'desc')
+        .limit(MAX_OBLIGATION_ROWS)
+        .select('api', 'kind', 'outcome', 'reason', 'due_at', 'trigger')) as Array<{
+        api: string
+        kind: string
+        outcome: string
+        reason: string | null
+        due_at: Date
+        trigger: string
+      }>
+      const { getObligationKind, summariseObligationsForAi } = await import(
+        './integration-obligations.js'
+      )
+      // The shaper keeps `kind` as the machine key (so several rows for the
+      // same kind still correlate); `kind_label` adds the registered plain
+      // name when one exists, and falls back to the key when it doesn't —
+      // an unregistered/retired kind still reads, it just reads plainer.
+      const obligations = summariseObligationsForAi(rows).map((o) => ({
+        ...o,
+        kind_label: getObligationKind(o.api, o.kind)?.label ?? o.kind
+      }))
+      return {
+        result: { record: `${collection}/${id}`, obligations },
+        summary:
+          obligations.length === 0
+            ? `No obligations recorded for ${collection}/${id}`
+            : `${obligations.length} obligation(s) for ${collection}/${id}`
+      }
+    }
+
     case 'aggregate': {
       const collection = assertBusinessCollection(input.collection)
       if (!(await can(user, 'read', collection))) throw new Error('No read access')
@@ -738,6 +795,7 @@ export const CHAT_SYSTEM_PROMPT = `You are the data assistant inside Nivaro, a h
 Rules:
 - Always ground answers in tool results. If a tool errors or returns nothing, say so plainly.
 - Prefer aggregate for counts/totals/breakdowns; query_items for record lists. When someone names a place, vendor, title or id, query_items with "search" finds it across the collection's text columns in one call — semantic_search only covers indexed records and is a last resort.
+- When someone asks whether or why an external system was or was not told about a record ("why didn't X get this", "did the partner receive it"), call integration_status with the record's collection and id — it returns the real reason from the ledger; never guess from the record's own fields.
 - Two things that are not directly linked usually meet on a THIRD collection: read the relations list_collections reports and look for the collection that carries a link to both (a request record that names a vendor and a site, a junction between two tables), then filter through it with dotted paths. Say which path you used.
 - The readable collections are listed below — do not call list_collections without a collection name. Call it WITH a name once per collection you have not inspected, then query. When several calls do not depend on each other, make them in the same turn.
 - A record's workflow/pipeline state is not a column: filter with {"$state": {"_in": [keys]}} using the pipeline_states keys list_collections reports. Relations are filtered with dotted paths ("project.name").
