@@ -3,6 +3,11 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { callExternalApi } from './external-apis.js'
+import {
+  openObligationForTrigger,
+  resolveObligation,
+  skipReason
+} from './integration-obligations.js'
 import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 
 // ─── Transition actions ──────────────────────────────────────────────────────
@@ -562,9 +567,42 @@ export async function runTransitionActions(opts: {
       record = {}
     }
 
-    // Guard: every rule must pass or the action is skipped silently
+    // Obligation ledger: open BEFORE the guards, so that a refusal is itself
+    // a recorded outcome rather than the silence it is today. An action core
+    // cannot attribute to a registered kind opens nothing and behaves exactly
+    // as before.
+    let obligationId: number | null = null
+    if (action.type === 'erp_submit' && action.external_api) {
+      obligationId = await openObligationForTrigger(
+        {
+          collection,
+          item: String(item),
+          api: String(action.external_api),
+          source: 'erp_submit',
+          endpoint_path: action.endpoint_path ?? null,
+          transition_label: opts.transition.label ?? null,
+          to_state_key: opts.newStateObj?.key ?? null,
+          action_context_keys: action.context ? Object.keys(action.context) : [],
+          action_skip_unless_any: action.skip_unless_any ?? [],
+          action_skip_when_empty: action.skip_when_empty ?? null
+        },
+        { trigger: 'transition', trigger_ref: opts.transition.id }
+      )
+    }
+
+    // Guard: every rule must pass or the action is skipped
     const guard = Array.isArray(action.guard) ? action.guard : []
-    if (!guard.every((r) => evalConditionRule(r, record))) continue
+    const failedRule = guard.find((r) => !evalConditionRule(r, record))
+    if (failedRule) {
+      await resolveObligation(obligationId, {
+        outcome: 'skipped',
+        reason: skipReason(
+          'guard',
+          `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
+        )
+      })
+      continue
+    }
 
     if (action.type === 'create_record') {
       await runCreateRecordAction(action, collection, item, record, opts.newStateObj, responses)
@@ -573,12 +611,27 @@ export async function runTransitionActions(opts: {
     }
 
     const apiId = await resolveExternalApiId(action.external_api)
-    if (!apiId || !action.endpoint_path || !action.payload_template) continue
+    if (!apiId || !action.endpoint_path || !action.payload_template) {
+      await resolveObligation(obligationId, {
+        outcome: 'skipped',
+        reason: skipReason(
+          'not_configured',
+          !apiId ? 'external_api' : !action.endpoint_path ? 'endpoint_path' : 'payload_template'
+        )
+      })
+      continue
+    }
 
     const context = await buildContext(action.context, item, record, opts.userId)
     if (action.skip_when_empty) {
       const gate = context[action.skip_when_empty]
-      if (gate == null || (Array.isArray(gate) && gate.length === 0)) continue
+      if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
+        await resolveObligation(obligationId, {
+          outcome: 'skipped',
+          reason: skipReason('skip_when_empty', action.skip_when_empty)
+        })
+        continue
+      }
     }
     if (Array.isArray(action.skip_unless_any) && action.skip_unless_any.length > 0) {
       const walk = (ref: string): unknown => {
@@ -593,7 +646,13 @@ export async function runTransitionActions(opts: {
         const v = walk(ref)
         return v != null && String(v).trim() !== ''
       })
-      if (!anySet) continue
+      if (!anySet) {
+        await resolveObligation(obligationId, {
+          outcome: 'skipped',
+          reason: skipReason('skip_unless_any', action.skip_unless_any.join(', '))
+        })
+        continue
+      }
     }
     const scope = {
       record,
@@ -608,7 +667,7 @@ export async function runTransitionActions(opts: {
       const rendered = await engine.parseAndRender(action.payload_template, scope)
       body = JSON.parse(rendered) as Record<string, unknown>
     } catch (err) {
-      await recordSubmission(
+      const submissionId = await recordSubmission(
         collection,
         item,
         apiId,
@@ -617,6 +676,17 @@ export async function runTransitionActions(opts: {
         'failed',
         `payload template error: ${err instanceof Error ? err.message : String(err)}`
       )
+      await resolveObligation(obligationId, {
+        outcome: 'failed',
+        reason: skipReason('template_error', err instanceof Error ? err.message : String(err)),
+        submission_id: submissionId
+      })
+      if (submissionId != null && obligationId != null) {
+        await db('nivaro_erp_submissions')
+          .where({ id: submissionId })
+          .update({ obligation_id: obligationId })
+          .catch(() => {})
+      }
       await applyWriteback(collection, item, action.on_failure?.set, {
         ...scope,
         error: String(err)
@@ -669,6 +739,15 @@ export async function runTransitionActions(opts: {
           lastSignature
         })
       ) {
+        await resolveObligation(obligationId, {
+          outcome: 'skipped',
+          reason: skipReason(
+            'push_when',
+            action.push_when.payload === true
+              ? 'payload unchanged since the last landed push'
+              : `no change in ${(action.push_when.fields ?? []).join(', ') || 'the watched fields'}`
+          )
+        })
         continue
       }
     }
@@ -757,7 +836,7 @@ export async function runTransitionActions(opts: {
     }
 
     responses.push(responseBody)
-    await recordSubmission(
+    const submissionId = await recordSubmission(
       collection,
       item,
       apiId,
@@ -770,6 +849,20 @@ export async function runTransitionActions(opts: {
       // signature for a failure would suppress the retry that fixes it.
       status === 'failed' ? null : signature
     )
+    await resolveObligation(obligationId, {
+      // A 2xx with no acknowledgement is not `sent` — it is `pending` until
+      // the partner says so or the sweep calls it overdue.
+      outcome: status === 'accepted' ? 'sent' : status === 'pending' ? 'pending' : 'failed',
+      reason: status === 'failed' ? (error?.slice(0, 500) ?? 'submission failed') : null,
+      submission_id: submissionId,
+      signature: status === 'failed' ? null : signature
+    })
+    if (submissionId != null && obligationId != null) {
+      await db('nivaro_erp_submissions')
+        .where({ id: submissionId })
+        .update({ obligation_id: obligationId })
+        .catch(() => {})
+    }
 
     const postScope = { ...scope, response: responseBody, responses, error }
     if (status === 'failed') {
@@ -1035,23 +1128,25 @@ async function recordSubmission(
   error: string | null,
   responseBody?: unknown,
   signature?: string | null
-): Promise<void> {
+): Promise<number | null> {
   try {
     const now = new Date()
-    await db('nivaro_erp_submissions').insert({
-      collection,
-      item: String(item),
-      external_api: externalApi,
-      external_ref: null,
-      status,
-      attempts: 1,
-      last_error: error,
-      payload: JSON.stringify({ endpoint_path: endpointPath, body }),
-      response: serializeResponseBody(responseBody),
-      change_signature: signature ?? null,
-      created_at: now,
-      updated_at: now
-    })
+    const inserted = (await db('nivaro_erp_submissions')
+      .insert({
+        collection,
+        item: String(item),
+        external_api: externalApi,
+        external_ref: null,
+        status,
+        attempts: 1,
+        last_error: error,
+        payload: JSON.stringify({ endpoint_path: endpointPath, body }),
+        response: serializeResponseBody(responseBody),
+        change_signature: signature ?? null,
+        created_at: now,
+        updated_at: now
+      })
+      .returning('id')) as Array<number | { id: number }>
     await logActivity({
       action: 'create',
       collection: 'nivaro_erp_submissions',
@@ -1059,7 +1154,11 @@ async function recordSubmission(
       user: null,
       comment: `transition action → api:${externalApi} (${status}${error ? `: ${error.slice(0, 120)}` : ''})`
     })
+    const first = inserted[0]
+    // tedious hands an OBJECT back from .returning on this stack.
+    return typeof first === 'object' && first !== null ? Number(first.id) : Number(first ?? 0) || null
   } catch (err) {
     console.error({ err, collection, item }, 'failed to record ERP submission')
+    return null
   }
 }

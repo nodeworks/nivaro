@@ -93,6 +93,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Nightly — usage hygiene + schema lint findings (unopened queues, orphan relations, missing display templates…) into the Config Health page.',
   'subscription-integrity':
     'Weekly (Sunday) — deactivates notification subscriptions whose collection, field, or queue no longer exists.',
+  'integration-reconcile':
+    'Every 15 minutes — derives, from the records themselves, which integrations are behind, and writes the outcomes no trigger can see: missing (the send never fired), overdue (unacknowledged, or skipped while the partner still lacks it) and superseded (the record moved on). Never sends.',
 
   // ── Ops telemetry ──
   'ops-monitors':

@@ -28,6 +28,7 @@ export type NotificationKind =
   | 'my_work'
   | 'home'
   | 'external'
+  | 'integration'
 
 export type NotificationAction =
   | 'open'
@@ -89,7 +90,8 @@ const KINDS = new Set<NotificationKind>([
   'dashboard',
   'my_work',
   'home',
-  'external'
+  'external',
+  'integration'
 ])
 const ACTIONS = new Set<NotificationAction>([
   'open',
@@ -200,6 +202,9 @@ export async function resolveTargetUrl(
       case 'record':
       case 'sla':
       case 'approval':
+      // An integration obligation is always about a record — same URL shape
+      // as 'record', it just carries a different label to the reader.
+      case 'integration':
         if (spec.collection && spec.id != null)
           return withFocus(await recordLink(spec.collection, spec.id, opts))
         if (spec.collection)
@@ -348,6 +353,8 @@ export function describeTarget(spec: NotificationTargetSpec | null): string | nu
       return 'Dashboard'
     case 'my_work':
       return 'My Work'
+    case 'integration':
+      return 'Integration'
     default:
       return null
   }

@@ -148,6 +148,13 @@ export function ErpFailureBanner({
       else toast.error('Retry failed — see the error below')
       void qc.invalidateQueries({ queryKey: ['erp-submissions', collection, String(itemId)] })
       void qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
+      // The server moves the submission's linked obligation synchronously
+      // (propagateSubmissionStatus, called from the /retry route) — without
+      // this, IntegrationStatusBanner would keep showing the pre-retry
+      // outcome until its own staleTime lapsed.
+      void qc.invalidateQueries({
+        queryKey: ['integration-obligations', 'record', collection, String(itemId)]
+      })
     },
     onError: () => toast.error('Retry failed')
   })

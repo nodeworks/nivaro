@@ -475,6 +475,7 @@ export async function buildServer() {
             )
         })
         .catch(() => {})
+
       async function runRetentionPurge() {
         try {
           {
@@ -555,6 +556,14 @@ export async function buildServer() {
                 )
             })
             .catch((err) => app.log.warn({ err }, '[retention] erp payload prune failed'))
+          // Landed integration obligations (sent/superseded) are history after
+          // 180 days; failed/missing/overdue/pending never expire.
+          await import('./services/integration-obligations.js')
+            .then((m) => m.pruneObligations())
+            .then((n) => {
+              if (n) app.log.info({ pruned: n }, '[retention] integration obligations pruned')
+            })
+            .catch((err) => app.log.warn({ err }, '[retention] integration obligations prune failed'))
           await pruneAiCalls().catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
@@ -1458,6 +1467,31 @@ export async function buildServer() {
           dryRun: async () => {
             const { detectRollupDrift } = await import('./services/rollup-drift.js')
             return await detectRollupDrift()
+          }
+        }
+      )
+
+      // Integration reconciliation: each registered obligation kind says
+      // which records the partner is behind on, derived from data alone —
+      // this compares that with the ledger and writes what no trigger can
+      // see (missing, overdue, superseded). Never sends.
+      app.cron.schedule(
+        'integration-reconcile',
+        '*/15 * * * *',
+        async () => {
+          const { runIntegrationReconcileForCron } = await import(
+            './services/integration-reconcile.js'
+          )
+          await runIntegrationReconcileForCron(app)
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            'Derives, from the records themselves, which integrations are behind, and writes the outcomes no trigger can see: missing (the send never fired), overdue (unacknowledged, or skipped while the partner still lacks it) and superseded. Never sends.',
+          dryRun: async () => {
+            const { dryRunIntegrationReconcile } = await import('./services/integration-reconcile.js')
+            return dryRunIntegrationReconcile()
           }
         }
       )

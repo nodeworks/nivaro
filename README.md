@@ -93,6 +93,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Image Transformations** — on-the-fly resize/crop/format/quality via sharp, cached
 - **File Expiry & PDF Generation** — auto-pruned temporary files; Liquid-templated PDF rendering per record
 - **ERP Submission Tracking & Sync Jobs** — push-status lifecycle per record; bi-directional scheduled syncs with conflict strategies and a no-code API connector
+- **Integration Obligations** — a ledger of every message a partner should have received, the written reason behind every skip, and a nightly reconcile sweep that catches the sends that never fired at all
 - **Parallel Workflow Branches** — split/join with auto-join when all branches complete
 - **Cross-Collection Triggers** — rule-driven writes into other collections with `{{field}}` templates and a recursion guard
 - **Tasks & Approval Chains** — per-record assignments and sequential sign-off with decision log

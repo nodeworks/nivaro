@@ -1,11 +1,19 @@
 import { createNivaro } from '@nivaro/sdk'
-import { InboundCallersView, NivaroProvider } from '@nivaro/shared'
+import {
+  defaultItemUrl,
+  InboundCallersView,
+  IntegrationObligationsView,
+  ItemEditAuthContext,
+  NavigationContext,
+  NivaroProvider
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link2, Play, RotateCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -75,6 +83,8 @@ function verdict(a: ApiHealth): { label: string; cls: string } {
 
 export function IntegrationHealthPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
+  const { user } = useAuth()
   const { data, isLoading, dataUpdatedAt } = useQuery<Health>({
     queryKey: ['integration-health'],
     queryFn: () => api.get<{ data: Health }>('/integration-health').then((r) => r.data.data),
@@ -120,6 +130,19 @@ export function IntegrationHealthPage() {
       </header>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+        <div className='mb-6'>
+          <NivaroProvider client={sharedClient}>
+            <NavigationContext.Provider
+              value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+            >
+              <ItemEditAuthContext.Provider
+                value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
+              >
+                <IntegrationObligationsView />
+              </ItemEditAuthContext.Provider>
+            </NavigationContext.Provider>
+          </NivaroProvider>
+        </div>
         {isLoading || !data ? (
           <div className='grid grid-cols-2 gap-4 lg:grid-cols-3'>
             {[1, 2, 3, 4, 5, 6].map((i) => (

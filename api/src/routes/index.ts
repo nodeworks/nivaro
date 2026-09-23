@@ -94,6 +94,7 @@ import { indexAdvisorRoutes } from './index-advisor.js'
 import { integrationContractRoutes } from './integration-contracts.js'
 import { integrationEventsRoutes } from './integration-events.js'
 import { integrationHealthRoutes } from './integration-health.js'
+import { integrationObligationsRoutes } from './integration-obligations.js'
 import { issuesRoutes } from './issues.js'
 import { itemActionsRoutes } from './item-actions.js'
 import { itemLocksRoutes } from './item-locks.js'
@@ -290,6 +291,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(recordLinkRoutes)
   await app.register(fieldHistoryRoutes)
   await app.register(integrationHealthRoutes)
+  await app.register(integrationObligationsRoutes)
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
   await app.register(activityRoutes, { prefix: '/activity' })

@@ -234,6 +234,15 @@ export interface ExtensionContext {
     /** Register a scored check on the go-live readiness scorecard. */
     registerCheck(check: import('../services/readiness.js').ReadinessCheck): void
   }
+  integrations: {
+    /** Declare an outbound obligation kind: what the partner expects, how a
+     *  decision point is attributed to it, and how to derive from DATA the
+     *  records the partner is currently behind on. Core owns the ledger and
+     *  the sweep; the extension owns the sends. */
+    registerObligationKind(
+      def: import('../services/integration-obligations.js').ObligationKindDef
+    ): void
+  }
   integrity: {
     /** Register a Data Integrity check the conformance sweep, the record
      *  banner and the Fix button run alongside the built-in rules. */
@@ -586,6 +595,7 @@ async function loadExtension(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'integrations'
     | 'integrity'
     | 'mail'
     | 'links'
@@ -896,6 +906,13 @@ async function loadExtension(
           registerReadinessCheck(check)
         }
       },
+      integrations: {
+        registerObligationKind: (def) => {
+          void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
+            registerObligationKind(def)
+          )
+        }
+      },
       integrity: {
         registerCheck: (check) => {
           note('integrity')
@@ -1048,6 +1065,7 @@ export async function loadExtensions(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'integrations'
     | 'integrity'
     | 'mail'
     | 'links'
@@ -1192,6 +1210,7 @@ export async function loadCloudExtensions(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'integrations'
     | 'integrity'
     | 'mail'
     | 'links'
@@ -1256,6 +1275,13 @@ export async function loadCloudExtensions(
         },
         readiness: {
           registerCheck: (check) => registerReadinessCheck(check)
+        },
+        integrations: {
+          registerObligationKind: (def) => {
+            void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
+              registerObligationKind(def)
+            )
+          }
         },
         integrity: {
           registerCheck: (check) => registerIntegrityCheck(check)
@@ -1451,6 +1477,7 @@ export async function scanNewExtensions(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'integrations'
     | 'integrity'
     | 'mail'
     | 'links'
