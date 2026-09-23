@@ -253,6 +253,15 @@ export function skipReason(kind: SkipReasonKind, detail: string): string {
   return text.length > 500 ? `${text.slice(0, 499)}…` : text
 }
 
+/** A flow that ended without sending: `halted_at` (migration 339) already
+ *  names the op whose reject stopped the chain. Null when the flow ran to
+ *  the end — there is then nothing to explain. */
+export function flowHaltReason(haltedAt: string | null): string | null {
+  const at = String(haltedAt ?? '').trim()
+  if (at === '') return null
+  return skipReason('flow_condition', at)
+}
+
 /** The decision-point entry point: attribute the context to a kind and open
  *  a `pending` row. Returns null when no kind claims it — which is how an
  *  unregistered integration stays exactly as silent as it is today. */

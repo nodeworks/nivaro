@@ -746,15 +746,18 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
   ctx.log.info({ flowId: ctx.flowId, key: op.key, status }, 'external-api executed')
 
   const response = { status, body }
+  // The run wrapper reads this to decide the obligation's outcome: a push
+  // that returned a non-2xx "matched" (an op ran) but did not land.
+  const httpStatus = { __http_status: status }
 
   if (failOnError && status >= 400) {
     return {
       status: 'reject' as const,
-      output: { ...data, [resultKey]: response, $error: `HTTP ${status}` }
+      output: { ...data, [resultKey]: response, ...httpStatus, $error: `HTTP ${status}` }
     }
   }
 
-  return { status: 'resolve' as const, output: { ...data, [resultKey]: response } }
+  return { status: 'resolve' as const, output: { ...data, [resultKey]: response, ...httpStatus } }
 }
 
 const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -1223,6 +1226,36 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
     if (status === 'reject' && ended) progress.halted = op.key
   }
 
+  // A flow that pushes to a partner carries an obligation for the whole run:
+  // a condition rejecting at op 2 means nothing was sent, and today that run
+  // is recorded "success". Opened per record the flow is about, against the
+  // first external-api op the flow carries (a flow with more than one push
+  // is a Phase-2 refinement) — a flow core cannot attribute to a registered
+  // kind opens nothing. A dry run (the Tester panel, or a shadow-mode flow)
+  // never actually calls the partner — runExternalApi returns before it does
+  // — so it must never be recorded as a real send or a real skip either.
+  const obligationId = await (async () => {
+    if (ctx.dryRun) return null
+    const collection = typeof data.collection === 'string' ? data.collection : null
+    const item =
+      data.item != null
+        ? String(data.item)
+        : Array.isArray(data.keys) && data.keys.length > 0
+          ? String(data.keys[0])
+          : null
+    if (!collection || !item) return null
+    const apiOp = operations.find((op) => op.type === 'external-api')
+    const apiName = apiOp
+      ? String((parseOpts(apiOp) as { api_id?: unknown }).api_id ?? '').trim()
+      : ''
+    if (!apiName) return null
+    const { openObligationForTrigger } = await import('./integration-obligations.js')
+    return openObligationForTrigger(
+      { collection, item, api: apiName, source: 'flow', flow_name: ctx.flowName },
+      { trigger: 'flow', trigger_ref: runId }
+    )
+  })()
+
   try {
     const opMap = new Map(operations.map((op) => [op.id, op]))
     const referencedIds = new Set(
@@ -1309,6 +1342,29 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
         ctx.log.warn({ err, flowId: ctx.flowId }, 'Failed to record flow run success')
       )
 
+    // Resolve the obligation opened above (no-op when it is null — a flow
+    // with nothing to push, or a dry run, opened nothing). `halted_at`
+    // already names the op whose reject stopped the chain: that is a
+    // legitimate skip, not a failure. Absent a halt, a pushed op's own HTTP
+    // status decides landed vs. failed over the coarser `matched` flag — a
+    // push that 4xx'd still "matched" but plainly did not land.
+    {
+      const { resolveObligation, flowHaltReason } = await import('./integration-obligations.js')
+      const halt = flowHaltReason(progress.halted)
+      const pushStatus = typeof data.__http_status === 'number' ? data.__http_status : null
+      const landed = pushStatus == null ? progress.matched : pushStatus >= 200 && pushStatus < 300
+      await resolveObligation(obligationId, {
+        outcome: halt ? 'skipped' : landed ? 'pending' : 'failed',
+        reason:
+          halt ??
+          (landed
+            ? null
+            : pushStatus != null
+              ? `HTTP ${pushStatus}`
+              : 'flow ran but no operation acted')
+      })
+    }
+
     ctx.log.info({ flowId: ctx.flowId }, 'Flow execution complete')
     return data
   } catch (err) {
@@ -1324,6 +1380,16 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
       .catch((updErr) =>
         ctx.log.warn({ err: updErr, flowId: ctx.flowId }, 'Failed to record flow run error')
       )
+    // An obligation an unhandled error left open must not sit "pending"
+    // forever misreporting the run as still in progress — it errored, and
+    // that is known now.
+    {
+      const { resolveObligation } = await import('./integration-obligations.js')
+      await resolveObligation(obligationId, {
+        outcome: 'failed',
+        reason: `flow errored: ${String(err).slice(0, 400)}`
+      })
+    }
     // #622: tell the flow's creator the run errored — fire-and-forget,
     // throttled to one notification per flow per hour.
     notifyFlowError(ctx, err)
