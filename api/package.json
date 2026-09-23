@@ -66,6 +66,7 @@
     "new-user:roles": "tsx extensions/efp-ops/scripts/new-user-roles.ts",
     "machine:accounts": "tsx extensions/efp-ops/scripts/machine-accounts.ts",
     "state:views": "tsx extensions/efp-ops/scripts/state-views.ts",
+    "state:retire": "tsx extensions/efp-ops/scripts/retire-legacy-state-columns.ts",
     "seed:project-type-values": "tsx extensions/efp-ops/scripts/project-type-values.ts",
     "golive:settings-check": "tsx extensions/efp-ops/scripts/check-prod-settings.ts"
   },

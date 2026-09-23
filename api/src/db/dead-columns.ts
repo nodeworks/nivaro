@@ -49,5 +49,37 @@ export const DEAD_COLUMNS: DeadColumn[] = [
     status: 'retire',
     blocked_by:
       'routes/queues.ts column-prefs GET/PUT still read and write it; the row itself survives for default_view_id'
+  },
+  {
+    table: 'workflows',
+    column: 'workflow_state',
+    since: '2026-09-22',
+    replaced_by: 'v_*_state views / $state (pipeline-instance state)',
+    status: 'retire',
+    blocked_by: 'the mirror writes it until retire-legacy-state-columns runs at cutover'
+  },
+  {
+    table: 'inventory_request',
+    column: 'request_state',
+    since: '2026-09-22',
+    replaced_by: 'v_*_state views / $state (pipeline-instance state)',
+    status: 'retire',
+    blocked_by: 'the mirror writes it until retire-legacy-state-columns runs at cutover'
+  },
+  {
+    table: 'workflows',
+    column: 'last_state_change',
+    since: '2026-09-22',
+    replaced_by: 'v_*_state views / $state (pipeline-instance state)',
+    status: 'retire',
+    blocked_by: 'the mirror writes it until retire-legacy-state-columns runs at cutover'
+  },
+  {
+    table: 'inventory_request',
+    column: 'last_state_change',
+    since: '2026-09-22',
+    replaced_by: 'v_*_state views / $state (pipeline-instance state)',
+    status: 'retire',
+    blocked_by: 'the mirror writes it until retire-legacy-state-columns runs at cutover'
   }
 ]

@@ -358,6 +358,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
               )
             ]
           }
+        if (r.length === 0)
+          return { status: 'pass', detail: 'No binding mirrors a legacy column — retired.' }
         if (drifted.length === 0)
           return {
             status: 'pass',

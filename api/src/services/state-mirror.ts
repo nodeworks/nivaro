@@ -13,6 +13,13 @@
  * collection, set-based: one grouped read of (current key, column value).
  * The repair re-runs `syncStateField` for the drifted records, i.e. makes the
  * mirror say what the instance says (the instance is the source of truth).
+ *
+ * `stateMirrorDrift()` already returns `[]` once no binding has `state_field`
+ * set — i.e. once Phase 2 (`retire-legacy-state-columns.ts`) has nulled it on
+ * every binding. Nothing here needed to change for that; the readiness
+ * check's PASS detail for that state ("No binding mirrors a legacy column —
+ * retired.") is formatted in `routes/pipelines.ts`, right at the `r.length
+ * === 0` case, rather than here.
  */
 import { db } from '../db/index.js'
 
