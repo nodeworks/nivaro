@@ -242,6 +242,28 @@ export interface ExtensionContext {
     registerObligationKind(
       def: import('../services/integration-obligations.js').ObligationKindDef
     ): void
+    /** Open an obligation for a decision point outside core's own writers
+     *  (a transition's erp_submit action, the flow executor's external-api
+     *  wrapper) — a hook, a cron, or a manually-clicked action that pushes
+     *  through an extension's own code. Returns null when no registered
+     *  kind claims the context, exactly like an unattributed transition
+     *  opens no row today. */
+    openObligation(
+      ctx: import('../services/integration-obligations.js').ObligationTriggerContext,
+      opts: {
+        trigger: import('../services/integration-obligations.js').ObligationTrigger
+        trigger_ref?: string | null
+        due_at?: Date
+      }
+    ): Promise<number | null>
+    /** Close an obligation with its outcome. A null id is a no-op, so a
+     *  caller never has to branch on whether the open succeeded. */
+    resolveObligation(
+      id: number | null,
+      patch: Parameters<
+        typeof import('../services/integration-obligations.js').resolveObligation
+      >[1]
+    ): Promise<void>
   }
   integrity: {
     /** Register a Data Integrity check the conformance sweep, the record
@@ -911,6 +933,14 @@ async function loadExtension(
           void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
             registerObligationKind(def)
           )
+        },
+        openObligation: async (ctx, opts) => {
+          const { openObligationForTrigger } = await import('../services/integration-obligations.js')
+          return openObligationForTrigger(ctx, opts)
+        },
+        resolveObligation: async (id, patch) => {
+          const { resolveObligation } = await import('../services/integration-obligations.js')
+          return resolveObligation(id, patch)
         }
       },
       integrity: {
@@ -1281,6 +1311,14 @@ export async function loadCloudExtensions(
             void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
               registerObligationKind(def)
             )
+          },
+          openObligation: async (ctx, opts) => {
+            const { openObligationForTrigger } = await import('../services/integration-obligations.js')
+            return openObligationForTrigger(ctx, opts)
+          },
+          resolveObligation: async (id, patch) => {
+            const { resolveObligation } = await import('../services/integration-obligations.js')
+            return resolveObligation(id, patch)
           }
         },
         integrity: {
