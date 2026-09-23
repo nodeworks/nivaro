@@ -5,6 +5,7 @@ export type { CascadeFilterRule, FieldDependencyConfig } from '@nivaro/sdk'
 // Expression engine result types (the functions were already exported)
 export type {
   ApiVersionInfo,
+  BannerLine,
   BaseMapBubble,
   BaseMapPin,
   ChangeReasonChallenge,
@@ -32,6 +33,7 @@ export type {
   GridFlushContextValue,
   HeaderWidgetInfo,
   IntegrationObligationsViewProps,
+  IntegrationStatusBannerProps,
   ItemEditAuthContextValue,
   ItemEditFormProps,
   ItemLinkTarget,
@@ -92,6 +94,7 @@ export {
   BaseMap,
   BroadcastView,
   BulkActionButtons,
+  bannerLines,
   buildGroups,
   CacheStamp,
   CellCopyLayer,
@@ -198,6 +201,7 @@ export {
   InboundCallersView,
   InlineTableField,
   IntegrationObligationsView,
+  IntegrationStatusBanner,
   ItemActionButtons,
   ItemEditAuthContext,
   ItemEditForm,

@@ -70,6 +70,7 @@ import { ImportColumnChips } from './import/ImportColumnChips'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
+import { IntegrationStatusBanner } from './integrations/IntegrationStatusBanner'
 import {
   AddendumFieldContext,
   type AddendumFieldMap,
@@ -10100,6 +10101,15 @@ export function ItemEditForm({
                                           itemId={String(pipelineItem)}
                                         />
                                       )}
+                                    {/* No wrapper div — the banner returns null with no
+                                      obligations, and an empty sibling in this space-y
+                                      stack still costs a 16px gap. */}
+                                    {!isNew && itemId && (
+                                      <IntegrationStatusBanner
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    )}
                                     {importIssues.length > 0 && (
                                       <ImportIssuesPanel
                                         issues={importIssues}
