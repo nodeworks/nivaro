@@ -25,7 +25,8 @@ import {
 import {
   pickRerunAction,
   runTransitionActions,
-  TransitionBlockedError
+  TransitionBlockedError,
+  validateRerunBody
 } from '../services/workflow-actions.js'
 import {
   type ConditionRule,
@@ -2281,49 +2282,80 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      const b = (req.body ?? {}) as { transition_id?: string; action_index?: number }
+      if (!IDENTIFIER_RE.test(collection) || /^nivaro_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Not a valid collection' })
+      }
+
+      const validated = validateRerunBody(
+        req.body as { transition_id?: unknown; action_index?: unknown } | null | undefined
+      )
+      if (!validated.ok) return reply.code(400).send({ error: validated.error })
+      const { transitionId, actionIndex } = validated
+
+      // A record can carry more than one instance row over its life (a
+      // migrated/restarted pipeline leaves the old one behind, completed) —
+      // the OPEN one is the one this record is actually running, tie-broken
+      // by newest id when more than one is open. Same ordering the
+      // instance-state views use elsewhere.
+      const inst = (await db('nivaro_workflow_instances')
+        .where({ collection, item: String(item) })
+        .orderByRaw('CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END')
+        .orderBy('id', 'desc')
+        .first('id', 'template', 'current_state')) as
+        | { id: string; template: string; current_state: string | null }
+        | undefined
+      if (!inst) return reply.code(404).send({ error: 'No pipeline instance for this record' })
+
+      // Scoped to the RECORD'S OWN template — a transition id from an
+      // unrelated pipeline must never be runnable against this record.
       const t = (await db('nivaro_workflow_transitions')
-        .where({ id: b.transition_id })
+        .where({ id: transitionId, template: inst.template })
         .first('id', 'label', 'actions', 'to_state')) as
         | { id: string; label: string; actions: string | null; to_state: string }
         | undefined
-      if (!t) return reply.code(404).send({ error: 'Transition not found' })
-      const pick = pickRerunAction(t.actions, Number(b.action_index))
+      if (!t)
+        return reply.code(404).send({ error: "Transition not found on this record's pipeline" })
+
+      const pick = pickRerunAction(t.actions, actionIndex)
       if (!pick.ok) return reply.code(400).send({ error: pick.error })
-      const inst = await db('nivaro_workflow_instances')
-        .where({ collection, item: String(item) })
-        .first('current_state')
+
       // Re-render the action's `state` scope from the record's CURRENT state
       // (never `t.to_state`) — a re-run is not the transition happening again,
       // so the payload must reflect where the record actually sits.
-      const state = inst?.current_state
+      const state = inst.current_state
         ? await db('nivaro_workflow_states').where({ id: inst.current_state }).first('key', 'label')
         : null
       const before = (await db('nivaro_erp_submissions')
         .where({ collection, item: String(item) })
         .max('id as m')
         .first()) as { m: number | null }
-      await runTransitionActions({
+      const { skippedReason } = await runTransitionActions({
         transition: t,
         instance: { collection, item: String(item) },
         newStateObj: state ? { key: state.key, label: state.label } : null,
         userId: req.user?.id ?? null,
-        onlyIndex: Number(b.action_index)
+        onlyIndex: actionIndex,
+        // The ledger should tell an on-demand resend apart from the push a
+        // real transition fired.
+        obligationTrigger: 'manual'
       })
       const sub = await db('nivaro_erp_submissions')
         .where({ collection, item: String(item) })
         .where('id', '>', before?.m ?? 0)
         .orderBy('id', 'desc')
         .first('id', 'status', 'last_error')
+      const outcomeText = sub ? sub.status : (skippedReason ?? 'no push attempted')
       await logActivity({
         action: 'transition-action-rerun',
         collection,
         item: String(item),
         user: req.user?.id,
         req,
-        comment: `${t.label} action #${b.action_index} → ${sub ? sub.status : 'no push (guard or push_when skipped it)'}`
+        comment: `${t.label} action #${actionIndex} → ${outcomeText}`
       })
-      return reply.send({ data: { submission: sub ?? null } })
+      return reply.send({
+        data: { submission: sub ?? null, skipped_reason: sub ? null : (skippedReason ?? null) }
+      })
     }
   )
 

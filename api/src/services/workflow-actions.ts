@@ -4,6 +4,7 @@ import { logActivity } from './activity.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { callExternalApi } from './external-apis.js'
 import {
+  type ObligationTrigger,
   openObligationForTrigger,
   resolveObligation,
   skipReason
@@ -227,6 +228,27 @@ export function pickRerunAction(
   if (a.type !== 'erp_submit')
     return { ok: false, error: 'Only push (erp_submit) actions can be re-run' }
   return { ok: true, action: a }
+}
+
+/**
+ * Shape-level validation for the rerun route's body — pure, so it's unit
+ * testable without a request/reply. `pickRerunAction` still owns the
+ * SEMANTIC checks (is this index in range, is it a push action) once the
+ * transition's actions are known; this only rejects a malformed body before
+ * any of that lookup work happens.
+ */
+export function validateRerunBody(
+  body: { transition_id?: unknown; action_index?: unknown } | null | undefined
+): { ok: true; transitionId: string; actionIndex: number } | { ok: false; error: string } {
+  const transitionId = body?.transition_id
+  if (typeof transitionId !== 'string' || transitionId.trim() === '') {
+    return { ok: false, error: 'transition_id is required' }
+  }
+  const actionIndex = body?.action_index
+  if (typeof actionIndex !== 'number' || !Number.isInteger(actionIndex)) {
+    return { ok: false, error: 'action_index must be an integer' }
+  }
+  return { ok: true, transitionId, actionIndex }
 }
 
 // nivaro_users is the ONLY system collection reachable from context queries —
@@ -572,7 +594,12 @@ export async function runTransitionActions(opts: {
    *  targeted re-run of one push action ("resend this to the partner") with
    *  the instance's state left untouched by the caller. */
   onlyIndex?: number
-}): Promise<{ blockedError: string | null }> {
+  /** What kind of trigger this run's obligation ledger rows should record —
+   *  default 'transition' (a normal transition firing this action). A
+   *  targeted re-run passes 'manual' so the ledger tells a resend apart from
+   *  the original push. */
+  obligationTrigger?: ObligationTrigger
+}): Promise<{ blockedError: string | null; skippedReason?: string | null }> {
   const all = parseActions(opts.transition.actions)
   const actions =
     opts.onlyIndex != null
@@ -582,7 +609,7 @@ export async function runTransitionActions(opts: {
         : opts.phase === 'post'
           ? all.filter((a) => a.blocking !== true)
           : all
-  if (actions.length === 0) return { blockedError: null }
+  if (actions.length === 0) return { blockedError: null, skippedReason: null }
 
   const { collection, item } = opts.instance
 
@@ -634,6 +661,10 @@ export async function runTransitionActions(opts: {
   }
 
   const responses: unknown[] = []
+  // The reason the last SKIPPED action didn't push — meaningful when the
+  // caller runs exactly one action (onlyIndex): "no submission" always means
+  // one of the `continue`s below fired, and this is which.
+  let skippedReason: string | null = null
   for (const action of actions) {
     if (action.type !== 'erp_submit' && action.type !== 'create_record') continue
     void import('./flow-executor.js')
@@ -675,7 +706,7 @@ export async function runTransitionActions(opts: {
           action_skip_unless_any: action.skip_unless_any ?? [],
           action_skip_when_empty: action.skip_when_empty ?? null
         },
-        { trigger: 'transition', trigger_ref: opts.transition.id }
+        { trigger: opts.obligationTrigger ?? 'transition', trigger_ref: opts.transition.id }
       )
     }
 
@@ -683,13 +714,11 @@ export async function runTransitionActions(opts: {
     const guard = Array.isArray(action.guard) ? action.guard : []
     const failedRule = guard.find((r) => !evalConditionRule(r, record))
     if (failedRule) {
-      await resolveObligation(obligationId, {
-        outcome: 'skipped',
-        reason: skipReason(
-          'guard',
-          `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
-        )
-      })
+      skippedReason = skipReason(
+        'guard',
+        `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
+      )
+      await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
       continue
     }
 
@@ -701,13 +730,11 @@ export async function runTransitionActions(opts: {
 
     const apiId = await resolveExternalApiId(action.external_api)
     if (!apiId || !action.endpoint_path || !action.payload_template) {
-      await resolveObligation(obligationId, {
-        outcome: 'skipped',
-        reason: skipReason(
-          'not_configured',
-          !apiId ? 'external_api' : !action.endpoint_path ? 'endpoint_path' : 'payload_template'
-        )
-      })
+      skippedReason = skipReason(
+        'not_configured',
+        !apiId ? 'external_api' : !action.endpoint_path ? 'endpoint_path' : 'payload_template'
+      )
+      await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
       continue
     }
 
@@ -715,10 +742,8 @@ export async function runTransitionActions(opts: {
     if (action.skip_when_empty) {
       const gate = context[action.skip_when_empty]
       if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
-        await resolveObligation(obligationId, {
-          outcome: 'skipped',
-          reason: skipReason('skip_when_empty', action.skip_when_empty)
-        })
+        skippedReason = skipReason('skip_when_empty', action.skip_when_empty)
+        await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
         continue
       }
     }
@@ -736,10 +761,8 @@ export async function runTransitionActions(opts: {
         return v != null && String(v).trim() !== ''
       })
       if (!anySet) {
-        await resolveObligation(obligationId, {
-          outcome: 'skipped',
-          reason: skipReason('skip_unless_any', action.skip_unless_any.join(', '))
-        })
+        skippedReason = skipReason('skip_unless_any', action.skip_unless_any.join(', '))
+        await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
         continue
       }
     }
@@ -828,15 +851,13 @@ export async function runTransitionActions(opts: {
           lastSignature
         })
       ) {
-        await resolveObligation(obligationId, {
-          outcome: 'skipped',
-          reason: skipReason(
-            'push_when',
-            action.push_when.payload === true
-              ? 'payload unchanged since the last landed push'
-              : `no change in ${(action.push_when.fields ?? []).join(', ') || 'the watched fields'}`
-          )
-        })
+        skippedReason = skipReason(
+          'push_when',
+          action.push_when.payload === true
+            ? 'payload unchanged since the last landed push'
+            : `no change in ${(action.push_when.fields ?? []).join(', ') || 'the watched fields'}`
+        )
+        await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
         continue
       }
     }
@@ -986,7 +1007,7 @@ export async function runTransitionActions(opts: {
       .update({ status: 'done', actions_done: journalDone, finished_at: new Date() })
       .catch(() => {})
   }
-  return { blockedError: null }
+  return { blockedError: null, skippedReason }
 }
 
 /** Render + apply per-child-row writebacks (see on_success_children). */
