@@ -23,6 +23,7 @@ import {
   X
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { DirectorySyncCard } from '@/components/directory-sync-card'
 import { Badge } from '@/components/ui/badge'
@@ -55,6 +56,28 @@ const LANGUAGES = [
 ]
 
 type AdGroupRow = { ad_group_id: string; role_id: string }
+
+// Integration obligations' epoch (migration 344) round-trips between an
+// ISO UTC string on the wire and an `<input type="datetime-local">` value,
+// which has NO timezone of its own — it is always the BROWSER's local wall
+// clock. `new Date(v)` on a datetime-local value therefore already reads it
+// as local time, so the reverse direction is just `.toISOString()`; only
+// ISO → local needs the explicit field-by-field format (`toISOString()` on
+// a Date built from the stored UTC value would print UTC fields, not local
+// ones).
+function isoToDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function datetimeLocalToIso(v: string): string | null {
+  if (!v) return null
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
 
 /** available_locales is stored as a JSON array (nvarchar) on nivaro_settings. */
 function toLocaleArray(v: unknown): string[] {
@@ -1583,6 +1606,10 @@ export function SettingsPage() {
   const [lockIdleMinutes, setLockIdleMinutes] = useState<number | ''>('')
   const [integrationNotificationsEnabled, setIntegrationNotificationsEnabled] = useState(false)
   const [integrationRemediationEnabled, setIntegrationRemediationEnabled] = useState(false)
+  // datetime-local value (browser-local wall clock, no timezone of its own —
+  // see isoToDatetimeLocal's comment); '' is a valid draft state (an admin
+  // who clears the field and saves is asking for the fallback, "now").
+  const [integrationObligationsEpoch, setIntegrationObligationsEpoch] = useState('')
   const [smtpHost, setSmtpHost] = useState('')
   const [smtpPort, setSmtpPort] = useState<number | ''>(587)
   const [smtpUser, setSmtpUser] = useState('')
@@ -1693,6 +1720,11 @@ export function SettingsPage() {
     )
     setIntegrationRemediationEnabled(
       !!(settings as { integration_remediation_enabled?: boolean }).integration_remediation_enabled
+    )
+    setIntegrationObligationsEpoch(
+      isoToDatetimeLocal(
+        (settings as { integration_obligations_epoch?: string | null }).integration_obligations_epoch
+      )
     )
     setRevisionRetentionCount(settings.revision_retention_count ?? '')
     const s = settings as Record<string, unknown>
@@ -1924,7 +1956,11 @@ export function SettingsPage() {
   function saveIntegrations() {
     mutation.mutate({
       integration_notifications_enabled: integrationNotificationsEnabled,
-      integration_remediation_enabled: integrationRemediationEnabled
+      integration_remediation_enabled: integrationRemediationEnabled,
+      // A cleared field is a deliberate reset, not "leave it alone" — the
+      // key rides in the PATCH body either way, and the server treats a
+      // falsy value as null (falls back to "now" on every future read).
+      integration_obligations_epoch: datetimeLocalToIso(integrationObligationsEpoch)
     })
   }
 
@@ -3179,6 +3215,53 @@ export function SettingsPage() {
                       checked={integrationRemediationEnabled}
                       onCheckedChange={setIntegrationRemediationEnabled}
                     />
+                  </div>
+                  <div
+                    data-settings-epoch
+                    className='rounded-lg border border-slate-200 px-3 py-2.5 dark:border-border'
+                  >
+                    <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                      Obligations started counting
+                    </p>
+                    <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                      Obligations consider only records that changed on or after this moment;
+                      history before it is never reported as missing.
+                    </p>
+                    <div className='mt-2 flex flex-wrap items-center gap-2'>
+                      <Input
+                        type='datetime-local'
+                        value={integrationObligationsEpoch}
+                        onChange={(e) => setIntegrationObligationsEpoch(e.target.value)}
+                        className='h-8 w-56 text-[12.5px]'
+                      />
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        onClick={() =>
+                          setIntegrationObligationsEpoch(isoToDatetimeLocal(new Date().toISOString()))
+                        }
+                      >
+                        Set to now
+                      </Button>
+                    </div>
+                  </div>
+                  <div
+                    data-obligations-switch-status
+                    className='rounded-md border border-dashed border-slate-200 px-3 py-2 text-[11.5px] text-slate-500 dark:border-border dark:text-muted-foreground'
+                  >
+                    Sweep every 15 min · epoch{' '}
+                    {integrationObligationsEpoch
+                      ? new Date(datetimeLocalToIso(integrationObligationsEpoch) ?? '').toLocaleString()
+                      : 'now, on next save'}{' '}
+                    · notifications {integrationNotificationsEnabled ? 'on' : 'off'} · remediation{' '}
+                    {integrationRemediationEnabled ? 'on' : 'off'} ·{' '}
+                    <Link
+                      to='/integration-health'
+                      className='text-nvr-cyan underline decoration-dotted hover:text-nvr-cyan/80'
+                    >
+                      View the board
+                    </Link>
                   </div>
                 </SectionWrap>
               )}

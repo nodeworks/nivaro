@@ -84,7 +84,12 @@ export function shouldNotify(
   return new Date(row.notified_at).getTime() <= dedupeCutoff(now, windowHours).getTime()
 }
 
-async function notificationsEnabled(): Promise<boolean> {
+/** The deployment's notifications switch (migration 345). Off unless an
+ *  admin turned it on in Settings → Integrations. Exported — same reasoning
+ *  as `remediationEnabled` (services/integration-remediation.ts): a read
+ *  route reports it once so the board can say "notifications off" instead
+ *  of leaving a person to guess why nothing arrived. */
+export async function notificationsEnabled(): Promise<boolean> {
   try {
     const row = (await db('nivaro_settings').first('integration_notifications_enabled')) as
       | { integration_notifications_enabled?: boolean | number | null }

@@ -172,6 +172,7 @@ export type CMSSettings = {
   lock_idle_release_minutes?: number | null
   integration_notifications_enabled?: boolean
   integration_remediation_enabled?: boolean
+  integration_obligations_epoch?: string | null
   brand_logo?: string | null
   brand_login_title?: string | null
   brand_login_message?: string | null

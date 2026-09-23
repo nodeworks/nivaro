@@ -38,6 +38,12 @@ export interface ExternalApi {
   enabled: boolean
   integration_type: string | null
   integration_config: Record<string, unknown> | null
+  // Integration obligations (migration 343) — who the board/notifications
+  // tell about this api's unmet sends, and the two grace windows the
+  // reconcile sweep judges pending/skipped rows against.
+  owner_user?: string | null
+  ack_grace_minutes?: number
+  skip_grace_minutes?: number
   created_at: string
   updated_at: string
 }

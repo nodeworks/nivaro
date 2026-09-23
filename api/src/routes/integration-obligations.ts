@@ -180,9 +180,14 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
     // Top-level sibling of `data`, same envelope position as /record below —
     // the two must never disagree about where a client looks for this.
     const { remediationEnabled } = await import('../services/integration-remediation.js')
+    // Same reasoning, same call, for the notifications switch — the board
+    // header says "notifications off" from THIS read rather than probing
+    // Settings separately.
+    const { notificationsEnabled } = await import('../services/integration-alerts.js')
     return {
       data: { apis: summariseObligations(rows, owners), kinds: listObligationKinds() },
-      remediation_enabled: await remediationEnabled()
+      remediation_enabled: await remediationEnabled(),
+      notifications_enabled: await notificationsEnabled()
     }
   })
 

@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { UserCombobox } from '@/components/user-combobox'
 import { PluginSlot } from '@/extensions/slots'
 import { api, type ExternalApiCallLog, type ExternalApiEndpoint } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
@@ -70,6 +71,10 @@ interface FormState {
   inline_retries: string
   inline_backoff_ms: string
   retry_on: string[]
+  // Integration obligations (migration 343)
+  owner_user: string | null
+  ack_grace_minutes: string
+  skip_grace_minutes: string
 }
 
 const EMPTY: FormState = {
@@ -85,7 +90,10 @@ const EMPTY: FormState = {
   retry_backoff: '',
   inline_retries: '',
   inline_backoff_ms: '',
-  retry_on: ['network', '5xx', '429']
+  retry_on: ['network', '5xx', '429'],
+  owner_user: null,
+  ack_grace_minutes: '',
+  skip_grace_minutes: ''
 }
 
 export function ExternalApiEditPage() {
@@ -116,6 +124,9 @@ export function ExternalApiEditPage() {
         })),
         enabled: data.enabled,
         integration_type: data.integration_type ?? '',
+        owner_user: data.owner_user ?? null,
+        ack_grace_minutes: data.ack_grace_minutes != null ? String(data.ack_grace_minutes) : '',
+        skip_grace_minutes: data.skip_grace_minutes != null ? String(data.skip_grace_minutes) : '',
         ...(() => {
           try {
             const rp = (data as { retry_policy?: string | Record<string, unknown> | null })
@@ -179,7 +190,14 @@ export function ExternalApiEditPage() {
         auth_config: form.auth_type === 'none' ? null : form.auth_config,
         headers: Object.keys(headersObj).length ? headersObj : null,
         enabled: form.enabled,
-        integration_type: form.integration_type || null
+        integration_type: form.integration_type || null,
+        owner_user: form.owner_user || null,
+        // NOT NULL columns with a schema default (60 / 30) — an empty field
+        // sends that default explicitly rather than omitting the key, so
+        // the editor and a freshly-created row always agree on what "blank"
+        // means.
+        ack_grace_minutes: form.ack_grace_minutes.trim() ? Number(form.ack_grace_minutes) : 60,
+        skip_grace_minutes: form.skip_grace_minutes.trim() ? Number(form.skip_grace_minutes) : 30
       }
       return isNew
         ? api.post<{ data: ExternalApi }>('/external-apis', payload).then((r) => r.data.data)
@@ -456,6 +474,66 @@ export function ExternalApiEditPage() {
           />
           <p className='text-[12px] text-slate-400'>Tag this API for use by an extension plugin.</p>
         </div>
+      </Card>
+
+      <Card className='mt-5 p-6 space-y-4' data-api-obligations-card>
+        <div>
+          <Label>Obligations</Label>
+          <p className='text-[12px] text-slate-400'>
+            Who the integration board and its notifications tell about this api's unmet sends, and
+            how long a send may wait before the reconcile sweep calls it overdue or a skip
+            suspicious.
+          </p>
+        </div>
+
+        <div className='space-y-1.5'>
+          <Label>Owner</Label>
+          <UserCombobox
+            value={form.owner_user}
+            onChange={(v) => setForm((f) => ({ ...f, owner_user: v }))}
+            placeholder='No owner'
+            noneLabel='No owner'
+          />
+          <p className='text-[12px] text-slate-400'>
+            Told alongside a record's own owners when this api has a failed, missing, or overdue
+            obligation — only while notifications are turned on in Settings → Integrations.
+          </p>
+        </div>
+
+        <div className='flex flex-wrap items-end gap-4'>
+          <label className='flex flex-col gap-1.5 text-[12px] text-slate-500'>
+            Ack grace (min)
+            <Input
+              type='number'
+              min={0}
+              max={10080}
+              value={form.ack_grace_minutes}
+              onChange={(e) => setForm((f) => ({ ...f, ack_grace_minutes: e.target.value }))}
+              className='h-8 w-24 text-[12.5px]'
+              placeholder='60'
+            />
+          </label>
+          <label className='flex flex-col gap-1.5 text-[12px] text-slate-500'>
+            Skip grace (min)
+            <Input
+              type='number'
+              min={0}
+              max={10080}
+              value={form.skip_grace_minutes}
+              onChange={(e) => setForm((f) => ({ ...f, skip_grace_minutes: e.target.value }))}
+              className='h-8 w-24 text-[12.5px]'
+              placeholder='30'
+            />
+          </label>
+        </div>
+        <p className='text-[12px] text-slate-400'>
+          Ack grace: how long a 2xx response may sit unacknowledged before the reconcile sweep
+          calls it overdue.
+        </p>
+        <p className='text-[12px] text-slate-400'>
+          Skip grace: how long a deliberate skip may stand while the data the guard checked still
+          expects the message, before the sweep reports the skip as suspicious.
+        </p>
       </Card>
 
       {!isNew && data && <EndpointsCard apiId={data.id} />}

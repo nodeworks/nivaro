@@ -28,13 +28,18 @@ export function UserCombobox({
   onChange,
   disabled,
   excludeId,
-  placeholder = 'Select user…'
+  placeholder = 'Select user…',
+  noneLabel = 'No delegate'
 }: {
   value: string | null
   onChange: (v: string | null) => void
   disabled?: boolean
   excludeId?: string
   placeholder?: string
+  /** The "clear selection" list item's label — the delegate-picker default
+   *  reads oddly for any other caller (e.g. an external API's owner), so
+   *  this is the whole component's own escape hatch rather than a copy. */
+  noneLabel?: string
 }) {
   const [open, setOpen] = useState(false)
 
@@ -79,7 +84,7 @@ export function UserCombobox({
                 className='text-[13px]'
               >
                 <Check className={cn('mr-2 h-3.5 w-3.5', !value ? 'opacity-100' : 'opacity-0')} />
-                <span className='text-muted-foreground'>No delegate</span>
+                <span className='text-muted-foreground'>{noneLabel}</span>
               </CommandItem>
               {options.map((u) => (
                 <CommandItem

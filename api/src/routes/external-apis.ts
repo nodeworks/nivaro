@@ -37,6 +37,12 @@ interface ExternalApiRow {
   outbound_contract?: string | null
   mock_config?: string | null
   instance_overrides?: string | null
+  // Integration obligations (migration 343): who the board/notifications
+  // page unmet sends of THIS api to, and the two grace windows the reconcile
+  // sweep judges `pending`/`skipped` rows against.
+  owner_user?: string | null
+  ack_grace_minutes?: number
+  skip_grace_minutes?: number
   created_at: Date
   updated_at: Date
 }
@@ -122,6 +128,29 @@ function parseJson<T = unknown>(val: string | null | undefined): T | null {
 function toJsonStr(val: unknown): string | null {
   if (val == null) return null
   return JSON.stringify(val)
+}
+
+// Integration obligations (migration 343): `ack_grace_minutes` /
+// `skip_grace_minutes` are NOT NULL columns with schema defaults (60 / 30) —
+// a caller may omit either (the column default applies) but never send a
+// value that isn't a sane whole number of minutes. Shared by both the
+// create and update routes so a bad value gets the same error message
+// either way. Capped at a week (10080 min) — past that the number is almost
+// certainly a mistake (seconds, or an hours value that forgot to convert).
+function validateGraceMinutes(
+  ack: number | null | undefined,
+  skip: number | null | undefined
+): string | null {
+  for (const [label, v] of [
+    ['ack_grace_minutes', ack],
+    ['skip_grace_minutes', skip]
+  ] as const) {
+    if (v == null) continue
+    if (!Number.isInteger(v) || v < 0 || v > 10_080) {
+      return `${label} must be a whole number of minutes, 0–10080`
+    }
+  }
+  return null
 }
 
 // Secret field names masked in GET responses (kept structurally but obscured).
@@ -260,6 +289,14 @@ function serializeForRead(row: ExternalApiRow) {
     endpoint_environment: endpointEnvironment(
       (resolveInstanceRow(row as never) as { base_url?: string | null }).base_url ?? row.base_url
     ),
+    // Integration obligations — owner_user is a bare uuid FK, not a secret;
+    // never masked. Grace minutes fall back to the column defaults for a
+    // row from before migration 343 (should never happen post-migration,
+    // but the reconcile sweep and this editor must agree on the same
+    // fallback either way).
+    owner_user: row.owner_user ?? null,
+    ack_grace_minutes: row.ack_grace_minutes ?? 60,
+    skip_grace_minutes: row.skip_grace_minutes ?? 30,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -514,12 +551,20 @@ export async function externalApisRoutes(app: FastifyInstance) {
       enabled?: boolean
       integration_type?: string | null
       integration_config?: unknown
+      owner_user?: string | null
+      ack_grace_minutes?: number | null
+      skip_grace_minutes?: number | null
     }
   }>('/', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body
     if (!body?.name || !body?.base_url) {
       return reply.code(400).send({ error: 'name and base_url are required' })
     }
+    // Both columns are NOT NULL with a schema default (60 / 30) — validated
+    // the same way the update route below does, so a bad value never gets a
+    // different error message depending on whether the row already existed.
+    const graceError = validateGraceMinutes(body.ack_grace_minutes, body.skip_grace_minutes)
+    if (graceError) return reply.code(400).send({ error: graceError })
     const now = new Date()
     const [inserted] = await db('nivaro_external_apis')
       .insert({
@@ -532,6 +577,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
         enabled: body.enabled ?? true,
         integration_type: body.integration_type ?? null,
         integration_config: toJsonStr(body.integration_config ?? null),
+        owner_user: body.owner_user || null,
+        ...(body.ack_grace_minutes != null ? { ack_grace_minutes: body.ack_grace_minutes } : {}),
+        ...(body.skip_grace_minutes != null ? { skip_grace_minutes: body.skip_grace_minutes } : {}),
         created_at: now,
         updated_at: now
       })
@@ -587,6 +635,9 @@ export async function externalApisRoutes(app: FastifyInstance) {
           headers?: Record<string, string>
         } | null
       > | null
+      owner_user: string | null
+      ack_grace_minutes: number
+      skip_grace_minutes: number
     }>
   }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number(req.params.id)
@@ -694,6 +745,17 @@ export async function externalApisRoutes(app: FastifyInstance) {
       )
       patch.auth_config = toJsonStr(merged)
     }
+
+    // Integration obligations — owner_user is a bare uuid, empty string
+    // clears it (the FK is nullable); a nonexistent user id is caught by the
+    // FK constraint itself, same as every other nullable user FK in this
+    // codebase. The two grace minutes are NOT NULL columns, so — unlike
+    // owner_user — they are validated up front rather than left to the DB.
+    if (body.owner_user !== undefined) patch.owner_user = body.owner_user || null
+    const graceError = validateGraceMinutes(body.ack_grace_minutes, body.skip_grace_minutes)
+    if (graceError) return reply.code(400).send({ error: graceError })
+    if (body.ack_grace_minutes !== undefined) patch.ack_grace_minutes = body.ack_grace_minutes
+    if (body.skip_grace_minutes !== undefined) patch.skip_grace_minutes = body.skip_grace_minutes
 
     await db('nivaro_external_apis').where({ id }).update(patch)
     const row = (await db('nivaro_external_apis').where({ id }).first()) as ExternalApiRow

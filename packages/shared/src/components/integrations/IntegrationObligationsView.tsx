@@ -2,7 +2,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { ChevronDown, Code2, Loader2, Send } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useItemNavigation, useNivaroClient } from '../../context'
+import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import {
   attemptsLabel,
@@ -163,6 +163,34 @@ function ShowRequestButton({ open, onToggle }: { open: boolean; onToggle: () => 
   )
 }
 
+/** Link into Settings → Integrations, where the two switches (and the
+ *  epoch) live — same `consoleUrl` resolution `ManageLink`
+ *  (NotificationSourcesCard.tsx) already established: absent = the admin's
+ *  own path, a function returning null = the host has no such page (hidden,
+ *  never a link into a 404). */
+function SettingsLink() {
+  const nav = useNavigation()
+  const path = '/settings?section=integrations'
+  const href = nav.consoleUrl ? nav.consoleUrl(path) : path
+  if (!href) return null
+  const external = /^https?:\/\//.test(href)
+  return (
+    <a
+      href={href}
+      data-obligations-settings-link
+      {...(external ? { target: '_blank', rel: 'noreferrer' } : {})}
+      onClick={(e) => {
+        if (external || e.metaKey || e.ctrlKey) return
+        e.preventDefault()
+        nav.navigate(href)
+      }}
+      className='underline decoration-dotted hover:text-slate-600 dark:hover:text-slate-200'
+    >
+      Settings → Integrations
+    </a>
+  )
+}
+
 interface ApiSummary {
   api: string
   owner_user: string | null
@@ -281,6 +309,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
       client.request<{
         data: { apis: ApiSummary[]; kinds: KindDef[] }
         remediation_enabled?: boolean
+        notifications_enabled?: boolean
       }>(get('/integration-obligations/summary')),
     staleTime: 30_000
   })
@@ -288,6 +317,18 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
   // Top-level sibling of `data`, same envelope position IntegrationStatusBanner
   // reads from /record/:c/:i.
   const remediationEnabled = summary?.remediation_enabled === true
+  const notificationsEnabled = summary?.notifications_enabled === true
+  // Only the switches that are actually OFF — "remediation off" beside an
+  // on switch would say something false. Undefined while the summary
+  // hasn't loaded yet (both booleans read false before then, same as
+  // remediationEnabled elsewhere in this component) is deliberately
+  // skipped: a loading board saying "notifications off" for a heartbeat
+  // before the real answer lands would be a flicker of a wrong claim.
+  const offSwitches = summaryLoading
+    ? []
+    : [!notificationsEnabled && 'notifications off', !remediationEnabled && 'remediation off'].filter(
+        (x): x is string => !!x
+      )
 
   // A filter change makes the current page meaningless — go back to the top
   // of the newly-scoped set rather than showing "page 3" of a filter that
@@ -453,6 +494,14 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
 
   return (
     <div className={cn('space-y-4', className)} data-obligations-board>
+      {offSwitches.length > 0 && (
+        <p
+          data-obligations-switch-status
+          className='text-[11px] text-slate-400 dark:text-muted-foreground'
+        >
+          {offSwitches.join(' · ')} — <SettingsLink />
+        </p>
+      )}
       {summaryError ? (
         <ErrorSurface variant='500' detail='Could not load the obligations summary.' />
       ) : summaryLoading ? (
