@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
 import {
+  bustObligationsEpochCache,
   clearObligationKinds,
+  getObligationsEpoch,
   listObligationKinds,
   openObligationForTrigger,
   recordObligation,
@@ -490,6 +492,87 @@ describe('resolveApiName', () => {
 
     const name = await resolveApiName(db, '9103')
     expect(name).toBe('9103')
+  })
+})
+
+describe('getObligationsEpoch', () => {
+  // One shared cache key (there is only ever one epoch), unlike
+  // resolveApiName's per-input cache — bust it every time or a later test
+  // would silently reuse an earlier test's cached value.
+  beforeEach(() => bustObligationsEpochCache())
+  afterEach(() => {
+    vi.clearAllMocks()
+    bustObligationsEpochCache()
+  })
+
+  it('reads nivaro_settings.integration_obligations_epoch', async () => {
+    const stored = new Date('2026-09-10T00:00:00Z')
+    const chain = {
+      orderBy: vi.fn(),
+      first: vi.fn().mockResolvedValue({ integration_obligations_epoch: stored })
+    }
+    chain.orderBy.mockReturnValue(chain)
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    const epoch = await getObligationsEpoch(db)
+    expect(epoch).toEqual(stored)
+    expect(chain.first).toHaveBeenCalledWith('integration_obligations_epoch')
+  })
+
+  it('caches for 60s — a second call within the window never touches the db again', async () => {
+    const stored = new Date('2026-09-10T00:00:00Z')
+    const chain = {
+      orderBy: vi.fn(),
+      first: vi.fn().mockResolvedValue({ integration_obligations_epoch: stored })
+    }
+    chain.orderBy.mockReturnValue(chain)
+    mockedDb().mockClear()
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    await getObligationsEpoch(db)
+    mockedDb().mockClear()
+    const epoch = await getObligationsEpoch(db)
+
+    expect(epoch).toEqual(stored)
+    expect(db).not.toHaveBeenCalled()
+  })
+
+  it('falls back to "now" when the column is NULL — never flood on a fresh install racing the sweep', async () => {
+    const before = Date.now()
+    const chain = {
+      orderBy: vi.fn(),
+      first: vi.fn().mockResolvedValue({ integration_obligations_epoch: null })
+    }
+    chain.orderBy.mockReturnValue(chain)
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    const epoch = await getObligationsEpoch(db)
+    expect(epoch.getTime()).toBeGreaterThanOrEqual(before)
+    expect(epoch.getTime()).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('falls back to "now" when the lookup throws — under-reporting one cycle beats flooding', async () => {
+    const before = Date.now()
+    const chain = { orderBy: vi.fn(), first: vi.fn().mockRejectedValue(new Error('down')) }
+    chain.orderBy.mockReturnValue(chain)
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    const epoch = await getObligationsEpoch(db)
+    expect(epoch.getTime()).toBeGreaterThanOrEqual(before)
+  })
+
+  it('bustObligationsEpochCache forces the next call to re-read', async () => {
+    const first = new Date('2026-09-10T00:00:00Z')
+    const second = new Date('2026-09-15T00:00:00Z')
+    const chain = { orderBy: vi.fn(), first: vi.fn() }
+    chain.orderBy.mockReturnValue(chain)
+    chain.first.mockResolvedValueOnce({ integration_obligations_epoch: first })
+    chain.first.mockResolvedValueOnce({ integration_obligations_epoch: second })
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    expect(await getObligationsEpoch(db)).toEqual(first)
+    bustObligationsEpochCache()
+    expect(await getObligationsEpoch(db)).toEqual(second)
   })
 })
 

@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
 import {
+  bustObligationsEpochCache,
   clearObligationKinds,
   registerObligationKind
 } from '../../../services/integration-obligations.js'
@@ -450,5 +451,55 @@ describe('reconcileKind honours the injected database param', () => {
     // scans see only itself, never something to supersede), so nothing was
     // ever written — the module `db` singleton should be completely silent.
     expect(db).not.toHaveBeenCalled()
+  })
+})
+
+describe('reconcileKind threads the obligations epoch into expect()', () => {
+  // getObligationsEpoch has ONE shared cache key (there is only ever one
+  // epoch) — an earlier test in this file may have already warmed it via a
+  // mismatched mock shape, so bust before AND after or this test's own
+  // assertion on the epoch value is at the mercy of test order.
+  beforeEach(() => bustObligationsEpochCache())
+  afterEach(() => {
+    vi.clearAllMocks()
+    bustObligationsEpochCache()
+  })
+
+  it("resolves getObligationsEpoch through the SAME injected database and hands it to the kind's expect()", async () => {
+    const epoch = new Date('2026-09-10T00:00:00Z')
+    const settingsChain = {
+      orderBy: vi.fn(),
+      first: vi.fn().mockResolvedValue({ integration_obligations_epoch: epoch })
+    }
+    settingsChain.orderBy.mockReturnValue(settingsChain)
+
+    const apiChain = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue({ ack_grace_minutes: 60, skip_grace_minutes: 30 })
+    }
+    apiChain.where.mockReturnValue(apiChain)
+
+    // Nothing expected (expectFn returns []), so the only remaining db touch
+    // is the unconditional "anything open no longer expected" scan at the
+    // end of reconcileKind.
+    const obligationsChain = { where: vi.fn(), whereIn: vi.fn(), select: vi.fn().mockResolvedValue([]) }
+    obligationsChain.where.mockReturnValue(obligationsChain)
+    obligationsChain.whereIn.mockReturnValue(obligationsChain)
+
+    const fakeDatabase = vi.fn().mockImplementation((table: string) => {
+      if (table === 'nivaro_settings') return settingsChain
+      if (table === 'nivaro_external_apis') return apiChain
+      if (table === 'nivaro_integration_obligations') return obligationsChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as unknown as Knex
+
+    const expectFn = vi.fn().mockResolvedValue([])
+    const def = { ...base, kind: 'wf.epoch', expect: expectFn }
+
+    const r = await reconcileKind(def, fakeDatabase, new Date('2026-09-22T00:00:00Z'))
+
+    expect(r).toMatchObject({ kind: 'wf.epoch', missing: 0, overdue: 0, superseded: 0 })
+    expect(expectFn).toHaveBeenCalledTimes(1)
+    expect(expectFn).toHaveBeenCalledWith(fakeDatabase, { epoch })
   })
 })

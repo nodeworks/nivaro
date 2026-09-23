@@ -123,7 +123,10 @@ const allowedSettingsKeys = [
   'theme_radius',
   'theme_font',
   // Approved accent palette users may pick from (#83)
-  'theme_accents'
+  'theme_accents',
+  // The moment integration obligations started counting (migration 344) —
+  // an admin may move it forward or back; getObligationsEpoch is what reads it
+  'integration_obligations_epoch'
 ]
 
 export async function settingsRoutes(app: FastifyInstance) {
@@ -185,6 +188,18 @@ export async function settingsRoutes(app: FastifyInstance) {
           : typeof patch.theme_accents === 'string'
             ? patch.theme_accents
             : JSON.stringify(patch.theme_accents)
+    }
+
+    // Integration obligations epoch: coerce to a real Date (the client sends
+    // an ISO string), and bust the 60s cache once the write commits — an
+    // admin moving this must take effect immediately, the same rule
+    // maintenance_mode and sla_zone_map already follow above.
+    if ('integration_obligations_epoch' in patch) {
+      patch.integration_obligations_epoch = patch.integration_obligations_epoch
+        ? new Date(patch.integration_obligations_epoch as string)
+        : null
+      const { bustObligationsEpochCache } = await import('../services/integration-obligations.js')
+      reply.raw.once('finish', () => bustObligationsEpochCache())
     }
 
     // Preserve secrets if masked value re-submitted

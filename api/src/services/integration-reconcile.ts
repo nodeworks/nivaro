@@ -5,8 +5,10 @@
  * that made it happen, which cannot see the case where the mechanism never
  * ran: a raw-SQL import that bypasses hooks, a transition missing its action,
  * a paused cron, a guard that is simply wrong. So each registered kind
- * declares `expect(db)` — the records the partner is BEHIND on, derived from
- * data alone — and this sweep compares that with the ledger.
+ * declares `expect(db, {epoch})` — the records the partner is BEHIND on,
+ * derived from data alone and bounded by `getObligationsEpoch` so a kind
+ * never flags a record older than obligations started counting — and this
+ * sweep compares that with the ledger.
  *
  * It writes truth and never sends. The one outcome worth naming: a `skipped`
  * whose expectation still holds after the grace window becomes `overdue`,
@@ -23,6 +25,7 @@ import {
   type ObligationOutcome,
   OPEN_OUTCOMES,
   allObligationKinds,
+  getObligationsEpoch,
   recordObligation,
   resolveObligation
 } from './integration-obligations.js'
@@ -216,7 +219,8 @@ export async function reconcileKind(
   expected: number
   truncated: boolean
 }> {
-  const expectedRows = await def.expect(database)
+  const epoch = await getObligationsEpoch(database)
+  const expectedRows = await def.expect(database, { epoch })
   const truncated = expectedRows.length > EXPECT_CEILING
   const rows = truncated ? expectedRows.slice(0, EXPECT_CEILING) : expectedRows
   const grace = await graceFor(def.api, database)
@@ -321,7 +325,8 @@ export async function dryRunIntegrationReconcile(): Promise<unknown> {
   const out: Array<{ kind: string; expected: number }> = []
   for (const def of allObligationKinds()) {
     try {
-      const rows = await def.expect(db)
+      const epoch = await getObligationsEpoch(db)
+      const rows = await def.expect(db, { epoch })
       out.push({ kind: def.kind, expected: rows.length })
     } catch {
       out.push({ kind: def.kind, expected: -1 })

@@ -74,8 +74,15 @@ export interface ObligationKindDef {
   grace_minutes?: number
   matches?(ctx: ObligationTriggerContext): boolean
   /** Records the partner is BEHIND on, derived from data alone. A returned
-   *  row means "the partner does not have this", never "this happened". */
-  expect(database: Knex): Promise<ExpectedObligation[]>
+   *  row means "the partner does not have this", never "this happened".
+   *  `epoch` (getObligationsEpoch) is the moment obligations started
+   *  counting — a kind's own WHERE clause must exclude anything whose
+   *  relevant moment (state entry, last edit, a link's created stamp — the
+   *  kind decides which) predates it, or the first sweep against an
+   *  existing database floods `missing` for every never-pushed record since
+   *  the beginning of time. Required, not optional: a kind that ignores it
+   *  is exactly the flooding this parameter exists to prevent. */
+  expect(database: Knex, opts: { epoch: Date }): Promise<ExpectedObligation[]>
   /** Phase 2 only: may the sweep re-fire a `missing` row by itself? */
   safe_to_refire?: boolean
 }
@@ -288,6 +295,44 @@ export async function resolveApiName(database: Knex, idOrName: string): Promise<
   } catch {
     return s
   }
+}
+
+let epochCache: { epoch: Date; at: number } | null = null
+const EPOCH_CACHE_TTL_MS = 60_000
+
+/**
+ * The moment integration obligations "started counting" (migration 344,
+ * `nivaro_settings.integration_obligations_epoch` — PATCH-allowlisted so an
+ * admin may move it). Every registered kind's `expect()` must exclude
+ * anything whose relevant moment predates this, or the first sweep against
+ * an existing database floods `missing` for years of never-pushed history.
+ *
+ * A lookup failure, or a NULL column (should not happen after the migration
+ * backfills it, but a fresh install racing the sweep before its own boot
+ * finishes is possible), falls back to "now" — same direction as
+ * `resolveApiName`'s catch-and-fall-back, and the SAFE failure mode here:
+ * under-reporting for one cycle beats re-flooding the exact problem this
+ * column exists to fix. 60s cache, same TTL and shape as `apiNameCache`.
+ */
+export async function getObligationsEpoch(database: Knex): Promise<Date> {
+  if (epochCache && Date.now() - epochCache.at < EPOCH_CACHE_TTL_MS) return epochCache.epoch
+  try {
+    const row = (await database('nivaro_settings')
+      .orderBy('id', 'asc')
+      .first('integration_obligations_epoch')) as
+      | { integration_obligations_epoch: Date | string | null }
+      | undefined
+    const epoch = row?.integration_obligations_epoch ? new Date(row.integration_obligations_epoch) : new Date()
+    epochCache = { epoch, at: Date.now() }
+    return epoch
+  } catch {
+    return new Date()
+  }
+}
+
+/** For settings PATCH (an admin moved the epoch) and tests. */
+export function bustObligationsEpochCache(): void {
+  epochCache = null
 }
 
 /** The decision-point entry point: attribute the context to a kind and open
