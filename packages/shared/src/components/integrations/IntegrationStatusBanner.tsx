@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { type BannerLine, bannerLines } from '../../lib/obligation-banner'
+import { bannerLines } from '../../lib/obligation-banner'
 import { cn } from '../../lib/utils'
 import { colorPair } from '../QueryTable'
+import { roleForTone } from './IntegrationObligationsView'
 
 /**
  * One line per partner on the record: were they told, when, and if not, why
@@ -13,20 +14,11 @@ import { colorPair } from '../QueryTable'
  *
  * Renders nothing when the record has no obligations, so a collection with
  * no integrations pays one cached request and shows no chrome.
+ *
+ * `roleForTone` is imported from `IntegrationObligationsView` (the board)
+ * rather than duplicated here, so the board and this banner can never
+ * disagree about what "overdue" looks like.
  */
-
-/** Mirrors `IntegrationObligationsView`'s private `roleForTone` — that
- *  function isn't exported, so this is a small (4-line) duplicate rather
- *  than a cross-file export for a task outside this component's manifest.
- *  Both map the SAME `toneForOutcome` domain onto the SAME `COLOR_ROLES`
- *  names, so the board and this banner can never disagree about what
- *  "overdue" looks like. */
-function roleForTone(tone: BannerLine['tone']): 'negative' | 'warning' | 'positive' | null {
-  if (tone === 'danger') return 'negative'
-  if (tone === 'warning') return 'warning'
-  if (tone === 'positive') return 'positive'
-  return null
-}
 
 export interface IntegrationStatusBannerProps {
   collection: string
@@ -74,7 +66,9 @@ export function IntegrationStatusBanner({ collection, itemId }: IntegrationStatu
               aria-hidden
               className={cn(
                 'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
-                accent ? 'bg-[color:var(--obt)] dark:bg-[color:var(--obtd)]' : 'bg-slate-400'
+                accent
+                  ? 'bg-[color:var(--obt)] dark:bg-[color:var(--obtd)]'
+                  : 'bg-slate-400 dark:bg-slate-600'
               )}
             />
             <p className='min-w-0 flex-1 leading-5 text-slate-700 dark:text-slate-200'>

@@ -54,8 +54,10 @@ const OUTCOME_OPTIONS = [
 
 /** Maps a filter tone onto the shared `COLOR_ROLES` name QueryTable's
  *  `colorPair` resolves — `null` for `neutral` renders as a plain card with
- *  no accent, never a bare slate wash. */
-function roleForTone(
+ *  no accent, never a bare slate wash. Exported so `IntegrationStatusBanner`
+ *  (the record banner, same tone→colorPair idiom) imports this instead of
+ *  keeping its own duplicate. */
+export function roleForTone(
   tone: ReturnType<typeof toneForOutcome>
 ): 'negative' | 'warning' | 'positive' | null {
   if (tone === 'danger') return 'negative'
