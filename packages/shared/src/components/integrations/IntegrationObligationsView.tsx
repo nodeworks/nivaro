@@ -203,12 +203,15 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
     queryKey: ['integration-obligations', 'summary'],
     queryFn: () =>
       client.request<{
-        data: { apis: ApiSummary[]; kinds: KindDef[]; remediation_enabled?: boolean }
+        data: { apis: ApiSummary[]; kinds: KindDef[] }
+        remediation_enabled?: boolean
       }>(get('/integration-obligations/summary')),
     staleTime: 30_000
   })
   // Read once, here — never a second probe per row of the list table below.
-  const remediationEnabled = summary?.data.remediation_enabled === true
+  // Top-level sibling of `data`, same envelope position IntegrationStatusBanner
+  // reads from /record/:c/:i.
+  const remediationEnabled = summary?.remediation_enabled === true
 
   // A filter change makes the current page meaningless — go back to the top
   // of the newly-scoped set rather than showing "page 3" of a filter that

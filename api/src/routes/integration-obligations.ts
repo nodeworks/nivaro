@@ -142,13 +142,12 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
     // Task 19 — a read the board already makes once, never a second probe
     // per row: the Send-now button shows/hides on this, and reports "off"
     // rather than looking broken while the deployment switch is off.
+    // Top-level sibling of `data`, same envelope position as /record below —
+    // the two must never disagree about where a client looks for this.
     const { remediationEnabled } = await import('../services/integration-remediation.js')
     return {
-      data: {
-        apis: summariseObligations(rows, owners),
-        kinds: listObligationKinds(),
-        remediation_enabled: await remediationEnabled()
-      }
+      data: { apis: summariseObligations(rows, owners), kinds: listObligationKinds() },
+      remediation_enabled: await remediationEnabled()
     }
   })
 
@@ -273,7 +272,8 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           'resolved_at'
         )
       // Task 19 — a read this banner already makes once per record, never a
-      // second probe per row: same reasoning as /summary above.
+      // second probe per row: same reasoning as /summary above. Same
+      // envelope position too — top-level sibling of `data`.
       const { remediationEnabled } = await import('../services/integration-remediation.js')
       return { data: rows, remediation_enabled: await remediationEnabled() }
     }

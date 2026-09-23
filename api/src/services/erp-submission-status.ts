@@ -50,13 +50,26 @@ export async function propagateSubmissionStatus(opts: {
   }
 }
 
+/** Columns this function decides for itself — never overridable via `extra`
+ *  below, so a caller can pass extra bookkeeping without any risk of it
+ *  accidentally clobbering the shared column set. */
+const OWNED_COLUMNS = new Set([
+  'status',
+  'response',
+  'external_ref',
+  'attempts',
+  'last_error',
+  'error_class',
+  'updated_at'
+])
+
 /**
  * The submission-row update that follows any send attempt — one function,
- * so the manual retry route, the bulk-retry route, the automatic sweep and
- * Task 19's send-now / retry-ladder / re-fire all write the SAME columns.
- * `attempts` in particular: it is what every backoff ladder counts, so a
- * writer that skipped it would leave that row's ladder stuck on rung zero
- * forever.
+ * so the manual retry route, the bulk-retry route, the status-override
+ * route, the automatic sweep and Task 19's send-now / retry-ladder /
+ * re-fire all write the SAME columns. `attempts` in particular: it is what
+ * every backoff ladder counts, so a writer that skipped it would leave that
+ * row's ladder stuck on rung zero forever.
  *
  * `error_class` (#628, migration 343) is written here too, for every
  * failure or rejection: `null` when the send did not fail, otherwise
@@ -65,6 +78,12 @@ export async function propagateSubmissionStatus(opts: {
  * falling back to text-pattern matching on the error string for a network
  * failure that never got a response at all. That classification is what
  * decides whether `runRetryPass` may ever pick the row back up.
+ *
+ * `extra` merges additional columns into this SAME `.update()` call — for a
+ * caller with its own bookkeeping this function knows nothing about (the
+ * automatic sweep's `retry_count`/`next_retry_at`), so a send attempt is
+ * ever only ONE write to the row, not one from here plus a second from the
+ * caller.
  */
 export async function applySendOutcome(opts: {
   submissionId: number
@@ -77,9 +96,13 @@ export async function applySendOutcome(opts: {
   }
   priorExternalRef: string | null
   priorAttempts: number
+  extra?: Record<string, unknown>
 }): Promise<void> {
   const { serializeResponseBody } = await import('./workflow-actions.js')
   const failed = opts.outcome.status === 'failed' || opts.outcome.status === 'rejected'
+  const extra = Object.fromEntries(
+    Object.entries(opts.extra ?? {}).filter(([k]) => !OWNED_COLUMNS.has(k))
+  )
   await db('nivaro_erp_submissions')
     .where({ id: opts.submissionId })
     .update({
@@ -91,6 +114,7 @@ export async function applySendOutcome(opts: {
       error_class: failed
         ? classifyError(opts.outcome.http_status ?? null, opts.outcome.response, opts.outcome.error)
         : null,
-      updated_at: new Date()
+      updated_at: new Date(),
+      ...extra
     })
 }

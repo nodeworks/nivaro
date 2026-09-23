@@ -9,14 +9,19 @@
  * and does nothing. Shipping this changes no behaviour on any existing
  * deployment.
  *
- * `resendSubmission` is the one place that actually sends: it re-plays a
- * STORED payload through the exact path the original send used
- * (`sendPayload`), so every guard and every side effect (the outbound
- * contract check, the activity trail) still applies — a re-send is never a
- * bypass. `sendNow`, `runRetryPass` and `runMissingRefirePass` are three
- * different reasons to call it: a person clicked a button, the backoff
- * ladder came due, or the sweep found a `missing` obligation with a prior
- * request to repeat.
+ * Two functions actually send, both through the exact path the original send
+ * used (`sendPayload`), so every guard and every side effect (the outbound
+ * contract check, the activity trail) still applies — neither is ever a
+ * bypass. Which one runs depends on whose evidence is being touched:
+ *
+ *  - `resendSubmission` MUTATES a submission the re-firing obligation
+ *    already OWNS — `runRetryPass` climbing its own ladder, or `sendNow` on
+ *    a `failed`/`overdue` row that already has a `submission_id`.
+ *  - `refireFromPrior` never mutates anything that belongs to another
+ *    obligation: for a `missing` row (`sendNow` on one, or
+ *    `runMissingRefirePass`'s own sweep), the "most recent request" it is
+ *    standing in for is someone ELSE's history, so it is CLONED into a
+ *    fresh `nivaro_erp_submissions` row rather than rewritten in place.
  */
 import { db } from '../db/index.js'
 import { getObligationKind, resolveObligation } from './integration-obligations.js'
@@ -173,13 +178,110 @@ async function resendSubmission(
 }
 
 /**
+ * Re-fire a `missing` obligation by CLONING the most recent prior submission
+ * into a FRESH row, rather than mutating it in place.
+ *
+ * RULING: the "prior" submission `mostRecentSubmissionFor` finds belongs to
+ * some OTHER obligation — quite possibly one that is already `sent`, and its
+ * row is that obligation's own evidence of what actually happened. Re-firing
+ * a `missing` obligation must never rewrite it: `resendSubmission` (above)
+ * is correct ONLY when the obligation being acted on already owns the
+ * submission it is re-sending — that is not true here. So this reads the
+ * prior row (collection, item, external_api, payload, change_signature)
+ * WITHOUT ever writing to it, inserts a brand-new row stamped with THIS
+ * obligation's own id, and applies the send outcome to that new row only.
+ * The prior obligation's submission is byte-unchanged afterward.
+ */
+async function refireFromPrior(
+  obligationId: number,
+  priorSubmissionId: number,
+  userId: string | null
+): Promise<{ detail: string }> {
+  const prior = (await db('nivaro_erp_submissions')
+    .where({ id: priorSubmissionId })
+    .first('collection', 'item', 'external_api', 'payload', 'change_signature')) as
+    | {
+        collection: string
+        item: string
+        external_api: number
+        payload: string | null
+        change_signature: string | null
+      }
+    | undefined
+  if (!prior) return { detail: 'the original request is no longer stored' }
+
+  let stored: { endpoint_path: string; body: Record<string, unknown> }
+  try {
+    stored = JSON.parse(prior.payload ?? '') as { endpoint_path: string; body: Record<string, unknown> }
+    if (!stored?.endpoint_path) throw new Error('no endpoint_path')
+  } catch {
+    return { detail: 'the original request is not readable' }
+  }
+
+  // The shell: identity cloned from the prior row, everything about THIS
+  // attempt (status/response/external_ref/error_class) starts blank and is
+  // filled in by applySendOutcome right after — the same shared function
+  // every other sender uses, so this row's final shape can never drift from
+  // theirs. `attempts: 0` because nothing has been attempted on this row
+  // yet — applySendOutcome's own `priorAttempts + 1` below is what makes the
+  // first real attempt land as attempts = 1, same as a freshly created
+  // submission anywhere else in the codebase.
+  const now = new Date()
+  const inserted = (await db('nivaro_erp_submissions')
+    .insert({
+      collection: prior.collection,
+      item: prior.item,
+      external_api: prior.external_api,
+      external_ref: null,
+      status: 'pending',
+      attempts: 0,
+      last_error: null,
+      payload: prior.payload,
+      change_signature: prior.change_signature,
+      obligation_id: obligationId,
+      created_at: now,
+      updated_at: now
+    })
+    .returning('id')) as Array<number | { id: number }>
+  const first = inserted[0]
+  // tedious hands an OBJECT back from .returning on this stack.
+  const newId =
+    typeof first === 'object' && first !== null ? Number(first.id) : Number(first ?? 0) || null
+  if (!newId) return { detail: 'could not create a submission row to re-fire into' }
+
+  const { sendPayload } = await import('../routes/erp-submissions.js')
+  const { applySendOutcome, propagateSubmissionStatus } = await import('./erp-submission-status.js')
+
+  const outcome = await sendPayload(prior.external_api, stored, userId ?? undefined)
+
+  await applySendOutcome({
+    submissionId: newId,
+    outcome,
+    priorExternalRef: null,
+    priorAttempts: 0
+  })
+  // resolveObligation (inside propagateSubmissionStatus) is what points the
+  // re-firing obligation's own submission_id at the NEW row — the prior
+  // obligation, whichever one that was, is never touched by this call.
+  await propagateSubmissionStatus({
+    submissionId: newId,
+    status: outcome.status,
+    error: outcome.error,
+    obligationId
+  })
+
+  return { detail: `re-sent: ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}` }
+}
+
+/**
  * A person clicked "Send now" on one obligation. When the obligation has a
  * submission of its own, that gets re-sent (the ordinary failed/overdue
  * case). When it does not — a `missing` obligation, by definition, since
  * nothing was ever attempted for it — the most recent request for the same
- * record + API stands in, the identical rule `runMissingRefirePass` uses,
- * so the button does something sensible for every outcome it is shown on
- * (failed, overdue, missing).
+ * record + API is CLONED into a fresh row (`refireFromPrior`; the request
+ * itself belongs to some other obligation's history, which must never be
+ * rewritten), so the button does something sensible for every outcome it is
+ * shown on (failed, overdue, missing).
  */
 export async function sendNow(
   obligationId: number,
@@ -203,7 +305,7 @@ export async function sendNow(
   if (!prior) {
     return { detail: 'nothing to re-send — this send has never run for this record' }
   }
-  return resendSubmission(obligationId, prior.id, userId)
+  return refireFromPrior(obligationId, prior.id, userId)
 }
 
 /**
@@ -317,7 +419,7 @@ export async function runMissingRefirePass(): Promise<{ refired: number; queued:
       })
       continue
     }
-    await resendSubmission(r.id, prior.id, null)
+    await refireFromPrior(r.id, prior.id, null)
     refired++
   }
   return { refired, queued }

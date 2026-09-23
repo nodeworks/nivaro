@@ -1582,6 +1582,7 @@ export function SettingsPage() {
   const [fieldWatchEnabled, setFieldWatchEnabled] = useState(false)
   const [lockIdleMinutes, setLockIdleMinutes] = useState<number | ''>('')
   const [integrationNotificationsEnabled, setIntegrationNotificationsEnabled] = useState(false)
+  const [integrationRemediationEnabled, setIntegrationRemediationEnabled] = useState(false)
   const [smtpHost, setSmtpHost] = useState('')
   const [smtpPort, setSmtpPort] = useState<number | ''>(587)
   const [smtpUser, setSmtpUser] = useState('')
@@ -1689,6 +1690,10 @@ export function SettingsPage() {
     setIntegrationNotificationsEnabled(
       !!(settings as { integration_notifications_enabled?: boolean })
         .integration_notifications_enabled
+    )
+    setIntegrationRemediationEnabled(
+      !!(settings as { integration_remediation_enabled?: boolean })
+        .integration_remediation_enabled
     )
     setRevisionRetentionCount(settings.revision_retention_count ?? '')
     const s = settings as Record<string, unknown>
@@ -1919,7 +1924,8 @@ export function SettingsPage() {
 
   function saveIntegrations() {
     mutation.mutate({
-      integration_notifications_enabled: integrationNotificationsEnabled
+      integration_notifications_enabled: integrationNotificationsEnabled,
+      integration_remediation_enabled: integrationRemediationEnabled
     })
   }
 
@@ -3145,6 +3151,28 @@ export function SettingsPage() {
                     <Switch
                       checked={integrationNotificationsEnabled}
                       onCheckedChange={setIntegrationNotificationsEnabled}
+                    />
+                  </div>
+                  <div
+                    data-settings-remediation
+                    className='flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 dark:border-border'
+                  >
+                    <div>
+                      <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                        Let Nivaro act on unmet obligations
+                      </p>
+                      <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                        Off by default. When on: Send now (from the record banner or the integration
+                        board) actually re-sends; a failure whose cause looks transient retries
+                        itself on a 1/5/30/120-minute ladder, up to five attempts, before it is
+                        handed to a person; and a message the sweep found was never sent at all is
+                        re-fired once. A validation failure — one repetition cannot fix — is never
+                        retried automatically either way.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={integrationRemediationEnabled}
+                      onCheckedChange={setIntegrationRemediationEnabled}
                     />
                   </div>
                 </SectionWrap>

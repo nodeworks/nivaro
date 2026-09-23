@@ -244,6 +244,55 @@ describe('sendNow — gate on', () => {
     const r = await sendNow(1, 'user-1')
     expect(r.detail).toMatch(/nothing to re-send/)
   })
+
+  it('a `missing` obligation WITH a prior request to repeat clones it into a fresh row, rather than resending the prior directly', async () => {
+    const settings = settingsChain(true)
+    const obligations = chain({
+      first: vi
+        .fn()
+        .mockResolvedValue({ id: 1, api: 'Partner', collection: 'workflows', item: '1', submission_id: null })
+    })
+    const priorLookup = chain({ first: vi.fn().mockResolvedValue({ id: 77 }) })
+    const priorRow = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue({
+        collection: 'workflows',
+        item: '1',
+        external_api: 9,
+        payload: JSON.stringify({ endpoint_path: '/push', body: { b: 2 } }),
+        change_signature: null
+      }),
+      insert: vi.fn(),
+      update: vi.fn()
+    }
+    priorRow.where.mockReturnValue(priorRow)
+    priorRow.insert.mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 501 }]) })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return obligations
+      if (table === 'nivaro_erp_submissions as es') return priorLookup
+      if (table === 'nivaro_erp_submissions') return priorRow
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    vi.mocked(sendPayload).mockResolvedValue({
+      status: 'pending',
+      external_ref: null,
+      error: null,
+      response: null,
+      http_status: 202
+    })
+
+    const r = await sendNow(1, 'user-1')
+
+    expect(priorRow.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ obligation_id: 1, external_api: 9, attempts: 0 })
+    )
+    expect(priorRow.update).not.toHaveBeenCalled()
+    expect(applySendOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ submissionId: 501, priorAttempts: 0 })
+    )
+    expect(r.detail).toBe('re-sent: pending')
+  })
 })
 
 describe('runRetryPass — gate on', () => {
@@ -422,7 +471,7 @@ describe('runMissingRefirePass — gate on', () => {
     expect(patch.reason).toMatch(/^gave up: this kind is never re-fired/)
   })
 
-  it('re-fires from the most recent prior request for the same record + API when the kind allows it', async () => {
+  it('re-fires from the most recent prior request for the same record + API when the kind allows it — by CLONING it into a fresh row', async () => {
     registerObligationKind({
       api: 'Partner',
       kind: 'outbound',
@@ -437,19 +486,31 @@ describe('runMissingRefirePass — gate on', () => {
         .mockResolvedValue([{ id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }])
     })
     const priorLookup = chain({ first: vi.fn().mockResolvedValue({ id: 77 }) })
-    const submissionRow = chain({
+    // ONE chain object serves BOTH calls db('nivaro_erp_submissions') makes
+    // in refireFromPrior — the read of the prior row's identity, and the
+    // insert of the fresh clone — exactly like a real knex query builder
+    // fielding two different terminal calls off the same table() call.
+    const priorRow = {
+      where: vi.fn(),
       first: vi.fn().mockResolvedValue({
+        collection: 'workflows',
+        item: '2',
         external_api: 7,
         payload: JSON.stringify({ endpoint_path: '/orders', body: { a: 1 } }),
-        external_ref: null,
-        attempts: 0
-      })
-    })
+        change_signature: 'sig-abc'
+      }),
+      insert: vi.fn(),
+      update: vi.fn()
+    }
+    priorRow.where.mockReturnValue(priorRow)
+    const insertReturning = { returning: vi.fn().mockResolvedValue([{ id: 999 }]) }
+    priorRow.insert.mockReturnValue(insertReturning)
+
     mockedDb().mockImplementation(((table: string) => {
       if (table === 'nivaro_settings') return settings
       if (table === 'nivaro_integration_obligations') return missingRows
       if (table === 'nivaro_erp_submissions as es') return priorLookup
-      if (table === 'nivaro_erp_submissions') return submissionRow
+      if (table === 'nivaro_erp_submissions') return priorRow
       throw new Error(`unexpected table: ${table}`)
     }) as never)
 
@@ -464,13 +525,104 @@ describe('runMissingRefirePass — gate on', () => {
     const r = await runMissingRefirePass()
 
     expect(r).toEqual({ refired: 1, queued: 0 })
+    // The clone's identity — collection/item/external_api/payload/
+    // change_signature copied, attempts starts at 0, stamped with THIS
+    // (the re-firing) obligation's own id.
+    const insertedRow = priorRow.insert.mock.calls[0][0] as Record<string, unknown>
+    expect(insertedRow).toMatchObject({
+      collection: 'workflows',
+      item: '2',
+      external_api: 7,
+      payload: JSON.stringify({ endpoint_path: '/orders', body: { a: 1 } }),
+      change_signature: 'sig-abc',
+      attempts: 0,
+      obligation_id: 11
+    })
+    // The prior row itself is never written to.
+    expect(priorRow.update).not.toHaveBeenCalled()
     expect(sendPayload).toHaveBeenCalledWith(7, { endpoint_path: '/orders', body: { a: 1 } }, undefined)
+    // Both the send outcome and the obligation move against the NEW row's
+    // id (999) — never 77, the prior obligation's own submission.
+    expect(applySendOutcome).toHaveBeenCalledWith({
+      submissionId: 999,
+      outcome: expect.objectContaining({ status: 'pending' }),
+      priorExternalRef: null,
+      priorAttempts: 0
+    })
     expect(propagateSubmissionStatus).toHaveBeenCalledWith({
-      submissionId: 77,
+      submissionId: 999,
       status: 'pending',
       error: null,
       obligationId: 11
     })
+  })
+
+  it("RULING — never mutates the prior obligation's own submission row: it stays byte-unchanged, and the new row links to the re-firing obligation, not the old one", async () => {
+    registerObligationKind({
+      api: 'Partner',
+      kind: 'outbound',
+      collection: 'workflows',
+      label: 'x',
+      expect: async () => []
+    })
+    const settings = settingsChain(true)
+    // The MISSING obligation being re-fired.
+    const missingRows = chain({
+      select: vi
+        .fn()
+        .mockResolvedValue([{ id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' }])
+    })
+    // The prior submission (id 77) belongs to some OTHER, already-`sent`
+    // obligation — refireFromPrior reads it but must never write to it.
+    const priorLookup = chain({ first: vi.fn().mockResolvedValue({ id: 77 }) })
+    const priorSnapshot = {
+      collection: 'workflows',
+      item: '2',
+      external_api: 7,
+      payload: JSON.stringify({ endpoint_path: '/orders', body: { a: 1 } }),
+      change_signature: 'sig-abc'
+    }
+    const priorRow = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue({ ...priorSnapshot }),
+      insert: vi.fn(),
+      update: vi.fn().mockResolvedValue(1)
+    }
+    priorRow.where.mockReturnValue(priorRow)
+    const insertReturning = { returning: vi.fn().mockResolvedValue([{ id: 999 }]) }
+    priorRow.insert.mockReturnValue(insertReturning)
+
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return missingRows
+      if (table === 'nivaro_erp_submissions as es') return priorLookup
+      if (table === 'nivaro_erp_submissions') return priorRow
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    vi.mocked(sendPayload).mockResolvedValue({
+      status: 'accepted',
+      external_ref: 'REF-9',
+      error: null,
+      response: { status: 'OK' },
+      http_status: 200
+    })
+
+    await runMissingRefirePass()
+
+    // The prior row's evidence is never touched by ANY write — no .update
+    // call on it at all, and a fresh read of it afterward would answer
+    // exactly the same snapshot it started with (nothing in this codepath
+    // could have changed it, since `update` was never called).
+    expect(priorRow.update).not.toHaveBeenCalled()
+    // The re-firing obligation (11) is what moves — never 77's own
+    // obligation, which this codepath never even reads.
+    expect(propagateSubmissionStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ submissionId: 999, obligationId: 11 })
+    )
+    expect(propagateSubmissionStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({ submissionId: 77 })
+    )
   })
 
   it('queues a missing obligation with no prior request to repeat, without ever calling sendPayload', async () => {
