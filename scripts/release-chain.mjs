@@ -268,7 +268,7 @@ async function main() {
         log(`${f.name}: local build`)
         sh('pnpm', ['run', f.build ?? 'build'], { cwd, quiet: true })
         sh('git', ['add', 'package.json', 'pnpm-lock.yaml'], { cwd, quiet: true })
-        sh('git', ['commit', '-q', '-m', `chore: bump ${Object.entries(pins).map(([n, v]) => `${n} to ${v}`).join(', ')}`], { cwd, quiet: true })
+        sh('git', ['commit', '-q', '-m', `chore: bump ${Object.entries(pins).map(([n, v]) => `${n} to ${v}`).join(', ')}`, '--', 'package.json', 'pnpm-lock.yaml'], { cwd, quiet: true })
         sh('git', ['push', 'origin', f.branch ?? 'main'], { cwd })
       }
     }
@@ -286,7 +286,7 @@ async function main() {
         const changed = git(['status', '--short', ...(d.commit_paths ?? ['.'])], { cwd })
         if (changed) {
           sh('git', ['add', ...(d.commit_paths ?? ['.'])], { cwd, quiet: true })
-          sh('git', ['commit', '-q', '-m', `chore: sync for nivaro ${V}`], { cwd, quiet: true })
+          sh('git', ['commit', '-q', '-m', `chore: sync for nivaro ${V}`, '--', ...(d.commit_paths ?? ['.'])], { cwd, quiet: true })
         } else {
           sh('git', ['commit', '-q', '--allow-empty', '-m', `chore: deploy nivaro ${V}`], { cwd, quiet: true })
         }
