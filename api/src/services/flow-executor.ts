@@ -1235,25 +1235,30 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
   // never actually calls the partner — runExternalApi returns before it does
   // — so it must never be recorded as a real send or a real skip either.
   const obligationId = await (async () => {
-    if (ctx.dryRun) return null
-    const collection = typeof data.collection === 'string' ? data.collection : null
-    const item =
-      data.item != null
-        ? String(data.item)
-        : Array.isArray(data.keys) && data.keys.length > 0
-          ? String(data.keys[0])
-          : null
-    if (!collection || !item) return null
-    const apiOp = operations.find((op) => op.type === 'external-api')
-    const apiName = apiOp
-      ? String((parseOpts(apiOp) as { api_id?: unknown }).api_id ?? '').trim()
-      : ''
-    if (!apiName) return null
-    const { openObligationForTrigger } = await import('./integration-obligations.js')
-    return openObligationForTrigger(
-      { collection, item, api: apiName, source: 'flow', flow_name: ctx.flowName },
-      { trigger: 'flow', trigger_ref: runId }
-    )
+    try {
+      if (ctx.dryRun) return null
+      const collection = typeof data.collection === 'string' ? data.collection : null
+      const item =
+        data.item != null
+          ? String(data.item)
+          : Array.isArray(data.keys) && data.keys.length > 0
+            ? String(data.keys[0])
+            : null
+      if (!collection || !item) return null
+      const apiOp = operations.find((op) => op.type === 'external-api')
+      const apiName = apiOp
+        ? String((parseOpts(apiOp) as { api_id?: unknown }).api_id ?? '').trim()
+        : ''
+      if (!apiName) return null
+      const { openObligationForTrigger } = await import('./integration-obligations.js')
+      return await openObligationForTrigger(
+        { collection, item, api: apiName, source: 'flow', flow_name: ctx.flowName },
+        { trigger: 'flow', trigger_ref: runId }
+      )
+    } catch {
+      // Bookkeeping only — a failure here must never block the run itself.
+      return null
+    }
   })()
 
   try {
@@ -1344,13 +1349,23 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
 
     // Resolve the obligation opened above (no-op when it is null — a flow
     // with nothing to push, or a dry run, opened nothing). `halted_at`
-    // already names the op whose reject stopped the chain: that is a
-    // legitimate skip, not a failure. Absent a halt, a pushed op's own HTTP
+    // (migration 339 / Task 1's `note()`) is set for ANY op whose reject
+    // branch is a dead end, not only `condition` ops — an external-api push
+    // that 4xx'd or fetch-threw with no reject wired ends the chain the same
+    // way a deliberate condition does. Only a real `condition` op counts as
+    // a legitimate skip; a halt on anything else (the push itself, most
+    // commonly — "fire the push, done") falls through to the HTTP-status
+    // read below instead, so a genuine push failure is never recorded as a
+    // deliberate non-send. Absent a condition halt, a pushed op's own HTTP
     // status decides landed vs. failed over the coarser `matched` flag — a
-    // push that 4xx'd still "matched" but plainly did not land.
+    // push that 4xx'd still "matched" but plainly did not land, and a
+    // network exception (fetch threw, no `__http_status` at all) falls back
+    // to whatever `$error` the op left behind.
     {
       const { resolveObligation, flowHaltReason } = await import('./integration-obligations.js')
-      const halt = flowHaltReason(progress.halted)
+      const haltedOp =
+        progress.halted != null ? operations.find((o) => o.key === progress.halted) : undefined
+      const halt = haltedOp?.type === 'condition' ? flowHaltReason(progress.halted) : null
       const pushStatus = typeof data.__http_status === 'number' ? data.__http_status : null
       const landed = pushStatus == null ? progress.matched : pushStatus >= 200 && pushStatus < 300
       await resolveObligation(obligationId, {
@@ -1361,7 +1376,9 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
             ? null
             : pushStatus != null
               ? `HTTP ${pushStatus}`
-              : 'flow ran but no operation acted')
+              : typeof data.$error === 'string'
+                ? data.$error
+                : 'flow ran but no operation acted')
       })
     }
 
