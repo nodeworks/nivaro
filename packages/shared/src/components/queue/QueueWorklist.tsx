@@ -168,10 +168,14 @@ export interface QueueItemRow {
   url: string
 }
 
-/** #85 — "↩ 2 · <last reason>" — how many times the record bounced back. */
+/** #85 — "↩ 2 · <last reason>" — how many times the record bounced back.
+ *  A record that never bounced reads as an empty cell, not a "0" (Rob,
+ *  2026-09-23: zeros on rows with nothing to say read as data). The
+ *  `send_backs=none` filter still selects those rows server-side. */
 function SendBackPill({ summary }: { summary: QueueItemRow['send_backs'] }) {
-  if (summary === undefined) return <span className='text-slate-300'>—</span>
-  if (!summary || summary.count === 0) return <span className='text-slate-300'>0</span>
+  if (!summary || summary.count === 0) {
+    return <span className='text-slate-300 dark:text-muted-foreground'>—</span>
+  }
   const edge = [summary.last_from, summary.last_to].filter(Boolean).join(' → ')
   const tip = [
     edge ? `Last: ${edge}` : null,
@@ -2155,6 +2159,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     ...(addendumsEnabled ? ['addendums'] : []),
     ...(fulfilmentEnabled ? ['fulfilment'] : []),
     ...(integrationsEnabled ? ['integrations'] : []),
+    ...(sendBacksEnabled ? ['send_backs'] : []),
     'aging_hours',
     'sla_status',
     'at_risk',
@@ -2180,6 +2185,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // registered obligation kind, auto-visible until the viewer hides it.
   if (integrationsEnabled && !hiddenByUser.has('integrations'))
     effectiveVisible.add('integrations')
+  // Same rule for Sent back (#85): every pipeline-bound source has it, a
+  // builder column set saved before it existed would hide it forever (Rob,
+  // 2026-09-23: "doesn't seem to be enabled by default").
+  if (sendBacksEnabled && !hiddenByUser.has('send_backs')) effectiveVisible.add('send_backs')
 
   // Render order of the middle (toggleable) columns follows visible_columns'
   // actual array order (the viewer's saved drag-reorder), falling back to

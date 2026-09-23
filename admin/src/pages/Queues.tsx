@@ -1564,7 +1564,16 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
     { key: 'owners', label: 'Owners' },
     { key: 'aging_hours', label: 'Aging' },
     { key: 'sla_status', label: 'SLA' },
-    { key: 'at_risk', label: 'Risk' }
+    { key: 'at_risk', label: 'Risk' },
+    // Informational columns the worklist renders when a source qualifies
+    // (pipeline-bound / addendums opted in / fulfilment declared / an
+    // obligation kind registered). Listed here so a builder can order,
+    // rename or drop them — before 2026-09-23 they were invisible to the
+    // builder and only reachable from a viewer's Customize Columns.
+    { key: 'send_backs', label: 'Sent back' },
+    { key: 'addendums', label: 'Addendums' },
+    { key: 'fulfilment', label: 'Shipped' },
+    { key: 'integrations', label: 'Integrations' }
   ]
   const extraAliasColumns = [...new Set(sources.flatMap((sc) => sc.extra_fields ?? []))].map(
     (f) => ({
@@ -1602,6 +1611,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
   const automaticColumns = [
     'state',
     'owners',
+    'send_backs',
     'aging_hours',
     'sla_status',
     'at_risk',
