@@ -595,6 +595,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        autoComplete={type === 'password' ? 'new-password' : 'off'}
       />
     </div>
   )
