@@ -1,10 +1,248 @@
 {
-  "generated_at": "2026-09-22T19:36:47.289Z",
+  "generated_at": "2026-09-23T14:58:06.932Z",
   "releases": [
+    {
+      "version": "0.1.330",
+      "tag": "v0.1.330",
+      "date": "2026-09-23T10:57:52-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "send now, retry what repetition can fix, re-fire what never ran",
+              "hash": "b1ce1798"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "pass through obligation open/resolve to extension context",
+              "hash": "d6ab2436"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "put an API's recovery and its decline on the ops timeline",
+              "hash": "bbc5af2d"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "tell the owners when a partner is still waiting",
+              "hash": "4bc045a6"
+            },
+            {
+              "section": "Added",
+              "scope": "obligations",
+              "text": "epoch — never flood missing for history predating tracking",
+              "hash": "051ac9b7"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "one dot per partner in the browser and the queues",
+              "hash": "de11a507"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "ask why a partner was not told, and document the ledger",
+              "hash": "979d2b41"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "say on the record whether the partner was told",
+              "hash": "70098754"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "obligations board on /integration-health",
+              "hash": "9698d6d0"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "put every obligation resolution in the Notes thread",
+              "hash": "31cd2b94"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "obligation read routes, retention and readiness",
+              "hash": "25b71674"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "reconcile expectations from the data, not the triggers",
+              "hash": "7aec5720"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "Phase 2 retirement scaffolding - dead columns, retired mirror-drift message, state:retire",
+              "hash": "b1c93d5c"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "record flow pushes, including the ones a condition stops",
+              "hash": "dbc946c0"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "record every erp_submit decision, including the noes",
+              "hash": "76ea67ec"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "obligation ledger service and kind registry",
+              "hash": "74226a31"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "add the integration obligation ledger",
+              "hash": "ec8b5569"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "re-firing is opt-in, truncation never supersedes, the scorecard counts failed",
+              "hash": "8f730248"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "keep the doc-comment example EFP-free",
+              "hash": "25c46819"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "uuid casing, claim-before-recipients, boundary, digest cache",
+              "hash": "c7466264"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ops-logs",
+              "text": "incident timeline reads the comment, not just the action",
+              "hash": "4d72faa7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "banner times honour the viewer's zone; name the transition",
+              "hash": "61c127dd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "remount ErpFailureBanner and fold Task 8's minors",
+              "hash": "3de4b2f7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "honour the operator on a $state condition",
+              "hash": "b3da2ff5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "register the Notes-thread source from the route plugin",
+              "hash": "d7388d49"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "register the obligation readiness check from the route plugin",
+              "hash": "2f7dcebe"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "reconcile sweep catches its own total failure and duplicate rows",
+              "hash": "973c81fc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "a halted push is not a skip unless it halted on a condition",
+              "hash": "a83048bf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "FK the obligation ledger's cross-links, NO ACTION",
+              "hash": "f62ec10c"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "admin",
+              "text": "dead-columns section stops naming the dropped view_mode column",
+              "hash": "716074c8"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "release-chain",
+              "text": "commit frontend and deployment bumps by pathspec",
+              "hash": "95e84db5"
+            },
+            {
+              "section": "Other",
+              "scope": "integrations",
+              "text": "generic wording in the target-url test comment",
+              "hash": "f0dcddc4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Task 19 round 1: settings switch, clone-not-mutate refire, shared applySendOutcome",
+              "hash": "eefb1aa3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "exclude Task 1 files swept into the previous commit by an index race",
+              "hash": "d3851349"
+            },
+            {
+              "section": "Other",
+              "scope": "integrations",
+              "text": "rename EFP-partner fixtures and cover the db-writing surface",
+              "hash": "12a92fd5"
+            }
+          ]
+        }
+      ],
+      "count": 35
+    },
     {
       "version": "0.1.329",
       "tag": "v0.1.329",
-      "date": "2026-09-22T15:36:36-04:00",
+      "date": "2026-09-22T15:36:47-04:00",
       "sections": [
         {
           "label": "Added",
@@ -1715,17 +1953,6 @@
       "date": "2026-09-14T15:35:36-04:00",
       "sections": [
         {
-          "label": "Added",
-          "entries": [
-            {
-              "section": "Added",
-              "scope": "api-log",
-              "text": "per-request list, inbound integrations view, root alias logging",
-              "hash": "72bfcdf8"
-            }
-          ]
-        },
-        {
           "label": "Fixed",
           "entries": [
             {
@@ -1733,6 +1960,25 @@
               "scope": "api-log",
               "text": "internal-dispatch skip uses a single-use nonce, not a bare header",
               "hash": "3fc2289d"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "version": "0.1.276",
+      "tag": "v0.1.276",
+      "date": "2026-09-14T15:34:10-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "api-log",
+              "text": "per-request list, inbound integrations view, root alias logging",
+              "hash": "72bfcdf8"
             }
           ]
         },
@@ -1748,7 +1994,7 @@
           ]
         }
       ],
-      "count": 3
+      "count": 2
     },
     {
       "version": "0.1.275",
