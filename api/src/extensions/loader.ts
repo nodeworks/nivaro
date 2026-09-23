@@ -55,6 +55,18 @@ import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
 import { runLongSql } from '../services/run-long.js'
 
+/** Every extension call lands in the external API's Call Logs. A caller that
+ *  names its own trigger (`_log.triggeredBy`) keeps it; one that passes nothing
+ *  is logged as `extension:<id>` rather than skipped — the log is how an admin
+ *  sees what a scheduled job actually sent and got back. */
+function withExtensionLog(extId: string, options?: CallOptions): CallOptions {
+  const opts = options ?? {}
+  return {
+    ...opts,
+    _log: { ...opts._log, triggeredBy: opts._log?.triggeredBy ?? `extension:${extId}` }
+  }
+}
+
 export type FlowOpRegistration = Omit<RegisteredOp, never>
 export type FlowTriggerRegistration = RegisteredTrigger
 export type {
@@ -729,7 +741,7 @@ async function loadExtension(
       },
       callExternalApi: (nameOrId, options) => {
         note('external-apis')
-        return callExternalApi(nameOrId, options)
+        return callExternalApi(nameOrId, withExtensionLog(extId, options))
       },
       notifyUser: (userId, opts) => {
         note('notifications')
@@ -1312,7 +1324,8 @@ export async function loadCloudExtensions(
 
       const scopedCtx: ExtensionContext = {
         ...ctx,
-        callExternalApi,
+        callExternalApi: (nameOrId, options) =>
+          callExternalApi(nameOrId, withExtensionLog(extId, options)),
         events: {
           publish: (eventType, payload) => publishExtensionEvent(extId, eventType, payload),
           on: (eventType, fn) => registerExtensionEventHandler(extId, eventType, fn)

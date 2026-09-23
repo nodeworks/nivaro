@@ -204,7 +204,8 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
               | 'PATCH'
               | 'PUT'
               | 'DELETE',
-            body
+            body,
+            _log: { triggeredBy: `custom-action:${action.id}`, userId: req.user?.id }
           })
           result = { status: (res as { status?: number }).status ?? 'sent' }
         } else if (action.action_type === 'update_fields') {
