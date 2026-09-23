@@ -1471,10 +1471,26 @@ export async function buildServer() {
         }
       )
 
+      // Integration obligation notifications: tell the record's owners and
+      // the API's owner when a row the sweep below writes (or a writer
+      // stamps directly, e.g. `failed`) is still unmet — module-level app
+      // reference, same shape as hooks/sla.ts / hooks/alerts.ts, set once
+      // here before the cron that could invoke it ever ticks.
+      // registerIntegrationDigest() adds "Integrations waiting on a human"
+      // to the daily action digest (services/daily-digest.ts).
+      {
+        const { registerIntegrationDigest, setApp: setIntegrationAlertsApp } = await import(
+          './services/integration-alerts.js'
+        )
+        setIntegrationAlertsApp(app)
+        registerIntegrationDigest()
+      }
+
       // Integration reconciliation: each registered obligation kind says
       // which records the partner is behind on, derived from data alone —
       // this compares that with the ledger and writes what no trigger can
-      // see (missing, overdue, superseded). Never sends.
+      // see (missing, overdue, superseded). Never sends. Its own tail calls
+      // alertUnmetObligations() once outcomes are written.
       app.cron.schedule(
         'integration-reconcile',
         '*/15 * * * *',

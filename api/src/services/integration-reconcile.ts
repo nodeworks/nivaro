@@ -313,6 +313,16 @@ export async function runIntegrationReconcile(): Promise<{
       totals.errors.push(`${def.kind}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
+
+  // Tell the people who can do something about it — the failed/missing/
+  // overdue rows this pass just wrote, and any `failed` a writer stamped
+  // between sweeps. Best-effort: an alerting failure must never make the
+  // sweep itself look like it failed — the ledger is already true by now.
+  {
+    const { alertUnmetObligations } = await import('./integration-alerts.js')
+    await alertUnmetObligations().catch(() => ({ notified: 0 }))
+  }
+
   return totals
 }
 
