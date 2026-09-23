@@ -288,6 +288,11 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
     help: 'Scheduled report emails, Report Studio subscription digests, and saved-view change digests.'
   },
   {
+    key: 'integrations',
+    label: 'Integrations',
+    help: 'A partner system was not told something about your record, or a send is still unanswered.'
+  },
+  {
     key: 'system',
     label: 'System & digests',
     help: 'Maintenance windows, failing monitors, import results, and the daily action summary itself. Maintenance and monitor failures always email immediately.'

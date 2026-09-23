@@ -216,6 +216,7 @@ export type NotifyCategory =
   | 'alerts'
   | 'anomaly'
   | 'reports'
+  | 'integrations'
   | 'system'
   | 'other'
 
@@ -227,6 +228,7 @@ export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'alerts',
   'anomaly',
   'reports',
+  'integrations',
   'system',
   'other'
 ]
@@ -240,6 +242,7 @@ export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
   alerts: 'Alerts',
   anomaly: 'Anomaly detection',
   reports: 'Reports',
+  integrations: 'Integrations',
   system: 'System',
   other: 'Everything else'
 }
@@ -251,6 +254,7 @@ export function classifyNotification(subject: string): NotifyCategory {
   // the keyword sniffing below gets a look.
   if (s.startsWith('anomaly')) return 'anomaly'
   if (s.startsWith('alert') || s.startsWith('report alert')) return 'alerts'
+  if (s.startsWith('integration:')) return 'integrations'
   if (s.includes('report') || s.startsWith('view "')) return 'reports'
   if (s.includes('mention')) return 'mentions'
   if (s.startsWith('sla') || s.includes('escalation') || s.includes('breach')) return 'sla'

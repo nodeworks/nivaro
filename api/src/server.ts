@@ -458,6 +458,15 @@ export async function buildServer() {
   // In cloud mode, retention runs per-tenant via the provisioning system.
   if (!process.env.CLOUD_META_DB_URL)
     app.addHook('onReady', async () => {
+      // Integration obligation notes — the collection list comes from
+      // whichever kinds actually registered during loadExtensions above, so
+      // an install with no obligation kinds registers no note sources.
+      {
+        const { allObligationKinds } = await import('./services/integration-obligations.js')
+        const { registerIntegrationNoteSources } = await import('./services/integration-notes.js')
+        registerIntegrationNoteSources(allObligationKinds().map((k) => k.collection))
+      }
+
       // Admin links (replay button, task/approval notifications, record_url
       // fallbacks) all resolve through adminBaseUrl(). When that answer IS the
       // registered portal, every such link lands on the headless frontend's
