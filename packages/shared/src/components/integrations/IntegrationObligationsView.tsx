@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Loader2, Send } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import {
   type ObligationFilterState,
   obligationQueryParams,
@@ -75,6 +77,64 @@ function dueLabel(dueAt: string): string {
   return formatRelative(dueAt)
 }
 
+/** Send-now on one row of the list. Same two-click posture as the record
+ *  banner's copy of this button (armed by a first click, fired by a second,
+ *  disarms on its own) — the two are separate small components rather than
+ *  one shared export because they invalidate different query shapes (this
+ *  one refreshes the tile counts too, the banner refreshes only its own
+ *  record's ledger). */
+function SendNowButton({ obligationId }: { obligationId: number }) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [armed, setArmed] = useState(false)
+
+  const send = useMutation({
+    mutationFn: () =>
+      client.request<{ data: { detail: string } }>(
+        post(`/integration-obligations/${obligationId}/send`)
+      ),
+    onSuccess: (res) => {
+      toast.message(res?.data?.detail ?? 'Sent')
+      void qc.invalidateQueries({ queryKey: ['integration-obligations', 'summary'] })
+      void qc.invalidateQueries({ queryKey: ['integration-obligations', 'list'] })
+    },
+    onError: (err) => {
+      const resp = (err as { response?: { error?: string } })?.response
+      toast.error(resp?.error ?? 'Send now failed', { duration: 8000 })
+    },
+    onSettled: () => setArmed(false)
+  })
+
+  return (
+    <button
+      type='button'
+      data-obligation-send-now
+      disabled={send.isPending}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!armed) {
+          setArmed(true)
+          return
+        }
+        send.mutate()
+      }}
+      className={cn(
+        'ml-2 inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-medium transition-colors disabled:opacity-60',
+        armed
+          ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan dark:border-nvr-cyan dark:bg-nvr-cyan/15'
+          : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+      )}
+    >
+      {send.isPending ? (
+        <Loader2 className='h-3 w-3 animate-spin' />
+      ) : (
+        <Send className='h-3 w-3' />
+      )}
+      {armed ? 'Confirm?' : 'Send now'}
+    </button>
+  )
+}
+
 interface ApiSummary {
   api: string
   owner_user: string | null
@@ -142,11 +202,16 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
   } = useQuery({
     queryKey: ['integration-obligations', 'summary'],
     queryFn: () =>
-      client.request<{ data: { apis: ApiSummary[]; kinds: KindDef[] } }>(
-        get('/integration-obligations/summary')
-      ),
+      client.request<{
+        data: { apis: ApiSummary[]; kinds: KindDef[] }
+        remediation_enabled?: boolean
+      }>(get('/integration-obligations/summary')),
     staleTime: 30_000
   })
+  // Read once, here — never a second probe per row of the list table below.
+  // Top-level sibling of `data`, same envelope position IntegrationStatusBanner
+  // reads from /record/:c/:i.
+  const remediationEnabled = summary?.remediation_enabled === true
 
   // A filter change makes the current page meaningless — go back to the top
   // of the newly-scoped set rather than showing "page 3" of a filter that
@@ -396,12 +461,16 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                 <th className='px-3 py-1.5 font-medium'>Due</th>
                 <th className='px-3 py-1.5 font-medium'>Outcome</th>
                 <th className='px-3 py-1.5 font-medium'>Why</th>
+                {remediationEnabled && <th className='px-3 py-1.5 font-medium' />}
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => {
                 const role = roleForTone(toneForOutcome(r.outcome))
                 const [accent, accentDark] = role ? colorPair(role) : [null, null]
+                const canSend =
+                  remediationEnabled &&
+                  (r.outcome === 'failed' || r.outcome === 'missing' || r.outcome === 'overdue')
                 return (
                   <tr
                     key={r.id}
@@ -459,6 +528,11 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                         </span>
                       )}
                     </td>
+                    {remediationEnabled && (
+                      <td className='px-3 py-1.5 text-right'>
+                        {canSend && <SendNowButton obligationId={r.id} />}
+                      </td>
+                    )}
                   </tr>
                 )
               })}

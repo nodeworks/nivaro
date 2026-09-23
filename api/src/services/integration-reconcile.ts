@@ -343,6 +343,21 @@ export async function runIntegrationReconcile(): Promise<{
     await recordIncidentFlips(healthBefore)
   }
 
+  // Task 19 — remediation: retry the failures worth retrying, and re-fire a
+  // `missing` obligation once. Gated the same way incidents just were above
+  // (only when at least one kind is registered) — a bare install with
+  // nothing registered has trivially nothing in THIS ledger to act on, and
+  // must touch the database not at all, same as every other pass in this
+  // function. Both passes gate themselves on the deployment's own
+  // remediation switch too, so this call is inert on arrival regardless of
+  // whether kinds are registered — wrapped so a failure here can never make
+  // the sweep itself look like it failed, the same posture as alerting.
+  if (defs.length > 0) {
+    const rem = await import('./integration-remediation.js')
+    await rem.runRetryPass().catch(() => ({ retried: 0, gaveUp: 0 }))
+    await rem.runMissingRefirePass().catch(() => ({ refired: 0, queued: 0 }))
+  }
+
   return totals
 }
 

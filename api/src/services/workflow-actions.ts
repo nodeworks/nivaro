@@ -793,6 +793,10 @@ export async function runTransitionActions(opts: {
     let status: 'pending' | 'accepted' | 'failed' = 'failed'
     let responseBody: unknown = null
     let error: string | null = null
+    // #628 — the raw status the response came back with, so a real HTTP
+    // failure classifies as itself (404/422/500/…) rather than as
+    // "unknown"; stays null for a thrown network failure, which has none.
+    let httpStatus: number | null = null
     try {
       const res = await callExternalApi(apiId, {
         method: (action.method as 'POST' | 'PUT') ?? 'POST',
@@ -802,6 +806,7 @@ export async function runTransitionActions(opts: {
         _log: { triggeredBy: 'transition-action', userId: opts.userId ?? undefined }
       })
       responseBody = res.body
+      httpStatus = res.status
       if (res.status >= 200 && res.status < 300) {
         // A 2xx can still be a rejection — some ERPs answer 200 with an error
         // status in the body. The action's `response_error` config decides;
@@ -847,7 +852,8 @@ export async function runTransitionActions(opts: {
       responseBody,
       // Only a push that LANDED defines "what they already know" — recording a
       // signature for a failure would suppress the retry that fixes it.
-      status === 'failed' ? null : signature
+      status === 'failed' ? null : signature,
+      httpStatus
     )
     await resolveObligation(obligationId, {
       // A 2xx with no acknowledgement is not `sent` — it is `pending` until
@@ -1127,7 +1133,13 @@ async function recordSubmission(
   status: 'pending' | 'accepted' | 'failed',
   error: string | null,
   responseBody?: unknown,
-  signature?: string | null
+  signature?: string | null,
+  // #628 — the raw HTTP status this attempt came back with, when there was
+  // one: a payload-template error and a thrown network failure both have
+  // none, a real HTTP response does. Threaded through so `classifyError`
+  // can tell a 404 apart from a 500 apart from a refused socket, rather than
+  // reading every non-2xx failure as equally "unknown".
+  httpStatus?: number | null
 ): Promise<number | null> {
   try {
     const now = new Date()
@@ -1143,6 +1155,16 @@ async function recordSubmission(
         payload: JSON.stringify({ endpoint_path: endpointPath, body }),
         response: serializeResponseBody(responseBody),
         change_signature: signature ?? null,
+        // #628 — NULL when this attempt did not fail; otherwise what kind of
+        // failure it was, which decides whether a later retry could help.
+        error_class:
+          status === 'failed'
+            ? (await import('./integration-remediation.js')).classifyError(
+                httpStatus ?? null,
+                responseBody,
+                error
+              )
+            : null,
         created_at: now,
         updated_at: now
       })

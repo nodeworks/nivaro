@@ -103,6 +103,12 @@ const allowedSettingsKeys = [
   // sweep may tell record/API owners about a failed/missing/overdue row —
   // off by default so a first deploy's existing backlog doesn't flood.
   'integration_notifications_enabled',
+  // Integration remediation (Task 19, migration 346): whether Nivaro may
+  // ACT on an unmet obligation itself — Send now, the automatic retry
+  // ladder, and re-firing a `missing` obligation once. A separate gate from
+  // notifications above: that one only covers telling a person, this one
+  // covers sending to the partner. Off by default.
+  'integration_remediation_enabled',
   // Branding (#21)
   'brand_logo',
   'brand_login_title',

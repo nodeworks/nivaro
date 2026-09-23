@@ -171,6 +171,7 @@ export type CMSSettings = {
   field_watch_enabled?: boolean
   lock_idle_release_minutes?: number | null
   integration_notifications_enabled?: boolean
+  integration_remediation_enabled?: boolean
   brand_logo?: string | null
   brand_login_title?: string | null
   brand_login_message?: string | null
