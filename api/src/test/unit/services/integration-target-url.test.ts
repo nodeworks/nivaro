@@ -16,7 +16,7 @@ describe('an integration obligation notification points somewhere that opens', (
   })
 
   it('opens the board when the "record" is a bucket key in a nivaro_ table', async () => {
-    // linx.inbound's shape: the API log is not a registered collection and
+    // An inbound-request kind: the API log is not a registered collection and
     // the item is `/graphql@2026-09-23T14`, so a record URL cannot resolve.
     const url = await resolveTargetUrl(
       {
