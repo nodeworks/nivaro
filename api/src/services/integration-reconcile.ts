@@ -296,6 +296,15 @@ export async function runIntegrationReconcile(): Promise<{
   failed: number
 }> {
   const defs = allObligationKinds()
+
+  // Sampled before anything below writes a row, so a partner whose last
+  // unmet obligation this very tick resolves counts as recovered by the
+  // time the flip is written at the end. Nothing is registered on a bare
+  // install (Phase 1, dormant-safe) — the sweep must touch the database not
+  // at all in that case, so incident tracking is skipped along with
+  // everything else when there is nothing to reconcile.
+  const healthBefore = defs.length > 0 ? await (await import('./integration-incidents.js')).currentApiHealth() : []
+
   const totals = {
     kinds: defs.length,
     missing: 0,
@@ -317,6 +326,23 @@ export async function runIntegrationReconcile(): Promise<{
       totals.errors.push(`${def.kind}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
+
+  // Tell the people who can do something about it — the failed/missing/
+  // overdue rows this pass just wrote, and any `failed` a writer stamped
+  // between sweeps. Best-effort: an alerting failure must never make the
+  // sweep itself look like it failed — the ledger is already true by now.
+  {
+    const { alertUnmetObligations } = await import('./integration-alerts.js')
+    await alertUnmetObligations().catch(() => ({ notified: 0 }))
+  }
+
+  // Last, so a retry that landed inside this same tick counts as recovery
+  // rather than a flip nobody ever sees.
+  if (defs.length > 0) {
+    const { recordIncidentFlips } = await import('./integration-incidents.js')
+    await recordIncidentFlips(healthBefore)
+  }
+
   return totals
 }
 

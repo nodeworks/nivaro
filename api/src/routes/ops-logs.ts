@@ -256,7 +256,7 @@ export async function opsLogsRoutes(app: FastifyInstance) {
           .whereNotIn('action', ['read', 'login'])
           .orderBy('timestamp', 'desc')
           .limit(80)
-          .select('action', 'collection', 'item', 'timestamp', 'user')
+          .select('action', 'collection', 'item', 'timestamp', 'user', 'comment')
           .catch(() => [] as Array<Record<string, unknown>>)
       ])
       for (const i of issues) {
@@ -274,10 +274,15 @@ export async function opsLogsRoutes(app: FastifyInstance) {
         })
       }
       for (const a of configWrites) {
+        // A writer that left a human sentence in `comment` (integration
+        // incidents, change reasons, …) gets read here instead of a bare
+        // action-on-collection line — generic for any config event, not
+        // special-cased to one feature's action names.
+        const comment = typeof a.comment === 'string' ? a.comment.trim() : ''
         events.push({
           at: new Date(a.timestamp as Date).toISOString(),
           kind: 'config',
-          label: `${a.action} on ${a.collection}${a.item ? ` #${a.item}` : ''}`
+          label: comment || `${a.action} on ${a.collection}${a.item ? ` #${a.item}` : ''}`
         })
       }
       events.sort((a, b) => b.at.localeCompare(a.at))

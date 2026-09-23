@@ -71,6 +71,7 @@ import {
 import { CellCopyLayer } from './CellCopyLayer'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
+import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
 import { MapView } from './MapView'
@@ -1760,6 +1761,7 @@ type ColFilterVal =
   | { kind: 'date'; value: string }
   | { kind: 'state'; value: string[] }
   | { kind: 'fulfilment'; value: 'none' | 'partial' | 'complete' }
+  | { kind: 'integrations'; value: 'danger' | 'warning' | 'positive' | 'none' }
 
 // ─── FilterBar (admin components/filter-bar.tsx port) ─────────────────────────
 
@@ -4240,7 +4242,9 @@ export function CollectionBrowserView({
           conds.push({ path: [sf], op: '_gt', value: 0 })
           if (rf) conds.push({ path: [rf], op: '_lte', value: 0 })
         }
-      } else if (f.kind === 'text' && f.value.trim())
+      } else if (f.kind === 'integrations')
+        conds.push({ path: ['$integrations'], op: '_eq', value: f.value })
+      else if (f.kind === 'text' && f.value.trim())
         conds.push({ path: f.path, op: '_contains', value: f.value.trim() })
       else if (f.kind === 'num' && f.value !== '' && !Number.isNaN(Number(f.value)))
         conds.push({ path: [key], op: f.op, value: Number(f.value) })
@@ -4468,6 +4472,35 @@ export function CollectionBrowserView({
         )
         .then((r) => r.data ?? {}),
     enabled: !!collection && addendumsEnabled && pageIdsKey.length > 0,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+    retry: false
+  })
+  // Integration obligations — probed ONCE (long-lived, unscoped by collection:
+  // the registry rarely changes) so the column never asks per row, the same
+  // shape as the at-risk rules probe. The Integrations column only exists
+  // once THIS collection is in that list.
+  const { data: integrationsCollections = [] } = useQuery({
+    queryKey: ['cbv-integrations-collections'],
+    queryFn: () =>
+      client
+        .request<{ data: string[] }>(get('/integration-obligations/collections'))
+        .then((r) => r.data ?? [])
+        .catch(() => [] as string[]),
+    staleTime: 60_000,
+    retry: false
+  })
+  const integrationsEnabled = integrationsCollections.includes(collection)
+  const { data: integrationsSummary } = useQuery({
+    queryKey: ['cbv-integrations-summary', collection, pageIdsKey],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, Array<{ api: string; outcome: string }>> }>(
+          post('/integration-obligations/summary', { collection, ids: pageIdsKey.split(',') })
+        )
+        .then((r) => r.data ?? {})
+        .catch(() => ({}) as Record<string, Array<{ api: string; outcome: string }>>),
+    enabled: !!collection && integrationsEnabled && pageIdsKey.length > 0,
     placeholderData: (prev) => prev,
     staleTime: 30_000,
     retry: false
@@ -4913,7 +4946,14 @@ export function CollectionBrowserView({
       }),
       // Synthetic columns (State/Owners/Actions) persist pins as pin-only
       // entries; applyView drops them from the display-column list.
-      ...['__state__', '__owners__', '__addendums__', '__fulfilment__', '__actions__']
+      ...[
+        '__state__',
+        '__owners__',
+        '__addendums__',
+        '__fulfilment__',
+        '__integrations__',
+        '__actions__'
+      ]
         .filter((k) => effectivePins[k])
         .map((k) => ({ key: k, pin: effectivePins[k] }))
     ]
@@ -5240,7 +5280,7 @@ export function CollectionBrowserView({
   // last; sticky offsets come from live header-cell width measurement.
   type CbvColDesc = {
     key: string
-    kind: 'data' | 'state' | 'owners' | 'addendums' | 'fulfilment' | 'actions'
+    kind: 'data' | 'state' | 'owners' | 'addendums' | 'fulfilment' | 'integrations' | 'actions'
   }
   const baseColDescs: CbvColDesc[] = [
     ...effectiveColumns.map((k) => ({ key: k, kind: 'data' as const })),
@@ -5252,6 +5292,7 @@ export function CollectionBrowserView({
       : []),
     ...(addendumsEnabled ? [{ key: '__addendums__', kind: 'addendums' as const }] : []),
     ...(bcFulfilment ? [{ key: '__fulfilment__', kind: 'fulfilment' as const }] : []),
+    ...(integrationsEnabled ? [{ key: '__integrations__', kind: 'integrations' as const }] : []),
     ...(enableActions ? [{ key: '__actions__', kind: 'actions' as const }] : [])
   ]
   const orderedCols: CbvColDesc[] = [
@@ -6805,7 +6846,9 @@ export function CollectionBrowserView({
                                   ? bcFulfilment?.label
                                     ? `${bcFulfilment.label} shipped`
                                     : 'Shipped'
-                                  : ''
+                                  : col.kind === 'integrations'
+                                    ? 'Integrations'
+                                    : ''
                         return (
                           <th
                             key={key}
@@ -6919,6 +6962,35 @@ export function CollectionBrowserView({
                                       ? {
                                           kind: 'fulfilment',
                                           value: v as 'none' | 'partial' | 'complete'
+                                        }
+                                      : null
+                                  )
+                                }
+                              />
+                            </th>
+                          )
+                        }
+                        if (col.kind === 'integrations') {
+                          const cur = colFilters.__integrations__
+                          const curVal = cur?.kind === 'integrations' ? cur.value : ''
+                          return (
+                            <th
+                              key={key}
+                              style={pinStyle(key)}
+                              className={baseTh}
+                              data-integrations-filter={curVal}
+                            >
+                              <SimpleSelectXs
+                                ariaLabel='Integrations filter'
+                                value={curVal}
+                                options={[{ value: '', label: 'All' }, ...INTEGRATIONS_FILTER_OPTIONS]}
+                                onChange={(v: string) =>
+                                  setColFilter(
+                                    '__integrations__',
+                                    v
+                                      ? {
+                                          kind: 'integrations',
+                                          value: v as 'danger' | 'warning' | 'positive' | 'none'
                                         }
                                       : null
                                   )
@@ -7208,6 +7280,17 @@ export function CollectionBrowserView({
                                     )}
                                     label={bcFulfilment.label}
                                   />
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'integrations') {
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  <IntegrationDots rows={integrationsSummary?.[String(id)]} />
                                 </td>
                               )
                             }

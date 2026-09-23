@@ -12,6 +12,7 @@ import {
   Mail,
   MessageSquare,
   Palette,
+  Plug,
   Plus,
   Radio,
   Send,
@@ -142,6 +143,7 @@ type Section =
   | 'presence'
   | 'sla'
   | 'content'
+  | 'integrations'
   | 'email'
   | 'sms'
   | 'sso'
@@ -159,6 +161,7 @@ const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'presence', label: 'Presence', icon: <Radio className='h-3.5 w-3.5' /> },
   { id: 'sla', label: 'SLA', icon: <Clock className='h-3.5 w-3.5' /> },
   { id: 'content', label: 'Content', icon: <Database className='h-3.5 w-3.5' /> },
+  { id: 'integrations', label: 'Integrations', icon: <Plug className='h-3.5 w-3.5' /> },
   { id: 'email', label: 'Email', icon: <Mail className='h-3.5 w-3.5' /> },
   { id: 'sms', label: 'SMS', icon: <MessageSquare className='h-3.5 w-3.5' /> },
   { id: 'sso', label: 'Sign-in providers', icon: <KeyRound className='h-3.5 w-3.5' /> },
@@ -1578,6 +1581,7 @@ export function SettingsPage() {
   const [revisionRetentionCount, setRevisionRetentionCount] = useState<number | ''>('')
   const [fieldWatchEnabled, setFieldWatchEnabled] = useState(false)
   const [lockIdleMinutes, setLockIdleMinutes] = useState<number | ''>('')
+  const [integrationNotificationsEnabled, setIntegrationNotificationsEnabled] = useState(false)
   const [smtpHost, setSmtpHost] = useState('')
   const [smtpPort, setSmtpPort] = useState<number | ''>(587)
   const [smtpUser, setSmtpUser] = useState('')
@@ -1681,6 +1685,10 @@ export function SettingsPage() {
     setFieldWatchEnabled(!!(settings as { field_watch_enabled?: boolean }).field_watch_enabled)
     setLockIdleMinutes(
       (settings as { lock_idle_release_minutes?: number | null }).lock_idle_release_minutes ?? ''
+    )
+    setIntegrationNotificationsEnabled(
+      !!(settings as { integration_notifications_enabled?: boolean })
+        .integration_notifications_enabled
     )
     setRevisionRetentionCount(settings.revision_retention_count ?? '')
     const s = settings as Record<string, unknown>
@@ -1906,6 +1914,12 @@ export function SettingsPage() {
       revision_retention_count: revisionRetentionCount === '' ? null : revisionRetentionCount,
       field_watch_enabled: fieldWatchEnabled,
       lock_idle_release_minutes: lockIdleMinutes === '' ? null : lockIdleMinutes
+    })
+  }
+
+  function saveIntegrations() {
+    mutation.mutate({
+      integration_notifications_enabled: integrationNotificationsEnabled
     })
   }
 
@@ -3106,6 +3120,33 @@ export function SettingsPage() {
                       className='h-8 w-40 text-[13px]'
                     />
                   </Field>
+                </SectionWrap>
+              )}
+
+              {activeSection === 'integrations' && (
+                <SectionWrap
+                  title='Integrations'
+                  onSave={saveIntegrations}
+                  saving={mutation.isPending}
+                >
+                  <div className='flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 dark:border-border'>
+                    <div>
+                      <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                        Notify on unmet obligations
+                      </p>
+                      <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                        Tell a record's owners and an integration's owner when the reconcile sweep
+                        finds a row it still owes a partner — failed, missing, or overdue — at most
+                        once per record per integration every 12 hours. Off by default: turning this
+                        on for the first time can surface an existing backlog all at once, so review
+                        the integration board before switching it on.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={integrationNotificationsEnabled}
+                      onCheckedChange={setIntegrationNotificationsEnabled}
+                    />
+                  </div>
                 </SectionWrap>
               )}
 

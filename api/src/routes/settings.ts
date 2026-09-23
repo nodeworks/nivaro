@@ -99,6 +99,10 @@ const allowedSettingsKeys = [
   'chat_bot_name',
   // Field-level record watches (#58) — instance feature flag, off by default
   'field_watch_enabled',
+  // Integration obligations (Task 18, migration 345): whether the reconcile
+  // sweep may tell record/API owners about a failed/missing/overdue row —
+  // off by default so a first deploy's existing backlog doesn't flood.
+  'integration_notifications_enabled',
   // Branding (#21)
   'brand_logo',
   'brand_login_title',
