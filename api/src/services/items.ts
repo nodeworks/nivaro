@@ -1760,18 +1760,21 @@ export async function applyConditions(
     // Virtual path: workflow/pipeline state by key — resolved against the
     // instance tables so state filters run server-side over the full set.
     if (cond.path[0] === '$state' && cond.path.length === 1) {
-      const keys = (Array.isArray(cond.value) ? cond.value : [cond.value]).filter(
-        (v) => typeof v === 'string' && v.length > 0
-      )
-      if (!keys.length) continue
-      q.whereExists(function () {
-        this.select(db.raw('1'))
-          .from('nivaro_workflow_instances as wfi')
-          .leftJoin('nivaro_workflow_states as wfs', 'wfi.current_state', 'wfs.id')
-          .where('wfi.collection', collection)
-          .whereRaw('wfi.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
-          .whereIn('wfs.key', keys as string[])
-      })
+      // The SAME compiler `filter={"$state":…}` uses, handed this condition's
+      // own operator: `_in`/`_eq` include, `_nin`/`_neq` exclude (NOT EXISTS,
+      // which keeps a record running no pipeline at all — the SQL-natural
+      // reading, and the one the filter surface already had). The op used to
+      // be ignored here, so every $state condition compiled as an include and
+      // exclude could not be expressed on this surface at all; a caller that
+      // wanted "anything but completed" had to send the complement of the
+      // state list and keep it in step with the template by hand.
+      //
+      // An operator neither surface knows narrows to nothing rather than
+      // quietly widening — see applyStateFilter. That is deliberately unlike
+      // applyOneFilter's unknown-op no-op: a plain column filter that fails to
+      // narrow is a wrong list, a state filter that fails to narrow is every
+      // record in the collection.
+      applyStateFilter(q, collection, { [cond.op || '_in']: cond.value })
       continue
     }
     // Virtual path: addendum presence — 'active' = an addendum still in flight
