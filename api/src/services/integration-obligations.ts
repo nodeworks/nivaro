@@ -312,3 +312,97 @@ export async function openObligationForTrigger(
     outcome: 'pending'
   })
 }
+
+// ─── The board's per-API strip ─────────────────────────────────────────────
+
+/** The order the board's strip reads in: what needs a person first. */
+export const TILE_ORDER = ['overdue', 'failed', 'pending', 'skipped', 'sent', 'missing'] as const
+export type ObligationTileOutcome = (typeof TILE_ORDER)[number]
+
+/** Outcomes that mean the partner does not have it. Reads the same four
+ *  values as OPEN_OUTCOMES today, but it is a different question — this one
+ *  drives `oldest_unmet` on the board, not what the reconcile sweep may
+ *  still rewrite. */
+export const UNMET_OUTCOMES: ObligationOutcome[] = ['overdue', 'failed', 'missing', 'pending']
+
+export interface ObligationTile {
+  outcome: ObligationTileOutcome
+  count: number
+}
+
+export interface ObligationApiSummary {
+  api: string
+  owner_user: string | null
+  tiles: ObligationTile[]
+  oldest_unmet: string | null
+}
+
+/** Grouped counts → the per-API strip. Every outcome is present with a count,
+ *  including zero, so the strip has a fixed width and never reflows as
+ *  numbers change. */
+export function summariseObligations(
+  rows: Array<{ api: string; outcome: string; c: number; oldest: Date | null }>,
+  owners: Record<string, string | null>
+): ObligationApiSummary[] {
+  const byApi = new Map<string, ObligationApiSummary>()
+  for (const r of rows) {
+    let entry = byApi.get(r.api)
+    if (!entry) {
+      entry = {
+        api: r.api,
+        owner_user: owners[r.api] ?? null,
+        tiles: TILE_ORDER.map((outcome) => ({ outcome, count: 0 })),
+        oldest_unmet: null
+      }
+      byApi.set(r.api, entry)
+    }
+    const tile = entry.tiles.find((t) => t.outcome === r.outcome)
+    if (tile) tile.count += Number(r.c) || 0
+    if (r.oldest && (UNMET_OUTCOMES as string[]).includes(r.outcome)) {
+      const iso = new Date(r.oldest).toISOString()
+      if (!entry.oldest_unmet || iso < entry.oldest_unmet) entry.oldest_unmet = iso
+    }
+  }
+  return [...byApi.values()]
+}
+
+// ─── Retention ──────────────────────────────────────────────────────────────
+
+const PRUNE_BATCH = 5000
+const PRUNE_MAX_BATCHES = 40
+
+/** Retention: a landed obligation is history after 180 days. Deletes ONLY
+ *  `sent` / `superseded` rows — `skipped` keeps its reason as the
+ *  wrong-guard detector's evidence, and `failed` / `overdue` / `missing` /
+ *  `pending` (OPEN_OUTCOMES) are NEVER pruned: an unanswered question does
+ *  not expire, and `nivaro_erp_submissions.obligation_id` carries no FK
+ *  specifically so this can delete without touching that table.
+ *
+ *  Batched like services/erp-retention.ts, so a first run over months of
+ *  history never holds a lock for long; a batch that throws (lock
+ *  contention) returns what was already committed rather than losing it. */
+export async function pruneObligations(days = 180): Promise<number> {
+  const cutoff = new Date(Date.now() - days * 86_400_000)
+  let total = 0
+  for (let i = 0; i < PRUNE_MAX_BATCHES; i++) {
+    let affected = 0
+    try {
+      const res = (await db.raw(
+        `DELETE TOP (${PRUNE_BATCH}) FROM nivaro_integration_obligations
+          WHERE created_at < ? AND outcome IN ('sent', 'superseded')`,
+        [cutoff]
+      )) as unknown
+      affected =
+        Number(
+          typeof res === 'number'
+            ? res
+            : ((res as { rowCount?: number })?.rowCount ?? (res as number[])?.[0] ?? 0)
+        ) || 0
+    } catch {
+      return total
+    }
+    total += affected
+    if (affected < PRUNE_BATCH) break
+  }
+  return total
+}
