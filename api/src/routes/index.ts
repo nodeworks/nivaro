@@ -7,7 +7,6 @@ import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
 import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
-import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
@@ -95,6 +94,7 @@ import { integrationContractRoutes } from './integration-contracts.js'
 import { integrationEventsRoutes } from './integration-events.js'
 import { integrationHealthRoutes } from './integration-health.js'
 import { integrationObligationsRoutes } from './integration-obligations.js'
+import { integrationPartnersRoutes } from './integration-partners.js'
 import { integrationSignalsRoutes } from './integration-signals.js'
 import { issuesRoutes } from './issues.js'
 import { itemActionsRoutes } from './item-actions.js'
@@ -129,6 +129,7 @@ import { pagesRoutes } from './pages.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
+import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { pinnedRoutes } from './pinned.js'
 import { pipelinesRoutes } from './pipelines.js'
 import { preflightRoutes } from './preflight.js'
@@ -294,6 +295,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(integrationHealthRoutes)
   await app.register(integrationObligationsRoutes)
   await app.register(integrationSignalsRoutes)
+  await app.register(integrationPartnersRoutes)
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
   await app.register(activityRoutes, { prefix: '/activity' })
