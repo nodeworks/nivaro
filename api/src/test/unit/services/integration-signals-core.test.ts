@@ -50,8 +50,10 @@ describe('formatInboundCaller', () => {
   })
 
   it('keeps the key number and adds its name when it has one', () => {
-    const keys = new Map([[7, 'MDSi service account']])
-    expect(formatInboundCaller('u1', 7, new Map(), keys)).toBe('API key #7 (MDSi service account)')
+    const keys = new Map([[7, 'Partner service account']])
+    expect(formatInboundCaller('u1', 7, new Map(), keys)).toBe(
+      'API key #7 (Partner service account)'
+    )
     expect(formatInboundCaller('u1', 9, new Map(), keys)).toBe('API key #9')
   })
 })

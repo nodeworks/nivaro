@@ -858,7 +858,15 @@ export async function resolveFriendlyIds(
   for (const id of ids) out.set(id, id)
   if (ids.length === 0) return out
 
+  // Ids still needing the general (registry match_field / display label)
+  // resolution below — every id for a plain collection, but for addendums
+  // only the ones whose parent didn't resolve. Mirrors resolveFriendlyId's
+  // fall-through EXACTLY: an addendum with no usable parent is never a bare
+  // `Addendum "<title>"`, it's resolved as if it were any other record.
+  let remainingIds = ids
+
   if (collection === ADDENDUM_COLLECTION) {
+    remainingIds = []
     try {
       const infos = await loadAddendums(ids)
       const parentIdsByCollection = new Map<string, Set<string>>()
@@ -874,17 +882,23 @@ export async function resolveFriendlyIds(
         const resolved = await resolveFriendlyIds(parentCollection, [...parentIds])
         for (const [pid, label] of resolved) parentLabels.set(`${parentCollection}:${pid}`, label)
       }
-      for (const [id, info] of infos) {
-        const parentLabel =
-          info.parentCollection && info.parentId
-            ? (parentLabels.get(`${info.parentCollection}:${info.parentId}`) ?? info.parentId)
-            : null
-        out.set(id, addendumLabel(info, parentLabel))
+      for (const id of ids) {
+        const info = infos.get(id)
+        if (info?.parentCollection && info.parentId) {
+          const parentLabel =
+            parentLabels.get(`${info.parentCollection}:${info.parentId}`) ?? info.parentId
+          out.set(id, addendumLabel(info, parentLabel))
+        } else {
+          // No parent (or the row didn't load) — fall through below.
+          remainingIds.push(id)
+        }
       }
     } catch {
-      /* every id already defaults to itself */
+      // Unknown which ids had a parent — try the fall-through for all of
+      // them rather than leaving every one at its raw default.
+      remainingIds = ids
     }
-    return out
+    if (remainingIds.length === 0) return out
   }
 
   try {
@@ -893,11 +907,13 @@ export async function resolveFriendlyIds(
       .first()) as { match_field?: string | null } | undefined
     const field = rt?.match_field
     if (field && field !== 'id' && IDENT_RE.test(field)) {
-      const rows = (await selectInChunks(ids, 1000, (chunk) =>
+      const rows = (await selectInChunks(remainingIds, 1000, (chunk) =>
         db(collection).whereIn('id', chunk).select('id', field)
       )) as Array<Record<string, unknown>>
       for (const row of rows) {
-        const key = ids.find((id) => String(id).toUpperCase() === String(row.id).toUpperCase())
+        const key = remainingIds.find(
+          (id) => String(id).toUpperCase() === String(row.id).toUpperCase()
+        )
         if (!key) continue
         const v = row[field]
         if (v !== null && v !== undefined && v !== '') out.set(key, String(v))
@@ -909,8 +925,8 @@ export async function resolveFriendlyIds(
   }
 
   try {
-    const labels = await getLabels(new Map([[collection, new Set(ids)]]))
-    for (const id of ids) {
+    const labels = await getLabels(new Map([[collection, new Set(remainingIds)]]))
+    for (const id of remainingIds) {
       const label = labels[`${collection}:${id}`]
       if (label) out.set(id, label)
     }

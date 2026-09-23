@@ -5,7 +5,9 @@ vi.mock('../../../services/queues.js', () => ({ getLabels: vi.fn() }))
 
 const { db } = await import('../../../db/index.js')
 const { getLabels } = await import('../../../services/queues.js')
-const { resolveFriendlyIds } = await import('../../../services/workflow-transitions.js')
+const { resolveFriendlyId, resolveFriendlyIds } = await import(
+  '../../../services/workflow-transitions.js'
+)
 
 /** Minimal knex stand-in: where().first() for the registry lookup,
  *  whereIn().select() for the business-table batch — same shape as the
@@ -53,11 +55,11 @@ describe('resolveFriendlyIds', () => {
 
   it('falls back to the display label, then the id, for an unregistered collection', async () => {
     vi.mocked(db).mockImplementation(fakeDb({}, {}))
-    vi.mocked(getLabels).mockResolvedValue({ 'projects:1': 'CIFA build-out' })
+    vi.mocked(getLabels).mockResolvedValue({ 'projects:1': 'Site build-out' })
     const out = await resolveFriendlyIds('projects', ['1', '2'])
     expect(out).toEqual(
       new Map([
-        ['1', 'CIFA build-out'],
+        ['1', 'Site build-out'],
         ['2', '2']
       ])
     )
@@ -82,6 +84,28 @@ describe('resolveFriendlyIds', () => {
     )
     const out = await resolveFriendlyIds('nivaro_addendums', ['ADD-1'])
     expect(out.get('ADD-1')).toBe('Addendum "Extra scope" · CR26-80361')
+  })
+
+  it('addendum with no parent falls through like the singular resolver — never a bare title', async () => {
+    const mockDb = fakeDb(
+      {},
+      {
+        nivaro_addendums: [
+          {
+            id: 'ADD-2',
+            parent_collection: null,
+            parent_id: null,
+            title: 'Standalone note'
+          }
+        ]
+      }
+    )
+    vi.mocked(db).mockImplementation(mockDb)
+    vi.mocked(getLabels).mockResolvedValue({})
+    const singular = await resolveFriendlyId('nivaro_addendums', 'ADD-2')
+    const batch = await resolveFriendlyIds('nivaro_addendums', ['ADD-2'])
+    expect(batch.get('ADD-2')).toBe(singular)
+    expect(batch.get('ADD-2')).toBe('ADD-2')
   })
 
   it('never throws and always returns every requested id', async () => {

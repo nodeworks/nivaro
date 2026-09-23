@@ -310,10 +310,12 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       idsByCollection.get(r.collection)?.add(String(r.item))
     }
     const recordLabels = new Map<string, string>()
-    for (const [collection, ids] of idsByCollection) {
-      const resolved = await resolveFriendlyIds(collection, [...ids])
-      for (const [id, label] of resolved) recordLabels.set(`${collection}:${id}`, label)
-    }
+    await Promise.all(
+      [...idsByCollection].map(async ([collection, ids]) => {
+        const resolved = await resolveFriendlyIds(collection, [...ids])
+        for (const [id, label] of resolved) recordLabels.set(`${collection}:${id}`, label)
+      })
+    )
     const data = rows.map((r) => {
       const matched: string[] = []
       if ((r.payload ?? '').toLowerCase().includes(lower)) matched.push('payload')

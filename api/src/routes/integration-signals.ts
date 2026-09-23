@@ -68,6 +68,16 @@ export async function fillRecordLabels(
       // the plain "open" action beside them still works either way.
     }
   }
+  // Bound the cache — nothing else ever shrinks it. Expired entries first;
+  // if a run somehow still leaves it oversized (thousands of distinct
+  // records within one 60s window), clear it outright rather than let it
+  // grow without limit.
+  if (recordLabelCache.size > 5000) {
+    for (const [key, entry] of recordLabelCache) {
+      if (now - entry.at >= LABEL_CACHE_MS) recordLabelCache.delete(key)
+    }
+    if (recordLabelCache.size > 5000) recordLabelCache.clear()
+  }
   for (const rec of records) {
     const cached = recordLabelCache.get(`${rec.collection}:${rec.id}`)
     if (cached) rec.label = cached.label

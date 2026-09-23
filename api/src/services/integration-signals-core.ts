@@ -3,6 +3,7 @@
  * Keys are entity identities so a problem keeps its first_seen across runs.
  */
 import { db } from '../db/index.js'
+import { selectInChunks } from './db-batch.js'
 import { registerIntegrationSignal, type SignalRow } from './integration-signals.js'
 
 export function isAuthFailure(status: number | null, error: string | null): boolean {
@@ -303,9 +304,9 @@ export function registerCoreIntegrationSignals(): void {
       ]
       const userNames = new Map<string, string>()
       if (userIds.length > 0) {
-        const users = (await db('nivaro_users')
-          .whereIn('id', userIds)
-          .select('id', 'first_name', 'last_name', 'email')) as Array<{
+        const users = (await selectInChunks(userIds, 1000, (chunk) =>
+          db('nivaro_users').whereIn('id', chunk).select('id', 'first_name', 'last_name', 'email')
+        )) as Array<{
           id: string
           first_name: string | null
           last_name: string | null
@@ -319,9 +320,9 @@ export function registerCoreIntegrationSignals(): void {
       }
       const keyNames = new Map<number, string>()
       if (keyIds.length > 0) {
-        const keys = (await db('nivaro_api_keys')
-          .whereIn('id', keyIds)
-          .select('id', 'name')) as Array<{
+        const keys = (await selectInChunks(keyIds, 1000, (chunk) =>
+          db('nivaro_api_keys').whereIn('id', chunk).select('id', 'name')
+        )) as Array<{
           id: number
           name: string | null
         }>
