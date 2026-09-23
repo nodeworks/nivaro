@@ -251,6 +251,8 @@ export class ItemNotFoundError extends Error {
 
 type QB = Knex.QueryBuilder
 
+const INTEGRATIONS_FIELD = '$integrations'
+
 // Per-process cache of actual DB columns per table. Schema is fixed at runtime.
 const columnCache = new Map<string, Set<string>>()
 
@@ -1238,6 +1240,15 @@ function applyFilters(
       continue
     }
 
+    // ── Integration obligations ──────────────────────────────────────────────
+    // filter={"$integrations":"danger"} — same EXISTS shape as $state, mirrored
+    // into the conditions path below so a caller cannot tell which surface it
+    // used. See applyIntegrationsFilter.
+    if (key === INTEGRATIONS_FIELD) {
+      applyIntegrationsFilter(q, collection, value)
+      continue
+    }
+
     // ── Logical combinators ──────────────────────────────────────────────────
     if (key === '_and' && Array.isArray(value)) {
       q.where((sub) => {
@@ -1718,6 +1729,51 @@ function applyRiskRules(
   }
 }
 
+/**
+ * filter={"$integrations": "danger"} / conditions path $integrations — how
+ * far behind a record's integration partners are, aggregated across every
+ * partner. Mirrors $addendums: an EXISTS/NOT EXISTS subquery over
+ * `nivaro_integration_obligations` keyed on (collection, item). Exported so
+ * both `applyFilters` (the `filter=` surface) and `applyConditions` (the
+ * collection browser's `conditions[]` surface) compile it identically — one
+ * implementation, both callers, the same precedent as `applyStateFilter`.
+ *
+ * A 'superseded' row was replaced by a newer one and never counts, in every
+ * bucket including 'none' — a record whose only rows are superseded reads
+ * the same as a record with no ledger rows at all.
+ *
+ *   'danger'   — a partner is overdue, failed, or never got word at all
+ *   'warning'  — a partner is still pending, or was deliberately skipped
+ *   'positive' — every non-superseded row for this record is a clean send
+ *   'none'     — no integration has ever opened an obligation for it
+ *
+ * An unrecognised value narrows to nothing rather than widening — the
+ * `applyStateFilter` rule: a filter that fails to read must never silently
+ * answer with every row in the collection.
+ */
+export function applyIntegrationsFilter(q: QB, collection: string, rawValue: unknown): void {
+  const want = String(Array.isArray(rawValue) ? rawValue[0] : (rawValue ?? ''))
+  const outcomesByBucket: Record<string, string[]> = {
+    danger: ['overdue', 'failed', 'missing'],
+    warning: ['pending', 'skipped'],
+    positive: ['sent']
+  }
+  if (want !== 'none' && !outcomesByBucket[want]) {
+    q.whereRaw('1 = 0')
+    return
+  }
+  const exists = function (this: QB) {
+    this.select(db.raw('1'))
+      .from('nivaro_integration_obligations as io')
+      .where('io.collection', collection)
+      .whereRaw('io.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+      .whereNot('io.outcome', 'superseded')
+    if (want !== 'none') this.whereIn('io.outcome', outcomesByBucket[want])
+  }
+  if (want === 'none') q.whereNotExists(exists)
+  else q.whereExists(exists)
+}
+
 export async function applyConditions(
   q: QB,
   conditions: Array<FilterCondition | OrCondition>,
@@ -1791,6 +1847,11 @@ export async function applyConditions(
       }
       if (want === 'none') q.whereNotExists(cb)
       else q.whereExists(cb)
+      continue
+    }
+    // Virtual path: integration obligations — see applyIntegrationsFilter.
+    if (cond.path[0] === INTEGRATIONS_FIELD && cond.path.length === 1) {
+      applyIntegrationsFilter(q, collection, cond.value)
       continue
     }
     // Virtual path: at-risk highlight rules — value = rule id (or an array of

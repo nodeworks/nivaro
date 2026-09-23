@@ -11,6 +11,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { selectInChunks } from '../services/db-batch.js'
 import { registerIntegrationNoteSources } from '../services/integration-notes.js'
 import {
   allObligationKinds,
@@ -22,6 +23,7 @@ import { registerReadinessCheck } from '../services/readiness.js'
 
 const MAX_LIMIT = 200
 const RECORD_CAP = 50
+const SUMMARY_ID_CAP = 500
 
 // The core integration-obligations readiness check. WARN once any
 // overdue/missing row exists; FAIL only once a `missing` row — one whose
@@ -138,6 +140,42 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
     for (const a of apiRows) owners[a.name] = a.owner_user
     return { data: { apis: summariseObligations(rows, owners), kinds: listObligationKinds() } }
   })
+
+  // Which collections have ANY registered obligation kind — a cheap,
+  // long-cacheable probe so the collection browser and queue columns know
+  // whether to even ask for a given collection, the same "probe once, don't
+  // ask per row" shape as the at-risk rules query on a collection. The
+  // registry is in-process, so this is not a database read.
+  app.get('/integration-obligations/collections', { preHandler: requireAuth }, async () => {
+    return { data: [...new Set(allObligationKinds().map((k) => k.collection))] }
+  })
+
+  // Per-record summary for a PAGE of rows (collection browser / queue
+  // columns): every non-superseded ledger row across the page's ids, one
+  // query. Gated on the caller's own read permission for the collection —
+  // same posture as the record-ledger read below, not the admin board.
+  app.post<{ Body: { collection?: string; ids?: string[] } }>(
+    '/integration-obligations/summary',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const collection = String(req.body?.collection ?? '')
+      const ids = (req.body?.ids ?? []).map(String).filter(Boolean).slice(0, SUMMARY_ID_CAP)
+      if (!collection || ids.length === 0) return { data: {} }
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const rows = (await selectInChunks(ids, 2000, (chunk) =>
+        db('nivaro_integration_obligations')
+          .where({ collection })
+          .whereIn('item', chunk)
+          .whereNot({ outcome: 'superseded' })
+          .select('item', 'api', 'outcome')
+      )) as Array<{ item: string; api: string; outcome: string }>
+      const out: Record<string, Array<{ api: string; outcome: string }>> = {}
+      for (const r of rows) (out[r.item] ??= []).push({ api: r.api, outcome: r.outcome })
+      return { data: out }
+    }
+  )
 
   app.get<{
     Querystring: {

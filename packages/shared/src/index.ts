@@ -107,6 +107,8 @@ export type {
   ImportRunStatus,
   ImportStats
 } from './components/imports/types'
+export type { IntegrationDotsProps } from './components/integrations/IntegrationDots'
+export { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './components/integrations/IntegrationDots'
 export type { IntegrationObligationsViewProps } from './components/integrations/IntegrationObligationsView'
 export { IntegrationObligationsView } from './components/integrations/IntegrationObligationsView'
 export type { IntegrationStatusBannerProps } from './components/integrations/IntegrationStatusBanner'
@@ -309,6 +311,7 @@ export {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from './lib/notification-target'
+export { dotsForRecord } from './lib/integration-dots'
 export type { BannerLine } from './lib/obligation-banner'
 export { bannerLines } from './lib/obligation-banner'
 export type { ObligationFilterState } from './lib/obligation-filters'

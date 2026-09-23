@@ -82,6 +82,7 @@ import {
 import { EmptyState } from '../EmptyState'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { IntegrationDots } from '../integrations/IntegrationDots'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
@@ -1271,6 +1272,63 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     }))
   })
   const addendumsEnabled = addendumMetaQueries.some((q) => q.data === true)
+  // Integration obligations — the queue's items response is NOT extended
+  // with this (unlike addendums/fulfilment, which the server resolver rides
+  // onto every row for free), so it is probed and fetched client-side,
+  // exactly the collection-browser's Integrations column. One global probe
+  // (the registry rarely changes) decides whether ANY source collection
+  // participates; then one summary query per collection actually present
+  // among the CURRENTLY RENDERED rows, ids capped the same way the server
+  // caps them.
+  const { data: integrationsCollections = [] } = useQuery({
+    queryKey: ['queue-integrations-collections'],
+    queryFn: () =>
+      client
+        .request<{ data: string[] }>(get('/integration-obligations/collections'))
+        .then((r) => r.data ?? [])
+        .catch(() => [] as string[]),
+    staleTime: 5 * 60 * 1000
+  })
+  const integrationsEnabled = sourceCollections.some((c) => integrationsCollections.includes(c))
+  const integrationsIdsByCollection = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    if (!integrationsEnabled) return map
+    for (const it of items) {
+      if (!integrationsCollections.includes(it.collection)) continue
+      const bucket = (map[it.collection] ??= [])
+      if (bucket.length < 500) bucket.push(it.item_id)
+    }
+    return map
+  }, [items, integrationsCollections, integrationsEnabled])
+  const integrationsQueryCollections = Object.keys(integrationsIdsByCollection)
+  const integrationsSummaryQueries = useQueries({
+    queries: integrationsQueryCollections.map((col) => ({
+      queryKey: ['queue-integrations-summary', col, integrationsIdsByCollection[col].join(',')],
+      queryFn: () =>
+        client
+          .request<{ data: Record<string, Array<{ api: string; outcome: string }>> }>(
+            post('/integration-obligations/summary', {
+              collection: col,
+              ids: integrationsIdsByCollection[col]
+            })
+          )
+          .then((r) => r.data ?? {})
+          .catch(() => ({}) as Record<string, Array<{ api: string; outcome: string }>>),
+      staleTime: 30_000
+    }))
+  })
+  const integrationsSummaryStamp = integrationsSummaryQueries.map((q) => q.dataUpdatedAt).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the stamp string is the dependency (useQueries results are a fresh array each render)
+  const integrationsSummary = useMemo(() => {
+    // Keyed `collection:item` — a queue can span several source collections,
+    // and item ids are not unique across them.
+    const out: Record<string, Array<{ api: string; outcome: string }>> = {}
+    integrationsQueryCollections.forEach((col, i) => {
+      const map = integrationsSummaryQueries[i]?.data ?? {}
+      for (const [id, entries] of Object.entries(map)) out[`${col}:${id}`] = entries
+    })
+    return out
+  }, [integrationsSummaryStamp])
   // Active highlight rules across the source collections — a "Highlight rule"
   // filter (On hold / Sent back) that pairs with the row tint.
   const riskRuleQueries = useQueries({
@@ -1904,6 +1962,18 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
           } satisfies Column<QueueItemRow>
         ]
       : []),
+    ...(integrationsEnabled
+      ? [
+          {
+            key: 'integrations',
+            header: aliasFor('integrations', 'Integrations'),
+            sortable: false,
+            render: (row: QueueItemRow) => (
+              <IntegrationDots rows={integrationsSummary[`${row.collection}:${row.item_id}`]} />
+            )
+          } satisfies Column<QueueItemRow>
+        ]
+      : []),
     ...(sendBacksEnabled
       ? [
           {
@@ -2073,6 +2143,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     'at_risk',
     ...(addendumsEnabled ? ['addendums'] : []),
     ...(fulfilmentEnabled ? ['fulfilment'] : []),
+    ...(integrationsEnabled ? ['integrations'] : []),
     ...(sendBacksEnabled ? ['send_backs'] : []),
     ...extraFieldKeys.map((f) => `extra.${f}`)
   ]
@@ -2083,6 +2154,7 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     'owners',
     ...(addendumsEnabled ? ['addendums'] : []),
     ...(fulfilmentEnabled ? ['fulfilment'] : []),
+    ...(integrationsEnabled ? ['integrations'] : []),
     'aging_hours',
     'sla_status',
     'at_risk',
@@ -2104,6 +2176,10 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
   // Same rule for the fulfilment column (#7): configured per collection,
   // informational, auto-visible until the viewer hides it.
   if (fulfilmentEnabled && !hiddenByUser.has('fulfilment')) effectiveVisible.add('fulfilment')
+  // Same rule for Integrations: only exists once a source collection has a
+  // registered obligation kind, auto-visible until the viewer hides it.
+  if (integrationsEnabled && !hiddenByUser.has('integrations'))
+    effectiveVisible.add('integrations')
 
   // Render order of the middle (toggleable) columns follows visible_columns'
   // actual array order (the viewer's saved drag-reorder), falling back to
@@ -2485,13 +2561,14 @@ export function QueueWorklist({ queueId, realtime, renderError }: QueueWorklistP
     const current = new Set(effectiveVisible)
     if (current.has(key)) {
       current.delete(key)
-      if (key === 'addendums') setHiddenByUser((prev) => new Set(prev).add('addendums'))
+      if (key === 'addendums' || key === 'integrations')
+        setHiddenByUser((prev) => new Set(prev).add(key))
     } else {
       current.add(key)
-      if (key === 'addendums')
+      if (key === 'addendums' || key === 'integrations')
         setHiddenByUser((prev) => {
           const next = new Set(prev)
-          next.delete('addendums')
+          next.delete(key)
           return next
         })
     }
