@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { dedupeRowKeys, planActionTargets, validateSnoozeScope } from '../../../routes/integration-signals.js'
+import {
+  dedupeRowKeys,
+  fillRecordLabels,
+  planActionTargets,
+  validateSnoozeScope
+} from '../../../routes/integration-signals.js'
 
 describe('planActionTargets', () => {
   const rows = [
@@ -51,5 +56,21 @@ describe('validateSnoozeScope', () => {
     expect(validateSnoozeScope({ until_change: false })).toEqual({ ok: true })
     expect(validateSnoozeScope({})).toEqual({ ok: true })
     expect(validateSnoozeScope({ row_key: null })).toEqual({ ok: true })
+  })
+})
+
+describe('fillRecordLabels', () => {
+  it('labels every row even when one round resolves more records than the cache holds', async () => {
+    const rows = Array.from({ length: 5200 }, (_, i) => ({
+      key: `k${i}`,
+      title: `T${i}`,
+      actions: [],
+      record: { collection: 'bulk_labels_probe', id: String(i) }
+    }))
+    await fillRecordLabels(
+      [{ rows, snoozed: [] }],
+      async (_c, ids) => new Map(ids.map((id) => [id, `R-${id}`]))
+    )
+    expect(rows.every((r) => (r.record as { label?: string }).label === `R-${r.record.id}`)).toBe(true)
   })
 })
