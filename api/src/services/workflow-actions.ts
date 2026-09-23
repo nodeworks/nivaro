@@ -667,7 +667,7 @@ export async function runTransitionActions(opts: {
       const rendered = await engine.parseAndRender(action.payload_template, scope)
       body = JSON.parse(rendered) as Record<string, unknown>
     } catch (err) {
-      await recordSubmission(
+      const submissionId = await recordSubmission(
         collection,
         item,
         apiId,
@@ -678,8 +678,15 @@ export async function runTransitionActions(opts: {
       )
       await resolveObligation(obligationId, {
         outcome: 'failed',
-        reason: skipReason('template_error', err instanceof Error ? err.message : String(err))
+        reason: skipReason('template_error', err instanceof Error ? err.message : String(err)),
+        submission_id: submissionId
       })
+      if (submissionId != null && obligationId != null) {
+        await db('nivaro_erp_submissions')
+          .where({ id: submissionId })
+          .update({ obligation_id: obligationId })
+          .catch(() => {})
+      }
       await applyWriteback(collection, item, action.on_failure?.set, {
         ...scope,
         error: String(err)

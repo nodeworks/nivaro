@@ -6,6 +6,7 @@ import {
   openObligationForTrigger,
   recordObligation,
   registerObligationKind,
+  resolveApiName,
   resolveKindForTrigger,
   resolveObligation
 } from '../../../services/integration-obligations.js'
@@ -424,6 +425,71 @@ describe('openObligationForTrigger', () => {
     expect(row.trigger).toBe('transition')
     expect(row.trigger_ref).toBe('state->done')
     expect(row.outcome).toBe('pending')
+  })
+
+  it('normalizes a numeric external_api id to its name before matching a kind — the sweep and the registry always compare names', async () => {
+    registerObligationKind({ ...base, kind: 'wf.only' })
+    const apiChain = { where: vi.fn(), first: vi.fn().mockResolvedValue({ name: 'Partner' }) }
+    apiChain.where.mockReturnValue(apiChain)
+    const insertStub = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 4 }])
+    })
+    mockedDb().mockImplementation(((table: string) =>
+      table === 'nivaro_external_apis' ? apiChain : { insert: insertStub }) as never)
+
+    // ctx.api is "42" — the numeric id an erp_submit action carries when it
+    // was configured by picking the API from a list, not typing its name.
+    // Without normalization this matches no kind (api 'Partner' !== '42')
+    // and openObligationForTrigger returns null.
+    const id = await openObligationForTrigger(
+      { collection: 'workflows', item: '9', api: '42', source: 'erp_submit' },
+      { trigger: 'transition' }
+    )
+
+    expect(id).toBe(4)
+    expect(apiChain.where).toHaveBeenCalledWith({ id: 42 })
+    const row = insertStub.mock.calls[0][0] as Record<string, unknown>
+    expect(row.api).toBe('Partner')
+    expect(row.kind).toBe('wf.only')
+  })
+})
+
+describe('resolveApiName', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('passes a non-numeric value straight through without touching the db', async () => {
+    mockedDb().mockClear()
+    const name = await resolveApiName(db, 'Partner')
+    expect(name).toBe('Partner')
+    expect(db).not.toHaveBeenCalled()
+  })
+
+  it("resolves a numeric id to the row's name", async () => {
+    const chain = { where: vi.fn(), first: vi.fn().mockResolvedValue({ name: 'Fusion IIP' }) }
+    chain.where.mockReturnValue(chain)
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    const name = await resolveApiName(db, '9101')
+    expect(name).toBe('Fusion IIP')
+    expect(chain.where).toHaveBeenCalledWith({ id: 9101 })
+  })
+
+  it('falls back to the id string itself when no row matches', async () => {
+    const chain = { where: vi.fn(), first: vi.fn().mockResolvedValue(undefined) }
+    chain.where.mockReturnValue(chain)
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    const name = await resolveApiName(db, '9102')
+    expect(name).toBe('9102')
+  })
+
+  it('falls back to the id string when the lookup throws', async () => {
+    const chain = { where: vi.fn(), first: vi.fn().mockRejectedValue(new Error('down')) }
+    chain.where.mockReturnValue(chain)
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    const name = await resolveApiName(db, '9103')
+    expect(name).toBe('9103')
   })
 })
 

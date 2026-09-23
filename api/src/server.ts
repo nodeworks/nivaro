@@ -1462,6 +1462,35 @@ export async function buildServer() {
         }
       )
 
+      // Integration reconciliation: each registered obligation kind says
+      // which records the partner is behind on, derived from data alone —
+      // this compares that with the ledger and writes what no trigger can
+      // see (missing, overdue, superseded). Never sends.
+      app.cron.schedule(
+        'integration-reconcile',
+        '*/15 * * * *',
+        async () => {
+          const { runIntegrationReconcile } = await import('./services/integration-reconcile.js')
+          const r = await runIntegrationReconcile()
+          if (r.missing > 0 || r.overdue > 0) {
+            app.log.warn(
+              { missing: r.missing, overdue: r.overdue, superseded: r.superseded },
+              'integration reconcile found unmet obligations'
+            )
+          }
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            'Derives, from the records themselves, which integrations are behind, and writes the outcomes no trigger can see: missing (the send never fired), overdue (unacknowledged, or skipped while the partner still lacks it) and superseded. Never sends.',
+          dryRun: async () => {
+            const { dryRunIntegrationReconcile } = await import('./services/integration-reconcile.js')
+            return dryRunIntegrationReconcile()
+          }
+        }
+      )
+
       // Alert definitions sweep — anomaly detections and threshold rules whose
       // data changes outside record writes only fire from a periodic pass.
       app.cron.schedule('alert-definitions-sweep', '15 * * * *', async () => {

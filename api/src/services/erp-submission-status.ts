@@ -7,7 +7,6 @@
  * accepted an hour ago is exactly the kind of quiet disagreement this whole
  * feature exists to stop. So the mapping lives here and every writer calls it.
  */
-import { db } from '../db/index.js'
 import { resolveObligation } from './integration-obligations.js'
 
 export type SubmissionStatus = 'submitted' | 'pending' | 'accepted' | 'rejected' | 'failed'
@@ -19,24 +18,26 @@ export function outcomeForSubmission(status: SubmissionStatus): 'sent' | 'failed
   return 'pending'
 }
 
-/** Move the obligation a submission belongs to. No obligation = no-op. */
+/**
+ * Move the obligation a submission belongs to. No obligation = no-op.
+ *
+ * `obligationId` is required, not looked up: every one of this function's
+ * four callers (the manual retry route, the bulk-retry route, the PATCH
+ * status override and the automatic retry sweep) already has the submission
+ * row in hand and passes `row.obligation_id` straight through — including
+ * when that value is null, for a submission that predates the ledger or was
+ * never attributed to a registered kind. A second query for a field the
+ * caller already read would only repeat the null it already found.
+ */
 export async function propagateSubmissionStatus(opts: {
   submissionId: number
   status: SubmissionStatus
   error?: string | null
-  /** Pass it when the caller already has it; otherwise it is read. */
-  obligationId?: number | null
+  obligationId: number | null
 }): Promise<void> {
   try {
-    let obligationId = opts.obligationId ?? null
-    if (obligationId == null) {
-      const row = (await db('nivaro_erp_submissions')
-        .where({ id: opts.submissionId })
-        .first('obligation_id')) as { obligation_id: number | null } | undefined
-      obligationId = row?.obligation_id ?? null
-    }
-    if (obligationId == null) return
-    await resolveObligation(Number(obligationId), {
+    if (opts.obligationId == null) return
+    await resolveObligation(opts.obligationId, {
       outcome: outcomeForSubmission(opts.status),
       reason: opts.error?.slice(0, 500) ?? null,
       submission_id: opts.submissionId

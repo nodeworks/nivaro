@@ -262,6 +262,34 @@ export function flowHaltReason(haltedAt: string | null): string | null {
   return skipReason('flow_condition', at)
 }
 
+const apiNameCache = new Map<string, { name: string; at: number }>()
+const API_NAME_TTL_MS = 60_000
+
+/**
+ * `TransitionActionDef.external_api` is `<id | name>`, so an action
+ * configured by numeric id opens a context whose `api` is `"7"` — but every
+ * registered kind, and the reconciliation sweep, key on the API's NAME.
+ * Numeric input resolves to the row's name (60s cache); anything else passes
+ * straight through, which covers both "already a name" and "an id that
+ * resolves to nothing" — the latter simply matches no kind downstream.
+ */
+export async function resolveApiName(database: Knex, idOrName: string): Promise<string> {
+  const s = String(idOrName ?? '').trim()
+  if (s === '' || !/^\d+$/.test(s)) return s
+  const cached = apiNameCache.get(s)
+  if (cached && Date.now() - cached.at < API_NAME_TTL_MS) return cached.name
+  try {
+    const row = (await database('nivaro_external_apis').where({ id: Number(s) }).first('name')) as
+      | { name: string }
+      | undefined
+    const name = row?.name ?? s
+    apiNameCache.set(s, { name, at: Date.now() })
+    return name
+  } catch {
+    return s
+  }
+}
+
 /** The decision-point entry point: attribute the context to a kind and open
  *  a `pending` row. Returns null when no kind claims it — which is how an
  *  unregistered integration stays exactly as silent as it is today. */
@@ -269,7 +297,9 @@ export async function openObligationForTrigger(
   ctx: ObligationTriggerContext,
   opts: { trigger: ObligationTrigger; trigger_ref?: string | null; due_at?: Date }
 ): Promise<number | null> {
-  const def = resolveKindForTrigger(ctx)
+  const apiName = await resolveApiName(db, ctx.api)
+  const resolvedCtx = apiName === ctx.api ? ctx : { ...ctx, api: apiName }
+  const def = resolveKindForTrigger(resolvedCtx)
   if (!def) return null
   return recordObligation({
     api: def.api,
