@@ -6,6 +6,7 @@ import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
 import { NOTIFY_CATEGORIES, NOTIFY_CATEGORY_LABELS, notifyUser } from './notification-channels.js'
+import { detectDefaultBodyRejection } from './workflow-actions.js'
 
 interface FlowOperation {
   id: string
@@ -751,9 +752,26 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
   const httpStatus = { __http_status: status }
 
   if (failOnError && status >= 400) {
+    const detail = typeof body === 'string' ? body : JSON.stringify(body ?? null)
     return {
       status: 'reject' as const,
-      output: { ...data, [resultKey]: response, ...httpStatus, $error: `HTTP ${status}` }
+      output: {
+        ...data,
+        [resultKey]: response,
+        ...httpStatus,
+        $error: `HTTP ${status}${detail && detail !== 'null' ? `: ${detail.slice(0, 300)}` : ''}`
+      }
+    }
+  }
+  // A 2xx can still be a refusal — some partners answer 200 with an error
+  // status in the body. That push did not land either.
+  if (failOnError) {
+    const refusal = detectDefaultBodyRejection(body)
+    if (refusal) {
+      return {
+        status: 'reject' as const,
+        output: { ...data, [resultKey]: response, __http_status: 422, $error: refusal }
+      }
     }
   }
 
@@ -1219,11 +1237,34 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
   // like one that matched: ops_run counts operations executed, `matched`
   // means something other than a condition ran, halted_at names the op whose
   // reject branch ended the chain.
-  const progress = { ops: 0, matched: false, halted: null as string | null }
-  const note = (op: { key: string; type: string }, status: string, ended: boolean) => {
+  const progress = {
+    ops: 0,
+    matched: false,
+    halted: null as string | null,
+    // A chain that ENDED on a rejecting op other than a condition — a push
+    // that 401'd, a custom op that failed — is a failed run, not a quiet
+    // non-match. Recorded so the run lands 'error' (dead letters, retry,
+    // creator notification) instead of 'success'.
+    failed: null as { key: string; error: string } | null
+  }
+  const note = (
+    op: { key: string; type: string },
+    status: string,
+    ended: boolean,
+    output?: FlowData
+  ) => {
     progress.ops++
     if (op.type !== 'condition' && status !== 'reject') progress.matched = true
-    if (status === 'reject' && ended) progress.halted = op.key
+    if (status === 'reject' && ended) {
+      progress.halted = op.key
+      if (op.type !== 'condition' && !progress.failed) {
+        const err = output?.$error
+        progress.failed = {
+          key: op.key,
+          error: typeof err === 'string' && err ? err : `operation "${op.key}" failed`
+        }
+      }
+    }
   }
 
   // A flow that pushes to a partner carries an obligation for the whole run:
@@ -1304,7 +1345,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
             preview: result.output[`$preview_${op.key}`]
           })
           currentId = result.status === 'resolve' ? op.resolve : op.reject
-          note(op, result.status, currentId == null)
+          note(op, result.status, currentId == null, result.output)
         }
       }
       return d
@@ -1327,7 +1368,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
           status: result.status,
           preview: result.output[`$preview_${op.key}`]
         })
-        note(op, result.status, result.status === 'reject')
+        note(op, result.status, result.status === 'reject', result.output)
         if (result.status === 'reject') break
       }
     }
@@ -1343,7 +1384,10 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
     await db('nivaro_flow_runs')
       .where({ id: runId })
       .update({
-        status: 'success',
+        status: progress.failed ? 'error' : 'success',
+        ...(progress.failed
+          ? { error_message: `${progress.failed.key}: ${progress.failed.error}`.slice(0, 2000) }
+          : {}),
         completed_at: new Date(),
         duration_ms: Date.now() - startMs,
         output: JSON.stringify(data),
@@ -1389,7 +1433,15 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
       })
     }
 
-    ctx.log.info({ flowId: ctx.flowId }, 'Flow execution complete')
+    if (progress.failed) {
+      ctx.log.warn(
+        { flowId: ctx.flowId, key: progress.failed.key, error: progress.failed.error },
+        'Flow run failed'
+      )
+      notifyFlowError(ctx, new Error(`${progress.failed.key}: ${progress.failed.error}`))
+    } else {
+      ctx.log.info({ flowId: ctx.flowId }, 'Flow execution complete')
+    }
     return data
   } catch (err) {
     ctx.log.error({ err, flowId: ctx.flowId }, 'Operation threw unexpectedly, halting flow')

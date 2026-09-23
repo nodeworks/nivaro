@@ -5,7 +5,11 @@ import { logActivity } from '../services/activity.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
-import { detectBodyAcceptance, serializeResponseBody } from '../services/workflow-actions.js'
+import {
+  detectBodyAcceptance,
+  detectDefaultBodyRejection,
+  serializeResponseBody
+} from '../services/workflow-actions.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -86,6 +90,18 @@ interface SendOutcome {
  */
 function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
   if (httpStatus >= 200 && httpStatus < 300) {
+    // A 2xx whose body refuses (status: ERROR, api_status: Bad Request…) did
+    // not land — recording it pending/accepted would read as success.
+    const refusal = detectDefaultBodyRejection(body)
+    if (refusal) {
+      return {
+        status: 'failed',
+        external_ref: null,
+        error: refusal,
+        response: body,
+        http_status: httpStatus
+      }
+    }
     let status: ErpStatus = 'pending'
     let ref: string | null = null
     if (body && typeof body === 'object' && !Array.isArray(body)) {

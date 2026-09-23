@@ -461,6 +461,62 @@ const DEFAULT_SUCCESS_VALUES = new Set(['OK', 'SUCCESS', 'SUCCEEDED', 'ACCEPTED'
  *  before, so those pushes parked at `pending` after a real success. */
 const DEFAULT_SUCCESS_BOOL_KEYS = ['status', 'success', 'ok']
 
+/**
+ * The generic "the partner said no" check for a response body, used when no
+ * `response_error` config applies: a top-level `status` / `api_status` /
+ * `result` string such as ERROR / FAILED / REJECTED / "Bad Request", or a
+ * boolean `status` / `success` / `ok` of false. Returns the partner's own
+ * message (message / statusMessage / error / detail) when it sent one, else a
+ * short sentence naming the status; null when the body reads as no rejection.
+ * Matters most on a 2xx — some partners answer 200 and refuse in the body.
+ */
+const DEFAULT_REJECT_VALUES = new Set([
+  'ERROR',
+  'ERRORS',
+  'FAIL',
+  'FAILED',
+  'FAILURE',
+  'REJECTED',
+  'DENIED',
+  'INVALID',
+  'BAD REQUEST',
+  'UNAUTHORIZED',
+  'FORBIDDEN',
+  'NOT FOUND'
+])
+const DEFAULT_MESSAGE_KEYS = [
+  'message',
+  'statusMessage',
+  'error_description',
+  'error',
+  'detail',
+  'detailMessage'
+]
+
+export function detectDefaultBodyRejection(body: unknown): string | null {
+  if (body == null || typeof body !== 'object' || Array.isArray(body)) return null
+  const obj = body as Record<string, unknown>
+  let label: string | null = null
+  for (const k of DEFAULT_SUCCESS_BOOL_KEYS) {
+    if (obj[k] === false) label = `${k}: false`
+  }
+  for (const k of DEFAULT_SUCCESS_KEYS) {
+    const v = obj[k]
+    if (typeof v === 'string' && DEFAULT_REJECT_VALUES.has(v.trim().toUpperCase())) {
+      label = `${k}: ${v.trim()}`
+    }
+  }
+  if (!label) return null
+  for (const k of DEFAULT_MESSAGE_KEYS) {
+    const v = obj[k]
+    if (typeof v === 'string' && v.trim()) {
+      const detail = extractErpErrorDetails(v)
+      return (detail.length ? detail.join(' · ') : v.trim()).slice(0, 1000)
+    }
+  }
+  return `Partner responded with ${label}`
+}
+
 export function detectBodyAcceptance(
   cfg: ResponseSuccessConfig | null | undefined,
   body: unknown
@@ -818,10 +874,13 @@ export async function runTransitionActions(opts: {
         // A 2xx can still be a rejection — some ERPs answer 200 with an error
         // status in the body. The action's `response_error` config decides;
         // without one, 2xx keeps meaning pending as before.
-        const bodyError = detectConfiguredBodyError(
-          action.response_error as ResponseErrorConfig | undefined,
-          res.body
-        )
+        // …else the generic check (status/api_status/result reads ERROR,
+        // FAILED, "Bad Request"…, or success/ok/status is false).
+        const bodyError =
+          detectConfiguredBodyError(
+            action.response_error as ResponseErrorConfig | undefined,
+            res.body
+          ) ?? detectDefaultBodyRejection(res.body)
         if (bodyError) {
           error = bodyError
         } else {
@@ -1166,11 +1225,9 @@ async function recordSubmission(
         // failure it was, which decides whether a later retry could help.
         error_class:
           status === 'failed'
-            ? (await import('./integration-remediation.js')).classifyError(
-                httpStatus ?? null,
-                responseBody,
-                error
-              )
+            ? (
+                await import('./integration-remediation.js')
+              ).classifyError(httpStatus ?? null, responseBody, error)
             : null,
         created_at: now,
         updated_at: now
@@ -1185,7 +1242,9 @@ async function recordSubmission(
     })
     const first = inserted[0]
     // tedious hands an OBJECT back from .returning on this stack.
-    return typeof first === 'object' && first !== null ? Number(first.id) : Number(first ?? 0) || null
+    return typeof first === 'object' && first !== null
+      ? Number(first.id)
+      : Number(first ?? 0) || null
   } catch (err) {
     console.error({ err, collection, item }, 'failed to record ERP submission')
     return null

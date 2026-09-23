@@ -296,8 +296,22 @@ export async function resolveAuth(
             ...(c.audience ? { audience: c.audience } : {})
           })
         })
-        const body = (await res.json()) as { access_token?: string }
-        if (body.access_token) headers.Authorization = `Bearer ${body.access_token}`
+        // A failed exchange must stop the call: sending the request with no
+        // Authorization only turns "our credentials are wrong" into a partner
+        // 401 that reads like their fault.
+        const text = await res.text()
+        let body: { access_token?: string; error?: string; error_description?: string } = {}
+        try {
+          body = JSON.parse(text)
+        } catch {
+          /* non-JSON token response — handled below */
+        }
+        if (!res.ok || !body.access_token) {
+          const why =
+            body.error_description || body.error || text.slice(0, 200) || 'no access_token'
+          throw new Error(`Token exchange failed (HTTP ${res.status}): ${why}`)
+        }
+        headers.Authorization = `Bearer ${body.access_token}`
       }
       break
     }
