@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-09-23T14:58:06.932Z",
+  "generated_at": "2026-09-23T16:55:44.971Z",
   "releases": [
+    {
+      "version": "0.1.331",
+      "tag": "v0.1.331",
+      "date": "2026-09-23T12:55:31-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "manage obligation switches from the admin UI",
+              "hash": "1a63128a"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "board columns, collection filter, partner tabs",
+              "hash": "a2118adf"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "Sent back column reads blank for zero, is default-visible, and is in the builder",
+              "hash": "cfb1f88e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "header",
+              "text": "owners tile uses the strip's hairline dividers",
+              "hash": "7ac578a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "drop the record's external-submission banner",
+              "hash": "084d931f"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.330",
       "tag": "v0.1.330",
-      "date": "2026-09-23T10:57:52-04:00",
+      "date": "2026-09-23T10:58:07-04:00",
       "sections": [
         {
           "label": "Added",
