@@ -3,6 +3,7 @@ import {
   defaultItemUrl,
   InboundCallersView,
   IntegrationObligationsView,
+  IntegrationsConsole,
   ItemEditAuthContext,
   NavigationContext,
   NivaroProvider
@@ -10,7 +11,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link2, Play, RotateCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -81,7 +82,69 @@ function verdict(a: ApiHealth): { label: string; cls: string } {
   return { label: 'failing', cls: 'text-red-600 dark:text-red-400' }
 }
 
+/**
+ * Admin host for the shared Integrations console. Tab + focused signal ride
+ * the URL (?tab=, ?signal=) so a notification can deep-link. The previous
+ * page body lives on as the admin-only "Jobs" tab so nothing was lost.
+ */
 export function IntegrationHealthPage() {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') ?? 'firefight'
+  const focusSignal = params.get('signal') ?? undefined
+  return (
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <header className='flex shrink-0 items-center gap-2.5 border-b border-slate-200 px-6 py-4 dark:border-border'>
+        <Link2 className='h-5 w-5 text-muted-foreground' />
+        <div>
+          <h1 className='text-lg font-semibold'>Integrations</h1>
+          <p className='text-[12px] text-muted-foreground'>
+            Every outside system this instance talks to — what is broken right now, and how each
+            partner is doing.
+          </p>
+        </div>
+      </header>
+      <div className='flex-1 overflow-y-auto bg-slate-50 px-6 py-5 dark:bg-background'>
+        <NivaroProvider client={sharedClient}>
+          <NavigationContext.Provider
+            value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+          >
+            <ItemEditAuthContext.Provider
+              value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
+            >
+              <IntegrationsConsole
+                tab={tab}
+                focusSignal={focusSignal}
+                onTabChange={(key) =>
+                  setParams(
+                    (p) => {
+                      const next = new URLSearchParams(p)
+                      next.set('tab', key)
+                      next.delete('signal')
+                      return next
+                    },
+                    { replace: true }
+                  )
+                }
+                onOpenRecord={(c, id) => navigate(`/collections/${c}/${id}`)}
+                extraTabs={
+                  user?.is_admin
+                    ? [{ key: 'jobs', label: 'Jobs', render: () => <IntegrationJobsTab /> }]
+                    : []
+                }
+              />
+            </ItemEditAuthContext.Provider>
+          </NavigationContext.Provider>
+        </NivaroProvider>
+      </div>
+    </div>
+  )
+}
+
+/** The pre-console Integration Health body: per-API push outcomes, OAuth
+ *  token health, outbound calls, the cron roster, callers and contracts. */
+function IntegrationJobsTab() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -111,25 +174,13 @@ export function IntegrationHealthPage() {
   })
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
-        <div className='flex items-center gap-2.5'>
-          <Link2 className='h-5 w-5 text-muted-foreground' />
-          <div>
-            <h1 className='text-lg font-semibold'>Integrations</h1>
-            <p className='text-[11px] text-muted-foreground'>
-              Push outcomes, last failures, and scheduled jobs — one screen per external system.
-            </p>
-          </div>
-        </div>
-        {dataUpdatedAt > 0 && (
-          <span className='text-[11px] text-muted-foreground'>
-            Updated {new Date(dataUpdatedAt).toLocaleTimeString()} · refreshes every 30s
-          </span>
-        )}
-      </header>
-
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+    <div>
+      {dataUpdatedAt > 0 && (
+        <p className='mb-3 text-[11px] text-muted-foreground'>
+          Updated {new Date(dataUpdatedAt).toLocaleTimeString()} · refreshes every 30s
+        </p>
+      )}
+      <div>
         <div className='mb-6'>
           <NivaroProvider client={sharedClient}>
             <NavigationContext.Provider
@@ -544,7 +595,7 @@ function ContractsCard() {
           <input
             value={collection}
             onChange={(e) => setCollection(e.target.value)}
-            placeholder='Collection (e.g. mwf_queue)'
+            placeholder='Collection (e.g. partner_orders)'
             className='h-8 rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
           />
           <textarea
