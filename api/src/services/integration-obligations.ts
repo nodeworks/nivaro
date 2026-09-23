@@ -95,6 +95,22 @@ export interface ObligationKindDef {
    */
   human?: boolean
   /**
+   * This kind's "record" is not one — its `expect()` derives its
+   * expectations from something the record-open UI can never resolve (an
+   * API log entry keyed by a time bucket, not a row of `collection`), rather
+   * than a genuine business record. Board rows of an inbound kind are shown
+   * but never clickable (the row-open rule already tests `collection` for
+   * this — see `isRoutableRecord`), and the board's "Inbound rejected"
+   * sub-tab (spec §2.4.1) is exactly these kinds.
+   *
+   * Optional and additive: a kind whose `collection` already starts with
+   * `nivaro_` is inbound-shaped by that alone (`isInboundKind`,
+   * packages/shared/src/lib/obligation-filters.ts) and needs no flag at
+   * all. This exists only for an inbound-shaped kind that, for whatever
+   * reason, does NOT key off a `nivaro_` table.
+   */
+  inbound?: boolean
+  /**
    * The endpoint this kind's send goes to, as stored in
    * `nivaro_erp_submissions.payload.endpoint_path`. Required before the
    * sweep may re-fire anything: several kinds share one API, and "the most

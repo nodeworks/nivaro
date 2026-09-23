@@ -1,16 +1,21 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Send } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronDown, Code2, Loader2, Send } from 'lucide-react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import {
+  attemptsLabel,
   isRoutableRecord,
+  lastResponseFull,
+  lastResponseLabel,
   type ObligationFilterState,
+  type ObligationSubmissionInfo,
   obligationQueryParams,
+  obligationTabsFor,
   toneForOutcome
 } from '../../lib/obligation-filters'
-import { cn, formatRelative, humanHours } from '../../lib/utils'
+import { cn, formatRelative, humanHours, titleCase } from '../../lib/utils'
 import { EmptyState } from '../EmptyState'
 import { ErrorSurface } from '../ErrorSurface'
 import { colorPair } from '../QueryTable'
@@ -132,6 +137,32 @@ function SendNowButton({ obligationId }: { obligationId: number }) {
   )
 }
 
+/** "Show request" — the Inbound rejected tab's action (spec §2.4.1). Toggles
+ *  the detail row rendered by the caller; the row's own `detail` blob is the
+ *  only trace the ledger keeps of what a partner rejected (the ledger has no
+ *  link back to the specific `nivaro_api_logs` row an inbound kind's
+ *  `expect()` read from a time BUCKET, not an id — I5's fix already made
+ *  those rows non-clickable for the same reason). A row with nothing stored
+ *  still gets the button; the expansion says so honestly rather than hiding
+ *  the action inconsistently. */
+function ShowRequestButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type='button'
+      data-obligations-show-request
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggle()
+      }}
+      className='inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10.5px] font-medium text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+    >
+      <Code2 className='h-3 w-3' />
+      {open ? 'Hide request' : 'Show request'}
+      <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
+    </button>
+  )
+}
+
 interface ApiSummary {
   api: string
   owner_user: string | null
@@ -144,6 +175,12 @@ interface KindDef {
   kind: string
   collection: string
   label: string
+  /** §2.4.1's partner-derived tabs read straight off these two — see
+   *  `obligationTabsFor` in lib/obligation-filters.ts, which this view and
+   *  the server (`ObligationKindDef`, api/src/services/integration-obligations.ts)
+   *  share the same names for. */
+  human?: boolean
+  inbound?: boolean
 }
 
 interface Row {
@@ -157,6 +194,42 @@ interface Row {
   outcome: string
   reason: string | null
   submission_id: number | null
+  /** Caller-supplied JSON a writer stashed when it opened/resolved this row
+   *  (capped 4000 chars) — routinely null; rendered by "Show request" on the
+   *  Inbound rejected tab. */
+  detail: string | null
+  submission_attempts: number | null
+  submission_status: string | null
+  submission_last_error: string | null
+  submission_response: string | null
+}
+
+/** The four `submission_*` columns, reshaped into the small object the
+ *  Attempts/Last response helpers (lib/obligation-filters.ts) take — `null`
+ *  when the row never had a submission joined at all (no `attempts` came
+ *  back), not an object of nulls that would otherwise still read "0". */
+function submissionOf(r: Row): ObligationSubmissionInfo | null {
+  if (r.submission_attempts == null) return null
+  return {
+    attempts: r.submission_attempts,
+    status: r.submission_status,
+    last_error: r.submission_last_error,
+    response: r.submission_response
+  }
+}
+
+/** Best-effort pretty-print of a stored `detail` blob for the "Show request"
+ *  expansion — it is `detailColumn()`'s `JSON.stringify` output
+ *  (api/src/services/integration-obligations.ts), so it usually re-parses
+ *  and re-indents; a writer that stashed a bare string instead renders as
+ *  itself rather than failing. */
+function prettyDetail(detail: string | null): string | null {
+  if (!detail) return null
+  try {
+    return JSON.stringify(JSON.parse(detail), null, 2)
+  } catch {
+    return detail
+  }
 }
 
 export interface IntegrationObligationsViewProps {
@@ -174,10 +247,16 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
   const [filters, setFilters] = useState<ObligationFilterState>({
     api: api ?? null,
     kind: null,
+    collection: null,
     outcome: ['overdue', 'failed', 'missing'],
     ageHours: null
   })
   const [page, setPage] = useState(1)
+  // Which row of the Inbound rejected tab has its "Show request" expansion
+  // open — one at a time, cosmetic UI state, reset whenever the filtered
+  // rows change under it so an id from a previous filter can never linger
+  // open against different rows.
+  const [expandedDetailId, setExpandedDetailId] = useState<number | null>(null)
 
   // `filters.api` starts from the `api` prop but is user-editable from
   // there (a tile click or "Clear partner" toggles it) — a stray re-render
@@ -218,7 +297,8 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset trigger
   useEffect(() => {
     setPage(1)
-  }, [filters.api, filters.kind, outcomeKey, filters.ageHours])
+    setExpandedDetailId(null)
+  }, [filters.api, filters.kind, filters.collection, outcomeKey, filters.ageHours])
 
   const params = useMemo(
     () => ({
@@ -252,8 +332,113 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
     return m
   }, [kinds])
 
+  // Distinct collections present under the currently scoped api (or across
+  // all of them, unscoped) — labelled by titleCase since this view carries
+  // no collection display-template metadata to prefer over it.
+  const collectionOptions = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const k of kindsForFilter) if (!seen.has(k.collection)) seen.set(k.collection, titleCase(k.collection))
+    return [...seen.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [kindsForFilter])
+
+  // Partner-derived tabs (spec §2.4.1) — which kind names of the SCOPED api
+  // belong in each bucket. Empty without an api picked: a tab spanning every
+  // partner's human/inbound kinds at once would mix unrelated sends under
+  // one label, so the tabs only appear once a single api is selected (same
+  // gate the tiles already put the viewer through to reach the row table
+  // scoped to one partner).
+  const tabsForApi = useMemo(() => obligationTabsFor(kinds, filters.api), [kinds, filters.api])
+
+  // The active bucket is DERIVED from `filters.kind`, never tracked as its
+  // own state — a CSV of exactly one bucket's kind names means that bucket
+  // is showing; anything else (a single kind picked from the dropdown, no
+  // kind filter at all, an api switch that leaves a stale CSV behind) reads
+  // as "all". Self-healing from every source that can change `filters.kind`
+  // — tile clicks, the dropdown, the Clear button, a tab click — with no
+  // synchronization code of its own.
+  const selectedKinds = useMemo(
+    () =>
+      new Set(
+        (filters.kind ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      ),
+    [filters.kind]
+  )
+  const matchesBucket = (list: string[]) =>
+    list.length > 0 && list.length === selectedKinds.size && list.every((k) => selectedKinds.has(k))
+  const activeBucket: 'all' | 'waiting' | 'inbound' = matchesBucket(tabsForApi.waiting)
+    ? 'waiting'
+    : matchesBucket(tabsForApi.inbound)
+      ? 'inbound'
+      : 'all'
+
+  const selectTab = (bucket: 'all' | 'waiting' | 'inbound') => {
+    const list = bucket === 'waiting' ? tabsForApi.waiting : bucket === 'inbound' ? tabsForApi.inbound : []
+    setFilters((f) => ({ ...f, kind: list.length > 0 ? list.join(',') : null }))
+  }
+
   const rows = list?.data ?? []
   const total = list?.total ?? 0
+
+  // Waiting on a person: owner name(s) per visible row, batched per
+  // distinct collection (routinely one call — a human kind's records are
+  // usually all one collection) via the SAME endpoint the collection
+  // browser's own Owners column already uses.
+  const waitingCollections = useMemo(
+    () => (activeBucket === 'waiting' ? [...new Set(rows.map((r) => r.collection))] : []),
+    [activeBucket, rows]
+  )
+  const ownerQueries = useQueries({
+    queries: waitingCollections.map((collection) => {
+      const ids = rows.filter((r) => r.collection === collection).map((r) => r.item)
+      return {
+        queryKey: ['integration-obligations', 'owners', collection, ids.slice().sort().join(',')],
+        queryFn: () =>
+          client
+            .request<{ data: Record<string, Array<{ id: string; name: string }>> }>(
+              post(`/pipelines/instance/${collection}/owners/batch`, { ids })
+            )
+            .then((r) => r.data ?? {}),
+        enabled: ids.length > 0,
+        staleTime: 60_000
+      }
+    })
+  })
+  const ownersByKey = useMemo(() => {
+    const out: Record<string, string> = {}
+    waitingCollections.forEach((collection, i) => {
+      const data = ownerQueries[i]?.data
+      if (!data) return
+      for (const [item, owners] of Object.entries(data)) {
+        out[`${collection}:${item}`] = owners.map((o) => o.name).join(', ')
+      }
+    })
+    return out
+  }, [waitingCollections, ownerQueries])
+  const ownersLoading = ownerQueries.some((q) => q.isLoading)
+  // A row's owners may have RESOLVED to zero (an unowned state) — that is
+  // "—", the same as never having asked, so both read a bare string; only
+  // the KEY's presence in the map, not its (possibly empty) value, tells the
+  // two apart from "still loading".
+  const ownerCellText = (r: Row): string => {
+    const key = `${r.collection}:${r.item}`
+    if (key in ownersByKey) return ownersByKey[key] || '—'
+    return ownersLoading ? '…' : '—'
+  }
+
+  // Base columns (Record/Kind/Due/Outcome/Why/Attempts/Last response) plus
+  // whichever tab column and remediation column are showing — used for the
+  // "Show request" detail row's colSpan, which must span the table exactly
+  // however many columns are up at the moment.
+  const columnCount =
+    7 +
+    (activeBucket === 'waiting' ? 1 : 0) +
+    (activeBucket === 'inbound' ? 1 : 0) +
+    (remediationEnabled ? 1 : 0)
 
   const toggleOutcome = (outcome: string) =>
     setFilters((f) => ({
@@ -378,6 +563,18 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
             ]}
           />
         </div>
+        <div data-obligations-collection-filter className='flex items-center gap-1.5'>
+          <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>Collection</span>
+          <SimpleSelectXs
+            ariaLabel='Filter by collection'
+            value={filters.collection ?? ''}
+            onChange={(v) => setFilters((f) => ({ ...f, collection: v || null }))}
+            options={[
+              { value: '', label: 'Every collection' },
+              ...collectionOptions
+            ]}
+          />
+        </div>
         <div data-obligation-filter='age' className='flex items-center gap-1.5'>
           <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>Age</span>
           <SimpleSelectXs
@@ -416,18 +613,77 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
             )
           })}
         </div>
-        {(filters.api || filters.kind || filters.ageHours != null) && (
+        {(filters.api || filters.kind || filters.collection || filters.ageHours != null) && (
           <button
             type='button'
             onClick={() =>
-              setFilters((f) => ({ api: null, kind: null, ageHours: null, outcome: f.outcome }))
+              setFilters((f) => ({
+                api: null,
+                kind: null,
+                collection: null,
+                ageHours: null,
+                outcome: f.outcome
+              }))
             }
             className='text-[11px] text-slate-400 underline decoration-dotted hover:text-slate-600 dark:text-muted-foreground dark:hover:text-slate-200'
           >
-            Clear partner/kind/age
+            Clear partner/kind/collection/age
           </button>
         )}
       </div>
+
+      {/* Partner-derived tabs (spec §2.4.1) — only once one api is scoped,
+          and only for the buckets that api actually has kinds in. */}
+      {filters.api && (tabsForApi.waiting.length > 0 || tabsForApi.inbound.length > 0) && (
+        <div className='flex flex-wrap items-center gap-1' data-obligation-filter='tab'>
+          <button
+            type='button'
+            data-obligations-tab='all'
+            aria-pressed={activeBucket === 'all'}
+            onClick={() => selectTab('all')}
+            className={cn(
+              'inline-flex h-6 items-center rounded-full border px-2.5 text-[10.5px] font-medium transition-colors',
+              activeBucket === 'all'
+                ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan dark:bg-nvr-cyan/15'
+                : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+            )}
+          >
+            All
+          </button>
+          {tabsForApi.waiting.length > 0 && (
+            <button
+              type='button'
+              data-obligations-tab='waiting'
+              aria-pressed={activeBucket === 'waiting'}
+              onClick={() => selectTab('waiting')}
+              className={cn(
+                'inline-flex h-6 items-center rounded-full border px-2.5 text-[10.5px] font-medium transition-colors',
+                activeBucket === 'waiting'
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan dark:bg-nvr-cyan/15'
+                  : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+              )}
+            >
+              Waiting on a person
+            </button>
+          )}
+          {tabsForApi.inbound.length > 0 && (
+            <button
+              type='button'
+              data-obligations-tab='inbound'
+              aria-pressed={activeBucket === 'inbound'}
+              onClick={() => selectTab('inbound')}
+              className={cn(
+                'inline-flex h-6 items-center rounded-full border px-2.5 text-[10.5px] font-medium transition-colors',
+                activeBucket === 'inbound'
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan dark:bg-nvr-cyan/15'
+                  : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+              )}
+            >
+              Inbound rejected
+            </button>
+          )}
+        </div>
+      )}
 
       {listError ? (
         <ErrorSurface variant='500' detail='Could not load obligations for this filter.' />
@@ -458,6 +714,10 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                 <th className='px-3 py-1.5 font-medium'>Due</th>
                 <th className='px-3 py-1.5 font-medium'>Outcome</th>
                 <th className='px-3 py-1.5 font-medium'>Why</th>
+                <th className='hidden px-3 py-1.5 font-medium lg:table-cell'>Attempts</th>
+                <th className='hidden px-3 py-1.5 font-medium lg:table-cell'>Last response</th>
+                {activeBucket === 'waiting' && <th className='px-3 py-1.5 font-medium'>Owner</th>}
+                {activeBucket === 'inbound' && <th className='px-3 py-1.5 font-medium' />}
                 {remediationEnabled && <th className='px-3 py-1.5 font-medium' />}
               </tr>
             </thead>
@@ -474,77 +734,135 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                 // resolves. Those rows simply do not offer a click, rather
                 // than offering one that lands on an error page.
                 const routable = isRoutableRecord(r.collection)
+                const submission = submissionOf(r)
+                const detailOpen = activeBucket === 'inbound' && expandedDetailId === r.id
+                const detailText = prettyDetail(r.detail)
                 return (
-                  <tr
-                    key={r.id}
-                    data-obligation-row={r.id}
-                    data-obligation-routable={routable ? '1' : '0'}
-                    className={cn(
-                      'border-b border-slate-100 last:border-0 dark:border-border/60',
-                      routable && 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
-                    )}
-                    onClick={
-                      routable
-                        ? () => nav.open({ collection: r.collection, itemId: r.item })
-                        : undefined
-                    }
-                  >
-                    <td className='px-3 py-1.5 font-medium text-slate-700 dark:text-slate-200'>
-                      {r.collection} · {r.item}
-                    </td>
-                    <td className='px-3 py-1.5 text-slate-600 dark:text-slate-300'>
-                      {kindLabel.get(r.kind) ?? r.kind}
-                    </td>
-                    <td className='px-3 py-1.5 text-slate-500 dark:text-muted-foreground'>
-                      {dueLabel(r.due_at)}
-                    </td>
-                    <td className='px-3 py-1.5' data-obligation-outcome={r.outcome}>
-                      <span
-                        style={
-                          accent
-                            ? ({
-                                '--obt': accent,
-                                '--obtd': accentDark
-                              } as unknown as React.CSSProperties)
-                            : undefined
-                        }
-                        className={cn(
-                          'inline-flex items-center gap-1 font-medium',
-                          accent
-                            ? 'text-[color:var(--obt)] dark:text-[color:var(--obtd)]'
-                            : 'text-slate-500 dark:text-muted-foreground'
-                        )}
-                      >
-                        <span
-                          aria-hidden
-                          className={cn(
-                            'h-1.5 w-1.5 rounded-full',
-                            accent
-                              ? 'bg-[color:var(--obt)] dark:bg-[color:var(--obtd)]'
-                              : 'bg-slate-400 dark:bg-slate-600'
-                          )}
-                        />
-                        {TILE_LABEL[r.outcome] ?? r.outcome}
-                      </span>
-                    </td>
-                    <td
-                      className='max-w-[38ch] truncate px-3 py-1.5 text-slate-500 dark:text-muted-foreground'
-                      data-obligation-reason
-                      data-tip={r.reason ?? undefined}
-                    >
-                      {r.reason ?? '—'}
-                      {r.submission_id != null && (
-                        <span className='ml-1 text-slate-300 dark:text-slate-600'>
-                          · submission #{r.submission_id}
-                        </span>
+                  <Fragment key={r.id}>
+                    <tr
+                      data-obligation-row={r.id}
+                      data-obligation-routable={routable ? '1' : '0'}
+                      className={cn(
+                        'border-b border-slate-100 last:border-0 dark:border-border/60',
+                        routable && 'cursor-pointer hover:bg-slate-50 dark:hover:bg-muted'
                       )}
-                    </td>
-                    {remediationEnabled && (
-                      <td className='px-3 py-1.5 text-right'>
-                        {canSend && <SendNowButton obligationId={r.id} />}
+                      onClick={
+                        routable
+                          ? () => nav.open({ collection: r.collection, itemId: r.item })
+                          : undefined
+                      }
+                    >
+                      <td className='px-3 py-1.5 font-medium text-slate-700 dark:text-slate-200'>
+                        {r.collection} · {r.item}
                       </td>
+                      <td className='px-3 py-1.5 text-slate-600 dark:text-slate-300'>
+                        {kindLabel.get(r.kind) ?? r.kind}
+                      </td>
+                      <td className='px-3 py-1.5 text-slate-500 dark:text-muted-foreground'>
+                        {dueLabel(r.due_at)}
+                      </td>
+                      <td className='px-3 py-1.5' data-obligation-outcome={r.outcome}>
+                        <span
+                          style={
+                            accent
+                              ? ({
+                                  '--obt': accent,
+                                  '--obtd': accentDark
+                                } as unknown as React.CSSProperties)
+                              : undefined
+                          }
+                          className={cn(
+                            'inline-flex items-center gap-1 font-medium',
+                            accent
+                              ? 'text-[color:var(--obt)] dark:text-[color:var(--obtd)]'
+                              : 'text-slate-500 dark:text-muted-foreground'
+                          )}
+                        >
+                          <span
+                            aria-hidden
+                            className={cn(
+                              'h-1.5 w-1.5 rounded-full',
+                              accent
+                                ? 'bg-[color:var(--obt)] dark:bg-[color:var(--obtd)]'
+                                : 'bg-slate-400 dark:bg-slate-600'
+                            )}
+                          />
+                          {TILE_LABEL[r.outcome] ?? r.outcome}
+                        </span>
+                      </td>
+                      <td
+                        className='max-w-[38ch] truncate px-3 py-1.5 text-slate-500 dark:text-muted-foreground'
+                        data-obligation-reason
+                        data-tip={r.reason ?? undefined}
+                      >
+                        {r.reason ?? '—'}
+                        {r.submission_id != null && (
+                          <span className='ml-1 text-slate-300 dark:text-slate-600'>
+                            · submission #{r.submission_id}
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        className='hidden px-3 py-1.5 text-slate-500 dark:text-muted-foreground lg:table-cell'
+                        data-obligations-col-attempts
+                      >
+                        {attemptsLabel(submission, r.reason)}
+                      </td>
+                      <td
+                        className='hidden max-w-[28ch] truncate px-3 py-1.5 text-slate-500 dark:text-muted-foreground lg:table-cell'
+                        data-obligations-last-response
+                        data-tip={lastResponseFull(submission) ?? undefined}
+                      >
+                        {lastResponseLabel(r.outcome, submission)}
+                      </td>
+                      {activeBucket === 'waiting' && (
+                        <td
+                          className='px-3 py-1.5 text-slate-600 dark:text-slate-300'
+                          data-obligations-owner
+                        >
+                          {ownerCellText(r)}
+                        </td>
+                      )}
+                      {activeBucket === 'inbound' && (
+                        <td className='px-3 py-1.5 text-right'>
+                          <ShowRequestButton
+                            open={detailOpen}
+                            onToggle={() =>
+                              setExpandedDetailId((id) => (id === r.id ? null : r.id))
+                            }
+                          />
+                        </td>
+                      )}
+                      {remediationEnabled && (
+                        <td className='px-3 py-1.5 text-right'>
+                          {canSend && <SendNowButton obligationId={r.id} />}
+                        </td>
+                      )}
+                    </tr>
+                    {detailOpen && (
+                      <tr
+                        key={`${r.id}-detail`}
+                        className='border-b border-slate-100 dark:border-border/60'
+                      >
+                        <td
+                          colSpan={columnCount}
+                          className='bg-slate-50 px-3 py-2 dark:bg-muted'
+                          data-obligations-detail
+                        >
+                          {detailText ? (
+                            <pre className='max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white p-2 font-mono text-[10.5px] leading-4 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300'>
+                              {detailText}
+                            </pre>
+                          ) : (
+                            <p className='text-[11px] italic text-slate-400 dark:text-muted-foreground'>
+                              No request detail was stored for this rejection — the reason column
+                              above is everything the ledger recorded.
+                            </p>
+                          )}
+                        </td>
+                      </tr>
                     )}
-                  </tr>
+                  </Fragment>
                 )
               })}
             </tbody>

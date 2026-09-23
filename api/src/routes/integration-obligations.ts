@@ -236,44 +236,77 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
     const q = req.query
     const page = Math.max(1, Number(q.page) || 1)
     const limit = Math.min(MAX_LIMIT, Math.max(1, Number(q.limit) || 50))
-    const base = db('nivaro_integration_obligations')
+    // LEFT JOINed to the submission it belongs to, when it has one —
+    // `submission_id` is a 1:1 relation onto `nivaro_erp_submissions`' own
+    // PK, so this can never fan a ledger row out into more than one row and
+    // the paged `total` below stays exact. Both tables carry `collection`
+    // and `item` columns of their own, so every filter and select below is
+    // alias-qualified — an unqualified `collection` here would be ambiguous.
+    const base = db('nivaro_integration_obligations as o').leftJoin(
+      'nivaro_erp_submissions as s',
+      's.id',
+      'o.submission_id'
+    )
     // `api` is filtered by name — the ledger stores the resolved name, never
     // the numeric id an action may have been configured with.
-    if (q.api) base.where({ api: q.api })
-    if (q.kind) base.where({ kind: q.kind })
-    if (q.collection) base.where({ collection: q.collection })
+    if (q.api) base.where({ 'o.api': q.api })
+    // Comma list, same shape as `outcome` below — the partner-derived tabs
+    // (spec §2.4.1: "Waiting on a person" / "Inbound rejected") scope to
+    // SEVERAL kind names under one api at once; a single kind is just a
+    // list of one and keeps working exactly as before.
+    if (q.kind) {
+      const list = q.kind
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (list.length > 0) base.whereIn('o.kind', list)
+    }
+    if (q.collection) base.where({ 'o.collection': q.collection })
     if (q.outcome) {
       const list = q.outcome
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean)
-      if (list.length > 0) base.whereIn('outcome', list)
+      if (list.length > 0) base.whereIn('o.outcome', list)
     }
     if (q.age_hours) {
       const hours = Number(q.age_hours)
       if (Number.isFinite(hours) && hours > 0) {
-        base.where('due_at', '<', new Date(Date.now() - hours * 3_600_000))
+        base.where('o.due_at', '<', new Date(Date.now() - hours * 3_600_000))
       }
     }
     const [{ total }] = (await base.clone().count({ total: '*' })) as Array<{ total: number }>
     const rows = await base
       .clone()
-      .orderBy('due_at', 'desc')
+      .orderBy('o.due_at', 'desc')
       .offset((page - 1) * limit)
       .limit(limit)
       .select(
-        'id',
-        'api',
-        'kind',
-        'collection',
-        'item',
-        'trigger',
-        'trigger_ref',
-        'due_at',
-        'outcome',
-        'reason',
-        'submission_id',
-        'resolved_at'
+        'o.id',
+        'o.api',
+        'o.kind',
+        'o.collection',
+        'o.item',
+        'o.trigger',
+        'o.trigger_ref',
+        'o.due_at',
+        'o.outcome',
+        'o.reason',
+        'o.submission_id',
+        'o.resolved_at',
+        // The caller-supplied JSON a writer stashed when it opened/resolved
+        // this row (`detailColumn`, capped 4000 chars) — for an inbound
+        // rejection, the closest thing to "the request that got rejected"
+        // the ledger keeps; rendered by the board's "Show request" action.
+        // Not every writer sets it, so this is routinely null.
+        'o.detail',
+        // Attempts / Last response (spec §2.4.1): additive to every row —
+        // null across all four when the obligation never had a submission
+        // attached (a `skipped`/`missing` outcome, most of the time).
+        's.attempts as submission_attempts',
+        's.status as submission_status',
+        's.last_error as submission_last_error',
+        's.response as submission_response'
       )
     return { data: rows, total: Number(total) || 0, page, limit }
   })
