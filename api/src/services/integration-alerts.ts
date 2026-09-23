@@ -61,6 +61,18 @@ interface ObligationAlertRow {
   notified_at: Date | null
 }
 
+/** The exact instant `windowHours` before `now` — the one boundary both
+ *  `shouldNotify` (JS, decides which rows are candidates this sweep) and the
+ *  atomic claim UPDATE (SQL, decides which candidate actually gets to send)
+ *  must agree on. A row `notified_at` exactly here is "the window has
+ *  passed" in both places — `shouldNotify` treats `notified_at <= cutoff` as
+ *  true, and the claim's WHERE uses the identical `<=` on this same value,
+ *  so a row that qualifies here can never lose its own claim for having
+ *  qualified. */
+export function dedupeCutoff(now: Date, windowHours: number): Date {
+  return new Date(now.getTime() - windowHours * 3_600_000)
+}
+
 /** Pure — who hears about this row, and has the dedupe window passed? */
 export function shouldNotify(
   row: { outcome: string; notified_at: Date | null },
@@ -69,7 +81,7 @@ export function shouldNotify(
 ): boolean {
   if (!(UNMET as readonly string[]).includes(row.outcome)) return false
   if (!row.notified_at) return true
-  return now.getTime() - new Date(row.notified_at).getTime() >= windowHours * 3_600_000
+  return new Date(row.notified_at).getTime() <= dedupeCutoff(now, windowHours).getTime()
 }
 
 async function notificationsEnabled(): Promise<boolean> {
@@ -92,6 +104,13 @@ async function notificationsEnabled(): Promise<boolean> {
  * `resolveStateOwnersBatch` — never a per-record lookup. A pair with no open
  * workflow instance simply contributes no owners; the API's own owner still
  * reaches them.
+ *
+ * Returned ids are UPPERCASED (same normalization `recipientOwnsRecord` in
+ * notification-channels.ts already uses for the same reason): a uuid can
+ * come back from SQL Server in either case depending on the column, and an
+ * unnormalized comparison would either double-notify the same person under
+ * two spellings of their id, or silently miss that a digest row is theirs.
+ * Every caller of this function compares against an ALSO-uppercased id.
  */
 async function batchRecordOwners(
   pairs: Array<{ collection: string; item: string }>
@@ -142,7 +161,7 @@ async function batchRecordOwners(
     const k = key(inst.collection, inst.item)
     out.set(
       k,
-      (resolved.get(k) ?? []).map((o) => String(o.id))
+      (resolved.get(k) ?? []).map((o) => String(o.id).toUpperCase())
     )
   }
   return out
@@ -192,29 +211,40 @@ export async function alertUnmetObligations(): Promise<{ notified: number }> {
     batchRecordOwners(due.map((r) => ({ collection: r.collection, item: r.item })))
   ])
 
-  const cutoff = new Date(now.getTime() - DEDUPE_HOURS * 3_600_000)
+  const cutoff = dedupeCutoff(now, DEDUPE_HOURS)
   let notified = 0
+  let recipientless = 0
 
   for (const r of due) {
-    const recipients = new Set<string>()
-    const apiOwner = apiOwners.get(r.api)
-    if (apiOwner) recipients.add(apiOwner)
-    for (const uid of recordOwners.get(recordKey(r.collection, r.item)) ?? []) recipients.add(uid)
-    if (recipients.size === 0) continue
-
-    // Claim the row FIRST, atomically, with the exact same dedupe condition
-    // `shouldNotify` just evaluated — a second replica racing this row loses
-    // the claim (0 rows affected) and skips instead of notifying twice.
+    // Claim the row FIRST, atomically, with the exact same dedupe boundary
+    // `shouldNotify` just evaluated (`<=`, not `<` — a row exactly at the
+    // cutoff already passed `shouldNotify` and must not lose its own claim
+    // for it) — a second replica racing this row loses the claim (0 rows
+    // affected) and skips instead of notifying twice. Claimed REGARDLESS of
+    // whether a recipient resolves below: a row nobody can be told about
+    // right now (no API owner, no open record instance) would otherwise
+    // never get `notified_at` stamped and would occupy this sweep's BATCH
+    // cap on every future 15-minute pass, forever, starving genuinely
+    // notifiable rows out of the batch.
     let claimed = 0
     try {
       claimed = await db('nivaro_integration_obligations')
         .where({ id: r.id })
-        .where((qb) => qb.whereNull('notified_at').orWhere('notified_at', '<', cutoff))
+        .where((qb) => qb.whereNull('notified_at').orWhere('notified_at', '<=', cutoff))
         .update({ notified_at: now })
     } catch {
       claimed = 0
     }
     if (!claimed) continue
+
+    const recipients = new Set<string>()
+    const apiOwner = apiOwners.get(r.api)
+    if (apiOwner) recipients.add(apiOwner.toUpperCase())
+    for (const uid of recordOwners.get(recordKey(r.collection, r.item)) ?? []) recipients.add(uid)
+    if (recipients.size === 0) {
+      recipientless++
+      continue
+    }
 
     const { resolveFriendlyId } = await import('./workflow-transitions.js')
     const label = await resolveFriendlyId(r.collection, r.item).catch(
@@ -244,34 +274,61 @@ export async function alertUnmetObligations(): Promise<{ notified: number }> {
       notified++
     }
   }
+  if (recipientless > 0) {
+    console.warn(
+      `[integration-alerts] ${recipientless} unmet obligation(s) claimed this sweep with no ` +
+        'resolvable recipient (no API owner, no open record instance to own it) — skipped, and ' +
+        'will not be reconsidered until the 12h dedupe window opens again'
+    )
+  }
   return { notified }
 }
 
-/** Rows relevant to ONE user: obligations on an API they own, or on a
- *  record they resolve as an owner of. Called once per digest-eligible
- *  user by daily-digest.ts, same shape as its other section providers. */
-async function integrationsForUser(userId: string): Promise<ObligationAlertRow[]> {
+interface DigestPassData {
+  rows: ObligationAlertRow[]
+  apiOwners: Map<string, string | null>
+  recordOwners: Map<string, string[]>
+  at: number
+}
+
+/** daily-digest.ts calls this provider once PER USER, within one digest
+ *  tick — `registerDigestSection` gives it no notion of "this run" to key a
+ *  cache on, so a short TTL memo does the same job: the unmet-row fetch,
+ *  every API's owner and the batched record-owner resolution happen ONCE
+ *  for the whole pass, and every user in that pass reads the same three
+ *  maps instead of re-querying and re-resolving them from scratch. 60s
+ *  (same duration as notification-channels.ts's own prefsCache) comfortably
+ *  covers one pass's per-user loop; a pass that somehow outlives it just
+ *  re-fetches for whoever is left — self-healing, never a correctness
+ *  issue, only ever a cost one. */
+const DIGEST_PASS_CACHE_TTL_MS = 60_000
+let digestPassCache: DigestPassData | null = null
+
+async function digestPassData(): Promise<DigestPassData> {
+  if (digestPassCache && Date.now() - digestPassCache.at < DIGEST_PASS_CACHE_TTL_MS) {
+    return digestPassCache
+  }
   const rows = await fetchUnmetRows(BATCH)
+  const [apiOwners, recordOwners] = await Promise.all([
+    apiOwnerMap().catch(() => new Map<string, string | null>()),
+    batchRecordOwners(rows.map((r) => ({ collection: r.collection, item: r.item })))
+  ])
+  digestPassCache = { rows, apiOwners, recordOwners, at: Date.now() }
+  return digestPassCache
+}
+
+/** Rows relevant to ONE user: obligations on an API they own, or on a
+ *  record they resolve as an owner of — read from the one shared pass
+ *  computed above, never a fresh query per user. */
+async function integrationsForUser(userId: string): Promise<ObligationAlertRow[]> {
+  const { rows, apiOwners, recordOwners } = await digestPassData()
   if (rows.length === 0) return []
-
-  const ownedApis = new Set(
-    (
-      (await db('nivaro_external_apis')
-        .where({ owner_user: userId })
-        .select('name')
-        .catch(() => [])) as Array<{ name: string }>
-    ).map((a) => a.name)
-  )
-
-  const byApi = rows.filter((r) => ownedApis.has(r.api))
-  const rest = rows.filter((r) => !ownedApis.has(r.api))
-  const recordOwners = await batchRecordOwners(
-    rest.map((r) => ({ collection: r.collection, item: r.item }))
-  )
-  const byRecord = rest.filter((r) =>
-    (recordOwners.get(recordKey(r.collection, r.item)) ?? []).includes(userId)
-  )
-  return [...byApi, ...byRecord]
+  const me = userId.toUpperCase()
+  return rows.filter((r) => {
+    const apiOwner = apiOwners.get(r.api)
+    if (apiOwner && apiOwner.toUpperCase() === me) return true
+    return (recordOwners.get(recordKey(r.collection, r.item)) ?? []).includes(me)
+  })
 }
 
 async function buildIntegrationDigestSection(userId: string): Promise<DigestSection | null> {
