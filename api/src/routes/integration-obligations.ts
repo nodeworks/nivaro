@@ -11,6 +11,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { registerIntegrationNoteSources } from '../services/integration-notes.js'
 import {
@@ -138,7 +139,17 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
     }>
     const owners: Record<string, string | null> = {}
     for (const a of apiRows) owners[a.name] = a.owner_user
-    return { data: { apis: summariseObligations(rows, owners), kinds: listObligationKinds() } }
+    // Task 19 — a read the board already makes once, never a second probe
+    // per row: the Send-now button shows/hides on this, and reports "off"
+    // rather than looking broken while the deployment switch is off.
+    const { remediationEnabled } = await import('../services/integration-remediation.js')
+    return {
+      data: {
+        apis: summariseObligations(rows, owners),
+        kinds: listObligationKinds(),
+        remediation_enabled: await remediationEnabled()
+      }
+    }
   })
 
   // Which collections have ANY registered obligation kind — a cheap,
@@ -261,7 +272,59 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           'submission_id',
           'resolved_at'
         )
-      return { data: rows }
+      // Task 19 — a read this banner already makes once per record, never a
+      // second probe per row: same reasoning as /summary above.
+      const { remediationEnabled } = await import('../services/integration-remediation.js')
+      return { data: rows, remediation_enabled: await remediationEnabled() }
+    }
+  )
+
+  // Send now (Task 19, admin-only, gated on integration_remediation_enabled
+  // — read via remediationEnabled() so this route can never disagree with
+  // /summary and /record about whether the feature is on): re-sends the
+  // obligation's own submission, or — for a `missing` row, which by
+  // definition has none of its own — the most recent request ever made for
+  // this record on this API. Always a two-click confirm in the UI; this
+  // route itself is a single POST, the confirm lives client-side.
+  app.post<{ Params: { id: string } }>(
+    '/integration-obligations/:id/send',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      const { sendNow, remediationEnabled, isClosedOutcome } = await import(
+        '../services/integration-remediation.js'
+      )
+      // Checked here FIRST, before even reading the row — the whole point
+      // is that the button says so rather than looking broken, regardless
+      // of whether the id it was clicked on happens to exist.
+      if (!(await remediationEnabled())) {
+        return { data: { detail: 'remediation is off for this deployment' } }
+      }
+      if (!Number.isFinite(id)) {
+        return reply.code(404).send({ error: 'No such obligation' })
+      }
+      const row = (await db('nivaro_integration_obligations')
+        .where({ id })
+        .first('id', 'outcome')) as { id: number; outcome: string } | undefined
+      if (!row) return reply.code(404).send({ error: 'No such obligation' })
+      // A genuine conflict — the ledger already considers this one done, so
+      // "send it again" is not a question with a sensible answer. Anything
+      // still OPEN (incl. `missing`, which sendNow handles by re-firing the
+      // most recent request for the record) reaches sendNow below.
+      if (isClosedOutcome(row.outcome)) {
+        return reply
+          .code(409)
+          .send({ error: `already ${row.outcome} — there is nothing to send` })
+      }
+      const r = await sendNow(id, req.user?.id ?? null)
+      await logActivity({
+        action: 'integration-send-now',
+        collection: 'nivaro_integration_obligations',
+        item: req.params.id,
+        user: req.user?.id ?? null,
+        comment: r.detail
+      })
+      return { data: r }
     }
   )
 }

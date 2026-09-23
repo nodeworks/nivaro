@@ -71,6 +71,13 @@ interface SendOutcome {
   external_ref: string | null
   error: string | null
   response: unknown
+  // #628 — the raw HTTP status this outcome came from, `null` when the
+  // request never got a response at all (a thrown network failure). Carried
+  // through so `classifyError` (integration-remediation.ts) can tell a 404
+  // apart from a 500 apart from a refused socket — the three read very
+  // differently for "would sending this again help?". Optional-safe for any
+  // older caller building a SendOutcome-shaped object by hand.
+  http_status?: number | null
 }
 
 /**
@@ -99,14 +106,15 @@ function interpretResponse(httpStatus: number, body: unknown): SendOutcome {
         ref = String(refCandidate)
       }
     }
-    return { status, external_ref: ref, error: null, response: body }
+    return { status, external_ref: ref, error: null, response: body, http_status: httpStatus }
   }
   const bodyStr = typeof body === 'string' ? body : JSON.stringify(body ?? null)
   return {
     status: 'failed',
     external_ref: null,
     error: `HTTP ${httpStatus}${bodyStr ? `: ${bodyStr.slice(0, 500)}` : ''}`,
-    response: body
+    response: body,
+    http_status: httpStatus
   }
 }
 
@@ -129,7 +137,9 @@ export async function sendPayload(
       status: 'failed',
       external_ref: null,
       error: err instanceof Error ? err.message : 'Request failed',
-      response: null
+      response: null,
+      // No response ever came back — nothing to attribute a status to.
+      http_status: null
     }
   }
 }
@@ -346,16 +356,16 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
 
       const outcome = await sendPayload(row.external_api, stored, req.user?.id)
 
-      await db('nivaro_erp_submissions')
-        .where({ id })
-        .update({
-          status: outcome.status,
-          response: serializeResponseBody(outcome.response),
-          external_ref: outcome.external_ref ?? row.external_ref,
-          attempts: row.attempts + 1,
-          last_error: outcome.error,
-          updated_at: new Date()
-        })
+      // One function for the row update (#628: writes error_class too) so
+      // this route can never drift from the bulk sweep or Task 19's own
+      // send paths about which columns a retry touches.
+      const { applySendOutcome } = await import('../services/erp-submission-status.js')
+      await applySendOutcome({
+        submissionId: id,
+        outcome,
+        priorExternalRef: row.external_ref,
+        priorAttempts: row.attempts
+      })
       await propagateSubmissionStatus({
         submissionId: id,
         status: outcome.status,
@@ -524,6 +534,12 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
     .where('status', 'failed')
     .whereIn('external_api', [...policies.keys()])
     .where((qb) => qb.whereNull('next_retry_at').orWhere('next_retry_at', '<=', now))
+    // #628 — never re-send what repetition cannot fix. NULL passes: rows
+    // written before this migration carry no classification and keep their
+    // old (retry) behaviour rather than being silently excluded.
+    .where((qb) =>
+      qb.whereNull('error_class').orWhereNotIn('error_class', ['validation', 'not_found'])
+    )
     .orderBy('id', 'asc')
     .limit(25)) as ErpSubmissionRow[]
 
@@ -540,22 +556,28 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
     const outcome = await sendPayload(row.external_api, stored, undefined)
     const ok = outcome.status !== 'failed'
     if (ok) landed++
+    // Shared columns (#628: incl. error_class) via the same function every
+    // other send path uses now.
+    const { applySendOutcome } = await import('../services/erp-submission-status.js')
+    await applySendOutcome({
+      submissionId: row.id,
+      outcome,
+      priorExternalRef: row.external_ref,
+      priorAttempts: row.attempts
+    })
+    // This sweep's OWN backoff bookkeeping — applySendOutcome does not touch
+    // retry_count/next_retry_at, which belong to this ladder alone, not the
+    // shared attempts/error_class columns above.
     await db('nivaro_erp_submissions')
       .where({ id: row.id })
       .update({
-        status: outcome.status,
-        response: serializeResponseBody(outcome.response),
-        external_ref: outcome.external_ref ?? row.external_ref,
-        attempts: row.attempts + 1,
         retry_count: retries + 1,
         // Exponential-ish backoff: base * 2^retries, capped at a day.
         next_retry_at: ok
           ? null
           : new Date(
               now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000
-            ),
-        last_error: outcome.error,
-        updated_at: new Date()
+            )
       })
     await propagateSubmissionStatus({
       submissionId: row.id,
