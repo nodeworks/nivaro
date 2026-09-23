@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { db } from '../../../db/index.js'
 import {
   clearObligationKinds,
   listObligationKinds,
+  openObligationForTrigger,
+  recordObligation,
   registerObligationKind,
-  resolveKindForTrigger
+  resolveKindForTrigger,
+  resolveObligation
 } from '../../../services/integration-obligations.js'
 
 const base = {
@@ -57,14 +61,14 @@ describe('kind registry', () => {
     registerObligationKind({
       ...base,
       kind: 'wf.complete',
-      matches: (c) => c.action_skip_unless_any?.some((r) => r.includes('mwf_id')) === true
+      matches: (c) => c.action_skip_unless_any?.some((r) => r.includes('ref_id')) === true
     })
     const asState = resolveKindForTrigger({
       collection: 'workflows',
       item: '1',
       api: 'Partner',
       source: 'erp_submit',
-      endpoint_path: '/update_workflow.php',
+      endpoint_path: '/partner-update',
       action_context_keys: ['legacy_state']
     })
     const asComplete = resolveKindForTrigger({
@@ -72,8 +76,8 @@ describe('kind registry', () => {
       item: '1',
       api: 'Partner',
       source: 'erp_submit',
-      endpoint_path: '/update_workflow.php',
-      action_skip_unless_any: ['context.mwf_link.0.mwf_id']
+      endpoint_path: '/partner-update',
+      action_skip_unless_any: ['context.partner_link.0.ref_id']
     })
     expect(asState?.kind).toBe('wf.state')
     expect(asComplete?.kind).toBe('wf.complete')
@@ -110,5 +114,350 @@ describe('kind registry', () => {
     expect(listed[0]).not.toHaveProperty('expect')
     expect(listed[0]).not.toHaveProperty('matches')
     expect(listed[0].api).toBe('Partner')
+  })
+})
+
+// ─── The db-writing surface ────────────────────────────────────────────────
+// db is already mocked in src/test/setup.ts — db(table) is a vi.fn() whose
+// return value each test overrides with its own fake query chain, mirroring
+// the pattern already established in src/test/unit/services/activity.test.ts.
+
+const mockedDb = () => vi.mocked(db as unknown as (table: string) => unknown)
+
+function mockUpdateChain() {
+  const chain: { where: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> } = {
+    where: vi.fn(),
+    update: vi.fn().mockResolvedValue(1)
+  }
+  chain.where.mockReturnValue(chain)
+  return chain
+}
+
+describe('recordObligation — row shape', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('writes every field, coerces item to a string, and pending is not resolved_at', async () => {
+    const insertStub = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 9 }])
+    })
+    mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+    const id = await recordObligation({
+      api: 'Partner',
+      kind: 'wf.only',
+      collection: 'workflows',
+      item: 42,
+      trigger: 'manual',
+      trigger_ref: 'ref-1'
+    })
+
+    expect(id).toBe(9)
+    const row = insertStub.mock.calls[0][0] as Record<string, unknown>
+    expect(row.api).toBe('Partner')
+    expect(row.kind).toBe('wf.only')
+    expect(row.collection).toBe('workflows')
+    expect(row.item).toBe('42')
+    expect(row.trigger).toBe('manual')
+    expect(row.trigger_ref).toBe('ref-1')
+    expect(row.outcome).toBe('pending')
+    expect(row.reason).toBeNull()
+    expect(row.detail).toBeNull()
+    expect(row.resolved_at).toBeNull()
+    expect(row.due_at).toBeInstanceOf(Date)
+    expect(row.created_at).toBeInstanceOf(Date)
+  })
+
+  for (const outcome of ['sent', 'skipped', 'superseded'] as const) {
+    it(`outcome "${outcome}" sets resolved_at — it closes the obligation`, async () => {
+      const insertStub = vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 1 }])
+      })
+      mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+      await recordObligation({
+        api: 'Partner',
+        kind: 'wf.only',
+        collection: 'workflows',
+        item: '1',
+        trigger: 'manual',
+        outcome
+      })
+
+      const row = insertStub.mock.calls[0][0] as Record<string, unknown>
+      expect(row.resolved_at).toBeInstanceOf(Date)
+    })
+  }
+
+  for (const outcome of ['failed', 'overdue', 'missing', 'pending'] as const) {
+    it(`outcome "${outcome}" leaves resolved_at null — the obligation stays open`, async () => {
+      const insertStub = vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 1 }])
+      })
+      mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+      await recordObligation({
+        api: 'Partner',
+        kind: 'wf.only',
+        collection: 'workflows',
+        item: '1',
+        trigger: 'manual',
+        outcome
+      })
+
+      const row = insertStub.mock.calls[0][0] as Record<string, unknown>
+      expect(row.resolved_at).toBeNull()
+    })
+  }
+
+  it('truncates trigger_ref to 200 chars and reason to 500 chars', async () => {
+    const insertStub = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 1 }])
+    })
+    mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+    await recordObligation({
+      api: 'Partner',
+      kind: 'wf.only',
+      collection: 'workflows',
+      item: '1',
+      trigger: 'manual',
+      trigger_ref: 'x'.repeat(250),
+      reason: 'y'.repeat(600)
+    })
+
+    const row = insertStub.mock.calls[0][0] as Record<string, unknown>
+    expect((row.trigger_ref as string).length).toBe(200)
+    expect((row.reason as string).length).toBe(500)
+  })
+
+  it('caps a stringified detail at 4000 chars plus a trailing ellipsis, and stores null when detail is omitted', async () => {
+    const insertStub = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 1 }])
+    })
+    mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+    await recordObligation({
+      api: 'Partner',
+      kind: 'wf.only',
+      collection: 'workflows',
+      item: '1',
+      trigger: 'manual',
+      detail: { big: 'z'.repeat(5000) }
+    })
+    const capped = (insertStub.mock.calls[0][0] as Record<string, unknown>).detail as string
+    expect(capped.length).toBe(4001)
+    expect(capped.endsWith('…')).toBe(true)
+
+    insertStub.mockClear()
+    await recordObligation({
+      api: 'Partner',
+      kind: 'wf.only',
+      collection: 'workflows',
+      item: '1',
+      trigger: 'manual'
+    })
+    expect((insertStub.mock.calls[0][0] as Record<string, unknown>).detail).toBeNull()
+  })
+
+  it('unwraps a tedious-style {id} object returned by .returning', async () => {
+    const insertStub = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 55 }])
+    })
+    mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+    const id = await recordObligation({
+      api: 'Partner',
+      kind: 'wf.only',
+      collection: 'workflows',
+      item: '1',
+      trigger: 'manual'
+    })
+    expect(id).toBe(55)
+  })
+
+  it('unwraps a plain numeric id returned by .returning', async () => {
+    const insertStub = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([77])
+    })
+    mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+    const id = await recordObligation({
+      api: 'Partner',
+      kind: 'wf.only',
+      collection: 'workflows',
+      item: '1',
+      trigger: 'manual'
+    })
+    expect(id).toBe(77)
+  })
+})
+
+describe('resolveObligation', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('is a no-op for a null id — the db is never touched', async () => {
+    mockedDb().mockClear()
+    await resolveObligation(null, { outcome: 'sent' })
+    expect(db).not.toHaveBeenCalled()
+  })
+
+  it('sets outcome + resolved_at for a closing outcome and omits every optional field the caller did not pass', async () => {
+    const chain = mockUpdateChain()
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    await resolveObligation(12, { outcome: 'sent' })
+
+    expect(chain.where).toHaveBeenCalledWith({ id: 12 })
+    const row = chain.update.mock.calls[0][0] as Record<string, unknown>
+    expect(row.outcome).toBe('sent')
+    expect(row.resolved_at).toBeInstanceOf(Date)
+    expect(row.reason).toBeNull()
+    expect('submission_id' in row).toBe(false)
+    expect('signature' in row).toBe(false)
+    expect('resolved_by' in row).toBe(false)
+    expect('detail' in row).toBe(false)
+  })
+
+  it('leaves resolved_at null for a still-open outcome (pending)', async () => {
+    const chain = mockUpdateChain()
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+    await resolveObligation(12, { outcome: 'pending' })
+    const row = chain.update.mock.calls[0][0] as Record<string, unknown>
+    expect(row.resolved_at).toBeNull()
+  })
+
+  for (const outcome of ['failed', 'overdue', 'missing'] as const) {
+    it(`leaves resolved_at null for outcome "${outcome}"`, async () => {
+      const chain = mockUpdateChain()
+      mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+      await resolveObligation(1, { outcome })
+      const row = chain.update.mock.calls[0][0] as Record<string, unknown>
+      expect(row.resolved_at).toBeNull()
+    })
+  }
+
+  for (const outcome of ['skipped', 'superseded'] as const) {
+    it(`sets resolved_at for outcome "${outcome}"`, async () => {
+      const chain = mockUpdateChain()
+      mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+      await resolveObligation(1, { outcome })
+      const row = chain.update.mock.calls[0][0] as Record<string, unknown>
+      expect(row.resolved_at).toBeInstanceOf(Date)
+    })
+  }
+
+  it('includes submission_id, signature (truncated to 64), resolved_by and detail only when the caller passes them — a null submission_id is still written, only "undefined" omits the key', async () => {
+    const chain = mockUpdateChain()
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    await resolveObligation(1, {
+      outcome: 'sent',
+      submission_id: null,
+      signature: 'x'.repeat(100),
+      resolved_by: 'user-1',
+      detail: { ok: true }
+    })
+
+    const row = chain.update.mock.calls[0][0] as Record<string, unknown>
+    expect('submission_id' in row).toBe(true)
+    expect(row.submission_id).toBeNull()
+    expect((row.signature as string).length).toBe(64)
+    expect(row.resolved_by).toBe('user-1')
+    expect(row.detail).toBe(JSON.stringify({ ok: true }))
+  })
+
+  it('truncates reason to 500 chars', async () => {
+    const chain = mockUpdateChain()
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+    await resolveObligation(1, { outcome: 'failed', reason: 'z'.repeat(600) })
+    const row = chain.update.mock.calls[0][0] as Record<string, unknown>
+    expect((row.reason as string).length).toBe(500)
+  })
+
+  it('does not read the row back before writing, so it can move an already-sent obligation to a different outcome — there is no guard against re-resolving a closed row', async () => {
+    // The fake chain below exposes ONLY where()/update() — if the implementation
+    // tried to SELECT/first() the current row before deciding whether to write,
+    // that call would throw inside the try/catch and update() would never run.
+    const chain = mockUpdateChain()
+    mockedDb().mockReturnValue(chain as unknown as ReturnType<typeof db>)
+
+    await resolveObligation(1, { outcome: 'sent' })
+    await resolveObligation(1, { outcome: 'failed' })
+
+    expect(chain.update).toHaveBeenCalledTimes(2)
+    expect((chain.update.mock.calls[0][0] as Record<string, unknown>).outcome).toBe('sent')
+    expect((chain.update.mock.calls[1][0] as Record<string, unknown>).outcome).toBe('failed')
+  })
+})
+
+describe('openObligationForTrigger', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('returns null and never touches the db when no kind claims the context', async () => {
+    mockedDb().mockClear()
+    const id = await openObligationForTrigger(
+      { collection: 'workflows', item: '1', api: 'Partner', source: 'manual' },
+      { trigger: 'manual' }
+    )
+    expect(id).toBeNull()
+    expect(db).not.toHaveBeenCalled()
+  })
+
+  it('opens a pending obligation attributed to the resolved kind', async () => {
+    registerObligationKind({ ...base, kind: 'wf.only' })
+    const insertStub = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: 3 }])
+    })
+    mockedDb().mockReturnValue({ insert: insertStub } as unknown as ReturnType<typeof db>)
+
+    const id = await openObligationForTrigger(
+      { collection: 'workflows', item: '55', api: 'Partner', source: 'erp_submit' },
+      { trigger: 'transition', trigger_ref: 'state->done' }
+    )
+
+    expect(id).toBe(3)
+    const row = insertStub.mock.calls[0][0] as Record<string, unknown>
+    expect(row.api).toBe('Partner')
+    expect(row.kind).toBe('wf.only')
+    expect(row.collection).toBe('workflows')
+    expect(row.item).toBe('55')
+    expect(row.trigger).toBe('transition')
+    expect(row.trigger_ref).toBe('state->done')
+    expect(row.outcome).toBe('pending')
+  })
+})
+
+describe('never throws — warnOnce', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('recordObligation and resolveObligation both swallow a db failure without throwing, and warn only once across both failures', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failingChain: {
+      insert: ReturnType<typeof vi.fn>
+      where: ReturnType<typeof vi.fn>
+      update: ReturnType<typeof vi.fn>
+    } = {
+      insert: vi.fn().mockReturnValue({
+        returning: vi.fn().mockRejectedValue(new Error('connection lost'))
+      }),
+      where: vi.fn(),
+      update: vi.fn().mockRejectedValue(new Error('connection lost'))
+    }
+    failingChain.where.mockReturnValue(failingChain)
+    mockedDb().mockReturnValue(failingChain as unknown as ReturnType<typeof db>)
+
+    const id = await recordObligation({
+      api: 'Partner',
+      kind: 'wf.only',
+      collection: 'workflows',
+      item: '1',
+      trigger: 'manual'
+    })
+    expect(id).toBeNull()
+
+    await expect(resolveObligation(1, { outcome: 'sent' })).resolves.toBeUndefined()
+
+    expect(warnSpy).toHaveBeenCalledOnce()
+    warnSpy.mockRestore()
   })
 })
