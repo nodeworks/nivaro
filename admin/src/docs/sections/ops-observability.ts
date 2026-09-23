@@ -108,7 +108,7 @@ export const dbHealthDocs: DocSection = {
     { type: 'h2', id: 'dead-columns', text: 'Dead columns' },
     {
       type: 'p',
-      text: 'Columns a model change left behind are registered in `api/src/db/dead-columns.ts` with the date the last writer stopped, what replaced them and whether they can be dropped yet. `pnpm --filter @nivaro/api run dead-columns:check` greps every source tree and fails when code still names a column marked droppable; the readiness check `dead-columns` reports droppable columns still present on the database (the dropping migration has not run there) and lists what still blocks the retiring ones. `GET /ops-db/dead-columns` is the same view. Migration 336 dropped the first one, `nivaro_queues.view_mode`.'
+      text: 'Columns a model change left behind are registered in `api/src/db/dead-columns.ts` with the date the last writer stopped, what replaced them and whether they can be dropped yet. `pnpm --filter @nivaro/api run dead-columns:check` greps every source tree and fails when code still names a column marked droppable; the readiness check `dead-columns` reports droppable columns still present on the database (the dropping migration has not run there) and lists what still blocks the retiring ones. `GET /ops-db/dead-columns` is the same view. Migration 336 dropped the first one, the queues table\'s retired view-mode column.'
     },
     { type: 'h2', id: 'erp-payload-retention', text: 'ERP push payload retention' },
     {
