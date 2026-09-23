@@ -9706,7 +9706,7 @@ export function ItemEditForm({
                                               return (
                                                 <div
                                                   key='__owners__'
-                                                  className='group relative flex flex-col justify-start border-r border-slate-200 dark:border-border px-4 py-2 min-w-0 transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
+                                                  className='group relative flex flex-col justify-start px-4 py-2 min-w-0 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
                                                 >
                                                   <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
                                                     {f.label}
