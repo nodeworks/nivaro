@@ -1,5 +1,5 @@
 /**
- * "MWF started failing at 14:10 and was healthy again by 15:40."
+ * "The ERP started failing at 14:10 and was healthy again by 15:40."
  *
  * The Ops incident timeline is an AGGREGATOR, not a table: it reads issues,
  * failed job runs and activity rows on nivaro_* collections within a window
