@@ -29,16 +29,44 @@ const open = (collection: string, id: string, label?: string) => ({
   payload: { collection, id, label }
 })
 
+/**
+ * Collapse rows sharing a `key` to the FIRST occurrence — a safety net on
+ * top of the SQL windowing above, not a replacement for it: a row's own
+ * `key` must be unique on the wire before it ever reaches the registry,
+ * because `diffSnapshot` only dedupes by overwriting (last-write-wins),
+ * which silently keeps whichever duplicate happens to sort last. Callers
+ * order rows newest-first, so keeping the first occurrence keeps the
+ * newest.
+ */
+export function uniqueByKey(rows: SignalRow[]): SignalRow[] {
+  const seen = new Set<string>()
+  const out: SignalRow[] = []
+  for (const r of rows) {
+    if (seen.has(r.key)) continue
+    seen.add(r.key)
+    out.push(r)
+  }
+  return out
+}
+
 export function registerCoreIntegrationSignals(): void {
   registerIntegrationSignal({
     id: 'core:partner-failing',
     label: 'Partner failing',
-    description: 'Consecutive failed calls to an external API, or any authentication failure, in the recent window.',
+    description:
+      'Consecutive failed calls to an external API, or any authentication failure, in the recent window.',
     tab: 'partners',
     severity: 'critical',
     thresholds: [
       { key: 'streak', label: 'Consecutive failures', default: 3, unit: 'calls', min: 1, max: 50 },
-      { key: 'window_minutes', label: 'Look-back window', default: 60, unit: 'minutes', min: 5, max: 1440 }
+      {
+        key: 'window_minutes',
+        label: 'Look-back window',
+        default: 60,
+        unit: 'minutes',
+        min: 5,
+        max: 1440
+      }
     ],
     evaluate: async ({ thresholds }) => {
       const since = new Date(Date.now() - thresholds.window_minutes * 60_000)
@@ -67,7 +95,9 @@ export function registerCoreIntegrationSignals(): void {
         const name = newest.api_name ?? `API #${apiId}`
         rows.push({
           key: `api:${apiId}`,
-          title: auth ? `${name}: authentication failing` : `${name}: ${streak} failed calls in a row`,
+          title: auth
+            ? `${name}: authentication failing`
+            : `${name}: ${streak} failed calls in a row`,
           detail: newest.error ?? (newest.status != null ? `HTTP ${newest.status}` : 'No response'),
           since: new Date(firstFail.created_at).toISOString(),
           api: name,
@@ -81,40 +111,75 @@ export function registerCoreIntegrationSignals(): void {
   registerIntegrationSignal({
     id: 'core:push-failed',
     label: 'Failed pushes',
-    description: 'Pushes whose latest attempt failed and that no later push to the same record and endpoint has replaced.',
+    description:
+      'Pushes whose latest attempt failed and that no later push to the same record and endpoint has replaced.',
     tab: 'pushes',
     severity: 'warn',
-    thresholds: [{ key: 'min_age_minutes', label: 'Older than', default: 0, unit: 'minutes', min: 0, max: 1440 }],
+    thresholds: [
+      {
+        key: 'min_age_minutes',
+        label: 'Older than',
+        default: 0,
+        unit: 'minutes',
+        min: 0,
+        max: 1440
+      }
+    ],
     evaluate: async ({ thresholds }) => {
       const cutoff = new Date(Date.now() - thresholds.min_age_minutes * 60_000)
+      // recordSubmission() inserts one row per attempt — several still-failing
+      // attempts can share one (collection, item, external_api, endpoint)
+      // tuple with nothing accepted/pending in between. Window to the newest
+      // failed attempt per tuple so the signal's row key is unique BY
+      // CONSTRUCTION (never just by the registry's last-write-wins dedupe).
       const rows = (await db.raw(
-        `SELECT s.id, s.collection, s.item, s.last_error, s.updated_at, s.attempts, a.name AS api_name,
-                JSON_VALUE(s.payload, '$.endpoint_path') AS endpoint
-           FROM nivaro_erp_submissions s
-           JOIN nivaro_external_apis a ON a.id = s.external_api
-          WHERE s.status IN ('failed', 'rejected') AND s.updated_at <= ?
-            AND NOT EXISTS (
-              SELECT 1 FROM nivaro_erp_submissions n
-               WHERE n.collection = s.collection AND n.item = s.item AND n.external_api = s.external_api
-                 AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') = ISNULL(JSON_VALUE(s.payload, '$.endpoint_path'), '')
-                 AND n.id > s.id AND n.status IN ('accepted', 'pending'))
-          ORDER BY s.updated_at DESC, s.id DESC`,
+        `SELECT id, collection, item, last_error, updated_at, attempts, api_name, endpoint
+           FROM (
+             SELECT s.id, s.collection, s.item, s.last_error, s.updated_at, s.attempts, a.name AS api_name,
+                    JSON_VALUE(s.payload, '$.endpoint_path') AS endpoint,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY s.collection, s.item, s.external_api,
+                                   ISNULL(JSON_VALUE(s.payload, '$.endpoint_path'), '')
+                      ORDER BY s.id DESC
+                    ) AS rn
+               FROM nivaro_erp_submissions s
+               JOIN nivaro_external_apis a ON a.id = s.external_api
+              WHERE s.status IN ('failed', 'rejected') AND s.updated_at <= ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM nivaro_erp_submissions n
+                   WHERE n.collection = s.collection AND n.item = s.item AND n.external_api = s.external_api
+                     AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') = ISNULL(JSON_VALUE(s.payload, '$.endpoint_path'), '')
+                     AND n.id > s.id AND n.status IN ('accepted', 'pending'))
+           ) x
+          WHERE rn = 1
+          ORDER BY updated_at DESC, id DESC`,
         [cutoff]
-      )) as Array<{ id: number; collection: string; item: string; last_error: string | null; updated_at: Date; attempts: number; api_name: string; endpoint: string | null }>
-      const out: SignalRow[] = rows.map((r) => ({
-        key: `${r.collection}:${r.item}:${r.api_name}:${r.endpoint ?? ''}`,
-        group: r.api_name,
-        group_label: r.api_name,
-        title: `${r.api_name} ${r.endpoint ?? ''}`.trim(),
-        detail: `${r.last_error ?? 'failed'} · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}`,
-        since: new Date(r.updated_at).toISOString(),
-        api: r.api_name,
-        record: { collection: r.collection, id: r.item },
-        actions: [
-          { kind: 'retry_submission', label: 'Retry', id: String(r.id) },
-          open(r.collection, r.item)
-        ]
-      }))
+      )) as Array<{
+        id: number
+        collection: string
+        item: string
+        last_error: string | null
+        updated_at: Date
+        attempts: number
+        api_name: string
+        endpoint: string | null
+      }>
+      const out: SignalRow[] = uniqueByKey(
+        rows.map((r) => ({
+          key: `${r.collection}:${r.item}:${r.api_name}:${r.endpoint ?? ''}`,
+          group: r.api_name,
+          group_label: r.api_name,
+          title: `${r.api_name} ${r.endpoint ?? ''}`.trim(),
+          detail: `${r.last_error ?? 'failed'} · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}`,
+          since: new Date(r.updated_at).toISOString(),
+          api: r.api_name,
+          record: { collection: r.collection, id: r.item },
+          actions: [
+            { kind: 'retry_submission', label: 'Retry', id: String(r.id) },
+            open(r.collection, r.item)
+          ]
+        }))
+      )
       return { count: out.length, rows: out }
     }
   })
@@ -131,13 +196,25 @@ export function registerCoreIntegrationSignals(): void {
       severity: outcome === 'missing' ? 'critical' : 'warn',
       thresholds: [],
       evaluate: async () => {
-        const rows = (await db('nivaro_integration_obligations')
-          .where({ outcome })
-          .whereNull('resolved_at')
-          .orderBy('due_at', 'asc')
-          .orderBy('id', 'asc')
-          .limit(2000)
-          .select('id', 'api', 'kind', 'collection', 'item', 'reason', 'due_at', 'created_at')) as Array<{
+        // A crash between opening and resolving an obligation, or any path
+        // that opens more than one row for the same item, can leave several
+        // unresolved rows sharing one (collection, item, kind) — the
+        // reconcile sweep's own supersede pass only reaches items it is
+        // currently looking at, so this is not guaranteed clean between
+        // sweeps. Window to the newest row per key so the signal's row key
+        // is unique BY CONSTRUCTION.
+        const rows = (await db.raw(
+          `SELECT id, api, kind, collection, item, reason, due_at, created_at FROM (
+             SELECT id, api, kind, collection, item, reason, due_at, created_at,
+                    ROW_NUMBER() OVER (PARTITION BY collection, item, kind ORDER BY id DESC) AS rn
+               FROM nivaro_integration_obligations
+              WHERE outcome = ? AND resolved_at IS NULL
+           ) x
+          WHERE rn = 1
+          ORDER BY due_at ASC, id ASC
+          OFFSET 0 ROWS FETCH NEXT 2000 ROWS ONLY`,
+          [outcome]
+        )) as Array<{
           id: number
           api: string
           kind: string
@@ -147,17 +224,19 @@ export function registerCoreIntegrationSignals(): void {
           due_at: Date | null
           created_at: Date
         }>
-        const out: SignalRow[] = rows.map((r) => ({
-          key: `${r.collection}:${r.item}:${r.kind}`,
-          group: `${r.api}:${r.kind}`,
-          group_label: `${r.api} · ${r.kind}`,
-          title: `${r.api}: ${r.kind}`,
-          detail: r.reason ?? undefined,
-          since: new Date(r.due_at ?? r.created_at).toISOString(),
-          api: r.api,
-          record: { collection: r.collection, id: r.item },
-          actions: [open(r.collection, r.item)]
-        }))
+        const out: SignalRow[] = uniqueByKey(
+          rows.map((r) => ({
+            key: `${r.collection}:${r.item}:${r.kind}`,
+            group: `${r.api}:${r.kind}`,
+            group_label: `${r.api} · ${r.kind}`,
+            title: `${r.api}: ${r.kind}`,
+            detail: r.reason ?? undefined,
+            since: new Date(r.due_at ?? r.created_at).toISOString(),
+            api: r.api,
+            record: { collection: r.collection, id: r.item },
+            actions: [open(r.collection, r.item)]
+          }))
+        )
         return { count: out.length, rows: out }
       }
     })
@@ -166,7 +245,8 @@ export function registerCoreIntegrationSignals(): void {
   registerIntegrationSignal({
     id: 'core:inbound-errors',
     label: 'Inbound error spike',
-    description: 'A caller using a token or API key whose requests fail at or above the error rate in the last hour.',
+    description:
+      'A caller using a token or API key whose requests fail at or above the error rate in the last hour.',
     tab: 'inbound',
     severity: 'warn',
     thresholds: [
@@ -184,7 +264,13 @@ export function registerCoreIntegrationSignals(): void {
           GROUP BY l.[user], l.api_key_id
           ORDER BY l.[user], l.api_key_id`,
         [since]
-      )) as Array<{ user_id: string | null; api_key_id: number | null; calls: number; errors: number; last_error_at: Date | null }>
+      )) as Array<{
+        user_id: string | null
+        api_key_id: number | null
+        calls: number
+        errors: number
+        last_error_at: Date | null
+      }>
       const out: SignalRow[] = []
       for (const r of rows) {
         const calls = Number(r.calls)
@@ -196,7 +282,13 @@ export function registerCoreIntegrationSignals(): void {
           title: `${who}: ${Math.round((errors / calls) * 100)}% of calls failing`,
           detail: `${errors} of ${calls} calls in the last hour`,
           since: r.last_error_at ? new Date(r.last_error_at).toISOString() : undefined,
-          actions: [{ kind: 'explain', label: 'Request log', payload: { user: r.user_id, api_key_id: r.api_key_id } }]
+          actions: [
+            {
+              kind: 'explain',
+              label: 'Request log',
+              payload: { user: r.user_id, api_key_id: r.api_key_id }
+            }
+          ]
         })
       }
       return { count: out.length, rows: out }
@@ -218,7 +310,13 @@ export function registerCoreIntegrationSignals(): void {
           WHERE q.id IN (SELECT MAX(id) FROM nivaro_import_queue WHERE status IN ('completed','error') GROUP BY import_key)
             AND q.status = 'error'
           ORDER BY q.finished_at DESC, q.id DESC`
-      )) as Array<{ import_key: string; label: string; id: number; finished_at: Date | null; logs: string | null }>
+      )) as Array<{
+        import_key: string
+        label: string
+        id: number
+        finished_at: Date | null
+        logs: string | null
+      }>
       const out: SignalRow[] = rows.map((r) => ({
         key: `import:${r.import_key}`,
         title: `${r.label}: last run failed`,
@@ -233,10 +331,20 @@ export function registerCoreIntegrationSignals(): void {
   registerIntegrationSignal({
     id: 'core:import-stale',
     label: 'Import stale',
-    description: 'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>").',
+    description:
+      'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>").',
     tab: 'inbound',
     severity: 'warn',
-    thresholds: [{ key: 'default_hours', label: 'Default cadence', default: 48, unit: 'hours', min: 1, max: 2160 }],
+    thresholds: [
+      {
+        key: 'default_hours',
+        label: 'Default cadence',
+        default: 48,
+        unit: 'hours',
+        min: 1,
+        max: 2160
+      }
+    ],
     evaluate: async ({ thresholds }) => {
       const rows = (await db.raw(
         `SELECT d.[key] AS import_key, d.label, MAX(q.finished_at) AS last_ok
@@ -271,7 +379,9 @@ export function registerCoreIntegrationSignals(): void {
     description: 'Flows whose most recent run ended in error within the window.',
     tab: 'pushes',
     severity: 'warn',
-    thresholds: [{ key: 'window_hours', label: 'Window', default: 24, unit: 'hours', min: 1, max: 168 }],
+    thresholds: [
+      { key: 'window_hours', label: 'Window', default: 24, unit: 'hours', min: 1, max: 168 }
+    ],
     evaluate: async ({ thresholds }) => {
       const since = new Date(Date.now() - thresholds.window_hours * 3600_000)
       const rows = (await db.raw(
@@ -282,7 +392,13 @@ export function registerCoreIntegrationSignals(): void {
           WHERE r.status = 'error' AND r.started_at >= ?
           ORDER BY r.started_at DESC, f.id`,
         [since, since]
-      )) as Array<{ id: string; name: string; error_message: string | null; started_at: Date; errors: number }>
+      )) as Array<{
+        id: string
+        name: string
+        error_message: string | null
+        started_at: Date
+        errors: number
+      }>
       const out: SignalRow[] = rows.map((r) => ({
         key: `flow:${r.id}`,
         title: `${r.name}: failing`,
