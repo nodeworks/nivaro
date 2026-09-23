@@ -476,65 +476,6 @@ export async function buildServer() {
         })
         .catch(() => {})
 
-      // The core integration-obligations readiness check. WARN once any
-      // overdue/missing row exists; FAIL only once a `missing` row — one
-      // whose trigger never fired at all — has sat unmet for more than a
-      // day, since `overdue` has already been through the reconcile sweep's
-      // own grace window and being old is not itself worse.
-      {
-        const { registerReadinessCheck } = await import('./services/readiness.js')
-        registerReadinessCheck({
-          id: 'integration-obligations-health',
-          label: 'Integration obligations',
-          group: 'Integrations',
-          description:
-            'Messages a partner should have received and has not. Overdue or missing in the last 24 hours is a warning; a "missing" message — one whose trigger never fired at all — unmet for over a day is a failure.',
-          run: async () => {
-            const { listObligationKinds } = await import('./services/integration-obligations.js')
-            if (listObligationKinds().length === 0) {
-              return { status: 'pass', detail: 'no obligation kinds registered' }
-            }
-            const day = new Date(Date.now() - 86_400_000)
-            const rows = (await db('nivaro_integration_obligations')
-              .whereIn('outcome', ['overdue', 'missing'])
-              .select('api', 'kind', 'outcome')
-              .count({ c: '*' })
-              .min({ oldest: 'due_at' })
-              .groupBy('api', 'kind', 'outcome')) as Array<{
-              api: string
-              kind: string
-              outcome: string
-              c: number
-              oldest: Date | null
-            }>
-            if (rows.length === 0) {
-              return { status: 'pass', detail: 'Every obligation is met or in flight.' }
-            }
-            const total = rows.reduce((a, r) => a + Number(r.c), 0)
-            const staleMissing = rows.filter(
-              (r) => r.outcome === 'missing' && r.oldest && new Date(r.oldest) < day
-            )
-            const blockers = rows.map(
-              (r) =>
-                `${r.api}/${r.kind}: ${r.c} ${r.outcome}${
-                  r.oldest ? ` (oldest ${new Date(r.oldest).toISOString().slice(0, 16)})` : ''
-                }`
-            )
-            return staleMissing.length > 0
-              ? {
-                  status: 'fail',
-                  detail: `${total} unmet obligation(s); ${staleMissing.length} "missing" group(s) older than 24 hours.`,
-                  blockers
-                }
-              : {
-                  status: 'warn',
-                  detail: `${total} unmet obligation(s) in the last 24 hours.`,
-                  blockers
-                }
-          }
-        })
-      }
-
       async function runRetentionPurge() {
         try {
           {

@@ -72,7 +72,7 @@ function mockRaw(fn: ReturnType<typeof vi.fn>): void {
 describe('pruneObligations', () => {
   afterEach(() => vi.clearAllMocks())
 
-  it('deletes only sent/superseded rows — the WHERE never names an open outcome', async () => {
+  it('deletes only sent/superseded rows — the WHERE never names an open outcome, and never "skipped"', async () => {
     const raw = vi.fn().mockResolvedValueOnce([0])
     mockRaw(raw)
 
@@ -80,8 +80,11 @@ describe('pruneObligations', () => {
 
     const [sql] = raw.mock.calls[0] as [string, unknown[]]
     expect(sql).toContain("outcome IN ('sent', 'superseded')")
-    for (const open of ['pending', 'failed', 'overdue', 'missing']) {
-      expect(sql).not.toContain(`'${open}'`)
+    // OPEN_OUTCOMES (never expire) plus `skipped` — a closed outcome, but
+    // deliberately kept: it is the wrong-guard detector's evidence, not
+    // clutter.
+    for (const kept of ['pending', 'failed', 'overdue', 'missing', 'skipped']) {
+      expect(sql).not.toContain(`'${kept}'`)
     }
   })
 

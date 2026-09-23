@@ -13,11 +13,81 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { listObligationKinds, summariseObligations } from '../services/integration-obligations.js'
 import { can } from '../services/permissions.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 
 const MAX_LIMIT = 200
 const RECORD_CAP = 50
 
+// The core integration-obligations readiness check. WARN once any
+// overdue/missing row exists; FAIL only once a `missing` row — one whose
+// trigger never fired at all — has sat unmet for more than a day, since
+// `overdue` has already been through the reconcile sweep's own grace
+// window and being old is not itself worse.
+//
+// Registered from the route plugin (same pattern as
+// registerIntegrationReadiness() in routes/external-apis.ts), NOT from
+// server.ts's onReady — that hook only exists in self-hosted mode
+// (`if (!process.env.CLOUD_META_DB_URL)`), so a check registered there
+// never shows up on a cloud deployment. Route plugins register regardless
+// of mode.
+let readinessRegistered = false
+function registerIntegrationObligationsReadiness(): void {
+  if (readinessRegistered) return
+  readinessRegistered = true
+  registerReadinessCheck({
+    id: 'integration-obligations-health',
+    label: 'Integration obligations',
+    group: 'Integrations',
+    description:
+      'Messages a partner should have received and has not. Overdue or missing in the last 24 hours is a warning; a "missing" message — one whose trigger never fired at all — unmet for over a day is a failure.',
+    run: async () => {
+      if (listObligationKinds().length === 0) {
+        return { status: 'pass', detail: 'no obligation kinds registered' }
+      }
+      const day = new Date(Date.now() - 86_400_000)
+      const rows = (await db('nivaro_integration_obligations')
+        .whereIn('outcome', ['overdue', 'missing'])
+        .select('api', 'kind', 'outcome')
+        .count({ c: '*' })
+        .min({ oldest: 'due_at' })
+        .groupBy('api', 'kind', 'outcome')) as Array<{
+        api: string
+        kind: string
+        outcome: string
+        c: number
+        oldest: Date | null
+      }>
+      if (rows.length === 0) {
+        return { status: 'pass', detail: 'Every obligation is met or in flight.' }
+      }
+      const total = rows.reduce((a, r) => a + Number(r.c), 0)
+      const staleMissing = rows.filter(
+        (r) => r.outcome === 'missing' && r.oldest && new Date(r.oldest) < day
+      )
+      const blockers = rows.map(
+        (r) =>
+          `${r.api}/${r.kind}: ${r.c} ${r.outcome}${
+            r.oldest ? ` (oldest ${new Date(r.oldest).toISOString().slice(0, 16)})` : ''
+          }`
+      )
+      return staleMissing.length > 0
+        ? {
+            status: 'fail',
+            detail: `${total} unmet obligation(s); ${staleMissing.length} "missing" group(s) older than 24 hours.`,
+            blockers
+          }
+        : {
+            status: 'warn',
+            detail: `${total} unmet obligation(s) in the last 24 hours.`,
+            blockers
+          }
+    }
+  })
+}
+
 export async function integrationObligationsRoutes(app: FastifyInstance): Promise<void> {
+  registerIntegrationObligationsReadiness()
+
   // The board: admin-only, matching /integration-health.
   app.get('/integration-obligations/summary', { preHandler: requireAdmin }, async () => {
     const rows = (await db('nivaro_integration_obligations')
