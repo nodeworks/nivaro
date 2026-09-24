@@ -61,6 +61,23 @@ function Dot() {
   )
 }
 
+/**
+ * Whether two requesters are "the same one" for the purpose of "Retried by".
+ * A person or machine account is identified by its ID — never by its
+ * rendered label: two different accounts can share a display name (two
+ * people with the same name, two machine accounts of the same kind and
+ * name), and comparing labels would either hide a genuinely different
+ * starter or, less often, wrongly show one. When neither side has an
+ * identified user (both automatic — cron, a flow with no known runner…),
+ * there is nothing to compare by ID, so the label is the only remaining
+ * signal — and it is a real one there: "Scheduled — the retry ladder"
+ * legitimately differs from the original cron trigger's own label.
+ */
+export function sameRequester(a: Requester, b: Requester): boolean {
+  if (a.user?.id || b.user?.id) return a.user?.id === b.user?.id
+  return a.kind === b.kind && a.label === b.label
+}
+
 const ERROR_CLASS_WORD: Record<string, string> = {
   transient: 'Temporary failure',
   rate_limited: 'Rate limited',
@@ -160,7 +177,7 @@ function SubmissionDrillBody({
   const ob = d.obligation
   const laterStarters = d.attempt_requesters.filter(
     (a) =>
-      a.attempt > 1 && a.requester.label !== d.triggered_by.label && a.requester.kind !== 'unknown'
+      a.attempt > 1 && a.requester.kind !== 'unknown' && !sameRequester(a.requester, d.triggered_by)
   )
 
   return (

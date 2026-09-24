@@ -2,6 +2,7 @@ import { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
+import { requesterInsertFields } from './erp-requester-columns.js'
 import type { RequestedVia } from './erp-submission-status.js'
 import { callExternalApi } from './external-apis.js'
 import {
@@ -1257,7 +1258,7 @@ interface SubmissionRequester {
   via: RequestedVia
 }
 
-async function recordSubmission(
+export async function recordSubmission(
   collection: string,
   item: string,
   externalApi: number,
@@ -1277,6 +1278,15 @@ async function recordSubmission(
 ): Promise<number | null> {
   try {
     const now = new Date()
+    // Probed once per process — naming a column this database hasn't run
+    // migration 350 for yet fails the WHOLE insert, not just these two
+    // fields, so the requester is spread conditionally instead of written
+    // directly.
+    const requesterFields = await requesterInsertFields(
+      'nivaro_erp_submissions',
+      who?.by ?? null,
+      who?.via ?? null
+    )
     const inserted = (await db('nivaro_erp_submissions')
       .insert({
         collection,
@@ -1289,8 +1299,7 @@ async function recordSubmission(
         payload: JSON.stringify({ endpoint_path: endpointPath, body }),
         response: serializeResponseBody(responseBody),
         change_signature: signature ?? null,
-        requested_by: who?.by ?? null,
-        requested_via: who?.via ?? null,
+        ...requesterFields,
         // #628 — NULL when this attempt did not fail; otherwise what kind of
         // failure it was, which decides whether a later retry could help.
         error_class:

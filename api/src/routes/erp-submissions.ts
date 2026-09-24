@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
@@ -207,6 +208,13 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     const outcome = await sendPayload(external_api, stored, req.user?.id)
 
     const now = new Date()
+    // Probed once per process — a column this database hasn't run
+    // migration 350 for fails the WHOLE insert, not just these two fields.
+    const requesterFields = await requesterInsertFields(
+      'nivaro_erp_submissions',
+      req.user?.id ?? null,
+      'api'
+    )
     const [inserted] = await db('nivaro_erp_submissions')
       .insert({
         collection,
@@ -218,8 +226,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         attempts: 1,
         last_error: outcome.error,
         payload: JSON.stringify(stored),
-        requested_by: req.user?.id ?? null,
-        requested_via: 'api',
+        ...requesterFields,
         created_at: now,
         updated_at: now
       })

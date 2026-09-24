@@ -24,6 +24,7 @@
  *    fresh `nivaro_erp_submissions` row rather than rewritten in place.
  */
 import { db } from '../db/index.js'
+import { requesterInsertFields } from './erp-requester-columns.js'
 import {
   allObligationKinds,
   getObligationKind,
@@ -286,6 +287,13 @@ async function refireFromPrior(
   // first real attempt land as attempts = 1, same as a freshly created
   // submission anywhere else in the codebase.
   const now = new Date()
+  // Probed once per process — naming a column this database hasn't run
+  // migration 350 for fails the WHOLE insert, not just these two fields.
+  const requesterFields = await requesterInsertFields(
+    'nivaro_erp_submissions',
+    userId,
+    userId ? 'resend' : 'cron'
+  )
   const inserted = (await db('nivaro_erp_submissions')
     .insert({
       collection: prior.collection,
@@ -298,8 +306,7 @@ async function refireFromPrior(
       payload: prior.payload,
       change_signature: prior.change_signature,
       obligation_id: obligationId,
-      requested_by: userId,
-      requested_via: userId ? 'resend' : 'cron',
+      ...requesterFields,
       created_at: now,
       updated_at: now
     })

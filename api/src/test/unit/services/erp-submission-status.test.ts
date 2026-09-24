@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
+import { resetRequesterColumnProbe } from '../../../services/erp-requester-columns.js'
 import {
   applySendOutcome,
   outcomeForSubmission,
@@ -12,6 +13,19 @@ vi.mock('../../../services/integration-obligations.js', async () => {
     typeof import('../../../services/integration-obligations.js')
   >('../../../services/integration-obligations.js')
   return { ...actual, resolveObligation: vi.fn(async () => {}) }
+})
+
+// The global db mock (test/setup.ts) has no `.schema` — every test in this
+// file that doesn't care about migration 350's column probe gets a default
+// "the columns are here" so the existing requested_by/requested_via
+// assertions below keep meaning what they say. The dedicated "columns
+// missing" describe block below overrides this per test.
+type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn> } }
+beforeEach(() => {
+  ;(db as unknown as SchemaDb).schema = { hasColumn: vi.fn().mockResolvedValue(true) }
+})
+afterEach(() => {
+  resetRequesterColumnProbe()
 })
 
 describe('outcomeForSubmission', () => {
@@ -226,5 +240,75 @@ describe('applySendOutcome — who started each attempt (migration 350)', () => 
     // The submission row itself keeps the ORIGINAL send's requester.
     const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
     expect(patch).not.toHaveProperty('requested_by')
+  })
+})
+
+// ─── The columns are missing (migration 350 has not reached this database) ─
+//
+// A writer that names requested_by/requested_via unconditionally would fail
+// its WHOLE insert against a real database missing them — not drop the two
+// fields, lose the row. Everything below proves the opposite: the SELECT
+// never names a missing column, and both the captured and the fresh attempt
+// insert land, just without the two fields this database doesn't have yet.
+describe('applySendOutcome — the requester columns are missing on this database', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('drops requested_by/requested_via — the SELECT and both inserts still happen', async () => {
+    ;(db as unknown as { schema: { hasColumn: ReturnType<typeof vi.fn> } }).schema.hasColumn = vi
+      .fn()
+      .mockResolvedValue(false)
+
+    const sub = {
+      where: vi.fn(),
+      update: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockResolvedValue({
+        payload: '{"endpoint_path":"/x","body":{}}',
+        response: null,
+        status: 'failed',
+        last_error: 'HTTP 500',
+        updated_at: new Date('2026-09-20T10:00:00Z'),
+        created_at: new Date('2026-09-20T10:00:00Z')
+        // no requested_by / requested_via — this database hasn't run
+        // migration 350, so the row simply has no such columns.
+      })
+    }
+    sub.where.mockReturnValue(sub)
+    const att = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue(undefined),
+      insert: vi.fn().mockResolvedValue([1])
+    }
+    att.where.mockReturnValue(att)
+    mockedDb().mockImplementation(((table: string) =>
+      table === 'nivaro_erp_submission_attempts' ? att : sub) as never)
+
+    await applySendOutcome({
+      submissionId: 9,
+      outcome: { status: 'failed', external_ref: null, error: 'HTTP 500', response: null },
+      priorExternalRef: null,
+      priorAttempts: 1,
+      requestedBy: 'RETRYING-USER',
+      requestedVia: 'retry'
+    })
+
+    // The captured-attempt SELECT never names a column this database lacks.
+    expect(sub.first).toHaveBeenCalledWith(
+      'payload',
+      'response',
+      'status',
+      'last_error',
+      'updated_at',
+      'created_at'
+    )
+    // Both the captured attempt (from the prior send) and the fresh one
+    // still land — a missing column drops the two fields, never the row.
+    expect(att.insert).toHaveBeenCalledTimes(2)
+    for (const call of att.insert.mock.calls) {
+      const row = call[0] as Record<string, unknown>
+      expect(row).not.toHaveProperty('requested_by')
+      expect(row).not.toHaveProperty('requested_via')
+    }
+    // The submission row's own update still happens too.
+    expect(sub.update).toHaveBeenCalledTimes(1)
   })
 })

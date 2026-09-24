@@ -542,6 +542,10 @@ function SignalRowView({
               onKeyDown={(e) => {
                 if (e.key === 'Escape' && drillOpen) {
                   e.preventDefault()
+                  // Match collapse()'s own handling below — an ancestor
+                  // (a modal/sheet hosting this list) must never ALSO react
+                  // to the same Escape that just closed this disclosure.
+                  e.stopPropagation()
                   setDrillOpen(false)
                 }
               }}

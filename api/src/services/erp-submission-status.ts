@@ -8,6 +8,7 @@
  * feature exists to stop. So the mapping lives here and every writer calls it.
  */
 import { db } from '../db/index.js'
+import { requesterInsertFields, requesterSelectColumns } from './erp-requester-columns.js'
 import { resolveObligation } from './integration-obligations.js'
 import { classifyError } from './integration-remediation.js'
 
@@ -185,9 +186,16 @@ interface AttemptRow {
 
 async function recordAttempt(row: AttemptRow): Promise<void> {
   try {
+    const { requested_by, requested_via, ...base } = row
+    const requester = await requesterInsertFields(
+      'nivaro_erp_submission_attempts',
+      requested_by,
+      requested_via
+    )
     await db('nivaro_erp_submission_attempts').insert({
-      ...row,
-      error: row.error ? row.error.slice(0, 2000) : null
+      ...base,
+      error: row.error ? row.error.slice(0, 2000) : null,
+      ...requester
     })
   } catch {
     /* attempt history is bookkeeping — never fail a send because of it */
@@ -204,6 +212,7 @@ async function captureSubmissionRow(
   priorAttempts: number
 ): Promise<{ payload: string | null } | null> {
   try {
+    const extraCols = await requesterSelectColumns('nivaro_erp_submissions')
     const row = (await db('nivaro_erp_submissions')
       .where({ id: submissionId })
       .first(
@@ -213,8 +222,7 @@ async function captureSubmissionRow(
         'last_error',
         'updated_at',
         'created_at',
-        'requested_by',
-        'requested_via'
+        ...extraCols
       )) as
       | {
           payload: string | null
@@ -223,8 +231,8 @@ async function captureSubmissionRow(
           last_error: string | null
           updated_at: Date | null
           created_at: Date | null
-          requested_by: string | null
-          requested_via: string | null
+          requested_by?: string | null
+          requested_via?: string | null
         }
       | undefined
     if (!row) return null

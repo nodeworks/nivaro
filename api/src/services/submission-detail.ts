@@ -218,6 +218,15 @@ const iso = (v: Date | string | null | undefined): string | null =>
   v == null ? null : new Date(v).toISOString()
 const ms = (v: Date | string) => new Date(v).getTime()
 
+// How close a transition/record edit must sit to the first send to be read
+// as its cause (Task 15d fix round 1). The history window used to be ±60s
+// and the record-edit window −10s/+2s; both were wide enough on a busy
+// record to risk matching something unrelated — a later transition, an
+// edit made for a different reason moments earlier.
+export const HISTORY_WINDOW_MS = 15_000
+export const RECORD_EDIT_WINDOW_BEFORE_MS = 3_000
+export const RECORD_EDIT_WINDOW_AFTER_MS = 1_000
+
 const KIND_WORD: Record<string, string> = {
   integration: 'Integration account',
   bot: 'Bot',
@@ -243,7 +252,7 @@ export function toRequesterUser(u: FactUser): RequesterUser {
   }
 }
 
-/** "push-to-fusion" → "Push to fusion". */
+/** "sync-inventory" → "Sync inventory". */
 function humanize(slug: string): string {
   const s = slug.replace(/[-_]+/g, ' ').trim()
   return s ? s[0].toUpperCase() + s.slice(1) : slug
@@ -633,17 +642,9 @@ export function resolveRequester(
         'The transition behind it was made by the system, not a person.'
       )
     }
-    // 2d. A person's edit of the record moments before (a change-driven push).
-    if (f.record_edit?.user) {
-      return personRequester(
-        userFor(f, f.record_edit.user),
-        f.record_edit.user,
-        'inferred',
-        'api',
-        'Edited the record moments before the push.'
-      )
-    }
-    // 2e. A schedule or a flow, by the trigger text.
+    // 2d. A schedule or a flow, by the trigger text — checked BEFORE a
+    //     coincidental record edit, so a cron/flow push is never misread as
+    //     "whoever happened to touch the record at the same moment".
     if (trigger.kind === 'cron') return noPersonRequester('cron', trigger, 'inferred', null)
     if (trigger.kind === 'flow') {
       if (f.flow?.user) {
@@ -656,6 +657,24 @@ export function resolveRequester(
         )
       }
       return noPersonRequester('flow', trigger, 'inferred', null)
+    }
+    // 2e. A person's edit of the record moments before (a change-driven
+    //     push) — only for the trigger kinds that mean "something reacted
+    //     to a record write with nothing clearer to name": hook | unknown |
+    //     api. Any other kind (item-action, retry, resend, …) has its own
+    //     dedicated inference above and must never borrow a coincidental
+    //     edit instead — it may belong to something else entirely.
+    if (
+      (trigger.kind === 'hook' || trigger.kind === 'unknown' || trigger.kind === 'api') &&
+      f.record_edit?.user
+    ) {
+      return personRequester(
+        userFor(f, f.record_edit.user),
+        f.record_edit.user,
+        'inferred',
+        'api',
+        'Edited the record moments before the push.'
+      )
     }
   }
   return NOT_RECORDED
@@ -968,18 +987,29 @@ export async function gatherSubmissionFacts(
     if (fl) flow = { ...fl, user: null }
   }
 
-  // The record's transition nearest the first send.
+  // The record's transition nearest the first send. When the obligation
+  // names the transition EXACTLY (`obligationTransition` above resolved a
+  // real row from its trigger_ref), filter on it directly instead of
+  // guessing by clock alone — several transitions on the same record inside
+  // the window would otherwise let the nearest one win by timestamp even
+  // when it isn't the one that actually fired this push.
+  const exactTransition = obligationTransition?.id ?? null
   const history = (await db('nivaro_workflow_history as h')
     .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
     .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
     .leftJoin('nivaro_workflow_templates as tp', 'tp.id', 't.template')
     .where('i.collection', row.collection)
     .where('i.item', String(row.item))
+    .modify((qb) => {
+      if (exactTransition) qb.where('h.transition', exactTransition)
+    })
     // A blocking action sends BEFORE its history row is written, a post
-    // action after — so look both sides and take the nearest.
+    // action after — so look both sides and take the nearest. ±15s (was
+    // ±60s: a wider window risked matching an unrelated later transition on
+    // a record with several).
     .whereBetween('h.timestamp', [
-      new Date(created.getTime() - 60_000),
-      new Date(created.getTime() + 60_000)
+      new Date(created.getTime() - HISTORY_WINDOW_MS),
+      new Date(created.getTime() + HISTORY_WINDOW_MS)
     ])
     .orderByRaw('ABS(DATEDIFF_BIG(millisecond, h.[timestamp], ?))', [created])
     .first(
@@ -994,14 +1024,17 @@ export async function gatherSubmissionFacts(
     )
     .catch(() => null)) as Record<string, unknown> | null
 
-  // A person's write to the record just before (the change that fired a hook).
+  // A person's write to the record just before (the change that fired a
+  // hook). −3s/+1s: a hook-driven push follows its record write almost
+  // immediately — the wider −10s/+2s this used to use was wide enough to
+  // catch an unrelated edit made moments earlier for a different reason.
   const recordEdit = (await db('nivaro_activity')
     .where({ collection: row.collection, item: String(row.item) })
     .whereIn('action', ['update', 'create'])
     .whereNotNull('user')
     .whereBetween('timestamp', [
-      new Date(created.getTime() - pad),
-      new Date(created.getTime() + 2_000)
+      new Date(created.getTime() - RECORD_EDIT_WINDOW_BEFORE_MS),
+      new Date(created.getTime() + RECORD_EDIT_WINDOW_AFTER_MS)
     ])
     .orderBy('timestamp', 'desc')
     .first('action', 'user', 'comment', 'timestamp')
