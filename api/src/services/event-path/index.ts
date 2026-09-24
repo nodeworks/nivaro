@@ -56,8 +56,87 @@ export async function buildEventPath(
     mode = 'inferred'
   }
 
+  return finishPath(rootStep, steps, {
+    mode,
+    warnings,
+    chainId: ev.chain_id ?? null,
+    viewer
+  })
+}
+
+/**
+ * The full path of one CHAIN, with no event to start from — how a replay
+ * link opens: `replay_of` / `replayed_as` name chain ids. The root is the
+ * chain's own request log when it has one, else the key its top steps point
+ * at (a cron / import / replay root). Null when the chain left no rows.
+ */
+export async function buildChainPath(
+  chainId: string,
+  viewer: PathViewer
+): Promise<EventPath | null> {
+  const exact = await loadChainSteps(chainId, { withBodies: viewer.isAdmin })
+  if (!exact.rootStep && exact.steps.length === 0) return null
+  const rootStep = exact.rootStep ?? chainRootStep(chainId, exact.steps)
+  return finishPath(rootStep, exact.steps, {
+    mode: 'exact',
+    warnings: exact.warnings,
+    chainId,
+    viewer
+  })
+}
+
+const ROOT_KIND: Record<string, PathStep['kind']> = {
+  request: 'request',
+  cron: 'cron',
+  import_run: 'import',
+  root: 'feed'
+}
+
+/** A root for a chain with no request log: named the key its top steps point
+ *  at, dated by its earliest step. */
+export function chainRootStep(chainId: string, steps: PathStep[]): PathStep {
+  const key = rootKeyOf(steps) ?? `root:${chainId}`
+  const prefix = key.slice(0, key.indexOf(':'))
+  const name = key.slice(key.indexOf(':') + 1)
+  const kind = ROOT_KIND[prefix] ?? 'feed'
+  const earliest = steps.reduce<string | null>(
+    (min, s) => (min === null || s.at < min ? s.at : min),
+    null
+  )
+  const summary =
+    kind === 'cron'
+      ? `Scheduled job ${name}`
+      : kind === 'import'
+        ? `Import run ${name}`
+        : kind === 'request'
+          ? 'Inbound request'
+          : 'Chain started'
+  return {
+    key,
+    parent: null,
+    kind,
+    at: earliest ?? new Date(0).toISOString(),
+    who: null,
+    record: null,
+    summary,
+    failed: false
+  }
+}
+
+/** Shared tail of both builders: permission filter, labels, tree, links. */
+async function finishPath(
+  rootStep: PathStep,
+  rawSteps: PathStep[],
+  opts: {
+    mode: 'exact' | 'inferred'
+    warnings: string[]
+    chainId: string | null
+    viewer: PathViewer
+  }
+): Promise<EventPath> {
+  const { viewer } = opts
   // Calls first go under their push, so a hidden push takes its calls along.
-  steps = reparentCallsUnderPushes(steps)
+  let steps = reparentCallsUnderPushes(rawSteps)
 
   // Permission filter (record side): a step on a record the viewer may not
   // read is dropped with its subtree; every dropped step is counted.
@@ -77,19 +156,19 @@ export async function buildEventPath(
 
   await labelRecords([rootStep, ...steps])
   const { root, truncated, count } = buildTree(rootStep, steps)
-  const links = ev.chain_id
-    ? await replayLinks(ev.chain_id)
+  const links = opts.chainId
+    ? await replayLinks(opts.chainId)
     : { replay_of: null, replayed_as: [] as string[] }
   return {
     root,
-    mode,
+    mode: opts.mode,
     truncated,
     step_count: count,
     first_failure: firstFailure(root),
     replay_of: links.replay_of,
     replayed_as: links.replayed_as,
     hidden_steps: hidden || undefined,
-    warnings
+    warnings: opts.warnings
   }
 }
 

@@ -14,19 +14,22 @@ import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useStat
 import { cn } from '../../../../lib/utils'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../../../ui/sheet'
 import { Skeleton } from '../../../ui/skeleton'
-import { useEventPath } from '../api'
+import { type EventPathTarget, eventPathTargetKey, useEventPath } from '../api'
 import { CodeBlock, HttpStatusChip, isTruncatedBody, pretty, StatusPill } from '../drill'
 import { agoText, exactTime, TONE_BORDER, TONE_SOFT, TONE_TEXT } from '../tone'
 import type { PathDetail, PathNode } from '../types'
 import { ancestorsOf, flattenVisible, formatOffset, summarySentence } from './pathModel'
 
 export interface EventPathSheetProps {
-  target: { source: string; id: string; record?: { collection: string; item: string } } | null
+  /** An event (`source` + `id`, optionally read through its `record`), or a
+   *  chain opened directly by id — where a replay link leads. */
+  target: EventPathTarget | null
   event?: { label?: string | null; item_label?: string | null } | null
   onClose: () => void
   onOpenRecord?: (collection: string, id: string) => void
-  /** Replay links — the event this one replayed, or a replay of it. */
-  onOpenEvent?: (source: string, id: string) => void
+  /** Replay links — the chain this one replayed, or a replay of it. The host
+   *  swaps the sheet's target to `{ chainId }`. Absent = the links read as text. */
+  onOpenEvent?: (target: { chainId: string }) => void
 }
 
 const KIND_ICON: Record<PathNode['kind'], typeof Send> = {
@@ -262,6 +265,7 @@ function StepRow({
       data-path-kind={node.kind}
       data-path-failed={node.failed ? '' : undefined}
       data-path-open={open ? '' : undefined}
+      className='scroll-mt-10'
       style={{ paddingLeft: depth * INDENT }}
     >
       <div className={cn(depth > 0 && 'border-l border-border pl-2')}>
@@ -317,20 +321,29 @@ function StepRow({
               {formatOffset(node.offset_ms)}
             </span>
             {node.who && <span className='font-medium text-foreground'>{node.who}</span>}
-            {rec && recordLabel && (
-              <button
-                type='button'
-                data-path-record={`${rec.collection}:${rec.item}`}
-                disabled={!onOpenRecord}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenRecord?.(rec.collection, rec.item)
-                }}
-                className='max-w-[220px] truncate rounded border border-border bg-card px-1.5 text-[11.5px] font-medium text-foreground transition-colors enabled:hover:bg-muted disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-              >
-                {recordLabel}
-              </button>
-            )}
+            {rec &&
+              recordLabel &&
+              (onOpenRecord ? (
+                <button
+                  type='button'
+                  data-path-record={`${rec.collection}:${rec.item}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onOpenRecord(rec.collection, rec.item)
+                  }}
+                  className='max-w-[220px] truncate rounded border border-border bg-card px-1.5 text-[11.5px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                >
+                  {recordLabel}
+                </button>
+              ) : (
+                // No host handler: plain text, so a click falls through to the row.
+                <span
+                  data-path-record={`${rec.collection}:${rec.item}`}
+                  className='max-w-[220px] truncate rounded border border-border bg-card px-1.5 text-[11.5px] font-medium text-foreground'
+                >
+                  {recordLabel}
+                </span>
+              ))}
             <span
               className={cn(
                 'min-w-0 [overflow-wrap:anywhere]',
@@ -374,29 +387,52 @@ export function EventPathSheet({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [open, setOpen] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  /** The step the failure-first pass wants on screen — scrolled to ONCE. */
+  const pendingScrollRef = useRef<string | null>(null)
+  /** Which target + root the failure-first pass last ran for. */
+  const initFor = useRef<string | null>(null)
+  const targetKey = target ? eventPathTargetKey(target) : null
 
-  // Failure-first: expand to and open the first failure; else expand the root.
+  // Failure-first: expand to and open the first failure; else expand the
+  // root. Once per target + root — a background refetch that returns the
+  // same path keeps whatever the person expanded and opened since.
   useEffect(() => {
     if (!path) return
+    const id = `${targetKey}|${path.root.key}`
+    if (initFor.current === id) return
+    initFor.current = id
     const keys = new Set<string>([path.root.key])
     if (path.first_failure) {
       for (const k of ancestorsOf(path.root, path.first_failure)) keys.add(k)
       setOpen(path.first_failure)
+      pendingScrollRef.current = path.first_failure
     } else {
       setOpen(null)
+      pendingScrollRef.current = null
     }
     setExpanded(keys)
-  }, [path])
-
-  // Re-runs on `expanded` too: the step only exists once its ancestors render.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: expanded gates the step's presence
-  useEffect(() => {
-    if (!open || !scrollRef.current) return
-    const el = scrollRef.current.querySelector(`[data-path-step="${CSS.escape(open)}"]`)
-    el?.scrollIntoView({ block: 'center' })
-  }, [open, expanded])
+  }, [path, targetKey])
 
   const rows = useMemo(() => (path ? flattenVisible(path.root, expanded) : []), [path, expanded])
+  // Empty means the tree has nothing under its root — never "the person
+  // collapsed the root", which must keep the chevron to expand it again.
+  const pathHasSteps =
+    !!path && (path.root.children.length > 0 || (path.root.members?.length ?? 0) > 0)
+
+  // Scroll to the failure-first step once it has rendered, then never again:
+  // expanding, collapsing or opening a step must not pull the view back.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-check as rows render
+  useEffect(() => {
+    const key = pendingScrollRef.current
+    if (!key || !scrollRef.current) return
+    const el = scrollRef.current.querySelector(`[data-path-step="${CSS.escape(key)}"]`)
+    if (!el) return
+    pendingScrollRef.current = null
+    // `start`, not `center`: an open step's detail can be taller than the
+    // body, and centring it would push its own heading off the top. The
+    // row's scroll margin keeps a little of its parent in view above it.
+    el.scrollIntoView({ block: 'start' })
+  }, [rows])
   if (!target) return null
 
   const toggle = (key: string) =>
@@ -416,7 +452,7 @@ export function EventPathSheet({
       <SheetContent
         className='flex flex-col gap-0 overflow-hidden p-0'
         style={{ width: 720, maxWidth: '94vw' }}
-        data-event-path={`${target.source}:${target.id}`}
+        data-event-path={targetKey ?? undefined}
         data-path-mode={path?.mode ?? (q.isError ? 'error' : 'loading')}
       >
         <div className='shrink-0 border-b border-border px-6 pb-4 pt-5'>
@@ -455,9 +491,9 @@ export function EventPathSheet({
                 (onOpenEvent ? (
                   <button
                     type='button'
-                    data-path-replay-of
+                    data-path-replay-of={path.replay_of}
                     className='underline decoration-border underline-offset-2 hover:text-foreground'
-                    onClick={() => onOpenEvent('chain', path.replay_of as string)}
+                    onClick={() => onOpenEvent({ chainId: path.replay_of as string })}
                   >
                     Replay of an earlier event
                   </button>
@@ -472,8 +508,9 @@ export function EventPathSheet({
                       <button
                         key={r}
                         type='button'
+                        data-path-replay={r}
                         className='ml-1.5 underline decoration-border underline-offset-2 hover:text-foreground'
-                        onClick={() => onOpenEvent('chain', r)}
+                        onClick={() => onOpenEvent({ chainId: r })}
                       >
                         #{i + 1}
                       </button>
@@ -501,22 +538,20 @@ export function EventPathSheet({
               Couldn't load this path{errMsg ? ` · ${errMsg}` : ''}.
             </p>
           )}
-          {path && rows.length <= 1 && (
+          {path && !pathHasSteps && (
             <>
-              {rows.length === 1 && (
-                <ol className='mb-3 space-y-0.5'>
-                  <StepRow
-                    node={path.root}
-                    depth={0}
-                    hasChildren={false}
-                    expanded={false}
-                    open={open === path.root.key}
-                    onToggle={() => {}}
-                    onOpen={() => setOpen(open === path.root.key ? null : path.root.key)}
-                    onOpenRecord={onOpenRecord}
-                  />
-                </ol>
-              )}
+              <ol className='mb-3 space-y-0.5'>
+                <StepRow
+                  node={path.root}
+                  depth={0}
+                  hasChildren={false}
+                  expanded={false}
+                  open={open === path.root.key}
+                  onToggle={() => {}}
+                  onOpen={() => setOpen(open === path.root.key ? null : path.root.key)}
+                  onOpenRecord={onOpenRecord}
+                />
+              </ol>
               <p className='px-2 text-[13px] text-muted-foreground' data-path-empty>
                 {path.mode === 'inferred'
                   ? 'Nothing matched this event within the window.'
@@ -524,7 +559,7 @@ export function EventPathSheet({
               </p>
             </>
           )}
-          {path && rows.length > 1 && (
+          {path && pathHasSteps && (
             <ol className='space-y-0.5'>
               {rows.map(({ node, depth }) => (
                 <StepRow

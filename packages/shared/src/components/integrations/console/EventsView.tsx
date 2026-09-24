@@ -5,7 +5,7 @@ import { useDebounced } from '../../../hooks/useDebounced'
 import { cn } from '../../../lib/utils'
 import { Checkbox } from '../../ui/checkbox'
 import { SimpleSelect } from '../../ui/SimpleSelect'
-import { useIntegrationEvents, useReplayEvent } from './api'
+import { type EventPathTarget, useIntegrationEvents, useReplayEvent } from './api'
 import { EventPathSheet } from './event-path'
 import { agoText, exactTime, TONE_BORDER, TONE_FILL, TONE_SOFT, TONE_TEXT, type Tone } from './tone'
 import type { EventDirection, EventProvider, EventStatus, IntegrationEvent } from './types'
@@ -312,10 +312,10 @@ export function EventsView({ onOpenRecord }: EventsViewProps) {
   const [caller, setCaller] = useState('')
   const [recordText, setRecordText] = useState('')
   const [includePeople, setIncludePeople] = useState(false)
+  // The sheet's target: an event from the feed, or a chain a replay link led to.
   const [selected, setSelected] = useState<{
-    source: string
-    id: string
-    event: IntegrationEvent
+    target: EventPathTarget
+    event: IntegrationEvent | null
   } | null>(null)
   const record = useDebounced(recordText.trim(), 350)
   const peopleId = useId()
@@ -672,7 +672,7 @@ export function EventsView({ onOpenRecord }: EventsViewProps) {
                   direction={directionOf(e)}
                   onOpenRecord={onOpenRecord}
                   onSelect={(ev) =>
-                    setSelected({ source: sourceOf(ev), id: String(ev.id), event: ev })
+                    setSelected({ target: { source: sourceOf(ev), id: String(ev.id) }, event: ev })
                   }
                 />
               ))}
@@ -708,10 +708,11 @@ export function EventsView({ onOpenRecord }: EventsViewProps) {
       {toolbar}
       {body}
       <EventPathSheet
-        target={selected ? { source: selected.source, id: selected.id } : null}
+        target={selected?.target ?? null}
         event={selected?.event}
         onClose={() => setSelected(null)}
         onOpenRecord={onOpenRecord}
+        onOpenEvent={(chain) => setSelected({ target: chain, event: null })}
       />
     </div>
   )

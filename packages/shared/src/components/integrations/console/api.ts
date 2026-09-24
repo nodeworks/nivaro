@@ -261,30 +261,38 @@ export function useIntegrationEvents(filters: IntegrationEventFilters) {
 
 /** Which event to open a path for. With `record`, the path is read through
  *  the record-scoped route (any user who can read the record); without, the
- *  admin console route. */
-export interface EventPathTarget {
-  source: string
-  id: string
-  record?: { collection: string; item: string }
+ *  admin console route. `{ chainId }` opens one chain directly — what a
+ *  replay link carries (admin route). */
+export type EventPathTarget =
+  | { source: string; id: string; record?: { collection: string; item: string } }
+  | { chainId: string }
+
+/** A stable string for a path target — the sheet's identity and hook key. */
+export function eventPathTargetKey(target: EventPathTarget): string {
+  return 'chainId' in target ? `chain:${target.chainId}` : `${target.source}:${target.id}`
 }
 
 /** One event's full chain of writes. */
 export function useEventPath(target: EventPathTarget | null) {
   const client = useNivaroClient()
+  const chainId = target && 'chainId' in target ? target.chainId : null
+  const ev = target && !('chainId' in target) ? target : null
   return useQuery({
-    queryKey: [
-      'integration-event-path',
-      target?.source,
-      target?.id,
-      target?.record?.collection,
-      target?.record?.item
-    ],
+    queryKey: chainId
+      ? ['integration-event-path', 'chain', chainId]
+      : ['integration-event-path', ev?.source, ev?.id, ev?.record?.collection, ev?.record?.item],
     enabled: target != null,
     queryFn: async () => {
-      if (!target) return null
-      const url = target.record
-        ? `/integration-events/record/${encodeURIComponent(target.record.collection)}/${encodeURIComponent(target.record.item)}/path?source=${encodeURIComponent(target.source)}&id=${encodeURIComponent(target.id)}`
-        : `/integration-events/${encodeURIComponent(target.source)}/${encodeURIComponent(target.id)}/path`
+      let url: string
+      if (chainId) {
+        url = `/integration-events/chain/${encodeURIComponent(chainId)}/path`
+      } else if (ev?.record) {
+        url = `/integration-events/record/${encodeURIComponent(ev.record.collection)}/${encodeURIComponent(ev.record.item)}/path?source=${encodeURIComponent(ev.source)}&id=${encodeURIComponent(ev.id)}`
+      } else if (ev) {
+        url = `/integration-events/${encodeURIComponent(ev.source)}/${encodeURIComponent(ev.id)}/path`
+      } else {
+        return null
+      }
       const res = await client.request<{ data: EventPath }>(get(url))
       return res.data
     },

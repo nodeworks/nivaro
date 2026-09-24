@@ -3,7 +3,7 @@ import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chainIdsForRoots, recordReplayRoot } from '../services/chain-roots.js'
-import { buildEventPath, type EventPath } from '../services/event-path/index.js'
+import { buildChainPath, buildEventPath, type EventPath } from '../services/event-path/index.js'
 import { chainsTouchingRecord, findRecordRef } from '../services/event-path/record-ref.js'
 import { redactError } from '../services/event-path/redact.js'
 import {
@@ -90,6 +90,8 @@ function redactRoot(path: EventPath): EventPath {
   }
 }
 
+const CHAIN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 const PATH_UNAVAILABLE = 'The path for this event could not be assembled right now'
 
 /**
@@ -130,6 +132,22 @@ export async function integrationEventsRoutes(app: FastifyInstance) {
         record
       }
     })
+  })
+
+  // A chain's full path, by chain id — what a replay link opens (`replay_of`
+  // and `replayed_as` name chains, not events). Admins only, bodies included.
+  app.get('/chain/:chainId/path', { preHandler: requireAdmin }, async (req, reply) => {
+    const { chainId } = req.params as { chainId: string }
+    if (!CHAIN_ID_RE.test(chainId)) return reply.code(400).send({ error: 'Invalid chain id' })
+    try {
+      const path = await buildChainPath(chainId, { isAdmin: true })
+      if (!path) return reply.code(404).send({ error: 'Chain not found' })
+      return reply.send({ data: path })
+    } catch (err) {
+      req.log.warn({ err, chainId }, 'integration chain path failed')
+      const detail = err instanceof Error ? err.message : String(err)
+      return reply.code(503).send({ error: `${PATH_UNAVAILABLE}: ${detail}` })
+    }
   })
 
   // An event's full path, bodies included (admins only).

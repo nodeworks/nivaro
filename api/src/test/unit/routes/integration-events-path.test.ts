@@ -5,6 +5,11 @@ vi.mock('../../../services/event-path/index.js', () => ({
   buildEventPath: vi.fn(async (_s: string, id: string) =>
     id === 'missing' ? null : { root: { key: 'request:c' }, mode: 'exact', warnings: [] }
   ),
+  buildChainPath: vi.fn(async (chainId: string) =>
+    chainId.startsWith('00000000')
+      ? null
+      : { root: { key: `request:${chainId}` }, mode: 'exact', warnings: [] }
+  ),
   chainsTouchingRecord: vi.fn(async () => ['c1'])
 }))
 vi.mock('../../../services/event-path/record-ref.js', () => ({
@@ -54,7 +59,7 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 }))
 
 import { integrationEventsRoutes } from '../../../routes/integration-events.js'
-import { buildEventPath } from '../../../services/event-path/index.js'
+import { buildChainPath, buildEventPath } from '../../../services/event-path/index.js'
 import { getEvent, listEvents } from '../../../services/integration-event-sources.js'
 import { readItems } from '../../../services/items.js'
 import { can } from '../../../services/permissions.js'
@@ -92,6 +97,45 @@ beforeEach(() => {
 })
 
 describe('path routes', () => {
+  const CHAIN = '8b6213be-eae8-4cb2-b027-2f0ab216282b'
+
+  it('chain path returns the built path for a chain id', async () => {
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/integration-events/chain/${CHAIN}/path`
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.root.key).toBe(`request:${CHAIN}`)
+    expect(vi.mocked(buildChainPath).mock.calls[0]).toEqual([CHAIN, { isAdmin: true }])
+    expect(buildEventPath).not.toHaveBeenCalled()
+  })
+
+  it('chain path 400s an id that is not a uuid', async () => {
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/integration-events/chain/not-a-chain/path'
+    })
+    expect(res.statusCode).toBe(400)
+    expect(buildChainPath).not.toHaveBeenCalled()
+  })
+
+  it('chain path 404s a chain with no rows', async () => {
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/integration-events/chain/00000000-0000-4000-8000-000000000000/path'
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('chain path answers 503, never a 500, when assembly throws', async () => {
+    vi.mocked(buildChainPath).mockRejectedValueOnce(new Error('boom'))
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/integration-events/chain/${CHAIN}/path`
+    })
+    expect(res.statusCode).toBe(503)
+  })
+
   it('admin path returns the built path', async () => {
     const res = await (await app()).inject({
       method: 'GET',
