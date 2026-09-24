@@ -5,6 +5,8 @@ import {
   isReoccurrence,
   type OpenRow,
   planSnapshotWrite,
+  pruneClearedSignalRows,
+  pruneStaleDismissals,
   ROW_CAP,
   registerIntegrationSignal,
   runSignalsCycle,
@@ -81,6 +83,17 @@ describe('diffSnapshot', () => {
     const d = diffSnapshot([], [row('x', { title: 'one' }), row('x', { title: 'two' })], now)
     expect(d.inserts).toHaveLength(1)
     expect(d.inserts[0].row.title).toBe('two')
+  })
+})
+
+describe('diffSnapshot — keys longer than the stored 300 characters', () => {
+  it('matches an open row by its truncated row_key instead of inserting a duplicate', () => {
+    const long = `k:${'x'.repeat(398)}`
+    const open = [openRow(4, long.slice(0, 300), new Date('2026-09-20T00:00:00Z'))]
+    const d = diffSnapshot(open, [row(long)], new Date('2026-09-24T00:00:00Z'))
+    expect(d.inserts).toEqual([])
+    expect(d.updates.map((u) => u.id)).toEqual([4])
+    expect(d.clears).toEqual([])
   })
 })
 
@@ -325,5 +338,88 @@ describe('runSignalsCycle', () => {
     ])
     expect(a).toBe(b)
     expect(calls).toBe(1)
+  })
+})
+
+// ── housekeeping query shapes (fake db records every call) ─────────────────
+type Call = { table: string; ops: Array<[string, unknown[]]> }
+function recordingDb(results: Record<string, unknown[][]>) {
+  const calls: Call[] = []
+  const database = ((table: string) => {
+    const call: Call = { table, ops: [] }
+    calls.push(call)
+    const queue = results[table] ?? []
+    const api: Record<string, unknown> = {}
+    for (const m of ['where', 'whereIn', 'whereNotNull', 'whereNull', 'orderBy', 'limit']) {
+      api[m] = (...args: unknown[]) => {
+        call.ops.push([m, args])
+        return api
+      }
+    }
+    const next = async () => queue.shift() ?? []
+    api.select = async (...args: unknown[]) => {
+      call.ops.push(['select', args])
+      return next()
+    }
+    api.pluck = async (...args: unknown[]) => {
+      call.ops.push(['pluck', args])
+      return next()
+    }
+    api.del = async () => {
+      call.ops.push(['del', []])
+      return 0
+    }
+    return api
+  }) as unknown as import('knex').Knex
+  return { database, calls }
+}
+
+describe('pruneClearedSignalRows', () => {
+  it('deletes rows cleared more than 30 days ago, in id chunks, until none are left', async () => {
+    const now = new Date('2026-09-24T00:00:00Z')
+    const ids = Array.from({ length: 1000 }, (_, i) => i + 1)
+    const { database, calls } = recordingDb({
+      nivaro_integration_signal_rows: [ids, [1001, 1002], [], [], []]
+    })
+    const deleted = await pruneClearedSignalRows(now, database)
+    expect(deleted).toBe(1002)
+    const reads = calls.filter((c) => c.ops.some(([m]) => m === 'pluck'))
+    const cutoff = new Date(now.getTime() - 30 * 86_400_000)
+    expect(reads[0].ops).toContainEqual(['where', ['cleared_at', '<', cutoff]])
+    expect(reads[0].ops).toContainEqual(['limit', [1000]])
+    const dels = calls.filter((c) => c.ops.some(([m]) => m === 'del'))
+    expect(dels).toHaveLength(2)
+    expect(dels[0].ops[0]).toEqual(['whereIn', ['id', ids]])
+  })
+})
+
+describe('pruneStaleDismissals', () => {
+  it('reads only the dismissed rows, and only those seen within the prune window', async () => {
+    const now = new Date('2026-09-24T00:00:00Z')
+    const { database, calls } = recordingDb({
+      nivaro_integration_signal_snoozes: [
+        [
+          { id: 1, signal: 'core:x', row_key: 'a', until_occurrence: 'run:1' },
+          { id: 2, signal: 'core:x', row_key: 'b', until_occurrence: 'run:2' }
+        ]
+      ],
+      nivaro_integration_signal_rows: [
+        [{ signal: 'core:x', row_key: 'a', last_seen: new Date('2026-09-23T00:00:00Z') }]
+      ]
+    })
+    await pruneStaleDismissals(now, database)
+    const read = calls.find(
+      (c) => c.table === 'nivaro_integration_signal_rows' && c.ops.some(([m]) => m === 'select')
+    )
+    expect(read?.ops).toContainEqual(['whereIn', ['row_key', ['a', 'b']]])
+    expect(read?.ops).toContainEqual([
+      'where',
+      ['last_seen', '>=', new Date(now.getTime() - 30 * 86_400_000)]
+    ])
+    // 'b' was not seen within the window: its dismissal goes.
+    const del = calls.find(
+      (c) => c.table === 'nivaro_integration_signal_snoozes' && c.ops.some(([m]) => m === 'del')
+    )
+    expect(del?.ops[0]).toEqual(['whereIn', ['id', [2]]])
   })
 })

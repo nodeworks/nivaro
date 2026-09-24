@@ -17,6 +17,7 @@ import {
   rowOccurrence,
   splitSettingValues,
   stableRowHash,
+  storedKey,
   validateSettingPatch
 } from '../services/integration-signal-settings.js'
 import {
@@ -325,8 +326,9 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
     const [ins] = await db('nivaro_integration_signal_snoozes')
       .insert({
         signal: b.signal,
-        row_key: b.row_key ?? null,
-        group_key: b.group_key ?? null,
+        // The key columns hold 300 characters; isSnoozed compares the prefix.
+        row_key: b.row_key ? storedKey(b.row_key) : null,
+        group_key: b.group_key ? storedKey(b.group_key) : null,
         until: b.until ? new Date(b.until) : null,
         until_change_hash: hash,
         until_occurrence: occurrence,
@@ -379,7 +381,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       }
       toInsert.push({
         signal: b.signal,
-        row_key: k,
+        row_key: storedKey(k),
         group_key: null,
         until: null,
         until_change_hash: null,

@@ -157,6 +157,14 @@ export function isImportStale(
   return now.getTime() - new Date(lastOk).getTime() > cadence.hours * 3600_000
 }
 
+/** `row_key` / `group_key` are 300-character columns (migration 348) — a
+ *  longer key is stored truncated, so every comparison against a STORED key
+ *  compares this prefix, never the full key. */
+export const STORED_KEY_LENGTH = 300
+export function storedKey(key: string): string {
+  return key.slice(0, STORED_KEY_LENGTH)
+}
+
 export function stableRowHash(row: SignalRow): string {
   const detail = (row.detail ?? '').replace(/\d+/g, '#')
   return createHash('sha256')
@@ -205,9 +213,9 @@ export function isSnoozed(
   for (const s of snoozes) {
     if (s.signal !== signal) continue
     const scoped = s.row_key
-      ? s.row_key === row.key
+      ? s.row_key === storedKey(row.key)
       : s.group_key
-        ? s.group_key === row.group
+        ? row.group != null && s.group_key === storedKey(row.group)
         : true
     if (!scoped) continue
     if (s.until && new Date(s.until) <= now) continue
@@ -281,6 +289,27 @@ export function planStaleDismissalPrune(
     if (s.until_occurrence == null || s.row_key == null) continue
     const seen = lastSeen.get(`${s.signal}\u0000${s.row_key}`)
     if (seen == null || now.getTime() - seen > staleAfterMs) out.push(s.id)
+  }
+  return out
+}
+
+/**
+ * "Until it changes" snoozes whose OPEN row has changed since — they already
+ * stopped hiding it (isSnoozed compares the hash), but left in place an old
+ * wording coming back would silently hide the row again. A snooze whose row
+ * is not open right now is left alone: it may come back unchanged.
+ */
+export function planChangedSnoozePrune(
+  snoozes: SnoozeRow[],
+  open: Array<{ signal: string; row: SignalRow }>
+): number[] {
+  const byKey = new Map<string, SignalRow>()
+  for (const o of open) byKey.set(`${o.signal}\u0000${storedKey(o.row.key)}`, o.row)
+  const out: number[] = []
+  for (const s of snoozes) {
+    if (!s.until_change_hash || s.row_key == null) continue
+    const row = byKey.get(`${s.signal}\u0000${s.row_key}`)
+    if (row && stableRowHash(row) !== s.until_change_hash) out.push(s.id)
   }
   return out
 }

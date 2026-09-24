@@ -8,12 +8,17 @@
  * new keys insert, seen keys update, vanished keys clear. The console reads
  * the snapshot, never evaluates on page load.
  */
+
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { chunkArray } from './db-batch.js'
 import {
+  planChangedSnoozePrune,
   planStaleDismissalPrune,
   resolveThresholds,
-  rowOccurrence
+  rowOccurrence,
+  type SnoozeRow,
+  storedKey
 } from './integration-signal-settings.js'
 
 export interface SignalThreshold {
@@ -152,8 +157,10 @@ export interface SnapshotDiff {
 }
 
 export function diffSnapshot(open: OpenRow[], fresh: SignalRow[], now: Date): SnapshotDiff {
+  // Keyed by the STORED (300-character) key, so a longer key still finds its
+  // open row instead of inserting a duplicate every cycle.
   const byKey = new Map<string, SignalRow>()
-  for (const r of fresh) byKey.set(r.key, r)
+  for (const r of fresh) byKey.set(storedKey(r.key), r)
   const openByKey = new Map(open.map((o) => [o.row_key, o]))
   const inserts: SnapshotDiff['inserts'] = []
   const updates: SnapshotDiff['updates'] = []
@@ -254,8 +261,8 @@ export function planSnapshotWrite(open: OpenRow[], diff: SnapshotDiff): Snapshot
   const openById = new Map(open.map((o) => [o.id, o]))
   const inserts: PlannedInsert[] = diff.inserts.map((ins) => ({
     key: ins.row.key,
-    row_key: ins.row.key.slice(0, 300),
-    group_key: ins.row.group?.slice(0, 300) ?? null,
+    row_key: storedKey(ins.row.key),
+    group_key: ins.row.group != null ? storedKey(ins.row.group) : null,
     payload: JSON.stringify(ins.row),
     first_seen: ins.first_seen
   }))
@@ -264,7 +271,7 @@ export function planSnapshotWrite(open: OpenRow[], diff: SnapshotDiff): Snapshot
   const touchIds: number[] = []
   for (const up of diff.updates) {
     const payload = JSON.stringify(up.row)
-    const group_key = up.row.group?.slice(0, 300) ?? null
+    const group_key = up.row.group != null ? storedKey(up.row.group) : null
     const stored = openById.get(up.id)
     if (stored && stored.payload === payload && stored.group_key === group_key) {
       touchIds.push(up.id)
@@ -472,7 +479,9 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
     .where('ran_at', '<', new Date(now.getTime() - 7 * 86_400_000))
     .del()
     .catch(() => undefined)
+  await pruneClearedSignalRows(now).catch(() => undefined)
   await pruneStaleDismissals(now).catch(() => undefined)
+  await pruneChangedSnoozes().catch(() => undefined)
   // Opt-in alerts (Task 16). Lazy import: the alerts module reads this
   // registry, so a static import would be circular. Never fails the cycle.
   try {
@@ -484,14 +493,41 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
   return summary
 }
 
+/** How long a cleared row, and a dismissal nobody has seen the row of, is kept. */
+const HOUSEKEEPING_MS = 30 * 86_400_000
+
+/**
+ * Cleared rows older than 30 days — the board never shows them and alerts
+ * never read them; without this the table only ever grows. Deletes in chunks
+ * of 1000 ids (MSSQL's bound-parameter cap), at most 100 chunks per cycle.
+ */
+export async function pruneClearedSignalRows(now: Date, database: Knex = db): Promise<number> {
+  const cutoff = new Date(now.getTime() - HOUSEKEEPING_MS)
+  let deleted = 0
+  for (let i = 0; i < 100; i++) {
+    const ids = (await database('nivaro_integration_signal_rows')
+      .whereNotNull('cleared_at')
+      .where('cleared_at', '<', cutoff)
+      .orderBy('id')
+      .limit(1000)
+      .pluck('id')) as number[]
+    if (ids.length === 0) break
+    await database('nivaro_integration_signal_rows').whereIn('id', ids).del()
+    deleted += ids.length
+    if (ids.length < 1000) break
+  }
+  return deleted
+}
+
 /**
  * Dismiss-snoozes (`until_occurrence` set) whose row hasn't been seen at all
  * in 30 days are dead weight — see `planStaleDismissalPrune`'s own comment.
- * Scoped to only the signals that actually have a dismissal on file, so a
- * quiet instance never pays for scanning every open/cleared row.
+ * Reads only the rows those dismissals name, and only ones seen within the
+ * window (a row older than that counts as unseen, so its dismissal goes) —
+ * never every row of every signal that has a dismissal on file.
  */
-async function pruneStaleDismissals(now: Date): Promise<void> {
-  const snoozes = (await db('nivaro_integration_signal_snoozes')
+export async function pruneStaleDismissals(now: Date, database: Knex = db): Promise<void> {
+  const snoozes = (await database('nivaro_integration_signal_snoozes')
     .whereNotNull('until_occurrence')
     .select('id', 'signal', 'row_key', 'until_occurrence')) as Array<{
     id: number
@@ -501,15 +537,59 @@ async function pruneStaleDismissals(now: Date): Promise<void> {
   }>
   if (snoozes.length === 0) return
   const signals = [...new Set(snoozes.map((s) => s.signal))]
-  const rows = (await db('nivaro_integration_signal_rows')
-    .whereIn('signal', signals)
-    .select('signal', 'row_key', 'last_seen')) as Array<{
-    signal: string
-    row_key: string
-    last_seen: Date
-  }>
-  const staleIds = planStaleDismissalPrune(snoozes, rows, now)
+  const keys = [...new Set(snoozes.map((s) => s.row_key).filter((k): k is string => !!k))]
+  const seenSince = new Date(now.getTime() - HOUSEKEEPING_MS)
+  const rows: Array<{ signal: string; row_key: string; last_seen: Date }> = []
+  for (const chunk of chunkArray(keys, 1000)) {
+    rows.push(
+      ...((await database('nivaro_integration_signal_rows')
+        .whereIn('signal', signals)
+        .whereIn('row_key', chunk)
+        .where('last_seen', '>=', seenSince)
+        .select('signal', 'row_key', 'last_seen')) as typeof rows)
+    )
+  }
+  const staleIds = planStaleDismissalPrune(snoozes, rows, now, HOUSEKEEPING_MS)
   for (const chunk of chunkArray(staleIds, 1000)) {
-    await db('nivaro_integration_signal_snoozes').whereIn('id', chunk).del()
+    await database('nivaro_integration_signal_snoozes').whereIn('id', chunk).del()
+  }
+}
+
+/** Drop "until it changes" snoozes whose open row has changed — see
+ *  `planChangedSnoozePrune`. Reads only the rows those snoozes name. */
+export async function pruneChangedSnoozes(database: Knex = db): Promise<void> {
+  const snoozes = (await database('nivaro_integration_signal_snoozes')
+    .whereNotNull('until_change_hash')
+    .whereNotNull('row_key')
+    .select(
+      'id',
+      'signal',
+      'row_key',
+      'group_key',
+      'until',
+      'until_change_hash',
+      'until_occurrence'
+    )) as SnoozeRow[]
+  if (snoozes.length === 0) return
+  const signals = [...new Set(snoozes.map((s) => s.signal))]
+  const keys = [...new Set(snoozes.map((s) => s.row_key).filter((k): k is string => !!k))]
+  const open: Array<{ signal: string; row: SignalRow }> = []
+  for (const chunk of chunkArray(keys, 1000)) {
+    const rows = (await database('nivaro_integration_signal_rows')
+      .whereIn('signal', signals)
+      .whereIn('row_key', chunk)
+      .whereNull('cleared_at')
+      .select('signal', 'payload')) as Array<{ signal: string; payload: string }>
+    for (const r of rows) {
+      try {
+        open.push({ signal: r.signal, row: JSON.parse(r.payload) as SignalRow })
+      } catch {
+        // An unreadable payload can't be compared — leave its snooze alone.
+      }
+    }
+  }
+  const ids = planChangedSnoozePrune(snoozes, open)
+  for (const chunk of chunkArray(ids, 1000)) {
+    await database('nivaro_integration_signal_snoozes').whereIn('id', chunk).del()
   }
 }

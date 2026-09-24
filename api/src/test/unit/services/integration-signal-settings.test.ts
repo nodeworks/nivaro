@@ -3,6 +3,7 @@ import {
   importCadence,
   isImportStale,
   isSnoozed,
+  planChangedSnoozePrune,
   planStaleDismissalPrune,
   rowOccurrence,
   type SnoozeRow,
@@ -300,9 +301,7 @@ describe('isSnoozed — Dismiss (until_occurrence)', () => {
     // `since` moving (a fresh instance the signal only distinguishes by
     // timestamp) is exactly "it happened again" for a signal with no
     // dedicated occurrence.
-    expect(
-      isSnoozed(row(undefined, '2026-09-21T00:00:00Z'), 'core:x', [dismissed], now)
-    ).toBeNull()
+    expect(isSnoozed(row(undefined, '2026-09-21T00:00:00Z'), 'core:x', [dismissed], now)).toBeNull()
   })
 
   it('a row with neither occurrence nor since falls back to the stable hash', () => {
@@ -316,9 +315,7 @@ describe('isSnoozed — Dismiss (until_occurrence)', () => {
       isSnoozed({ ...target, detail: '9 records failing' }, 'core:x', [dismissed], now)
     ).not.toBeNull()
     // A real change to the title (a different problem) is a different hash.
-    expect(
-      isSnoozed({ ...target, title: 'Other problem' }, 'core:x', [dismissed], now)
-    ).toBeNull()
+    expect(isSnoozed({ ...target, title: 'Other problem' }, 'core:x', [dismissed], now)).toBeNull()
   })
 
   it('a Dismiss and an older timed snooze on the same row do not interfere with each other', () => {
@@ -341,7 +338,14 @@ describe('isSnoozed — Dismiss (until_occurrence)', () => {
 })
 
 describe('planStaleDismissalPrune', () => {
-  const dsn = (p: Partial<{ id: number; signal: string; row_key: string | null; until_occurrence: string | null }>) => ({
+  const dsn = (
+    p: Partial<{
+      id: number
+      signal: string
+      row_key: string | null
+      until_occurrence: string | null
+    }>
+  ) => ({
     id: 1,
     signal: 'core:x',
     row_key: 'k1',
@@ -377,3 +381,48 @@ describe('planStaleDismissalPrune', () => {
 function daysAgoOf(from: Date, days: number): Date {
   return new Date(from.getTime() - days * 86_400_000)
 }
+
+describe('isSnoozed — keys longer than the stored 300 characters', () => {
+  it('matches a row whose key the snooze table could only hold truncated', () => {
+    const long = `k:${'x'.repeat(398)}`
+    const group = `g:${'y'.repeat(398)}`
+    const row = { key: long, group, title: 'T', actions: [] }
+    const until = new Date('2026-09-24')
+    expect(
+      isSnoozed(row, 'core:x', [sn({ row_key: long.slice(0, 300), until })], now)
+    ).not.toBeNull()
+    expect(
+      isSnoozed(row, 'core:x', [sn({ group_key: group.slice(0, 300), until })], now)
+    ).not.toBeNull()
+  })
+})
+
+describe('planChangedSnoozePrune', () => {
+  const row = { key: 'k1', title: 'T', actions: [] }
+  const h = stableRowHash(row)
+  it('drops an "until it changes" snooze once its open row no longer matches the hash', () => {
+    const snoozes = [
+      sn({ id: 1, row_key: 'k1', until_change_hash: h }),
+      sn({ id: 2, row_key: 'k2', until_change_hash: h }),
+      sn({ id: 3, row_key: 'k3', until_change_hash: 'old' }),
+      sn({ id: 4, row_key: 'k1', until: new Date('2026-09-24') })
+    ]
+    const open = [
+      { signal: 'core:x', row: row },
+      { signal: 'core:x', row: { ...row, key: 'k2', title: 'reworded' } }
+    ]
+    // k1 still matches; k2 changed; k3 is not open (left alone — it may
+    // come back unchanged); 4 is a timed snooze.
+    expect(planChangedSnoozePrune(snoozes, open)).toEqual([2])
+  })
+  it('matches long keys by their stored 300-character prefix', () => {
+    const long = `k:${'x'.repeat(398)}`
+    const changed = { key: long, title: 'new wording', actions: [] }
+    expect(
+      planChangedSnoozePrune(
+        [sn({ id: 9, row_key: long.slice(0, 300), until_change_hash: h })],
+        [{ signal: 'core:x', row: changed }]
+      )
+    ).toEqual([9])
+  })
+})
