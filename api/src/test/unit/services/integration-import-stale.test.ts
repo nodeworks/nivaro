@@ -16,7 +16,12 @@ describe('core:import-stale', () => {
 
   it('skips an excluded import (cadence 0) and honours overrides and the default', async () => {
     raw.mockResolvedValueOnce([
-      { import_key: 'excluded', label: 'Excluded', last_ok: hoursAgo(500), last_attempt: hoursAgo(500) },
+      {
+        import_key: 'excluded',
+        label: 'Excluded',
+        last_ok: hoursAgo(500),
+        last_attempt: hoursAgo(500)
+      },
       { import_key: 'fast', label: 'Fast', last_ok: hoursAgo(10), last_attempt: hoursAgo(10) },
       { import_key: 'plain', label: 'Plain', last_ok: hoursAgo(50), last_attempt: hoursAgo(50) },
       { import_key: 'fresh', label: 'Fresh', last_ok: hoursAgo(1), last_attempt: hoursAgo(1) },
@@ -36,7 +41,12 @@ describe('core:import-stale', () => {
     raw.mockResolvedValueOnce([
       // Would read stale by cadence alone — 200 days since even an attempt
       // means nobody is watching it, so it must not appear.
-      { import_key: 'dormant', label: 'Dormant', last_ok: daysAgo(200), last_attempt: daysAgo(200) },
+      {
+        import_key: 'dormant',
+        label: 'Dormant',
+        last_ok: daysAgo(200),
+        last_attempt: daysAgo(200)
+      },
       // Still succeeded within the window — stays a normal stale candidate.
       { import_key: 'plain', label: 'Plain', last_ok: hoursAgo(50), last_attempt: hoursAgo(50) }
     ])
