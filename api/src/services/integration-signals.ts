@@ -9,6 +9,7 @@
  * the snapshot, never evaluates on page load.
  */
 import { db } from '../db/index.js'
+import { chunkArray } from './db-batch.js'
 import { resolveThresholds } from './integration-signal-settings.js'
 
 export interface SignalThreshold {
@@ -108,6 +109,11 @@ export interface OpenRow {
   id: number
   row_key: string
   first_seen: Date
+  /** Exactly what was last written to the `payload` column (JSON.stringify
+   *  of the SignalRow at write time) — planSnapshotWrite string-compares
+   *  against this, it is never read by diffSnapshot itself. */
+  payload: string
+  group_key: string | null
 }
 
 export interface SnapshotDiff {
@@ -132,6 +138,66 @@ export function diffSnapshot(open: OpenRow[], fresh: SignalRow[], now: Date): Sn
   }
   const clears = open.filter((o) => !byKey.has(o.row_key)).map((o) => o.id)
   return { inserts, updates, clears }
+}
+
+// ── write plan (pure) ───────────────────────────────────────────────────────
+
+export interface PlannedInsert {
+  /** Untruncated — this is what newKeys reports, never the DB row_key. */
+  key: string
+  row_key: string
+  group_key: string | null
+  payload: string
+  first_seen: Date
+}
+
+export interface PlannedChange {
+  id: number
+  payload: string
+  group_key: string | null
+}
+
+export interface SnapshotWritePlan {
+  inserts: PlannedInsert[]
+  changed: PlannedChange[]
+  /** Open rows whose payload AND group_key are unchanged — last_seen only. */
+  touchIds: number[]
+  clears: number[]
+}
+
+/**
+ * Decides how to turn a diff into writes without touching the DB: unchanged
+ * rows only need last_seen advanced (bulk, cheap), a changed payload or a
+ * drifted group_key needs a real per-row UPDATE, and a new key needs an
+ * INSERT. The comparison is a plain string compare of the stored `payload`
+ * against a fresh `JSON.stringify` of the row — the stored value is exactly
+ * what evaluate() produced last time, so as long as the same code produces
+ * the same key order this run, string equality is correct; it is
+ * deliberately NOT a deep-equal (semantically-equal-but-differently-ordered
+ * JSON registers as changed, and that is fine).
+ */
+export function planSnapshotWrite(open: OpenRow[], diff: SnapshotDiff): SnapshotWritePlan {
+  const openById = new Map(open.map((o) => [o.id, o]))
+  const inserts: PlannedInsert[] = diff.inserts.map((ins) => ({
+    key: ins.row.key,
+    row_key: ins.row.key.slice(0, 300),
+    group_key: ins.row.group?.slice(0, 300) ?? null,
+    payload: JSON.stringify(ins.row),
+    first_seen: ins.first_seen
+  }))
+  const changed: PlannedChange[] = []
+  const touchIds: number[] = []
+  for (const up of diff.updates) {
+    const payload = JSON.stringify(up.row)
+    const group_key = up.row.group?.slice(0, 300) ?? null
+    const stored = openById.get(up.id)
+    if (stored && stored.payload === payload && stored.group_key === group_key) {
+      touchIds.push(up.id)
+    } else {
+      changed.push({ id: up.id, payload, group_key })
+    }
+  }
+  return { inserts, changed, touchIds, clears: diff.clears }
 }
 
 // ── evaluation ──────────────────────────────────────────────────────────────
@@ -254,31 +320,41 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
         const open = (await db('nivaro_integration_signal_rows')
           .where({ signal: r.signal })
           .whereNull('cleared_at')
-          .select('id', 'row_key', 'first_seen')) as OpenRow[]
+          .select('id', 'row_key', 'first_seen', 'payload', 'group_key')) as OpenRow[]
         const diff = diffSnapshot(open, r.rows, now)
-        for (const ins of diff.inserts) {
-          await db('nivaro_integration_signal_rows').insert({
-            signal: r.signal,
-            row_key: ins.row.key.slice(0, 300),
-            group_key: ins.row.group?.slice(0, 300) ?? null,
-            payload: JSON.stringify(ins.row),
-            first_seen: ins.first_seen,
-            last_seen: now
-          })
-          newKeys.push(ins.row.key)
-        }
-        for (const up of diff.updates) {
-          await db('nivaro_integration_signal_rows')
-            .where({ id: up.id })
-            .update({
-              payload: JSON.stringify(up.row),
-              group_key: up.row.group?.slice(0, 300) ?? null,
+        const plan = planSnapshotWrite(open, diff)
+
+        // Multi-row INSERT, ≤ 50 rows/chunk (6 columns × 50 = 300 bound params).
+        for (const chunk of chunkArray(plan.inserts, 50)) {
+          await db('nivaro_integration_signal_rows').insert(
+            chunk.map((ins) => ({
+              signal: r.signal,
+              row_key: ins.row_key,
+              group_key: ins.group_key,
+              payload: ins.payload,
+              first_seen: ins.first_seen,
               last_seen: now
-            })
+            }))
+          )
         }
-        for (let i = 0; i < diff.clears.length; i += 1000) {
+        newKeys.push(...plan.inserts.map((ins) => ins.key))
+
+        // A real payload/group_key change still gets its own UPDATE.
+        for (const ch of plan.changed) {
           await db('nivaro_integration_signal_rows')
-            .whereIn('id', diff.clears.slice(i, i + 1000))
+            .where({ id: ch.id })
+            .update({ payload: ch.payload, group_key: ch.group_key, last_seen: now })
+        }
+
+        // Everything else just advances last_seen — bulk, chunked at 1000
+        // ids (MSSQL's ~2100 bound-param cap).
+        for (const chunk of chunkArray(plan.touchIds, 1000)) {
+          await db('nivaro_integration_signal_rows').whereIn('id', chunk).update({ last_seen: now })
+        }
+
+        for (const chunk of chunkArray(plan.clears, 1000)) {
+          await db('nivaro_integration_signal_rows')
+            .whereIn('id', chunk)
             .update({ cleared_at: now })
         }
       }
