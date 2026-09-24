@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   diffSnapshot,
   evaluateAll,
+  isReoccurrence,
   type OpenRow,
   planSnapshotWrite,
   ROW_CAP,
@@ -10,13 +11,24 @@ import {
   type SignalRow
 } from '../../../services/integration-signals.js'
 
-vi.mock('../../../services/integration-signal-settings.js', () => ({
-  resolveThresholds: vi.fn(async (s: { thresholds: Array<{ key: string; default: number }> }) => ({
-    enabled: true,
-    severity: 'warn',
-    thresholds: Object.fromEntries(s.thresholds.map((t) => [t.key, t.default]))
-  }))
-}))
+// Only `resolveThresholds` needs faking (evaluateAll's own settings lookup) —
+// `isReoccurrence` (integration-signals.ts) calls the REAL `rowOccurrence`
+// from this module, so the mock must keep everything else genuine rather
+// than replacing the whole module.
+vi.mock('../../../services/integration-signal-settings.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../services/integration-signal-settings.js')>()
+  return {
+    ...actual,
+    resolveThresholds: vi.fn(
+      async (s: { thresholds: Array<{ key: string; default: number }> }) => ({
+        enabled: true,
+        severity: 'warn',
+        thresholds: Object.fromEntries(s.thresholds.map((t) => [t.key, t.default]))
+      })
+    )
+  }
+})
 
 const row = (key: string, extra: Partial<SignalRow> = {}): SignalRow => ({
   key,
@@ -147,6 +159,101 @@ describe('planSnapshotWrite', () => {
     const diff = diffSnapshot(open, [], now)
     const plan = planSnapshotWrite(open, diff)
     expect(plan.clears).toEqual([9])
+  })
+
+  it('a changed row whose occurrence moved on is reported in reoccurredKeys', () => {
+    const staleRow = row('a', { occurrence: 'run:1' })
+    const freshRow = row('a', { occurrence: 'run:2' })
+    const open = [openRow(1, 'a', now, { payload: JSON.stringify(staleRow), group_key: null })]
+    const diff = diffSnapshot(open, [freshRow], now)
+    const plan = planSnapshotWrite(open, diff)
+    expect(plan.changed).toEqual([{ id: 1, payload: JSON.stringify(freshRow), group_key: null }])
+    expect(plan.reoccurredKeys).toEqual(['a'])
+  })
+
+  it('a changed row whose occurrence is unchanged is NOT a re-occurrence, even though the payload differs', () => {
+    const staleRow = row('a', { occurrence: 'run:1', detail: 'old detail' })
+    const freshRow = row('a', { occurrence: 'run:1', detail: 'new detail' })
+    const open = [openRow(1, 'a', now, { payload: JSON.stringify(staleRow), group_key: null })]
+    const diff = diffSnapshot(open, [freshRow], now)
+    const plan = planSnapshotWrite(open, diff)
+    expect(plan.changed).toEqual([{ id: 1, payload: JSON.stringify(freshRow), group_key: null }])
+    expect(plan.reoccurredKeys).toEqual([])
+  })
+
+  it('an unchanged row (touch-only) never appears in reoccurredKeys', () => {
+    const freshRow = row('a', { occurrence: 'run:1', group: 'g1' })
+    const open = [openRow(1, 'a', now, { payload: JSON.stringify(freshRow), group_key: 'g1' })]
+    const diff = diffSnapshot(open, [freshRow], now)
+    const plan = planSnapshotWrite(open, diff)
+    expect(plan.touchIds).toEqual([1])
+    expect(plan.reoccurredKeys).toEqual([])
+  })
+
+  it('an insert (unseen key) is never in reoccurredKeys — it is already reported via `inserts`', () => {
+    const freshRow = row('b')
+    const diff = diffSnapshot([], [freshRow], now)
+    const plan = planSnapshotWrite([], diff)
+    expect(plan.reoccurredKeys).toEqual([])
+  })
+})
+
+describe('isReoccurrence', () => {
+  it('same explicit occurrence: not a re-occurrence', () => {
+    const stored = JSON.stringify(row('a', { occurrence: 'run:1', detail: 'x' }))
+    expect(isReoccurrence(stored, row('a', { occurrence: 'run:1', detail: 'y' }))).toBe(false)
+  })
+
+  it('a new explicit occurrence on the same key: a re-occurrence', () => {
+    const stored = JSON.stringify(row('a', { occurrence: 'run:1' }))
+    expect(isReoccurrence(stored, row('a', { occurrence: 'run:2' }))).toBe(true)
+  })
+
+  it('payload change without an occurrence change is not a re-occurrence', () => {
+    const stored = JSON.stringify(row('a', { occurrence: 'run:1', title: 'old title' }))
+    expect(isReoccurrence(stored, row('a', { occurrence: 'run:1', title: 'new title' }))).toBe(
+      false
+    )
+  })
+
+  it('neither side sets an explicit occurrence: falls back to the since/hash compare, and a real change registers', () => {
+    // No `since` on either side, so both fall through to stableRowHash — a
+    // genuine (non-digit) content change moves the hash, which IS a
+    // re-occurrence under the fallback.
+    const stored = JSON.stringify(row('a', { title: 'has expired' }))
+    expect(isReoccurrence(stored, row('a', { title: 'has failed' }))).toBe(true)
+  })
+
+  it('neither side sets an explicit occurrence and nothing meaningful changed: not a re-occurrence', () => {
+    const stored = JSON.stringify(row('a', { title: 't', detail: 'gap 4' }))
+    expect(isReoccurrence(stored, row('a', { title: 't', detail: 'gap 9' }))).toBe(false)
+  })
+
+  it('stored had NO explicit occurrence and the fresh row now sets one for the first time: NOT a re-occurrence', () => {
+    // This is the "first cycle after this signal starts setting `occurrence`"
+    // case (pre-existing rows, or genuinely pre-349 rows, whose stored JSON
+    // has no `occurrence` key at all) — the since/hash fallback for the
+    // stored side would almost certainly differ from the new real
+    // occurrence value, which would otherwise flag EVERY open row as
+    // freshly re-occurred the moment a signal's evaluate() gains an
+    // explicit `occurrence`. That is a richer-identity upgrade, not a new
+    // instance of the problem, so it is deliberately excluded.
+    const stored = JSON.stringify(row('a', { title: 't', detail: 'd' }))
+    expect(isReoccurrence(stored, row('a', { title: 't', detail: 'd', occurrence: 'run:1' }))).toBe(
+      false
+    )
+  })
+
+  it('stored had an explicit occurrence and the fresh row drops it: falls back and can still register a change', () => {
+    // The reverse direction is NOT special-cased — losing explicit identity
+    // is unusual enough that comparing via the fallback (which will very
+    // likely differ from the old explicit value) is the safer default.
+    const stored = JSON.stringify(row('a', { occurrence: 'run:1', title: 'old' }))
+    expect(isReoccurrence(stored, row('a', { title: 'new' }))).toBe(true)
+  })
+
+  it('an unparsable stored payload is never a re-occurrence', () => {
+    expect(isReoccurrence('not json', row('a', { occurrence: 'run:1' }))).toBe(false)
   })
 })
 

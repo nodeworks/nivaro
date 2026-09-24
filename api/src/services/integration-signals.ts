@@ -10,7 +10,11 @@
  */
 import { db } from '../db/index.js'
 import { chunkArray } from './db-batch.js'
-import { planStaleDismissalPrune, resolveThresholds } from './integration-signal-settings.js'
+import {
+  planStaleDismissalPrune,
+  resolveThresholds,
+  rowOccurrence
+} from './integration-signal-settings.js'
 
 export interface SignalThreshold {
   key: string
@@ -172,9 +176,54 @@ export interface PlannedChange {
 export interface SnapshotWritePlan {
   inserts: PlannedInsert[]
   changed: PlannedChange[]
+  /**
+   * Subset of `changed`, by key — rows whose OCCURRENCE moved on since the
+   * stored payload, not merely some other field. "The same problem
+   * happened again," which the caller treats like a fresh insert for
+   * alerting purposes (Task 16 reads `CycleSummary.results[].new_keys`),
+   * while the DB write stays a plain UPDATE — the row was never cleared, so
+   * `first_seen` is untouched. See `isReoccurrence` for what counts.
+   */
+  reoccurredKeys: string[]
   /** Open rows whose payload AND group_key are unchanged — last_seen only. */
   touchIds: number[]
   clears: number[]
+}
+
+/**
+ * True when `freshRow`'s occurrence differs from what the STORED payload
+ * (the last-written JSON of the SAME key) held — a genuinely new instance
+ * of the problem, not merely "some other field drifted" (a payload string
+ * change alone already routes the row into `changed`; this decides whether
+ * THAT change also counts as a re-occurrence).
+ *
+ * One case is deliberately excluded: a stored payload with NO explicit
+ * `occurrence` at all (a row written before this signal ever set one — the
+ * common shape for anything predating this concept, "pre-349 rows" in the
+ * spec's own words) compared against a fresh row that now sets one for the
+ * FIRST time. Comparing via `rowOccurrence`'s fallback there would almost
+ * always report a difference (the fallback compares `since`/hash for the
+ * stored side against a real occurrence id for the fresh side, which have
+ * nothing to do with each other), which would flag EVERY already-open row
+ * as having "just happened again" on the very first cycle after a signal's
+ * evaluate() gains explicit occurrence tracking. That is the signal
+ * reporting richer identity, not a new instance of the problem it already
+ * had open — so it is excluded here, not merely as an edge case but as the
+ * one guard that keeps a code change from masquerading as new incidents.
+ * Once both sides have gone through the SAME fallback (neither side ever
+ * set an explicit occurrence), the comparison is exactly the since/hash
+ * compare `rowOccurrence` already does for a signal that never sets one.
+ */
+export function isReoccurrence(storedPayload: string, freshRow: SignalRow): boolean {
+  let stored: SignalRow
+  try {
+    stored = JSON.parse(storedPayload) as SignalRow
+  } catch {
+    return false
+  }
+  if (!stored || typeof stored !== 'object') return false
+  if (stored.occurrence == null && freshRow.occurrence != null) return false
+  return rowOccurrence(freshRow) !== rowOccurrence(stored)
 }
 
 /**
@@ -198,6 +247,7 @@ export function planSnapshotWrite(open: OpenRow[], diff: SnapshotDiff): Snapshot
     first_seen: ins.first_seen
   }))
   const changed: PlannedChange[] = []
+  const reoccurredKeys: string[] = []
   const touchIds: number[] = []
   for (const up of diff.updates) {
     const payload = JSON.stringify(up.row)
@@ -207,9 +257,10 @@ export function planSnapshotWrite(open: OpenRow[], diff: SnapshotDiff): Snapshot
       touchIds.push(up.id)
     } else {
       changed.push({ id: up.id, payload, group_key })
+      if (stored && isReoccurrence(stored.payload, up.row)) reoccurredKeys.push(up.row.key)
     }
   }
-  return { inserts, changed, touchIds, clears: diff.clears }
+  return { inserts, changed, reoccurredKeys, touchIds, clears: diff.clears }
 }
 
 // ── evaluation ──────────────────────────────────────────────────────────────
@@ -295,7 +346,17 @@ export async function evaluateAll(
 
 export interface CycleSummary {
   ran_at: string
-  results: Array<{ signal: string; count: number; error: string | null; new_keys: string[] }>
+  results: Array<{
+    signal: string
+    count: number
+    error: string | null
+    /** Brand-new keys AND keys whose occurrence moved on — what alerts (Task
+     *  16) treat as "this needs a fresh look". */
+    new_keys: string[]
+    /** Subset of `new_keys` that were already open under this same key —
+     *  distinguished so wording can say "happened again" rather than "new". */
+    reoccurred_keys: string[]
+  }>
 }
 
 let inFlight: Promise<CycleSummary> | null = null
@@ -318,6 +379,7 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
   const summary: CycleSummary = { ran_at: now.toISOString(), results: [] }
   for (const r of results) {
     const newKeys: string[] = []
+    const reoccurredKeys: string[] = []
     try {
       await db('nivaro_integration_signal_runs').insert({
         signal: r.signal,
@@ -350,6 +412,11 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
           )
         }
         newKeys.push(...plan.inserts.map((ins) => ins.key))
+        // A re-occurring row (same key, occurrence moved on) counts as new
+        // for alerting even though its DB row is only ever UPDATEd, never
+        // cleared+reinserted — first_seen stays put.
+        newKeys.push(...plan.reoccurredKeys)
+        reoccurredKeys.push(...plan.reoccurredKeys)
 
         // A real payload/group_key change still gets its own UPDATE.
         for (const ch of plan.changed) {
@@ -375,11 +442,18 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
         signal: r.signal,
         count: r.count,
         error: `snapshot write failed: ${err instanceof Error ? err.message : String(err)}`,
-        new_keys: []
+        new_keys: [],
+        reoccurred_keys: []
       })
       continue
     }
-    summary.results.push({ signal: r.signal, count: r.count, error: r.error, new_keys: newKeys })
+    summary.results.push({
+      signal: r.signal,
+      count: r.count,
+      error: r.error,
+      new_keys: newKeys,
+      reoccurred_keys: reoccurredKeys
+    })
   }
   await db('nivaro_integration_signal_runs')
     .where('ran_at', '<', new Date(now.getTime() - 7 * 86_400_000))

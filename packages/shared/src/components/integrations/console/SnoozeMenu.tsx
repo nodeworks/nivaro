@@ -146,7 +146,7 @@ export function SnoozeMenu({
                   { onSuccess: () => setOpen(false) }
                 )
               }}
-              className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60'
+              className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60'
             >
               {add.isPending ? (
                 <Loader2 className='h-3.5 w-3.5 shrink-0 animate-spin' />
