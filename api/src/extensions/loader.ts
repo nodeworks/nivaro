@@ -29,6 +29,7 @@ import {
   registerExtensionEventHandler
 } from '../services/extension-events.js'
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
+import { registerEventSource } from '../services/integration-event-sources.js'
 import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
@@ -298,6 +299,11 @@ export interface ExtensionContext {
     /** Register an action a signal row may offer (kind 'extension', id = def.id). */
     registerSignalAction(
       def: import('../services/integration-signals.js').SignalActionHandler
+    ): void
+    /** Register an event source on the Integrations console's Events feed
+     *  (a partner feed with its own list, and optionally a single lookup). */
+    registerEventSource(
+      def: import('../services/integration-event-sources.js').EventSourceDef
     ): void
   }
   integrity: {
@@ -1008,6 +1014,11 @@ async function loadExtension(
         },
         registerSignalAction: (def) => {
           void registerExtensionSignalAction(def, ext.id ?? 'extension', ctx.logger)
+        },
+        registerEventSource: (def) => {
+          note('integrations')
+          own('event_sources', `${def.id} · ${def.label}`)
+          registerEventSource(def)
         }
       },
       integrity: {
@@ -1398,7 +1409,8 @@ export async function loadCloudExtensions(
           },
           registerSignalAction: (def) => {
             void registerExtensionSignalAction(def, ext.id ?? 'extension', ctx.logger)
-          }
+          },
+          registerEventSource: (def) => registerEventSource(def)
         },
         integrity: {
           registerCheck: (check) => registerIntegrityCheck(check)

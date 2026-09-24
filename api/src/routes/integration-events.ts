@@ -3,66 +3,55 @@ import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chainIdsForRoots, recordReplayRoot } from '../services/chain-roots.js'
+import { chainsTouchingRecord, findRecordRef } from '../services/event-path/record-ref.js'
+import {
+  describeEventSources,
+  fillEventLabels,
+  listEvents
+} from '../services/integration-event-sources.js'
 import { can } from '../services/permissions.js'
-import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 
-type FeedEntry = Awaited<ReturnType<typeof relatedNoteRegistry.listRecent>>[number]
-
-/**
- * Entries a provider sent without a record label get the record's friendly id
- * (the human id the entity-room registry names), one batched lookup per
- * collection over the page. Never throws — a failed lookup leaves the entry
- * unlabelled and the client falls back to the raw id.
- */
-export async function fillItemLabels(entries: FeedEntry[]): Promise<void> {
-  const byCollection = new Map<string, Set<string>>()
-  for (const e of entries) {
-    if (e.item_label || !e.collection || e.item_id == null || e.item_id === '') continue
-    const set = byCollection.get(e.collection) ?? new Set<string>()
-    set.add(String(e.item_id))
-    byCollection.set(e.collection, set)
-  }
-  for (const [collection, ids] of byCollection) {
-    try {
-      const labels = await resolveFriendlyIds(collection, [...ids])
-      for (const e of entries) {
-        if (e.item_label || e.collection !== collection) continue
-        const label = labels.get(String(e.item_id))
-        // resolveFriendlyIds echoes the id when it finds nothing better.
-        if (label && label !== String(e.item_id)) e.item_label = label
-      }
-    } catch {
-      /* the entry keeps no label */
-    }
-  }
-}
+/** Kept for existing importers — the fill lives with the event sources now. */
+export const fillItemLabels = fillEventLabels
 
 /**
- * #20 / #29 — the integration events feed: every extension-registered notes
- * source that can LIST across records feeds one page (filter by integration
- * and status), and a provider that can REPLAY re-applies one event from its
- * stored form. The thread's per-record entries reuse the same replay route.
+ * #20 / #29 — the integration events feed: every registered event source
+ * (core outbound pushes and inbound partner writes, plus each notes
+ * provider that can LIST across records) feeds one page, filterable by
+ * source, status, partner, caller and record; a provider that can REPLAY
+ * re-applies one event from its stored form. The thread's per-record
+ * entries reuse the same replay route.
  */
 export async function integrationEventsRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
-    const q = req.query as {
-      integration?: string
-      provider?: string
-      status?: string
-      limit?: string
-      before?: string
-    }
-    const limit = Math.min(500, Math.max(1, Number(q.limit) || 100))
+    const q = req.query as Record<string, string | undefined>
+    const limit = Math.min(Math.max(Number(q.limit) || 100, 1), 500)
     const status =
       q.status === 'ok' || q.status === 'error' || q.status === 'info' ? q.status : null
-    // `provider` is the name the console (and the old events page) sends;
-    // `integration` is the original parameter — both narrow to one source.
-    const provider = q.integration || q.provider || null
-    const before = q.before && !Number.isNaN(new Date(q.before).getTime()) ? q.before : null
-    const providers = relatedNoteRegistry.describe()
-    const entries = await relatedNoteRegistry.listRecent({ limit, provider, status, before })
-    await fillItemLabels(entries)
-    return reply.send({ data: { providers, entries } })
+    const before = q.before && !Number.isNaN(Date.parse(q.before)) ? q.before : null
+    const record = q.record ? await findRecordRef(q.record) : null
+    const chainIds = record ? await chainsTouchingRecord(record.collection, record.item) : null
+    const entries = await listEvents({
+      limit,
+      status,
+      before,
+      // `provider` is what the console sends; `integration` the original
+      // parameter; `source` the registry's own name — all narrow to one.
+      source: q.source || q.provider || q.integration || null,
+      partner: q.partner || null,
+      caller: q.caller || null,
+      includePeople: q.include_people === '1',
+      record,
+      chainIds
+    })
+    await fillEventLabels(entries)
+    return reply.send({
+      data: {
+        providers: describeEventSources(),
+        entries: entries.map((e) => ({ ...e, provider: e.source })),
+        record
+      }
+    })
   })
 
   app.post('/:provider/replay', { preHandler: requireAuth }, async (req, reply) => {

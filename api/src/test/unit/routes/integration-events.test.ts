@@ -90,10 +90,10 @@ describe('GET /integration-events', () => {
     register('test:a', [entry(1, 1), entry(2, 2, { item_label: 'Given label' }), entry(3, 3)])
     const app = buildApp()
     const res = await app.inject({ method: 'GET', url: '/integration-events' })
-    const entries = res.json().data.entries as Array<{ id: number; item_label?: string | null }>
-    expect(entries.find((e) => e.id === 1)?.item_label).toBe('REC-101')
-    expect(entries.find((e) => e.id === 2)?.item_label).toBe('Given label')
-    expect(entries.find((e) => e.id === 3)?.item_label).toBe('REC-103')
+    const entries = res.json().data.entries as Array<{ id: string; item_label?: string | null }>
+    expect(entries.find((e) => e.id === '1')?.item_label).toBe('REC-101')
+    expect(entries.find((e) => e.id === '2')?.item_label).toBe('Given label')
+    expect(entries.find((e) => e.id === '3')?.item_label).toBe('REC-103')
     expect(vi.mocked(resolveFriendlyIds)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(resolveFriendlyIds).mock.calls[0][1].sort()).toEqual(['101', '103'])
     await app.close()
@@ -118,8 +118,8 @@ describe('GET /integration-events', () => {
       method: 'GET',
       url: `/integration-events?limit=2&before=${encodeURIComponent(cursor)}`
     })
-    const ids = (res.json().data.entries as Array<{ id: number }>).map((e) => e.id)
-    expect(ids).toEqual([3, 4])
+    const ids = (res.json().data.entries as Array<{ id: string }>).map((e) => e.id)
+    expect(ids).toEqual(['3', '4'])
     await app.close()
   })
 })
