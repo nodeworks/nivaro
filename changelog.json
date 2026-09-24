@@ -1,10 +1,325 @@
 {
-  "generated_at": "2026-09-23T19:40:45.498Z",
+  "generated_at": "2026-09-24T12:53:57.687Z",
   "releases": [
+    {
+      "version": "0.1.335",
+      "tag": "v0.1.335",
+      "date": "2026-09-24T08:53:45-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "opt-in integration alerts — real-time and daily summary, thresholds editor",
+              "hash": "6d28906b"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "partner calls show the full request and response",
+              "hash": "8040ffc8"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "drill into a Firefight row — failed push and import run detail",
+              "hash": "aa966fd4"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "record who started each push and how (migration 350)",
+              "hash": "6cd85ee2"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "dismiss one occurrence — it returns when the problem happens again",
+              "hash": "911e430e"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "Events tab — the integration events feed joins the console",
+              "hash": "d43cab0f"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "Inbound tab — callers, request log, import health",
+              "hash": "cb5656b7"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "per-import staleness can be excluded or cleared",
+              "hash": "1e5bfa02"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "friendly record names on the console",
+              "hash": "0e05bdc1"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "re-run one transition push action for a record without moving its state",
+              "hash": "eed53021"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "shared Integrations console — Firefight and Partners",
+              "hash": "af62ccff"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "partner health cards, partner detail and import health API",
+              "hash": "2f4ea18f"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "signals API, snoozes, settings, row actions and the 5-minute evaluation job",
+              "hash": "6d880160"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "core signals — partner failing, failed pushes, obligations, inbound, imports, flows",
+              "hash": "b4175394"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "ctx.integrations.registerSignal and registerSignalAction",
+              "hash": "814ff5de"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "signal settings validation and snooze matching",
+              "hash": "eb127a81"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "signal registry, snapshot diff and single-flight evaluation cycle",
+              "hash": "01e41f8a"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "signal snapshot, settings, snooze and subscription tables",
+              "hash": "54139fed"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "chunked call-log prune, per-tenant notes probe, masked attempt responses",
+              "hash": "bab17559"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "prune external API call logs after 30 days",
+              "hash": "3bba4bba"
+            },
+            {
+              "section": "Fixed",
+              "scope": "extensions",
+              "text": "a bad signal registration is logged, not fatal",
+              "hash": "041a1eaa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "keep column probes per tenant",
+              "hash": "c54a88a0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "prune the signal snapshot and match long keys",
+              "hash": "b9846fb7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "mask secrets in stored call-log bodies",
+              "hash": "23bed6d5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "alert once per problem, and name the record in each line",
+              "hash": "d0b3adb2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "alerts reach current admins only; honest re-occurrence wording and retries",
+              "hash": "d48e39ad"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "mask every call-log reader, reuse the requester chip, neutral test fixtures",
+              "hash": "48de7965"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "never lose a submission row to a missing column; tighter who-triggered inference",
+              "hash": "fbf13204"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "a re-occurrence counts as new; stock gaps keep their own occurrence",
+              "hash": "c0373f67"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "readable armed Replay on the Events tab",
+              "hash": "ff243639"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "selected filter pills are brand-tinted in dark mode, not inverted near-white",
+              "hash": "28dad9b8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "Inbound health first, dormant imports, staleness refresh",
+              "hash": "aa84641f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "bound the record label cache after labeling, not before",
+              "hash": "5b61a17c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "external-apis",
+              "text": "stop browsers autofilling Client ID/Secret on the edit page",
+              "hash": "2a6cbd41"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "friendly-name review fixes",
+              "hash": "64f5fbb3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "external-apis",
+              "text": "extension and custom-action calls land in the Call Logs",
+              "hash": "933fbc09"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "scope rerun to the record's own template, require an instance, thread manual obligations + skip reasons",
+              "hash": "1c59aab4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "console bulk selection, shared-snooze unsnooze, hidden dead explain actions",
+              "hash": "6852c1bb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "reject non-positive-integer ids on GET /integration-partners/:id",
+              "hash": "1a2e035d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "dedupe action row keys, scope until_change to one row, untie the signals cron from the heavy slot",
+              "hash": "6a583f5f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "window push-failed/obligation signals to one row per key",
+              "hash": "b1170441"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "integrations",
+              "text": "batch the Firefight snapshot write — touch unchanged rows in bulk",
+              "hash": "f9cbe2f4"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "integrations",
+              "text": "alert behaviour, per-tenant probes, generic wording",
+              "hash": "fce2d1b7"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "Integrations console",
+              "hash": "0a989e08"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "biome format integration files",
+              "hash": "0e133116"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "integrations:queries script alias",
+              "hash": "3bdb8cb1"
+            },
+            {
+              "section": "Other",
+              "scope": "integrations",
+              "text": "format signals action tests",
+              "hash": "30217608"
+            }
+          ]
+        }
+      ],
+      "count": 47
+    },
     {
       "version": "0.1.334",
       "tag": "v0.1.334",
-      "date": "2026-09-23T15:40:32-04:00",
+      "date": "2026-09-23T15:40:45-04:00",
       "sections": [
         {
           "label": "Fixed",
