@@ -122,7 +122,9 @@ function ReplayButton({ event }: { event: IntegrationEvent }) {
       className={cn(
         'h-7 shrink-0 whitespace-nowrap rounded-md px-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70',
         armed
-          ? 'bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+          ? // Tinted brand fill + foreground ink: raw brand cyan under white
+            // text is ~1.9:1, and brand-coloured text on white is no better.
+            'bg-nvr-cyan/15 text-foreground ring-1 ring-inset ring-nvr-cyan/50 hover:bg-nvr-cyan/25 dark:bg-nvr-cyan/20'
           : 'text-muted-foreground hover:bg-muted hover:text-foreground'
       )}
     >
