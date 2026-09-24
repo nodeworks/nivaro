@@ -433,3 +433,99 @@ describe('evaluateTransitionRequirements — optional_when.in_query', () => {
     expect(result).toBeNull()
   })
 })
+
+describe('evaluateTransitionRequirements — review_when', () => {
+  const filled = {
+    nivaro_fields: [{ field: 'sales_order_id', label: 'Sales Order ID', type: 'string' }],
+    nivaro_relations: LINE_RELATIONS,
+    order_lines: [{ id: 1, sales_order_id: 'SO-1' }],
+    // the transitioning record (fakeDb keys by table; the record collection is 'orders')
+    orders: [{ id: 'order-1', push_status: 'error' }]
+  }
+  const entry = (over: Record<string, unknown>) => ({
+    fields: ['sales_order_id'],
+    review_when: { field: 'push_status', in: ['error'] },
+    ...over
+  })
+  const evaluate = async (
+    tables: Record<string, Array<Record<string, unknown>>>,
+    e: Record<string, unknown>,
+    opts?: { reviewed?: boolean }
+  ) => {
+    const dbMock = fakeDb(tables)
+    const logger = makeLogger()
+    const result = await evaluateTransitionRequirements(
+      dbMock as unknown as Parameters<typeof evaluateTransitionRequirements>[0],
+      JSON.stringify([
+        { type: 'child_fields', collection: 'order_lines', fk_field: 'order', ...e }
+      ]),
+      'order-1',
+      logger,
+      'orders',
+      opts
+    )
+    return { result, logger }
+  }
+
+  it('brings every (filled) row back for review when the record matches', async () => {
+    const { result } = await evaluate(filled, entry({}))
+    const block = result?.[0]
+    if (block?.type !== 'child_fields') throw new Error('expected a child_fields block')
+    expect(block.review).toBe(true)
+    expect(block.review_message).toMatch(/not accepted/)
+    expect(block.rows).toHaveLength(1)
+    expect(block.rows[0].complete).toBe(true)
+  })
+
+  it("uses the entry's own review_message when given", async () => {
+    const { result } = await evaluate(
+      filled,
+      entry({ review_message: 'Fusion said no — fix the lines.' })
+    )
+    const block = result?.[0]
+    if (block?.type !== 'child_fields') throw new Error('expected a child_fields block')
+    expect(block.review_message).toBe('Fusion said no — fix the lines.')
+  })
+
+  it('does not ask again once the caller says the rows were reviewed', async () => {
+    const { result } = await evaluate(filled, entry({}), { reviewed: true })
+    expect(result).toBeNull()
+  })
+
+  it('still blocks on an incomplete row even when reviewed', async () => {
+    const { result } = await evaluate(
+      { ...filled, order_lines: [{ id: 1, sales_order_id: null }] },
+      entry({}),
+      { reviewed: true }
+    )
+    const block = result?.[0]
+    if (block?.type !== 'child_fields') throw new Error('expected a child_fields block')
+    expect(block.review).toBeUndefined()
+    expect(block.rows[0].complete).toBe(false)
+  })
+
+  it('passes when the record does not match, and accepts a list of rules', async () => {
+    const ok = await evaluate(
+      { ...filled, orders: [{ id: 'order-1', push_status: 'requested' }] },
+      entry({})
+    )
+    expect(ok.result).toBeNull()
+    const list = await evaluate(
+      { ...filled, orders: [{ id: 'order-1', push_status: null, other_status: 'error' }] },
+      entry({
+        review_when: [
+          { field: 'push_status', in: ['error'] },
+          { field: 'other_status', in: ['error'] }
+        ]
+      })
+    )
+    expect(list.result?.[0]).toMatchObject({ review: true })
+  })
+
+  it('ignores a malformed rule and a record query failure — never blocks on bad config', async () => {
+    const bad = await evaluate(filled, entry({ review_when: { field: 'a b', in: ['x'] } }))
+    expect(bad.result).toBeNull()
+    const noCollection = await evaluate(filled, entry({}))
+    expect(noCollection.result?.[0]).toMatchObject({ review: true })
+  })
+})

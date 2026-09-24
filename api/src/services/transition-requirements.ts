@@ -49,6 +49,24 @@ export interface OptionalWhenQuery {
 
 const OPTIONAL_WHEN_QUERY_LIMIT = 500
 
+/** `review_when`: one rule or a list; each `{field, in}` on the transitioning record. */
+function normalizeReviewRules(raw: unknown): Array<{ field: string; in: unknown[] }> {
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : []
+  const out: Array<{ field: string; in: unknown[] }> = []
+  for (const r of list) {
+    const rule = r as { field?: unknown; in?: unknown }
+    if (
+      typeof rule?.field === 'string' &&
+      IDENTIFIER_RE.test(rule.field) &&
+      Array.isArray(rule.in) &&
+      rule.in.length > 0
+    ) {
+      out.push({ field: rule.field, in: rule.in })
+    }
+  }
+  return out
+}
+
 /** Business collections only — a waiver list is never read off a nivaro_* table. */
 function queryCollectionAllowed(name: unknown): name is string {
   return typeof name === 'string' && IDENTIFIER_RE.test(name) && !/^nivaro_/i.test(name)
@@ -133,6 +151,11 @@ export interface RequirementBlockResult {
   /** entry.prefill_from_record resolved against the transitioning record —
    *  {childField: recordValue}; the dialog seeds EMPTY inputs from these. */
   prefill_values?: Record<string, unknown>
+  /** entry.review_when matched: every row is filled in, but the record says
+   *  the last attempt failed, so the dialog shows the rows again for review
+   *  before re-submitting (its re-submit passes `reviewed`, which skips this). */
+  review?: true
+  review_message?: string
 }
 
 /** Record-level required fields — collected on the TRANSITIONING record itself
@@ -175,12 +198,19 @@ function isEmptyRequirementValue(v: unknown): boolean {
 // or the 422 payload's `requirements` array when it doesn't. Malformed JSON,
 // malformed entries, and unrecognized `type` values are all treated as "no
 // requirement" — logged, never thrown, never blocking a transition on bad config.
+export interface EvaluateRequirementsOptions {
+  /** The caller already reviewed the rows this attempt (the dialog's own
+   *  re-submit) — `review_when` entries no longer block; incomplete rows still do. */
+  reviewed?: boolean
+}
+
 export async function evaluateTransitionRequirements(
   database: typeof db,
   requirementsJson: string | null,
   itemId: string,
   logger: Logger = consoleLogger,
-  recordCollection?: string | null
+  recordCollection?: string | null,
+  options: EvaluateRequirementsOptions = {}
 ): Promise<TransitionRequirementBlock[] | null> {
   if (!requirementsJson) return null
   const parsed = parseJson(requirementsJson)
@@ -545,7 +575,41 @@ export async function evaluateTransitionRequirements(
         }
       }
     }
-    if (incompleteIds.size === 0) continue // every row already filled in
+    // review_when: {field, in} (or a list of them — any match) on the
+    // TRANSITIONING record: when it matches, the dialog comes back with every
+    // row even though they are all filled in — e.g. the last submission was
+    // rejected and the person needs to fix a line before trying again. The
+    // dialog's own re-submit passes `reviewed`, which is what stops this from
+    // asking forever while the failure flag is still set.
+    const reviewRules = normalizeReviewRules(entry.review_when)
+    let review = false
+    if (
+      reviewRules.length > 0 &&
+      !options.reviewed &&
+      recordCollection &&
+      IDENTIFIER_RE.test(recordCollection)
+    ) {
+      try {
+        const rec = (await database(recordCollection)
+          .where({ id: itemId })
+          .first([...new Set(reviewRules.map((r) => r.field))])) as
+          | Record<string, unknown>
+          | undefined
+        review =
+          !!rec &&
+          reviewRules.some((r) => r.in.some((v) => String(v) === String(rec[r.field] ?? '')))
+      } catch (err) {
+        logger.warn(
+          { err, collection },
+          'transition requirements: review_when query failed, ignoring'
+        )
+      }
+    }
+    if (incompleteIds.size === 0 && !review) continue // every row already filled in, nothing to review
+    const reviewMessage =
+      typeof entry.review_message === 'string' && entry.review_message.trim()
+        ? entry.review_message.trim()
+        : 'The last submission was not accepted — check the lines below and submit again.'
 
     const relatedLabel = async (
       relatedCollection: string,
@@ -689,7 +753,8 @@ export async function evaluateTransitionRequirements(
       ...(Array.isArray(rawApplyAll) && rawApplyAll.length
         ? { apply_all: rawApplyAll.map(String) }
         : {}),
-      ...(prefillValues ? { prefill_values: prefillValues } : {})
+      ...(prefillValues ? { prefill_values: prefillValues } : {}),
+      ...(review ? { review: true as const, review_message: reviewMessage } : {})
     })
   }
 

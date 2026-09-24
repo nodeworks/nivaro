@@ -1242,7 +1242,11 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
             comments: number
             addendums: { count: number; cost_impact: number }
             edited_by: string[]
-            lines?: Array<{ label: string; text: string; tone?: 'ok' | 'warn' | 'danger' | 'neutral' }>
+            lines?: Array<{
+              label: string
+              text: string
+              tone?: 'ok' | 'warn' | 'danger' | 'neutral'
+            }>
           } | null
         }>(get(`/pipelines/instance/${collection}/${item}/approval-brief`))
         .then((r) => r.data),
@@ -1481,9 +1485,22 @@ function PipelinePanelInner({
     onError: () => toast.error('Failed to start pipeline')
   })
   const executeTransition = useMutation({
-    mutationFn: ({ transition_id, comment }: { transition_id: string; comment?: string }) =>
+    mutationFn: ({
+      transition_id,
+      comment,
+      reviewed
+    }: {
+      transition_id: string
+      comment?: string
+      /** Set by the requirements dialog's re-submit: the rows were just reviewed. */
+      reviewed?: boolean
+    }) =>
       client.request(
-        post(`/pipelines/instance/${collection}/${item}/transition`, { transition_id, comment })
+        post(`/pipelines/instance/${collection}/${item}/transition`, {
+          transition_id,
+          comment,
+          ...(reviewed ? { reviewed: true } : {})
+        })
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
@@ -1903,7 +1920,8 @@ function PipelinePanelInner({
           onSubmitted={() =>
             executeTransition.mutate({
               transition_id: requirementsDialog.transitionId,
-              comment: requirementsDialog.comment
+              comment: requirementsDialog.comment,
+              reviewed: true
             })
           }
           executing={executeTransition.isPending}
@@ -1997,9 +2015,22 @@ function PipelineTransitionButtonsInner({
     staleTime: 10_000
   })
   const executeTransition = useMutation({
-    mutationFn: ({ transition_id, comment }: { transition_id: string; comment?: string }) =>
+    mutationFn: ({
+      transition_id,
+      comment,
+      reviewed
+    }: {
+      transition_id: string
+      comment?: string
+      /** Set by the requirements dialog's re-submit: the rows were just reviewed. */
+      reviewed?: boolean
+    }) =>
       client.request(
-        post(`/pipelines/instance/${collection}/${item}/transition`, { transition_id, comment })
+        post(`/pipelines/instance/${collection}/${item}/transition`, {
+          transition_id,
+          comment,
+          ...(reviewed ? { reviewed: true } : {})
+        })
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
@@ -2216,7 +2247,8 @@ function PipelineTransitionButtonsInner({
           onSubmitted={() =>
             executeTransition.mutate({
               transition_id: requirementsDialog.transitionId,
-              comment: requirementsDialog.comment
+              comment: requirementsDialog.comment,
+              reviewed: true
             })
           }
           onClose={() => setRequirementsDialog(null)}

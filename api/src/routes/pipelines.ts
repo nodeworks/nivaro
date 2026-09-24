@@ -2150,7 +2150,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      const body = req.body as { transition_id: string; comment?: string }
+      const body = req.body as { transition_id: string; comment?: string; reviewed?: boolean }
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
 
@@ -2208,7 +2208,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           transition.requirements,
           item,
           req.log,
-          collection
+          collection,
+          // The requirements dialog's own re-submit: the person just reviewed
+          // the rows, so a `review_when` entry no longer asks again.
+          { reviewed: body.reviewed === true }
         )
         if (blocking) {
           return reply.code(422).send({ error: 'TRANSITION_REQUIREMENTS', requirements: blocking })

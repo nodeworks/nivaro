@@ -719,42 +719,46 @@ export async function runTransitionActions(opts: {
       record = {}
     }
 
-    // Obligation ledger: open BEFORE the guards, so that a refusal is itself
-    // a recorded outcome rather than the silence it is today. An action core
-    // cannot attribute to a registered kind opens nothing and behaves exactly
-    // as before.
-    let obligationId: number | null = null
-    if (action.type === 'erp_submit' && action.external_api) {
-      obligationId = await openObligationForTrigger(
-        {
-          collection,
-          item: String(item),
-          api: String(action.external_api),
-          source: 'erp_submit',
-          endpoint_path: action.endpoint_path ?? null,
-          transition_label: opts.transition.label ?? null,
-          to_state_key: opts.newStateObj?.key ?? null,
-          action_context_keys: action.context ? Object.keys(action.context) : [],
-          action_skip_unless_any: action.skip_unless_any ?? [],
-          action_skip_when_empty: action.skip_when_empty ?? null
-        },
-        { trigger: opts.obligationTrigger ?? 'transition', trigger_ref: opts.transition.id }
-      )
+    // Obligation ledger: opened BEFORE the guard, so that a refusal is itself
+    // a recorded outcome rather than silence — but AFTER the two applicability
+    // gates (skip_when_empty / skip_unless_any). Those say "this action is not
+    // for this record" (no lines for this partner, no link to this system),
+    // and a partner that was never supposed to be told has no obligation to
+    // record: several partners' actions share one transition, and opening for
+    // each used to leave every record with a "should have been told" line for
+    // the partners that did not apply. An action core cannot attribute to a
+    // registered kind opens nothing and behaves exactly as before.
+    const triggerContext = {
+      collection,
+      item: String(item),
+      api: String(action.external_api ?? ''),
+      source: 'erp_submit' as const,
+      endpoint_path: action.endpoint_path ?? null,
+      transition_label: opts.transition.label ?? null,
+      to_state_key: opts.newStateObj?.key ?? null,
+      action_context_keys: action.context ? Object.keys(action.context) : [],
+      action_skip_unless_any: action.skip_unless_any ?? [],
+      action_skip_when_empty: action.skip_when_empty ?? null
     }
-
-    // Guard: every rule must pass or the action is skipped
-    const guard = Array.isArray(action.guard) ? action.guard : []
-    const failedRule = guard.find((r) => !evalConditionRule(r, record))
-    if (failedRule) {
-      skippedReason = skipReason(
-        'guard',
-        `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
-      )
-      await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
-      continue
-    }
+    const openObligation = async (): Promise<number | null> =>
+      action.type === 'erp_submit' && action.external_api
+        ? openObligationForTrigger(triggerContext, {
+            trigger: opts.obligationTrigger ?? 'transition',
+            trigger_ref: opts.transition.id
+          })
+        : null
 
     if (action.type === 'create_record') {
+      // Guard: every rule must pass or the action is skipped
+      const guard = Array.isArray(action.guard) ? action.guard : []
+      const failedRule = guard.find((r) => !evalConditionRule(r, record))
+      if (failedRule) {
+        skippedReason = skipReason(
+          'guard',
+          `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
+        )
+        continue
+      }
       await runCreateRecordAction(action, collection, item, record, opts.newStateObj, responses)
       await journalTick()
       continue
@@ -766,7 +770,8 @@ export async function runTransitionActions(opts: {
         'not_configured',
         !apiId ? 'external_api' : !action.endpoint_path ? 'endpoint_path' : 'payload_template'
       )
-      await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
+      // A misconfigured action IS worth a recorded no — someone must fix it.
+      await resolveObligation(await openObligation(), { outcome: 'skipped', reason: skippedReason })
       continue
     }
 
@@ -775,7 +780,6 @@ export async function runTransitionActions(opts: {
       const gate = context[action.skip_when_empty]
       if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
         skippedReason = skipReason('skip_when_empty', action.skip_when_empty)
-        await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
         continue
       }
     }
@@ -794,9 +798,24 @@ export async function runTransitionActions(opts: {
       })
       if (!anySet) {
         skippedReason = skipReason('skip_unless_any', action.skip_unless_any.join(', '))
-        await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
         continue
       }
+    }
+
+    // The action applies to this record: from here on every way out is a
+    // recorded outcome on the partner's ledger.
+    const obligationId = await openObligation()
+
+    // Guard: every rule must pass or the action is skipped
+    const guard = Array.isArray(action.guard) ? action.guard : []
+    const failedRule = guard.find((r) => !evalConditionRule(r, record))
+    if (failedRule) {
+      skippedReason = skipReason(
+        'guard',
+        `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
+      )
+      await resolveObligation(obligationId, { outcome: 'skipped', reason: skippedReason })
+      continue
     }
     const scope = {
       record,

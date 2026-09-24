@@ -65,6 +65,11 @@ export interface TransitionRequirementEntry {
   rows: TransitionRequirementRow[]
   /** Server-resolved record values to seed EMPTY line inputs from. */
   prefill_values?: Record<string, unknown>
+  /** Every row is filled in, but the record says the last attempt failed —
+   *  the server asks for a review before re-submitting (its re-submit passes
+   *  `reviewed`, so this shows once per attempt). */
+  review?: true
+  review_message?: string
 }
 
 /** Record-level required fields collected on the transitioning record itself
@@ -567,6 +572,12 @@ export function TransitionRequirementsDialog({
     })
   })
 
+  // A review_when block: the server sent every row back because the record's
+  // last attempt failed — say so once, in the entry's own words if it has any.
+  const reviewMessage =
+    payload.find((e): e is TransitionRequirementEntry => e.type === 'child_fields' && !!e.review)
+      ?.review_message ?? null
+
   const handleSubmit = async () => {
     setSubmitting(true)
     const results = await Promise.all(
@@ -714,6 +725,12 @@ export function TransitionRequirementsDialog({
             <p className='flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'>
               <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' />
               Values changed since your last attempt — review the highlighted rows.
+            </p>
+          )}
+          {reviewMessage && !isRetry && (
+            <p className='flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400'>
+              <AlertCircle className='h-3.5 w-3.5 shrink-0' />
+              {reviewMessage}
             </p>
           )}
           {payload.map((entry) => {
