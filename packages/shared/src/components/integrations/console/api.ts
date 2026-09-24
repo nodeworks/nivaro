@@ -12,6 +12,7 @@ import type {
   ActionResult,
   AlertMode,
   AlertSubscription,
+  EventPath,
   EventProvider,
   EventStatus,
   IntegrationEvent,
@@ -198,25 +199,55 @@ export function useCallDetail(apiId: number, callId: number | null) {
 /** Entries per page of the events feed. */
 export const EVENTS_PAGE = 50
 
+/** Filters for the integration events feed. */
+export interface IntegrationEventFilters {
+  provider: string
+  status: EventStatus | ''
+  /** A partner (external API) name. */
+  partner?: string
+  /** An inbound caller (user or API key) id. */
+  caller?: string
+  /** A friendly id or `collection:id` — events that concern that record. */
+  record?: string
+  /** Include people's own writes, not only integration traffic. */
+  includePeople?: boolean
+}
+
 /**
  * The integration events feed, newest first, paged backwards with a `before`
  * cursor (the oldest entry already shown). A page shorter than EVENTS_PAGE is
  * the end of what the sources keep.
  */
-export function useIntegrationEvents(filters: { provider: string; status: EventStatus | '' }) {
+export function useIntegrationEvents(filters: IntegrationEventFilters) {
   const client = useNivaroClient()
   return useInfiniteQuery({
-    queryKey: ['integration-events', filters.provider, filters.status],
+    queryKey: [
+      'integration-events',
+      filters.provider,
+      filters.status,
+      filters.partner ?? '',
+      filters.caller ?? '',
+      filters.record ?? '',
+      Boolean(filters.includePeople)
+    ],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({ limit: String(EVENTS_PAGE) })
       if (filters.provider) params.set('provider', filters.provider)
       if (filters.status) params.set('status', filters.status)
+      if (filters.partner) params.set('partner', filters.partner)
+      if (filters.caller) params.set('caller', filters.caller)
+      if (filters.record) params.set('record', filters.record)
+      if (filters.includePeople) params.set('include_people', '1')
       if (pageParam) params.set('before', pageParam)
       return client
-        .request<{ data: { providers: EventProvider[]; entries: IntegrationEvent[] } }>(
-          get(`/integration-events?${params.toString()}`)
-        )
+        .request<{
+          data: {
+            providers: EventProvider[]
+            entries: IntegrationEvent[]
+            record: { collection: string; item: string } | null
+          }
+        }>(get(`/integration-events?${params.toString()}`))
         .then((r) => r.data)
     },
     getNextPageParam: (last) =>
@@ -228,6 +259,61 @@ export function useIntegrationEvents(filters: { provider: string; status: EventS
   })
 }
 
+/** Which event to open a path for. With `record`, the path is read through
+ *  the record-scoped route (any user who can read the record); without, the
+ *  admin console route. */
+export interface EventPathTarget {
+  source: string
+  id: string
+  record?: { collection: string; item: string }
+}
+
+/** One event's full chain of writes. */
+export function useEventPath(target: EventPathTarget | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: [
+      'integration-event-path',
+      target?.source,
+      target?.id,
+      target?.record?.collection,
+      target?.record?.item
+    ],
+    enabled: target != null,
+    queryFn: async () => {
+      if (!target) return null
+      const url = target.record
+        ? `/integration-events/record/${encodeURIComponent(target.record.collection)}/${encodeURIComponent(target.record.item)}/path?source=${encodeURIComponent(target.source)}&id=${encodeURIComponent(target.id)}`
+        : `/integration-events/${encodeURIComponent(target.source)}/${encodeURIComponent(target.id)}/path`
+      const res = await client.request<{ data: EventPath }>(get(url))
+      return res.data
+    },
+    staleTime: 30_000,
+    // A 404 (event no longer kept, or not about this record) will not heal.
+    retry: false
+  })
+}
+
+/** Integration events about one record, newest first, one page at a time. */
+export function useRecordIntegrationActivity(collection: string, item: string, page: number) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: ['integration-record-activity', collection, item, page],
+    enabled: Boolean(collection && item),
+    queryFn: async () => {
+      const res = await client.request<{
+        data: { entries: IntegrationEvent[]; page: number; has_more: boolean }
+      }>(
+        get(
+          `/integration-events/record/${encodeURIComponent(collection)}/${encodeURIComponent(item)}?page=${page}`
+        )
+      )
+      return res.data
+    },
+    placeholderData: keepPreviousData
+  })
+}
+
 export function useReplayEvent() {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -235,7 +321,7 @@ export function useReplayEvent() {
     mutationFn: (e: IntegrationEvent) =>
       client
         .request<{ data: { replayed: boolean; detail?: string } }>(
-          post(`/integration-events/${encodeURIComponent(e.provider)}/replay`, {
+          post(`/integration-events/${encodeURIComponent(e.provider ?? e.source ?? '')}/replay`, {
             entry_id: String(e.id)
           })
         )

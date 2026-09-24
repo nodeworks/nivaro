@@ -177,18 +177,28 @@ export interface PartnerDetailData {
 
 export type { ImportHealthRow } from '../../imports/ImportStalenessControl'
 
-/** GET /integration-events — a notes source that can list or replay (#20). */
+/** Which way an integration event travels: a partner calling in, a push we
+ *  sent out, or a poll we made of the partner. */
+export type EventDirection = 'in' | 'out' | 'poll'
+
+/** GET /integration-events — a source that can list (and maybe replay) events.
+ *  `collection` is null for core sources that span collections. */
 export interface EventProvider {
   id: string
-  collection: string
+  collection: string | null
   label: string
+  direction?: EventDirection
   can_list: boolean
   can_replay: boolean
 }
 
 export type EventStatus = 'ok' | 'error' | 'info'
 
-/** One entry of the cross-record integration events feed. */
+/**
+ * One entry of the integration events feed. The cross-record feed carries
+ * `provider`; the per-record feed (GET /integration-events/record/...) carries
+ * `source` instead — read `provider ?? source` for the source id.
+ */
 export interface IntegrationEvent {
   id: string | number
   label: string
@@ -196,12 +206,100 @@ export interface IntegrationEvent {
   user?: string | null
   created_at: string
   context?: string | null
-  collection: string
-  item_id: string
+  /** Null when the event concerns no single record (a whole import, a poll). */
+  collection: string | null
+  item_id: string | null
   item_label?: string | null
-  provider: string
+  provider?: string
+  source?: string
+  direction?: EventDirection
+  chain_id?: string | null
+  /** How many records the event touched, when it is more than one. */
+  record_count?: number
+  partner?: string | null
+  caller?: string | null
   replayable?: boolean
   status?: EventStatus | null
+}
+
+// ── Event paths — GET /integration-events/:source/:id/path ───────────────────
+// Copied from api/src/services/event-path/types.ts so shared never imports api.
+
+export type PathStepKind =
+  | 'request'
+  | 'cron'
+  | 'import'
+  | 'feed'
+  | 'write'
+  | 'transition'
+  | 'flow'
+  | 'push'
+  | 'attempt'
+  | 'partner_call'
+  | 'group'
+
+/** What a step opens to: field changes, a push, a partner call, a flow run,
+ *  a transition. */
+export type PathDetail =
+  | { type: 'changes'; changes: Array<{ field: string; label: string; old: string; new: string }> }
+  | {
+      type: 'push'
+      status: string
+      http_status?: number | null
+      attempts?: number
+      error?: string | null
+      request?: string | null
+      response?: string | null
+      submission_id: number
+    }
+  | {
+      type: 'call'
+      method: string
+      url: string
+      status?: number | null
+      duration_ms?: number | null
+      error?: string | null
+    }
+  | { type: 'flow'; status: string; halted_at?: string | null; error?: string | null }
+  | { type: 'transition'; from?: string | null; to?: string | null; comment?: string | null }
+
+/** One step of an event's path, with the steps it set off under it. */
+export interface PathNode {
+  /** e.g. 'activity:12' */
+  key: string
+  /** Parent step key; null = the root. */
+  parent: string | null
+  kind: PathStepKind
+  /** ISO timestamp. */
+  at: string
+  /** Milliseconds after the root step. */
+  offset_ms: number
+  who?: string | null
+  record?: { collection: string; item: string; label?: string | null } | null
+  summary: string
+  failed?: boolean
+  inferred?: boolean
+  /** Why it was matched (inferred) or why it failed. */
+  reason?: string | null
+  detail?: PathDetail | null
+  api_id?: number | null
+  children: PathNode[]
+  /** The folded steps of a 'group' node. */
+  members?: PathNode[]
+}
+
+export interface EventPath {
+  root: PathNode
+  mode: 'exact' | 'inferred'
+  truncated: boolean
+  step_count: number
+  /** Key of the first failed step, if any. */
+  first_failure: string | null
+  replay_of: string | null
+  replayed_as: string[]
+  /** Steps left out because the viewer may not read their records. */
+  hidden_steps?: number
+  warnings: string[]
 }
 
 export type ActionResult = { key: string; ok: boolean; message: string }

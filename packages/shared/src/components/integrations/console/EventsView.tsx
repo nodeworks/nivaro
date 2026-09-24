@@ -144,16 +144,17 @@ function RecordRef({
   event: IntegrationEvent
   onOpenRecord?: EventsViewProps['onOpenRecord']
 }) {
-  if (!event.item_id) return null
-  const label = event.item_label || `${event.collection.replace(/_/g, ' ')} ${event.item_id}`
+  if (!event.item_id || !event.collection) return null
+  const collection = event.collection
+  const label = event.item_label || `${collection.replace(/_/g, ' ')} ${event.item_id}`
   if (!onOpenRecord) {
     return <span className='font-medium text-foreground'>{label}</span>
   }
   return (
     <button
       type='button'
-      data-ic-record={`${event.collection}:${event.item_id}`}
-      onClick={() => onOpenRecord(event.collection, String(event.item_id))}
+      data-ic-record={`${collection}:${event.item_id}`}
+      onClick={() => onOpenRecord(collection, String(event.item_id))}
       className='inline-flex max-w-full items-center gap-1 truncate font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
     >
       {label}
