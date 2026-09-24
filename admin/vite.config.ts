@@ -10,7 +10,17 @@ export default defineConfig(({ command }) => ({
     // Vite only watches the admin folder; files it serves from outside it
     // (the shared source below) never raised a change event, so edits there
     // never hot-reloaded. Watch that folder explicitly.
-    { name: 'watch-shared-src', configureServer: (server) => void server.watcher.add(sharedSrc) }
+    {
+      name: 'watch-shared-src',
+      // After listen: adding it during config made the dependency scan crawl
+      // the shared tree first and delayed the server by a minute.
+      configureServer: (server) => {
+        // `listening` may already have fired by the time this runs.
+        const add = () => server.watcher.add(sharedSrc)
+        if (server.httpServer?.listening) add()
+        else server.httpServer?.once('listening', add)
+      }
+    }
   ],
   resolve: {
     alias: {
