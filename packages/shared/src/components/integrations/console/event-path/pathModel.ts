@@ -64,11 +64,21 @@ export function ancestorsOf(root: PathNode, key: string): string[] {
   return go(root) ? trail : []
 }
 
-/** Time since the root step: "+420 ms", "+1.5 s", "+2m 5s". */
+/** Time since the root step: "+420 ms", "+1.5 s", "+2m 5s", "+47h 44m",
+ *  "+3d 2h". An inferred step can precede the root, so a negative offset
+ *  reads "−500 ms" / "−1.2 s" with a true minus sign. */
 export function formatOffset(ms: number): string {
-  if (ms < 1000) return `+${Math.round(ms)} ms`
-  if (ms < 59_950) return `+${(ms / 1000).toFixed(1)} s`
-  // Round to whole seconds first so 119 999 ms reads "+2m 0s", never "+1m 60s".
-  const total = Math.round(ms / 1000)
-  return `+${Math.floor(total / 60)}m ${total % 60}s`
+  const sign = ms < 0 ? '\u2212' : '+'
+  const abs = Math.abs(ms)
+  if (Math.round(abs) === 0) return '+0 ms'
+  if (abs < 1000) return `${sign}${Math.round(abs)} ms`
+  if (abs < 59_950) return `${sign}${(abs / 1000).toFixed(1)} s`
+  // Round to the smallest unit shown first so 119 999 ms reads "+2m 0s",
+  // never "+1m 60s" (and likewise for minutes and hours).
+  const secs = Math.round(abs / 1000)
+  if (secs < 3600) return `${sign}${Math.floor(secs / 60)}m ${secs % 60}s`
+  const mins = Math.round(abs / 60_000)
+  if (mins < 24 * 60) return `${sign}${Math.floor(mins / 60)}h ${mins % 60}m`
+  const hours = Math.round(abs / 3_600_000)
+  return `${sign}${Math.floor(hours / 24)}d ${hours % 24}h`
 }
