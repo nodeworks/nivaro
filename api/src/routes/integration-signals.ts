@@ -6,7 +6,7 @@
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chunkArray } from '../services/db-batch.js'
 import {
@@ -152,6 +152,23 @@ export function validateSnoozeScope(b: {
   return { ok: true }
 }
 
+/** POST /integration-signals/subscriptions body check — `*critical` is the
+ *  "every critical problem" subscription; anything else must be a signal
+ *  this instance actually registers. */
+export function validateSubscription(
+  b: { signal?: unknown; mode?: unknown },
+  signalExists: (id: string) => boolean
+): { ok: true; signal: string; mode: 'realtime' | 'digest' } | { ok: false; error: string } {
+  const signal = typeof b?.signal === 'string' ? b.signal : ''
+  if (!signal) return { ok: false, error: 'signal is required' }
+  if (signal !== '*critical' && !signalExists(signal)) return { ok: false, error: 'Unknown signal' }
+  if (b.mode !== 'realtime' && b.mode !== 'digest')
+    return { ok: false, error: 'mode must be realtime or digest' }
+  return { ok: true, signal, mode: b.mode }
+}
+
+const PREVIEW_BUDGET_MS = 10_000
+
 function authHeaders(req: FastifyRequest): Record<string, string> {
   const h: Record<string, string> = {}
   if (req.headers.authorization) h.authorization = String(req.headers.authorization)
@@ -271,9 +288,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
     if (!b?.signal || !getIntegrationSignal(b.signal))
       return reply.code(400).send({ error: 'Unknown signal' })
     if (!b.until && !b.until_change && !b.until_occurrence)
-      return reply
-        .code(400)
-        .send({ error: 'until, until_change or until_occurrence is required' })
+      return reply.code(400).send({ error: 'until, until_change or until_occurrence is required' })
     const scoped = validateSnoozeScope(b)
     if (!scoped.ok) return reply.code(400).send({ error: scoped.error })
     let hash: string | null = null
@@ -454,11 +469,91 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       }
       try {
         const { businessDaysAgoForPreview } = await import('../services/integration-signals.js')
-        const out = await s.evaluate({ thresholds, businessDaysAgo: businessDaysAgoForPreview })
+        let timer: NodeJS.Timeout | undefined
+        const out = await Promise.race([
+          s.evaluate({ thresholds, businessDaysAgo: businessDaysAgoForPreview }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`Preview took longer than ${PREVIEW_BUDGET_MS / 1000} s`)),
+              PREVIEW_BUDGET_MS
+            )
+          })
+        ]).finally(() => clearTimeout(timer))
         return { data: { count: out.count, error: null } }
       } catch (err) {
         return { data: { count: null, error: err instanceof Error ? err.message : String(err) } }
       }
+    }
+  )
+
+  // ── opt-in alert subscriptions (own rows only) ─────────────────────────
+  app.get('/integration-signals/subscriptions', { preHandler: requireAuth }, async (req) => ({
+    data: (await db('nivaro_integration_signal_subscriptions')
+      .where({ user: req.user!.id })
+      .orderBy('id', 'asc')
+      .select('id', 'signal', 'mode', 'last_notified_at')) as Array<{
+      id: number
+      signal: string
+      mode: string
+      last_notified_at: Date | null
+    }>
+  }))
+
+  app.post(
+    '/integration-signals/subscriptions',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      // Alerts describe the admin-only console and link into it — a person
+      // who cannot open it has nothing to subscribe to.
+      if (!req.isAdmin) {
+        return reply.code(403).send({ error: 'Integration alerts are for administrators' })
+      }
+      const v = validateSubscription(
+        (req.body ?? {}) as { signal?: unknown; mode?: unknown },
+        (id) => !!getIntegrationSignal(id)
+      )
+      if (!v.ok) return reply.code(400).send({ error: v.error })
+      const userId = req.user!.id
+      const existing = (await db('nivaro_integration_signal_subscriptions')
+        .where({ user: userId, signal: v.signal, mode: v.mode })
+        .first('id')) as { id: number } | undefined
+      if (existing) return { data: { id: existing.id, signal: v.signal, mode: v.mode } }
+      const [ins] = await db('nivaro_integration_signal_subscriptions')
+        .insert({ user: userId, signal: v.signal, mode: v.mode, created_at: new Date() })
+        .returning('id')
+      const id = typeof ins === 'object' ? (ins as { id: number }).id : ins
+      await logActivity({
+        action: 'integration-signal-subscribe',
+        collection: 'nivaro_integration_signal_subscriptions',
+        item: String(id),
+        user: userId,
+        req,
+        comment: `${v.signal} · ${v.mode}`
+      })
+      return { data: { id, signal: v.signal, mode: v.mode } }
+    }
+  )
+
+  app.delete(
+    '/integration-signals/subscriptions/:id',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const id = Number((req.params as { id: string }).id)
+      if (!Number.isInteger(id)) return reply.code(404).send({ error: 'Not found' })
+      const row = (await db('nivaro_integration_signal_subscriptions')
+        .where({ id, user: req.user!.id })
+        .first('id', 'signal', 'mode')) as { id: number; signal: string; mode: string } | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      await db('nivaro_integration_signal_subscriptions').where({ id }).del()
+      await logActivity({
+        action: 'integration-signal-unsubscribe',
+        collection: 'nivaro_integration_signal_subscriptions',
+        item: String(id),
+        user: req.user!.id,
+        req,
+        comment: `${row.signal} · ${row.mode}`
+      })
+      return { data: { id } }
     }
   )
 

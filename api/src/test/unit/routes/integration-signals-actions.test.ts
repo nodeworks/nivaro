@@ -3,7 +3,8 @@ import {
   dedupeRowKeys,
   fillRecordLabels,
   planActionTargets,
-  validateSnoozeScope
+  validateSnoozeScope,
+  validateSubscription
 } from '../../../routes/integration-signals.js'
 
 describe('planActionTargets', () => {
@@ -82,5 +83,35 @@ describe('fillRecordLabels', () => {
     expect(rows.every((r) => (r.record as { label?: string }).label === `R-${r.record.id}`)).toBe(
       true
     )
+  })
+})
+
+describe('validateSubscription', () => {
+  const exists = (id: string) => id === 'core:push-failed'
+  it('accepts a registered signal or *critical, realtime or digest', () => {
+    expect(validateSubscription({ signal: 'core:push-failed', mode: 'realtime' }, exists)).toEqual({
+      ok: true,
+      signal: 'core:push-failed',
+      mode: 'realtime'
+    })
+    expect(validateSubscription({ signal: '*critical', mode: 'digest' }, exists)).toEqual({
+      ok: true,
+      signal: '*critical',
+      mode: 'digest'
+    })
+  })
+  it('rejects an unknown signal, a missing signal and a bad mode', () => {
+    expect(validateSubscription({ signal: 'core:nope', mode: 'realtime' }, exists)).toEqual({
+      ok: false,
+      error: 'Unknown signal'
+    })
+    expect(validateSubscription({ mode: 'realtime' }, exists)).toEqual({
+      ok: false,
+      error: 'signal is required'
+    })
+    expect(validateSubscription({ signal: 'core:push-failed', mode: 'weekly' }, exists)).toEqual({
+      ok: false,
+      error: 'mode must be realtime or digest'
+    })
   })
 })

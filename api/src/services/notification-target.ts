@@ -220,7 +220,9 @@ export async function resolveTargetUrl(
       case 'integration':
         if (spec.collection && spec.id != null && !/^nivaro_/i.test(spec.collection))
           return withFocus(await recordLink(spec.collection, spec.id, opts))
-        return linkTo('integrations', {}, opts)
+        // The board itself: carry query/tab so an alert opens its own signal
+        // (?tab=firefight&signal=<id>) rather than the page's first tab.
+        return withFocus(await linkTo('integrations', {}, opts))
       case 'task':
         return linkTo('tasks', {}, opts)
       case 'access_request':

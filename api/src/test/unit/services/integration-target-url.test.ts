@@ -34,4 +34,12 @@ describe('an integration obligation notification points somewhere that opens', (
     const url = await resolveTargetUrl({ kind: 'integration', action: 'review' }, { app: 'admin' })
     expect(url).toMatch(/\/integration-health$/)
   })
+
+  it('a board target carries its query — an alert lands on its own signal', async () => {
+    const url = await resolveTargetUrl(
+      { kind: 'integration', query: 'tab=firefight&signal=core:push-failed', action: 'review' },
+      { app: 'admin' }
+    )
+    expect(url).toMatch(/\/integration-health\?tab=firefight&signal=core:push-failed$/)
+  })
 })

@@ -6,9 +6,12 @@ import {
   useQueryClient
 } from '@tanstack/react-query'
 import { useNivaroClient } from '../../../context'
-import { del, get, post } from '../../../lib/commands'
+import { del, get, patch, post } from '../../../lib/commands'
+import { IMPORT_HEALTH_KEY } from '../../imports/ImportStalenessControl'
 import type {
   ActionResult,
+  AlertMode,
+  AlertSubscription,
   EventProvider,
   EventStatus,
   IntegrationEvent,
@@ -17,6 +20,7 @@ import type {
   PartnerDetailData,
   PartnersSummary,
   RowView,
+  SignalSettingsEntry,
   SignalsSnapshot,
   SubmissionAttempt,
   SubmissionDetail
@@ -242,3 +246,88 @@ export function useReplayEvent() {
 
 /** One query key with the Import Console's staleness control — edits in either refresh both. */
 export { useImportHealth } from '../../imports/ImportStalenessControl'
+
+// ── Alerts tab: subscriptions + threshold settings ─────────────────────────
+
+export const SIGNAL_SETTINGS_KEY = ['integration-signal-settings'] as const
+export const ALERT_SUBSCRIPTIONS_KEY = ['integration-signal-subscriptions'] as const
+
+export function useSignalSettings() {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: SIGNAL_SETTINGS_KEY,
+    queryFn: () =>
+      client
+        .request<{ data: SignalSettingsEntry[] }>(get('/integration-signals/settings'))
+        .then((r) => r.data)
+  })
+}
+
+/** Save one signal's settings — a threshold set to null goes back to its default. */
+export function useSaveSignalSettings() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: { signal: string; values: Record<string, number | string | boolean | null> }) =>
+      client.request(
+        patch(`/integration-signals/settings/${encodeURIComponent(b.signal)}`, b.values)
+      ),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: SIGNAL_SETTINGS_KEY })
+      void qc.invalidateQueries({ queryKey: ['integration-signals'] })
+      // The stale-import signal's default cadence is the Inbound table's too.
+      void qc.invalidateQueries({ queryKey: IMPORT_HEALTH_KEY })
+    }
+  })
+}
+
+/**
+ * "Would currently flag N" for proposed thresholds — evaluates the one
+ * signal server-side with the draft values (nothing is written). `values`
+ * null = don't ask (editor closed or the draft is invalid).
+ */
+export function useSignalPreview(signal: string, values: Record<string, number> | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: ['integration-signal-preview', signal, values],
+    queryFn: () =>
+      client
+        .request<{ data: { count: number | null; error: string | null } }>(
+          get(`/integration-signals/settings/${encodeURIComponent(signal)}/preview`, values ?? {})
+        )
+        .then((r) => r.data),
+    enabled: values != null,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    retry: false
+  })
+}
+
+export function useAlertSubscriptions() {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: ALERT_SUBSCRIPTIONS_KEY,
+    queryFn: () =>
+      client
+        .request<{ data: AlertSubscription[] }>(get('/integration-signals/subscriptions'))
+        .then((r) => r.data)
+  })
+}
+
+/** Turn one (signal, mode) alert on or off — on = POST, off = DELETE by id. */
+export function useToggleSubscription() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (b: { signal: string; mode: AlertMode; on: boolean; id?: number }) => {
+      if (b.on) {
+        await client.request(
+          post('/integration-signals/subscriptions', { signal: b.signal, mode: b.mode })
+        )
+      } else if (b.id != null) {
+        await client.request(del(`/integration-signals/subscriptions/${b.id}`))
+      }
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ALERT_SUBSCRIPTIONS_KEY })
+  })
+}

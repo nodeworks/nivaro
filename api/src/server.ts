@@ -571,7 +571,9 @@ export async function buildServer() {
             .then((n) => {
               if (n) app.log.info({ pruned: n }, '[retention] integration obligations pruned')
             })
-            .catch((err) => app.log.warn({ err }, '[retention] integration obligations prune failed'))
+            .catch((err) =>
+              app.log.warn({ err }, '[retention] integration obligations prune failed')
+            )
           await pruneAiCalls().catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
@@ -1492,6 +1494,16 @@ export async function buildServer() {
         )
         setIntegrationAlertsApp(app)
         registerIntegrationDigest()
+        // Opt-in integration signal alerts (console → Alerts): real-time
+        // rides the signals cycle; the daily summary gets its own section
+        // and audience (subscribers who would otherwise get no summary).
+        const signalAlerts = await import('./services/integration-signal-alerts.js')
+        const { registerDigestAudience, registerDigestSection } = await import(
+          './services/daily-digest.js'
+        )
+        signalAlerts.setApp(app)
+        registerDigestSection(signalAlerts.integrationSignalsDigest)
+        registerDigestAudience(signalAlerts.integrationSignalsDigestAudience)
       }
 
       // Integration reconciliation: each registered obligation kind says
@@ -1514,7 +1526,9 @@ export async function buildServer() {
           description:
             'Derives, from the records themselves, which integrations are behind, and writes the outcomes no trigger can see: missing (the send never fired), overdue (unacknowledged, or skipped while the partner still lacks it) and superseded. Never sends.',
           dryRun: async () => {
-            const { dryRunIntegrationReconcile } = await import('./services/integration-reconcile.js')
+            const { dryRunIntegrationReconcile } = await import(
+              './services/integration-reconcile.js'
+            )
             return dryRunIntegrationReconcile()
           }
         }

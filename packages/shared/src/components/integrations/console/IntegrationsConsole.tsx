@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
+import { AlertsView } from './AlertsView'
 import { useSignals } from './api'
 import { EventsView } from './EventsView'
 import { FirefightView } from './FirefightView'
@@ -26,15 +27,6 @@ export interface IntegrationsConsoleProps {
   /** Host content rendered at the end of the Inbound tab (a deployment's own queues). */
   inboundExtra?: ReactNode
   className?: string
-}
-
-function NextPhase({ what }: { what: string }) {
-  return (
-    <div className='rounded-lg border border-dashed border-border bg-card px-5 py-6'>
-      <p className='text-[14px] font-semibold text-foreground'>Coming in the next phase</p>
-      <p className='mt-1 max-w-[70ch] text-[12.5px] text-muted-foreground'>{what}</p>
-    </div>
-  )
 }
 
 /**
@@ -101,7 +93,10 @@ export function IntegrationsConsole({
       key: 'alerts',
       label: 'Alerts',
       render: () => (
-        <NextPhase what='Choose which problems to be told about — right away or in your daily summary — and tune when each one counts as a problem.' />
+        <AlertsView
+          tabLabels={Object.fromEntries(tabs.map((t) => [t.key, t.label]))}
+          onJumpTab={go}
+        />
       )
     }
   ]

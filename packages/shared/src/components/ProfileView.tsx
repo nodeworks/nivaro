@@ -290,7 +290,7 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
   {
     key: 'integrations',
     label: 'Integrations',
-    help: 'A partner system was not told something about your record, or a send is still unanswered.'
+    help: 'A partner system was not told something about your record, a send is still unanswered, or an integration alert you turned on in the Integrations console fired.'
   },
   {
     key: 'system',

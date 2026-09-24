@@ -295,3 +295,24 @@ export interface SubmissionAttempt {
   payload: unknown
   response: unknown
 }
+
+/** GET /integration-signals/settings — every registered signal, enabled or not. */
+export interface SignalSettingsEntry {
+  id: string
+  label: string
+  description: string
+  tab: string
+  thresholds: SignalThreshold[]
+  settings: SignalView['settings']
+}
+
+export type AlertMode = 'realtime' | 'digest'
+
+/** GET /integration-signals/subscriptions — the caller's own opt-in rows. */
+export interface AlertSubscription {
+  id: number
+  /** A signal id, or `*critical` for every critical problem. */
+  signal: string
+  mode: AlertMode
+  last_notified_at: string | null
+}

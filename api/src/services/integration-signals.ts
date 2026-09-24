@@ -473,6 +473,14 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
     .del()
     .catch(() => undefined)
   await pruneStaleDismissals(now).catch(() => undefined)
+  // Opt-in alerts (Task 16). Lazy import: the alerts module reads this
+  // registry, so a static import would be circular. Never fails the cycle.
+  try {
+    const { deliverSignalAlerts } = await import('./integration-signal-alerts.js')
+    await deliverSignalAlerts(summary)
+  } catch (err) {
+    console.warn('[integration-signals] alert delivery failed:', err)
+  }
   return summary
 }
 

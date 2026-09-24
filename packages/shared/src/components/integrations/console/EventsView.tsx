@@ -46,21 +46,25 @@ const dayKey = (iso: string) => {
 }
 
 /** Light: dark chip. Dark: a brand-tinted chip — never an inverted near-white one. */
-function Segment<T extends string>({
+export function Segment<T extends string>({
   value,
   options,
   onChange,
-  label
+  label,
+  disabled,
+  ...rest
 }: {
   value: T
   options: Array<[T, string]>
   onChange: (v: T) => void
   label: string
-}) {
+  disabled?: boolean
+} & { [data: `data-${string}`]: string | boolean | undefined }) {
   return (
     <fieldset
       aria-label={label}
-      data-ic-events-status
+      disabled={disabled}
+      {...rest}
       className='m-0 inline-flex h-8 min-w-0 overflow-hidden rounded-md border border-border bg-card p-0'
     >
       {options.map(([v, text]) => {
@@ -300,7 +304,13 @@ export function EventsView({ onOpenRecord }: EventsViewProps) {
             className='h-8 w-[180px] border-border bg-card text-[12.5px]'
           />
         </div>
-        <Segment value={status} options={STATUS_OPTIONS} onChange={setStatus} label='Status' />
+        <Segment
+          value={status}
+          options={STATUS_OPTIONS}
+          onChange={setStatus}
+          label='Status'
+          data-ic-events-status
+        />
         <button
           type='button'
           data-ic-events-refresh

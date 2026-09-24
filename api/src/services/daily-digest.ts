@@ -2,6 +2,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { chunkArray } from './db-batch.js'
 import { sendRawMail } from './mail.js'
 import { classifyNotification, emailModeFor, type NotifyPrefs } from './notification-channels.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
@@ -50,6 +51,15 @@ const providers: DigestSectionProvider[] = []
 /** Extensions add per-user digest sections here (via ctx.digest.registerSection). */
 export function registerDigestSection(fn: DigestSectionProvider): void {
   providers.push(fn)
+}
+
+/** Returns user ids who should get a summary even when nothing else would
+ *  send them one (an opt-in section's subscribers). */
+export type DigestAudienceProvider = () => Promise<string[]>
+const audiences: DigestAudienceProvider[] = []
+
+export function registerDigestAudience(fn: DigestAudienceProvider): void {
+  audiences.push(fn)
 }
 
 function parsePrefs(raw: unknown): Record<string, unknown> | null {
@@ -326,6 +336,28 @@ export async function runDailyActionDigest(
     }
   } catch (err) {
     console.warn('[daily-digest] subscription cadence lookup failed:', err)
+  }
+  // Opt-in section audiences (integration alert digests, …): active,
+  // unredacted users with an email join the run; their section provider
+  // decides what, if anything, they see.
+  for (const audience of audiences) {
+    try {
+      const ids = [...new Set((await audience()).map((id) => String(id)))]
+      for (const chunk of chunkArray(ids, 1000)) {
+        const rows = (await db('nivaro_users')
+          .whereIn('id', chunk)
+          .where('status', 'active')
+          .where('is_redacted', 0)
+          .whereNotNull('email')
+          .select('id', 'email')) as Array<{ id: string; email: string }>
+        for (const r of rows) if (!digestUsers.has(r.id)) digestUsers.set(r.id, r.email)
+      }
+    } catch (err) {
+      console.warn(
+        '[daily-digest] audience lookup failed:',
+        err instanceof Error ? err.message : err
+      )
+    }
   }
   const prefsById = new Map<string, Record<string, unknown> | null>()
   for (const u of users) prefsById.set(u.id, parsePrefs(u.preferences))
