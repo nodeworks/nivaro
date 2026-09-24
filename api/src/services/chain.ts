@@ -32,11 +32,6 @@ export function newChainId(): string {
   return randomUUID()
 }
 
-/** Fastify onRequest only: scopes the rest of the request without wrapping it. */
-export function enterChain(store: ChainStore): void {
-  als.enterWith(store)
-}
-
 /** Run `fn` with `stepKey` as the open parent. Outside a chain: plain call. */
 export function withChainStep<T>(stepKey: string, fn: () => T): T {
   const cur = als.getStore()

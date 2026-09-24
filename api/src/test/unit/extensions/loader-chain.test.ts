@@ -17,4 +17,17 @@ describe('ctx.chain', () => {
     )
     expect(out).toEqual({})
   })
+
+  it('current returns a copy an extension cannot use to re-parent the request', async () => {
+    const chain = buildChainContext()
+    expect(chain.current()).toBeNull()
+    await chain.begin({ source: 'test', ref: '3' }, async () => {
+      const seen = chain.current()
+      expect(seen).not.toBeNull()
+      const before = currentChain()?.parent
+      ;(seen as { parent: string | null }).parent = 'hijacked'
+      expect(currentChain()?.parent).toBe(before)
+      expect(chain.current()).not.toBe(seen)
+    })
+  })
 })

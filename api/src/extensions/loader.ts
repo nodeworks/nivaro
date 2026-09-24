@@ -493,7 +493,12 @@ const CHAIN_TABLES: ReadonlySet<string> = new Set<ChainTable>([
 export function buildChainContext(): ExtensionContext['chain'] {
   return {
     begin: (root, fn) => beginChainRoot({ source: root.source, ref: root.ref }, fn),
-    current: () => currentChain(),
+    // A copy: the live store is the whole request's chain context, and an
+    // extension that mutated it would re-parent every later write.
+    current: () => {
+      const cur = currentChain()
+      return cur ? { ...cur } : null
+    },
     fields: async (table, opts) =>
       CHAIN_TABLES.has(table) ? chainFields(table as ChainTable, opts) : {}
   }

@@ -72,9 +72,15 @@ function eventConcernsRecord(ev: EventEntry, record: RecordRef, chainIds: string
   return Boolean(ev.chain_id && chainIds.includes(String(ev.chain_id)))
 }
 
-/** A non-admin sees an event's text at status level: first line, secrets masked, capped. */
-function redactEntry<T extends { text: string }>(e: T): T {
-  return { ...e, text: redactError(e.text, false) ?? '' }
+/**
+ * A non-admin sees an event's text and context at status level: first line,
+ * secrets masked, capped. An outbound push's context carries the partner's
+ * raw reply.
+ */
+export function redactEntry<T extends { text: string; context?: string | null }>(e: T): T {
+  const out = { ...e, text: redactError(e.text, false) ?? '' }
+  if (e.context != null) out.context = redactError(e.context, false)
+  return out
 }
 
 /** Same treatment for the root step of a path shown to a non-admin. */
@@ -239,15 +245,19 @@ export async function integrationEventsRoutes(app: FastifyInstance) {
       })
       if (!path) return reply.code(404).send({ error: 'Event not found' })
       if (reader) {
-        // The path service filters steps, never the root: check it here.
+        // The path service filters steps, never the root: check the event's
+        // own record and the root's here, as the record's activity list does.
+        const refs: RecordRef[] = []
+        if (ev.collection && ev.item_id != null && ev.item_id !== '') {
+          refs.push({ collection: ev.collection, item: String(ev.item_id) })
+        }
         const rootRec = path.root.record
         if (rootRec?.collection && rootRec.item != null && rootRec.item !== '') {
-          const key = `${rootRec.collection}:${rootRec.item}`
-          if (
-            !(await reader([{ collection: rootRec.collection, item: String(rootRec.item) }])).has(
-              key
-            )
-          ) {
+          refs.push({ collection: rootRec.collection, item: String(rootRec.item) })
+        }
+        if (refs.length) {
+          const allowed = await reader(refs)
+          if (refs.some((r) => !allowed.has(`${r.collection}:${r.item}`))) {
             return reply.code(404).send({ error: 'Event not found' })
           }
         }

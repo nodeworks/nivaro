@@ -18,6 +18,65 @@ import { runLongSql } from '../../services/run-long.js'
  */
 export const config = { transaction: false }
 
+function dialectOf(knex: Knex): string {
+  // biome-ignore lint/suspicious/noExplicitAny: knex client config is untyped here
+  return String((knex as any).client?.config?.client ?? '')
+}
+
+const PG_CLIENTS = new Set(['pg', 'postgres', 'postgresql'])
+
+/**
+ * The chain_id index, per dialect. SQL Server builds a FILTERED index on its
+ * own long request, on THIS migration's connection (`knex` — not the app's
+ * global handle, which a cloud tenant migrated through /admin/migrate does not
+ * share). Postgres gets the same partial index; any other dialect a plain one.
+ * Every branch is idempotent.
+ */
+async function createChainIndex(knex: Knex, table: string, ix: string): Promise<void> {
+  const client = dialectOf(knex)
+  if (client === 'mssql') {
+    await runLongSql(
+      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${ix}')
+         CREATE INDEX ${ix} ON ${table} (chain_id) WHERE chain_id IS NOT NULL`,
+      { knex, timeoutMs: 60 * 60 * 1000 }
+    )
+    return
+  }
+  if (PG_CLIENTS.has(client)) {
+    await knex.raw(
+      `CREATE INDEX IF NOT EXISTS ${ix} ON ${table} (chain_id) WHERE chain_id IS NOT NULL`
+    )
+    return
+  }
+  try {
+    await knex.schema.alterTable(table, (t) => {
+      t.index(['chain_id'], ix)
+    })
+  } catch (err) {
+    // Already there from an earlier run — the only failure worth tolerating.
+    if (!/exist|duplicate/i.test(String((err as Error)?.message ?? err))) throw err
+  }
+}
+
+async function dropChainIndex(knex: Knex, table: string, ix: string): Promise<void> {
+  const client = dialectOf(knex)
+  if (client === 'mssql') {
+    await knex.raw(
+      `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${ix}') DROP INDEX ${ix} ON ${table}`
+    )
+    return
+  }
+  if (PG_CLIENTS.has(client)) {
+    await knex.raw(`DROP INDEX IF EXISTS ${ix}`)
+    return
+  }
+  await knex.schema
+    .alterTable(table, (t) => {
+      t.dropIndex(['chain_id'], ix)
+    })
+    .catch(() => undefined)
+}
+
 const TABLES = [
   'nivaro_activity',
   'nivaro_api_logs',
@@ -41,12 +100,7 @@ export async function up(knex: Knex): Promise<void> {
         t.string('chain_parent', 120).nullable()
       })
     }
-    const ix = `ix_${table}_chain_id`
-    await runLongSql(
-      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${ix}')
-         CREATE INDEX ${ix} ON ${table} (chain_id) WHERE chain_id IS NOT NULL`,
-      { timeoutMs: 60 * 60 * 1000 }
-    )
+    await createChainIndex(knex, table, `ix_${table}_chain_id`)
   }
 
   if (!(await knex.schema.hasTable('nivaro_chain_roots'))) {
@@ -70,10 +124,7 @@ export async function down(knex: Knex): Promise<void> {
   }
   for (const table of TABLES) {
     if (!(await knex.schema.hasTable(table))) continue
-    const ix = `ix_${table}_chain_id`
-    await knex.raw(
-      `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${ix}') DROP INDEX ${ix} ON ${table}`
-    )
+    await dropChainIndex(knex, table, `ix_${table}_chain_id`)
     for (const col of ['chain_id', 'chain_parent']) {
       if (await knex.schema.hasColumn(table, col)) {
         await knex.schema.alterTable(table, (t) => {

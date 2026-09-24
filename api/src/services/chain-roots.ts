@@ -92,6 +92,8 @@ export async function chainIdsForRoots(
       db('nivaro_chain_roots')
         .where('source', source)
         .whereIn('ref', chunk)
+        // Oldest first: a ref's ORIGINAL chain wins over any later row for it.
+        .orderBy('id')
         .select('ref', 'chain_id')
     )
     for (const r of found as Array<{ ref: string; chain_id: string }>) {

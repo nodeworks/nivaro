@@ -11,19 +11,48 @@ function humanCollection(c: string): string {
   return c.replace(/_/g, ' ')
 }
 
-/** Sit each partner call under the sibling push to the same API that made it. */
+/**
+ * Sit each partner call under the sibling push to the same API that made it.
+ * A push row is written once its call has answered, so a call belongs to the
+ * NEAREST push at or after it (same parent, same API, within 5 s), one call
+ * per push — two pushes to one API from one transition keep their own calls.
+ * A call no push claims that way falls back to any push within 5 s.
+ */
 export function reparentCallsUnderPushes(steps: PathStep[]): PathStep[] {
   const pushes = steps.filter((s) => s.kind === 'push' && s.api_id != null)
-  return steps.map((s) => {
-    if (s.kind !== 'partner_call' || s.api_id == null) return s
-    const t = Date.parse(s.at)
-    const match = pushes.find(
+  if (pushes.length === 0) return steps
+  const calls = steps
+    .filter((s) => s.kind === 'partner_call' && s.api_id != null)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+  const claimed = new Set<string>()
+  const owner = new Map<string, string>()
+  for (const c of calls) {
+    const t = Date.parse(c.at)
+    let best: PathStep | null = null
+    let bestGap = Number.POSITIVE_INFINITY
+    for (const p of pushes) {
+      if (claimed.has(p.key) || p.parent !== c.parent || p.api_id !== c.api_id) continue
+      const gap = Date.parse(p.at) - t
+      if (gap < 0 || gap > CALL_ADOPT_MS || gap >= bestGap) continue
+      best = p
+      bestGap = gap
+    }
+    if (best) {
+      claimed.add(best.key)
+      owner.set(c.key, best.key)
+      continue
+    }
+    const loose = pushes.find(
       (p) =>
-        p.parent === s.parent &&
-        p.api_id === s.api_id &&
+        p.parent === c.parent &&
+        p.api_id === c.api_id &&
         Math.abs(Date.parse(p.at) - t) <= CALL_ADOPT_MS
     )
-    return match ? { ...s, parent: match.key } : s
+    if (loose) owner.set(c.key, loose.key)
+  }
+  return steps.map((s) => {
+    const key = s.kind === 'partner_call' ? owner.get(s.key) : undefined
+    return key ? { ...s, parent: key } : s
   })
 }
 

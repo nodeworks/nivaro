@@ -235,6 +235,26 @@ describe('path routes', () => {
     expect(res.statusCode).toBe(404)
   })
 
+  it('record-side path 404s an event whose own record the viewer cannot read', async () => {
+    // A crafted request: the event shares one of the record's chains, but it
+    // names a record the viewer cannot open, and its root carries no record.
+    vi.mocked(getEvent).mockResolvedValueOnce(
+      event({ collection: 'purchase_orders', item_id: '5', chain_id: 'c1' })
+    )
+    vi.mocked(readItems).mockImplementation((async (
+      _u: unknown,
+      collection: string,
+      q: { filter: { id: { _in: string[] } } }
+    ) => ({
+      data: collection === 'purchase_orders' ? [] : q.filter.id._in.map((id) => ({ id }))
+    })) as unknown as typeof readItems)
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/integration-events/record/workflows/371367/path?source=core:outbound&id=82'
+    })
+    expect(res.statusCode).toBe(404)
+  })
+
   it('record-side path 403s without read permission on the collection', async () => {
     vi.mocked(can).mockResolvedValueOnce(false)
     const res = await (await app()).inject({
@@ -293,6 +313,27 @@ describe('record activity route', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().data.entries.map((e: { id: string }) => e.id)).toEqual(['1'])
+  })
+
+  it('redacts an entry context (a partner reply) for a non-admin', async () => {
+    vi.mocked(listEvents).mockResolvedValueOnce([
+      event({
+        id: '1',
+        context: 'HTTP 500: {"client_secret":"CS-9"}\nfull partner reply body'
+      }),
+      event({ id: '2', context: null })
+    ])
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/integration-events/record/workflows/371367'
+    })
+    expect(res.statusCode).toBe(200)
+    const entries = res.json().data.entries as Array<{ id: string; context: string | null }>
+    const text = JSON.stringify(entries)
+    expect(text).not.toContain('CS-9')
+    expect(text).not.toContain('full partner reply')
+    expect(entries[0].context).toMatch(/^HTTP 500/)
+    expect(entries[1].context).toBeNull()
   })
 
   it('404s a record the viewer cannot read', async () => {

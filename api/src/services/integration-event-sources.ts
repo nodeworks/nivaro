@@ -73,6 +73,7 @@ function noteProviderSources(): EventSourceDef[] {
       // One mapping for list() and get() — the two must never disagree on
       // chain_id or replayable.
       const toEntries = async (rows: RelatedNoteFeedEntry[]): Promise<EventEntry[]> => {
+        if (rows.length === 0) return []
         const chains = await chainIdsForRoots(
           p.id,
           rows.map((r) => String(r.id))
@@ -96,7 +97,7 @@ function noteProviderSources(): EventSourceDef[] {
           replayable: r.replayable === true && p.can_replay
         }))
       }
-      const list = async (opts: EventListOpts): Promise<EventEntry[]> =>
+      const recent = async (opts: EventListOpts): Promise<EventEntry[]> =>
         toEntries(
           await relatedNoteRegistry.listRecent({
             limit: opts.limit,
@@ -105,6 +106,22 @@ function noteProviderSources(): EventSourceDef[] {
             before: opts.before ?? null
           })
         )
+      const list = async (opts: EventListOpts): Promise<EventEntry[]> => {
+        const provider = relatedNoteRegistry.get(p.id)
+        const record = opts.record
+        if (!record || !provider || provider.collection !== record.collection) return recent(opts)
+        // A record's own entries come from the provider's per-record thread —
+        // the cross-record feed only reaches its newest window. Entry ids are
+        // the same ids list() and get() use, so chain ids attach the same way.
+        const own = (await provider.load(record.item))
+          .filter((r) => !opts.status || (r.status ?? null) === opts.status)
+          .map((r) => ({ ...r, collection: record.collection, item_id: record.item }))
+        const mine = await toEntries(own)
+        if (!opts.chainIds?.length) return mine
+        // Entries on OTHER records that share one of this record's chains.
+        const seen = new Set(mine.map((e) => e.id))
+        return [...mine, ...(await recent(opts)).filter((e) => !seen.has(e.id))]
+      }
       return {
         id: p.id,
         label: p.label,
@@ -197,17 +214,34 @@ export async function getEvent(source: string, id: string): Promise<EventEntry |
   return (await s.list({ limit: LOOKUP_WINDOW })).find((e) => e.id === id) ?? null
 }
 
+/** `# comments` out, stopping at a real newline or a JSON-escaped one. */
+function stripGraphqlComments(text: string): string {
+  return text.replace(/#.*?(?=\\n|\n|$)/g, '')
+}
+
+/** Last resort when the operation type cannot be read off the first token. */
+function mentionsMutation(text: string): boolean {
+  return /\bmutation\b/.test(stripGraphqlComments(text))
+}
+
 export function isGraphqlMutation(body: string | null | undefined): boolean {
   if (!body) return false
-  let query: unknown
+  // A stored body is capped and ends in '…' when cut: never valid JSON.
+  if (body.endsWith('…')) return mentionsMutation(body)
+  let parsed: unknown
   try {
-    query = (JSON.parse(body) as { query?: unknown }).query
+    parsed = JSON.parse(body)
   } catch {
-    return false
+    return mentionsMutation(body)
   }
+  // A batched request: any mutation in the batch makes it a write.
+  if (Array.isArray(parsed)) return mentionsMutation(body)
+  const query = (parsed as { query?: unknown } | null)?.query
   if (typeof query !== 'string') return false
   // The operation type is the first token of the document (ignoring comments).
-  const first = query.replace(/#[^\n]*/g, '').trimStart()
+  const first = stripGraphqlComments(query).trimStart()
+  // Fragments may come first; the operation follows them.
+  if (/^fragment\b/.test(first)) return mentionsMutation(query)
   return /^mutation\b/.test(first)
 }
 

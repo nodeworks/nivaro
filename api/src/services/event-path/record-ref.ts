@@ -34,12 +34,12 @@ export async function findRecordRef(
 /** Distinct chain ids of rows on this record (activity, submissions, workflow history). */
 export async function chainsTouchingRecord(collection: string, item: string): Promise<string[]> {
   const out = new Set<string>()
-  // `.distinct(col)` + row mapping, never `.pluck` — on mssql a distinct
-  // pluck comes back as nested arrays.
-  const add = (rows: Array<{ chain_id: string | null }>) => {
+  // Grouped + row mapping, never `.pluck` — on mssql a distinct pluck comes
+  // back as nested arrays. Newest chains first, so the cap drops the oldest.
+  const add = (rows: Array<Record<string, unknown>>) => {
     for (const r of rows) if (r.chain_id) out.add(String(r.chain_id))
   }
-  const read = async (fn: () => Promise<Array<{ chain_id: string | null }>>) => {
+  const read = async (fn: () => PromiseLike<Array<Record<string, unknown>>>) => {
     try {
       add(await fn())
     } catch {
@@ -51,7 +51,10 @@ export async function chainsTouchingRecord(collection: string, item: string): Pr
       db('nivaro_activity')
         .where({ collection, item })
         .whereNotNull('chain_id')
-        .distinct('chain_id')
+        .select('chain_id')
+        .max('id as newest')
+        .groupBy('chain_id')
+        .orderBy('newest', 'desc')
         .limit(500)
     )
   }
@@ -60,7 +63,10 @@ export async function chainsTouchingRecord(collection: string, item: string): Pr
       db('nivaro_erp_submissions')
         .where({ collection, item })
         .whereNotNull('chain_id')
-        .distinct('chain_id')
+        .select('chain_id')
+        .max('id as newest')
+        .groupBy('chain_id')
+        .orderBy('newest', 'desc')
         .limit(500)
     )
   }
@@ -70,7 +76,10 @@ export async function chainsTouchingRecord(collection: string, item: string): Pr
         .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
         .where({ 'i.collection': collection, 'i.item': item })
         .whereNotNull('h.chain_id')
-        .distinct('h.chain_id as chain_id')
+        .select('h.chain_id as chain_id')
+        .max('h.id as newest')
+        .groupBy('h.chain_id')
+        .orderBy('newest', 'desc')
         .limit(500)
     )
   }

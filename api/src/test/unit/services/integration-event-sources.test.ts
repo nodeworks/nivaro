@@ -46,7 +46,7 @@ vi.mock('../../../services/chain-roots.js', () => ({
   chainIdsForRoots: vi.fn(async () => new Map())
 }))
 
-import { relatedNoteRegistry } from '../../../extensions/related-notes.js'
+import { type RelatedNoteEntry, relatedNoteRegistry } from '../../../extensions/related-notes.js'
 import { resetChainColumnProbe } from '../../../services/chain-columns.js'
 import { chainIdsForRoots } from '../../../services/chain-roots.js'
 import {
@@ -79,6 +79,33 @@ describe('isGraphqlMutation', () => {
   it('null/garbage is not a mutation', () => {
     expect(isGraphqlMutation(null)).toBe(false)
     expect(isGraphqlMutation('not json')).toBe(false)
+  })
+  it('reads a body cut short at the storage cap', () => {
+    expect(isGraphqlMutation('{"query":"mutation { create_workflows_item(data: {name: "a…')).toBe(
+      true
+    )
+    expect(isGraphqlMutation('{"query":"{ workflows { id name des…')).toBe(false)
+  })
+  it('reads a batched request', () => {
+    expect(
+      isGraphqlMutation('[{"query":"{ a { id } }"},{"query":"mutation { b(id: 1) { id } }"}]')
+    ).toBe(true)
+    expect(isGraphqlMutation('[{"query":"{ a { id } }"}]')).toBe(false)
+  })
+  it('reads past fragments that come before the operation', () => {
+    expect(
+      isGraphqlMutation(
+        '{"query":"fragment F on workflows { id }\\nmutation { update_workflows_item(id: 1) { ...F } }"}'
+      )
+    ).toBe(true)
+    expect(
+      isGraphqlMutation('{"query":"fragment F on workflows { id }\\nquery { workflows { ...F } }"}')
+    ).toBe(false)
+  })
+  it('ignores mutation inside a comment on the fallback path', () => {
+    expect(isGraphqlMutation('{"query":"# mutation later\\n{ workflows { id } }…')).toBe(false)
+    expect(isGraphqlMutation('not json # mutation')).toBe(false)
+    expect(isGraphqlMutation('not json mutation { x }')).toBe(true)
   })
 })
 
@@ -206,6 +233,64 @@ describe('listEvents record search', () => {
       expect(out[0].direction).toBe('poll')
     } finally {
       relatedNoteRegistry.unregister('test:feed')
+    }
+  })
+})
+
+describe('listEvents record search on a note provider', () => {
+  it("reads a record's own entries through load(), however old", async () => {
+    rows = []
+    const at = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+    const load = vi.fn(
+      async (_item: string): Promise<RelatedNoteEntry[]> => [
+        { id: 77, label: 'Feed', text: 'old shipment', created_at: at(60 * 24 * 90), status: 'ok' },
+        { id: 78, label: 'Feed', text: 'old error', created_at: at(60 * 24 * 91), status: 'error' }
+      ]
+    )
+    // The cross-record feed only holds newer rows about other records.
+    const list = vi.fn(async () => [
+      { id: 5, label: 'Feed', text: 'x', created_at: at(1), collection: 'orders', item_id: '9' }
+    ])
+    relatedNoteRegistry.register({
+      id: 'test:load',
+      collection: 'orders',
+      label: 'Feed',
+      load,
+      list
+    })
+    vi.mocked(chainIdsForRoots).mockResolvedValueOnce(new Map([['77', 'c-77']]))
+    try {
+      const out = await listEvents({
+        limit: 10,
+        source: 'test:load',
+        status: 'ok',
+        record: { collection: 'orders', item: '7' }
+      })
+      expect(load).toHaveBeenCalledWith('7')
+      expect(list).not.toHaveBeenCalled()
+      expect(out.map((e) => e.id)).toEqual(['77'])
+      expect(out[0]).toMatchObject({ collection: 'orders', item_id: '7', chain_id: 'c-77' })
+      expect(vi.mocked(chainIdsForRoots).mock.calls.at(-1)).toEqual(['test:load', ['77']])
+    } finally {
+      relatedNoteRegistry.unregister('test:load')
+    }
+  })
+
+  it('keeps the feed for a record in another collection', async () => {
+    rows = []
+    const load = vi.fn(async () => [])
+    const list = vi.fn(async () => [])
+    relatedNoteRegistry.register({ id: 'test:other', collection: 'orders', load, list })
+    try {
+      await listEvents({
+        limit: 10,
+        source: 'test:other',
+        record: { collection: 'workflows', item: '7' }
+      })
+      expect(load).not.toHaveBeenCalled()
+      expect(list).toHaveBeenCalled()
+    } finally {
+      relatedNoteRegistry.unregister('test:other')
     }
   })
 })

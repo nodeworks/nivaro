@@ -237,30 +237,64 @@ const fmtV = (v: unknown): string =>
               .slice(0, 120)
 
 /** Labelled old → new pairs for a delta, FK ids resolved to display labels. */
+type FieldLabelRow = { field: string; label: string | null }
+type RelationTargetRow = { many_field: string; one_collection: string | null }
+
+/**
+ * A per-caller cache of each collection's field labels and M2O targets, for
+ * callers that label many rows of the same collections in one go (an event
+ * path). Holds the WHOLE collection's rows; filtered by key on use.
+ */
+export type LabelMetaCache = Map<
+  string,
+  Promise<{ fields: FieldLabelRow[]; rels: RelationTargetRow[] }>
+>
+
 export async function labelledChanges(
   collection: string,
   delta: Record<string, unknown> | null | undefined,
   previous: Record<string, unknown> | null | undefined,
-  cap = 12
+  cap = 12,
+  metaCache?: LabelMetaCache
 ): Promise<Array<{ field: string; label: string; old: string; new: string }>> {
   if (!delta) return []
   const keys = Object.keys(delta)
     .filter((k) => !k.startsWith('_') && !HIDDEN_KEYS.has(k))
     .slice(0, cap)
   if (keys.length === 0) return []
-  const [fields, rels] = await Promise.all([
-    db('nivaro_fields')
-      .where({ collection })
-      .whereIn('field', keys)
-      .select('field', 'label') as Promise<Array<{ field: string; label: string | null }>>,
-    db('nivaro_relations')
-      .where({ many_collection: collection })
-      .whereIn('many_field', keys)
-      .whereNull('junction_field')
-      .select('many_field', 'one_collection') as Promise<
-      Array<{ many_field: string; one_collection: string | null }>
-    >
-  ])
+  let fields: FieldLabelRow[]
+  let rels: RelationTargetRow[]
+  if (metaCache) {
+    let meta = metaCache.get(collection)
+    if (!meta) {
+      meta = Promise.all([
+        db('nivaro_fields').where({ collection }).select('field', 'label') as Promise<
+          FieldLabelRow[]
+        >,
+        db('nivaro_relations')
+          .where({ many_collection: collection })
+          .whereNull('junction_field')
+          .select('many_field', 'one_collection') as Promise<RelationTargetRow[]>
+      ]).then(([f, r]) => ({ fields: f, rels: r }))
+      metaCache.set(collection, meta)
+    }
+    const all = await meta
+    const wanted = new Set(keys)
+    fields = all.fields.filter((f) => wanted.has(f.field))
+    rels = all.rels.filter((r) => wanted.has(r.many_field))
+  } else {
+    ;[fields, rels] = await Promise.all([
+      db('nivaro_fields')
+        .where({ collection })
+        .whereIn('field', keys)
+        .select('field', 'label') as Promise<FieldLabelRow[]>,
+      db('nivaro_relations')
+        .where({ many_collection: collection })
+        .whereIn('many_field', keys)
+        .whereNull('junction_field')
+        .select('many_field', 'one_collection') as Promise<RelationTargetRow[]>
+    ])
+  }
   const labelOf = new Map(fields.map((f) => [f.field, f.label]))
   const target = new Map(
     rels.filter((r) => r.one_collection).map((r) => [r.many_field, r.one_collection as string])

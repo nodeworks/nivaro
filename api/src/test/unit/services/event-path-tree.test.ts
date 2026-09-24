@@ -284,3 +284,49 @@ describe('rootKeyOf', () => {
     expect(rootKeyOf([{ ...steps[0] }])).toBeNull()
   })
 })
+
+describe('reparentCallsUnderPushes', () => {
+  const push = (key: string, ms: number, failed = false): PathStep => ({
+    key,
+    parent: 'history:7',
+    kind: 'push',
+    at: at(ms),
+    summary: key,
+    failed,
+    api_id: 3
+  })
+  const call = (key: string, ms: number, failed = false): PathStep => ({
+    key,
+    parent: 'history:7',
+    kind: 'partner_call',
+    at: at(ms),
+    summary: key,
+    failed,
+    api_id: 3
+  })
+
+  it('gives two pushes to one API under one transition their own calls', () => {
+    // MWF state push, then the completion push — each row written after its
+    // call answered. The second call failed; it belongs under the second push.
+    const out = reparentCallsUnderPushes([
+      push('submission:1', 300),
+      push('submission:2', 900, true),
+      call('call:10', 100),
+      call('call:11', 700, true)
+    ])
+    const parentOf = (k: string) => out.find((s) => s.key === k)?.parent
+    expect(parentOf('call:10')).toBe('submission:1')
+    expect(parentOf('call:11')).toBe('submission:2')
+  })
+
+  it('falls back to any push within 5 s when none follows the call', () => {
+    const out = reparentCallsUnderPushes([push('submission:1', 0), call('call:10', 2000)])
+    expect(out.find((s) => s.key === 'call:10')?.parent).toBe('submission:1')
+  })
+
+  it('leaves a call on another API or parent alone', () => {
+    const other = { ...call('call:10', 100), api_id: 9 }
+    const out = reparentCallsUnderPushes([push('submission:1', 300), other])
+    expect(out.find((s) => s.key === 'call:10')?.parent).toBe('history:7')
+  })
+})

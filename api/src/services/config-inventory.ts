@@ -201,6 +201,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tasks',
   'nivaro_erp_submissions',
   'nivaro_erp_submission_attempts',
+  'nivaro_chain_roots', // integration event chains — which feed row / replay started which chain
   'nivaro_integration_signal_rows',
   'nivaro_integration_signal_runs',
   'nivaro_integration_signal_snoozes',

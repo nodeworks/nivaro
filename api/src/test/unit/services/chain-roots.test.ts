@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const inserted: Record<string, unknown>[] = []
 const rows: Record<string, unknown>[] = []
+const orderedBy: string[] = []
 let hasTable = true
 
 vi.mock('../../../db/index.js', () => {
@@ -13,6 +14,10 @@ vi.mock('../../../db/index.js', () => {
     })
     q.where = vi.fn(() => q)
     q.whereIn = vi.fn(() => q)
+    q.orderBy = vi.fn((col: string) => {
+      orderedBy.push(col)
+      return q
+    })
     q.select = vi.fn(async () => rows)
     return q
   }
@@ -40,6 +45,7 @@ import {
 afterEach(() => {
   inserted.length = 0
   rows.length = 0
+  orderedBy.length = 0
   hasTable = true
   resetChainRootsProbe()
 })
@@ -68,6 +74,12 @@ describe('chainIdsForRoots', () => {
     const map = await chainIdsForRoots('efp-ops:mdsi', ['1', '2'])
     expect(map.get('1')).toBe('a')
     expect(map.get('2')).toBe('b')
+    expect(orderedBy).toEqual(['id'])
+  })
+
+  it('keeps the oldest row when a ref maps to more than one chain', async () => {
+    rows.push({ ref: '1', chain_id: 'first' }, { ref: '1', chain_id: 'later' })
+    expect((await chainIdsForRoots('s', ['1'])).get('1')).toBe('first')
   })
 
   it('returns an empty map for no refs', async () => {
