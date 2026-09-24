@@ -36,6 +36,7 @@
     "pipeline:row-menu": "tsx extensions/efp-ops/scripts/row-menu-transitions.ts",
     "mdsi:fulfilment": "tsx extensions/efp-ops/scripts/mdsi-fulfilment.ts",
     "fusion:transfer-orders": "tsx extensions/efp-ops/scripts/fusion-transfer-orders.ts",
+    "fusion:inbound-identity": "tsx extensions/efp-ops/scripts/fusion-inbound-identity.ts",
     "integrations:queries": "tsx extensions/efp-ops/scripts/integrations-console-queries.ts",
     "typecheck:extensions": "tsc -p extensions/tsconfig.json",
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
