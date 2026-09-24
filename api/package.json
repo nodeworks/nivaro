@@ -35,6 +35,7 @@
     "retire:workflow-task": "tsx extensions/efp-ops/scripts/retire-workflow-task.ts",
     "pipeline:row-menu": "tsx extensions/efp-ops/scripts/row-menu-transitions.ts",
     "mdsi:fulfilment": "tsx extensions/efp-ops/scripts/mdsi-fulfilment.ts",
+    "integrations:queries": "tsx extensions/efp-ops/scripts/integrations-console-queries.ts",
     "typecheck:extensions": "tsc -p extensions/tsconfig.json",
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
     "owners:fingerprint": "tsx src/scripts/owner-fingerprint.ts",
