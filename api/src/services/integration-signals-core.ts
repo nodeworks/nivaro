@@ -4,6 +4,7 @@
  */
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { importCadence, isImportStale } from './integration-signal-settings.js'
 import { registerIntegrationSignal, type SignalRow } from './integration-signals.js'
 
 export function isAuthFailure(status: number | null, error: string | null): boolean {
@@ -388,7 +389,7 @@ export function registerCoreIntegrationSignals(): void {
     id: 'core:import-stale',
     label: 'Import stale',
     description:
-      'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>").',
+      'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>", 0 = not monitored).',
     tab: 'inbound',
     severity: 'warn',
     thresholds: [
@@ -414,9 +415,11 @@ export function registerCoreIntegrationSignals(): void {
       for (const r of rows) {
         // Only imports that have ever run are expected to keep running.
         if (!r.last_ok) continue
-        const hours = thresholds[`cadence_hours:${r.import_key}`] ?? thresholds.default_hours
+        const cadence = importCadence(r.import_key, thresholds)
+        // Excluded (cadence 0) imports are never stale.
+        if (!isImportStale(r.last_ok, cadence)) continue
+        const hours = cadence.hours
         const age = (Date.now() - new Date(r.last_ok).getTime()) / 3600_000
-        if (age < hours) continue
         out.push({
           key: `import:${r.import_key}`,
           title: `${r.label}: no successful run in ${Math.floor(age)} h`,

@@ -196,37 +196,46 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
   })
 
   // Registered ahead of `/:id` so this static segment wins the route match.
+  // Every definition (inactive ones too — the Import Console's definitions
+  // list shows their staleness setting); only active ones can go stale.
   app.get('/integration-partners/imports', { preHandler: requireAdmin }, async () => {
-    const { resolveThresholds } = await import('../services/integration-signal-settings.js')
+    const { importCadence, isImportStale, resolveThresholds } = await import(
+      '../services/integration-signal-settings.js'
+    )
     const { getIntegrationSignal } = await import('../services/integration-signals.js')
     const stale = getIntegrationSignal('core:import-stale')
     const th = stale ? (await resolveThresholds(stale)).thresholds : { default_hours: 48 }
     const rows = (await db.raw(
-      `SELECT d.[key], d.label,
+      `SELECT d.[key], d.label, d.is_active,
               (SELECT TOP 1 status FROM nivaro_import_queue q WHERE q.definition = d.id ORDER BY q.id DESC) AS last_status,
               (SELECT MAX(COALESCE(finished_at, started_at)) FROM nivaro_import_queue q WHERE q.definition = d.id) AS last_run_at,
               (SELECT MAX(finished_at) FROM nivaro_import_queue q WHERE q.definition = d.id AND q.status = 'completed') AS last_ok_at,
               (SELECT COUNT(*) FROM nivaro_import_queue q WHERE q.definition = d.id AND q.status = 'error' AND q.created_at >= DATEADD(day, -7, GETUTCDATE())) AS failures7d
-         FROM nivaro_import_definitions d WHERE d.is_active = 1 ORDER BY d.sort, d.label`
+         FROM nivaro_import_definitions d ORDER BY d.sort, d.label`
     )) as Array<{
       key: string
       label: string
+      is_active: boolean | number
       last_status: string | null
       last_run_at: Date | null
       last_ok_at: Date | null
       failures7d: number
     }>
+    const now = new Date()
     return {
       data: rows.map((r) => {
-        const cadence = th[`cadence_hours:${r.key}`] ?? th.default_hours
+        const cadence = importCadence(r.key, th)
+        const active = !!r.is_active
         return {
           ...r,
+          is_active: active,
           failures7d: Number(r.failures7d),
-          cadence_hours: cadence,
-          stale:
-            !!r.last_ok_at && Date.now() - new Date(r.last_ok_at).getTime() > cadence * 3600_000
+          cadence_hours: cadence.hours,
+          cadence_source: cadence.source,
+          stale: active && isImportStale(r.last_ok_at, cadence, now)
         }
-      })
+      }),
+      default_hours: th.default_hours ?? 48
     }
   })
 

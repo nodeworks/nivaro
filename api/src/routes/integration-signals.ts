@@ -13,6 +13,7 @@ import {
   isSnoozed,
   loadActiveSnoozes,
   resolveThresholds,
+  splitSettingValues,
   stableRowHash,
   validateSettingPatch
 } from '../services/integration-signal-settings.js'
@@ -326,7 +327,8 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       if (!s) return reply.code(404).send({ error: 'Unknown signal' })
       const v = validateSettingPatch(s, (req.body ?? {}) as Record<string, unknown>)
       if (!v.ok) return reply.code(400).send({ error: v.error })
-      for (const [key, value] of Object.entries(v.values)) {
+      const { upserts, deletes } = splitSettingValues(v.values)
+      for (const [key, value] of upserts) {
         const hit = await db('nivaro_integration_signal_settings')
           .where({ signal: id, key })
           .first('id')
@@ -334,6 +336,12 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
         if (hit) await db('nivaro_integration_signal_settings').where({ id: hit.id }).update(row)
         else await db('nivaro_integration_signal_settings').insert({ signal: id, key, ...row })
       }
+      // null = back to the default: drop the stored row.
+      if (deletes.length)
+        await db('nivaro_integration_signal_settings')
+          .where({ signal: id })
+          .whereIn('key', deletes)
+          .del()
       bustSignalSettings()
       await logActivity({
         action: 'integration-signal-settings',
@@ -342,7 +350,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
         user: req.user?.id,
         req,
         comment: Object.entries(v.values)
-          .map(([k, x]) => `${k}=${x}`)
+          .map(([k, x]) => (x === null ? `${k} cleared` : `${k}=${x}`))
           .join(', ')
       })
       return { data: await resolveThresholds(s) }
@@ -360,8 +368,14 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       if (!v.ok) return reply.code(400).send({ error: v.error })
       const base = await resolveThresholds(s)
       const thresholds = { ...base.thresholds }
-      for (const [k, x] of Object.entries(v.values))
-        if (k !== 'severity' && k !== 'enabled') thresholds[k] = Number(x)
+      for (const [k, x] of Object.entries(v.values)) {
+        if (k === 'severity' || k === 'enabled') continue
+        if (x === null) {
+          const declared = s.thresholds.find((t) => t.key === k)
+          if (declared) thresholds[k] = declared.default
+          else delete thresholds[k]
+        } else thresholds[k] = Number(x)
+      }
       try {
         const { businessDaysAgoForPreview } = await import('../services/integration-signals.js')
         const out = await s.evaluate({ thresholds, businessDaysAgo: businessDaysAgoForPreview })

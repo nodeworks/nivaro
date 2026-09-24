@@ -50,11 +50,20 @@ export async function resolveThresholds(s: IntegrationSignal): Promise<ResolvedS
   }
 }
 
+/** Per-import cadence overrides live under this dynamic-key prefix. */
+export const CADENCE_PREFIX = 'cadence_hours:'
+const CADENCE_MAX_HOURS = 2160
+
+/**
+ * Validate a settings PATCH. `null` on a threshold or dynamic key means
+ * "remove the stored value" (back to the default); `0` on a
+ * `cadence_hours:<key>` override means "exclude this import".
+ */
 export function validateSettingPatch(
   s: IntegrationSignal,
   patch: Record<string, unknown>
-): { ok: true; values: Record<string, string> } | { ok: false; error: string } {
-  const values: Record<string, string> = {}
+): { ok: true; values: Record<string, string | null> } | { ok: false; error: string } {
+  const values: Record<string, string | null> = {}
   for (const [k, v] of Object.entries(patch)) {
     if (k === 'enabled') {
       if (typeof v !== 'boolean') return { ok: false, error: 'enabled must be true or false' }
@@ -62,26 +71,78 @@ export function validateSettingPatch(
       continue
     }
     if (k === 'severity') {
-      if (v !== 'critical' && v !== 'warn') return { ok: false, error: 'severity must be critical or warn' }
+      if (v !== 'critical' && v !== 'warn')
+        return { ok: false, error: 'severity must be critical or warn' }
       values[k] = v
       continue
     }
     const t = s.thresholds.find((x) => x.key === k)
     const dynamic = /^[a-z_]+:[A-Za-z0-9_.-]+$/.test(k)
     if (!t && !dynamic) return { ok: false, error: `Unknown setting "${k}"` }
-    const n = Number(v)
+    if (v === null) {
+      values[k] = null
+      continue
+    }
+    const n = typeof v === 'string' && v.trim() === '' ? Number.NaN : Number(v)
     if (!Number.isFinite(n)) return { ok: false, error: `"${k}" must be a number` }
-    if (t?.min != null && n < t.min) return { ok: false, error: `"${t.label}" must be at least ${t.min}` }
-    if (t?.max != null && n > t.max) return { ok: false, error: `"${t.label}" must be at most ${t.max}` }
-    if (!t && n <= 0) return { ok: false, error: `"${k}" must be positive` }
+    if (t?.min != null && n < t.min)
+      return { ok: false, error: `"${t.label}" must be at least ${t.min}` }
+    if (t?.max != null && n > t.max)
+      return { ok: false, error: `"${t.label}" must be at most ${t.max}` }
+    if (!t && k.startsWith(CADENCE_PREFIX)) {
+      if (n < 0) return { ok: false, error: `"${k}" must be 0 (not monitored) or more` }
+      if (n > CADENCE_MAX_HOURS)
+        return { ok: false, error: `"${k}" must be at most ${CADENCE_MAX_HOURS}` }
+    } else if (!t && n <= 0) return { ok: false, error: `"${k}" must be positive` }
     values[k] = String(n)
   }
   return { ok: true, values }
 }
 
+/** A validated patch as the writes it becomes: null = delete that key's row. */
+export function splitSettingValues(values: Record<string, string | null>): {
+  upserts: Array<[string, string]>
+  deletes: string[]
+} {
+  const upserts: Array<[string, string]> = []
+  const deletes: string[] = []
+  for (const [k, v] of Object.entries(values)) {
+    if (v === null) deletes.push(k)
+    else upserts.push([k, v])
+  }
+  return { upserts, deletes }
+}
+
+export interface ImportCadence {
+  /** Expected hours between successful runs; 0 when excluded. */
+  hours: number
+  source: 'default' | 'override' | 'excluded'
+}
+
+/** How often an import is expected to succeed, from the stale signal's thresholds. */
+export function importCadence(key: string, thresholds: Record<string, number>): ImportCadence {
+  const override = thresholds[`${CADENCE_PREFIX}${key}`]
+  if (override === 0) return { hours: 0, source: 'excluded' }
+  if (override != null && Number.isFinite(override) && override > 0)
+    return { hours: override, source: 'override' }
+  return { hours: thresholds.default_hours ?? 48, source: 'default' }
+}
+
+/** Only an import that has succeeded before, and is monitored, can go stale. */
+export function isImportStale(
+  lastOk: Date | string | null,
+  cadence: ImportCadence,
+  now: Date = new Date()
+): boolean {
+  if (!lastOk || cadence.source === 'excluded' || cadence.hours <= 0) return false
+  return now.getTime() - new Date(lastOk).getTime() > cadence.hours * 3600_000
+}
+
 export function stableRowHash(row: SignalRow): string {
   const detail = (row.detail ?? '').replace(/\d+/g, '#')
-  return createHash('sha256').update(`${row.title}|${row.group ?? ''}|${detail}`).digest('hex')
+  return createHash('sha256')
+    .update(`${row.title}|${row.group ?? ''}|${detail}`)
+    .digest('hex')
 }
 
 export interface SnoozeRow {
@@ -96,10 +157,19 @@ export interface SnoozeRow {
   note?: string | null
 }
 
-export function isSnoozed(row: SignalRow, signal: string, snoozes: SnoozeRow[], now: Date): SnoozeRow | null {
+export function isSnoozed(
+  row: SignalRow,
+  signal: string,
+  snoozes: SnoozeRow[],
+  now: Date
+): SnoozeRow | null {
   for (const s of snoozes) {
     if (s.signal !== signal) continue
-    const scoped = s.row_key ? s.row_key === row.key : s.group_key ? s.group_key === row.group : true
+    const scoped = s.row_key
+      ? s.row_key === row.key
+      : s.group_key
+        ? s.group_key === row.group
+        : true
     if (!scoped) continue
     if (s.until && new Date(s.until) <= now) continue
     if (s.until_change_hash && s.until_change_hash !== stableRowHash(row)) continue
