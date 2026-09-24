@@ -42,6 +42,7 @@ import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 //   iso_date               — format as yyyy-MM-dd
 //   at_least_days_out: N   — max(date, today + N days)
 //   next_open_day          — skip weekends and nivaro_blackout_dates forward
+//   pad_start: N, 'c'      — left-pad to N chars with 'c' (default '0')
 
 interface ContextQueryDef {
   collection: string
@@ -124,56 +125,6 @@ const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 const engine = new Liquid({ strictFilters: false, strictVariables: false })
 
-engine.registerFilter('add_days', (v: unknown, n: unknown) => {
-  const d = new Date(String(v ?? new Date().toISOString()))
-  if (Number.isNaN(d.getTime())) return v
-  d.setDate(d.getDate() + Number(n ?? 0))
-  return d.toISOString().slice(0, 10)
-})
-// JSON.stringify anything — undefined/missing renders as null, keeping
-// generated JSON payloads valid without per-field if-guards.
-engine.registerFilter('jsonify', (v: unknown) => JSON.stringify(v ?? null))
-// Editor.js document JSON → plain text: paragraph/header block texts joined with
-// spaces, HTML tags stripped. Non-editorjs strings pass through unchanged.
-engine.registerFilter('editorjs_text', (v: unknown) => {
-  const raw = String(v ?? '')
-  try {
-    const doc = JSON.parse(raw) as { blocks?: Array<{ data?: { text?: string } }> }
-    if (!Array.isArray(doc.blocks)) return raw
-    return doc.blocks
-      .map((b) => String(b?.data?.text ?? ''))
-      .filter(Boolean)
-      .join(' ')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-  } catch {
-    // Post-conversion notes are HTML — strip to plain text the same way an
-    // EditorJS doc's inline markup was stripped.
-    if (/^\s*</.test(raw)) {
-      return raw
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .replace(/\s+/g, ' ')
-        .trim()
-    }
-    return raw
-  }
-})
-engine.registerFilter('iso_date', (v: unknown) => {
-  const d = new Date(String(v ?? ''))
-  return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
-})
-engine.registerFilter('at_least_days_out', (v: unknown, n: unknown) => {
-  const min = new Date()
-  min.setDate(min.getDate() + Number(n ?? 0))
-  const d = new Date(String(v ?? ''))
-  const pick = Number.isNaN(d.getTime()) || d < min ? min : d
-  return pick.toISOString().slice(0, 10)
-})
-
 let blackoutCache: { dates: Set<string>; loadedAt: number } | null = null
 async function blackoutDates(): Promise<Set<string>> {
   if (blackoutCache && Date.now() - blackoutCache.loadedAt < 300_000) return blackoutCache.dates
@@ -190,18 +141,88 @@ async function blackoutDates(): Promise<Set<string>> {
   blackoutCache = { dates, loadedAt: Date.now() }
   return dates
 }
-engine.registerFilter('next_open_day', async (v: unknown) => {
-  const blocked = await blackoutDates()
-  const d = new Date(String(v ?? ''))
-  if (Number.isNaN(d.getTime())) return v
-  for (let i = 0; i < 60; i++) {
-    const iso = d.toISOString().slice(0, 10)
-    const day = d.getUTCDay()
-    if (day !== 0 && day !== 6 && !blocked.has(iso)) return iso
-    d.setDate(d.getDate() + 1)
-  }
-  return d.toISOString().slice(0, 10)
-})
+
+/**
+ * The payload-template filters, registered on the module engine at load and
+ * exported so a test can register them on a fresh `Liquid` and render
+ * without touching the database.
+ */
+export function registerPayloadFilters(engine: Liquid): void {
+  engine.registerFilter('add_days', (v: unknown, n: unknown) => {
+    const d = new Date(String(v ?? new Date().toISOString()))
+    if (Number.isNaN(d.getTime())) return v
+    d.setDate(d.getDate() + Number(n ?? 0))
+    return d.toISOString().slice(0, 10)
+  })
+  // JSON.stringify anything — undefined/missing renders as null, keeping
+  // generated JSON payloads valid without per-field if-guards.
+  engine.registerFilter('jsonify', (v: unknown) => JSON.stringify(v ?? null))
+  // Editor.js document JSON → plain text: paragraph/header block texts joined with
+  // spaces, HTML tags stripped. Non-editorjs strings pass through unchanged.
+  engine.registerFilter('editorjs_text', (v: unknown) => {
+    const raw = String(v ?? '')
+    try {
+      const doc = JSON.parse(raw) as { blocks?: Array<{ data?: { text?: string } }> }
+      if (!Array.isArray(doc.blocks)) return raw
+      return doc.blocks
+        .map((b) => String(b?.data?.text ?? ''))
+        .filter(Boolean)
+        .join(' ')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    } catch {
+      // Post-conversion notes are HTML — strip to plain text the same way an
+      // EditorJS doc's inline markup was stripped.
+      if (/^\s*</.test(raw)) {
+        return raw
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/\s+/g, ' ')
+          .trim()
+      }
+      return raw
+    }
+  })
+  engine.registerFilter('iso_date', (v: unknown) => {
+    const d = new Date(String(v ?? ''))
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
+  })
+  engine.registerFilter('at_least_days_out', (v: unknown, n: unknown) => {
+    const min = new Date()
+    min.setDate(min.getDate() + Number(n ?? 0))
+    const d = new Date(String(v ?? ''))
+    const pick = Number.isNaN(d.getTime()) || d < min ? min : d
+    return pick.toISOString().slice(0, 10)
+  })
+
+  engine.registerFilter('next_open_day', async (v: unknown) => {
+    const blocked = await blackoutDates()
+    const d = new Date(String(v ?? ''))
+    if (Number.isNaN(d.getTime())) return v
+    for (let i = 0; i < 60; i++) {
+      const iso = d.toISOString().slice(0, 10)
+      const day = d.getUTCDay()
+      if (day !== 0 && day !== 6 && !blocked.has(iso)) return iso
+      d.setDate(d.getDate() + 1)
+    }
+    return d.toISOString().slice(0, 10)
+  })
+  // Left-pad to a fixed width: `{{ sku | pad_start: 9, '0' }}` → "000106416".
+  // Longer input is returned unchanged; a missing value renders as "" so a
+  // partner's schema check names the real problem instead of "000000null".
+  engine.registerFilter('pad_start', (v: unknown, width: unknown, fill: unknown = '0') => {
+    if (v == null) return ''
+    const str = String(v).trim()
+    const w = Number(width ?? 0)
+    if (!Number.isFinite(w) || w <= str.length) return str
+    return str.padStart(w, String(fill ?? '0').slice(0, 1) || '0')
+  })
+}
+
+registerPayloadFilters(engine)
 
 function parseActions(raw: string | null | undefined): TransitionActionDef[] {
   if (!raw) return []

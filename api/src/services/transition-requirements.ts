@@ -26,6 +26,63 @@ const consoleLogger: Logger = {
 
 export const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
+/** The resolved optional_when rule handed to the dialog — always a concrete list. */
+export interface OptionalWhenRule {
+  field: string
+  in: Array<string | number>
+  placeholder?: string
+}
+
+/**
+ * `optional_when.<target>.in_query` — the waiver list read from a collection
+ * at evaluation time instead of typed into config, so the rule follows an
+ * attribute ("warehouses whose ordering_system is automated") rather than a
+ * hardcoded id list. `filter` keys are column = value (an array → IN, null →
+ * IS NULL); `value_field` is the column projected (default `id`); 500 rows max.
+ * Resolved server-side into a plain `in`, so the dialog never sees it.
+ */
+export interface OptionalWhenQuery {
+  collection: string
+  filter?: Record<string, unknown>
+  value_field?: string
+}
+
+const OPTIONAL_WHEN_QUERY_LIMIT = 500
+
+/** Business collections only — a waiver list is never read off a nivaro_* table. */
+function queryCollectionAllowed(name: unknown): name is string {
+  return typeof name === 'string' && IDENTIFIER_RE.test(name) && !/^nivaro_/i.test(name)
+}
+
+/**
+ * Run one `in_query` and return its values, or null when the query is
+ * malformed or fails — the caller then DROPS the rule so the field stays
+ * required. A waiver must never be granted by accident.
+ */
+async function resolveOptionalWhenQuery(
+  database: typeof db,
+  q: OptionalWhenQuery
+): Promise<Array<string | number> | null> {
+  if (!queryCollectionAllowed(q.collection)) return null
+  const valueField = q.value_field ?? 'id'
+  if (!IDENTIFIER_RE.test(valueField)) return null
+  const filter =
+    q.filter && typeof q.filter === 'object' && !Array.isArray(q.filter) ? q.filter : {}
+  if (!Object.keys(filter).every((k) => IDENTIFIER_RE.test(k))) return null
+  let query = database(q.collection)
+  for (const [col, val] of Object.entries(filter)) {
+    if (val === null) query = query.whereNull(col)
+    else if (Array.isArray(val)) query = query.whereIn(col, val as never)
+    else query = query.where(col, val as never)
+  }
+  const rows = (await query.limit(OPTIONAL_WHEN_QUERY_LIMIT).select(valueField)) as Array<
+    Record<string, unknown>
+  >
+  return rows
+    .map((r) => r[valueField])
+    .filter((v): v is string | number => typeof v === 'string' || typeof v === 'number')
+}
+
 export interface RequirementFieldMeta {
   field: string
   label: string
@@ -33,8 +90,8 @@ export interface RequirementFieldMeta {
   /** M2M alias required fields (e.g. per-line supporting warehouses): the
    *  dialog renders a multi-select and writes junction rows instead of a
    *  scalar PATCH. Completeness = at least one junction row per child.
-   *  'm2o' marks a record-level FK field — the dialog renders a single-select
-   *  over related_collection. */
+   *  'm2o' marks an FK field — record-level or on the child row — the dialog
+   *  renders a single-select over related_collection. */
   kind?: 'm2m' | 'm2o'
   related_collection?: string
   junction?: string
@@ -46,8 +103,9 @@ export interface RequirementFieldMeta {
   max_values?: number
   /** entry.optional_when rule: this field is NOT required (and the dialog
    *  disables it) when the row's controlling field matches one of `in` —
-   *  e.g. an order id waived for lines whose warehouse is auto-submitted. */
-  optional_when?: { field: string; in: Array<string | number>; placeholder?: string }
+   *  e.g. an order id waived for lines whose warehouse is auto-submitted.
+   *  Always resolved to a concrete list here (see OptionalWhenQuery). */
+  optional_when?: OptionalWhenRule
 }
 
 export interface RequirementRow {
@@ -212,12 +270,12 @@ export async function evaluateTransitionRequirements(
       entry.max_values && typeof entry.max_values === 'object' && !Array.isArray(entry.max_values)
         ? (entry.max_values as Record<string, unknown>)
         : {}
-    // optional_when: {targetField: {field, in, placeholder?}} — validated
-    // per-entry; malformed rules are dropped (never block on bad config).
-    const optionalWhen = new Map<
-      string,
-      { field: string; in: Array<string | number>; placeholder?: string }
-    >()
+    // optional_when: {targetField: {field, in?, in_query?, placeholder?}} —
+    // validated per-entry; malformed rules are dropped (never block on bad
+    // config). `in_query` is resolved here into a concrete list; when it
+    // fails or matches nothing (and no static `in` backs it) the rule is
+    // dropped too — the field stays REQUIRED, never accidentally waived.
+    const optionalWhen = new Map<string, OptionalWhenRule>()
     if (
       entry.optional_when &&
       typeof entry.optional_when === 'object' &&
@@ -226,20 +284,45 @@ export async function evaluateTransitionRequirements(
       for (const [target, ruleRaw] of Object.entries(
         entry.optional_when as Record<string, unknown>
       )) {
-        const rule = ruleRaw as { field?: unknown; in?: unknown; placeholder?: unknown }
-        if (
-          IDENTIFIER_RE.test(target) &&
-          typeof rule?.field === 'string' &&
-          IDENTIFIER_RE.test(rule.field) &&
-          Array.isArray(rule.in) &&
-          rule.in.length > 0
-        ) {
-          optionalWhen.set(target, {
-            field: rule.field,
-            in: rule.in as Array<string | number>,
-            ...(typeof rule.placeholder === 'string' ? { placeholder: rule.placeholder } : {})
-          })
+        const rule = ruleRaw as {
+          field?: unknown
+          in?: unknown
+          in_query?: unknown
+          placeholder?: unknown
         }
+        if (!IDENTIFIER_RE.test(target)) continue
+        if (typeof rule?.field !== 'string' || !IDENTIFIER_RE.test(rule.field)) continue
+        const staticIn = Array.isArray(rule.in) ? (rule.in as Array<string | number>) : []
+        const hasQuery =
+          rule.in_query != null &&
+          typeof rule.in_query === 'object' &&
+          !Array.isArray(rule.in_query)
+        if (staticIn.length === 0 && !hasQuery) continue
+        let queried: Array<string | number> | null = []
+        if (hasQuery) {
+          try {
+            queried = await resolveOptionalWhenQuery(database, rule.in_query as OptionalWhenQuery)
+            if (queried === null) {
+              logger.warn(
+                { collection, target, in_query: rule.in_query },
+                'transition requirements: optional_when in_query malformed — field stays required'
+              )
+            }
+          } catch (err) {
+            logger.warn(
+              { err, collection, target },
+              'transition requirements: optional_when in_query failed — field stays required'
+            )
+            queried = null
+          }
+        }
+        const values = [...new Set([...staticIn, ...(queried ?? [])])]
+        if (values.length === 0) continue
+        optionalWhen.set(target, {
+          field: rule.field,
+          in: values,
+          ...(typeof rule.placeholder === 'string' ? { placeholder: rule.placeholder } : {})
+        })
       }
     }
     const toMeta = (f: string): RequirementFieldMeta => {
@@ -367,7 +450,13 @@ export async function evaluateTransitionRequirements(
       const rule = optionalWhen.get(f)
       const base = { ...toMeta(f), ...(rule ? { optional_when: rule } : {}) }
       const cfg = m2mByField.get(f)
-      if (!cfg) return base
+      if (!cfg) {
+        // A plain M2O column (an FK the row carries) renders as a single-select
+        // over the related collection, like a record-level m2o field — without
+        // the kind the dialog would show a text box asking for a raw id.
+        const related = m2oByField.get(f)
+        return related ? { ...base, kind: 'm2o' as const, related_collection: related } : base
+      }
       const maxRaw = Number(maxValuesMap[f])
       return {
         ...base,

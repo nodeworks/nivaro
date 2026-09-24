@@ -353,7 +353,7 @@ function M2MPickCell({
   )
 }
 
-// ─── M2O single-select (record-level FK fields) ──────────────────────────────
+// ─── M2O single-select (FK fields — record-level or per child row) ──────────────────────────────
 
 function M2OPickCell({
   meta,
@@ -620,7 +620,10 @@ export function TransitionRequirementsDialog({
             // typed value (the server autofills it post-submit).
             if (isWaived(rk, f)) continue
             if (current[f.field] !== saved[f.field]) {
-              changed[f.field] = coerceForPatch(String(current[f.field] ?? ''), f.type)
+              changed[f.field] =
+                f.kind === 'm2o'
+                  ? String(current[f.field] ?? '') || null
+                  : coerceForPatch(String(current[f.field] ?? ''), f.type)
             }
           }
           if (Object.keys(changed).length === 0 && m2mChanges.length === 0) {
@@ -905,6 +908,16 @@ export function TransitionRequirementsDialog({
                                       placeholder={f.optional_when?.placeholder ?? 'Auto-assigned'}
                                       title='Assigned automatically after submission'
                                       className='h-8 w-full min-w-[9rem] bg-slate-50 text-[12px] italic dark:bg-muted/50'
+                                    />
+                                  ) : f.kind === 'm2o' ? (
+                                    <M2OPickCell
+                                      meta={f}
+                                      selected={
+                                        typeof values[rk]?.[f.field] === 'string'
+                                          ? (values[rk]?.[f.field] as string)
+                                          : ''
+                                      }
+                                      onChange={(id) => setFieldValue(rk, f.field, id)}
                                     />
                                   ) : (
                                     <Input
