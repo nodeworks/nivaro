@@ -20,6 +20,7 @@ export * from './sections/graphql.js'
 export * from './sections/import-templates.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
+export * from './sections/integrations-console.js'
 export * from './sections/live-ops.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
@@ -210,6 +211,7 @@ import {
   integrationsParallelBranches,
   integrationsSyncJobs
 } from './sections/integrations.js'
+import { integrationsConsole } from './sections/integrations-console.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -722,6 +724,7 @@ export const navSections: NavGroup[] = [
     id: 'integrations',
     label: 'Integration & Sync',
     items: [
+      integrationsConsole,
       integrationsErp,
       integrationObligations,
       integrationsEvents,

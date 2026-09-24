@@ -441,6 +441,7 @@
           <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 2l4 4-4 4"/></svg>
         </button>
         <div class="docs-nav-items" id="group-int">
+          <a class="docs-nav-item" data-section="integrations-console" href="#integrations-console">Integrations Console</a>
           <a class="docs-nav-item" data-section="erp-submissions" href="#erp-submissions">ERP Submission Status</a>
           <a class="docs-nav-item" data-section="sync-jobs" href="#sync-jobs">Bi-Directional Sync Jobs</a>
           <a class="docs-nav-item" data-section="api-connector" href="#api-connector">No-Code API Connector</a>
@@ -12137,6 +12138,214 @@ POST /api/pdf-templates/:id/render
 
         <!-- ════ INTEGRATION & SYNC ════ -->
 
+        <!-- INTEGRATIONS CONSOLE -->
+        <div class="doc-section" id="s-integrations-console" data-toc='[{"id":"integrations-console","label":"Integrations Console"},{"id":"ic-tabs","label":"Tabs"},{"id":"ic-registry","label":"The signal registry"},{"id":"ic-snapshot","label":"Evaluation cycle and snapshot semantics"},{"id":"ic-snooze-dismiss","label":"Snoozes and Dismiss"},{"id":"ic-drill","label":"Row drill-down — \"Details\""},{"id":"ic-who","label":"Who triggered it — recorded vs. inferred"},{"id":"ic-resend","label":"Resending a push"},{"id":"ic-partners","label":"Partners tab"},{"id":"ic-inbound","label":"Inbound tab"},{"id":"ic-alerts","label":"Alerts — opt-in real-time and daily-summary"},{"id":"ic-extension-api","label":"Extension API"}]'>
+          <!-- SYNC:integrations-console -->
+          <h1 class="doc-h1" id="integrations-console">Integrations Console</h1>
+          <p class="doc-p">One console for watching every partner integration, deciding what counts as a problem, and drilling into exactly what happened — replacing the old /integration-health page (same address; the old body is now the console's admin-only extra tab) and /integration-events (now redirects here). A host application (an extension's own UI, or a headless frontend) can add its own tab alongside the built-in ones.</p>
+          <h2 class="doc-h2" id="ic-tabs">Tabs</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Tab</th><th>What it answers</th></tr></thead>
+            <tbody><tr><tr><td>Firefight</td><td>What is broken right now, ranked (critical first, then oldest). Snooze, dismiss, retry, or drill in without leaving the list.</td></tr>
+              <tr><td>Partners</td><td>Per-external-API health cards (a sparkline, a health word, TEST/MOCK/auth flags) and a detail sheet: Recent calls, Submissions, Obligations, Contracts.</td></tr>
+              <tr><td>Events</td><td>A chronological feed from every integration that registers a notes source — what happened, on which record, and whether it can be replayed. Full detail in the "Integration Events &amp; Replay" section.</td></tr>
+              <tr><td>(host tabs)</td><td>A hosting app or extension's own tab, passed in via <code class="doc-code">extraTabs</code> — e.g. a partner-specific operations tab (errors by cause, stuck-order reasons, flow charts).</td></tr>
+              <tr><td>Inbound</td><td>Who is calling INTO this instance (per-caller request log), the health of every scheduled/staged import including its staleness cadence, plus an optional host panel (<code class="doc-code">inboundExtra</code>) for a queue or backlog that lives outside the signal registry.</td></tr>
+              <tr><td>Alerts</td><td>Opt in to be told about a problem (real-time and/or a daily summary), and edit the thresholds that decide when it counts as one.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Firefight, Partners and Events are console-owned; Inbound and Alerts render the same shared components everywhere. A host renders <code class="doc-code">&lt;IntegrationsConsole extraTabs={...} inboundExtra={...} onOpenRecord={...} /&gt;</code> from <code class="doc-code">@nivaro/react</code>.</div>
+          <h2 class="doc-h2" id="ic-registry">The signal registry</h2>
+          <p class="doc-p">A signal is one KIND of integration problem — "a push failed", "an import hasn't run on schedule", "a partner keeps rejecting our calls" — not one occurrence of it. Core registers eight generic signals (<code class="doc-code">services/integration-signals-core.ts</code>): <code class="doc-code">core:partner-failing</code>, <code class="doc-code">core:push-failed</code>, <code class="doc-code">core:obligation-missing</code>, <code class="doc-code">core:obligation-overdue</code>, <code class="doc-code">core:inbound-errors</code>, <code class="doc-code">core:import-failed</code>, <code class="doc-code">core:import-stale</code>, <code class="doc-code">core:flow-failed</code>. Any extension registers its own the same way.</p>
+          <pre class="doc-pre"><code>interface IntegrationSignal {
+  id: string           // "owner:name" — e.g. "core:push-failed", "my-ext:sync-lag"
+  label: string
+  description: string
+  tab: string          // 'partners' | 'pushes' | 'inbound' | a custom string
+  severity: 'critical' | 'warn'
+  thresholds: SignalThreshold[]
+  evaluate(ctx: SignalEvalContext): Promise&lt;{ count: number; rows: SignalRow[] }&gt;
+}
+
+interface SignalThreshold {
+  key: string          // 'min_age_minutes', or dynamic "cadence_hours:&lt;import key&gt;"
+  label: string
+  default: number
+  unit: string
+  min?: number
+  max?: number
+}
+
+interface SignalEvalContext {
+  thresholds: Record&lt;string, number&gt;          // resolved defaults + admin overrides
+  businessDaysAgo(n: number): Promise&lt;Date&gt;    // core SLA schedule (days + holidays)
+}</code></pre>
+          <p class="doc-p"><code class="doc-code">evaluate()</code> returns the REAL total in <code class="doc-code">count</code> even when <code class="doc-code">rows</code> is capped at <code class="doc-code">ROW_CAP</code> (500) — a signal with 900 open problems still reports 900; a row-ordering caller (a signal read at evaluation time, as opposed to a paged route) should sort oldest-first with an id tiebreak so the cap drops the newest problems, never an arbitrary slice. A signal that throws or exceeds its evaluation budget (60 s default) is isolated — its count/rows come back empty for that pass, but its EXISTING open rows are left completely untouched; a broken checker must never read as "everything just got fixed."</p>
+          <h3 class="doc-h3">SignalRow — one open problem instance</h3>
+          <pre class="doc-pre"><code>interface SignalRow {
+  key: string            // STABLE identity of the PROBLEM — never a message or timestamp
+  group?: string
+  group_label?: string
+  title: string
+  detail?: string
+  since?: string
+  occurrence?: string    // identity of THIS INSTANCE — see "Snapshot semantics" below
+  api?: string
+  record?: { collection: string; id: string; label?: string }
+  actions: SignalAction[]
+  drill?: { kind: 'submission' | 'import_run'; id: string }
+}
+
+interface SignalAction {
+  kind: 'retry_submission' | 'resend' | 'open' | 'explain' | 'extension'
+  label: string
+  id?: string             // submission id (retry), extension action id, ...
+  payload?: Record&lt;string, unknown&gt;
+}</code></pre>
+          <div class="doc-note doc-warn"><code class="doc-code">key</code> must be STABLE across evaluations of the SAME problem, and it must never be built from a message string, a count or a timestamp. It is the unique identity <code class="doc-code">UNIQUE(signal, row_key) WHERE cleared_at IS NULL</code> matches on — a key that shifts every cycle (e.g. one that embeds "N days ago") mints a brand-new row every 5 minutes instead of updating the one that already exists, which breaks first_seen, snoozes, dismissals and "happened again" wording all at once. Use a durable id: a record id, a submission id, an import key — never a rendered sentence.</div>
+          <p class="doc-p">A <code class="doc-code">kind: "extension"</code> action needs a matching <code class="doc-code">SignalActionHandler</code>, registered separately, that the console dispatches through <code class="doc-code">POST /integration-signals/actions</code>:</p>
+          <pre class="doc-pre"><code>interface SignalActionHandler {
+  id: string
+  label: string
+  run(args: {
+    rows: SignalRow[]
+    userId: string | null
+    authHeaders: Record&lt;string, string&gt;
+  }): Promise&lt;Array&lt;{ key: string; ok: boolean; message: string }&gt;&gt;
+}</code></pre>
+          <h2 class="doc-h2" id="ic-snapshot">Evaluation cycle and snapshot semantics</h2>
+          <p class="doc-p">A 5-minute cron (<code class="doc-code">integration-signals</code>) runs every enabled, registered signal and writes the result into <code class="doc-code">nivaro_integration_signal_rows</code> — the Firefight tab reads that snapshot, it never evaluates on page load. The cycle is single-flight: a second call while one is already running gets back the SAME in-flight result rather than starting a concurrent pass. <code class="doc-code">POST /integration-signals/refresh</code> runs it on demand.</p>
+          <ul class="doc-ul">
+            <li>A key present now that was NOT open before → INSERT (a new row; <code class="doc-code">first_seen</code> = the row's own <code class="doc-code">since</code> when it names one, else now).</li>
+            <li>A key present now that WAS open, with an identical serialized payload and group → touch <code class="doc-code">last_seen</code> ONLY, in a bulk <code class="doc-code">UPDATE … WHERE id IN (…)</code> batched in chunks of ≤1000 ids — no per-row write at all.</li>
+            <li>A key present now whose payload (or group) genuinely differs → a real per-row <code class="doc-code">UPDATE</code>; <code class="doc-code">first_seen</code> is untouched — the SAME problem, updated in place.</li>
+            <li>A key that was open before and is absent now → <code class="doc-code">cleared_at</code> is set (the row survives for history; a later recurrence of the same key opens a FRESH row, since the unique index only covers <code class="doc-code">cleared_at IS NULL</code>).</li>
+          </ul>
+          <div class="doc-note">The batched write (touch vs. changed vs. insert vs. clear) is what keeps a full cycle fast — before it, one plain per-row <code class="doc-code">UPDATE</code> per open row dominated the cycle's wall time almost entirely; batching cut a representative full refresh from roughly a minute to a few seconds with byte-identical results (row counts, <code class="doc-code">first_seen</code>, <code class="doc-code">group_key</code> all unchanged; only <code class="doc-code">last_seen</code> legitimately advances further on every open row).</div>
+          <h3 class="doc-h3"><code class="doc-code">occurrence</code> — the difference between "still broken" and "happened again"</h3>
+          <p class="doc-p"><code class="doc-code">key</code> names the PROBLEM and stays the same for as long as it is open. <code class="doc-code">occurrence</code> names THIS INSTANCE of it — a submission attempt id, a failing run id, an obligation id, a snapshot timestamp — whatever the signal knows best; unset, it falls back to the row's <code class="doc-code">since</code>, then to a hash of the row's own text with digits masked out. A row whose <code class="doc-code">occurrence</code> differs from what was stored last cycle is a re-occurrence: the database write is still a plain <code class="doc-code">UPDATE</code> (the row was never cleared, so <code class="doc-code">first_seen</code> never moves), but the cycle reports it in <code class="doc-code">CycleSummary.results[].new_keys</code> alongside genuinely brand-new keys — and separately in <code class="doc-code">reoccurred_keys</code>, so delivery wording can say "happened again" rather than "new". One case is deliberately excluded: a row stored with NO explicit <code class="doc-code">occurrence</code> at all (it predates the signal ever setting one) compared against a fresh row that now sets one for the first time is NOT counted as a re-occurrence — a signal gaining richer identity is not the same event as its problem coming back, and treating it as one would flag every already-open row the moment a signal's code changes.</p>
+          <h2 class="doc-h2" id="ic-snooze-dismiss">Snoozes and Dismiss</h2>
+          <p class="doc-p">Two separate mechanisms sit on every row, at three possible scopes — this row, everything in its <code class="doc-code">group</code>, or the whole signal:</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Mechanism</th><th>Scope</th><th>Reawakens when</th></tr></thead>
+            <tbody><tr><tr><td>Snooze — for a time</td><td>row / group / signal</td><td>the chosen date passes</td></tr>
+              <tr><td>Snooze — "Until it changes"</td><td>row only</td><td>the row's title/group/detail changes in any way OTHER than a digit (a masked sha256 hash of the three, so a re-run with the same wording but a different age number never reawakens it)</td></tr>
+              <tr><td>Dismiss — "this occurrence"</td><td>row only</td><td>the row's <code class="doc-code">occurrence</code> changes — a genuinely new instance of the same problem, tracked by real identity (an id or timestamp) rather than a text hash</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Dismiss is the more precise of the two for a signal that carries a real <code class="doc-code">occurrence</code>: a resend that fails with the IDENTICAL error message still un-dismisses the row (a new submission id = a new occurrence), which "Until it changes" cannot do since its hash sees no difference. A row with no meaningful <code class="doc-code">occurrence</code> falls back to the same since/hash comparison "Until it changes" uses, so Dismiss is never worse, only sometimes equivalent.</p>
+          <pre class="doc-pre"><code>POST /api/integration-signals/snoozes
+{ "signal": "core:import-stale", "row_key": "import:orders",
+  "until_occurrence": true, "note": "will fix Monday" }   // exactly one of
+                                                            // until / until_change / until_occurrence
+
+POST /api/integration-signals/dismiss    // bulk "Dismiss selected"
+{ "signal": "core:import-stale", "row_keys": ["import:orders", "import:invoices"] }
+// -&gt; { data: { dismissed: 2, skipped: [] } }  — a row already closed on its own is reported, not an error
+
+DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze</code></pre>
+          <div class="doc-note">A Dismiss whose row hasn't been seen in 30 days is pruned automatically at the end of every evaluation cycle — a stale dismissal never lingers as dead configuration.</div>
+          <h2 class="doc-h2" id="ic-drill">Row drill-down — "Details"</h2>
+          <p class="doc-p">A Firefight row whose signal sets <code class="doc-code">drill</code> (<code class="doc-code">{ kind: "submission" | "import_run", id }</code>) gets a "Details" disclosure that expands the row IN PLACE — no modal. For a failed push, the panel is seven parts, in order:</p>
+          <ul class="doc-ul">
+            <li>1. **Summary line** — partner name, method + path, a link to the record, status, attempt count, first sent / last tried.</li>
+            <li>2. **What went wrong** — the FULL error text, never clamped, plus the linked obligation's own reason when it differs.</li>
+            <li>3. **Attempts** — every attempt, and who started each one.</li>
+            <li>4. **Request and response** — the latest (or only) attempt's payload and response, pretty-printed, foldable past 40 lines, with copy.</li>
+            <li>5. **Why it was sent — and who** — the resolved trigger, the requester, "Retried by" when a later attempt's starter differs from the original, and the linked obligation.</li>
+            <li>6. **Call log** — matching partner call-log rows (method, status, duration, user, trigger), with a link into Call Logs.</li>
+            <li>7. **Actions** — Retry, with the exact refusal reason shown inline when it is not offered.</li>
+          </ul>
+          <p class="doc-p">A failed import run (<code class="doc-code">kind: "import_run"</code>) shows that run's own log text and a link into the Import Console instead. <code class="doc-code">GET /api/erp-submissions/:id</code> (admin) returns the whole thing in one call: partner, endpoint, the linked obligation, the trigger, the requester, every attempt's requester, matching call-log rows, and retry eligibility with its reason.</p>
+          <h2 class="doc-h2" id="ic-who">Who triggered it — recorded vs. inferred</h2>
+          <p class="doc-p">Every submission and every attempt records <code class="doc-code">requested_by</code> (the user, when a person was behind it) and <code class="doc-code">requested_via</code> — <code class="doc-code">transition</code>, <code class="doc-code">auto-transition</code>, <code class="doc-code">resend</code>, <code class="doc-code">api</code>, <code class="doc-code">retry</code>, <code class="doc-code">cron</code>, <code class="doc-code">item-action</code> or <code class="doc-code">flow</code>. A later Retry by someone else is that attempt's own requester, not the original sender's.</p>
+          <div class="doc-note doc-warn">These two columns are NULLABLE and carry no foreign key — a deleted or merged user must never block a push from being recorded, and a database that hasn't reached this migration yet must never fail an insert over it. Every writer goes through <code class="doc-code">requesterInsertFields(table, by, via)</code> / <code class="doc-code">requesterSelectColumns(table)</code> (<code class="doc-code">services/erp-requester-columns.ts</code>; mirrored by hand in <code class="doc-code">api/extensions/efp-ops</code> — extensions can't import <code class="doc-code">api/src</code>), which probe <code class="doc-code">db.schema.hasColumn(table, "requested_by")</code> exactly ONCE per process per table: a hit is cached forever, a miss is re-checked after 60 seconds (so a database that catches up mid-session is picked up without a restart, but a genuinely absent column is never re-probed every request). When the columns are missing, the insert or select simply OMITS them rather than naming a column that doesn't exist — the submission row is still written either way.</div>
+          <p class="doc-p">A push recorded before these columns existed — or landed via a path this instance hasn't updated yet — is answered by INFERENCE instead, in order: the matching partner call log's user, the transition made moments before (scoped to the SAME transition when the linked obligation names one), a person's edit of the record just before the send (only for a hook/unknown/api-shaped trigger — a scheduled, flow-driven or item-action send must never borrow a coincidental edit by someone else), or the schedule/flow that ran it. The drill marks an inferred answer with a dashed chip naming the evidence it used; anything still unresolved reads "Not recorded", and a machine account always reads as the account, never as a person.</p>
+          <h2 class="doc-h2" id="ic-resend">Resending a push</h2>
+          <p class="doc-p">Two distinct mechanisms, both offered as a row action:</p>
+          <ul class="doc-ul">
+            <li>**Retry** (<code class="doc-code">kind: "retry_submission"</code>) — <code class="doc-code">POST /api/erp-submissions/:id/retry</code>, re-sends the exact SAME stored payload.</li>
+            <li>**Rerun a transition's push action** — re-renders and re-sends ONE <code class="doc-code">erp_submit</code> action from a workflow transition, without moving the record's pipeline state at all.</li>
+          </ul>
+          <pre class="doc-pre"><code>POST /api/pipelines/instance/:collection/:item/actions/rerun   // admin only
+{ "transition_id": "...", "action_index": 0 }
+// -&gt; { data: { submission: { id, status, last_error }, skipped_reason: null } }</code></pre>
+          <p class="doc-p">The route refuses anything that isn't an <code class="doc-code">erp_submit</code> action at that index (a <code class="doc-code">create_record</code> action can never be re-run this way), requires the record to actually hold an instance of that transition's OWN pipeline template (a transition id from an unrelated template 404s), renders the payload against the record's CURRENT state rather than the transition's target state, and always produces a brand-new submission row — exactly like a first send, obligation-trigger <code class="doc-code">manual</code>. When a guard or <code class="doc-code">push_when</code> would have skipped the push instead of sending it, the response carries <code class="doc-code">skipped_reason</code> naming why, and no submission is produced.</p>
+          <h2 class="doc-h2" id="ic-partners">Partners tab</h2>
+          <p class="doc-p">A health card per registered external API — a health word (idle / healthy / degraded / failing, with an auth-failure override), a 48-hour call sparkline, and TEST / MOCK / "sign-in failing" / "turned off" flags. Opening a card shows the detail sheet: Recent calls, Submissions, Obligations, Contracts.</p>
+          <h3 class="doc-h3">Recent calls</h3>
+          <p class="doc-p">Merges the lightweight outbound log (every call, no body) with the API-call log (calls a writer explicitly logged, WITH the full request and response) over the last 14 days / 200 calls, newest first. A row backed by a logged call expands in place to headers, pretty or raw body (foldable past 40 lines, with copy), the resolved trigger, and who sent it — a resolved user always wins over a bare trigger string.</p>
+          <pre class="doc-pre"><code>GET /api/integration-partners/:id/calls/:callId   // scoped to that partner; headers re-masked on read</code></pre>
+          <div class="doc-note doc-warn">EVERY reader of a stored call log's header columns re-masks them on read, regardless of what is actually stored — never trust that a value was already masked at write time. <code class="doc-code">maskHeaders()</code> matches <code class="doc-code">Authorization</code>, <code class="doc-code">Cookie</code>/<code class="doc-code">Set-Cookie</code>, and any header name containing secret, token, password, passwd, key, cookie, auth, session, signature or credential (case-insensitive); <code class="doc-code">Authorization</code> keeps its scheme (<code class="doc-code">Bearer ••••••</code>).</div>
+          <h3 class="doc-h3">Submissions, Obligations, Contracts</h3>
+          <p class="doc-p">Submissions lists this partner's pushes with retry; Obligations embeds the existing per-API obligations board; Contracts lists the partner's endpoint contract tests with a Run button. See the ERP Submission Status and Integration Obligations sections for the underlying models.</p>
+          <h2 class="doc-h2" id="ic-inbound">Inbound tab</h2>
+          <p class="doc-p">Three groups, in this order: an optional host panel (<code class="doc-code">inboundExtra</code> — a queue or backlog view a hosting app owns and wants surfaced here), Scheduled imports, then Inbound callers (the existing per-caller request log; picking a caller scopes it).</p>
+          <h3 class="doc-h3">Import staleness</h3>
+          <p class="doc-p">Backed by <code class="doc-code">core:import-stale</code>'s own settings, keyed dynamically per import: <code class="doc-code">cadence_hours:&lt;import key&gt;</code>. <code class="doc-code">null</code> follows the signal's own default (48 h); <code class="doc-code">0</code> means "not monitored" — the import is excluded from the signal entirely; a positive number pins that one import's expected cadence. An import whose last successful run predates the signal's <code class="doc-code">dormant_days</code> threshold (default 90) with no override reads Dormant rather than Stale, so years-old one-off imports don't become permanent noise.</p>
+          <p class="doc-p">Editable in TWO places that share one query key, so editing either refreshes both immediately: the Integrations console's Inbound tab (a per-row "Stale after" control) and the Import Console's Definitions list (the import's own "Staleness" field). Both call the same settings endpoints:</p>
+          <pre class="doc-pre"><code>GET   /api/integration-partners/imports   // every import, effective cadence + source (default|override|excluded|dormant)
+PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": 6 }
+PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": 0 }     // not monitored
+PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": null }  // back to the default</code></pre>
+          <h2 class="doc-h2" id="ic-alerts">Alerts — opt-in real-time and daily-summary</h2>
+          <p class="doc-p">Nothing is ever sent unless a person explicitly turns it on for a signal — there is no default recipient. Two independent switches per problem: Real-time (one notification right after the evaluation cycle that found it) and Daily summary (one line per subscribed signal in the existing daily digest, e.g. "Failed pushes — 3 open · 1 new since yesterday"). Subscribing to <code class="doc-code">*critical</code> covers every signal whose CURRENTLY RESOLVED severity is critical, without naming them one by one — so it automatically follows a severity override made in the thresholds editor.</p>
+          <pre class="doc-pre"><code>GET    /api/integration-signals/subscriptions              // own rows
+POST   /api/integration-signals/subscriptions               // admin only — see below
+{ "signal": "core:push-failed", "mode": "realtime" }         // mode: realtime | digest
+DELETE /api/integration-signals/subscriptions/:id            // own row only</code></pre>
+          <div class="doc-note doc-warn">Admin-only is enforced AGAIN at delivery, not only at subscribe time — a subscriber who is later demoted, suspended or redacted gets NOTHING, silently, rather than an error or a stale notification stream nobody can turn off. <code class="doc-code">alerted_at</code> (on the row) and <code class="doc-code">last_notified_at</code> (on the subscription) are stamped only after an actual, successful delivery; if every recipient's notification throws or is dropped (muted, quiet hours, etc.), neither is stamped — the NEXT cycle tries again instead of going quiet forever.</div>
+          <p class="doc-p">"Happened again" wording is only used for a subscriber who was actually told about the row before — a re-occurrence of a problem nobody was subscribed to yet reads as new to whoever hears about it first, not as a repeat of an alert they never received.</p>
+          <p class="doc-p">The thresholds editor on this tab reads and writes the exact same settings endpoints described under "The signal registry" and "Import staleness" above, with a debounced live preview ("Currently flags N" / "Would currently flag N") before saving; typing a value back to its own default sends <code class="doc-code">null</code> (removes the override entirely, rather than pinning "the default number" as if it were a deliberate choice).</p>
+          <h2 class="doc-h2" id="ic-extension-api">Extension API</h2>
+          <pre class="doc-pre"><code>// api/extensions/&lt;name&gt;/index.ts
+export default {
+  id: 'payments-sync',
+  async register({ integrations }) {
+    integrations.registerSignal({
+      id: 'payments-sync:reconcile-lag',
+      label: 'Reconciliation running behind',
+      description: 'A payment batch has not reconciled within its expected window.',
+      tab: 'partners',          // or any custom tab your host renders alongside it
+      severity: 'warn',
+      thresholds: [
+        { key: 'max_age_hours', label: 'Flag after', default: 6, unit: 'hours', min: 1, max: 72 }
+      ],
+      async evaluate({ thresholds }) {
+        const rows = await findLaggingBatches(thresholds.max_age_hours)
+        return {
+          count: rows.length,
+          rows: rows.map((b) =&gt; ({
+            key: `batch:${b.id}`,                 // stable — the batch id, never a message
+            title: `Batch ${b.id} — reconciliation is ${b.age_hours}h behind`,
+            occurrence: `run:${b.last_run_id}`,     // a fresh run id = a genuinely new instance
+            since: b.started_at,
+            record: { collection: 'payment_batches', id: b.id },
+            actions: [{ kind: 'open', label: 'Open batch', payload: { collection: 'payment_batches', id: b.id } }]
+          }))
+        }
+      }
+    })
+
+    integrations.registerSignalAction({
+      id: 'payments-sync:force-reconcile',
+      label: 'Force reconcile now',
+      async run({ rows, userId }) {
+        return Promise.all(rows.map(async (r) =&gt; {
+          try {
+            await forceReconcile(r.record!.id, userId)
+            return { key: r.key, ok: true, message: 'Reconciled' }
+          } catch (err) {
+            return { key: r.key, ok: false, message: String(err) }
+          }
+        }))
+      }
+    })
+  }
+}</code></pre>
+          <p class="doc-p">An extension cannot import <code class="doc-code">api/src</code> (rootDir), so it mirrors the <code class="doc-code">IntegrationSignal</code> / <code class="doc-code">SignalRow</code> / <code class="doc-code">SignalAction</code> / <code class="doc-code">SignalActionHandler</code> shapes locally rather than importing them — the same leaf-module convention used everywhere else in the extension architecture. A signal id keeps the same <code class="doc-code">owner:name</code> rule core's does (<code class="doc-code">payments-sync:reconcile-lag</code>, not a bare name).</p>
+          <div class="doc-note">Every <code class="doc-code">callExternalApi</code> call made from inside an extension now always lands in that API's Call Logs — the caller's own trigger (e.g. <code class="doc-code">cron:&lt;job id&gt;</code>, when the writer names one explicitly) is kept if given, otherwise it defaults to <code class="doc-code">extension:&lt;extension id&gt;</code>. A partner's Recent calls tab therefore shows an extension's scheduled syncs and polls without the extension writer doing anything extra to log them.</div>
+          <!-- /SYNC:integrations-console -->
+        </div>
+
         <!-- ERP SUBMISSION STATUS -->
         <div class="doc-section" id="s-erp-submissions" data-toc='[{"id":"erp-submissions","label":"ERP Submission Status Tracking"}]'>
           <!-- SYNC:erp-submissions -->
@@ -12152,7 +12361,12 @@ POST /api/erp-submissions                              # record a submission
 PATCH /api/erp-submissions/:id      # update status (e.g. from a callback/webhook)
 { "status": "accepted", "response": { "erp_id": "SO-1001" } }
 
-POST /api/erp-submissions/:id/retry # re-run the submission</code></pre>
+POST /api/erp-submissions/:id/retry # re-run the submission
+GET  /api/erp-submissions/:id       # one push in full (admin): partner, obligation,
+                                    # trigger, who sent it, matched call logs, retry eligibility</code></pre>
+          <h3 class="doc-h3">Who sent a push</h3>
+          <p class="doc-p">Every submission and every attempt records <code class="doc-code">requested_by</code> (the user, when a person was behind it) and <code class="doc-code">requested_via</code> (transition, auto-transition, flow, item-action, retry, resend, cron or api). A later Retry by someone else is that attempt's own requester. Pushes recorded before these columns existed are answered by inference — the partner call log's user, the transition made moments before, a person's edit of the record just before, or the schedule/flow that ran it — and the Integrations console marks those answers as inferred. Anything still unresolved reads "Not recorded"; machine accounts read as the account, never as a person.</p>
+          <p class="doc-p">In the Integrations console, a Failed pushes row (and any row that is really a push or an import run) has a Details button that opens the push in place: the full error, every attempt with who started it, the request and response, what sent it and who, the matched call-log rows and a Retry that says why when it is not offered.</p>
           <ul class="doc-ul">
             <li>Statuses: submitted, pending, accepted, rejected.</li>
             <li>The item edit page shows the latest status as a badge with the full history in a panel.</li>
