@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-24T19:52:29.390Z",
+  "generated_at": "2026-09-24T20:56:57.267Z",
   "releases": [
+    {
+      "version": "0.1.339",
+      "tag": "v0.1.339",
+      "date": "2026-09-24T16:56:46-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "partner status lives in the header Integrations chip, with told / needs-attention badges",
+              "hash": "378b3d90"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.338",
       "tag": "v0.1.338",
-      "date": "2026-09-24T15:52:16-04:00",
+      "date": "2026-09-24T15:52:29-04:00",
       "sections": [
         {
           "label": "Fixed",
