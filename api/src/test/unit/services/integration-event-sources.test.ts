@@ -51,6 +51,7 @@ import { resetChainColumnProbe } from '../../../services/chain-columns.js'
 import { chainIdsForRoots } from '../../../services/chain-roots.js'
 import {
   describeEventSources,
+  getEvent,
   INBOUND_MAX_BATCHES,
   inboundBatchSize,
   isGraphqlMutation,
@@ -205,6 +206,79 @@ describe('listEvents record search', () => {
       expect(out[0].direction).toBe('poll')
     } finally {
       relatedNoteRegistry.unregister('test:feed')
+    }
+  })
+})
+
+describe('getEvent on a note provider', () => {
+  const at = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+  // The newest window the scan fallback reads: 500 rows, ids 1000..501.
+  const window = Array.from({ length: 500 }, (_, i) => ({
+    id: 1000 - i,
+    label: 'Feed',
+    text: `row ${1000 - i}`,
+    created_at: at(i + 1),
+    collection: 'orders',
+    item_id: '7'
+  }))
+
+  it("resolves an entry older than the scan window through the provider's get()", async () => {
+    const get = vi.fn(async (id: string) =>
+      id === '42'
+        ? {
+            id: 42,
+            label: 'Feed',
+            text: 'old',
+            created_at: at(60 * 24 * 30),
+            collection: 'orders',
+            item_id: '7',
+            replayable: true
+          }
+        : null
+    )
+    const list = vi.fn(async () => window)
+    relatedNoteRegistry.register({
+      id: 'test:get',
+      collection: 'orders',
+      label: 'Feed',
+      load: async () => [],
+      list,
+      get,
+      replay: async () => ({ detail: 'ok' })
+    })
+    vi.mocked(chainIdsForRoots).mockResolvedValueOnce(new Map([['42', 'c-old']]))
+    try {
+      const ev = await getEvent('test:get', '42')
+      expect(get).toHaveBeenCalledWith('42')
+      expect(list).not.toHaveBeenCalled()
+      expect(ev).toMatchObject({
+        id: '42',
+        source: 'test:get',
+        direction: 'poll',
+        chain_id: 'c-old',
+        replayable: true,
+        collection: 'orders',
+        item_id: '7'
+      })
+      expect(await getEvent('test:get', '9999')).toBeNull()
+    } finally {
+      relatedNoteRegistry.unregister('test:get')
+    }
+  })
+
+  it('without get(), an entry outside the newest window is not found', async () => {
+    relatedNoteRegistry.register({
+      id: 'test:scan',
+      collection: 'orders',
+      label: 'Feed',
+      load: async () => [],
+      list: async () => window
+    })
+    try {
+      expect(await getEvent('test:scan', '42')).toBeNull()
+      expect((await getEvent('test:scan', '600'))?.text).toBe('row 600')
+    } finally {
+      relatedNoteRegistry.unregister('test:scan')
     }
   })
 })

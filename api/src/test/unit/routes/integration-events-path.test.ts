@@ -270,7 +270,8 @@ describe('record activity route', () => {
     expect(vi.mocked(listEvents).mock.calls[0][0]).toMatchObject({
       record: { collection: 'workflows', item: '371367' },
       chainIds: ['c1'],
-      includePeople: true
+      // People's own token calls are not a record's integration activity.
+      includePeople: false
     })
   })
 

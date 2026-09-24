@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { relatedNoteRegistry } from '../extensions/related-notes.js'
+import { type RelatedNoteFeedEntry, relatedNoteRegistry } from '../extensions/related-notes.js'
 import { hasChainColumns } from './chain-columns.js'
 import { chainIdsForRoots } from './chain-roots.js'
 import { requesterSelectColumns } from './erp-requester-columns.js'
@@ -70,13 +70,9 @@ function noteProviderSources(): EventSourceDef[] {
     .describe()
     .filter((p) => p.can_list && !sources.has(p.id))
     .map((p) => {
-      const list = async (opts: EventListOpts): Promise<EventEntry[]> => {
-        const rows = await relatedNoteRegistry.listRecent({
-          limit: opts.limit,
-          provider: p.id,
-          status: opts.status ?? null,
-          before: opts.before ?? null
-        })
+      // One mapping for list() and get() — the two must never disagree on
+      // chain_id or replayable.
+      const toEntries = async (rows: RelatedNoteFeedEntry[]): Promise<EventEntry[]> => {
         const chains = await chainIdsForRoots(
           p.id,
           rows.map((r) => String(r.id))
@@ -100,12 +96,29 @@ function noteProviderSources(): EventSourceDef[] {
           replayable: r.replayable === true && p.can_replay
         }))
       }
+      const list = async (opts: EventListOpts): Promise<EventEntry[]> =>
+        toEntries(
+          await relatedNoteRegistry.listRecent({
+            limit: opts.limit,
+            provider: p.id,
+            status: opts.status ?? null,
+            before: opts.before ?? null
+          })
+        )
       return {
         id: p.id,
         label: p.label,
         direction: 'poll' as const,
         list,
         async get(id: string) {
+          // A provider that can look one entry up answers for any age; the
+          // newest-window scan is only the fallback for one that cannot.
+          const provider = relatedNoteRegistry.get(p.id)
+          if (provider?.get) {
+            const row = await provider.get(id)
+            if (!row) return null
+            return (await toEntries([row]))[0] ?? null
+          }
           const found = await list({ limit: LOOKUP_WINDOW })
           return found.find((r) => r.id === id) ?? null
         }

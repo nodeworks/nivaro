@@ -70,11 +70,22 @@ export function IntegrationActivitySection({
   item: string
   onOpenRecord?: (c: string, id: string) => void
 }) {
-  const [page, setPage] = useState(1)
-  const [selected, setSelected] = useState<IntegrationEvent | null>(null)
+  // The page belongs to one record: another record starts on its own newest
+  // page, with no event left selected.
+  const recordKey = `${collection}:${item}`
+  const [paging, setPaging] = useState({ key: recordKey, page: 1 })
+  const sameRecord = paging.key === recordKey
+  const page = sameRecord ? paging.page : 1
+  const setPage = (next: number) => setPaging({ key: recordKey, page: next })
+  const [picked, setSelected] = useState<{ key: string; event: IntegrationEvent } | null>(null)
+  const selected = picked?.key === recordKey ? picked.event : null
   const q = useRecordIntegrationActivity(collection, item, page)
   const rows = q.data?.entries ?? []
-  if (!q.isLoading && rows.length === 0 && page === 1) return null
+  // Most records have none: stay silent while page 1 loads rather than flash
+  // a card that then collapses — and never show the previous record's rows
+  // (kept as placeholder data) under this one.
+  if (page === 1 && (q.isLoading || rows.length === 0)) return null
+  if (!sameRecord && q.isPlaceholderData) return null
   return (
     <section
       className='mt-4 rounded-lg border border-slate-200 p-3 dark:border-border'
@@ -94,43 +105,39 @@ export function IntegrationActivitySection({
           </button>
         )}
       </div>
-      {q.isLoading && rows.length === 0 ? (
-        <p className='px-2 py-1.5 text-[12px] text-muted-foreground'>Loading…</p>
-      ) : (
-        <ul className={cn('space-y-0.5', q.isFetching && 'opacity-60')}>
-          {rows.map((e) => {
-            const key = `${e.source ?? e.provider}:${e.id}`
-            return (
-              <li key={key}>
-                <button
-                  type='button'
-                  className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted'
-                  onClick={() => setSelected(e)}
-                  data-record-integration-event={key}
-                >
-                  <span className='w-[136px] shrink-0 whitespace-nowrap tabular-nums text-[11.5px] text-muted-foreground'>
-                    {formatDateTime(e.created_at)}
+      <ul className={cn('space-y-0.5', q.isFetching && 'opacity-60')}>
+        {rows.map((e) => {
+          const key = `${e.source ?? e.provider}:${e.id}`
+          return (
+            <li key={key}>
+              <button
+                type='button'
+                className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted'
+                onClick={() => setSelected({ key: recordKey, event: e })}
+                data-record-integration-event={key}
+              >
+                <span className='w-[136px] shrink-0 whitespace-nowrap tabular-nums text-[11.5px] text-muted-foreground'>
+                  {formatDateTime(e.created_at)}
+                </span>
+                <span className='shrink-0 font-medium text-foreground'>{e.label}</span>
+                <span className='min-w-0 truncate text-muted-foreground' data-tip={e.text}>
+                  {e.text}
+                </span>
+                {e.status === 'error' && (
+                  <span className='ml-auto shrink-0 rounded-full bg-[#fee2e2] px-2 text-[11px] text-[#991b1b] dark:bg-[#450a0a] dark:text-[#fecaca]'>
+                    Problem
                   </span>
-                  <span className='shrink-0 font-medium text-foreground'>{e.label}</span>
-                  <span className='min-w-0 truncate text-muted-foreground' data-tip={e.text}>
-                    {e.text}
-                  </span>
-                  {e.status === 'error' && (
-                    <span className='ml-auto shrink-0 rounded-full bg-[#fee2e2] px-2 text-[11px] text-[#991b1b] dark:bg-[#450a0a] dark:text-[#fecaca]'>
-                      Problem
-                    </span>
-                  )}
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      )}
+                )}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
       {q.data?.has_more && (
         <button
           type='button'
           className='mt-2 text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground'
-          onClick={() => setPage((p) => p + 1)}
+          onClick={() => setPage(page + 1)}
         >
           Older
         </button>

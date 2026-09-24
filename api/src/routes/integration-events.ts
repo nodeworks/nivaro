@@ -183,7 +183,11 @@ export async function integrationEventsRoutes(app: FastifyInstance) {
         limit: page * RECORD_PAGE + 1,
         record: { collection, item },
         chainIds,
-        includePeople: true
+        // Only machine accounts and API keys count as a record's inbound
+        // integration activity; a person's own writes (and lock/heartbeat
+        // traffic from their tokens) are not. Pushes a person set off still
+        // show — they come through core:outbound.
+        includePeople: false
       })
       const hasMore = entries.length > page * RECORD_PAGE
       entries = entries.slice((page - 1) * RECORD_PAGE, page * RECORD_PAGE)

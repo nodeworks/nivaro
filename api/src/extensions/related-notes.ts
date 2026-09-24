@@ -53,6 +53,10 @@ export interface RelatedNoteProvider {
      *  over-fetches and filters regardless, so ignoring it is safe. */
     before?: string | null
   }): Promise<RelatedNoteFeedEntry[]>
+  /** One entry by id, however old — the event path looks an entry up by id,
+   *  and without this it can only search the newest `list` window. Null when
+   *  the entry does not exist. */
+  get?(entryId: string): Promise<RelatedNoteFeedEntry | null>
   /** #29 — re-fetch / re-apply one event from its stored form. */
   replay?(entryId: string, opts: { userId: string | null }): Promise<{ detail: string }>
 }
