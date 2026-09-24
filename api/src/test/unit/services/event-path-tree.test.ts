@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildTree,
   FOLD_THRESHOLD,
+  filterHiddenSubtrees,
   firstFailure,
   reparentCallsUnderPushes,
   STEP_CAP
@@ -93,6 +94,120 @@ describe('buildTree', () => {
     const out = buildTree(root, many)
     expect(out.truncated).toBe(true)
     expect(out.count).toBe(STEP_CAP)
+  })
+})
+
+describe('buildTree truncation', () => {
+  it('drops writes first: a failed push after 2,000+ writes survives and is the first failure', () => {
+    const writes: PathStep[] = Array.from({ length: STEP_CAP + 10 }, (_, i) => ({
+      key: `activity:${i}`,
+      parent: 'request:c1',
+      kind: 'write',
+      at: at(i),
+      summary: 'u'
+    }))
+    const push: PathStep = {
+      key: 'submission:9',
+      parent: 'request:c1',
+      kind: 'push',
+      at: at(STEP_CAP + 50),
+      summary: 'Push to LinX · failed',
+      failed: true
+    }
+    const hist: PathStep = {
+      key: 'history:1',
+      parent: 'request:c1',
+      kind: 'transition',
+      at: at(STEP_CAP + 40),
+      summary: 't'
+    }
+    const out = buildTree(root, [...writes, hist, push])
+    expect(out.truncated).toBe(true)
+    expect(out.count).toBe(STEP_CAP)
+    const keys = out.root.children.map((c) => c.key)
+    expect(keys).toContain('submission:9')
+    expect(keys).toContain('history:1')
+    // the oldest writes are the ones kept
+    expect(keys).toContain('activity:0')
+    expect(keys).not.toContain(`activity:${STEP_CAP + 9}`)
+    expect(firstFailure(out.root)).toBe('submission:9')
+  })
+})
+
+describe('filterHiddenSubtrees', () => {
+  const secret = { collection: 'workflows', item: '1' }
+  const open = { collection: 'workflows', item: '2' }
+  const steps: PathStep[] = [
+    {
+      key: 'history:1',
+      parent: 'request:c1',
+      kind: 'transition',
+      at: at(1),
+      summary: 't',
+      record: secret
+    },
+    {
+      key: 'submission:2',
+      parent: 'history:1',
+      kind: 'push',
+      at: at(2),
+      summary: 'p',
+      record: secret
+    },
+    { key: 'attempt:3', parent: 'submission:2', kind: 'attempt', at: at(3), summary: 'a' },
+    { key: 'call:4', parent: 'submission:2', kind: 'partner_call', at: at(4), summary: 'c' },
+    { key: 'flow_run:5', parent: 'history:1', kind: 'flow', at: at(5), summary: 'f' },
+    {
+      key: 'activity:6',
+      parent: 'flow_run:5',
+      kind: 'write',
+      at: at(6),
+      summary: 'w',
+      record: open
+    },
+    { key: 'call:7', parent: 'activity:6', kind: 'partner_call', at: at(7), summary: 'c2' },
+    { key: 'call:8', parent: 'request:c1', kind: 'partner_call', at: at(8), summary: 'top' }
+  ]
+  const canRead = (r: { collection: string; item: string }) => r.item !== '1'
+
+  it('drops a hidden step with its whole subtree and counts every dropped step', () => {
+    const out = filterHiddenSubtrees(steps, canRead)
+    expect(out.steps.map((s) => s.key)).toEqual(['activity:6', 'call:7', 'call:8'])
+    expect(out.hidden).toBe(5)
+  })
+
+  it('keeps a descendant with its own readable record; it re-attaches to the root', () => {
+    const out = filterHiddenSubtrees(steps, canRead)
+    const tree = buildTree(root, out.steps).root
+    expect(tree.children.map((c) => c.key)).toEqual(['activity:6', 'call:8'])
+    expect(tree.children[0].children.map((c) => c.key)).toEqual(['call:7'])
+  })
+
+  it('a hidden push takes its re-parented calls with it', () => {
+    const out = filterHiddenSubtrees(
+      reparentCallsUnderPushes([
+        {
+          key: 'submission:2',
+          parent: 'request:c1',
+          kind: 'push',
+          at: at(2),
+          summary: 'p',
+          record: secret,
+          api_id: 3
+        },
+        {
+          key: 'call:4',
+          parent: 'request:c1',
+          kind: 'partner_call',
+          at: at(4),
+          summary: 'c',
+          api_id: 3
+        }
+      ]),
+      canRead
+    )
+    expect(out.steps).toEqual([])
+    expect(out.hidden).toBe(2)
   })
 })
 

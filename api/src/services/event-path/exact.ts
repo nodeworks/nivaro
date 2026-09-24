@@ -2,6 +2,7 @@ import { db } from '../../db/index.js'
 import { hasChainColumns } from '../chain-columns.js'
 import { labelledChanges } from '../mail-types.js'
 import { maskBodySecrets } from '../secret-mask.js'
+import { redactError, redactUrl } from './redact.js'
 import type { PathStep } from './types.js'
 
 /**
@@ -273,12 +274,12 @@ export async function loadChainSteps(
         at: iso(r.started_at),
         summary: `Flow "${r.flow_name ?? 'flow'}" · ${r.status}`,
         failed: r.status === 'error',
-        reason: (r.error_message as string | null) ?? null,
+        reason: redactError(r.error_message, opts.withBodies),
         detail: {
           type: 'flow',
           status: String(r.status),
           halted_at: (r.halted_at as string | null) ?? null,
-          error: (r.error_message as string | null) ?? null
+          error: redactError(r.error_message, opts.withBodies)
         }
       })
     }
@@ -316,13 +317,13 @@ export async function loadChainSteps(
         record: s.collection ? { collection: String(s.collection), item: String(s.item) } : null,
         summary: `Push to ${s.api_name ?? 'partner'} · ${s.status}`,
         failed,
-        reason: failed ? ((s.last_error as string | null) ?? null) : null,
+        reason: failed ? redactError(s.last_error, opts.withBodies) : null,
         api_id: s.external_api != null ? Number(s.external_api) : null,
         detail: {
           type: 'push',
           status: String(s.status),
           attempts: Number(s.attempts ?? 1),
-          error: (s.last_error as string | null) ?? null,
+          error: redactError(s.last_error, opts.withBodies),
           submission_id: Number(s.id),
           request: opts.withBodies ? maskedJson(s.payload) : null,
           response: opts.withBodies ? maskedJson(s.response) : null
@@ -355,7 +356,7 @@ export async function loadChainSteps(
         at: iso(a.recorded_at),
         summary: `Attempt ${a.attempt} · ${a.status}${a.http_status ? ` · HTTP ${a.http_status}` : ''}`,
         failed: a.status === 'failed',
-        reason: (a.error as string | null) ?? null
+        reason: redactError(a.error, opts.withBodies)
       })
     }
   }
@@ -390,15 +391,15 @@ export async function loadChainSteps(
         at: iso(c.created_at),
         summary: `${c.api_name ?? 'Partner'} answered ${status ?? 'no response'}`,
         failed: status == null || status >= 400 || Boolean(c.error),
-        reason: (c.error as string | null) ?? null,
+        reason: redactError(c.error, opts.withBodies),
         api_id: c.api_id != null ? Number(c.api_id) : null,
         detail: {
           type: 'call',
           method: String(c.method),
-          url: String(c.url),
+          url: redactUrl(c.url, opts.withBodies),
           status,
           duration_ms: c.duration_ms != null ? Number(c.duration_ms) : null,
-          error: (c.error as string | null) ?? null
+          error: redactError(c.error, opts.withBodies)
         }
       })
     }

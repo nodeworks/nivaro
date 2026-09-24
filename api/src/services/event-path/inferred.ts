@@ -1,13 +1,17 @@
 import { db } from '../../db/index.js'
 import type { EventEntry } from '../integration-event-sources.js'
-import { gatherSubmissionFacts } from '../submission-detail.js'
+import { CALL_LOG_WINDOW_MS, gatherSubmissionFacts } from '../submission-detail.js'
 import { iso } from './exact.js'
+import { redactError, redactUrl } from './redact.js'
 import type { PathStep } from './types.js'
 import { inboundWindow, POLL_WINDOW_MS, PUSH_AFTER_MS } from './windows.js'
 
 function ms(v: unknown): number {
   return Date.parse(iso(v))
 }
+
+/** "15 s" — reason text follows the window constant, never a literal. */
+const PUSH_WINDOW_TEXT = `${Math.round(PUSH_AFTER_MS / 1000)} s`
 
 function gap(a: unknown, b: unknown): string {
   const d = Math.abs(ms(a) - ms(b))
@@ -20,7 +24,8 @@ function gap(a: unknown, b: unknown): string {
  * clock is marked inferred and names why it was matched.
  */
 export async function inferSteps(
-  ev: EventEntry
+  ev: EventEntry,
+  opts: { withBodies: boolean } = { withBodies: false }
 ): Promise<{ rootStep: PathStep; steps: PathStep[]; warnings: string[] }> {
   const warnings: string[] = []
   const rootStep: PathStep = {
@@ -57,11 +62,12 @@ export async function inferSteps(
               inferredWrite(a, `same account, ${gap(a.timestamp, log.created_at)} from the call`)
             )
           }
+          await transitionsOn(steps, acts, w, log.created_at, warnings)
           await pushesAfter(steps, acts, warnings)
         }
       }
     } else if (ev.source === 'core:outbound') {
-      if (/^\d+$/.test(ev.id)) await outboundSteps(Number(ev.id), rootStep, steps, warnings)
+      if (/^\d+$/.test(ev.id)) await outboundSteps(Number(ev.id), rootStep, steps, warnings, opts)
     } else if (ev.collection && ev.item_id) {
       const t = Date.parse(ev.created_at)
       const acts = (await db('nivaro_activity')
@@ -89,7 +95,8 @@ async function outboundSteps(
   id: number,
   rootStep: PathStep,
   steps: PathStep[],
-  warnings: string[]
+  warnings: string[],
+  opts: { withBodies: boolean }
 ): Promise<void> {
   const facts = await gatherSubmissionFacts(id)
   if (!facts) return
@@ -107,7 +114,7 @@ async function outboundSteps(
         ? `${t.label} — the transition that set off this push`
         : 'Transition that set off this push',
       inferred: true,
-      reason: 'nearest transition on the record within 15 s'
+      reason: `nearest transition on the record within ${PUSH_WINDOW_TEXT}`
     })
   }
   if (facts.record_edit) {
@@ -140,8 +147,92 @@ async function outboundSteps(
       at: iso(a.recorded_at),
       summary: `Attempt ${a.attempt} · ${a.status}${a.http_status ? ` · HTTP ${a.http_status}` : ''}`,
       failed: a.status === 'failed',
-      reason: (a.error as string | null) ?? null
+      reason: redactError(a.error, opts.withBodies)
     })
+  }
+  // The push's own partner calls — the submission drill's matching (a body
+  // match is proof; otherwise the same endpoint within 10 s of an attempt).
+  const apiId = facts.row.external_api != null ? Number(facts.row.external_api) : null
+  for (const c of facts.call_logs) {
+    const status = c.response_status != null ? Number(c.response_status) : null
+    steps.push({
+      key: `call:${c.id}`,
+      parent: rootStep.key,
+      kind: 'partner_call',
+      at: iso(c.created_at),
+      summary: `${facts.api?.name ?? 'Partner'} answered ${status ?? 'no response'}`,
+      failed: status == null || status >= 400 || Boolean(c.error),
+      api_id: apiId,
+      inferred: true,
+      reason: c.body_match
+        ? 'request body matches the stored push'
+        : `same partner endpoint within ${Math.round(CALL_LOG_WINDOW_MS / 1000)} s of an attempt`,
+      detail: {
+        type: 'call',
+        method: String(c.method ?? ''),
+        url: redactUrl(c.url, opts.withBodies),
+        status,
+        duration_ms: c.duration_ms != null ? Number(c.duration_ms) : null,
+        error: redactError(c.error, opts.withBodies)
+      }
+    })
+  }
+}
+
+/** Transitions on the records these writes touched, inside the call's window. */
+async function transitionsOn(
+  steps: PathStep[],
+  acts: Array<Record<string, unknown>>,
+  w: { from: Date; to: Date },
+  callAt: unknown,
+  warnings: string[]
+): Promise<void> {
+  const pairs = new Set(acts.map((a) => `${a.collection}\u0000${a.item}`))
+  if (pairs.size === 0) return
+  const collections = [...new Set(acts.map((a) => String(a.collection)))].slice(0, 100)
+  const items = [...new Set(acts.map((a) => String(a.item)))].slice(0, 500)
+  try {
+    const hist = (await db('nivaro_workflow_history as h')
+      .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+      .leftJoin('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
+      .leftJoin('nivaro_workflow_states as ts', 'ts.id', 'h.to_state')
+      .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
+      .whereIn('i.collection', collections)
+      .whereIn('i.item', items)
+      .whereBetween('h.timestamp', [w.from, w.to])
+      .select(
+        'h.id',
+        'h.timestamp',
+        'h.comment',
+        'i.collection',
+        'i.item',
+        'fs.label as from_label',
+        'ts.label as to_label',
+        't.label as transition_label'
+      )
+      .orderBy('h.id')
+      .limit(200)) as Array<Record<string, unknown>>
+    for (const h of hist) {
+      if (!pairs.has(`${h.collection}\u0000${h.item}`)) continue
+      steps.push({
+        key: `history:${h.id}`,
+        parent: null,
+        kind: 'transition',
+        at: iso(h.timestamp),
+        record: { collection: String(h.collection), item: String(h.item) },
+        summary: `${h.transition_label ?? 'Moved'} → ${h.to_label ?? '?'}`,
+        inferred: true,
+        reason: `transition on a record this call wrote, ${gap(h.timestamp, callAt)} from the call`,
+        detail: {
+          type: 'transition',
+          from: (h.from_label as string | null) ?? null,
+          to: (h.to_label as string | null) ?? null,
+          comment: (h.comment as string | null) ?? null
+        }
+      })
+    }
+  } catch (err) {
+    warnings.push(`inferred transitions: ${String((err as Error)?.message ?? err).slice(0, 160)}`)
   }
 }
 
@@ -198,7 +289,7 @@ async function pushesAfter(
         failed,
         api_id: s.external_api != null ? Number(s.external_api) : null,
         inferred: true,
-        reason: 'push for a record this event changed, within 15 s'
+        reason: `push for a record this event changed, within ${PUSH_WINDOW_TEXT}`
       })
     }
   } catch (err) {

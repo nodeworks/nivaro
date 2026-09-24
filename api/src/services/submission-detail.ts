@@ -225,6 +225,8 @@ const ms = (v: Date | string) => new Date(v).getTime()
 // record to risk matching something unrelated — a later transition, an
 // edit made for a different reason moments earlier.
 export const HISTORY_WINDOW_MS = 15_000
+/** A partner call within this of a known attempt (same endpoint) is the push's call. */
+export const CALL_LOG_WINDOW_MS = 10_000
 export const RECORD_EDIT_WINDOW_BEFORE_MS = 3_000
 export const RECORD_EDIT_WINDOW_AFTER_MS = 1_000
 
@@ -839,7 +841,7 @@ export async function gatherSubmissionFacts(
   if (!row) return null
   const created = new Date(row.created_at)
   const updated = new Date(row.updated_at ?? row.created_at)
-  const pad = 10_000
+  const pad = CALL_LOG_WINDOW_MS
 
   const [api, obligation, attempts, activity, logsRaw, newer, label] = await Promise.all([
     db('nivaro_external_apis')

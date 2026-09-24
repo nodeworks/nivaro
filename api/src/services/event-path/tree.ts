@@ -61,6 +61,52 @@ function fold(children: PathNode[]): PathNode[] {
   )
 }
 
+const byTime = (a: PathStep, b: PathStep) => Date.parse(a.at) - Date.parse(b.at)
+
+/**
+ * Over the cap, writes go first: every transition, flow, push, attempt and
+ * call is kept (they carry the path's failures), and only the newest writes
+ * are dropped.
+ */
+function capSteps(steps: PathStep[]): PathStep[] {
+  const others = steps.filter((s) => s.kind !== 'write').sort(byTime)
+  if (others.length >= STEP_CAP) return others.slice(0, STEP_CAP)
+  const writes = steps
+    .filter((s) => s.kind === 'write')
+    .sort(byTime)
+    .slice(0, STEP_CAP - others.length)
+  return [...others, ...writes]
+}
+
+/**
+ * Drop steps on records the viewer may not read, WITH their subtrees: a
+ * hidden push takes its attempts and calls with it. A descendant carrying its
+ * own readable record is kept (it re-attaches to the root). Parents are
+ * resolved before anything is dropped. Returns the kept steps and how many
+ * were dropped.
+ */
+export function filterHiddenSubtrees(
+  steps: PathStep[],
+  canRead: (record: { collection: string; item: string }) => boolean
+): { steps: PathStep[]; hidden: number } {
+  const byKey = new Map(steps.map((s) => [s.key, s]))
+  const memo = new Map<string, boolean>()
+  const dropped = (s: PathStep, seen: Set<string>): boolean => {
+    const known = memo.get(s.key)
+    if (known !== undefined) return known
+    let out: boolean
+    if (s.record) out = !canRead(s.record)
+    else {
+      const p = s.parent && s.parent !== s.key ? byKey.get(s.parent) : undefined
+      out = p && !seen.has(p.key) ? dropped(p, new Set(seen).add(s.key)) : false
+    }
+    memo.set(s.key, out)
+    return out
+  }
+  const kept = steps.filter((s) => !dropped(s, new Set([s.key])))
+  return { steps: kept, hidden: steps.length - kept.length }
+}
+
 /**
  * Nest steps under their parents (an unknown, missing or self parent = the
  * root), order siblings by time, fold bulk writes, and cap the step count.
@@ -70,7 +116,7 @@ export function buildTree(
   steps: PathStep[]
 ): { root: PathNode; truncated: boolean; count: number } {
   const truncated = steps.length > STEP_CAP
-  const kept = truncated ? steps.slice(0, STEP_CAP) : steps.slice()
+  const kept = truncated ? capSteps(steps) : steps.slice()
   const t0 = Date.parse(rootStep.at)
   const toNode = (s: PathStep): PathNode => ({
     ...s,

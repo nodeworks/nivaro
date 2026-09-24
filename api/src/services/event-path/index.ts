@@ -3,7 +3,7 @@ import { getEvent } from '../integration-event-sources.js'
 import { getLabels } from '../queues.js'
 import { loadChainSteps } from './exact.js'
 import { inferSteps } from './inferred.js'
-import { buildTree, firstFailure, reparentCallsUnderPushes } from './tree.js'
+import { buildTree, filterHiddenSubtrees, firstFailure, reparentCallsUnderPushes } from './tree.js'
 import type { EventPath, PathNode, PathStep } from './types.js'
 
 export interface PathViewer {
@@ -49,15 +49,18 @@ export async function buildEventPath(
     }
     mode = 'exact'
   } else {
-    const inf = await inferSteps(ev)
+    const inf = await inferSteps(ev, { withBodies: viewer.isAdmin })
     steps = inf.steps
     rootStep = inf.rootStep
     warnings = inf.warnings
     mode = 'inferred'
   }
 
+  // Calls first go under their push, so a hidden push takes its calls along.
+  steps = reparentCallsUnderPushes(steps)
+
   // Permission filter (record side): a step on a record the viewer may not
-  // read is dropped and counted; its children re-attach to the root.
+  // read is dropped with its subtree; every dropped step is counted.
   let hidden = 0
   if (viewer.canReadRecords) {
     const refs = steps
@@ -67,13 +70,13 @@ export async function buildEventPath(
         item: (s.record as { item: string }).item
       }))
     const allowed = refs.length ? await viewer.canReadRecords(refs) : new Set<string>()
-    const before = steps.length
-    steps = steps.filter((s) => !s.record || allowed.has(`${s.record.collection}:${s.record.item}`))
-    hidden = before - steps.length
+    const out = filterHiddenSubtrees(steps, (r) => allowed.has(`${r.collection}:${r.item}`))
+    steps = out.steps
+    hidden = out.hidden
   }
 
   await labelRecords([rootStep, ...steps])
-  const { root, truncated, count } = buildTree(rootStep, reparentCallsUnderPushes(steps))
+  const { root, truncated, count } = buildTree(rootStep, steps)
   const links = ev.chain_id
     ? await replayLinks(ev.chain_id)
     : { replay_of: null, replayed_as: [] as string[] }
