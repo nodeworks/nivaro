@@ -1279,32 +1279,51 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
   // kind opens nothing. A dry run (the Tester panel, or a shadow-mode flow)
   // never actually calls the partner — runExternalApi returns before it does
   // — so it must never be recorded as a real send or a real skip either.
-  const obligationId = await (async () => {
+  //
+  // Opened when the run REACHES its first external-api op, not when the flow
+  // fires: the `condition` ops before it are the flow deciding whether it
+  // applies to this record at all ("has an MWF link", "is a workflow"), and a
+  // partner that was never supposed to be told has nothing to be "skipped"
+  // on — the record's partner lines used to show one such line per flow
+  // whose condition rejected. A condition halt AFTER the push (a check on the
+  // response) still finds the obligation open and resolves it below.
+  const obligationParams = (() => {
+    if (ctx.dryRun) return null
+    const collection = typeof data.collection === 'string' ? data.collection : null
+    const item =
+      data.item != null
+        ? String(data.item)
+        : Array.isArray(data.keys) && data.keys.length > 0
+          ? String(data.keys[0])
+          : null
+    if (!collection || !item) return null
+    const apiOp = operations.find((op) => op.type === 'external-api')
+    const apiName = apiOp
+      ? String((parseOpts(apiOp) as { api_id?: unknown }).api_id ?? '').trim()
+      : ''
+    if (!apiName) return null
+    return { collection, item, apiName, apiOpId: apiOp?.id ?? null }
+  })()
+  let obligationId: number | null = null
+  const openObligation = async (): Promise<void> => {
+    if (!obligationParams || obligationId != null) return
     try {
-      if (ctx.dryRun) return null
-      const collection = typeof data.collection === 'string' ? data.collection : null
-      const item =
-        data.item != null
-          ? String(data.item)
-          : Array.isArray(data.keys) && data.keys.length > 0
-            ? String(data.keys[0])
-            : null
-      if (!collection || !item) return null
-      const apiOp = operations.find((op) => op.type === 'external-api')
-      const apiName = apiOp
-        ? String((parseOpts(apiOp) as { api_id?: unknown }).api_id ?? '').trim()
-        : ''
-      if (!apiName) return null
       const { openObligationForTrigger } = await import('./integration-obligations.js')
-      return await openObligationForTrigger(
-        { collection, item, api: apiName, source: 'flow', flow_name: ctx.flowName },
+      obligationId = await openObligationForTrigger(
+        {
+          collection: obligationParams.collection,
+          item: obligationParams.item,
+          api: obligationParams.apiName,
+          source: 'flow',
+          flow_name: ctx.flowName
+        },
         { trigger: 'flow', trigger_ref: runId }
       )
     } catch {
       // Bookkeeping only — a failure here must never block the run itself.
-      return null
+      obligationId = null
     }
-  })()
+  }
 
   try {
     // Every op this run executes — and whatever those ops write — hangs
@@ -1331,6 +1350,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
           if (!op) break
           const opts = parseOpts(op)
           if (opts.async) {
+            if (op.id === obligationParams?.apiOpId) await openObligation()
             runOperation(op, d, ctx).catch((err) =>
               ctx.log.warn({ err, flowId: ctx.flowId, key: op.key }, 'Async op failed')
             )
@@ -1339,6 +1359,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
             note(op, 'async', false)
             currentId = op.resolve ?? null
           } else {
+            if (op.id === obligationParams?.apiOpId) await openObligation()
             const result = await runOperation(op, d, ctx)
             d = result.output
             ctx.log.debug(

@@ -98,15 +98,17 @@ function defaultChain() {
  *  captured so a test can assert on the outcome/reason it resolved with. */
 function wireDb(ops: FlowOpFixture[], obligationRowId: number) {
   const resolvedUpdates: Array<Record<string, unknown>> = []
+  openedRows.length = 0
   vi.mocked(db as unknown as (table: string) => unknown).mockImplementation(
     (table: string): unknown => {
       if (table === 'nivaro_flow_operations') return thenableRows(ops)
       if (table === 'nivaro_flow_runs') return flowRunsChain()
       if (table === 'nivaro_integration_obligations') {
         const chain: Record<string, unknown> = {}
-        chain.insert = vi.fn(() => ({
-          returning: vi.fn().mockResolvedValue([{ id: obligationRowId }])
-        }))
+        chain.insert = vi.fn((row: Record<string, unknown>) => {
+          openedRows.push(row)
+          return { returning: vi.fn().mockResolvedValue([{ id: obligationRowId }]) }
+        })
         chain.where = vi.fn(() => ({
           update: vi.fn((row: Record<string, unknown>) => {
             resolvedUpdates.push(row)
@@ -120,6 +122,9 @@ function wireDb(ops: FlowOpFixture[], obligationRowId: number) {
   )
   return resolvedUpdates
 }
+
+/** Every obligation row a run inserted — the ledger's "the partner was owed this". */
+const openedRows: Array<Record<string, unknown>> = []
 
 const PARTNER_KIND = { api: 'Partner', collection: 'workflows', label: 'x', expect: async () => [] }
 
@@ -141,7 +146,7 @@ describe('executeFlow — obligation ledger for a flow that pushes to a partner'
     vi.mocked(callExternalApi).mockReset()
   })
 
-  it('a real condition op rejecting resolves the obligation skipped, naming the op', async () => {
+  it('a condition rejecting BEFORE the push opens no obligation — the flow decided it does not apply to this record', async () => {
     registerObligationKind({ ...PARTNER_KIND, kind: 'wf.push' })
     const ops: FlowOpFixture[] = [
       {
@@ -173,11 +178,55 @@ describe('executeFlow — obligation ledger for a flow that pushes to a partner'
 
     await executeFlow(baseCtx())
 
-    // The condition halted the chain before op-push ever ran.
+    // The condition halted the chain before op-push ever ran: nothing was
+    // owed, so nothing is opened and nothing is resolved.
     expect(callExternalApi).not.toHaveBeenCalled()
+    expect(openedRows).toHaveLength(0)
+    expect(resolvedUpdates).toHaveLength(0)
+  })
+
+  it('a condition rejecting AFTER the push resolves the (opened) obligation skipped, naming the op', async () => {
+    registerObligationKind({ ...PARTNER_KIND, kind: 'wf.push' })
+    vi.mocked(callExternalApi).mockResolvedValue({
+      status: 200,
+      body: { ok: true },
+      ok: true
+    } as never)
+    const ops: FlowOpFixture[] = [
+      {
+        id: 'op-push',
+        flow: 'flow-1',
+        name: 'Push',
+        key: 'push',
+        type: 'external-api',
+        position_x: 0,
+        position_y: 0,
+        options: JSON.stringify({ mode: 'predefined', api_id: 'Partner' }),
+        resolve: 'op-check',
+        reject: null
+      },
+      {
+        id: 'op-check',
+        flow: 'flow-1',
+        name: 'Check',
+        key: 'check',
+        type: 'condition',
+        position_x: 0,
+        position_y: 1,
+        options: JSON.stringify({ field: 'nope', operator: 'eq', value: 'yes' }),
+        resolve: null,
+        reject: null
+      }
+    ]
+    const resolvedUpdates = wireDb(ops, 501)
+
+    await executeFlow(baseCtx())
+
+    expect(callExternalApi).toHaveBeenCalledTimes(1)
+    expect(openedRows).toHaveLength(1)
     expect(resolvedUpdates).toHaveLength(1)
     expect(resolvedUpdates[0].outcome).toBe('skipped')
-    expect(resolvedUpdates[0].reason).toBe('flow condition rejected at "gate"')
+    expect(resolvedUpdates[0].reason).toBe('flow condition rejected at "check"')
   })
 
   it('an external-api op that 4xxs with no reject branch wired resolves failed with the HTTP status — not a mislabelled skip', async () => {
@@ -197,7 +246,11 @@ describe('executeFlow — obligation ledger for a flow that pushes to a partner'
       }
     ]
     const resolvedUpdates = wireDb(ops, 502)
-    vi.mocked(callExternalApi).mockResolvedValue({ status: 422, headers: {}, body: { error: 'nope' } })
+    vi.mocked(callExternalApi).mockResolvedValue({
+      status: 422,
+      headers: {},
+      body: { error: 'nope' }
+    })
 
     await executeFlow(baseCtx())
 
