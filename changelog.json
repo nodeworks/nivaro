@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-09-24T19:23:38.551Z",
+  "generated_at": "2026-09-24T19:52:29.390Z",
   "releases": [
+    {
+      "version": "0.1.338",
+      "tag": "v0.1.338",
+      "date": "2026-09-24T15:52:16-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cbv",
+              "text": "unpinning the first column survives a saved view",
+              "hash": "18bd5941"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "automatic moves keep the yellow callout, carrying the plain sentence",
+              "hash": "9618abe3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "describe transitions to people (notify_text), human wording for automatic moves",
+              "hash": "64c264f4"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.337",
       "tag": "v0.1.337",
-      "date": "2026-09-24T15:23:24-04:00",
+      "date": "2026-09-24T15:23:38-04:00",
       "sections": [
         {
           "label": "Fixed",
