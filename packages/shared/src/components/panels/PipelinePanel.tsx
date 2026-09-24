@@ -16,7 +16,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
-import { invalidateRecordInsights } from '../item-edit/RecordInsights'
+import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
@@ -1509,6 +1509,9 @@ function PipelinePanelInner({
       // A transition changes owners, integrations pushes and audience —
       // refresh the Record Insights popover caches too.
       invalidateRecordInsights(queryClient, collection, String(item))
+      // ...and its on_success writes (order number, line sales_order_ids)
+      // — the header and the child grids, so the form shows them at once.
+      invalidateRecordData(queryClient, collection, String(item))
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
@@ -1542,8 +1545,10 @@ function PipelinePanelInner({
       setRequirementsDialog(null)
       setPendingTransition(null)
       // The push that just failed wrote a submission AND an obligation —
-      // the failure banner and the partner lines refresh together.
+      // the failure banner and the partner lines refresh together, and so
+      // does the record (an `on_error.set` status such as fusion_status=error).
       invalidateRecordInsights(queryClient, collection, String(item))
+      invalidateRecordData(queryClient, collection, String(item))
       if (resp?.status === 409) {
         queryClient.invalidateQueries({ queryKey })
       }
@@ -2045,6 +2050,9 @@ function PipelineTransitionButtonsInner({
       // A transition changes owners, integrations pushes and audience —
       // refresh the Record Insights popover caches too.
       invalidateRecordInsights(queryClient, collection, String(item))
+      // ...and its on_success writes (order number, line sales_order_ids)
+      // — the header and the child grids, so the form shows them at once.
+      invalidateRecordData(queryClient, collection, String(item))
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
@@ -2078,8 +2086,10 @@ function PipelineTransitionButtonsInner({
       setRequirementsDialog(null)
       setPendingTransition(null)
       // The push that just failed wrote a submission AND an obligation —
-      // the failure banner and the partner lines refresh together.
+      // the failure banner and the partner lines refresh together, and so
+      // does the record (an `on_error.set` status such as fusion_status=error).
       invalidateRecordInsights(queryClient, collection, String(item))
+      invalidateRecordData(queryClient, collection, String(item))
       if (resp?.status === 409) {
         queryClient.invalidateQueries({ queryKey })
       }

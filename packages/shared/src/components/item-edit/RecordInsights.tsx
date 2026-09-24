@@ -37,6 +37,30 @@ export function invalidateRecordInsights(
   }
 }
 
+/** A transition's `on_success.set` / `on_success_children` writes land on
+ *  the record header and its child rows without going through the form —
+ *  refresh the form's own record query and every O2M grid keyed on this
+ *  record (catalog picker, inline tables, summary chips) so an ERP push's
+ *  order number / line ids show up without a reload. Query keys:
+ *  `['item', collection, id]` and `['o2m-rows', rc, mf, parentId, ...]`. */
+export function invalidateRecordData(
+  qc: {
+    invalidateQueries: (o: {
+      queryKey?: unknown[]
+      predicate?: (q: { queryKey: readonly unknown[] }) => boolean
+    }) => unknown
+  },
+  collection: string,
+  itemId: string
+): void {
+  void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+  void qc.invalidateQueries({
+    predicate: (q) => q.queryKey[0] === 'o2m-rows' && String(q.queryKey[3]) === itemId
+  })
+  void qc.invalidateQueries({ queryKey: ['child-summary', collection, itemId] })
+  void qc.invalidateQueries({ queryKey: ['last-touch', collection, itemId] })
+}
+
 export function RecordInsightsButton({
   collection,
   itemId,
