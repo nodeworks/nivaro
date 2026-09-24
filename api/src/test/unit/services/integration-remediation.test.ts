@@ -490,7 +490,10 @@ describe('sendNow — actually sends (resendSubmission)', () => {
       submissionId: 50,
       outcome: expect.objectContaining({ status: 'accepted' }),
       priorExternalRef: null,
-      priorAttempts: 2
+      priorAttempts: 2,
+      // A person's Send now is a resend, stamped with who (migration 350).
+      requestedBy: 'user-1',
+      requestedVia: 'resend'
     })
     expect(propagateSubmissionStatus).toHaveBeenCalledWith({
       submissionId: 50,
@@ -690,7 +693,10 @@ describe('runMissingRefirePass — gate on', () => {
       submissionId: 999,
       outcome: expect.objectContaining({ status: 'pending' }),
       priorExternalRef: null,
-      priorAttempts: 0
+      priorAttempts: 0,
+      // The sweep has nobody behind it.
+      requestedBy: null,
+      requestedVia: 'cron'
     })
     expect(propagateSubmissionStatus).toHaveBeenCalledWith({
       submissionId: 999,

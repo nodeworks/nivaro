@@ -13,6 +13,22 @@ import { classifyError } from './integration-remediation.js'
 
 export type SubmissionStatus = 'submitted' | 'pending' | 'accepted' | 'rejected' | 'failed'
 
+/**
+ * What kind of thing sent a push (migration 350 `requested_via`). A person's
+ * id rides beside it in `requested_by` whenever one was involved.
+ */
+export const REQUESTED_VIA = [
+  'transition',
+  'auto-transition',
+  'flow',
+  'item-action',
+  'retry',
+  'resend',
+  'cron',
+  'api'
+] as const
+export type RequestedVia = (typeof REQUESTED_VIA)[number]
+
 /** What a submission status means for the obligation behind it. */
 export function outcomeForSubmission(status: SubmissionStatus): 'sent' | 'failed' | 'pending' {
   if (status === 'accepted') return 'sent'
@@ -106,6 +122,11 @@ export async function applySendOutcome(opts: {
   extra?: Record<string, unknown>
   /** Default true: this outcome came from a request we actually made. */
   attempted?: boolean
+  /** Who started THIS attempt (a manual Retry by someone else is its own
+   *  requester) and how — stamped on the attempt row only; the submission
+   *  row keeps the original send's requester. */
+  requestedBy?: string | null
+  requestedVia?: RequestedVia | null
 }): Promise<void> {
   const { serializeResponseBody } = await import('./workflow-actions.js')
   const failed = opts.outcome.status === 'failed' || opts.outcome.status === 'rejected'
@@ -141,7 +162,9 @@ export async function applySendOutcome(opts: {
       response: serializeResponseBody(opts.outcome.response),
       error: opts.outcome.error,
       source: 'send',
-      recorded_at: new Date()
+      recorded_at: new Date(),
+      requested_by: opts.requestedBy ?? null,
+      requested_via: opts.requestedVia ?? null
     })
   }
 }
@@ -156,6 +179,8 @@ interface AttemptRow {
   error: string | null
   source: 'send' | 'captured'
   recorded_at: Date
+  requested_by: string | null
+  requested_via: string | null
 }
 
 async function recordAttempt(row: AttemptRow): Promise<void> {
@@ -181,7 +206,16 @@ async function captureSubmissionRow(
   try {
     const row = (await db('nivaro_erp_submissions')
       .where({ id: submissionId })
-      .first('payload', 'response', 'status', 'last_error', 'updated_at', 'created_at')) as
+      .first(
+        'payload',
+        'response',
+        'status',
+        'last_error',
+        'updated_at',
+        'created_at',
+        'requested_by',
+        'requested_via'
+      )) as
       | {
           payload: string | null
           response: string | null
@@ -189,6 +223,8 @@ async function captureSubmissionRow(
           last_error: string | null
           updated_at: Date | null
           created_at: Date | null
+          requested_by: string | null
+          requested_via: string | null
         }
       | undefined
     if (!row) return null
@@ -206,7 +242,11 @@ async function captureSubmissionRow(
           response: row.response,
           error: row.last_error,
           source: 'captured',
-          recorded_at: row.updated_at ?? row.created_at ?? new Date()
+          recorded_at: row.updated_at ?? row.created_at ?? new Date(),
+          // The row's own requester IS this attempt's — captured before the
+          // next attempt overwrites it.
+          requested_by: row.requested_by ?? null,
+          requested_via: row.requested_via ?? null
         })
       }
     }

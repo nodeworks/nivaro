@@ -218,7 +218,10 @@ async function resendSubmission(
     submissionId,
     outcome,
     priorExternalRef: sub.external_ref,
-    priorAttempts: sub.attempts
+    priorAttempts: sub.attempts,
+    // A person's "Send now" is a resend; the retry ladder has nobody behind it.
+    requestedBy: userId,
+    requestedVia: userId ? 'resend' : 'cron'
   })
   await propagateSubmissionStatus({
     submissionId,
@@ -295,6 +298,8 @@ async function refireFromPrior(
       payload: prior.payload,
       change_signature: prior.change_signature,
       obligation_id: obligationId,
+      requested_by: userId,
+      requested_via: userId ? 'resend' : 'cron',
       created_at: now,
       updated_at: now
     })
@@ -314,7 +319,9 @@ async function refireFromPrior(
     submissionId: newId,
     outcome,
     priorExternalRef: null,
-    priorAttempts: 0
+    priorAttempts: 0,
+    requestedBy: userId,
+    requestedVia: userId ? 'resend' : 'cron'
   })
   // resolveObligation (inside propagateSubmissionStatus) is what points the
   // re-firing obligation's own submission_id at the NEW row — the prior

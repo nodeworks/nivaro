@@ -2337,7 +2337,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         onlyIndex: actionIndex,
         // The ledger should tell an on-demand resend apart from the push a
         // real transition fired.
-        obligationTrigger: 'manual'
+        obligationTrigger: 'manual',
+        // …and the submission row says a person re-sent it (migration 350).
+        requestedVia: 'resend'
       })
       const sub = await db('nivaro_erp_submissions')
         .where({ collection, item: String(item) })

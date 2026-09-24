@@ -2,6 +2,7 @@ import { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
+import type { RequestedVia } from './erp-submission-status.js'
 import { callExternalApi } from './external-apis.js'
 import {
   type ObligationTrigger,
@@ -599,6 +600,10 @@ export async function runTransitionActions(opts: {
    *  targeted re-run passes 'manual' so the ledger tells a resend apart from
    *  the original push. */
   obligationTrigger?: ObligationTrigger
+  /** How this run's pushes were requested, stamped on each submission row
+   *  (migration 350). Default: 'transition' when a person drove it, else
+   *  'auto-transition'. A targeted re-run passes 'resend'. */
+  requestedVia?: RequestedVia
 }): Promise<{ blockedError: string | null; skippedReason?: string | null }> {
   const all = parseActions(opts.transition.actions)
   const actions =
@@ -612,6 +617,10 @@ export async function runTransitionActions(opts: {
   if (actions.length === 0) return { blockedError: null, skippedReason: null }
 
   const { collection, item } = opts.instance
+  const who: SubmissionRequester = {
+    by: opts.userId ?? null,
+    via: opts.requestedVia ?? (opts.userId ? 'transition' : 'auto-transition')
+  }
 
   // Action journal (#327): write-ahead intent for the chain. If the process
   // dies mid-chain the row stays 'running' — boot recovery flags it as
@@ -786,7 +795,11 @@ export async function runTransitionActions(opts: {
         action.endpoint_path,
         null,
         'failed',
-        `payload template error: ${err instanceof Error ? err.message : String(err)}`
+        `payload template error: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        undefined,
+        undefined,
+        who
       )
       await resolveObligation(obligationId, {
         outcome: 'failed',
@@ -966,7 +979,8 @@ export async function runTransitionActions(opts: {
       // Only a push that LANDED defines "what they already know" — recording a
       // signature for a failure would suppress the retry that fixes it.
       status === 'failed' ? null : signature,
-      httpStatus
+      httpStatus,
+      who
     )
     await resolveObligation(obligationId, {
       // A 2xx with no acknowledgement is not `sent` — it is `pending` until
@@ -1237,6 +1251,12 @@ export function serializeResponseBody(body: unknown): string | null {
   }
 }
 
+/** Who sent a push and how — migration 350's requested_by / requested_via. */
+interface SubmissionRequester {
+  by: string | null
+  via: RequestedVia
+}
+
 async function recordSubmission(
   collection: string,
   item: string,
@@ -1252,7 +1272,8 @@ async function recordSubmission(
   // none, a real HTTP response does. Threaded through so `classifyError`
   // can tell a 404 apart from a 500 apart from a refused socket, rather than
   // reading every non-2xx failure as equally "unknown".
-  httpStatus?: number | null
+  httpStatus?: number | null,
+  who?: SubmissionRequester
 ): Promise<number | null> {
   try {
     const now = new Date()
@@ -1268,6 +1289,8 @@ async function recordSubmission(
         payload: JSON.stringify({ endpoint_path: endpointPath, body }),
         response: serializeResponseBody(responseBody),
         change_signature: signature ?? null,
+        requested_by: who?.by ?? null,
+        requested_via: who?.via ?? null,
         // #628 — NULL when this attempt did not fail; otherwise what kind of
         // failure it was, which decides whether a later retry could help.
         error_class:

@@ -995,7 +995,8 @@ export async function applyTransition(opts: {
       // does (external_label included), not a hand-narrowed {key, label}.
       newStateObj: targetStateObj ?? null,
       userId: opts.userId ?? null,
-      phase: 'blocking'
+      phase: 'blocking',
+      requestedVia: opts.source === 'auto' || !opts.userId ? 'auto-transition' : 'transition'
     })
     if (blockedError) throw new TransitionBlockedError(blockedError)
   }
@@ -1045,7 +1046,8 @@ export async function applyTransition(opts: {
       instance: updatedInstance ?? instance,
       newStateObj,
       userId: opts.userId ?? null,
-      phase: 'post'
+      phase: 'post',
+      requestedVia: opts.source === 'auto' || !opts.userId ? 'auto-transition' : 'transition'
     })
   } catch {
     /* logged inside runTransitionActions */
