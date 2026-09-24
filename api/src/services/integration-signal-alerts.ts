@@ -108,7 +108,7 @@ export async function filterActiveAdminUserIds(userIds: string[]): Promise<Set<s
 }
 
 /** "3 new · Failed pushes" + up to five titles (each naming its record when
- *  it has one — "Partner /orders · CR26-80361"), then "and N more". */
+ *  it has one — "Partner /orders · ORD-1042"), then "and N more". */
 export function alertMessage(
   signalLabel: string,
   newRows: Array<{ title: string; again?: boolean; label?: string | null }>

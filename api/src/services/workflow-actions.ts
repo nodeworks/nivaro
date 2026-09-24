@@ -1278,7 +1278,7 @@ export async function recordSubmission(
 ): Promise<number | null> {
   try {
     const now = new Date()
-    // Probed once per process — naming a column this database hasn't run
+    // Probed once per tenant — naming a column this database hasn't run
     // migration 350 for yet fails the WHOLE insert, not just these two
     // fields, so the requester is spread conditionally instead of written
     // directly.

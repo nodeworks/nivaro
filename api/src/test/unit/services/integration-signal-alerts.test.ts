@@ -61,13 +61,13 @@ describe('alertMessage', () => {
   })
   it('names the record a line is about', () => {
     const m = alertMessage('Failed pushes', [
-      { title: 'Partner /orders', label: 'CR26-80361' },
-      { title: 'Partner /orders', label: 'CR26-80362', again: true },
+      { title: 'Partner /orders', label: 'ORD-1042' },
+      { title: 'Partner /orders', label: 'ORD-1043', again: true },
       { title: 'No record here' }
     ])
     expect(m.message.split('\n')).toEqual([
-      'Partner /orders · CR26-80361',
-      'Partner /orders · CR26-80362 — happened again',
+      'Partner /orders · ORD-1042',
+      'Partner /orders · ORD-1043 — happened again',
       'No record here'
     ])
   })

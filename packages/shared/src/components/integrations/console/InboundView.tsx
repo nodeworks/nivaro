@@ -220,7 +220,7 @@ export interface InboundViewProps {
 }
 
 /**
- * Inbound: health first — the host's own live queue (e.g. MWF), then whether
+ * Inbound: health first — the host's own live queue (an ingest backlog, say), then whether
  * scheduled imports are arriving on time — and investigation last, since who
  * called in and exactly what they sent is what you reach for once something
  * above already looks wrong, not on every visit.

@@ -209,7 +209,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
     const outcome = await sendPayload(external_api, stored, req.user?.id)
 
     const now = new Date()
-    // Probed once per process — a column this database hasn't run
+    // Probed once per tenant — a column this database hasn't run
     // migration 350 for fails the WHOLE insert, not just these two fields.
     const requesterFields = await requesterInsertFields(
       'nivaro_erp_submissions',

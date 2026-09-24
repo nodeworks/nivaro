@@ -287,7 +287,7 @@ async function refireFromPrior(
   // first real attempt land as attempts = 1, same as a freshly created
   // submission anywhere else in the codebase.
   const now = new Date()
-  // Probed once per process — naming a column this database hasn't run
+  // Probed once per tenant — naming a column this database hasn't run
   // migration 350 for fails the WHOLE insert, not just these two fields.
   const requesterFields = await requesterInsertFields(
     'nivaro_erp_submissions',

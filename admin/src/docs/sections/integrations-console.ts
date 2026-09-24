@@ -136,8 +136,17 @@ interface SignalAction {
         "A key present now that was NOT open before → INSERT (a new row; `first_seen` = the row's own `since` when it names one, else now).",
         'A key present now that WAS open, with an identical serialized payload and group → touch `last_seen` ONLY, in a bulk `UPDATE … WHERE id IN (…)` batched in chunks of ≤1000 ids — no per-row write at all.',
         'A key present now whose payload (or group) genuinely differs → a real per-row `UPDATE`; `first_seen` is untouched — the SAME problem, updated in place.',
-        'A key that was open before and is absent now → `cleared_at` is set (the row survives for history; a later recurrence of the same key opens a FRESH row, since the unique index only covers `cleared_at IS NULL`).'
+        'A key that was open before and is absent now → `cleared_at` is set (the row survives for history; a later recurrence of the same key opens a FRESH row, since the unique index only covers `cleared_at IS NULL`).',
+        'Cleared rows older than 30 days are deleted at the end of each cycle, in chunks, so the table does not only grow.'
       ]
+    },
+    {
+      type: 'p',
+      text: '`row_key` and `group_key` are 300-character columns. A longer key is stored as its first 300 characters and every comparison against a stored key (the snapshot diff, snoozes, Dismiss) uses that prefix, so a long key still updates its one open row instead of inserting a new one every cycle.'
+    },
+    {
+      type: 'note',
+      text: 'Self-hosted only: the core signals and the `integration-signals` cron are registered in self-hosted mode. A cloud deployment runs no evaluation cycle, so its console has no core signals to show.'
     },
     {
       type: 'note',
@@ -149,7 +158,7 @@ interface SignalAction {
     },
     {
       type: 'p',
-      text: '`key` names the PROBLEM and stays the same for as long as it is open. `occurrence` names THIS INSTANCE of it — a submission attempt id, a failing run id, an obligation id, a snapshot timestamp — whatever the signal knows best; unset, it falls back to the row\'s `since`, then to a hash of the row\'s own text with digits masked out. A row whose `occurrence` differs from what was stored last cycle is a re-occurrence: the database write is still a plain `UPDATE` (the row was never cleared, so `first_seen` never moves), but the cycle reports it in `CycleSummary.results[].new_keys` alongside genuinely brand-new keys — and separately in `reoccurred_keys`, so delivery wording can say "happened again" rather than "new". One case is deliberately excluded: a row stored with NO explicit `occurrence` at all (it predates the signal ever setting one) compared against a fresh row that now sets one for the first time is NOT counted as a re-occurrence — a signal gaining richer identity is not the same event as its problem coming back, and treating it as one would flag every already-open row the moment a signal\'s code changes.'
+      text: '`key` names the PROBLEM and stays the same for as long as it is open. `occurrence` names THIS INSTANCE of it — a submission attempt id, a failing run id, an obligation id, a snapshot timestamp — whatever the signal knows best; unset, it falls back to the row\'s `since`, then to a hash of the row\'s own text with digits masked out. An `occurrence` should mark where the problem STARTED, never its newest event — a value that moves every cycle while the same problem continues makes a steady outage read as "happened again" every 5 minutes and undoes Dismiss. The core signals follow that rule: `core:partner-failing` uses the first failing call after the partner\'s last success, `core:inbound-errors` the first error after a quiet hour, `core:flow-failed` and `core:import-failed` the first failing run since the last successful one. A row whose `occurrence` differs from what was stored last cycle is a re-occurrence: the database write is still a plain `UPDATE` (the row was never cleared, so `first_seen` never moves), but the cycle reports it in `CycleSummary.results[].new_keys` alongside genuinely brand-new keys — and separately in `reoccurred_keys`, so delivery wording can say "happened again" rather than "new". One case is deliberately excluded: a row stored with NO explicit `occurrence` at all (it predates the signal ever setting one) compared against a fresh row that now sets one for the first time is NOT counted as a re-occurrence — a signal gaining richer identity is not the same event as its problem coming back, and treating it as one would flag every already-open row the moment a signal\'s code changes.'
     },
 
     { type: 'h2', id: 'ic-snooze-dismiss', text: 'Snoozes and Dismiss' },
@@ -225,7 +234,7 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze`
     },
     {
       type: 'warn',
-      text: "These two columns are NULLABLE and carry no foreign key — a deleted or merged user must never block a push from being recorded, and a database that hasn't reached this migration yet must never fail an insert over it. Every writer goes through `requesterInsertFields(table, by, via)` / `requesterSelectColumns(table)` (`services/erp-requester-columns.ts`; mirrored by hand in `api/extensions/efp-ops` — extensions can't import `api/src`), which probe `db.schema.hasColumn(table, \"requested_by\")` exactly ONCE per process per table: a hit is cached forever, a miss is re-checked after 60 seconds (so a database that catches up mid-session is picked up without a restart, but a genuinely absent column is never re-probed every request). When the columns are missing, the insert or select simply OMITS them rather than naming a column that doesn't exist — the submission row is still written either way."
+      text: "These two columns are NULLABLE and carry no foreign key — a deleted or merged user must never block a push from being recorded, and a database that hasn't reached this migration yet must never fail an insert over it. Every writer goes through `requesterInsertFields(table, by, via)` / `requesterSelectColumns(table)` (`services/erp-requester-columns.ts`; extensions keep a local copy of these helpers, since they can't import `api/src`), which probe `db.schema.hasColumn(table, \"requested_by\")` once per TENANT per table (one database when self-hosted): a hit is cached forever, a miss is re-checked after 60 seconds (so a database that catches up mid-session is picked up without a restart, but a genuinely absent column is never re-probed every request). One tenant being migrated never makes another, un-migrated tenant name the columns. Still migrate every tenant before rolling a new image. When the columns are missing, the insert or select simply OMITS them rather than naming a column that doesn't exist — the submission row is still written either way."
     },
     {
       type: 'p',
@@ -267,7 +276,7 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze`
     },
     {
       type: 'pre',
-      code: 'GET /api/integration-partners/:id/calls/:callId   // scoped to that partner; headers re-masked on read'
+      code: 'GET /api/integration-partners/:id/calls/:callId   // scoped to that partner; headers and bodies masked'
     },
     {
       type: 'warn',
@@ -315,11 +324,15 @@ DELETE /api/integration-signals/subscriptions/:id            // own row only`
     },
     {
       type: 'warn',
-      text: "Admin-only is enforced AGAIN at delivery, not only at subscribe time — a subscriber who is later demoted, suspended or redacted gets NOTHING, silently, rather than an error or a stale notification stream nobody can turn off. `alerted_at` (on the row) and `last_notified_at` (on the subscription) are stamped only after an actual, successful delivery; if every recipient's notification throws or is dropped (muted, quiet hours, etc.), neither is stamped — the NEXT cycle tries again instead of going quiet forever."
+      text: "Admin-only is enforced AGAIN at delivery, not only at subscribe time — a subscriber who is later demoted, suspended or redacted gets NOTHING, silently, rather than an error or a stale notification stream nobody can turn off. `alerted_at` (on the row) and `last_notified_at` (on the subscription) are stamped only after an actual, successful delivery; if every recipient's notification throws or is dropped (muted, suspended, etc.), neither is stamped, and later cycles offer the row again for up to a day after it appeared instead of going quiet forever. Quiet hours only hold back the push notification — the inbox copy still lands, so an alert during quiet hours counts as delivered."
     },
     {
       type: 'p',
       text: '"Happened again" wording is only used for a subscriber who was actually told about the row before — a re-occurrence of a problem nobody was subscribed to yet reads as new to whoever hears about it first, not as a repeat of an alert they never received.'
+    },
+    {
+      type: 'p',
+      text: 'A row that re-occurs within 6 hours of its last alert (`REALERT_HOURS`) stays quiet, so a flapping partner is one notification, not one per cycle. Each line names the record it is about when it has one ("Partner /orders · ORD-1042"), resolved with the same friendly-id lookup the console uses.'
     },
     {
       type: 'p',
@@ -349,7 +362,7 @@ export default {
           rows: rows.map((b) => ({
             key: \`batch:\${b.id}\`,                 // stable — the batch id, never a message
             title: \`Batch \${b.id} — reconciliation is \${b.age_hours}h behind\`,
-            occurrence: \`run:\${b.last_run_id}\`,     // a fresh run id = a genuinely new instance
+            occurrence: \`run:\${b.first_late_run_id}\`, // where THIS lag started — unchanged while it lasts
             since: b.started_at,
             record: { collection: 'payment_batches', id: b.id },
             actions: [{ kind: 'open', label: 'Open batch', payload: { collection: 'payment_batches', id: b.id } }]
