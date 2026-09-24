@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import {
   ImportDefaultCadenceControl,
@@ -94,23 +94,48 @@ function ImportRow({ row }: { row: ImportHealthRow }) {
   )
 }
 
+/** last-run-failed, then stale, then dormant, then everything else — each
+ *  group keeping definition order. Dormant and stale are mutually exclusive
+ *  by construction (a dormant cadence never reads stale). */
+const rank = (r: ImportHealthRow) =>
+  r.last_status === 'error' ? 0 : r.stale ? 1 : r.cadence_source === 'dormant' ? 2 : 3
+const isProblem = (r: ImportHealthRow) =>
+  r.last_status === 'error' || r.stale || r.cadence_source === 'dormant'
+
 function ImportsSection() {
   const { data, isLoading, isError } = useImportHealth()
-  // Problems first — last run failed, then stale — each group in definition order.
-  const rank = (r: ImportHealthRow) => (r.last_status === 'error' ? 0 : r.stale ? 1 : 2)
-  const rows = (data?.rows ?? [])
+  const [showAll, setShowAll] = useState(false)
+  const allRows = (data?.rows ?? [])
     .filter((r) => r.is_active)
     .map((r, i) => ({ r, i }))
     .sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i)
     .map(({ r }) => r)
-  const stale = rows.filter((r) => r.stale).length
-  const excluded = rows.filter((r) => r.cadence_source === 'excluded').length
-  const failing = rows.filter((r) => r.last_status === 'error').length
+  const problemRows = allRows.filter(isProblem)
+  const rows = showAll ? allRows : problemRows
+  const stale = allRows.filter((r) => r.stale).length
+  const dormant = allRows.filter((r) => r.cadence_source === 'dormant').length
+  const excluded = allRows.filter((r) => r.cadence_source === 'excluded').length
+  const failing = allRows.filter((r) => r.last_status === 'error').length
 
-  const summary: string[] = [`${rows.length} active import${rows.length === 1 ? '' : 's'}`]
+  const summary: string[] = [`${allRows.length} active import${allRows.length === 1 ? '' : 's'}`]
   if (stale) summary.push(`${stale} stale`)
   if (failing) summary.push(`${failing} last run failed`)
+  if (dormant) summary.push(`${dormant} dormant`)
   if (excluded) summary.push(`${excluded} not monitored`)
+
+  const toggle = allRows.length > 0 && (
+    <button
+      type='button'
+      data-ic-imports-all
+      onClick={() => setShowAll((v) => !v)}
+      // Brand cyan text is too low-contrast on its own against either
+      // theme's card surface — pair it with dark ink in light mode the way
+      // the console's own active-tab label does, cyan only in dark mode.
+      className='text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+    >
+      {showAll ? 'Show only problems' : `Show all ${allRows.length} imports`}
+    </button>
+  )
 
   return (
     <section className='space-y-3' data-ic-imports>
@@ -133,7 +158,7 @@ function ImportsSection() {
         </div>
       ) : isError ? (
         <p className={cn('text-[12.5px]', TONE_TEXT.negative)}>Couldn't load import health.</p>
-      ) : rows.length === 0 ? (
+      ) : allRows.length === 0 ? (
         <div className='rounded-lg border border-border bg-card px-5 py-6'>
           <p className='text-[14px] font-semibold text-foreground'>No active imports</p>
           <p className='mt-1 max-w-[70ch] text-[12.5px] text-muted-foreground'>
@@ -141,38 +166,49 @@ function ImportsSection() {
             their last run, last success and how often each one is expected to arrive.
           </p>
         </div>
-      ) : (
-        <div className='overflow-x-auto rounded-lg border border-border bg-card'>
-          <table className='w-full min-w-[720px] border-collapse text-left'>
-            <caption className='caption-top px-4 pb-2 pt-3 text-left text-[12px] text-muted-foreground'>
-              {summary.join(' · ')}
-            </caption>
-            <thead>
-              <tr className='text-[11.5px] text-muted-foreground'>
-                <th scope='col' className='py-2 pl-4 pr-3 font-medium'>
-                  Import
-                </th>
-                <th scope='col' className='px-3 py-2 font-medium'>
-                  Last run
-                </th>
-                <th scope='col' className='px-3 py-2 font-medium'>
-                  Last success
-                </th>
-                <th scope='col' className='px-3 py-2 text-right font-medium'>
-                  Failures, 7 days
-                </th>
-                <th scope='col' className='py-2 pl-3 pr-4 font-medium'>
-                  Stale after
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <ImportRow key={r.key} row={r} />
-              ))}
-            </tbody>
-          </table>
+      ) : !showAll && problemRows.length === 0 ? (
+        <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-5 py-4'>
+          <p className='text-[13px] text-foreground'>
+            All {allRows.length} import{allRows.length === 1 ? '' : 's'} are running on time.
+          </p>
+          {toggle}
         </div>
+      ) : (
+        <>
+          <div className='overflow-x-auto rounded-lg border border-border bg-card'>
+            <table className='w-full min-w-[720px] border-collapse text-left'>
+              <caption className='caption-top px-4 pb-2 pt-3 text-left text-[12px] text-muted-foreground'>
+                {summary.join(' · ')}
+                {!showAll && ' · showing problems only'}
+              </caption>
+              <thead>
+                <tr className='text-[11.5px] text-muted-foreground'>
+                  <th scope='col' className='py-2 pl-4 pr-3 font-medium'>
+                    Import
+                  </th>
+                  <th scope='col' className='px-3 py-2 font-medium'>
+                    Last run
+                  </th>
+                  <th scope='col' className='px-3 py-2 font-medium'>
+                    Last success
+                  </th>
+                  <th scope='col' className='px-3 py-2 text-right font-medium'>
+                    Failures, 7 days
+                  </th>
+                  <th scope='col' className='py-2 pl-3 pr-4 font-medium'>
+                    Stale after
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <ImportRow key={r.key} row={r} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className='flex justify-end'>{toggle}</div>
+        </>
       )}
     </section>
   )
@@ -184,15 +220,17 @@ export interface InboundViewProps {
 }
 
 /**
- * Inbound: who is calling in (and exactly what they sent), whether scheduled
- * imports are arriving on time, then anything the host adds.
+ * Inbound: health first — the host's own live queue (e.g. MWF), then whether
+ * scheduled imports are arriving on time — and investigation last, since who
+ * called in and exactly what they sent is what you reach for once something
+ * above already looks wrong, not on every visit.
  */
 export function InboundView({ extra }: InboundViewProps) {
   return (
     <div className='space-y-8' data-ic-inbound>
-      <InboundCallersView />
-      <ImportsSection />
       {extra}
+      <ImportsSection />
+      <InboundCallersView />
     </div>
   )
 }

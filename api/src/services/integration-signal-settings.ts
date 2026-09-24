@@ -53,6 +53,9 @@ export async function resolveThresholds(s: IntegrationSignal): Promise<ResolvedS
 /** Per-import cadence overrides live under this dynamic-key prefix. */
 export const CADENCE_PREFIX = 'cadence_hours:'
 const CADENCE_MAX_HOURS = 2160
+/** An import with no run attempt of any kind in this many days is dormant —
+ *  not watched, not stale — unless `dormant_days` is overridden in settings. */
+const DEFAULT_DORMANT_DAYS = 90
 
 /**
  * Validate a settings PATCH. `null` on a threshold or dynamic key means
@@ -114,17 +117,33 @@ export function splitSettingValues(values: Record<string, string | null>): {
 }
 
 export interface ImportCadence {
-  /** Expected hours between successful runs; 0 when excluded. */
+  /** Expected hours between successful runs; 0 when excluded or dormant. */
   hours: number
-  source: 'default' | 'override' | 'excluded'
+  source: 'default' | 'override' | 'excluded' | 'dormant'
 }
 
-/** How often an import is expected to succeed, from the stale signal's thresholds. */
-export function importCadence(key: string, thresholds: Record<string, number>): ImportCadence {
+/**
+ * How often an import is expected to succeed, from the stale signal's
+ * thresholds. `lastAttempt` is the newest run of ANY status (not just
+ * success) — an import nobody has even tried to run in `dormant_days` has
+ * gone quiet on purpose, not fallen behind, so it stops being watched until
+ * either it runs again or an explicit override is set. An override always
+ * wins: it is a person choosing this import's cadence regardless of history.
+ */
+export function importCadence(
+  key: string,
+  thresholds: Record<string, number>,
+  lastAttempt?: Date | string | null,
+  now: Date = new Date()
+): ImportCadence {
   const override = thresholds[`${CADENCE_PREFIX}${key}`]
   if (override === 0) return { hours: 0, source: 'excluded' }
   if (override != null && Number.isFinite(override) && override > 0)
     return { hours: override, source: 'override' }
+  const dormantDays = thresholds.dormant_days ?? DEFAULT_DORMANT_DAYS
+  if (lastAttempt && now.getTime() - new Date(lastAttempt).getTime() > dormantDays * 86_400_000) {
+    return { hours: 0, source: 'dormant' }
+  }
   return { hours: thresholds.default_hours ?? 48, source: 'default' }
 }
 

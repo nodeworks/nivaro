@@ -208,7 +208,7 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
     const rows = (await db.raw(
       `SELECT d.[key], d.label, d.is_active,
               (SELECT TOP 1 status FROM nivaro_import_queue q WHERE q.definition = d.id ORDER BY q.id DESC) AS last_status,
-              (SELECT MAX(COALESCE(finished_at, started_at)) FROM nivaro_import_queue q WHERE q.definition = d.id) AS last_run_at,
+              (SELECT MAX(COALESCE(finished_at, started_at, created_at)) FROM nivaro_import_queue q WHERE q.definition = d.id) AS last_run_at,
               (SELECT MAX(finished_at) FROM nivaro_import_queue q WHERE q.definition = d.id AND q.status = 'completed') AS last_ok_at,
               (SELECT COUNT(*) FROM nivaro_import_queue q WHERE q.definition = d.id AND q.status = 'error' AND q.created_at >= DATEADD(day, -7, GETUTCDATE())) AS failures7d
          FROM nivaro_import_definitions d ORDER BY d.sort, d.label`
@@ -224,7 +224,9 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
     const now = new Date()
     return {
       data: rows.map((r) => {
-        const cadence = importCadence(r.key, th)
+        // `last_run_at` is any status (never status-filtered) — the last
+        // attempt of ANY kind, which is what decides dormancy, not just success.
+        const cadence = importCadence(r.key, th, r.last_run_at, now)
         const active = !!r.is_active
         return {
           ...r,

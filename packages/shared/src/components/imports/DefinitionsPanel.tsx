@@ -10,7 +10,11 @@ import { Label } from '../ui/label'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
-import { ImportStalenessChip, ImportStalenessControl } from './ImportStalenessControl'
+import {
+  IMPORT_HEALTH_KEY,
+  ImportStalenessChip,
+  ImportStalenessControl
+} from './ImportStalenessControl'
 import { StagingColumnsBuilder, ValidationBuilder } from './SchemaValidationBuilders'
 import { ServiceConfigBuilder } from './ServiceConfigBuilder'
 import { definitionTitle, type ImportDefinition } from './types'
@@ -285,6 +289,10 @@ export function DefinitionsPanel({
     onSuccess: (res) => {
       setError(null)
       void qc.invalidateQueries({ queryKey: ['staged-import-definitions'] })
+      // A just-created (or newly activated/deactivated) definition changes
+      // what the staleness signal watches — refresh it too, so the
+      // definition's own "Staleness" field and its list chip agree at once.
+      void qc.invalidateQueries({ queryKey: IMPORT_HEALTH_KEY })
       const saved = (res as { data?: ImportDefinition })?.data
       if (saved?.id) setSelectedId(saved.id)
     },

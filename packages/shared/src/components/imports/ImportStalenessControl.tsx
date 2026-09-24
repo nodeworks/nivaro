@@ -25,9 +25,9 @@ export interface ImportHealthRow {
   last_run_at: string | null
   last_ok_at: string | null
   failures7d: number
-  /** Expected hours between successes; 0 when not monitored. */
+  /** Expected hours between successes; 0 when not monitored or dormant. */
   cadence_hours: number
-  cadence_source: 'default' | 'override' | 'excluded'
+  cadence_source: 'default' | 'override' | 'excluded' | 'dormant'
   stale: boolean
 }
 
@@ -92,6 +92,18 @@ function hoursProblem(raw: string): string | null {
   return null
 }
 
+/** Days since the import's last run of any kind — what a dormant chip's tip
+ *  names, so it reads as elapsed time, not a repeat of the fixed threshold. */
+function daysSinceLastRun(row: ImportHealthRow): number | null {
+  if (!row.last_run_at) return null
+  return Math.max(0, Math.floor((Date.now() - new Date(row.last_run_at).getTime()) / 86_400_000))
+}
+
+function dormantTip(row: ImportHealthRow): string {
+  const days = daysSinceLastRun(row)
+  return `No run in ${days ?? 'many'} days — not watched. Run it or set a cadence to watch it again.`
+}
+
 /** The editor body — shared by the compact popover and the inline field. */
 function CadenceEditor({
   row,
@@ -104,8 +116,12 @@ function CadenceEditor({
 }) {
   const set = useSetImportCadence()
   const excluded = row.cadence_source === 'excluded'
+  // A dormant row's `cadence_hours` reads 0 too (it isn't watched right now,
+  // same as excluded) — seed the input from the default instead, so opening
+  // the editor never starts on an invalid "0 hours".
+  const noStoredCadence = excluded || row.cadence_source === 'dormant'
   const [monitored, setMonitored] = useState(!excluded)
-  const [hours, setHours] = useState(String(excluded ? defaultHours : row.cadence_hours))
+  const [hours, setHours] = useState(String(noStoredCadence ? defaultHours : row.cadence_hours))
   const inputId = useId()
   const switchId = useId()
   const problem = monitored ? hoursProblem(hours) : null
@@ -210,6 +226,20 @@ function CadenceEditor({
 }
 
 function stateText(row: ImportHealthRow, compact: boolean): ReactNode {
+  if (row.cadence_source === 'dormant') {
+    return compact ? (
+      <span className='text-muted-foreground' data-tip={dormantTip(row)}>
+        Dormant
+      </span>
+    ) : (
+      <span
+        className='rounded-full bg-muted px-2 py-px text-[11.5px] text-muted-foreground'
+        data-tip={dormantTip(row)}
+      >
+        Dormant
+      </span>
+    )
+  }
   if (row.cadence_source === 'excluded') {
     // Table cells sit under a "Stale after" header, where "Never" reads right;
     // the row's own "Not monitored" chip carries the state.
@@ -375,6 +405,15 @@ export function ImportStalenessChip({ importKey }: { importKey: string }) {
   const health = useImportHealth()
   const row = health.data?.rows.find((r) => r.key === importKey)
   if (!row) return null
+  if (row.cadence_source === 'dormant')
+    return (
+      <span
+        className='shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground'
+        data-tip={dormantTip(row)}
+      >
+        Dormant
+      </span>
+    )
   if (row.cadence_source === 'excluded')
     return (
       <span className='shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground'>

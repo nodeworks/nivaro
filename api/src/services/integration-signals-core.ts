@@ -389,7 +389,7 @@ export function registerCoreIntegrationSignals(): void {
     id: 'core:import-stale',
     label: 'Import stale',
     description:
-      'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>", 0 = not monitored).',
+      'A staged import whose newest successful run is older than its expected cadence (default 48 h; per-import override "cadence_hours:<key>", 0 = not monitored). An import with no run attempt at all in a long while is dormant instead — not raised here.',
     tab: 'inbound',
     severity: 'warn',
     thresholds: [
@@ -400,23 +400,38 @@ export function registerCoreIntegrationSignals(): void {
         unit: 'hours',
         min: 1,
         max: 2160
+      },
+      {
+        key: 'dormant_days',
+        label: 'Treat as dormant after',
+        default: 90,
+        unit: 'days',
+        min: 7,
+        max: 3650
       }
     ],
     evaluate: async ({ thresholds }) => {
       const rows = (await db.raw(
-        `SELECT d.[key] AS import_key, d.label, MAX(q.finished_at) AS last_ok
+        `SELECT d.[key] AS import_key, d.label, MAX(q.finished_at) AS last_ok,
+                (SELECT MAX(COALESCE(q2.finished_at, q2.started_at, q2.created_at))
+                   FROM nivaro_import_queue q2 WHERE q2.definition = d.id) AS last_attempt
            FROM nivaro_import_definitions d
            LEFT JOIN nivaro_import_queue q ON q.definition = d.id AND q.status = 'completed'
           WHERE d.is_active = 1
-          GROUP BY d.[key], d.label
+          GROUP BY d.id, d.[key], d.label
           ORDER BY d.[key]`
-      )) as Array<{ import_key: string; label: string; last_ok: Date | null }>
+      )) as Array<{
+        import_key: string
+        label: string
+        last_ok: Date | null
+        last_attempt: Date | null
+      }>
       const out: SignalRow[] = []
       for (const r of rows) {
         // Only imports that have ever run are expected to keep running.
         if (!r.last_ok) continue
-        const cadence = importCadence(r.import_key, thresholds)
-        // Excluded (cadence 0) imports are never stale.
+        const cadence = importCadence(r.import_key, thresholds, r.last_attempt)
+        // Excluded (cadence 0) and dormant imports are never stale.
         if (!isImportStale(r.last_ok, cadence)) continue
         const hours = cadence.hours
         const age = (Date.now() - new Date(r.last_ok).getTime()) / 3600_000

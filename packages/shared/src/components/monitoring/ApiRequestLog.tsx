@@ -517,8 +517,15 @@ function Segment({
           onClick={() => onChange(v)}
           className={cn(
             'px-2 text-[11px] font-medium transition-colors',
+            // The dark host's `.dark .text-white { !important }` companion
+            // rule (admin/efp-new both carry it) forces plain `text-white`
+            // to a fixed near-white regardless of any `dark:text-*` on the
+            // SAME element, so the intended dark-navy ink on the light
+            // dark-mode chip below was silently defeated — the pill read as
+            // near-white text on a near-white background. An arbitrary hex
+            // class name is outside that selector's reach.
             value === v
-              ? 'bg-[#1e293b] text-white dark:bg-[#e2e8f0] dark:text-[#0f172a]'
+              ? 'bg-[#1e293b] text-[#f2f2f2] dark:bg-[#e2e8f0] dark:text-[#0f172a]'
               : 'text-slate-600 hover:bg-muted dark:text-slate-300'
           )}
         >

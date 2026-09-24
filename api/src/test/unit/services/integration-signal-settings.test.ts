@@ -137,15 +137,54 @@ describe('importCadence', () => {
       source: 'excluded'
     })
   })
+  it('has no dormancy opinion with no last-attempt time', () => {
+    expect(importCadence('a', { default_hours: 48 })).toEqual({ hours: 48, source: 'default' })
+  })
+})
+
+describe('importCadence — dormant imports', () => {
+  const now = new Date('2026-09-23T12:00:00Z')
+  const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000)
+  it('an import untouched for the default 90 days is dormant, not stale', () => {
+    expect(importCadence('a', { default_hours: 48 }, daysAgo(120), now)).toEqual({
+      hours: 0,
+      source: 'dormant'
+    })
+    expect(importCadence('a', { default_hours: 48 }, daysAgo(89), now)).toEqual({
+      hours: 48,
+      source: 'default'
+    })
+  })
+  it('an explicit override always wins over dormancy', () => {
+    expect(
+      importCadence('a', { default_hours: 48, 'cadence_hours:a': 6 }, daysAgo(400), now)
+    ).toEqual({ hours: 6, source: 'override' })
+  })
+  it('an exclusion is unaffected by dormancy', () => {
+    expect(
+      importCadence('a', { default_hours: 48, 'cadence_hours:a': 0 }, daysAgo(400), now)
+    ).toEqual({ hours: 0, source: 'excluded' })
+  })
+  it('honours a custom dormant_days threshold', () => {
+    expect(importCadence('a', { default_hours: 48, dormant_days: 10 }, daysAgo(15), now)).toEqual({
+      hours: 0,
+      source: 'dormant'
+    })
+    expect(importCadence('a', { default_hours: 48, dormant_days: 10 }, daysAgo(5), now)).toEqual({
+      hours: 48,
+      source: 'default'
+    })
+  })
 })
 
 describe('isImportStale', () => {
   const now = new Date('2026-09-23T12:00:00Z')
   const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600_000)
-  it('is stale past the cadence, never when excluded or never run', () => {
+  it('is stale past the cadence, never when excluded, dormant or never run', () => {
     expect(isImportStale(hoursAgo(50), { hours: 48, source: 'default' }, now)).toBe(true)
     expect(isImportStale(hoursAgo(10), { hours: 48, source: 'default' }, now)).toBe(false)
     expect(isImportStale(hoursAgo(5000), { hours: 0, source: 'excluded' }, now)).toBe(false)
+    expect(isImportStale(hoursAgo(5000), { hours: 0, source: 'dormant' }, now)).toBe(false)
     expect(isImportStale(null, { hours: 48, source: 'default' }, now)).toBe(false)
   })
 })
