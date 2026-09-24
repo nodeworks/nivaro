@@ -225,7 +225,8 @@ type SavedViewColumn =
       key: string
       label?: string
       format?: ColumnFormatConfig
-      pin?: 'left' | 'right'
+      /** 'none' = explicitly unpinned (overrides the first-column default). */
+      pin?: 'left' | 'right' | 'none'
       tint?: TintRule[]
       width?: number
       /** Footer aggregate — server-computed SUM over the whole filtered set. */
@@ -4882,13 +4883,19 @@ export function CollectionBrowserView({
       const labels: Record<string, string> = {}
       const formats: Record<string, ColumnFormatConfig> = {}
       const pins: Record<string, 'left' | 'right'> = {}
+      // Any pin entry — 'none' included — means the view states its pins
+      // exactly; a view with none at all predates pins and keeps the default.
+      let pinsStated = false
       const tints: Record<string, TintRule[]> = {}
       const widths: Record<string, number> = {}
       const aggs: Record<string, 'sum'> = {}
       for (const c of v.columns) {
         if (typeof c !== 'string' && c.label) labels[c.key] = c.label
         if (typeof c !== 'string' && c.format) formats[c.key] = c.format
-        if (typeof c !== 'string' && c.pin) pins[c.key] = c.pin
+        if (typeof c !== 'string' && c.pin) {
+          pinsStated = true
+          if (c.pin !== 'none') pins[c.key] = c.pin
+        }
         if (typeof c !== 'string' && c.tint?.length) tints[c.key] = c.tint
         if (typeof c !== 'string' && c.width) widths[c.key] = c.width
         if (typeof c !== 'string' && c.agg) aggs[c.key] = c.agg
@@ -4898,7 +4905,7 @@ export function CollectionBrowserView({
       setColumnFormats(formats)
       setColumnTints(tints)
       setColumnWidths(widths)
-      setColumnPins(Object.keys(pins).length ? pins : null)
+      setColumnPins(pinsStated ? pins : null)
     } else {
       setColumnPins(null)
     }
@@ -4926,10 +4933,13 @@ export function CollectionBrowserView({
     filters,
     sort,
     columns: [
-      ...effectiveColumns.map((k) => {
+      ...effectiveColumns.map((k, i) => {
         const label = columnLabels[k]
         const format = columnFormats[k]
-        const pin = effectivePins[k]
+        // The first column is pinned left by default when a view states no
+        // pins, so unpinning it has to be written down or it comes back.
+        const pin: 'left' | 'right' | 'none' | undefined =
+          effectivePins[k] ?? (i === 0 && columnPins !== null ? 'none' : undefined)
         const tint = columnTints[k]
         const width = columnWidths[k]
         const agg = columnAggs[k]
