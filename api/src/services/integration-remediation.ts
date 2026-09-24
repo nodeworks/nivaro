@@ -25,6 +25,7 @@
  */
 import { db } from '../db/index.js'
 import { withChainStep } from './chain.js'
+import { chainFields } from './chain-columns.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
 import {
   allObligationKinds,
@@ -311,6 +312,7 @@ async function refireFromPrior(
       change_signature: prior.change_signature,
       obligation_id: obligationId,
       ...requesterFields,
+      ...(await chainFields('nivaro_erp_submissions')),
       created_at: now,
       updated_at: now
     })

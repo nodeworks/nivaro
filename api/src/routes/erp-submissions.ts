@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { withChainStep } from '../services/chain.js'
+import { chainFields } from '../services/chain-columns.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
@@ -229,6 +230,7 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         last_error: outcome.error,
         payload: JSON.stringify(stored),
         ...requesterFields,
+        ...(await chainFields('nivaro_erp_submissions')),
         created_at: now,
         updated_at: now
       })
