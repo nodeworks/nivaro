@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-24T20:56:57.267Z",
+  "generated_at": "2026-09-24T21:22:08.735Z",
   "releases": [
+    {
+      "version": "0.1.340",
+      "tag": "v0.1.340",
+      "date": "2026-09-24T17:21:58-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "partner status lines are actionable",
+              "hash": "989cfca7"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.339",
       "tag": "v0.1.339",
-      "date": "2026-09-24T16:56:46-04:00",
+      "date": "2026-09-24T16:56:57-04:00",
       "sections": [
         {
           "label": "Other",
