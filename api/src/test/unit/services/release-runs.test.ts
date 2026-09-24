@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import * as rr from '../../../services/release-runs.js'
 import {
   deriveState,
   markerOutcome,
@@ -105,5 +109,87 @@ describe('readLogChunk', () => {
   })
   it('an offset past the end returns from the start (log was recreated)', () => {
     expect(readLogChunk('abc', 10)).toEqual({ chunk: 'abc', next_offset: 3 })
+  })
+})
+
+describe('disk-backed runs', () => {
+  let dir: string
+  let original: typeof rr.runtime
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'release-runs-'))
+    original = { ...rr.runtime }
+    rr.runtime.runsDir = () => dir
+  })
+  afterEach(() => {
+    Object.assign(rr.runtime, original)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('a record with a dead pid and no marker lists as lost, and the outcome is written back once', async () => {
+    writeFileSync(
+      join(dir, 'r9.json'),
+      JSON.stringify({
+        id: 'r9',
+        mode: 'go',
+        args: [],
+        pid: 999999,
+        started_at: '2026-09-24T20:00:00.000Z',
+        started_by: 'u'
+      })
+    )
+    writeFileSync(join(dir, 'r9.log'), 'partial')
+    const runs = await rr.listRuns()
+    expect(runs[0].state).toBe('lost')
+    expect(JSON.parse(readFileSync(join(dir, 'r9.json'), 'utf8')).outcome).toBe('lost')
+  })
+
+  it('cancel on a run that already exited is a no-op that reports the derived outcome', async () => {
+    writeFileSync(
+      join(dir, 'r10.json'),
+      JSON.stringify({
+        id: 'r10',
+        mode: 'go',
+        args: [],
+        pid: 999999,
+        started_at: '2026-09-24T20:00:00.000Z',
+        started_by: 'u'
+      })
+    )
+    writeFileSync(join(dir, 'r10.log'), '### DONE — nivaro 0.1.341\n')
+    const s = await rr.cancelRun('r10')
+    expect(s?.state).toBe('done')
+  })
+
+  it('startRun refuses while current.json names a live pid of ours', async () => {
+    writeFileSync(join(dir, 'current.json'), JSON.stringify({ id: 'live' }))
+    writeFileSync(
+      join(dir, 'live.json'),
+      JSON.stringify({
+        id: 'live',
+        mode: 'go',
+        args: [],
+        pid: process.pid,
+        started_at: new Date().toISOString(),
+        started_by: 'u'
+      })
+    )
+    rr.runtime.isOurProcess = () => true
+    await expect(rr.startRun({ mode: 'go', args: ['--go'], user: 'u' })).rejects.toBeInstanceOf(
+      rr.RunLockedError
+    )
+  })
+
+  it('startRun spawns a detached child and writes the record + current.json', async () => {
+    // A stand-in script: prints a DONE marker and exits.
+    const script = join(dir, 'fake-chain.mjs')
+    writeFileSync(script, "console.log('### DONE — nivaro 9.9.9')\n")
+    rr.runtime.scriptPath = () => script
+    const rec = await rr.startRun({ mode: 'go', args: ['--go', '--events'], user: 'u1' })
+    expect(rec.pid).toBeGreaterThan(0)
+    expect(JSON.parse(readFileSync(join(dir, 'current.json'), 'utf8')).id).toBe(rec.id)
+    await new Promise((r) => setTimeout(r, 800))
+    const read = await rr.readRun(rec.id)
+    expect(read?.run.state).toBe('done')
+    expect(read?.log).toContain('### DONE')
   })
 })
