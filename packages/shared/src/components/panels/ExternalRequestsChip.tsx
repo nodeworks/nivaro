@@ -7,6 +7,7 @@ import { get, post } from '../../lib/commands'
 import { cn, formatRelative } from '../../lib/utils'
 import { type ErpSubmission, SubmissionRow } from '../integrations/console/SubmissionRow'
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
+import { RecordEventPathSheet } from './IntegrationActivitySection'
 
 /**
  * Item-header chip summarizing every external (ERP) request this record has
@@ -26,6 +27,9 @@ export function ExternalRequestsChip({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
+  // The push whose full path is showing. The sheet opens only after the
+  // dialog closes, so two modals never stack.
+  const [pathId, setPathId] = useState<number | null>(null)
   const { data, isLoading } = useQuery({
     queryKey: ['erp-submissions', collection, String(itemId)],
     queryFn: () =>
@@ -161,12 +165,28 @@ export function ExternalRequestsChip({
                   sub={s}
                   onRetry={(id) => retry.mutate(id)}
                   retrying={retry.isPending}
+                  onShowPath={(id) => {
+                    setOpen(false)
+                    setPathId(id)
+                  }}
                 />
               ))}
             </DialogBody>
           </DialogContent>
         </Dialog>
       )}
+      <RecordEventPathSheet
+        target={
+          pathId != null
+            ? {
+                source: 'core:outbound',
+                id: String(pathId),
+                record: { collection, item: String(itemId) }
+              }
+            : null
+        }
+        onClose={() => setPathId(null)}
+      />
     </>
   )
 }

@@ -23,6 +23,7 @@ import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
 import { Textarea } from '../ui/textarea'
+import { RecordEventPathSheet } from './IntegrationActivitySection'
 
 interface Comment {
   id: string
@@ -385,14 +386,36 @@ const NOTE_KIND_LABELS: Record<NoteKind, string> = {
   integration: 'Integration'
 }
 
+/** Note sources named `integrations:<collection>` are the obligation ledger
+ *  (api services/integration-notes.ts), not an integration event source. */
+const OBLIGATION_NOTE_PREFIX = 'integrations:'
+
 /**
  * A note the system recorded rather than a comment someone posted here: the
  * text is the person's, but it lives with the transition, change or addendum
  * that captured it — so it reads as part of the thread while being visibly not
  * a comment, and carries no edit or delete affordance.
  */
-function RecordedNote({ note }: { note: RelatedNote }) {
+function RecordedNote({
+  note,
+  collection,
+  item
+}: {
+  note: RelatedNote
+  /** The record whose thread this is — an integration entry's path is read
+   *  through it, so the server checks the viewer can read the record. */
+  collection: string
+  item: string
+}) {
   const drill = useDrilldown()
+  // The integration path behind an external entry (write → push → reply).
+  // Obligation-ledger entries ("the partner should have been told X") are
+  // not integration events — there is no path to open for them.
+  const [pathOpen, setPathOpen] = useState(false)
+  const hasPath =
+    note.source === 'external' &&
+    !!note.provider &&
+    !note.provider.startsWith(OBLIGATION_NOTE_PREFIX)
   const client = useNivaroClient()
   const queryClient = useQueryClient()
   const [reactOpen, setReactOpen] = useState(false)
@@ -501,6 +524,17 @@ function RecordedNote({ note }: { note: RelatedNote }) {
               error
             </span>
           )}
+          {hasPath && (
+            <button
+              type='button'
+              onClick={() => setPathOpen(true)}
+              data-note-show-path={note.id}
+              className='ml-auto rounded px-1.5 py-px text-[10.5px] font-medium text-sky-700 transition-colors hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-900/20'
+              data-tip='Everything this event set off, step by step'
+            >
+              Show path
+            </button>
+          )}
           {note.source === 'external' && note.replayable && note.provider && (
             <button
               type='button'
@@ -508,7 +542,7 @@ function RecordedNote({ note }: { note: RelatedNote }) {
               onBlur={() => setReplayArmed(false)}
               disabled={replay.isPending}
               data-note-replay={note.id}
-              className={`ml-auto rounded px-1.5 py-px text-[10.5px] font-medium transition-colors ${
+              className={`rounded px-1.5 py-px text-[10.5px] font-medium transition-colors ${
                 replayArmed
                   ? 'bg-sky-600 text-white'
                   : 'text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-900/20'
@@ -566,6 +600,21 @@ function RecordedNote({ note }: { note: RelatedNote }) {
           </div>
         )}
       </div>
+      {hasPath && note.provider && (
+        <RecordEventPathSheet
+          target={
+            pathOpen
+              ? {
+                  source: note.provider,
+                  id: note.id.replace(/^external:/, ''),
+                  record: { collection, item }
+                }
+              : null
+          }
+          event={{ label: note.label }}
+          onClose={() => setPathOpen(false)}
+        />
+      )}
     </div>
   )
 }
@@ -984,7 +1033,11 @@ export function CommentPanel({
                     if (entry.kind === 'related') {
                       return (
                         <div key={entry.note.id} className='nvr-section-enter'>
-                          <RecordedNote note={entry.note} />
+                          <RecordedNote
+                            note={entry.note}
+                            collection={collection}
+                            item={String(item)}
+                          />
                         </div>
                       )
                     }

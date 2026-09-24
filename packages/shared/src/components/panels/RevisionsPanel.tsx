@@ -21,6 +21,7 @@ import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { Skeleton } from '../ui/skeleton'
+import { IntegrationActivitySection } from './IntegrationActivitySection'
 
 export interface O2MFieldInfo {
   field: string
@@ -1373,6 +1374,7 @@ export function RevisionsPanel({
             </p>
           </SheetHeader>
           <RevisionValueSearch collection={collection} item={item} />
+          <IntegrationActivitySection collection={collection} item={String(item)} />
           <RevisionsList
             collection={collection}
             item={item}

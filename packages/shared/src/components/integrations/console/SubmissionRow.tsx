@@ -46,60 +46,77 @@ function recordBadgeLabel(collection: string, label: string): string {
 export function SubmissionRow({
   sub,
   onRetry,
-  retrying
+  retrying,
+  onShowPath
 }: {
   sub: ErpSubmission
   onRetry: (id: number) => void
   retrying: boolean
+  /** Opens the full integration path (write → transition → push → reply)
+   *  behind this submission. Absent = no "Show path" action. */
+  onShowPath?: (id: number) => void
 }) {
   const [open, setOpen] = useState(false)
   const payload = pretty(sub.payload)
   const response = pretty(sub.response)
   return (
     <div className='rounded-lg border border-slate-200 dark:border-border'>
-      <button
-        type='button'
-        onClick={() => setOpen(!open)}
-        className='flex w-full items-center gap-3 px-3 py-2 text-left'
-      >
-        <StatusPill status={sub.status} />
-        {sub.external_api_name && (
-          <span className='shrink-0 text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>
-            {sub.external_api_name}
-          </span>
-        )}
-        <span className='min-w-0 flex-1 truncate font-mono text-[11.5px] text-slate-500 dark:text-slate-400'>
-          {sub.endpoint_path ?? '—'}
-        </span>
-        {sub.record_label && (
-          <span
-            className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
-            data-tip={`${sub.collection}/${sub.item}`}
-          >
-            {recordBadgeLabel(sub.collection, sub.record_label)}
-          </span>
-        )}
-        {sub.external_ref && (
-          <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
-            {sub.external_ref}
-          </span>
-        )}
-        <span
-          className='shrink-0 text-[11px] text-slate-400'
-          title={new Date(sub.updated_at).toLocaleString()}
+      <div className='flex items-center'>
+        <button
+          type='button'
+          onClick={() => setOpen(!open)}
+          className='flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left'
         >
-          {formatRelative(sub.updated_at)}
-        </span>
-        {sub.attempts > 1 && (
-          <span className='shrink-0 text-[10.5px] text-slate-400'>×{sub.attempts}</span>
-        )}
-        <ChevronDown
-          className={cn(
-            'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform',
-            open && 'rotate-180'
+          <StatusPill status={sub.status} />
+          {sub.external_api_name && (
+            <span className='shrink-0 text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>
+              {sub.external_api_name}
+            </span>
           )}
-        />
-      </button>
+          <span className='min-w-0 flex-1 truncate font-mono text-[11.5px] text-slate-500 dark:text-slate-400'>
+            {sub.endpoint_path ?? '—'}
+          </span>
+          {sub.record_label && (
+            <span
+              className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+              data-tip={`${sub.collection}/${sub.item}`}
+            >
+              {recordBadgeLabel(sub.collection, sub.record_label)}
+            </span>
+          )}
+          {sub.external_ref && (
+            <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
+              {sub.external_ref}
+            </span>
+          )}
+          <span
+            className='shrink-0 text-[11px] text-slate-400'
+            title={new Date(sub.updated_at).toLocaleString()}
+          >
+            {formatRelative(sub.updated_at)}
+          </span>
+          {sub.attempts > 1 && (
+            <span className='shrink-0 text-[10.5px] text-slate-400'>×{sub.attempts}</span>
+          )}
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform',
+              open && 'rotate-180'
+            )}
+          />
+        </button>
+        {onShowPath && (
+          <button
+            type='button'
+            onClick={() => onShowPath(sub.id)}
+            className='mr-2 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+            data-submission-show-path={sub.id}
+            data-tip='Everything that led to this push and what came back'
+          >
+            Show path
+          </button>
+        )}
+      </div>
       {open && (
         <div className='space-y-2 border-t border-slate-100 px-3 py-2.5 dark:border-border'>
           <div className='grid grid-cols-2 gap-x-4 gap-y-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
