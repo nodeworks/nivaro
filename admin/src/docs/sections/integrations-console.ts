@@ -332,7 +332,7 @@ DELETE /api/integration-signals/subscriptions/:id            // own row only`
     },
     {
       type: 'p',
-      text: 'A row that re-occurs within 6 hours of its last alert (`REALERT_HOURS`) stays quiet, so a flapping partner is one notification, not one per cycle. Each line names the record it is about when it has one ("Partner /orders · ORD-1042"), resolved with the same friendly-id lookup the console uses.'
+      text: 'A row that re-occurs within 6 hours of its last alert (`REALERT_HOURS`) stays quiet, so a problem that keeps failing is one notification, not one per cycle. A problem that recovers and then fails again is a new problem and alerts again. Each line names the record it is about when it has one ("Partner /orders · ORD-1042"), resolved with the same friendly-id lookup the console uses.'
     },
     {
       type: 'p',

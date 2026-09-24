@@ -127,10 +127,26 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
           .catch(() => {})
         // External API call logs (full request/response bodies, up to 50 KB
         // each) — 30 days, same as the mail log, so they never grow unbounded.
-        await db('nivaro_external_api_logs')
-          .where('created_at', '<', new Date(Date.now() - 30 * 86_400_000))
-          .delete()
-          .catch(() => {})
+        // Chunked: a first pass after deploy can face months of rows, and one
+        // unbounded DELETE would time out and roll back on every pass.
+        const callCutoff = new Date(Date.now() - 30 * 86_400_000)
+        for (let i = 0; i < 20; i++) {
+          const res = (await db
+            .raw('DELETE TOP (500) FROM nivaro_external_api_logs WHERE created_at < ?', [
+              callCutoff
+            ])
+            .catch(() => null)) as unknown
+          // Same affected-count read as pruneObligations (knex/mssql raw shape).
+          const affected =
+            Number(
+              typeof res === 'number'
+                ? res
+                : ((res as { rowCount?: number } | null)?.rowCount ??
+                    (res as number[] | null)?.[0] ??
+                    0)
+            ) || 0
+          if (res == null || affected < 500) break
+        }
       }
     } catch (err) {
       app.log.warn({ err }, 'Failed to flush API logs')

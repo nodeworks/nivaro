@@ -6,7 +6,7 @@ import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
-import { sameLoggedBody } from '../services/secret-mask.js'
+import { maskBodySecrets, sameLoggedBody } from '../services/secret-mask.js'
 import { buildSubmissionDetail, gatherSubmissionFacts } from '../services/submission-detail.js'
 import {
   detectBodyAcceptance,
@@ -521,7 +521,10 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
             at: log.created_at,
             endpoint_path: serialize(row).endpoint_path,
             payload: sentBody,
-            response: parseJson(log.response_body) ?? log.response_body ?? null
+            response: (() => {
+              const masked = maskBodySecrets(log.response_body)
+              return parseJson(masked) ?? masked ?? null
+            })()
           })
           taken.add(next)
         }
