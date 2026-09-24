@@ -93,7 +93,7 @@ function shouldSkip(path: string, method: string): boolean {
  * Buffered API request logger. Captures method/path/status/latency for every
  * /api/* response into an in-memory buffer, flushed to nivaro_api_logs every
  * 5 seconds or once 50 rows accumulate. On ~1% of flushes, rows older than
- * 14 days are pruned.
+ * 14 days are pruned (mail + external API call logs: 30 days).
  */
 export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   let buffer: ApiLogRow[] = []
@@ -122,6 +122,12 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
           .catch(() => {})
         // Mail log rides the same pass — 30 days answers "did it send".
         await db('nivaro_mail_log')
+          .where('created_at', '<', new Date(Date.now() - 30 * 86_400_000))
+          .delete()
+          .catch(() => {})
+        // External API call logs (full request/response bodies, up to 50 KB
+        // each) — 30 days, same as the mail log, so they never grow unbounded.
+        await db('nivaro_external_api_logs')
           .where('created_at', '<', new Date(Date.now() - 30 * 86_400_000))
           .delete()
           .catch(() => {})
