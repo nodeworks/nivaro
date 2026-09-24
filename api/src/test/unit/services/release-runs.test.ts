@@ -187,9 +187,71 @@ describe('disk-backed runs', () => {
     const rec = await rr.startRun({ mode: 'go', args: ['--go', '--events'], user: 'u1' })
     expect(rec.pid).toBeGreaterThan(0)
     expect(JSON.parse(readFileSync(join(dir, 'current.json'), 'utf8')).id).toBe(rec.id)
-    await new Promise((r) => setTimeout(r, 800))
-    const read = await rr.readRun(rec.id)
+    let read = await rr.readRun(rec.id)
+    for (let i = 0; i < 100 && read?.run.state !== 'done'; i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      read = await rr.readRun(rec.id)
+    }
     expect(read?.run.state).toBe('done')
     expect(read?.log).toContain('### DONE')
+  })
+
+  it('an id that escapes the runs folder is refused before any path is built', async () => {
+    // Runs live one level down so '../package' would land on a sentinel we own.
+    const runs = join(dir, 'runs')
+    rr.runtime.runsDir = () => runs
+    const sentinel = join(dir, 'package.json')
+    const body = JSON.stringify({
+      id: '../package',
+      mode: 'go',
+      args: [],
+      pid: 999999,
+      started_at: '2026-09-24T20:00:00.000Z',
+      started_by: 'u'
+    })
+    writeFileSync(sentinel, body)
+    const repoPkg = join(rr.repoRoot(), 'package.json')
+    const repoBefore = readFileSync(repoPkg, 'utf8')
+    expect(await rr.cancelRun('../package')).toBeNull()
+    expect(await rr.readRun('../package')).toBeNull()
+    expect(readFileSync(sentinel, 'utf8')).toBe(body)
+    expect(readFileSync(repoPkg, 'utf8')).toBe(repoBefore)
+  })
+
+  it('two starts in the same tick: exactly one spawns, the other is locked out', async () => {
+    const script = join(dir, 'fake-chain.mjs')
+    writeFileSync(script, "console.log('### DONE — nivaro 9.9.9')\n")
+    rr.runtime.scriptPath = () => script
+    const results = await Promise.allSettled([
+      rr.startRun({ mode: 'go', args: ['--go'], user: 'u1' }),
+      rr.startRun({ mode: 'go', args: ['--go'], user: 'u2' })
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    const rejected = results.filter((r) => r.status === 'rejected')
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(rr.RunLockedError)
+  })
+
+  it('a cancelled run whose process is still alive keeps the lock', async () => {
+    writeFileSync(join(dir, 'current.json'), JSON.stringify({ id: 'exiting' }))
+    writeFileSync(
+      join(dir, 'exiting.json'),
+      JSON.stringify({
+        id: 'exiting',
+        mode: 'go',
+        args: [],
+        pid: process.pid,
+        started_at: new Date().toISOString(),
+        started_by: 'u',
+        outcome: 'cancelled'
+      })
+    )
+    rr.runtime.isOurProcess = () => true
+    const cur = await rr.currentRun()
+    expect(cur?.id).toBe('exiting')
+    expect(cur?.state).toBe('cancelled')
+    await expect(rr.startRun({ mode: 'go', args: ['--go'], user: 'u' })).rejects.toBeInstanceOf(
+      rr.RunLockedError
+    )
   })
 })

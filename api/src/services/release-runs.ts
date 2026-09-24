@@ -8,7 +8,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, rmSync } from 'node:fs'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -170,9 +170,14 @@ export function isAvailable(nodeEnv: string): boolean {
   )
 }
 
+/** `current` is null when another start holds the lock but has not written its record yet. */
 export class RunLockedError extends Error {
-  constructor(public current: RunSummary) {
-    super(`a release run is already in progress (${current.id})`)
+  constructor(public current: RunSummary | null) {
+    super(
+      current
+        ? `a release run is already in progress (${current.id})`
+        : 'another release run is starting'
+    )
   }
 }
 
@@ -185,13 +190,22 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-const recPath = (id: string) => join(runtime.runsDir(), `${id}.json`)
-const logPath = (id: string) => join(runtime.runsDir(), `${id}.log`)
+/** A run id becomes a file name: nothing that could leave the runs folder. */
+const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/
+const validId = (id: unknown): id is string => typeof id === 'string' && RUN_ID.test(id)
+
+const recPath = (id: string): string | null =>
+  validId(id) ? join(runtime.runsDir(), `${id}.json`) : null
+const logPath = (id: string): string | null =>
+  validId(id) ? join(runtime.runsDir(), `${id}.log`) : null
 const currentPath = () => join(runtime.runsDir(), 'current.json')
+const lockPath = () => join(runtime.runsDir(), 'current.lock')
 
 async function readRecord(id: string): Promise<RunRecord | null> {
+  const path = recPath(id)
+  if (!path) return null
   try {
-    return JSON.parse(await readFile(recPath(id), 'utf8')) as RunRecord
+    return JSON.parse(await readFile(path, 'utf8')) as RunRecord
   } catch {
     return null
   }
@@ -203,8 +217,10 @@ async function readRecord(id: string): Promise<RunRecord | null> {
  * multi-byte characters (—), so fs.read positions or stat.size would split them.
  */
 async function readLog(id: string): Promise<string> {
+  const path = logPath(id)
+  if (!path) return ''
   try {
-    return await readFile(logPath(id), 'utf8')
+    return await readFile(path, 'utf8')
   } catch {
     return ''
   }
@@ -215,14 +231,15 @@ async function summarize(rec: RunRecord): Promise<{ run: RunSummary; log: string
   const alive = pidAlive(rec.pid) && runtime.isOurProcess(rec.pid, rec.started_at)
   const run = deriveState(rec, alive, log)
   // Write the derived outcome back once so history reads stay cheap.
-  if (!alive && !rec.outcome && run.outcome) {
+  const path = recPath(rec.id)
+  if (path && !alive && !rec.outcome && run.outcome) {
     const finished: RunRecord = {
       ...rec,
       outcome: run.outcome,
       finished_at: new Date().toISOString(),
       ...(run.failed_stage ? { failed_stage: run.failed_stage } : {})
     }
-    await writeFile(recPath(rec.id), JSON.stringify(finished, null, 2)).catch(() => {})
+    await writeFile(path, JSON.stringify(finished, null, 2)).catch(() => {})
   }
   return { run, log }
 }
@@ -249,15 +266,20 @@ export async function listRuns(limit = 10): Promise<RunSummary[]> {
   return Promise.all(recs.slice(0, limit).map(async (r) => (await summarize(r)).run))
 }
 
+/**
+ * The run that holds the lock. The lock follows LIVENESS, not derived state:
+ * a cancelled run whose process is still exiting reads `state: 'cancelled'`
+ * and still blocks a new start.
+ */
 export async function currentRun(): Promise<RunSummary | null> {
   try {
-    // current.json is written by startRun, so its id is trusted: read the
-    // record directly rather than through readRun's request-id check.
+    // current.json is written by startRun: read the record directly rather
+    // than through readRun's uuid check (readRecord still checks the id).
     const { id } = JSON.parse(await readFile(currentPath(), 'utf8')) as { id: string }
     const rec = await readRecord(id)
     if (!rec) return null
-    const { run } = await summarize(rec)
-    return run.state === 'running' ? run : null
+    if (!(pidAlive(rec.pid) && runtime.isOurProcess(rec.pid, rec.started_at))) return null
+    return (await summarize(rec)).run
   } catch {
     return null
   }
@@ -269,29 +291,52 @@ export async function startRun(opts: {
   user: string
 }): Promise<RunRecord> {
   mkdirSync(runtime.runsDir(), { recursive: true })
-  const live = await currentRun()
-  if (live) throw new RunLockedError(live)
-  const id = randomUUID()
-  const fd = openSync(logPath(id), 'a')
-  const child = spawn(process.execPath, [runtime.scriptPath(), ...opts.args], {
-    cwd: repoRoot(),
-    detached: true,
-    stdio: ['ignore', fd, fd],
-    env: { ...process.env, FORCE_COLOR: '0' }
-  })
-  closeSync(fd)
-  child.unref()
-  const rec: RunRecord = {
-    id,
-    mode: opts.mode,
-    args: opts.args,
-    pid: child.pid ?? -1,
-    started_at: new Date().toISOString(),
-    started_by: opts.user
+  // Claim the lock atomically before anything awaits: two starts in the same
+  // tick (a double-click) must not both spawn a chain.
+  let lockFd: number
+  try {
+    lockFd = openSync(lockPath(), 'wx')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST')
+      throw new RunLockedError(await currentRun())
+    throw err
   }
-  await writeFile(recPath(id), JSON.stringify(rec, null, 2))
-  await writeFile(currentPath(), JSON.stringify({ id }))
-  return rec
+  try {
+    const live = await currentRun()
+    if (live) throw new RunLockedError(live)
+    const id = randomUUID()
+    const log = logPath(id) as string
+    const fd = openSync(log, 'a')
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(process.execPath, [runtime.scriptPath(), ...opts.args], {
+        cwd: repoRoot(),
+        detached: true,
+        stdio: ['ignore', fd, fd],
+        env: { ...process.env, FORCE_COLOR: '0' }
+      })
+    } finally {
+      closeSync(fd)
+    }
+    // An async spawn failure (EAGAIN, EMFILE) must not crash the API.
+    child.on('error', () => {})
+    if (child.pid === undefined) throw new Error('the release chain could not be started')
+    child.unref()
+    const rec: RunRecord = {
+      id,
+      mode: opts.mode,
+      args: opts.args,
+      pid: child.pid,
+      started_at: new Date().toISOString(),
+      started_by: opts.user
+    }
+    await writeFile(recPath(id) as string, JSON.stringify(rec, null, 2))
+    await writeFile(currentPath(), JSON.stringify({ id }))
+    return rec
+  } finally {
+    closeSync(lockFd)
+    rmSync(lockPath(), { force: true })
+  }
 }
 
 export async function runPlan(
@@ -311,6 +356,10 @@ export async function runPlan(
       out += String(d)
     })
     const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      resolvePlan({ plan: null, log: `${out}${err.message}\n`, ok: false })
+    })
     child.on('close', (code) => {
       clearTimeout(timer)
       resolvePlan({ plan: parseEvents(out).plan, log: out, ok: code === 0 })
@@ -319,6 +368,8 @@ export async function runPlan(
 }
 
 export async function cancelRun(id: string): Promise<RunSummary | null> {
+  const path = recPath(id)
+  if (!path) return null
   const rec = await readRecord(id)
   if (!rec) return null
   const { run } = await summarize(rec)
@@ -329,6 +380,6 @@ export async function cancelRun(id: string): Promise<RunSummary | null> {
     /* already gone */
   }
   const updated: RunRecord = { ...rec, outcome: 'cancelled', finished_at: new Date().toISOString() }
-  await writeFile(recPath(id), JSON.stringify(updated, null, 2))
+  await writeFile(path, JSON.stringify(updated, null, 2))
   return { ...updated, state: 'cancelled' }
 }
