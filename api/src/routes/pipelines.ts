@@ -6,6 +6,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
+import { withChainStep } from '../services/chain.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { originFields } from '../services/note-authorship.js'
@@ -2243,8 +2244,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       }
       const { updatedInstance, newStateObj, previousState } = applied
 
-      // Chained automation: fire any auto transitions now valid from the new state
-      await runAutoTransitions(collection, item)
+      // Chained automation: fire any auto transitions now valid from the new state.
+      // They hang under this transition's history row in the event chain.
+      await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
+        runAutoTransitions(collection, item)
+      )
 
       const prevStateObj = previousState
         ? await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()

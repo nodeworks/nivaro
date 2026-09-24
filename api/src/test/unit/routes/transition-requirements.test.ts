@@ -27,6 +27,16 @@ import { db } from '../../../db/index.js'
 import { pipelinesRoutes } from '../../../routes/pipelines.js'
 import { getCollection } from '../../../services/collections.js'
 
+// applyTransition reads the history row id back (`.returning('id')`, chain
+// step history:<id>) — the insert mock has to be thenable AND expose it.
+function withReturning(fn: (row: unknown) => unknown) {
+  return vi.fn((row: unknown) =>
+    Object.assign(Promise.resolve(fn(row)), {
+      returning: vi.fn().mockResolvedValue([{ id: 1 }])
+    })
+  )
+}
+
 function buildApp() {
   const app = Fastify({ logger: false })
   app.register(pipelinesRoutes, { prefix: '/pipelines' })
@@ -185,7 +195,7 @@ function makeExecuteDbMock(fx: DbFixture) {
       case 'nivaro_workflow_states':
         return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(fx.targetState)) })) }
       case 'nivaro_workflow_history':
-        return { insert: vi.fn(() => Promise.resolve([1])) }
+        return { insert: withReturning(() => [1]) }
       case 'nivaro_workflow_bindings':
         return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(undefined)) })) }
       case 'nivaro_fields':

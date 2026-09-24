@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
+import { startChain } from '../../../services/chain.js'
+import { resetChainColumnProbe } from '../../../services/chain-columns.js'
 import { resetRequesterColumnProbe } from '../../../services/erp-requester-columns.js'
 import {
   applySendOutcome,
@@ -26,6 +28,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   resetRequesterColumnProbe()
+  resetChainColumnProbe()
 })
 
 describe('outcomeForSubmission', () => {
@@ -240,6 +243,72 @@ describe('applySendOutcome — who started each attempt (migration 350)', () => 
     // The submission row itself keeps the ORIGINAL send's requester.
     const patch = sub.update.mock.calls[0][0] as Record<string, unknown>
     expect(patch).not.toHaveProperty('requested_by')
+  })
+})
+
+describe('applySendOutcome — attempts hang under their submission in the chain', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('stamps both the captured and the fresh attempt with submission:<id>', async () => {
+    const sub = {
+      where: vi.fn(),
+      update: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockResolvedValue({
+        payload: '{"endpoint_path":"/x","body":{}}',
+        response: null,
+        status: 'failed',
+        last_error: 'HTTP 500',
+        updated_at: new Date('2026-09-20T10:00:00Z'),
+        created_at: new Date('2026-09-20T10:00:00Z')
+      })
+    }
+    sub.where.mockReturnValue(sub)
+    const att = {
+      where: vi.fn(),
+      first: vi.fn().mockResolvedValue(undefined),
+      insert: vi.fn().mockResolvedValue([1])
+    }
+    att.where.mockReturnValue(att)
+    mockedDb().mockImplementation(((table: string) =>
+      table === 'nivaro_erp_submission_attempts' ? att : sub) as never)
+
+    await startChain(
+      'cron:erp-retry',
+      () =>
+        applySendOutcome({
+          submissionId: 9,
+          outcome: { status: 'failed', external_ref: null, error: 'HTTP 500', response: null },
+          priorExternalRef: null,
+          priorAttempts: 1
+        }),
+      'c-retry'
+    )
+
+    const rows = att.insert.mock.calls.map((c) => c[0] as Record<string, unknown>)
+    expect(rows).toHaveLength(2)
+    for (const r of rows) {
+      expect(r).toMatchObject({ chain_id: 'c-retry', chain_parent: 'submission:9' })
+    }
+  })
+
+  it('writes no chain columns outside a chain', async () => {
+    const sub = {
+      where: vi.fn(),
+      update: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockResolvedValue(undefined)
+    }
+    sub.where.mockReturnValue(sub)
+    const att = { insert: vi.fn().mockResolvedValue([1]) }
+    mockedDb().mockImplementation(((table: string) =>
+      table === 'nivaro_erp_submission_attempts' ? att : sub) as never)
+    await applySendOutcome({
+      submissionId: 9,
+      outcome: { status: 'accepted', external_ref: null, error: null, response: null },
+      priorExternalRef: null,
+      priorAttempts: 0
+    })
+    const row = att.insert.mock.calls[0][0] as Record<string, unknown>
+    expect(row).not.toHaveProperty('chain_id')
   })
 })
 

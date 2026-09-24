@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
+import { withChainStep } from './chain.js'
+import { chainFields } from './chain-columns.js'
 import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
@@ -1176,7 +1178,8 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
             duration_ms: 0,
             input: JSON.stringify(ctx.payload),
             error_message: 'skipped: previous run still going',
-            user: ctx.userId ?? null
+            user: ctx.userId ?? null,
+            ...(await chainFields('nivaro_flow_runs'))
           })
         } catch (runErr) {
           ctx.log.warn({ err: runErr, flowId: ctx.flowId }, 'Failed to record skipped flow run')
@@ -1225,7 +1228,8 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
       status: 'running',
       started_at: new Date(),
       input: JSON.stringify(ctx.payload),
-      user: ctx.userId ?? null
+      user: ctx.userId ?? null,
+      ...(await chainFields('nivaro_flow_runs'))
     })
   } catch (err) {
     ctx.log.warn({ err, flowId: ctx.flowId }, 'Failed to record flow run start')
@@ -1303,40 +1307,68 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
   })()
 
   try {
-    const opMap = new Map(operations.map((op) => [op.id, op]))
-    const referencedIds = new Set(
-      operations.flatMap((op) => [op.resolve, op.reject]).filter((id): id is string => id != null)
-    )
-    const rootOps = operations.filter((op) => !referencedIds.has(op.id))
+    // Every op this run executes — and whatever those ops write — hangs
+    // under the run in the integration event chain. The run-row updates
+    // below stay outside: they belong to the run itself, not its ops.
+    await withChainStep(`flow_run:${runId}`, async () => {
+      const opMap = new Map(operations.map((op) => [op.id, op]))
+      const referencedIds = new Set(
+        operations.flatMap((op) => [op.resolve, op.reject]).filter((id): id is string => id != null)
+      )
+      const rootOps = operations.filter((op) => !referencedIds.has(op.id))
 
-    async function runChain(startId: string, chainData: FlowData): Promise<FlowData> {
-      let currentId: string | null = startId
-      let d = chainData
-      const visited = new Set<string>()
-      while (currentId) {
-        if (visited.has(currentId)) {
-          ctx.log.warn({ flowId: ctx.flowId, opId: currentId }, 'Cycle detected in flow, halting')
-          break
+      async function runChain(startId: string, chainData: FlowData): Promise<FlowData> {
+        let currentId: string | null = startId
+        let d = chainData
+        const visited = new Set<string>()
+        while (currentId) {
+          if (visited.has(currentId)) {
+            ctx.log.warn({ flowId: ctx.flowId, opId: currentId }, 'Cycle detected in flow, halting')
+            break
+          }
+          visited.add(currentId)
+          const op = opMap.get(currentId)
+          if (!op) break
+          const opts = parseOpts(op)
+          if (opts.async) {
+            runOperation(op, d, ctx).catch((err) =>
+              ctx.log.warn({ err, flowId: ctx.flowId, key: op.key }, 'Async op failed')
+            )
+            ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Operation fired async, continuing')
+            ctx.trace?.push({ key: op.key, name: op.name, type: op.type, status: 'async' })
+            note(op, 'async', false)
+            currentId = op.resolve ?? null
+          } else {
+            const result = await runOperation(op, d, ctx)
+            d = result.output
+            ctx.log.debug(
+              { flowId: ctx.flowId, key: op.key, status: result.status },
+              'Operation executed'
+            )
+            ctx.trace?.push({
+              key: op.key,
+              name: op.name,
+              type: op.type,
+              status: result.status,
+              preview: result.output[`$preview_${op.key}`]
+            })
+            currentId = result.status === 'resolve' ? op.resolve : op.reject
+            note(op, result.status, currentId == null, result.output)
+          }
         }
-        visited.add(currentId)
-        const op = opMap.get(currentId)
-        if (!op) break
-        const opts = parseOpts(op)
-        if (opts.async) {
-          runOperation(op, d, ctx).catch((err) =>
-            ctx.log.warn({ err, flowId: ctx.flowId, key: op.key }, 'Async op failed')
-          )
-          ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Operation fired async, continuing')
-          ctx.trace?.push({ key: op.key, name: op.name, type: op.type, status: 'async' })
-          note(op, 'async', false)
-          currentId = op.resolve ?? null
-        } else {
-          const result = await runOperation(op, d, ctx)
-          d = result.output
-          ctx.log.debug(
-            { flowId: ctx.flowId, key: op.key, status: result.status },
-            'Operation executed'
-          )
+        return d
+      }
+
+      if (rootOps.length > 0) {
+        // Fan-out: each root branch runs in parallel with the same initial data
+        const results = await Promise.all(rootOps.map((root) => runChain(root.id, data)))
+        // Merge outputs — last write wins for shared keys
+        data = Object.assign(data, ...results)
+      } else if (operations.length > 0) {
+        ctx.log.warn({ flowId: ctx.flowId }, 'No root operation found, running in positional order')
+        for (const op of operations) {
+          const result = await runOperation(op, data, ctx)
+          data = result.output
           ctx.trace?.push({
             key: op.key,
             name: op.name,
@@ -1344,34 +1376,11 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
             status: result.status,
             preview: result.output[`$preview_${op.key}`]
           })
-          currentId = result.status === 'resolve' ? op.resolve : op.reject
-          note(op, result.status, currentId == null, result.output)
+          note(op, result.status, result.status === 'reject', result.output)
+          if (result.status === 'reject') break
         }
       }
-      return d
-    }
-
-    if (rootOps.length > 0) {
-      // Fan-out: each root branch runs in parallel with the same initial data
-      const results = await Promise.all(rootOps.map((root) => runChain(root.id, data)))
-      // Merge outputs — last write wins for shared keys
-      data = Object.assign(data, ...results)
-    } else if (operations.length > 0) {
-      ctx.log.warn({ flowId: ctx.flowId }, 'No root operation found, running in positional order')
-      for (const op of operations) {
-        const result = await runOperation(op, data, ctx)
-        data = result.output
-        ctx.trace?.push({
-          key: op.key,
-          name: op.name,
-          type: op.type,
-          status: result.status,
-          preview: result.output[`$preview_${op.key}`]
-        })
-        note(op, result.status, result.status === 'reject', result.output)
-        if (result.status === 'reject') break
-      }
-    }
+    })
 
     // `__http_status` is bookkeeping between the push op and the obligation
     // resolve below — never part of the flow's own data. Read once here and

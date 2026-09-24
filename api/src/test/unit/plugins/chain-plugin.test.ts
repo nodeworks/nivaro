@@ -8,6 +8,12 @@ async function build() {
   const app = Fastify()
   await app.register(chainPlugin)
   app.get('/api/probe', async () => currentChain())
+  // What the api-logger reads off the request. `undefined` would vanish from
+  // the JSON, so an unset field reads 'UNSET' — null must come back as null.
+  app.get('/api/probe-req', async (req) => ({
+    chainId: req.chainId ?? 'UNSET',
+    chainParent: req.chainParent === undefined ? 'UNSET' : req.chainParent
+  }))
   await app.ready()
   return app
 }
@@ -18,6 +24,10 @@ describe('chainPlugin', () => {
     const res = await app.inject({ method: 'GET', url: '/api/probe' })
     const body = res.json() as { chain_id: string; parent: string }
     expect(body.parent).toBe(`request:${body.chain_id}`)
+    // A chain root has no parent — the api-log row must read as the root.
+    const reqBody = (await app.inject({ method: 'GET', url: '/api/probe-req' })).json()
+    expect(reqBody.chainParent).toBeNull()
+    expect(typeof reqBody.chainId).toBe('string')
   })
 
   it('two injected requests get different chain ids', async () => {
@@ -38,6 +48,16 @@ describe('chainPlugin', () => {
       'c-ingest'
     )
     expect(body).toEqual({ chain_id: 'c-ingest', parent: 'history:3' })
+    // An adopted request's api-log row hangs under the caller's open step.
+    const reqBody = await startChain(
+      'cron:mwf-ingest',
+      () =>
+        withChainStep('history:3', async () =>
+          (await app.inject({ method: 'GET', url: '/api/probe-req' })).json()
+        ),
+      'c-ingest'
+    )
+    expect(reqBody).toEqual({ chainId: 'c-ingest', chainParent: 'history:3' })
   })
 
   it('ignores non-/api paths', async () => {

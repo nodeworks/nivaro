@@ -1,6 +1,7 @@
 import { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
 import type { RequestedVia } from './erp-submission-status.js'
@@ -1300,6 +1301,7 @@ export async function recordSubmission(
         response: serializeResponseBody(responseBody),
         change_signature: signature ?? null,
         ...requesterFields,
+        ...(await chainFields('nivaro_erp_submissions')),
         // #628 — NULL when this attempt did not fail; otherwise what kind of
         // failure it was, which decides whether a later retry could help.
         error_class:

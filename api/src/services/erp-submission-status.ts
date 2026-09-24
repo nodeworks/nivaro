@@ -8,6 +8,7 @@
  * feature exists to stop. So the mapping lives here and every writer calls it.
  */
 import { db } from '../db/index.js'
+import { chainFields } from './chain-columns.js'
 import { requesterInsertFields, requesterSelectColumns } from './erp-requester-columns.js'
 import { resolveObligation } from './integration-obligations.js'
 import { classifyError } from './integration-remediation.js'
@@ -195,7 +196,12 @@ async function recordAttempt(row: AttemptRow): Promise<void> {
     await db('nivaro_erp_submission_attempts').insert({
       ...base,
       error: row.error ? row.error.slice(0, 2000) : null,
-      ...requester
+      ...requester,
+      // An attempt hangs under its submission in the chain tree (the
+      // captured snapshot too — captureSubmissionRow writes through here).
+      ...(await chainFields('nivaro_erp_submission_attempts', {
+        parent: `submission:${base.submission_id}`
+      }))
     })
   } catch {
     /* attempt history is bookkeeping — never fail a send because of it */

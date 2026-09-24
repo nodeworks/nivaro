@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { chainFields } from './chain-columns.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
 // 'pulse' socket room when the server has registered itself here.
@@ -53,6 +54,7 @@ export async function logActivity(opts: {
         item: opts.item ?? null,
         comment: opts.comment ?? null,
         ...(await originColumn(opts.origin, opts.comment)),
+        ...(await chainFields('nivaro_activity')),
         ip: opts.req?.ip ?? null,
         user_agent: opts.req?.headers['user-agent'] ?? null,
         timestamp: new Date()

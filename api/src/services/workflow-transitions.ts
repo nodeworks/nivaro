@@ -5,6 +5,8 @@ import { logActivity } from './activity.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
 import { ensureAutoWatch } from './auto-watch.js'
+import { currentChain, withChainStep } from './chain.js'
+import { chainFields } from './chain-columns.js'
 import { selectInChunks } from './db-batch.js'
 import { latestPeopleComment } from './latest-comment.js'
 import { buildRecordCard } from './mail-record-card.js'
@@ -942,6 +944,8 @@ export interface ApplyTransitionResult {
   updatedInstance: WorkflowInstance | undefined
   newStateObj: WorkflowState | null
   previousState: string | null
+  /** nivaro_workflow_history row this transition wrote (chain step `history:<id>`). */
+  history_id: number | null
 }
 
 /**
@@ -1013,21 +1017,36 @@ export async function applyTransition(opts: {
       completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
     })
 
-  await db('nivaro_workflow_history').insert({
-    instance: instance.id,
-    transition: transition.id,
-    from_state: previousState,
-    to_state: newState,
-    user: opts.userId ?? null,
-    comment: await annotateDelegateComment(opts.userId ?? null, opts.comment ?? null),
-    timestamp: new Date(),
-    // #518: an auto transition (or one no person drove) is the machine's
-    // entry, whatever its comment happens to say.
-    ...(await originFields(
-      'nivaro_workflow_history',
-      opts.source === 'auto' || !opts.userId ? 'machine' : 'person'
-    ))
-  })
+  const historyRet = (await db('nivaro_workflow_history')
+    .insert({
+      instance: instance.id,
+      transition: transition.id,
+      from_state: previousState,
+      to_state: newState,
+      user: opts.userId ?? null,
+      comment: await annotateDelegateComment(opts.userId ?? null, opts.comment ?? null),
+      timestamp: new Date(),
+      // #518: an auto transition (or one no person drove) is the machine's
+      // entry, whatever its comment happens to say.
+      ...(await originFields(
+        'nivaro_workflow_history',
+        opts.source === 'auto' || !opts.userId ? 'machine' : 'person'
+      )),
+      ...(await chainFields('nivaro_workflow_history'))
+    })
+    .returning('id')) as Array<number | { id: number }>
+  const firstHistory = historyRet[0]
+  // tedious hands an OBJECT back from .returning on this stack.
+  const rawHistoryId =
+    typeof firstHistory === 'object' && firstHistory !== null
+      ? Number(firstHistory.id)
+      : firstHistory != null
+        ? Number(firstHistory)
+        : null
+  const historyId = rawHistoryId != null && Number.isFinite(rawHistoryId) ? rawHistoryId : null
+  // What this transition sets off (post-phase actions, the flow trigger)
+  // hangs under its history row in the integration event chain.
+  const historyStep = historyId ? `history:${historyId}` : 'history:unknown'
 
   // Transitions never pass through the generic collection-write hook — keep
   // materialized queue caches current explicitly.
@@ -1042,14 +1061,16 @@ export async function applyTransition(opts: {
   // Transition actions (external submissions etc.) — never block or fail the
   // transition itself.
   try {
-    await runTransitionActions({
-      transition,
-      instance: updatedInstance ?? instance,
-      newStateObj,
-      userId: opts.userId ?? null,
-      phase: 'post',
-      requestedVia: opts.source === 'auto' || !opts.userId ? 'auto-transition' : 'transition'
-    })
+    await withChainStep(historyStep, () =>
+      runTransitionActions({
+        transition,
+        instance: updatedInstance ?? instance,
+        newStateObj,
+        userId: opts.userId ?? null,
+        phase: 'post',
+        requestedVia: opts.source === 'auto' || !opts.userId ? 'auto-transition' : 'transition'
+      })
+    )
   } catch {
     /* logged inside runTransitionActions */
   }
@@ -1087,11 +1108,13 @@ export async function applyTransition(opts: {
       userId: opts.userId ?? null,
       enteredPrevAt
     })
-    emitTrigger(
-      'workflow-transition',
-      payload,
-      console as unknown as Parameters<typeof emitTrigger>[2],
-      opts.userId ?? undefined
+    withChainStep(historyStep, () =>
+      emitTrigger(
+        'workflow-transition',
+        payload,
+        console as unknown as Parameters<typeof emitTrigger>[2],
+        opts.userId ?? undefined
+      )
     )
   } catch {
     /* trigger emission is best-effort */
@@ -1148,7 +1171,7 @@ export async function applyTransition(opts: {
     })()
   }
 
-  return { updatedInstance, newStateObj, previousState }
+  return { updatedInstance, newStateObj, previousState, history_id: historyId }
 }
 
 /**
@@ -1159,6 +1182,9 @@ export async function applyTransition(opts: {
  */
 export async function runAutoTransitions(collection: string, item: string): Promise<void> {
   try {
+    // Each hop hangs under the history row of the hop before it, so a chain
+    // of auto transitions reads as a chain, not as siblings.
+    let prevHistory: number | null = null
     for (let hop = 0; hop < 5; hop++) {
       const instance = (await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })
@@ -1180,13 +1206,18 @@ export async function runAutoTransitions(collection: string, item: string): Prom
       const fired = candidates.find((c) => evaluateConditionRules(c.condition_rules, record))
       if (!fired) return
 
-      await applyTransition({
-        instance,
-        transition: fired,
-        userId: null,
-        comment: `auto: ${fired.label}`,
-        source: 'auto'
-      })
+      const res: ApplyTransitionResult = await withChainStep(
+        prevHistory ? `history:${prevHistory}` : (currentChain()?.parent ?? 'auto'),
+        () =>
+          applyTransition({
+            instance,
+            transition: fired,
+            userId: null,
+            comment: `auto: ${fired.label}`,
+            source: 'auto'
+          })
+      )
+      prevHistory = res.history_id
       await logActivity({
         action: 'pipeline-transition',
         collection,

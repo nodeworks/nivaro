@@ -5,6 +5,12 @@ declare module 'fastify' {
   interface FastifyRequest {
     /** Integration event chain this request belongs to (plugins/chain.ts). */
     chainId?: string
+    /**
+     * The chain step this request hangs under: null for a request that
+     * STARTED its chain (the api-log row is the root), the caller's open
+     * step for an adopted in-process inject.
+     */
+    chainParent?: string | null
   }
 }
 
@@ -28,10 +34,12 @@ export const chainPlugin = fp(async (app) => {
     const existing = currentChain()
     if (existing) {
       req.chainId = existing.chain_id
+      req.chainParent = existing.parent
       return done()
     }
     const id = newChainId()
     req.chainId = id
+    req.chainParent = null
     startChain(`request:${id}`, () => done(), id)
   })
 })

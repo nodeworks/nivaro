@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
+import { chainFields } from './chain-columns.js'
 import { maskBodySecrets, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
 
@@ -249,7 +250,8 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
       duration_ms: entry.duration_ms ?? null,
       error: entry.error ?? null,
       user_id: entry.user_id ?? null,
-      created_at: new Date()
+      created_at: new Date(),
+      ...(await chainFields('nivaro_external_api_logs'))
     })
   } catch {
     // Never throw — log failure must not affect the calling operation

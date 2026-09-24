@@ -17,8 +17,10 @@ interface ApiLogRow {
   error: string | null
   request_body: string | null
   created_at: Date
-  /** The request's integration chain (plugins/chain.ts) — the chain ROOT row. */
+  /** The request's integration chain (plugins/chain.ts). */
   chain_id?: string | null
+  /** null = this request started the chain (the ROOT row); else the caller's open step. */
+  chain_parent?: string | null
 }
 
 // #67 — keep the JSON body of an inbound INTEGRATION write (token / api-key
@@ -108,10 +110,10 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     const rows = buffer
     buffer = []
     try {
-      // A tenant that has not run migration 351 has no chain_id column —
-      // drop the field rather than fail the whole flush.
+      // A tenant that has not run migration 351 has no chain columns —
+      // drop both fields rather than fail the whole flush.
       const stamp = await hasChainColumns('nivaro_api_logs')
-      const shaped = stamp ? rows : rows.map(({ chain_id: _c, ...rest }) => rest)
+      const shaped = stamp ? rows : rows.map(({ chain_id: _c, chain_parent: _p, ...rest }) => rest)
       // Insert in modest chunks to stay under MSSQL parameter limits
       for (let i = 0; i < shaped.length; i += 50) {
         await db('nivaro_api_logs').insert(shaped.slice(i, i + 50))
@@ -209,7 +211,8 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         }
       ),
       created_at: new Date(),
-      chain_id: req.chainId ?? null
+      chain_id: req.chainId ?? null,
+      chain_parent: req.chainParent ?? null
     })
 
     // Live traffic view (#276): stream to admin watchers only when someone is

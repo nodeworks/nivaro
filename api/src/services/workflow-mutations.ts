@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { withChainStep } from './chain.js'
 import { parseJson } from './pipeline-engine.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { TransitionBlockedError } from './workflow-actions.js'
@@ -238,8 +239,11 @@ export async function executeWorkflowTransition(opts: {
   }
   const { updatedInstance, newStateObj, previousState } = applied
 
-  // Chained automation: fire any auto transitions now valid from the new state
-  await runAutoTransitions(collection, item)
+  // Chained automation: fire any auto transitions now valid from the new state.
+  // They hang under this transition's history row in the event chain.
+  await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
+    runAutoTransitions(collection, item)
+  )
 
   const prevStateObj = previousState
     ? ((await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()) as
