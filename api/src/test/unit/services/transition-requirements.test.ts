@@ -529,3 +529,59 @@ describe('evaluateTransitionRequirements — review_when', () => {
     expect(noCollection.result?.[0]).toMatchObject({ review: true })
   })
 })
+
+describe('evaluateTransitionRequirements — review_when through one M2O hop', () => {
+  const tables = {
+    nivaro_fields: [{ field: 'sales_order_id', label: 'Sales Order ID', type: 'string' }],
+    // fakeDb ignores `where`, so the relation the hop resolves must come first.
+    nivaro_relations: [
+      {
+        many_collection: 'orders',
+        many_field: 'warehouse',
+        one_collection: 'warehouses',
+        one_field: null,
+        junction_field: null
+      },
+      ...LINE_RELATIONS
+    ],
+    order_lines: [{ id: 1, sales_order_id: 'SO-1' }],
+    orders: [{ id: 'order-1', warehouse: 5 as number | null, push_status: null }],
+    warehouses: [{ id: 5, ordering_system: 'external' }]
+  }
+  const run = (rule: unknown, t: Record<string, Array<Record<string, unknown>>> = tables) =>
+    evaluateTransitionRequirements(
+      fakeDb(t) as unknown as Parameters<typeof evaluateTransitionRequirements>[0],
+      JSON.stringify([
+        {
+          type: 'child_fields',
+          collection: 'order_lines',
+          fk_field: 'order',
+          fields: ['sales_order_id'],
+          review_when: rule
+        }
+      ]),
+      'order-1',
+      makeLogger(),
+      'orders'
+    )
+
+  it('asks for a review when the related row matches (warehouse.ordering_system)', async () => {
+    const result = await run({ field: 'warehouse.ordering_system', in: ['external'] })
+    expect(result?.[0]).toMatchObject({ review: true })
+  })
+
+  it('passes when the related row does not match, or the hop is unknown', async () => {
+    expect(await run({ field: 'warehouse.ordering_system', in: ['other'] })).toBeNull()
+    expect(await run({ field: 'nope.ordering_system', in: ['external'] })).toBeNull()
+    expect(
+      await run(
+        { field: 'warehouse.ordering_system', in: ['external'] },
+        { ...tables, orders: [{ id: 'order-1', warehouse: null }] }
+      )
+    ).toBeNull()
+  })
+
+  it('rejects a two-hop path as malformed (rule dropped, gate passes)', async () => {
+    expect(await run({ field: 'warehouse.region.code', in: ['x'] })).toBeNull()
+  })
+})

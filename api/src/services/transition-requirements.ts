@@ -49,7 +49,12 @@ export interface OptionalWhenQuery {
 
 const OPTIONAL_WHEN_QUERY_LIMIT = 500
 
-/** `review_when`: one rule or a list; each `{field, in}` on the transitioning record. */
+/** `review_when`: one rule or a list; each `{field, in}` on the transitioning
+ *  record. `field` may hop ONE M2O (`supporting_warehouse.ordering_system`) —
+ *  "the record's warehouse orders through an external system" is the kind
+ *  of thing that decides whether a person should see the lines before they
+ *  go out, and it lives on the related row, not the record. */
+const REVIEW_FIELD_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$/
 function normalizeReviewRules(raw: unknown): Array<{ field: string; in: unknown[] }> {
   const list = Array.isArray(raw) ? raw : raw ? [raw] : []
   const out: Array<{ field: string; in: unknown[] }> = []
@@ -57,12 +62,44 @@ function normalizeReviewRules(raw: unknown): Array<{ field: string; in: unknown[
     const rule = r as { field?: unknown; in?: unknown }
     if (
       typeof rule?.field === 'string' &&
-      IDENTIFIER_RE.test(rule.field) &&
+      REVIEW_FIELD_RE.test(rule.field) &&
       Array.isArray(rule.in) &&
       rule.in.length > 0
     ) {
       out.push({ field: rule.field, in: rule.in })
     }
+  }
+  return out
+}
+
+/** Read the record's own columns plus one M2O hop per dotted field, keyed by
+ *  the rule's field text (`a.b` → the related row's `b`). Unknown hops read
+ *  as undefined, so a rule on them never matches. */
+async function readReviewValues(
+  database: typeof db,
+  recordCollection: string,
+  itemId: string,
+  fields: string[]
+): Promise<Record<string, unknown>> {
+  const own = [...new Set(fields.map((f) => f.split('.')[0]))]
+  const rec = (await database(recordCollection).where({ id: itemId }).first(own)) as
+    | Record<string, unknown>
+    | undefined
+  if (!rec) return {}
+  const out: Record<string, unknown> = { ...rec }
+  for (const f of fields) {
+    if (!f.includes('.')) continue
+    const [fk, col] = f.split('.')
+    const fkId = rec[fk]
+    if (fkId == null) continue
+    const rel = (await database('nivaro_relations')
+      .where({ many_collection: recordCollection, many_field: fk })
+      .first('one_collection')) as { one_collection: string | null } | undefined
+    if (!rel?.one_collection || !IDENTIFIER_RE.test(rel.one_collection)) continue
+    const related = (await database(rel.one_collection).where({ id: fkId }).first([col])) as
+      | Record<string, unknown>
+      | undefined
+    out[f] = related?.[col]
   }
   return out
 }
@@ -590,14 +627,10 @@ export async function evaluateTransitionRequirements(
       IDENTIFIER_RE.test(recordCollection)
     ) {
       try {
-        const rec = (await database(recordCollection)
-          .where({ id: itemId })
-          .first([...new Set(reviewRules.map((r) => r.field))])) as
-          | Record<string, unknown>
-          | undefined
-        review =
-          !!rec &&
-          reviewRules.some((r) => r.in.some((v) => String(v) === String(rec[r.field] ?? '')))
+        const rec = await readReviewValues(database, recordCollection, itemId, [
+          ...new Set(reviewRules.map((r) => r.field))
+        ])
+        review = reviewRules.some((r) => r.in.some((v) => String(v) === String(rec[r.field] ?? '')))
       } catch (err) {
         logger.warn(
           { err, collection },
