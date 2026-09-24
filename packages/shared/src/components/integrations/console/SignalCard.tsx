@@ -1,15 +1,13 @@
 import { AlertOctagon, AlertTriangle, ChevronRight, ExternalLink, Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { cn, titleCase } from '../../../lib/utils'
-import { useSignalAction, useSnooze } from './api'
-import { SnoozeMenu } from './SnoozeMenu'
+import { useDismissRows, useSignalAction, useSnooze } from './api'
+import { DismissButton, SnoozeMenu } from './SnoozeMenu'
 import { ageOf, agoText, exactTime, TONE_FILL, TONE_SOFT, TONE_TEXT } from './tone'
 import type { ActionResult, RowView, SignalAction, SignalView } from './types'
 
 /** Actions the server runs for many rows at once — a group can bulk these. */
 const BULKABLE: ReadonlyArray<SignalAction['kind']> = ['retry_submission', 'extension']
-
-const canBulk = (r: RowView) => r.actions.some((a) => BULKABLE.includes(a.kind))
 
 /** A retry's id is the row's own submission, so retries group by kind; an
  *  extension action is a distinct operation per id. */
@@ -171,6 +169,7 @@ function RowList({
   canExplain?: (action: SignalAction) => boolean
 }) {
   const act = useSignalAction()
+  const dismiss = useDismissRows()
   const [results, setResults] = useState<Record<string, ActionResult>>({})
   const [pending, setPending] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -202,6 +201,29 @@ function RowList({
       const msg =
         (e as { response?: { error?: string } })?.response?.error ??
         (e instanceof Error ? e.message : 'The action failed')
+      setResults((prev) => {
+        const next = { ...prev }
+        for (const k of keys) next[k] = { key: k, ok: false, message: msg }
+        return next
+      })
+    } finally {
+      setPending((p) => new Set([...p].filter((k) => !keys.includes(k))))
+    }
+  }
+
+  // "Dismiss selected" — a Dismiss is always row-scoped (never a group/
+  // signal snooze), so a bulk Dismiss is one fan-out request, not one
+  // group-level snooze row. Any row can be dismissed, unlike run() above.
+  const dismissSelected = async (targets: RowView[]) => {
+    const keys = targets.map((r) => r.key)
+    setPending((p) => new Set([...p, ...keys]))
+    try {
+      await dismiss.mutateAsync({ signal: signal.id, row_keys: keys })
+      setSelected((s) => new Set([...s].filter((k) => !keys.includes(k))))
+    } catch (e) {
+      const msg =
+        (e as { response?: { error?: string } })?.response?.error ??
+        (e instanceof Error ? e.message : 'Could not dismiss')
       setResults((prev) => {
         const next = { ...prev }
         for (const k of keys) next[k] = { key: k, ok: false, message: msg }
@@ -250,18 +272,60 @@ function RowList({
   )
 
   if (!groups) {
-    return <ul className='divide-y divide-border'>{rows.map((r) => renderRow(r, false))}</ul>
+    // No group headers, but every row can still be Dismissed in bulk — a
+    // small select-all strip instead of a per-group one.
+    const allChecked = rows.length > 0 && rows.every((r) => selected.has(r.key))
+    const inSelection = rows.filter((r) => selected.has(r.key))
+    return (
+      <div>
+        {rows.length > 0 && (
+          <div className='flex min-h-9 items-center gap-2.5 bg-muted/60 px-4 py-1.5'>
+            <input
+              type='checkbox'
+              checked={allChecked}
+              ref={(el) => {
+                if (el) el.indeterminate = inSelection.length > 0 && !allChecked
+              }}
+              onChange={(e) =>
+                setSelected(new Set(e.target.checked ? rows.map((r) => r.key) : []))
+              }
+              aria-label='Select every problem'
+              data-ic-select-all
+              className='h-3.5 w-3.5 accent-[rgb(var(--nvr-cyan-rgb))]'
+            />
+            {inSelection.length > 0 ? (
+              <button
+                type='button'
+                data-ic-bulk-action='dismiss'
+                disabled={inSelection.some((r) => pending.has(r.key))}
+                onClick={() => void dismissSelected(inSelection)}
+                className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground hover:bg-muted disabled:opacity-60'
+              >
+                {inSelection.some((r) => pending.has(r.key)) && (
+                  <Loader2 className='h-3 w-3 animate-spin' />
+                )}
+                Dismiss selected {inSelection.length}
+              </button>
+            ) : (
+              <span className='text-[12px] text-muted-foreground'>
+                Select problems to dismiss several at once
+              </span>
+            )}
+          </div>
+        )}
+        <ul className='divide-y divide-border'>{rows.map((r) => renderRow(r, true))}</ul>
+      </div>
+    )
   }
 
   return (
     <div className='pb-1'>
       {groups.map((g) => {
-        // Only rows with a bulk-able action can be selected — select-all and
-        // "all selected" are judged against that subset.
-        const eligible = g.rows.filter(canBulk)
-        const bulkable = eligible.length > 0
-        const inGroup = eligible.filter((r) => selected.has(r.key))
-        const all = bulkable && inGroup.length === eligible.length
+        // Every row can be Dismissed, so every row is selectable now —
+        // `BULKABLE` below still decides which SPECIFIC extra bulk buttons
+        // (retry/extension) a selection additionally offers.
+        const inGroup = g.rows.filter((r) => selected.has(r.key))
+        const all = g.rows.length > 0 && inGroup.length === g.rows.length
         // One button per action the selection offers, run on exactly the
         // selected rows that offer it — a group mixing retries and extension
         // actions gets a button for each.
@@ -278,31 +342,30 @@ function RowList({
             bulk.set(k, b)
           }
         }
+        const dismissBusy = inGroup.some((r) => pending.has(r.key))
         return (
           <div key={g.key} data-ic-group={g.key} className='mt-2 first:mt-1'>
             <div className='flex min-h-9 items-center gap-2.5 bg-muted/60 px-4 py-1.5'>
-              {bulkable && (
-                <input
-                  type='checkbox'
-                  checked={all}
-                  ref={(el) => {
-                    if (el) el.indeterminate = inGroup.length > 0 && !all
-                  }}
-                  onChange={(e) =>
-                    setSelected((s) => {
-                      const n = new Set(s)
-                      for (const r of eligible) {
-                        if (e.target.checked) n.add(r.key)
-                        else n.delete(r.key)
-                      }
-                      return n
-                    })
-                  }
-                  aria-label={`Select every problem in ${g.label}`}
-                  data-ic-group-select={g.key}
-                  className='h-3.5 w-3.5 accent-[rgb(var(--nvr-cyan-rgb))]'
-                />
-              )}
+              <input
+                type='checkbox'
+                checked={all}
+                ref={(el) => {
+                  if (el) el.indeterminate = inGroup.length > 0 && !all
+                }}
+                onChange={(e) =>
+                  setSelected((s) => {
+                    const n = new Set(s)
+                    for (const r of g.rows) {
+                      if (e.target.checked) n.add(r.key)
+                      else n.delete(r.key)
+                    }
+                    return n
+                  })
+                }
+                aria-label={`Select every problem in ${g.label}`}
+                data-ic-group-select={g.key}
+                className='h-3.5 w-3.5 accent-[rgb(var(--nvr-cyan-rgb))]'
+              />
               <span className='text-[12.5px] font-semibold text-foreground'>{g.label}</span>
               <span className='text-[12px] tabular-nums text-muted-foreground'>
                 {g.rows.length}
@@ -323,6 +386,18 @@ function RowList({
                     {b.action.label} {b.rows.length}
                   </button>
                 ))}
+                {inGroup.length > 0 && (
+                  <button
+                    type='button'
+                    data-ic-bulk-action='dismiss'
+                    disabled={dismissBusy}
+                    onClick={() => void dismissSelected(inGroup)}
+                    className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground hover:bg-muted disabled:opacity-60'
+                  >
+                    {dismissBusy && <Loader2 className='h-3 w-3 animate-spin' />}
+                    Dismiss selected {inGroup.length}
+                  </button>
+                )}
                 <SnoozeMenu
                   signal={signal.id}
                   signalLabel={signal.label}
@@ -331,7 +406,7 @@ function RowList({
                 />
               </span>
             </div>
-            <ul className='divide-y divide-border'>{g.rows.map((r) => renderRow(r, bulkable))}</ul>
+            <ul className='divide-y divide-border'>{g.rows.map((r) => renderRow(r, true))}</ul>
           </div>
         )
       })}
@@ -384,7 +459,6 @@ function SignalRowView({
           onChange={(e) => onSelect(e.target.checked)}
           aria-label={`Select ${row.title}`}
           className='mt-1 h-3.5 w-3.5 shrink-0 accent-[rgb(var(--nvr-cyan-rgb))]'
-          disabled={!canBulk(row)}
         />
       )}
       <div className='min-w-0 flex-1'>
@@ -444,6 +518,7 @@ function SignalRowView({
             {a.label}
           </button>
         ))}
+        <DismissButton signal={signal.id} rowKey={row.key} />
         <SnoozeMenu
           signal={signal.id}
           signalLabel={signal.label}
@@ -518,22 +593,29 @@ function SnoozedList({ signal }: { signal: SignalView }) {
       {signal.snoozed.map((r) => {
         const s = r.snooze
         const shared = s ? (covered.get(s.id) ?? []) : []
-        const until = s?.until_change
-          ? 'until it changes'
-          : s?.until
-            ? `until ${new Date(s.until).toLocaleString(undefined, {
-                month: 'short',
-                day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit'
-              })}`
-            : ''
+        // A Dismiss is always row-scoped (`shared.length` is always 1), so it
+        // never reaches the "with everything in <group>" wording below — its
+        // own line says what it means instead of "Snoozed <duration>".
+        const reasonText = s?.until_occurrence
+          ? 'Dismissed — shows again if it happens again'
+          : `Snoozed ${
+              s?.until_change
+                ? 'until it changes'
+                : s?.until
+                  ? `until ${new Date(s.until).toLocaleString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit'
+                    })}`
+                  : ''
+            }`
         return (
           <li key={r.key} data-ic-row={r.key} data-ic-snoozed className='flex gap-3 px-4 py-2'>
             <div className='min-w-0 flex-1'>
               <p className='truncate text-[12.5px] text-foreground'>{r.title}</p>
               <p className='text-[11.5px] text-muted-foreground'>
-                Snoozed {until}
+                {reasonText}
                 {shared.length > 1 ? ` with ${scopeOf(shared)}` : ''}
                 {s?.note ? ` — “${s.note}”` : ''}
               </p>
@@ -552,7 +634,11 @@ function SnoozedList({ signal }: { signal: SignalView }) {
                 onClick={() => remove.mutate(s.id)}
                 className='h-7 shrink-0 rounded-md px-2.5 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-60'
               >
-                {shared.length > 1 ? `Unsnooze all ${shared.length}` : 'Unsnooze'}
+                {shared.length > 1
+                  ? `Unsnooze all ${shared.length}`
+                  : s?.until_occurrence
+                    ? 'Undo'
+                    : 'Unsnooze'}
               </button>
             )}
           </li>

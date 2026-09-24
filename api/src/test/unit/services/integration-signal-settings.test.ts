@@ -3,12 +3,14 @@ import {
   importCadence,
   isImportStale,
   isSnoozed,
+  planStaleDismissalPrune,
+  rowOccurrence,
   type SnoozeRow,
   splitSettingValues,
   stableRowHash,
   validateSettingPatch
 } from '../../../services/integration-signal-settings.js'
-import type { IntegrationSignal } from '../../../services/integration-signals.js'
+import type { IntegrationSignal, SignalRow } from '../../../services/integration-signals.js'
 
 const sig: IntegrationSignal = {
   id: 'core:x',
@@ -27,6 +29,7 @@ const sn = (p: Partial<SnoozeRow>): SnoozeRow => ({
   group_key: null,
   until: null,
   until_change_hash: null,
+  until_occurrence: null,
   ...p
 })
 
@@ -245,3 +248,132 @@ describe('isSnoozed', () => {
     ).toBeNull()
   })
 })
+
+// Task 15c — Dismiss ("I've seen this one, tell me when it happens again").
+// `occurrence` identifies the SPECIFIC instance behind a row, distinct from
+// `key` (the problem itself, which never changes across failures).
+describe('rowOccurrence', () => {
+  const base: SignalRow = { key: 'k', title: 'T', actions: [] }
+
+  it('prefers an explicit occurrence over since or the hash', () => {
+    expect(rowOccurrence({ ...base, occurrence: 'run:1', since: '2026-01-01' })).toBe('run:1')
+  })
+
+  it('falls back to since when occurrence is unset', () => {
+    expect(rowOccurrence({ ...base, since: '2026-01-01' })).toBe('2026-01-01')
+  })
+
+  it('falls back to the stable hash when neither occurrence nor since is set', () => {
+    expect(rowOccurrence(base)).toBe(stableRowHash(base))
+  })
+})
+
+describe('isSnoozed — Dismiss (until_occurrence)', () => {
+  const row = (occurrence?: string, since?: string): SignalRow => ({
+    key: 'k1',
+    title: 'Forecasts: last run failed — import_forecasts -',
+    actions: [],
+    ...(occurrence !== undefined && { occurrence }),
+    ...(since !== undefined && { since })
+  })
+
+  it('hides the row while its occurrence is unchanged from the dismissal', () => {
+    const dismissed = sn({ row_key: 'k1', until_occurrence: 'run:100' })
+    expect(isSnoozed(row('run:100'), 'core:x', [dismissed], now)).not.toBeNull()
+  })
+
+  it('a NEW occurrence — same wording, new run id — shows the row again', () => {
+    const dismissed = sn({ row_key: 'k1', until_occurrence: 'run:100' })
+    expect(isSnoozed(row('run:105'), 'core:x', [dismissed], now)).toBeNull()
+  })
+
+  it('never matches a row with a different key, or a dismissal on another signal', () => {
+    const dismissed = sn({ row_key: 'k1', until_occurrence: 'run:100' })
+    expect(isSnoozed({ ...row('run:100'), key: 'k2' }, 'core:x', [dismissed], now)).toBeNull()
+    expect(isSnoozed(row('run:100'), 'core:y', [dismissed], now)).toBeNull()
+  })
+
+  it('a row with no explicit occurrence falls back to since — dismissal keys on THAT', () => {
+    const target = row(undefined, '2026-09-20T00:00:00Z')
+    const dismissed = sn({ row_key: 'k1', until_occurrence: rowOccurrence(target) })
+    expect(isSnoozed(target, 'core:x', [dismissed], now)).not.toBeNull()
+    // `since` moving (a fresh instance the signal only distinguishes by
+    // timestamp) is exactly "it happened again" for a signal with no
+    // dedicated occurrence.
+    expect(
+      isSnoozed(row(undefined, '2026-09-21T00:00:00Z'), 'core:x', [dismissed], now)
+    ).toBeNull()
+  })
+
+  it('a row with neither occurrence nor since falls back to the stable hash', () => {
+    const target: SignalRow = { ...row(), detail: '3 records failing' }
+    const dismissed = sn({ row_key: 'k1', until_occurrence: rowOccurrence(target) })
+    expect(isSnoozed(target, 'core:x', [dismissed], now)).not.toBeNull()
+    // The hash masks digits, so the SAME kind of detail with different
+    // numbers still hashes the same and stays dismissed — same guarantee as
+    // "Until it changes" (stableRowHash is shared).
+    expect(
+      isSnoozed({ ...target, detail: '9 records failing' }, 'core:x', [dismissed], now)
+    ).not.toBeNull()
+    // A real change to the title (a different problem) is a different hash.
+    expect(
+      isSnoozed({ ...target, title: 'Other problem' }, 'core:x', [dismissed], now)
+    ).toBeNull()
+  })
+
+  it('a Dismiss and an older timed snooze on the same row do not interfere with each other', () => {
+    const timed = sn({ id: 1, row_key: 'k1', until: new Date('2026-09-25') }) // still valid
+    const dismissed = sn({ id: 2, row_key: 'k1', until_occurrence: 'run:100' })
+    // Both valid — matches (order in the array must not matter).
+    expect(isSnoozed(row('run:100'), 'core:x', [timed, dismissed], now)).not.toBeNull()
+    expect(isSnoozed(row('run:100'), 'core:x', [dismissed, timed], now)).not.toBeNull()
+    // The dismissal goes stale (new occurrence) — the still-valid timed
+    // snooze keeps the row hidden regardless; the stale dismissal does not
+    // poison it.
+    expect(isSnoozed(row('run:105'), 'core:x', [timed, dismissed], now)).not.toBeNull()
+    // The timed snooze expires — the dismissal, still matching its
+    // occurrence, keeps the row hidden on its own.
+    const expiredTimed = sn({ id: 1, row_key: 'k1', until: new Date('2026-09-22') })
+    expect(isSnoozed(row('run:100'), 'core:x', [expiredTimed, dismissed], now)).not.toBeNull()
+    // Both stale/expired — the row shows again.
+    expect(isSnoozed(row('run:105'), 'core:x', [expiredTimed, dismissed], now)).toBeNull()
+  })
+})
+
+describe('planStaleDismissalPrune', () => {
+  const dsn = (p: Partial<{ id: number; signal: string; row_key: string | null; until_occurrence: string | null }>) => ({
+    id: 1,
+    signal: 'core:x',
+    row_key: 'k1',
+    until_occurrence: 'run:1',
+    ...p
+  })
+
+  it('prunes a dismissal whose row has not been seen at all in 30 days', () => {
+    const staleRows = [{ signal: 'core:x', row_key: 'k1', last_seen: daysAgoOf(now, 40) }]
+    expect(planStaleDismissalPrune([dsn({ id: 9 })], staleRows, now)).toEqual([9])
+  })
+
+  it('keeps a dismissal whose row is still being seen', () => {
+    const freshRows = [{ signal: 'core:x', row_key: 'k1', last_seen: daysAgoOf(now, 2) }]
+    expect(planStaleDismissalPrune([dsn({ id: 9 })], freshRows, now)).toEqual([])
+  })
+
+  it('prunes a dismissal whose row has no matching entry at all', () => {
+    expect(planStaleDismissalPrune([dsn({ id: 9 })], [], now)).toEqual([9])
+  })
+
+  it('ignores a plain (non-dismiss) snooze — until_occurrence null', () => {
+    expect(planStaleDismissalPrune([dsn({ id: 9, until_occurrence: null })], [], now)).toEqual([])
+  })
+
+  it('respects a custom staleness window', () => {
+    const rows = [{ signal: 'core:x', row_key: 'k1', last_seen: daysAgoOf(now, 10) }]
+    expect(planStaleDismissalPrune([dsn({ id: 9 })], rows, now, 5 * 86_400_000)).toEqual([9])
+    expect(planStaleDismissalPrune([dsn({ id: 9 })], rows, now, 20 * 86_400_000)).toEqual([])
+  })
+})
+
+function daysAgoOf(from: Date, days: number): Date {
+  return new Date(from.getTime() - days * 86_400_000)
+}

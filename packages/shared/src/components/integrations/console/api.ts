@@ -63,6 +63,9 @@ export interface SnoozeInput {
   group_key?: string
   until?: string | null
   until_change?: boolean
+  /** A Dismiss — hides this ONE row until its occurrence changes. Row-scoped
+   *  only; never combine with group_key. */
+  until_occurrence?: boolean
   note?: string
 }
 
@@ -79,6 +82,21 @@ export function useSnooze() {
       onSettled: () => qc.invalidateQueries({ queryKey: ['integration-signals'] })
     })
   }
+}
+
+/** "Dismiss selected" — one Dismiss per selected row in a single request. */
+export function useDismissRows() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: { signal: string; row_keys: string[] }) =>
+      client
+        .request<{ data: { dismissed: number; skipped: string[] } }>(
+          post('/integration-signals/dismiss', b)
+        )
+        .then((r) => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['integration-signals'] })
+  })
 }
 
 export function usePartners() {

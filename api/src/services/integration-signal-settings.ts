@@ -164,6 +164,21 @@ export function stableRowHash(row: SignalRow): string {
     .digest('hex')
 }
 
+/**
+ * The identity of THIS occurrence — never the row's own `key` (which
+ * identifies the PROBLEM, e.g. "forecasts import failing", and stays the
+ * same across every failing run). `occurrence` identifies WHICH instance of
+ * that problem this is: the run id, the submission attempt, the obligation.
+ * A signal that hasn't been updated to set one still gets a stable value to
+ * dismiss against — `since` (when THIS instance started), then the same
+ * masked hash "Until it changes" uses — so Dismiss always has something to
+ * key on, it just falls back to coarser identity than a signal that sets
+ * `occurrence` explicitly.
+ */
+export function rowOccurrence(row: SignalRow): string {
+  return row.occurrence ?? row.since ?? stableRowHash(row)
+}
+
 export interface SnoozeRow {
   id: number
   signal: string
@@ -171,6 +186,11 @@ export interface SnoozeRow {
   group_key: string | null
   until: Date | null
   until_change_hash: string | null
+  /** Set only by a Dismiss — never alongside a group/signal scope. Compared
+   *  against the row's CURRENT `rowOccurrence()` on every read, so a row
+   *  whose occurrence has moved on (a new run, a new attempt...) shows again
+   *  even though this snooze row is never touched. */
+  until_occurrence: string | null
   /** Optional — only `loadActiveSnoozes` populates it (the matching logic
    *  above never reads it, so a caller that doesn't select it stays valid). */
   note?: string | null
@@ -192,7 +212,8 @@ export function isSnoozed(
     if (!scoped) continue
     if (s.until && new Date(s.until) <= now) continue
     if (s.until_change_hash && s.until_change_hash !== stableRowHash(row)) continue
-    if (!s.until && !s.until_change_hash) continue
+    if (s.until_occurrence != null && s.until_occurrence !== rowOccurrence(row)) continue
+    if (!s.until && !s.until_change_hash && s.until_occurrence == null) continue
     return s
   }
   return null
@@ -201,6 +222,65 @@ export function isSnoozed(
 export async function loadActiveSnoozes(): Promise<SnoozeRow[]> {
   return (await db('nivaro_integration_signal_snoozes')
     .where((q) => q.whereNull('until').orWhere('until', '>', new Date()))
-    .select('id', 'signal', 'row_key', 'group_key', 'until', 'until_change_hash', 'note')
+    .select(
+      'id',
+      'signal',
+      'row_key',
+      'group_key',
+      'until',
+      'until_change_hash',
+      'until_occurrence',
+      'note'
+    )
     .catch(() => [])) as SnoozeRow[]
+}
+
+export interface DismissableSnooze {
+  id: number
+  signal: string
+  row_key: string | null
+  until_occurrence: string | null
+}
+
+export interface RowLastSeen {
+  signal: string
+  row_key: string
+  last_seen: Date | string
+}
+
+/**
+ * Dismissals (`until_occurrence` set) whose row hasn't been seen AT ALL in
+ * `staleAfterMs` (default 30 days) are dead weight — the problem never came
+ * back, so remembering exactly which instance was dismissed gains nothing.
+ * `rows` is every (signal, row_key)'s last_seen, open or long since cleared
+ * — a dismissal with no matching row at all (should not normally happen) is
+ * pruned too, same as one whose row is simply gone.
+ *
+ * Deliberately NOT about the occurrence going stale while the row stays
+ * active: a still-recurring row keeps advancing `last_seen` on every cycle
+ * regardless of which occurrence is current, so a dismissal for an OLDER
+ * occurrence of a still-open row is left alone here — it is already inert
+ * (isSnoozed no longer matches it), just not yet worth a dedicated cleanup.
+ */
+export function planStaleDismissalPrune(
+  snoozes: DismissableSnooze[],
+  rows: RowLastSeen[],
+  now: Date,
+  staleAfterMs = 30 * 86_400_000
+): number[] {
+  const lastSeen = new Map<string, number>()
+  for (const r of rows) {
+    const k = `${r.signal}\u0000${r.row_key}`
+    const t = new Date(r.last_seen).getTime()
+    if (Number.isNaN(t)) continue
+    const prev = lastSeen.get(k)
+    if (prev == null || t > prev) lastSeen.set(k, t)
+  }
+  const out: number[] = []
+  for (const s of snoozes) {
+    if (s.until_occurrence == null || s.row_key == null) continue
+    const seen = lastSeen.get(`${s.signal}\u0000${s.row_key}`)
+    if (seen == null || now.getTime() - seen > staleAfterMs) out.push(s.id)
+  }
+  return out
 }

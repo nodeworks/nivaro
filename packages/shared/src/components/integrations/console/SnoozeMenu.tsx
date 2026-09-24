@@ -1,4 +1,4 @@
-import { BellOff, Loader2 } from 'lucide-react'
+import { BellOff, EyeOff, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
@@ -14,9 +14,39 @@ const LENGTHS: Array<{ key: Length; label: string }> = [
 ]
 
 /**
+ * The quiet per-row "I've seen this one" control — notification-style: it
+ * hides THIS occurrence and nothing else, coming back the moment the row's
+ * occurrence changes (a new run, a new attempt...). Ghost icon button, same
+ * footprint as the Snooze trigger beside it, distinguished by icon (EyeOff
+ * vs BellOff) rather than color — Dismiss is not a warning action.
+ */
+export function DismissButton({ signal, rowKey }: { signal: string; rowKey: string }) {
+  const { add } = useSnooze()
+  return (
+    <button
+      type='button'
+      data-ic-dismiss={`${signal}:${rowKey}`}
+      aria-label='Dismiss this occurrence'
+      data-tip='Hide until it happens again'
+      disabled={add.isPending}
+      onClick={() => add.mutate({ signal, row_key: rowKey, until_occurrence: true })}
+      className='inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60'
+    >
+      {add.isPending ? (
+        <Loader2 className='h-3.5 w-3.5 animate-spin' />
+      ) : (
+        <EyeOff className='h-3.5 w-3.5' />
+      )}
+    </button>
+  )
+}
+
+/**
  * Quiet one problem, a whole group, or the whole signal. "Until it changes"
  * is offered only for a single row — the API hashes ONE row's payload, so a
- * group or signal can only be quieted for a set time.
+ * group or signal can only be quieted for a set time. Dismiss lives at the
+ * top for a row-scoped menu — the one-click, no-questions-asked cousin of
+ * everything below it.
  */
 export function SnoozeMenu({
   signal,
@@ -104,6 +134,29 @@ export function SnoozeMenu({
         </button>
       </PopoverTrigger>
       <PopoverContent align='end' className='w-72 p-0' data-ic-snooze-menu>
+        {rowKey && (
+          <div className='border-b border-border p-1'>
+            <button
+              type='button'
+              data-ic-dismiss-menu={`${signal}:${rowKey}`}
+              disabled={add.isPending}
+              onClick={() => {
+                add.mutate(
+                  { signal, row_key: rowKey, until_occurrence: true },
+                  { onSuccess: () => setOpen(false) }
+                )
+              }}
+              className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60'
+            >
+              {add.isPending ? (
+                <Loader2 className='h-3.5 w-3.5 shrink-0 animate-spin' />
+              ) : (
+                <EyeOff className='h-3.5 w-3.5 shrink-0' />
+              )}
+              Dismiss — hide until it happens again
+            </button>
+          </div>
+        )}
         <div className='space-y-3 p-3'>
           <fieldset>
             <legend className='mb-1.5 text-[12px] font-medium text-foreground'>

@@ -15,6 +15,9 @@ export interface RowSnooze {
   id: number
   until: string | null
   until_change: boolean
+  /** true = this snooze is a Dismiss — "seen this one, tell me when it
+   *  happens again" — never a group/signal scope, always row-only. */
+  until_occurrence: boolean
   note: string | null
 }
 
@@ -25,6 +28,9 @@ export interface RowView {
   title: string
   detail?: string
   since?: string
+  /** Identity of THIS occurrence (a run id, a submission attempt...) — what
+   *  Dismiss keys on, distinct from `key` (the problem itself). */
+  occurrence?: string
   api?: string
   record?: { collection: string; id: string; label?: string }
   actions: SignalAction[]

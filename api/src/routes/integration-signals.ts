@@ -8,11 +8,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { chunkArray } from '../services/db-batch.js'
 import {
   bustSignalSettings,
   isSnoozed,
   loadActiveSnoozes,
   resolveThresholds,
+  rowOccurrence,
   splitSettingValues,
   stableRowHash,
   validateSettingPatch
@@ -124,10 +126,14 @@ export function dedupeRowKeys(rowKeys: unknown[]): string[] {
  * whole-signal scope, the snooze route would hash whichever open row happens
  * to come back first and then compare EVERY other row in that scope against
  * that one row's hash, silently hiding only the rows that happen to be
- * identical to it. Refuse the combination instead of guessing.
+ * identical to it. Refuse the combination instead of guessing. Dismiss
+ * ("until_occurrence") is per-row by definition for the same reason, and for
+ * the notification-style meaning itself: "I've seen THIS one" only means
+ * something about a single problem instance.
  */
 export function validateSnoozeScope(b: {
   until_change?: boolean
+  until_occurrence?: boolean
   row_key?: string | null
 }): { ok: true } | { ok: false; error: string } {
   if (b.until_change && !b.row_key) {
@@ -135,6 +141,12 @@ export function validateSnoozeScope(b: {
       ok: false,
       error:
         '"Until it changes" applies to a single row — pick a date for a group or the whole signal'
+    }
+  }
+  if (b.until_occurrence && !b.row_key) {
+    return {
+      ok: false,
+      error: 'Dismiss applies to a single row — pick a date for a group or the whole signal'
     }
   }
   return { ok: true }
@@ -206,6 +218,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
               id: sn.id,
               until: sn.until ? new Date(sn.until).toISOString() : null,
               until_change: !!sn.until_change_hash,
+              until_occurrence: sn.until_occurrence != null,
               note: sn.note ?? null
             }
           })
@@ -252,21 +265,27 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       group_key?: string | null
       until?: string | null
       until_change?: boolean
+      until_occurrence?: boolean
       note?: string | null
     }
     if (!b?.signal || !getIntegrationSignal(b.signal))
       return reply.code(400).send({ error: 'Unknown signal' })
-    if (!b.until && !b.until_change)
-      return reply.code(400).send({ error: 'until or until_change is required' })
+    if (!b.until && !b.until_change && !b.until_occurrence)
+      return reply
+        .code(400)
+        .send({ error: 'until, until_change or until_occurrence is required' })
     const scoped = validateSnoozeScope(b)
     if (!scoped.ok) return reply.code(400).send({ error: scoped.error })
     let hash: string | null = null
-    if (b.until_change) {
-      // scoped above guarantees row_key is set here — never a group/signal
-      // scope, so this can only ever match the ONE row it's snoozing.
+    let occurrence: string | null = null
+    if (b.until_change || b.until_occurrence) {
+      // scoped above guarantees row_key is set here for either of these —
+      // never a group/signal scope, so this can only ever match the ONE row
+      // being snoozed/dismissed.
       const target = (await openRows(b.signal)).find((r) => r.key === b.row_key)
       if (!target) return reply.code(404).send({ error: 'Nothing open to snooze' })
-      hash = stableRowHash(target)
+      if (b.until_change) hash = stableRowHash(target)
+      if (b.until_occurrence) occurrence = rowOccurrence(target)
     }
     const [ins] = await db('nivaro_integration_signal_snoozes')
       .insert({
@@ -275,6 +294,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
         group_key: b.group_key ?? null,
         until: b.until ? new Date(b.until) : null,
         until_change_hash: hash,
+        until_occurrence: occurrence,
         note: b.note?.slice(0, 500) ?? null,
         created_by: req.user?.id ?? null,
         created_at: new Date()
@@ -282,14 +302,70 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
       .returning('id')
     const id = typeof ins === 'object' ? (ins as { id: number }).id : ins
     await logActivity({
-      action: 'integration-signal-snooze',
+      action: b.until_occurrence ? 'integration-signal-dismiss' : 'integration-signal-snooze',
       collection: 'nivaro_integration_signal_snoozes',
       item: String(id),
       user: req.user?.id,
       req,
-      comment: `${b.signal} ${b.row_key ?? b.group_key ?? '(whole signal)'} ${b.until ? `until ${b.until}` : 'until it changes'}${b.note ? ` — ${b.note}` : ''}`
+      comment: `${b.signal} ${b.row_key ?? b.group_key ?? '(whole signal)'} ${
+        b.until_occurrence
+          ? 'dismissed until this occurrence changes'
+          : b.until
+            ? `until ${b.until}`
+            : 'until it changes'
+      }${b.note ? ` — ${b.note}` : ''}`
     })
     return { data: { id } }
+  })
+
+  /**
+   * "Dismiss selected" in the bulk bar — one dismissal per selected row (each
+   * row keeps its OWN occurrence identity; there is no group/signal-scoped
+   * Dismiss). Rows already gone by the time this lands are reported, not
+   * treated as an error — the point of dismissing was to stop seeing them.
+   */
+  app.post('/integration-signals/dismiss', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body as { signal?: string; row_keys?: string[] }
+    if (!b?.signal || !getIntegrationSignal(b.signal))
+      return reply.code(400).send({ error: 'Unknown signal' })
+    const keys = dedupeRowKeys(b.row_keys ?? [])
+    if (keys.length === 0) return reply.code(400).send({ error: 'row_keys is required' })
+    if (keys.length > 200) return reply.code(400).send({ error: 'At most 200 rows at once' })
+    const open = await openRows(b.signal)
+    const byKey = new Map(open.map((r) => [r.key, r]))
+    const now = new Date()
+    const toInsert: Array<Record<string, unknown>> = []
+    const skipped: string[] = []
+    for (const k of keys) {
+      const target = byKey.get(k)
+      if (!target) {
+        skipped.push(k)
+        continue
+      }
+      toInsert.push({
+        signal: b.signal,
+        row_key: k,
+        group_key: null,
+        until: null,
+        until_change_hash: null,
+        until_occurrence: rowOccurrence(target),
+        note: null,
+        created_by: req.user?.id ?? null,
+        created_at: now
+      })
+    }
+    for (const chunk of chunkArray(toInsert, 50)) {
+      if (chunk.length) await db('nivaro_integration_signal_snoozes').insert(chunk)
+    }
+    await logActivity({
+      action: 'integration-signal-dismiss',
+      collection: 'nivaro_integration_signal_rows',
+      item: b.signal,
+      user: req.user?.id,
+      req,
+      comment: `Dismissed ${toInsert.length} row(s)${skipped.length ? `, ${skipped.length} no longer open` : ''}`
+    })
+    return { data: { dismissed: toInsert.length, skipped } }
   })
 
   app.delete('/integration-signals/snoozes/:id', { preHandler: requireAdmin }, async (req) => {

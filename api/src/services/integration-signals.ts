@@ -10,7 +10,7 @@
  */
 import { db } from '../db/index.js'
 import { chunkArray } from './db-batch.js'
-import { resolveThresholds } from './integration-signal-settings.js'
+import { planStaleDismissalPrune, resolveThresholds } from './integration-signal-settings.js'
 
 export interface SignalThreshold {
   key: string
@@ -37,6 +37,18 @@ export interface SignalRow {
   title: string
   detail?: string
   since?: string
+  /**
+   * Identity of THIS occurrence of the problem — the failing run id
+   * (`run:<id>`), the submission attempt (`sub:<id>:<attempts>`), the
+   * obligation (`obl:<id>`), a snapshot/import timestamp, whatever the
+   * signal knows best. Distinct from `key`: `key` names the PROBLEM ("this
+   * import keeps failing") and stays the same across every failure; a
+   * Dismiss hides the row only until `occurrence` next changes — a genuinely
+   * new instance of the same problem re-shows it, like a notification you
+   * can dismiss once. Unset falls back to `since`, then a masked hash of the
+   * row (see `rowOccurrence` in integration-signal-settings.ts).
+   */
+  occurrence?: string
   api?: string
   record?: { collection: string; id: string; label?: string }
   actions: SignalAction[]
@@ -373,5 +385,36 @@ async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {
     .where('ran_at', '<', new Date(now.getTime() - 7 * 86_400_000))
     .del()
     .catch(() => undefined)
+  await pruneStaleDismissals(now).catch(() => undefined)
   return summary
+}
+
+/**
+ * Dismiss-snoozes (`until_occurrence` set) whose row hasn't been seen at all
+ * in 30 days are dead weight — see `planStaleDismissalPrune`'s own comment.
+ * Scoped to only the signals that actually have a dismissal on file, so a
+ * quiet instance never pays for scanning every open/cleared row.
+ */
+async function pruneStaleDismissals(now: Date): Promise<void> {
+  const snoozes = (await db('nivaro_integration_signal_snoozes')
+    .whereNotNull('until_occurrence')
+    .select('id', 'signal', 'row_key', 'until_occurrence')) as Array<{
+    id: number
+    signal: string
+    row_key: string | null
+    until_occurrence: string | null
+  }>
+  if (snoozes.length === 0) return
+  const signals = [...new Set(snoozes.map((s) => s.signal))]
+  const rows = (await db('nivaro_integration_signal_rows')
+    .whereIn('signal', signals)
+    .select('signal', 'row_key', 'last_seen')) as Array<{
+    signal: string
+    row_key: string
+    last_seen: Date
+  }>
+  const staleIds = planStaleDismissalPrune(snoozes, rows, now)
+  for (const chunk of chunkArray(staleIds, 1000)) {
+    await db('nivaro_integration_signal_snoozes').whereIn('id', chunk).del()
+  }
 }

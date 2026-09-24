@@ -95,7 +95,8 @@ export function registerCoreIntegrationSignals(): void {
         .where('created_at', '>=', since)
         .orderBy('id', 'desc')
         .limit(5000)
-        .select('api_id', 'api_name', 'ok', 'status', 'error', 'created_at')) as Array<{
+        .select('id', 'api_id', 'api_name', 'ok', 'status', 'error', 'created_at')) as Array<{
+        id: number
         api_id: number
         api_name: string | null
         ok: boolean | number
@@ -121,6 +122,9 @@ export function registerCoreIntegrationSignals(): void {
             : `${name}: ${streak} failed calls in a row`,
           detail: newest.error ?? (newest.status != null ? `HTTP ${newest.status}` : 'No response'),
           since: new Date(firstFail.created_at).toISOString(),
+          // The newest failing call — unchanged while the streak just keeps
+          // going between evaluations, moves the moment a FRESH failure lands.
+          occurrence: `call:${newest.id}`,
           api: name,
           actions: [{ kind: 'explain', label: 'Partner detail', payload: { api_id: apiId } }]
         })
@@ -193,6 +197,10 @@ export function registerCoreIntegrationSignals(): void {
           title: `${r.api_name} ${r.endpoint ?? ''}`.trim(),
           detail: `${r.last_error ?? 'failed'} · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}`,
           since: new Date(r.updated_at).toISOString(),
+          // Attempts increments per retry — a new retry IS a new occurrence,
+          // same as dismissing one failed send but wanting to hear about the
+          // next one.
+          occurrence: `sub:${r.id}:${r.attempts}`,
           api: r.api_name,
           record: { collection: r.collection, id: r.item },
           actions: [
@@ -253,6 +261,7 @@ export function registerCoreIntegrationSignals(): void {
             title: `${r.api}: ${r.kind}`,
             detail: r.reason ?? undefined,
             since: new Date(r.due_at ?? r.created_at).toISOString(),
+            occurrence: `obl:${r.id}`,
             api: r.api,
             record: { collection: r.collection, id: r.item },
             actions: [open(r.collection, r.item)]
@@ -334,11 +343,16 @@ export function registerCoreIntegrationSignals(): void {
         const calls = Number(r.calls)
         const errors = Number(r.errors)
         const who = formatInboundCaller(r.user_id, r.api_key_id, userNames, keyNames)
+        const since = r.last_error_at ? new Date(r.last_error_at).toISOString() : undefined
         out.push({
           key: r.api_key_id ? `key:${r.api_key_id}` : `user:${r.user_id ?? 'none'}`,
           title: `${who}: ${Math.round((errors / calls) * 100)}% of calls failing`,
           detail: `${errors} of ${calls} calls in the last hour`,
-          since: r.last_error_at ? new Date(r.last_error_at).toISOString() : undefined,
+          since,
+          // The newest error in the window — a caller still erroring between
+          // evaluations keeps the same value; a fresh error after a quiet
+          // spell moves it, which is exactly "it happened again."
+          occurrence: since,
           actions: [
             {
               kind: 'explain',
@@ -379,6 +393,10 @@ export function registerCoreIntegrationSignals(): void {
         title: `${r.label}: last run failed`,
         detail: r.logs ?? undefined,
         since: r.finished_at ? new Date(r.finished_at).toISOString() : undefined,
+        // The failing run itself — the SAME failed run stays dismissed; the
+        // next run (whether it fails again or succeeds and later fails) is a
+        // new run id, so it shows again.
+        occurrence: `run:${r.id}`,
         actions: [{ kind: 'explain', label: 'Open run', payload: { import_run: r.id } }]
       }))
       return { count: out.length, rows: out }
@@ -440,6 +458,10 @@ export function registerCoreIntegrationSignals(): void {
           title: `${r.label}: no successful run in ${Math.floor(age)} h`,
           detail: `Expected every ${hours} h`,
           since: new Date(new Date(r.last_ok).getTime() + hours * 3600_000).toISOString(),
+          // The last SUCCESSFUL run this staleness is measured from. Once a
+          // fresh success lands and it later goes stale again, that is a
+          // genuinely new instance of "stale" worth raising again.
+          occurrence: new Date(r.last_ok).toISOString(),
           actions: []
         })
       }
@@ -459,7 +481,7 @@ export function registerCoreIntegrationSignals(): void {
     evaluate: async ({ thresholds }) => {
       const since = new Date(Date.now() - thresholds.window_hours * 3600_000)
       const rows = (await db.raw(
-        `SELECT f.id, f.name, r.error_message, r.started_at,
+        `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
                 (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors
            FROM nivaro_flows f
            JOIN nivaro_flow_runs r ON r.id = (SELECT TOP 1 id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC)
@@ -469,6 +491,7 @@ export function registerCoreIntegrationSignals(): void {
       )) as Array<{
         id: string
         name: string
+        run_id: number
         error_message: string | null
         started_at: Date
         errors: number
@@ -478,6 +501,9 @@ export function registerCoreIntegrationSignals(): void {
         title: `${r.name}: failing`,
         detail: `${r.error_message ?? 'error'} · ${r.errors} failed run${Number(r.errors) === 1 ? '' : 's'} in ${thresholds.window_hours} h`,
         since: new Date(r.started_at).toISOString(),
+        // The most recent failing run — a NEW failed run (this one succeeds
+        // then fails again, or just runs and fails once more) moves it.
+        occurrence: `run:${r.run_id}`,
         actions: [{ kind: 'explain', label: 'Open flow', payload: { flow: r.id } }]
       }))
       return { count: out.length, rows: out }
