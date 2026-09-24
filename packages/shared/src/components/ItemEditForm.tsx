@@ -6565,6 +6565,25 @@ export function ItemEditForm({
     }
   })
 
+  // Every transition button on this form — the header buttons, the pipeline
+  // panel in section/tab/steps mode and the __pipeline__ slot — runs this
+  // first. One click means one action: validate, save what is on screen,
+  // then transition. A transition that fails (a blocked partner push, a 422)
+  // must never cost the person the values they had just entered: they are
+  // on the record before the transition is attempted, and a reload shows them.
+  const saveThenTransition = async (): Promise<boolean> => {
+    if (!validateAll()) return false
+    if (!isDirty) return true
+    try {
+      await saveMut.mutateAsync()
+      return true
+    } catch {
+      // The save reports its own failure; transitioning on top of unsaved
+      // edits would apply the state change to values the record does not have.
+      return false
+    }
+  }
+
   const deleteMut = useMutation({
     mutationFn: () => client.request(del(`/items/${collection}/${itemId}`)),
     onSuccess: () => {
@@ -6959,7 +6978,7 @@ export function ItemEditForm({
           }
           hideActionsCollapsed={!!pipelineSlotOpts.hide_actions_collapsed}
           hideActionsExpanded={!!pipelineSlotOpts.hide_actions_expanded}
-          onBeforeTransition={validateAll}
+          onBeforeTransition={saveThenTransition}
           asRole={viewAs.roleId}
           addendumPending={
             !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
@@ -7656,7 +7675,7 @@ export function ItemEditForm({
           <PipelinePanel
             collection={pipelineCollection}
             item={pipelineItem}
-            onBeforeTransition={validateAll}
+            onBeforeTransition={saveThenTransition}
             addendumPending={
               !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
             }
@@ -7924,7 +7943,7 @@ export function ItemEditForm({
           <PipelinePanel
             collection={pipelineCollection}
             item={pipelineItem}
-            onBeforeTransition={validateAll}
+            onBeforeTransition={saveThenTransition}
             addendumPending={
               !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
             }
@@ -8036,22 +8055,9 @@ export function ItemEditForm({
                 collection={pipelineCollection}
                 item={pipelineItem}
                 // One click means one action: save what is on screen, then
-                // transition. Refusing and asking for a separate Save made the
-                // button lie about what it does — the person had already told
-                // us to move the record on.
-                onBeforeTransition={async () => {
-                  if (!validateAll()) return false
-                  if (!isDirty) return true
-                  try {
-                    await saveMut.mutateAsync()
-                    return true
-                  } catch {
-                    // The save reports its own failure; transitioning on top of
-                    // unsaved edits would apply the state change to values the
-                    // record does not have.
-                    return false
-                  }
-                }}
+                // transition (saveThenTransition — shared by every transition
+                // button on the form).
+                onBeforeTransition={saveThenTransition}
               />
             )}
           </div>
@@ -8109,7 +8115,7 @@ export function ItemEditForm({
             collection={pipelineCollection}
             item={pipelineItem}
             defaultExpanded={false}
-            onBeforeTransition={validateAll}
+            onBeforeTransition={saveThenTransition}
             addendumPending={
               !viewingAddendum && activeAddendumCount > 0 && !!colMeta?.addendums_enabled
             }
@@ -9488,16 +9494,7 @@ export function ItemEditForm({
                                             collection={pipelineCollection}
                                             item={pipelineItem}
                                             // Same as the header buttons: save first, then transition.
-                                            onBeforeTransition={async () => {
-                                              if (!validateAll()) return false
-                                              if (!isDirty) return true
-                                              try {
-                                                await saveMut.mutateAsync()
-                                                return true
-                                              } catch {
-                                                return false
-                                              }
-                                            }}
+                                            onBeforeTransition={saveThenTransition}
                                           />
                                         )}
                                     </div>

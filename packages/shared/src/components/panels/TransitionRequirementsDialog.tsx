@@ -465,7 +465,10 @@ export function TransitionRequirementsDialog({
   payload: TransitionRequirementsPayload
   /** True when this payload came from a retry's second 422 (values changed underneath). */
   isRetry?: boolean
-  onSubmitted: () => void
+  /** Runs the transition once the rows are saved. May return the call's
+   *  promise: the dialog stays busy (button disabled, spinner) until it
+   *  settles, whether or not the host also passes `executing`. */
+  onSubmitted: () => void | Promise<unknown>
   /** True while the PARENT is executing the transition (external submissions
    *  can take several seconds) — the dialog stays open showing progress. */
   executing?: boolean
@@ -479,6 +482,7 @@ export function TransitionRequirementsDialog({
   const savedRef = useRef<Record<string, Record<string, FieldValue>>>(snapshotValues(payload))
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
+  const [phase, setPhase] = useState<'save' | 'transition'>('save')
 
   const setFieldValue = (rk: string, field: string, v: FieldValue) => {
     setValues((prev) => ({ ...prev, [rk]: { ...prev[rk], [field]: v } }))
@@ -492,7 +496,10 @@ export function TransitionRequirementsDialog({
 
   // Copy the first filled value in a column to every line (e.g. one sales
   // order number shared by all lines).
-  const applyToAllLines = (entry: TransitionRequirementEntry, f: TransitionRequirementFieldMeta) => {
+  const applyToAllLines = (
+    entry: TransitionRequirementEntry,
+    f: TransitionRequirementFieldMeta
+  ) => {
     const source = entry.rows
       .map((r) => values[rowKey(entry.collection, r.id)]?.[f.field])
       .find((v) =>
@@ -616,7 +623,11 @@ export function TransitionRequirementsDialog({
           const current = values[rk] ?? {}
           const saved = savedRef.current[rk] ?? {}
           const changed: Record<string, unknown> = {}
-          const m2mChanges: Array<{ meta: TransitionRequirementFieldMeta; add: string[]; remove: string[] }> = []
+          const m2mChanges: Array<{
+            meta: TransitionRequirementFieldMeta
+            add: string[]
+            remove: string[]
+          }> = []
           for (const f of entry.fields) {
             if (f.kind === 'm2m') {
               const cur = Array.isArray(current[f.field]) ? (current[f.field] as string[]) : []
@@ -679,17 +690,29 @@ export function TransitionRequirementsDialog({
         })
       })
     )
-    setSubmitting(false)
     const failures = results.filter((r) => !r.ok)
     for (const r of results) {
       if (r.ok && r.saved) savedRef.current[r.rk] = r.saved
     }
     if (failures.length > 0) {
+      setSubmitting(false)
       setRowErrors(Object.fromEntries(failures.map((f) => [f.rk, f.ok ? '' : f.error])))
       return
     }
     setRowErrors({})
-    onSubmitted()
+    // Stay busy through the transition itself — a second click while the
+    // partner push is in flight would submit the order twice. The host
+    // reports the outcome (toast / banner / a fresh 422 payload); this only
+    // releases the button once that call has settled.
+    setPhase('transition')
+    try {
+      await onSubmitted()
+    } catch {
+      /* the host's mutation handlers own the error */
+    } finally {
+      setSubmitting(false)
+      setPhase('save')
+    }
   }
 
   const title =
@@ -980,14 +1003,23 @@ export function TransitionRequirementsDialog({
                 : 'Submitting — contacting external systems, this can take a few seconds…'}
             </span>
           )}
-          <Button type='button' variant='outline' onClick={onClose} disabled={submitting || executing}>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={onClose}
+            disabled={submitting || executing}
+          >
             Cancel
           </Button>
-          <Button type='button' onClick={handleSubmit} disabled={submitting || executing || hasEmpty}>
+          <Button
+            type='button'
+            onClick={handleSubmit}
+            disabled={submitting || executing || hasEmpty}
+          >
             {submitting || executing ? (
               <span className='flex items-center gap-1.5'>
                 <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                {submitting ? 'Saving…' : 'Submitting…'}
+                {submitting && phase === 'save' ? 'Saving…' : 'Submitting…'}
               </span>
             ) : (
               'Submit'

@@ -1918,11 +1918,15 @@ function PipelinePanelInner({
           payload={requirementsDialog.payload}
           isRetry={requirementsDialog.revision > 1}
           onSubmitted={() =>
-            executeTransition.mutate({
-              transition_id: requirementsDialog.transitionId,
-              comment: requirementsDialog.comment,
-              reviewed: true
-            })
+            // mutateAsync so the dialog can stay busy until the transition
+            // settles; the mutation's own onError/onSuccess handle the outcome.
+            executeTransition
+              .mutateAsync({
+                transition_id: requirementsDialog.transitionId,
+                comment: requirementsDialog.comment,
+                reviewed: true
+              })
+              .catch(() => undefined)
           }
           executing={executeTransition.isPending}
           onClose={() => setRequirementsDialog(null)}
@@ -2245,12 +2249,17 @@ function PipelineTransitionButtonsInner({
           payload={requirementsDialog.payload}
           isRetry={requirementsDialog.revision > 1}
           onSubmitted={() =>
-            executeTransition.mutate({
-              transition_id: requirementsDialog.transitionId,
-              comment: requirementsDialog.comment,
-              reviewed: true
-            })
+            // mutateAsync so the dialog can stay busy until the transition
+            // settles; the mutation's own onError/onSuccess handle the outcome.
+            executeTransition
+              .mutateAsync({
+                transition_id: requirementsDialog.transitionId,
+                comment: requirementsDialog.comment,
+                reviewed: true
+              })
+              .catch(() => undefined)
           }
+          executing={executeTransition.isPending}
           onClose={() => setRequirementsDialog(null)}
         />
       )}
