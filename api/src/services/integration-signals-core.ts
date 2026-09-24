@@ -591,11 +591,16 @@ export function registerCoreIntegrationSignals(): void {
                 ff.id AS first_fail_run_id, ff.started_at AS first_fail_at
            FROM nivaro_flows f
            OUTER APPLY (
+             SELECT MAX(s.started_at) AS last_ok FROM nivaro_flow_runs s
+              WHERE s.flow = f.id AND s.status = 'success'
+           ) ls
+           OUTER APPLY (
              SELECT TOP 1 e.id, e.started_at FROM nivaro_flow_runs e
               WHERE e.flow = f.id AND e.status = 'error'
-                AND e.id > ISNULL((SELECT MAX(s.id) FROM nivaro_flow_runs s
-                                    WHERE s.flow = f.id AND s.status = 'success'), 0)
-              ORDER BY e.id ASC
+                -- nivaro_flow_runs.id is a uuid, so "after the last success"
+                -- is judged by time, never by id.
+                AND (ls.last_ok IS NULL OR e.started_at > ls.last_ok)
+              ORDER BY e.started_at ASC, e.id ASC
            ) ff
            JOIN nivaro_flow_runs r ON r.id = (SELECT TOP 1 id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC)
           WHERE r.status = 'error' AND r.started_at >= ?
@@ -604,11 +609,11 @@ export function registerCoreIntegrationSignals(): void {
       )) as Array<{
         id: string
         name: string
-        run_id: number
+        run_id: string
         error_message: string | null
         started_at: Date
         errors: number
-        first_fail_run_id: number | null
+        first_fail_run_id: string | null
         first_fail_at: Date | null
       }>
       const out: SignalRow[] = rows.map((r) => ({

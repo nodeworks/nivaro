@@ -112,17 +112,17 @@ describe('core:flow-failed occurrence', () => {
       {
         id: 'F1',
         name: 'Sync',
-        run_id: 30,
+        run_id: 'B7E1C0DE-0000-4000-8000-000000000030',
         error_message: 'boom',
         started_at: new Date(),
         errors: 3,
-        first_fail_run_id: 21,
+        first_fail_run_id: 'B7E1C0DE-0000-4000-8000-000000000021',
         first_fail_at: new Date(Date.now() - 3600_000)
       }
     ]
     const def = getIntegrationSignal('core:flow-failed')!
     const { rows } = await def.evaluate(ctx({ window_hours: 24 }))
-    expect(rows[0].occurrence).toBe('run:21')
+    expect(rows[0].occurrence).toBe('run:B7E1C0DE-0000-4000-8000-000000000021')
   })
 })
 
