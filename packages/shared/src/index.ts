@@ -289,7 +289,6 @@ export {
   startApiVersionWatch,
   useApiUpdate
 } from './lib/api-version'
-export { SHARED_BUILT_AT } from './build-info'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export * from './lib/catalog-item-open'

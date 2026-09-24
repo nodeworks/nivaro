@@ -1,19 +1,15 @@
-import { SHARED_BUILT_AT } from '@nivaro/shared'
 import { useEffect, useState } from 'react'
 
 /**
- * Development only: says when the running API or this admin tab is on code
- * older than what is on disk (a watcher that missed a restart, or vite serving
- * a stale build of @nivaro/shared). The dev API reports its own start time,
- * the newest source file changed after it, and the shared build stamp on disk
- * as `dev` on /api/version; this compares that stamp with the one this tab
- * actually loaded. Production builds never render it.
+ * Development only: says when the running API is on code older than what is
+ * on disk (tsx watch missed a restart, or an extension changed). The dev API
+ * reports its start time and the newest source file changed after it as `dev`
+ * on /api/version. Production builds never render it.
  */
 
 interface DevInfo {
   started_at: string
   api_stale: { file: string; changed_at: string } | null
-  shared_built_at: string | null
 }
 
 const POLL_MS = 30_000
@@ -21,17 +17,12 @@ const time = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 /** Pure: the sentences to show, empty when everything is current. */
-export function staleMessages(dev: DevInfo | null, loadedShared: string | null): string[] {
+export function staleMessages(dev: DevInfo | null): string[] {
   if (!dev) return []
   const out: string[] = []
   if (dev.api_stale) {
     out.push(
       `The API is running code loaded at ${time(dev.started_at)} — ${dev.api_stale.file} changed at ${time(dev.api_stale.changed_at)}. Restart the API.`
-    )
-  }
-  if (loadedShared && dev.shared_built_at && dev.shared_built_at > loadedShared) {
-    out.push(
-      `This tab is running shared code built at ${time(loadedShared)}; the build on disk is from ${time(dev.shared_built_at)}. Reload — if this stays, restart the admin dev server.`
     )
   }
   return out
@@ -61,7 +52,7 @@ export function DevStaleBanner() {
     }
   }, [])
 
-  const lines = staleMessages(dev, SHARED_BUILT_AT)
+  const lines = staleMessages(dev)
   if (!import.meta.env.DEV || hidden || lines.length === 0) return null
   return (
     <div

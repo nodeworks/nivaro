@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && node scripts/stamp-build.mjs",
+    "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run"
   },

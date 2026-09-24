@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,8 +9,7 @@ import { fileURLToPath } from 'node:url'
  * tsx watch is supposed to restart the API on every save, but it has missed
  * restarts (a child that died on a DB blip and was never respawned; a process
  * that simply kept running old code), and it never reloads api/extensions at
- * all. Separately, the admin's vite server has served a stale build of
- * packages/shared after a rebuild. Both looked like "my fix doesn't work".
+ * all. It looked like "my fix doesn't work".
  *
  * The scan runs on its own 30s timer so /api/version stays free of disk I/O.
  * It only starts when the source tree exists — a release image has none, so
@@ -22,8 +21,6 @@ export interface DevStaleness {
   started_at: string
   /** Newest source file changed after the process started, else null. */
   api_stale: { file: string; changed_at: string } | null
-  /** Build time stamped into packages/shared/dist by its build, else null. */
-  shared_built_at: string | null
 }
 
 const STARTED_AT = new Date()
@@ -44,8 +41,7 @@ const SKIP_DIRS = new Set([
 
 let state: DevStaleness = {
   started_at: STARTED_AT.toISOString(),
-  api_stale: null,
-  shared_built_at: null
+  api_stale: null
 }
 let timer: NodeJS.Timeout | null = null
 
@@ -91,30 +87,15 @@ export function staleFrom(
   return { file: relative(root, newest.path), changed_at: new Date(newest.mtime).toISOString() }
 }
 
-/** Pure: the ISO stamp out of dist/build-info.js, else null. */
-export function parseSharedStamp(js: string): string | null {
-  const m = js.match(/SHARED_BUILT_AT\s*=\s*['"]([^'"]+)['"]/)
-  return m ? m[1] : null
-}
-
 async function scan(root: string): Promise<void> {
   const [src, ext] = await Promise.all([
     newestFile(join(root, 'api', 'src')),
     newestFile(join(root, 'api', 'extensions'))
   ])
   const newest = !src ? ext : !ext ? src : src.mtime >= ext.mtime ? src : ext
-  let shared: string | null = null
-  try {
-    shared = parseSharedStamp(
-      await readFile(join(root, 'packages', 'shared', 'dist', 'build-info.js'), 'utf8')
-    )
-  } catch {
-    shared = null
-  }
   state = {
     started_at: STARTED_AT.toISOString(),
-    api_stale: staleFrom(newest, STARTED_AT.getTime(), root),
-    shared_built_at: shared
+    api_stale: staleFrom(newest, STARTED_AT.getTime(), root)
   }
 }
 
