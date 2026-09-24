@@ -151,7 +151,11 @@ function plan(cfg, ch) {
   for (const d of cfg.deployments) {
     add('deployments', `${d.name}: ${(d.prepare ?? []).join(' && ') || 'no prepare step'}, commit (empty if nothing changed), push`)
   }
-  for (const v of cfg.verify) add('verify', `${v.name}: poll ${v.url} until it reports the new version twice in a row`)
+  for (const v of cfg.verify) {
+    const fe = v.expect?.startsWith('frontend:') ? v.expect.slice('frontend:'.length) : null
+    const what = fe ? `the pushed ${fe} commit` : 'the new version'
+    add('verify', `${v.name}: poll ${v.url} until it reports ${what} twice in a row`)
+  }
   if (!cfg.path) add('frontends', 'no release-chain.config.json — the chain stops after artifacts')
   return { lines, wantSdk, wantReact }
 }
@@ -355,16 +359,28 @@ async function main() {
         // new version every time. A probe failure is printed once per
         // distinct reason so a broken probe can never pass for a slow deploy.
         // `expect: "frontend:<name>"` waits for the commit this run pushed to
-        // that frontend (else its checkout's HEAD), not the app version.
+        // that frontend. When this run pushed nothing there (nothing to pin,
+        // or resumed past `frontends`), origin's head is what that frontend's
+        // CI deployed — never the local HEAD, which can hold unpushed commits.
         const frontendName = v.expect?.startsWith('frontend:')
           ? v.expect.slice('frontend:'.length)
           : null
-        const expected = frontendName
-          ? (pushedShas[frontendName] ??
-            git(['rev-parse', '--short=8', 'HEAD'], {
-              cwd: expand(cfg.frontends.find((f) => f.name === frontendName)?.path ?? '.')
-            }))
-          : V
+        let expected = V
+        if (frontendName) {
+          const fe = cfg.frontends.find((f) => f.name === frontendName)
+          if (!fe) {
+            throw new StageError(
+              `verify "${v.name}": no frontend named ${frontendName} in release-chain.config.json`
+            )
+          }
+          if (pushedShas[frontendName]) expected = pushedShas[frontendName]
+          else {
+            const cwd = expand(fe.path)
+            const branch = fe.branch ?? 'main'
+            sh('git', ['fetch', 'origin', branch], { cwd, quiet: true, allowFail: true })
+            expected = git(['rev-parse', '--short=8', `origin/${branch}`], { cwd })
+          }
+        }
         let streak = 0
         let lastErr = ''
         await until(`${v.name} on ${expected}`, async () => {
