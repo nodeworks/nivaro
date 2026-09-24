@@ -49,6 +49,9 @@ export interface RelatedNoteProvider {
   list?(opts: {
     limit: number
     status?: 'ok' | 'error' | 'info' | null
+    /** Older-than cursor (ISO) — a provider MAY honour it; the registry
+     *  over-fetches and filters regardless, so ignoring it is safe. */
+    before?: string | null
   }): Promise<RelatedNoteFeedEntry[]>
   /** #29 — re-fetch / re-apply one event from its stored form. */
   replay?(entryId: string, opts: { userId: string | null }): Promise<{ detail: string }>
@@ -67,6 +70,9 @@ export interface MachineMarkerSet {
   /** Prefix matches, case-insensitive ("forecast-import:"). */
   prefixes?: string[]
 }
+
+/** How far back a paged feed call reaches per provider. */
+export const LIST_WINDOW = 500
 
 class RelatedNoteRegistry {
   private providers = new Map<string, RelatedNoteProvider>()
@@ -144,24 +150,38 @@ class RelatedNoteRegistry {
     }))
   }
 
-  /** #20 — newest entries across every provider that can list, each isolated. */
+  /**
+   * #20 — newest entries across every provider that can list, each isolated.
+   * `before` pages backwards: entries strictly older than it. Providers list
+   * newest-first with no cursor contract of their own, so a paged call asks
+   * each for the feed's full window (LIST_WINDOW) and filters here — the feed
+   * therefore reaches back LIST_WINDOW entries per provider, no further.
+   */
   async listRecent(opts: {
     limit: number
     provider?: string | null
     status?: 'ok' | 'error' | 'info' | null
+    before?: string | null
   }): Promise<Array<RelatedNoteFeedEntry & { provider: string }>> {
+    const beforeMs = opts.before ? new Date(opts.before).getTime() : Number.NaN
+    const paged = Number.isFinite(beforeMs)
     const out: Array<RelatedNoteFeedEntry & { provider: string }> = []
     for (const p of this.providers.values()) {
       if (!p.list) continue
       if (opts.provider && p.id !== opts.provider) continue
       try {
-        const rows = await p.list({ limit: opts.limit, status: opts.status ?? null })
+        const rows = await p.list({
+          limit: paged ? LIST_WINDOW : opts.limit,
+          status: opts.status ?? null,
+          before: paged ? new Date(beforeMs).toISOString() : null
+        })
         out.push(...rows.map((r) => ({ ...r, provider: p.id })))
       } catch {
         /* one provider's failure never hides the others */
       }
     }
     return out
+      .filter((r) => !paged || new Date(r.created_at).getTime() < beforeMs)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       .slice(0, opts.limit)
   }

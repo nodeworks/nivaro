@@ -1,8 +1,17 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient
+} from '@tanstack/react-query'
 import { useNivaroClient } from '../../../context'
 import { del, get, post } from '../../../lib/commands'
 import type {
   ActionResult,
+  EventProvider,
+  EventStatus,
+  IntegrationEvent,
   PartnerCard,
   PartnerDetailData,
   PartnersSummary,
@@ -95,6 +104,55 @@ export function usePartner(id: number | null) {
       client
         .request<{ data: PartnerDetailData }>(get(`/integration-partners/${id}`))
         .then((r) => r.data)
+  })
+}
+
+/** Entries per page of the events feed. */
+export const EVENTS_PAGE = 50
+
+/**
+ * The integration events feed, newest first, paged backwards with a `before`
+ * cursor (the oldest entry already shown). A page shorter than EVENTS_PAGE is
+ * the end of what the sources keep.
+ */
+export function useIntegrationEvents(filters: { provider: string; status: EventStatus | '' }) {
+  const client = useNivaroClient()
+  return useInfiniteQuery({
+    queryKey: ['integration-events', filters.provider, filters.status],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: String(EVENTS_PAGE) })
+      if (filters.provider) params.set('provider', filters.provider)
+      if (filters.status) params.set('status', filters.status)
+      if (pageParam) params.set('before', pageParam)
+      return client
+        .request<{ data: { providers: EventProvider[]; entries: IntegrationEvent[] } }>(
+          get(`/integration-events?${params.toString()}`)
+        )
+        .then((r) => r.data)
+    },
+    getNextPageParam: (last) =>
+      last.entries.length < EVENTS_PAGE ? null : last.entries[last.entries.length - 1].created_at,
+    // A filter change keeps the old list on screen (dimmed) instead of
+    // collapsing to skeletons.
+    placeholderData: keepPreviousData,
+    refetchInterval: 60_000
+  })
+}
+
+export function useReplayEvent() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (e: IntegrationEvent) =>
+      client
+        .request<{ data: { replayed: boolean; detail?: string } }>(
+          post(`/integration-events/${encodeURIComponent(e.provider)}/replay`, {
+            entry_id: String(e.id)
+          })
+        )
+        .then((r) => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['integration-events'] })
   })
 }
 

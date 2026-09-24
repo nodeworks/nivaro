@@ -100,8 +100,8 @@ export function IntegrationHealthPage() {
         <div>
           <h1 className='text-lg font-semibold'>Integrations</h1>
           <p className='text-[12px] text-muted-foreground'>
-            Every outside system this instance talks to — what is broken right now, and how each
-            partner is doing.
+            Every outside system this instance talks to — what is broken right now, how each
+            partner is doing, and what they reported.
           </p>
         </div>
       </header>

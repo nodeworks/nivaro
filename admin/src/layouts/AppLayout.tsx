@@ -67,7 +67,6 @@ import {
   Rocket,
   RotateCcw,
   RotateCw,
-  Satellite,
   Scale,
   ScanSearch,
   ScrollText,
@@ -341,12 +340,6 @@ export const navCategories: NavCategory[] = [
       { icon: Activity, label: 'Background Jobs', to: '/background-jobs', section: 'Operations' },
       { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Operations' },
       { icon: Link2, label: 'Integrations', to: '/integration-health', section: 'Operations' },
-      {
-        icon: Satellite,
-        label: 'Integration Events',
-        to: '/integration-events',
-        section: 'Operations'
-      },
       { icon: Inbox, label: 'Inbound Mappings', to: '/inbound-mappings', section: 'Operations' },
       { icon: CalendarClock, label: 'Ops Calendar', to: '/ops-calendar', section: 'Operations' },
       { icon: CalendarClock, label: 'Cron Timeline', to: '/cron-timeline', section: 'Operations' },

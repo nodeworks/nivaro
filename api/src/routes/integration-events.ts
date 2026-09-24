@@ -3,6 +3,38 @@ import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
+import { resolveFriendlyIds } from '../services/workflow-transitions.js'
+
+type FeedEntry = Awaited<ReturnType<typeof relatedNoteRegistry.listRecent>>[number]
+
+/**
+ * Entries a provider sent without a record label get the record's friendly id
+ * (the human id the entity-room registry names), one batched lookup per
+ * collection over the page. Never throws — a failed lookup leaves the entry
+ * unlabelled and the client falls back to the raw id.
+ */
+export async function fillItemLabels(entries: FeedEntry[]): Promise<void> {
+  const byCollection = new Map<string, Set<string>>()
+  for (const e of entries) {
+    if (e.item_label || !e.collection || e.item_id == null || e.item_id === '') continue
+    const set = byCollection.get(e.collection) ?? new Set<string>()
+    set.add(String(e.item_id))
+    byCollection.set(e.collection, set)
+  }
+  for (const [collection, ids] of byCollection) {
+    try {
+      const labels = await resolveFriendlyIds(collection, [...ids])
+      for (const e of entries) {
+        if (e.item_label || e.collection !== collection) continue
+        const label = labels.get(String(e.item_id))
+        // resolveFriendlyIds echoes the id when it finds nothing better.
+        if (label && label !== String(e.item_id)) e.item_label = label
+      }
+    } catch {
+      /* the entry keeps no label */
+    }
+  }
+}
 
 /**
  * #20 / #29 — the integration events feed: every extension-registered notes
@@ -12,16 +44,23 @@ import { can } from '../services/permissions.js'
  */
 export async function integrationEventsRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
-    const q = req.query as { integration?: string; status?: string; limit?: string }
+    const q = req.query as {
+      integration?: string
+      provider?: string
+      status?: string
+      limit?: string
+      before?: string
+    }
     const limit = Math.min(500, Math.max(1, Number(q.limit) || 100))
     const status =
       q.status === 'ok' || q.status === 'error' || q.status === 'info' ? q.status : null
+    // `provider` is the name the console (and the old events page) sends;
+    // `integration` is the original parameter — both narrow to one source.
+    const provider = q.integration || q.provider || null
+    const before = q.before && !Number.isNaN(new Date(q.before).getTime()) ? q.before : null
     const providers = relatedNoteRegistry.describe()
-    const entries = await relatedNoteRegistry.listRecent({
-      limit,
-      provider: q.integration || null,
-      status
-    })
+    const entries = await relatedNoteRegistry.listRecent({ limit, provider, status, before })
+    await fillItemLabels(entries)
     return reply.send({ data: { providers, entries } })
   })
 

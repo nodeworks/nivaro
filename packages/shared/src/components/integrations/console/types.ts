@@ -124,4 +124,31 @@ export interface PartnerDetailData {
 
 export type { ImportHealthRow } from '../../imports/ImportStalenessControl'
 
+/** GET /integration-events — a notes source that can list or replay (#20). */
+export interface EventProvider {
+  id: string
+  collection: string
+  label: string
+  can_list: boolean
+  can_replay: boolean
+}
+
+export type EventStatus = 'ok' | 'error' | 'info'
+
+/** One entry of the cross-record integration events feed. */
+export interface IntegrationEvent {
+  id: string | number
+  label: string
+  text: string
+  user?: string | null
+  created_at: string
+  context?: string | null
+  collection: string
+  item_id: string
+  item_label?: string | null
+  provider: string
+  replayable?: boolean
+  status?: EventStatus | null
+}
+
 export type ActionResult = { key: string; ok: boolean; message: string }

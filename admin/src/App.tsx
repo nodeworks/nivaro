@@ -168,9 +168,6 @@ const CoverageGapsPage = lazy(() =>
 const IntegrationHealthPage = lazy(() =>
   import('@/pages/IntegrationHealth').then((m) => ({ default: m.IntegrationHealthPage }))
 )
-const IntegrationEventsPage = lazy(() =>
-  import('@/pages/IntegrationEvents').then((m) => ({ default: m.IntegrationEventsPage }))
-)
 const InboundMappingsPage = lazy(() =>
   import('@/pages/InboundMappings').then((m) => ({ default: m.InboundMappingsPage }))
 )
@@ -543,7 +540,10 @@ export default function App() {
                   <Route path='delegation' element={<DelegationConsole />} />
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
-                  <Route path='integration-events' element={<IntegrationEventsPage />} />
+                  <Route
+                    path='integration-events'
+                    element={<Navigate to='/integration-health?tab=events' replace />}
+                  />
                   <Route path='inbound-mappings' element={<InboundMappingsPage />} />
                   <Route path='background-jobs' element={<BackgroundJobs />} />
                   <Route path='realtime' element={<Realtime />} />

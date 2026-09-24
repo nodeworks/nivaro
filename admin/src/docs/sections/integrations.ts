@@ -176,7 +176,7 @@ export const integrationsEvents: DocSection = {
     { type: 'h1', id: 'integration-events', text: 'Integration Events & Replay' },
     {
       type: 'p',
-      text: "Every integration that registers a notes source (`ctx.notes.registerSource`) can also answer two more questions: what happened lately across every record, and can this event be re-applied. The Integration Events page (Monitoring → Integration Events) lists the newest events from every source with a status dot (ok / error / info), the record they belong to, and a Replay action where the source offers one. The same Replay sits on the record's Notes thread beside each replayable external entry."
+      text: "Every integration that registers a notes source (`ctx.notes.registerSource`) can also answer two more questions: what happened lately across every record, and can this event be re-applied. The Events tab of the Integrations console (Operations → Integrations → Events; the old /integration-events address lands there) lists the newest events from every source grouped by day, with a status dot (ok / error / info), the record they belong to by its friendly id, and a Replay action where the source offers one. Filter by source and by status (All · Problems · OK · Info); Show older pages back through what the sources keep. The same Replay sits on the record's Notes thread beside each replayable external entry."
     },
     {
       type: 'pre',
@@ -191,7 +191,7 @@ ctx.notes.registerSource({
 })
 
 // Routes
-GET  /api/integration-events?provider=&status=&limit=     // admin feed
+GET  /api/integration-events?provider=&status=&limit=&before=  // admin feed (integration= also accepted)
 POST /api/integration-events/:provider/replay { entry_id } // admin, or update rights on the source collection
 GET  /api/comments/related?collection=&item=               // entries carry provider, replayable, status`
     },

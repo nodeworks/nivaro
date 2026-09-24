@@ -2,6 +2,7 @@ import { type ReactNode, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
 import { useSignals } from './api'
+import { EventsView } from './EventsView'
 import { FirefightView } from './FirefightView'
 import { InboundView } from './InboundView'
 import { PartnersView } from './PartnersView'
@@ -14,7 +15,7 @@ export interface ConsoleTab {
 }
 
 export interface IntegrationsConsoleProps {
-  /** Host tabs, inserted after Partners (e.g. a deployment's own integrations). */
+  /** Host tabs, inserted after Events (e.g. a deployment's own integrations). */
   extraTabs?: ConsoleTab[]
   /** Controlled tab — pair with onTabChange to keep it in the URL. */
   tab?: string
@@ -38,8 +39,9 @@ function NextPhase({ what }: { what: string }) {
 
 /**
  * The Integrations console: everything that talks to an outside system on one
- * page — live problems first (Firefight), then per-partner health. Hosts add
- * their own tabs through `extraTabs`.
+ * page, in the order an operator asks — what is broken now (Firefight), how
+ * each partner is doing (Partners), what the partners reported (Events), who
+ * is calling us (Inbound). Hosts add their own tabs through `extraTabs`.
  */
 export function IntegrationsConsole({
   extraTabs = [],
@@ -83,6 +85,11 @@ export function IntegrationsConsole({
       key: 'partners',
       label: 'Partners',
       render: () => <PartnersView openId={partnerId} onOpenChange={setPartnerId} />
+    },
+    {
+      key: 'events',
+      label: 'Events',
+      render: () => <EventsView onOpenRecord={onOpenRecord} />
     },
     ...extraTabs,
     {

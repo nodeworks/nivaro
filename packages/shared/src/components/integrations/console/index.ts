@@ -1,13 +1,17 @@
 export {
+  EVENTS_PAGE,
   type SnoozeInput,
   useImportHealth,
+  useIntegrationEvents,
   usePartner,
   usePartners,
   useRefreshSignals,
+  useReplayEvent,
   useSignalAction,
   useSignals,
   useSnooze
 } from './api'
+export { dayHeading, EventsView, type EventsViewProps } from './EventsView'
 export { FirefightView, type FirefightViewProps, rankSignals } from './FirefightView'
 export { InboundView, type InboundViewProps } from './InboundView'
 export {
@@ -26,7 +30,10 @@ export {
 } from './SubmissionRow'
 export type {
   ActionResult as IntegrationActionResult,
+  EventProvider as IntegrationEventProvider,
+  EventStatus as IntegrationEventStatus,
   ImportHealthRow,
+  IntegrationEvent,
   PartnerCard as IntegrationPartnerCard,
   PartnerDetailData as IntegrationPartnerDetail,
   PartnerHealth as IntegrationPartnerHealth,
