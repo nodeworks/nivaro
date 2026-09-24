@@ -35,17 +35,19 @@ const base = {
 
 describe('workflow_transition mail — how a move is described', () => {
   it('an automatic move reads as a sentence, never the rule name or the auto: comment', async () => {
-    const out = text(
-      await renderMailTemplate('workflow_transition', {
-        ...base,
-        actor_name: null,
-        source: 'auto',
-        transition_text: 'Fusion accepted the transfer order, so the request is complete.'
-      })
-    )
+    const html = await renderMailTemplate('workflow_transition', {
+      ...base,
+      actor_name: null,
+      source: 'auto',
+      transition_text: 'Fusion accepted the transfer order, so the request is complete.'
+    })
+    const out = text(html)
     expect(out).toContain('Automatic update')
-    expect(out).toContain('Fusion accepted the transfer order, so the request is complete.')
-    expect(out).toContain('No one had to do anything for this step')
+    expect(out).toContain('no one had to do anything for this step')
+    // the sentence sits in the same yellow callout a person's note gets
+    expect(html).toMatch(
+      /background-color:#fffbeb[^>]*>Fusion accepted the transfer order, so the request is complete\./
+    )
     expect(out).not.toContain('"auto:')
     expect(out).not.toContain('Triggered automatically by the system')
     expect(out).not.toContain('no person made this change')

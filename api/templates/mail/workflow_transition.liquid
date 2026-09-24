@@ -20,8 +20,7 @@ and `transition_text`, the transition's notify_text, says what happened.
 {%- if actor_name -%}
 <p style="margin:0 0 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#1e293b;">{% if transition_text %}{{ transition_text }} &mdash; {% endif %}Triggered by <strong>{{ actor_name }}</strong>{% if actor_email %} <span style="color:#64748b;">&lt;{{ actor_email }}&gt;</span>{% endif %}{% if transitioned_at %} &middot; {{ transitioned_at | date: '%b %-d, %Y at %-I:%M %p' }}{% endif %}</p>
 {%- elsif automatic -%}
-<p style="margin:0 0 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#1e293b;">{% if transition_text %}{{ transition_text }}{% else %}This happened automatically &mdash; the portal moved the record on its own.{% endif %}{% if transitioned_at %} <span style="color:#64748b;">&middot; {{ transitioned_at | date: '%b %-d, %Y at %-I:%M %p' }}</span>{% endif %}</p>
-<p style="margin:0 0 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12.5px;line-height:1.5;color:#64748b;">No one had to do anything for this step{% if transition_text %} (rule: {{ transition_label }}){% endif %}.</p>
+<p style="margin:0 0 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#1e293b;">Updated <strong>automatically</strong>{% if transitioned_at %} &middot; {{ transitioned_at | date: '%b %-d, %Y at %-I:%M %p' }}{% endif %} &mdash; no one had to do anything for this step.</p>
 {%- else -%}
 <p style="margin:0 0 4px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#1e293b;">{% if transition_text %}{{ transition_text }} &mdash; {% endif %}Updated <strong>by the portal</strong>{% if source and source != 'manual' and source != 'harness' %} ({{ source | replace: '-', ' ' }}){% endif %}{% if transitioned_at %} &middot; {{ transitioned_at | date: '%b %-d, %Y at %-I:%M %p' }}{% endif %} &mdash; no person made this change.</p>
 {%- endif -%}
@@ -32,6 +31,14 @@ and `transition_text`, the transition's notify_text, says what happened.
 {%- if comment_is_human -%}
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
   <tr><td style="padding:12px 16px;background-color:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#78350f;">&ldquo;{{ comment }}&rdquo;{% if actor_name %} <span style="color:#a16207;">&mdash; {{ actor_name }}</span>{% endif %}</td></tr>
+</table>
+{%- elsif automatic -%}
+{%- comment -%}
+The same callout a person's note gets, carrying what happened in plain
+words (the transition's notify_text) — the rule name only as a footnote.
+{%- endcomment -%}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
+  <tr><td style="padding:12px 16px;background-color:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#78350f;">{% if transition_text %}{{ transition_text }}{% else %}This happened automatically &mdash; the portal moved the record on its own.{% endif %}{% if transition_text %} <span style="color:#a16207;">&mdash; rule: {{ transition_label }}</span>{% endif %}</td></tr>
 </table>
 {%- endif -%}
 {% render 'partials/button', url: record_url, label: 'Open record' %}
