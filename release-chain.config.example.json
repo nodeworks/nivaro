@@ -15,6 +15,7 @@
     }
   ],
   "verify": [
-    { "name": "staging api", "url": "https://staging.example.com/api/version", "field": "version" }
+    { "name": "staging api", "url": "https://staging.example.com/api/version", "field": "version" },
+    { "name": "staging frontend", "url": "https://staging.example.com/version.json", "field": "version", "expect": "frontend:portal" }
   ]
 }

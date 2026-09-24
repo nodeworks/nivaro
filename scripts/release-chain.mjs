@@ -51,11 +51,22 @@ const opt = (n, d) => {
 const GO = flag('go')
 const BUMP = opt('bump', 'patch')
 const FROM = opt('from', null)
+const EVENTS = flag('events')
+/** One machine-readable line per stage boundary — only with --events. */
+const emit = (stage, status, detail) => {
+  if (!EVENTS) return
+  const e = { stage, status, at: new Date().toISOString() }
+  if (detail) e.detail = String(detail).slice(0, 500)
+  console.log(`@@event ${JSON.stringify(e)}`)
+}
 const STAGES = ['preflight', 'release', 'publish', 'artifacts', 'frontends', 'deployments', 'verify']
 
 const expand = (p) => resolve(p.startsWith('~') ? p.replace(/^~/, homedir()) : p)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (msg) => console.log(`${new Date().toTimeString().slice(0, 8)}  ${msg}`)
+
+/** The stage running right now — read by progress events and the failure line. */
+let currentStage = 'preflight'
 
 class StageError extends Error {}
 
@@ -149,6 +160,7 @@ async function waitForWorkflow(repo, workflow, accept) {
   await sleep(25_000) // the run does not exist the instant the tag lands
   const id = sh('gh', ['run', 'list', '-R', repo, '--workflow', workflow, '-L1', '--json', 'databaseId', '-q', '.[0].databaseId'], { quiet: true }).out
   log(`watching ${workflow} run ${id}`)
+  emit(currentStage, 'progress', `watching ${workflow} run ${id}`)
   const res = sh('gh', ['run', 'watch', '-R', repo, id, '--exit-status'], { quiet: true, allowFail: true })
   if (res.ok) return
   // A registry can accept the package and still fail the run ("cannot publish
@@ -172,12 +184,14 @@ async function until(what, fn, { tries = 30, every = 20_000 } = {}) {
   for (let i = 1; i <= tries; i++) {
     if (await fn()) return
     log(`${what} — not yet (${i}/${tries})`)
+    emit(currentStage, 'progress', `${what} — not yet (${i}/${tries})`)
     await sleep(every)
   }
   throw new StageError(`${what} never became true`)
 }
 
 async function main() {
+  const pushedShas = {}
   const cfg = loadConfig()
   const ch = detectChanges()
   const p = plan(cfg, ch)
@@ -196,43 +210,70 @@ async function main() {
     console.log(`    · ${l.text}`)
   }
   console.log('')
+  if (EVENTS) {
+    console.log(
+      `@@plan ${JSON.stringify({
+        commits: ch.commits,
+        files: ch.files,
+        last_tag: ch.last,
+        sdk_changed: ch.sdk,
+        react_changed: ch.react,
+        migrations: ch.migrations,
+        dirty: ch.dirty,
+        versions: {
+          app: version('package.json'),
+          react: version('packages/react/package.json'),
+          sdk: version('packages/sdk/package.json')
+        },
+        lines: p.lines
+      })}`
+    )
+  }
   if (!GO) return
   if (ch.commits === 0 && !ch.headTag.startsWith('v')) throw new StageError('nothing to release')
 
   const startAt = FROM ? STAGES.indexOf(FROM) : 0
   if (startAt < 0) throw new StageError(`--from must be one of ${STAGES.join(', ')}`)
   const runs = (s) => STAGES.indexOf(s) >= startAt
-  let current = 'preflight'
+  currentStage = 'preflight'
   try {
     if (runs('preflight')) {
-      current = 'preflight'
+      currentStage = 'preflight'
+      emit('preflight', 'start')
       if (git(['rev-parse', '--abbrev-ref', 'HEAD']) !== 'main') throw new StageError('not on main')
       sh('gh', ['auth', 'status'], { quiet: true })
       for (const dir of ['api', 'admin', 'packages/shared']) {
         log(`typecheck ${dir}`)
         sh('npx', ['tsc', '--noEmit'], { cwd: resolve(ROOT, dir), quiet: true })
       }
-    }
+      emit('preflight', 'ok')
+    } else emit('preflight', 'skip', `resumed from ${FROM}`)
 
     if (runs('release') && !ch.headTag.startsWith('v')) {
-      current = 'release'
+      currentStage = 'release'
+      emit('release', 'start')
       if (p.wantSdk) sh('pnpm', ['sdk:release', BUMP])
       sh('pnpm', ['release', BUMP])
       if (p.wantReact) sh('pnpm', ['react:release', BUMP])
-    }
+      emit('release', 'ok')
+    } else if (runs('release')) emit('release', 'skip', `HEAD already tagged ${ch.headTag}`)
+    else emit('release', 'skip', `resumed from ${FROM}`)
     const V = version('package.json')
     const RV = version('packages/react/package.json')
     const SV = version('packages/sdk/package.json')
     log(`app ${V} · react ${RV} · sdk ${SV}`)
 
     if (runs('publish')) {
-      current = 'publish'
+      currentStage = 'publish'
+      emit('publish', 'start')
       sh('git', ['push', 'origin', 'main', '--tags'], { allowFail: true })
       if (cfg.mirror) sh('scripts/publish-github.sh', ['--push', cfg.mirror])
-    }
+      emit('publish', 'ok')
+    } else emit('publish', 'skip', `resumed from ${FROM}`)
 
     if (runs('artifacts')) {
-      current = 'artifacts'
+      currentStage = 'artifacts'
+      emit('artifacts', 'start')
       const repo = cfg.workflowsRepo
       if (repo) {
         if (p.wantSdk) await waitForWorkflow(repo, 'publish-sdk.yml', async () => npmHas('@nivaro/sdk', SV))
@@ -243,10 +284,12 @@ async function main() {
       if (cfg.image) await until(`image ${cfg.image}:${V} on the registry`, () => imageExists(cfg.image, V))
       if (p.wantSdk) await until(`@nivaro/sdk@${SV} on npm`, async () => npmHas('@nivaro/sdk', SV))
       if (p.wantReact) await until(`@nivaro/react@${RV} on npm`, async () => npmHas('@nivaro/react', RV))
-    }
+      emit('artifacts', 'ok')
+    } else emit('artifacts', 'skip', `resumed from ${FROM}`)
 
     if (runs('frontends') && (p.wantReact || p.wantSdk)) {
-      current = 'frontends'
+      currentStage = 'frontends'
+      emit('frontends', 'start')
       for (const f of cfg.frontends) {
         const cwd = expand(f.path)
         const pins = { ...(p.wantReact ? { '@nivaro/react': RV } : {}), ...(p.wantSdk ? { '@nivaro/sdk': SV } : {}) }
@@ -270,11 +313,15 @@ async function main() {
         sh('git', ['add', 'package.json', 'pnpm-lock.yaml'], { cwd, quiet: true })
         sh('git', ['commit', '-q', '-m', `chore: bump ${Object.entries(pins).map(([n, v]) => `${n} to ${v}`).join(', ')}`, '--', 'package.json', 'pnpm-lock.yaml'], { cwd, quiet: true })
         sh('git', ['push', 'origin', f.branch ?? 'main'], { cwd })
+        pushedShas[f.name] = git(['rev-parse', '--short=8', 'HEAD'], { cwd })
       }
-    }
+      emit('frontends', 'ok')
+    } else if (runs('frontends')) emit('frontends', 'skip', 'nothing to pin')
+    else emit('frontends', 'skip', `resumed from ${FROM}`)
 
     if (runs('deployments')) {
-      current = 'deployments'
+      currentStage = 'deployments'
+      emit('deployments', 'start')
       for (const d of cfg.deployments) {
         // Re-checked HERE, not trusted from above: --from deployments skips
         // the artifacts stage, and this is the push that can take an API down.
@@ -292,10 +339,12 @@ async function main() {
         }
         sh('git', ['push', 'origin', d.branch ?? 'main'], { cwd })
       }
-    }
+      emit('deployments', 'ok')
+    } else emit('deployments', 'skip', `resumed from ${FROM}`)
 
     if (runs('verify') && !flag('skip-verify')) {
-      current = 'verify'
+      currentStage = 'verify'
+      emit('verify', 'start')
       for (const v of cfg.verify) {
         // A recreating container answers the new version once and then 502s
         // for a minute. Two consecutive good answers, not one.
@@ -305,9 +354,20 @@ async function main() {
         // 2026-09-21 while curl, which uses the system keychain, answered the
         // new version every time. A probe failure is printed once per
         // distinct reason so a broken probe can never pass for a slow deploy.
+        // `expect: "frontend:<name>"` waits for the commit this run pushed to
+        // that frontend (else its checkout's HEAD), not the app version.
+        const frontendName = v.expect?.startsWith('frontend:')
+          ? v.expect.slice('frontend:'.length)
+          : null
+        const expected = frontendName
+          ? (pushedShas[frontendName] ??
+            git(['rev-parse', '--short=8', 'HEAD'], {
+              cwd: expand(cfg.frontends.find((f) => f.name === frontendName)?.path ?? '.')
+            }))
+          : V
         let streak = 0
         let lastErr = ''
-        await until(`${v.name} on ${V}`, async () => {
+        await until(`${v.name} on ${expected}`, async () => {
           let body = null
           try {
             body = JSON.parse(
@@ -321,18 +381,21 @@ async function main() {
             if (msg !== lastErr) log(`  probe: ${msg}`)
             lastErr = msg
           }
-          streak = body?.[v.field ?? 'version'] === V ? streak + 1 : 0
+          streak = body?.[v.field ?? 'version'] === expected ? streak + 1 : 0
           return streak >= 2
           // The GitLab deploy job npm-installs on the host, prunes, pulls the
           // image and runs the gate: 13–15 minutes end to end, which outran
           // the earlier 12.5-minute window. Wait up to 30 minutes.
         }, { tries: 120, every: 15_000 })
       }
-    }
+      emit('verify', 'ok')
+    } else if (flag('skip-verify')) emit('verify', 'skip', '--skip-verify')
+    else emit('verify', 'skip', `resumed from ${FROM}`)
     console.log(`\n### DONE — nivaro ${V}\n`)
   } catch (err) {
-    console.log(`\n### FAILED at ${current}: ${err instanceof Error ? err.message : err}`)
-    console.log(`    fix it, then: node scripts/release-chain.mjs --go --from ${current}\n`)
+    emit(currentStage, 'fail', err instanceof Error ? err.message : String(err))
+    console.log(`\n### FAILED at ${currentStage}: ${err instanceof Error ? err.message : err}`)
+    console.log(`    fix it, then: node scripts/release-chain.mjs --go --from ${currentStage}\n`)
     process.exitCode = 1
   }
 }
