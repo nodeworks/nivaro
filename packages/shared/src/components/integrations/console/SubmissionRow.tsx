@@ -47,7 +47,8 @@ export function SubmissionRow({
   sub,
   onRetry,
   retrying,
-  onShowPath
+  onShowPath,
+  initialOpen = false
 }: {
   sub: ErpSubmission
   onRetry: (id: number) => void
@@ -55,12 +56,17 @@ export function SubmissionRow({
   /** Opens the full integration path (write → transition → push → reply)
    *  behind this submission. Absent = no "Show path" action. */
   onShowPath?: (id: number) => void
+  /** Start expanded — a partner line's "View error" lands on this row open. */
+  initialOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(initialOpen)
   const payload = pretty(sub.payload)
   const response = pretty(sub.response)
   return (
-    <div className='rounded-lg border border-slate-200 dark:border-border'>
+    <div
+      className='rounded-lg border border-slate-200 dark:border-border'
+      data-submission-id={sub.id}
+    >
       <div className='flex items-center'>
         <button
           type='button'

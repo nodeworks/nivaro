@@ -7,6 +7,13 @@ export interface BannerLine {
   text: string
   obligation_id: number
   outcome: string
+  /** The submission this obligation tracks (null for a `missing` row). */
+  submission_id: number | null
+  /** The transition that owns a transition-triggered obligation — the
+   *  actionable fix is to run it again (after fixing what the partner
+   *  rejected). Null for hook / flow / cron obligations. */
+  transition_id: string | null
+  transition_label: string | null
 }
 
 interface Row {
@@ -25,6 +32,9 @@ interface Row {
   /** The kind's human label from the registry ("Fusion — transfer order
    *  submitted"); null when the server no longer knows the kind. */
   label?: string | null
+  submission_id?: number | null
+  transition_id?: string | null
+  transition_label?: string | null
 }
 
 /** "14:02" in the viewer's preferred zone — `getDisplayTimezone()` is the
@@ -113,7 +123,10 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
       tone: toneForOutcome(r.outcome),
       text,
       obligation_id: r.id,
-      outcome: r.outcome
+      outcome: r.outcome,
+      submission_id: r.submission_id ?? null,
+      transition_id: r.transition_id ?? null,
+      transition_label: r.transition_label ?? null
     }
   })
 }

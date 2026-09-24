@@ -123,11 +123,14 @@ export {
 export type { IntegrationObligationsViewProps } from './components/integrations/IntegrationObligationsView'
 export { IntegrationObligationsView } from './components/integrations/IntegrationObligationsView'
 export type { IntegrationStatusBannerProps } from './components/integrations/IntegrationStatusBanner'
+export type { IntegrationLineActions } from './components/integrations/IntegrationStatusBanner'
 export {
   IntegrationStatusBanner,
   IntegrationStatusLines,
   useRecordObligations
 } from './components/integrations/IntegrationStatusBanner'
+export type { RunTransitionRequest } from './lib/run-transition'
+export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'

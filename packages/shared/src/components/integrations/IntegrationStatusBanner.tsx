@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Send } from 'lucide-react'
+import { Eye, Loader2, RefreshCw, RotateCcw, Send } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { bannerLines } from '../../lib/obligation-banner'
+import { requestTransitionRun } from '../../lib/run-transition'
 import { cn } from '../../lib/utils'
 import { colorPair } from '../QueryTable'
 import { roleForTone } from './IntegrationObligationsView'
@@ -39,11 +40,16 @@ export interface IntegrationStatusBannerProps {
 function SendNowButton({
   obligationId,
   collection,
-  itemId
+  itemId,
+  enabled = true
 }: {
   obligationId: number
   collection: string
   itemId: string | number
+  /** Remediation switch off → the button stays, disabled, and says how to
+   *  turn it on: a person looking for the fix should find the path, not a
+   *  line with nothing on it. */
+  enabled?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -71,7 +77,13 @@ function SendNowButton({
     <button
       type='button'
       data-obligation-send-now
-      disabled={send.isPending}
+      data-obligation-send-now-enabled={enabled}
+      disabled={send.isPending || !enabled}
+      title={
+        enabled
+          ? 'Re-send the newest request for this partner (admins)'
+          : 'Remediation is off for this deployment — an admin turns it on under Integrations › Remediation, then this sends from here'
+      }
       onClick={() => {
         if (!armed) {
           setArmed(true)
@@ -80,7 +92,7 @@ function SendNowButton({
         send.mutate()
       }}
       className={cn(
-        'ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-medium transition-colors disabled:opacity-60',
+        'inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-medium transition-colors disabled:opacity-60',
         armed
           ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan dark:border-nvr-cyan dark:bg-nvr-cyan/15'
           : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
@@ -134,16 +146,46 @@ export function IntegrationStatusBanner({ collection, itemId }: IntegrationStatu
   )
 }
 
+/** What a reader can DO about a line (Rob 2026-09-24: "the partner status
+ *  messages should be actionable"). Every host that renders the lines
+ *  passes what it can offer; a missing callback simply hides that action. */
+export interface IntegrationLineActions {
+  /** Re-send a stored request as-is (the request log's own Retry). */
+  onRetry?: (submissionId: number) => void
+  /** Show the request (payload + reply) behind a line. */
+  onView?: (submissionId: number) => void
+  /** Re-fetch the partner status (a pending send may have been acked). */
+  onCheck?: () => void
+  /** Called after "re-run <transition>" was handed to the pipeline panel —
+   *  a popup closes itself so the requirements dialog is in front. */
+  onRanTransition?: () => void
+  /** Newest submission id per partner name (lower-cased) — how a `missing`
+   *  or `failed` line without its own submission still finds one to show. */
+  newestSubmissionByApi?: Map<string, { id: number; status: string }>
+}
+
+const actionBtn =
+  'inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10.5px] font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:opacity-60 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+
 /** The lines themselves — one per partner — without the fetch, so the
- *  Integrations popup (which already holds the data) renders the same rows. */
+ *  Integrations popup (which already holds the data) renders the same rows.
+ *  Each line ends with what to do about it: a failed send offers Retry
+ *  (same payload), the request itself, and — when a transition owns the
+ *  send — "re-run <Submit to Warehouse>", which is the real fix once the
+ *  rejected data is corrected (the pipeline panel runs it with its own
+ *  save-first + requirements dialog); a partner never told offers the
+ *  same re-run plus Send now for admins with remediation on; a send
+ *  awaiting an ack offers Check now; a told partner offers the request. */
 export function IntegrationStatusLines({
   collection,
   itemId,
   lines,
-  remediationEnabled
+  remediationEnabled,
+  actions
 }: IntegrationStatusBannerProps & {
   lines: ReturnType<typeof bannerLines>
   remediationEnabled: boolean
+  actions?: IntegrationLineActions
 }) {
   if (lines.length === 0) return null
   return (
@@ -151,9 +193,29 @@ export function IntegrationStatusLines({
       {lines.map((l) => {
         const role = roleForTone(l.tone)
         const [accent, accentDark] = role ? colorPair(role) : [null, null]
-        const canSend =
-          remediationEnabled &&
-          (l.outcome === 'failed' || l.outcome === 'missing' || l.outcome === 'overdue')
+        const open = l.outcome === 'failed' || l.outcome === 'missing' || l.outcome === 'overdue'
+        const canSend = open
+        const newest = actions?.newestSubmissionByApi?.get(l.api.toLowerCase())
+        const submissionId = l.submission_id ?? newest?.id ?? null
+        const canRetry =
+          !!actions?.onRetry &&
+          submissionId != null &&
+          (l.outcome === 'failed' || newest?.status === 'failed')
+        const canView = !!actions?.onView && submissionId != null
+        const canRerun = !!l.transition_id && !!l.transition_label && open
+        const canCheck = !!actions?.onCheck && (l.outcome === 'pending' || l.outcome === 'overdue')
+        const rerun = () => {
+          const claimed = requestTransitionRun({
+            collection,
+            item: String(itemId),
+            transition_id: l.transition_id as string
+          })
+          if (!claimed) {
+            toast.error(`Open the record to run “${l.transition_label}”`)
+            return
+          }
+          actions?.onRanTransition?.()
+        }
         return (
           <div
             key={l.api}
@@ -191,13 +253,64 @@ export function IntegrationStatusLines({
                 {l.text}
               </span>
             </p>
-            {canSend && (
-              <SendNowButton
-                obligationId={l.obligation_id}
-                collection={collection}
-                itemId={itemId}
-              />
-            )}
+            <span className='ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1'>
+              {canRerun && (
+                <button
+                  type='button'
+                  data-integration-action='rerun'
+                  onClick={rerun}
+                  title={`Fix what ${l.api} rejected, then run “${l.transition_label}” again — it re-sends from the current values`}
+                  className={cn(actionBtn, 'border-nvr-cyan/40 text-nvr-cyan hover:bg-nvr-cyan/10')}
+                >
+                  <RotateCcw className='h-3 w-3' />
+                  Re-run {l.transition_label}
+                </button>
+              )}
+              {canRetry && (
+                <button
+                  type='button'
+                  data-integration-action='retry'
+                  onClick={() => actions?.onRetry?.(submissionId as number)}
+                  title='Send the same request again, unchanged — for a partner that was down, not for data it rejected'
+                  className={actionBtn}
+                >
+                  <RefreshCw className='h-3 w-3' />
+                  Retry
+                </button>
+              )}
+              {canCheck && (
+                <button
+                  type='button'
+                  data-integration-action='check'
+                  onClick={() => actions?.onCheck?.()}
+                  title='Ask again whether the partner has acknowledged it'
+                  className={actionBtn}
+                >
+                  <RefreshCw className='h-3 w-3' />
+                  Check now
+                </button>
+              )}
+              {canView && (
+                <button
+                  type='button'
+                  data-integration-action='view'
+                  onClick={() => actions?.onView?.(submissionId as number)}
+                  title='Show the request and the reply'
+                  className={actionBtn}
+                >
+                  <Eye className='h-3 w-3' />
+                  {l.outcome === 'failed' ? 'View error' : 'View request'}
+                </button>
+              )}
+              {canSend && (
+                <SendNowButton
+                  obligationId={l.obligation_id}
+                  collection={collection}
+                  itemId={itemId}
+                  enabled={remediationEnabled}
+                />
+              )}
+            </span>
           </div>
         )
       })}

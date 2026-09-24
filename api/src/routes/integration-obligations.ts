@@ -339,6 +339,7 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           'api',
           'kind',
           'trigger',
+          'trigger_ref',
           'due_at',
           'outcome',
           'reason',
@@ -349,12 +350,40 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       // second probe per row: same reasoning as /summary above. Same
       // envelope position too — top-level sibling of `data`.
       const { remediationEnabled } = await import('../services/integration-remediation.js')
+      // A transition-triggered obligation names the transition that owns it
+      // (trigger_ref = its id) so the record's partner-status line can offer
+      // "re-run <Submit to Warehouse>" as the fix, not just say it failed.
+      const txIds = [
+        ...new Set(
+          (rows as Array<{ trigger: string | null; trigger_ref: string | null }>)
+            .filter((r) => r.trigger === 'transition' && r.trigger_ref)
+            .map((r) => String(r.trigger_ref))
+        )
+      ]
+      const txLabels = new Map<string, string>()
+      if (txIds.length) {
+        const txs = (await db('nivaro_workflow_transitions')
+          .whereIn('id', txIds)
+          .select('id', 'label')
+          .catch(() => [])) as Array<{ id: string; label: string }>
+        for (const t of txs) txLabels.set(String(t.id).toUpperCase(), t.label)
+      }
       // The kind's human label ("Fusion — transfer order submitted") rides
       // along so the record banner never has to humanize a machine key.
-      const data = (rows as Array<{ api: string; kind: string }>).map((r) => ({
-        ...r,
-        label: getObligationKind(r.api, r.kind)?.label ?? null
-      }))
+      const data = (
+        rows as Array<{ api: string; kind: string; trigger: string | null; trigger_ref: string | null }>
+      ).map(({ trigger_ref, ...r }) => {
+        const tx =
+          r.trigger === 'transition' && trigger_ref
+            ? txLabels.get(String(trigger_ref).toUpperCase())
+            : undefined
+        return {
+          ...r,
+          label: getObligationKind(r.api, r.kind)?.label ?? null,
+          transition_id: tx ? String(trigger_ref) : null,
+          transition_label: tx ?? null
+        }
+      })
       return { data, remediation_enabled: await remediationEnabled() }
     }
   )

@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
@@ -1555,6 +1556,34 @@ function PipelinePanelInner({
     }
   })
 
+
+  // A page-level "run this transition" request (lib/run-transition.ts — the
+  // Integrations popup's "re-run <Submit to Warehouse>" fix) behaves exactly
+  // like a click on the button: save first, then execute, dialogs and all.
+  // First mount to hear it claims it; a transition not available from the
+  // current step is claimed AND explained rather than silently dropped.
+  const runTransitionRef = useRef(trySetPending)
+  runTransitionRef.current = trySetPending
+  const availableRef = useRef(data?.available_transitions ?? [])
+  availableRef.current = data?.available_transitions ?? []
+  useEffect(() => {
+    const onRun = (ev: Event) => {
+      const d = (ev as CustomEvent<RunTransitionRequest>).detail
+      if (!d || d.claimed) return
+      if (d.collection !== collection || String(d.item) !== String(item)) return
+      d.claimed = true
+      const wanted = String(d.transition_id).toUpperCase()
+      const tx = availableRef.current.find((t) => String(t.id).toUpperCase() === wanted)
+      if (!tx) {
+        toast.error('That step is not available from where the record is now')
+        return
+      }
+      void runTransitionRef.current(tx.id)
+    }
+    window.addEventListener(RUN_TRANSITION_EVENT, onRun)
+    return () => window.removeEventListener(RUN_TRANSITION_EVENT, onRun)
+  }, [collection, item])
+
   if (isLoading)
     // Collapsed-shell skeleton at the real header height (px-5 py-3.5 row) —
     // returning null here made the whole Progress bar pop in after load and
@@ -2095,6 +2124,34 @@ function PipelineTransitionButtonsInner({
       }
     }
   })
+
+  // A page-level "run this transition" request (lib/run-transition.ts — the
+  // Integrations popup's "re-run <Submit to Warehouse>" fix) behaves exactly
+  // like a click on the button: save first, then execute, dialogs and all.
+  // First mount to hear it claims it; a transition not available from the
+  // current step is claimed AND explained rather than silently dropped.
+  const runTransitionRef = useRef(trySetPending)
+  runTransitionRef.current = trySetPending
+  const availableRef = useRef(data?.available_transitions ?? [])
+  availableRef.current = data?.available_transitions ?? []
+  useEffect(() => {
+    const onRun = (ev: Event) => {
+      const d = (ev as CustomEvent<RunTransitionRequest>).detail
+      if (!d || d.claimed) return
+      if (d.collection !== collection || String(d.item) !== String(item)) return
+      d.claimed = true
+      const wanted = String(d.transition_id).toUpperCase()
+      const tx = availableRef.current.find((t) => String(t.id).toUpperCase() === wanted)
+      if (!tx) {
+        toast.error('That step is not available from where the record is now')
+        return
+      }
+      void runTransitionRef.current(tx.id)
+    }
+    window.addEventListener(RUN_TRANSITION_EVENT, onRun)
+    return () => window.removeEventListener(RUN_TRANSITION_EVENT, onRun)
+  }, [collection, item])
+
   if (!data?.binding || !data?.instance) return null
   // Completed instances keep only escape hatches from their terminal state
   // (Uncancel) — everything else would 400 server-side.

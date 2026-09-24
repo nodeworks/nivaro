@@ -7,7 +7,10 @@ const line = (api: string, outcome: string, tone: BannerLine['tone']): BannerLin
   outcome,
   tone,
   text: `${outcome} …`,
-  obligation_id: 1
+  obligation_id: 1,
+  submission_id: null,
+  transition_id: null,
+  transition_label: null
 })
 
 describe('integrationChipSummary', () => {

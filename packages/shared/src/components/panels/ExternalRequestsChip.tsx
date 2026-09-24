@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Satellite } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -40,6 +40,14 @@ export function ExternalRequestsChip({
   // The push whose full path is showing. The sheet opens only after the
   // dialog closes, so two modals never stack.
   const [pathId, setPathId] = useState<number | null>(null)
+  // The request a partner line asked to see: that row mounts open and
+  // scrolls into view.
+  const [focusId, setFocusId] = useState<number | null>(null)
+  useEffect(() => {
+    if (!open || focusId == null) return
+    const el = document.querySelector(`[data-submission-id="${focusId}"]`)
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [open, focusId])
   const { data, isLoading } = useQuery({
     queryKey: ['erp-submissions', collection, String(itemId)],
     queryFn: () =>
@@ -90,6 +98,16 @@ export function ExternalRequestsChip({
     )
   }
   const summary = integrationChipSummary(lines, subs, (iso) => (iso ? formatRelative(iso) : ''))
+  // Newest request per partner (rows arrive newest first) — what a partner
+  // line's Retry / View act on when the obligation has no submission of its own.
+  const newestSubmissionByApi = new Map<string, { id: number; status: string }>()
+  for (const s of subs) {
+    const name = (
+      s.external_api_name ?? (s.external_api != null ? `#${s.external_api}` : 'External')
+    ).toLowerCase()
+    if (!newestSubmissionByApi.has(name))
+      newestSubmissionByApi.set(name, { id: s.id, status: s.status })
+  }
   if (subs.length === 0 && summary.partners.length === 0) {
     return (
       <span
@@ -202,6 +220,28 @@ export function ExternalRequestsChip({
                     itemId={itemId}
                     lines={lines}
                     remediationEnabled={remediationEnabled}
+                    actions={{
+                      newestSubmissionByApi,
+                      onRetry: (id) => retry.mutate(id),
+                      onView: (id) => setFocusId(id),
+                      onCheck: () => {
+                        void qc.invalidateQueries({
+                          queryKey: [
+                            'integration-obligations',
+                            'record',
+                            collection,
+                            String(itemId)
+                          ]
+                        })
+                        void qc.invalidateQueries({
+                          queryKey: ['erp-submissions', collection, String(itemId)]
+                        })
+                        toast.message('Checking with the partner status…')
+                      },
+                      // The pipeline panel takes over (save, requirements
+                      // dialog, run) — this dialog gets out of its way.
+                      onRanTransition: () => setOpen(false)
+                    }}
                   />
                 </div>
               )}
@@ -217,8 +257,9 @@ export function ExternalRequestsChip({
               )}
               {subs.map((s) => (
                 <SubmissionRow
-                  key={s.id}
+                  key={`${s.id}:${focusId === s.id ? 'focus' : ''}`}
                   sub={s}
+                  initialOpen={focusId === s.id}
                   onRetry={(id) => retry.mutate(id)}
                   retrying={retry.isPending}
                   onShowPath={(id) => {
