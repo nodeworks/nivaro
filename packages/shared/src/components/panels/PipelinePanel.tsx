@@ -1541,7 +1541,9 @@ function PipelinePanelInner({
       // persistent failure banner immediately.
       setRequirementsDialog(null)
       setPendingTransition(null)
-      queryClient.invalidateQueries({ queryKey: ['erp-submissions', collection, String(item)] })
+      // The push that just failed wrote a submission AND an obligation —
+      // the failure banner and the partner lines refresh together.
+      invalidateRecordInsights(queryClient, collection, String(item))
       if (resp?.status === 409) {
         queryClient.invalidateQueries({ queryKey })
       }
@@ -2075,7 +2077,9 @@ function PipelineTransitionButtonsInner({
       // persistent failure banner immediately.
       setRequirementsDialog(null)
       setPendingTransition(null)
-      queryClient.invalidateQueries({ queryKey: ['erp-submissions', collection, String(item)] })
+      // The push that just failed wrote a submission AND an obligation —
+      // the failure banner and the partner lines refresh together.
+      invalidateRecordInsights(queryClient, collection, String(item))
       if (resp?.status === 409) {
         queryClient.invalidateQueries({ queryKey })
       }

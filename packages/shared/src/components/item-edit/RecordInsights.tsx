@@ -26,6 +26,7 @@ export function invalidateRecordInsights(
   for (const key of [
     ['record-audience', collection, itemId],
     ['erp-submissions', collection, String(itemId)],
+    ['integration-obligations', 'record', collection, String(itemId)],
     ['record-integrations', collection, itemId],
     ['record-external-ids', collection, itemId],
     ['record-owner-history', collection, itemId],

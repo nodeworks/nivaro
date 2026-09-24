@@ -22,6 +22,9 @@ interface Row {
    *  ObligationTrigger union into this client lib for one comparison, so a
    *  new trigger kind added server-side never breaks this file's build. */
   trigger?: string
+  /** The kind's human label from the registry ("Fusion — transfer order
+   *  submitted"); null when the server no longer knows the kind. */
+  label?: string | null
 }
 
 /** "14:02" in the viewer's preferred zone — `getDisplayTimezone()` is the
@@ -32,12 +35,11 @@ interface Row {
  *  sharing its timezone resolution. Replaces the original cut's
  *  `toISOString().slice(11, 16)`, which always rendered the sender's UTC
  *  instant regardless of who was reading it. */
-const hhmm = (iso: string) => {
+const clock = (iso: string) => {
   const tz = getDisplayTimezone()
   return new Intl.DateTimeFormat('en-US', {
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
-    hourCycle: 'h23',
     ...(tz ? { timeZone: tz } : {})
   }).format(new Date(iso))
 }
@@ -91,17 +93,19 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
   }
   return [...newest.values()].map((r) => {
     const source = r.resolved_at ?? r.due_at
-    const at = hhmm(source)
-    const rel = relativeFrom(source, now)
+    // "5m ago (2:09 PM)": the relative wording people scan for, the clock
+    // for the record — never a bare 24-hour stamp.
+    const when = `${relativeFrom(source, now)} (${clock(source)})`
     const why = r.reason ? ` — ${r.reason}` : ''
-    const ctx = r.trigger === 'transition' ? ` (${humanizeKind(r.kind)})` : ''
+    const what = r.label?.trim() || (r.trigger === 'transition' ? humanizeKind(r.kind) : '')
+    const ctx = what ? ` · ${what}` : ''
     let text: string
-    if (r.outcome === 'sent') text = `told ${at}${ctx} · ${rel}`
+    if (r.outcome === 'sent') text = `told ${when}${ctx}`
     else if (r.outcome === 'pending') {
       const mins = Math.round((now.getTime() - new Date(r.due_at).getTime()) / 60_000)
-      text = `sent ${at}${ctx}, awaiting acknowledgement (${mins} min)`
-    } else if (r.outcome === 'skipped') text = `should have been told ${at}${ctx} · ${rel}${why}`
-    else if (r.outcome === 'failed') text = `send failed ${at}${ctx} · ${rel}${why}`
+      text = `sent ${when}${ctx}, awaiting acknowledgement (${mins} min)`
+    } else if (r.outcome === 'skipped') text = `should have been told ${when}${ctx}${why}`
+    else if (r.outcome === 'failed') text = `send failed ${when}${ctx}${why}`
     else if (r.outcome === 'missing') text = `never told${ctx}${why}`
     else text = `still not told${ctx}${why}`
     return {

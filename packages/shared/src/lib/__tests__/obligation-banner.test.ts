@@ -41,7 +41,7 @@ describe('bannerLines', () => {
 
   it('says when a partner was told, and how long ago', () => {
     const out = bannerLines([row({})], now)
-    expect(out[0].text).toBe('told 14:02 · 58m ago')
+    expect(out[0].text).toBe('told 58m ago (2:02 PM)')
     expect(out[0].tone).toBe('positive')
   })
 
@@ -51,20 +51,20 @@ describe('bannerLines', () => {
       now
     )
     expect(out[0].text).toBe(
-      'should have been told 14:02 · 58m ago — guard unmet: is_on_hold = true'
+      'should have been told 58m ago (2:02 PM) — guard unmet: is_on_hold = true'
     )
     expect(out[0].tone).toBe('warning')
   })
 
   it('ages a pending send so the wait is visible', () => {
     const out = bannerLines([row({ outcome: 'pending', resolved_at: null })], now)
-    expect(out[0].text).toBe('sent 14:02, awaiting acknowledgement (58 min)')
+    expect(out[0].text).toBe('sent 58m ago (2:02 PM), awaiting acknowledgement (58 min)')
   })
 
   it('reads a failure as danger and carries its error', () => {
     const out = bannerLines([row({ outcome: 'failed', reason: 'HTTP 500' })], now)
     expect(out[0].tone).toBe('danger')
-    expect(out[0].text).toBe('send failed 14:02 · 58m ago — HTTP 500')
+    expect(out[0].text).toBe('send failed 58m ago (2:02 PM) — HTTP 500')
   })
 
   it('says plainly when a send never happened', () => {
@@ -88,9 +88,27 @@ describe('bannerLines', () => {
 
   it('names the transition-triggered kind in context, but only for a transition trigger', () => {
     const withTransition = bannerLines([row({ trigger: 'transition', kind: 'wf.state' })], now)
-    expect(withTransition[0].text).toBe('told 14:02 (Wf State) · 58m ago')
+    expect(withTransition[0].text).toBe('told 58m ago (2:02 PM) · Wf State')
 
     const withHook = bannerLines([row({ trigger: 'hook', kind: 'wf.state' })], now)
-    expect(withHook[0].text).toBe('told 14:02 · 58m ago')
+    expect(withHook[0].text).toBe('told 58m ago (2:02 PM)')
+  })
+
+  it("prefers the kind's real label over the humanized key, for any trigger", () => {
+    const out = bannerLines(
+      [
+        row({
+          trigger: 'hook',
+          kind: 'ir.fusion_order_submit',
+          label: 'Fusion — transfer order submitted',
+          outcome: 'failed',
+          reason: 'LOV'
+        })
+      ],
+      now
+    )
+    expect(out[0].text).toBe(
+      'send failed 58m ago (2:02 PM) · Fusion — transfer order submitted — LOV'
+    )
   })
 })

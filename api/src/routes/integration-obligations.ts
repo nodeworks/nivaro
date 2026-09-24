@@ -16,6 +16,7 @@ import { selectInChunks } from '../services/db-batch.js'
 import { registerIntegrationNoteSources } from '../services/integration-notes.js'
 import {
   allObligationKinds,
+  getObligationKind,
   listObligationKinds,
   summariseObligations
 } from '../services/integration-obligations.js'
@@ -348,7 +349,13 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       // second probe per row: same reasoning as /summary above. Same
       // envelope position too — top-level sibling of `data`.
       const { remediationEnabled } = await import('../services/integration-remediation.js')
-      return { data: rows, remediation_enabled: await remediationEnabled() }
+      // The kind's human label ("Fusion — transfer order submitted") rides
+      // along so the record banner never has to humanize a machine key.
+      const data = (rows as Array<{ api: string; kind: string }>).map((r) => ({
+        ...r,
+        label: getObligationKind(r.api, r.kind)?.label ?? null
+      }))
+      return { data, remediation_enabled: await remediationEnabled() }
     }
   )
 
