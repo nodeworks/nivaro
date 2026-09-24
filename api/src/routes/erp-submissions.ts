@@ -6,6 +6,7 @@ import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
+import { sameLoggedBody } from '../services/secret-mask.js'
 import { buildSubmissionDetail, gatherSubmissionFacts } from '../services/submission-detail.js'
 import {
   detectBodyAcceptance,
@@ -480,39 +481,33 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       // on the same API, the submission's time window and an identical body.
       if (attempts.length < newest) {
         const sentBody = serialize(row).payload
-        const canon = (v: unknown) => {
-          try {
-            return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v)
-          } catch {
-            return String(v)
-          }
-        }
-        const want = sentBody != null ? canon(sentBody) : null
         const from = new Date(new Date(row.created_at).getTime() - 10_000)
         const to = new Date(new Date(row.updated_at ?? row.created_at).getTime() + 10_000)
-        const logs = want
-          ? ((await db('nivaro_external_api_logs')
-              .where({ api_id: row.external_api })
-              .whereIn('triggered_by', ['erp-submission', 'transition-action'])
-              .whereBetween('created_at', [from, to])
-              .orderBy('id', 'desc')
-              .limit(50)
-              .select('request_body', 'response_status', 'response_body', 'error', 'created_at')
-              .catch(() => [])) as Array<{
-              request_body: string | null
-              response_status: number | null
-              response_body: string | null
-              error: string | null
-              created_at: Date
-            }>)
-          : []
+        const logs =
+          sentBody != null
+            ? ((await db('nivaro_external_api_logs')
+                .where({ api_id: row.external_api })
+                .whereIn('triggered_by', ['erp-submission', 'transition-action'])
+                .whereBetween('created_at', [from, to])
+                .orderBy('id', 'desc')
+                .limit(50)
+                .select('request_body', 'response_status', 'response_body', 'error', 'created_at')
+                .catch(() => [])) as Array<{
+                request_body: string | null
+                response_status: number | null
+                response_body: string | null
+                error: string | null
+                created_at: Date
+              }>)
+            : []
         const near = (t: Date) =>
           attempts.some((a) => Math.abs(new Date(a.at).getTime() - new Date(t).getTime()) < 5_000)
         const taken = new Set(attempts.map((a) => a.attempt))
         let next = newest
         for (const log of logs) {
-          if (!log.request_body || canon(log.request_body) !== want || near(log.created_at))
-            continue
+          // The call log masks secrets in its bodies — sameLoggedBody compares
+          // the masked forms, so a payload carrying a token still matches.
+          if (!sameLoggedBody(log.request_body, sentBody) || near(log.created_at)) continue
           while (next >= 1 && taken.has(next)) next--
           if (next < 1) break
           const failed = log.error != null || (log.response_status ?? 0) >= 400

@@ -18,6 +18,7 @@ import {
   writeApiCallLog
 } from '../services/external-apis.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { maskBodySecrets } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -1683,10 +1684,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
       method: r.method,
       url: r.url,
       request_headers: r.request_headers ? maskHeaders(JSON.parse(r.request_headers)) : null,
-      request_body: r.request_body,
+      request_body: maskBodySecrets(r.request_body),
       response_status: r.response_status,
       response_headers: r.response_headers ? maskHeaders(JSON.parse(r.response_headers)) : null,
-      response_body: r.response_body,
+      response_body: maskBodySecrets(r.response_body),
       duration_ms: r.duration_ms,
       error: r.error,
       user_id: r.user_id,

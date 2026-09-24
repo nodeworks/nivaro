@@ -15,6 +15,7 @@ import { selectInChunks } from '../services/db-batch.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
 import { maskHeaders, mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
 import { isAuthFailure } from '../services/integration-signals-core.js'
+import { maskBodySecrets } from '../services/secret-mask.js'
 import {
   type FactUser,
   type RequesterUser,
@@ -530,10 +531,10 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
           method: row.method,
           url: row.url,
           request_headers: maskStoredHeaders(row.request_headers),
-          request_body: row.request_body ?? null,
+          request_body: maskBodySecrets(row.request_body),
           response_status: row.response_status,
           response_headers: maskStoredHeaders(row.response_headers),
-          response_body: row.response_body ?? null,
+          response_body: maskBodySecrets(row.response_body),
           duration_ms: row.duration_ms,
           error: row.error,
           triggered_by: row.triggered_by,

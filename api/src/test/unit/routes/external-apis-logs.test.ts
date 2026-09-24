@@ -74,8 +74,30 @@ describe('GET /logs/:logId re-masks every reader of nivaro_external_api_logs (Ta
     const d = res.json().data
     expect(d.request_headers.Authorization).toBe('Bearer ••••••')
     expect(d.response_headers['set-cookie']).toBe('••••••')
-    // The bodies themselves are untouched — masking is headers-only.
+    // A body with nothing sensitive in it comes back as stored.
     expect(d.response_body).toBe('{}')
+    await app.close()
+  })
+
+  it('masks a raw secret stored in a request or response BODY on read', async () => {
+    const chain = makeSingleRowChain({
+      first: {
+        ...RAW_LOG_ROW,
+        request_body: JSON.stringify({ token: 'raw-body-token', items: [{ api_key: 'x' }] }),
+        response_body: JSON.stringify({ access_token: 'raw-echo', ok: true })
+      }
+    })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_api_logs') return chain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/logs/1' })
+    const d = res.json().data
+    expect(JSON.parse(d.request_body)).toEqual({ token: '••••••', items: [{ api_key: '••••••' }] })
+    expect(JSON.parse(d.response_body)).toEqual({ access_token: '••••••', ok: true })
+    expect(res.body).not.toContain('raw-body-token')
     await app.close()
   })
 

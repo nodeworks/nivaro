@@ -431,6 +431,37 @@ describe('GET /integration-partners/:id/calls/:callId', () => {
     await app.close()
   })
 
+  it('masks a raw secret stored in a body on read', async () => {
+    const logsChain = makeChain({
+      first: {
+        id: 58,
+        api_id: 9,
+        created_at: CREATED,
+        method: 'POST',
+        url: 'https://partner-a.example/api/orders',
+        request_headers: null,
+        request_body: JSON.stringify({ token: 'raw-body-token', order: 12 }),
+        response_status: 200,
+        response_headers: null,
+        response_body: JSON.stringify({ session: 'raw-echo' }),
+        duration_ms: 90,
+        error: null,
+        triggered_by: 'erp-submission',
+        user_id: null
+      }
+    })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_api_logs') return logsChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/9/calls/58' })
+    const d = res.json().data
+    expect(JSON.parse(d.request_body)).toEqual({ token: '••••••', order: 12 })
+    expect(JSON.parse(d.response_body)).toEqual({ session: '••••••' })
+    await app.close()
+  })
+
   it('resolves a suspended account exactly as the push drill-down does, at the route level', async () => {
     const logsChain = makeChain({
       first: {

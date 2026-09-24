@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
+import { maskBodySecrets, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
 
 type AuthType = 'none' | 'bearer' | 'api_key' | 'basic' | 'oauth2_cc' | 'hmac' | 'aws_sigv4'
@@ -171,9 +172,9 @@ const SENSITIVE_HEADER_NAMES = new Set([
  *  hand-picked name list can never keep up with that. Broader on purpose:
  *  masked-and-wrong (content-type never matches this) costs nothing, shown-
  *  and-a-real-leak costs everything. `SENSITIVE_HEADER_NAMES` above stays as
- *  the explicit, always-masked baseline this widens, never replaces. */
-const SENSITIVE_HEADER_PATTERN =
-  /secret|token|password|passwd|key|cookie|auth|session|signature|credential/
+ *  the explicit, always-masked baseline this widens, never replaces. The SAME
+ *  rule masks JSON keys in stored bodies (secret-mask.ts). */
+const SENSITIVE_HEADER_PATTERN = SENSITIVE_KEY_PATTERN
 
 /** Exported so a reader (the integration-partners call detail route) can
  *  re-mask on the way out — a defence against any row written before a
@@ -234,7 +235,9 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
       request_headers: entry.request_headers
         ? JSON.stringify(maskHeaders(entry.request_headers))
         : null,
-      request_body: truncate(entry.request_body),
+      // Bodies are masked like headers — a partner that takes its token in
+      // the JSON body (or echoes one back) must not leave it on a log screen.
+      request_body: truncate(maskBodySecrets(entry.request_body)),
       response_status: entry.response_status ?? null,
       // The partner's own response can carry a session cookie or an echoed
       // auth header — mask it exactly like the request side, not just the
@@ -242,7 +245,7 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
       response_headers: entry.response_headers
         ? JSON.stringify(maskHeaders(entry.response_headers))
         : null,
-      response_body: truncate(entry.response_body),
+      response_body: truncate(maskBodySecrets(entry.response_body)),
       duration_ms: entry.duration_ms ?? null,
       error: entry.error ?? null,
       user_id: entry.user_id ?? null,

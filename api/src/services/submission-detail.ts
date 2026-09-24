@@ -22,6 +22,7 @@
  */
 import { db } from '../db/index.js'
 import { accountKindOf } from './machine-accounts.js'
+import { sameLoggedBody } from './secret-mask.js'
 
 // ─── Fact shapes ────────────────────────────────────────────────────────────
 
@@ -811,15 +812,6 @@ export function buildSubmissionDetail(f: SubmissionFacts): SubmissionDetail {
 
 // ─── Reading the facts ──────────────────────────────────────────────────────
 
-function canon(v: unknown): string | null {
-  if (v == null) return null
-  try {
-    return JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v)
-  } catch {
-    return String(v)
-  }
-}
-
 async function transitionById(id: string | null | undefined): Promise<FactTransition | null> {
   if (!id || !/^[0-9A-Fa-f-]{36}$/.test(id)) return null
   const t = (await db('nivaro_workflow_transitions as t')
@@ -928,7 +920,6 @@ export async function gatherSubmissionFacts(
   } catch {
     storedBody = null
   }
-  const want = canon(storedBody)
   const attemptTimes = [created, updated, ...attempts.map((a) => new Date(String(a.recorded_at)))]
   let endpointPath = ''
   try {
@@ -948,7 +939,8 @@ export async function gatherSubmissionFacts(
     error: (l.error as string) ?? null,
     triggered_by: (l.triggered_by as string) ?? null,
     user_id: (l.user_id as string) ?? null,
-    body_match: want != null && canon(l.request_body) === want
+    // The call log masks secrets in its bodies — compare masked forms.
+    body_match: sameLoggedBody(l.request_body as string | null, storedBody)
   }))
   // A body match is proof. Without one (the stored body can legitimately
   // differ — a writer that stores a trimmed copy), fall back to the same
