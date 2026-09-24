@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { NIVARO_REACT_VERSION, NIVARO_VERSION } from '../version.js'
 
@@ -20,7 +21,11 @@ export async function healthRoutes(app: FastifyInstance) {
   // The Environments registry reads it off every registered API so a picker can
   // offer real keys instead of a free-text guess. Not a secret: it names a
   // deployment slot, never a host or credential.
+  // Development only: a 30s background scan of the source tree, reported as
+  // `dev` so the admin can say "the API is running code older than disk".
+  startDevStalenessScan(config.NODE_ENV)
   app.get('/version', async (_req, reply) => {
+    const dev = devStaleness()
     return reply.send({
       version: NIVARO_VERSION,
       // The shared-code (@nivaro/react) version the admin SPA carries — a
@@ -28,7 +33,8 @@ export async function healthRoutes(app: FastifyInstance) {
       react: NIVARO_REACT_VERSION,
       environment: config.NODE_ENV,
       instance: instanceKey(),
-      cloud: !!process.env.CLOUD_META_DB_URL
+      cloud: !!process.env.CLOUD_META_DB_URL,
+      ...(dev ? { dev } : {})
     })
   })
 

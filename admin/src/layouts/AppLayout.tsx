@@ -109,6 +109,7 @@ import {
 } from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router'
 import { toast } from 'sonner'
+import { DevStaleBanner } from '@/components/dev-stale-banner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
 import { getRecorderState, subscribeRecorder } from '@/lib/e2e-recorder'
 import { preloadRoute } from '@/lib/preload-routes'
@@ -958,6 +959,7 @@ export function AppLayout() {
               `/changelog?since=${encodeURIComponent(u.from ?? '')}&to=${encodeURIComponent(u.version)}`
             }
           />
+          <DevStaleBanner />
           <RecorderBadge />
           <SessionExpiryWatcher />
           <OfflineBanner />
