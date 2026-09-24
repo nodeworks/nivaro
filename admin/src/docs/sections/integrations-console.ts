@@ -264,6 +264,24 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze`
       text: "The route refuses anything that isn't an `erp_submit` action at that index (a `create_record` action can never be re-run this way), requires the record to actually hold an instance of that transition's OWN pipeline template (a transition id from an unrelated template 404s), renders the payload against the record's CURRENT state rather than the transition's target state, and always produces a brand-new submission row — exactly like a first send, obligation-trigger `manual`. When a guard or `push_when` would have skipped the push instead of sending it, the response carries `skipped_reason` naming why, and no submission is produced."
     },
 
+    { type: 'h2', id: 'ic-event-paths', text: 'Event paths' },
+    {
+      type: 'p',
+      text: "Open any row on the Events tab to see everything it set off: the records it created or updated, the transitions and flows those writes ran, the pushes to partners and what each partner answered. The sheet opens on the first failure. Large runs of writes to one collection fold into a single line, and the tree stops at 2,000 steps (pushes, transitions and flows are kept before plain writes). The Events tab lists outbound pushes, inbound calls made with integration accounts or API keys (tick \"Include people's tokens\" to add calls made with a person's own token; GraphQL calls count only when they are mutations) and each extension's own feed."
+    },
+    {
+      type: 'p',
+      text: 'Exact paths are recorded as they happen: every API request, scheduled job, import run and extension feed event starts a chain, and every write, push, partner call, transition and flow run it causes is stamped with that chain. Events from before this feature, or on an instance that has not run migration 351, are matched by account and time instead and marked Inferred; each inferred step says why it was matched. A replay links to the event it replays, and the original links to its replays.'
+    },
+    {
+      type: 'p',
+      text: "On a record, the history sheet's Integration activity section lists every integration chain that touched it (integration accounts and API keys only), and each push under External requests has Show path. A record reader sees the path without request or response bodies, full error text or URL query strings; steps on records they cannot read are left out and counted."
+    },
+    {
+      type: 'note',
+      text: 'Routes: `GET /integration-events` (admin; filters `source`, `partner`, `caller`, `include_people`, `record`), `GET /integration-events/:source/:id/path` and `GET /integration-events/chain/:chainId/path` (admin), `GET /integration-events/record/:collection/:item` and `.../path?source=&id=` (read permission on the record; the path 404s unless the event names the record or shares one of its chains). A path that cannot be built answers 503, never 500. Extensions start a chain for their own feed events with `ctx.chain.begin` and list them with `ctx.integrations.registerEventSource`.'
+    },
+
     { type: 'h2', id: 'ic-partners', text: 'Partners tab' },
     {
       type: 'p',
