@@ -6,6 +6,7 @@ import {
   alertMessage,
   digestLine,
   pickRecipients,
+  REALERT_HOURS,
   selectAlertRows
 } from '../../../services/integration-signal-alerts.js'
 import type { SnoozeRow } from '../../../services/integration-signal-settings.js'
@@ -58,6 +59,18 @@ describe('alertMessage', () => {
     expect(m.subject).toBe('7 new · Failed pushes')
     expect(m.message.split('\n')).toEqual(['t0', 't1', 't2', 't3', 't4', 'and 2 more'])
   })
+  it('names the record a line is about', () => {
+    const m = alertMessage('Failed pushes', [
+      { title: 'Partner /orders', label: 'CR26-80361' },
+      { title: 'Partner /orders', label: 'CR26-80362', again: true },
+      { title: 'No record here' }
+    ])
+    expect(m.message.split('\n')).toEqual([
+      'Partner /orders · CR26-80361',
+      'Partner /orders · CR26-80362 — happened again',
+      'No record here'
+    ])
+  })
   it('says "happened again" for a re-occurrence and still counts it', () => {
     const m = alertMessage('Import failed', [{ title: 'forecasts', again: true }, { title: 'po' }])
     expect(m.subject).toBe('2 new · Import failed')
@@ -97,9 +110,23 @@ describe('selectAlertRows', () => {
   })
 
   it('a re-occurrence alerts again even though it was alerted before', () => {
-    const stored = [{ ...row('k3'), alerted_at: now }]
+    const sevenHoursAgo = new Date(now.getTime() - 7 * 3600_000)
+    const stored = [{ ...row('k3'), alerted_at: sevenHoursAgo }]
     const out = selectAlertRows('core:push-failed', stored, new Set(['k3']), [], now)
     expect(out.map((o) => [o.row.key, o.again])).toEqual([['k3', true]])
+  })
+
+  it('a re-occurrence of a row alerted less than the re-alert window ago stays quiet', () => {
+    const anHourAgo = new Date(now.getTime() - 3600_000)
+    const stored = [{ ...row('k3'), alerted_at: anHourAgo }]
+    expect(selectAlertRows('core:push-failed', stored, new Set(['k3']), [], now)).toEqual([])
+    // The window is a parameter — the default is REALERT_HOURS.
+    expect(
+      selectAlertRows('core:push-failed', stored, new Set(['k3']), [], now, 30 * 60_000).map(
+        (o) => o.row.key
+      )
+    ).toEqual(['k3'])
+    expect(REALERT_HOURS).toBe(6)
   })
 
   it('"happened again" only when the row was actually alerted before — reoccurring with no prior alert reads as new', () => {

@@ -910,10 +910,11 @@ export async function resolveFriendlyIds(
       const rows = (await selectInChunks(remainingIds, 1000, (chunk) =>
         db(collection).whereIn('id', chunk).select('id', field)
       )) as Array<Record<string, unknown>>
+      // Ids compare case-insensitively (MSSQL hands uuids back upper-cased) —
+      // one map, not a scan of every requested id per returned row.
+      const requested = new Map(remainingIds.map((id) => [String(id).toUpperCase(), id]))
       for (const row of rows) {
-        const key = remainingIds.find(
-          (id) => String(id).toUpperCase() === String(row.id).toUpperCase()
-        )
+        const key = requested.get(String(row.id).toUpperCase())
         if (!key) continue
         const v = row[field]
         if (v !== null && v !== undefined && v !== '') out.set(key, String(v))

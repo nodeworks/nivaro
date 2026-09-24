@@ -37,6 +37,18 @@ export type AlertMode = 'realtime' | 'digest'
 const TITLES_SHOWN = 5
 const WHY = 'you subscribed to this integration alert'
 
+/**
+ * A row that re-occurs within this many hours of its last alert stays quiet —
+ * a partner flapping, or a problem whose occurrence moves while it lasts,
+ * must never become one notification per 5-minute cycle. A constant rather
+ * than a per-signal setting: it is about how often a PERSON may be told, not
+ * about what counts as a problem, and no signal has asked to tune it.
+ */
+export const REALERT_HOURS = 6
+/** A row nobody could be told about (every delivery failed or was dropped)
+ *  is offered again on later cycles, for this long after it first appeared. */
+const RETRY_WINDOW_MS = 86_400_000
+
 let _app: FastifyInstance | null = null
 /** Set once at boot (server.ts) — notifyUser needs the app for sockets/push. */
 export function setApp(app: FastifyInstance): void {
@@ -95,14 +107,16 @@ export async function filterActiveAdminUserIds(userIds: string[]): Promise<Set<s
   return new Set(rows.map((r) => String(r.id).toUpperCase()))
 }
 
-/** "3 new · Failed pushes" + up to five titles, then "and N more". */
+/** "3 new · Failed pushes" + up to five titles (each naming its record when
+ *  it has one — "Partner /orders · CR26-80361"), then "and N more". */
 export function alertMessage(
   signalLabel: string,
-  newRows: Array<{ title: string; again?: boolean }>
+  newRows: Array<{ title: string; again?: boolean; label?: string | null }>
 ): { subject: string; message: string } {
-  const lines = newRows
-    .slice(0, TITLES_SHOWN)
-    .map((r) => (r.again ? `${r.title} — happened again` : r.title))
+  const lines = newRows.slice(0, TITLES_SHOWN).map((r) => {
+    const line = r.label ? `${r.title} · ${r.label}` : r.title
+    return r.again ? `${line} — happened again` : line
+  })
   if (newRows.length > TITLES_SHOWN) lines.push(`and ${newRows.length - TITLES_SHOWN} more`)
   return { subject: `${newRows.length} new · ${signalLabel}`, message: lines.join('\n') }
 }
@@ -117,7 +131,9 @@ export interface StoredAlertRow {
 /**
  * Which of the cycle's new rows are worth telling anyone about: not hidden
  * by a snooze or Dismiss (`isSnoozed` — the page's own rule), and not already
- * alerted — unless it re-occurred, which is news in its own right.
+ * alerted — unless it re-occurred, which is news in its own right, and even
+ * then only once `realertMs` (default REALERT_HOURS) has passed since the
+ * last alert about it.
  *
  * "Happened again" only reads true when the row had actually been alerted
  * BEFORE this reoccurrence (`alerted_at != null`) — a row that reoccurred
@@ -130,7 +146,8 @@ export function selectAlertRows(
   stored: StoredAlertRow[],
   reoccurred: Set<string>,
   snoozes: SnoozeRow[],
-  now: Date
+  now: Date,
+  realertMs = REALERT_HOURS * 3600_000
 ): Array<{ id: number; row: SignalRow; again: boolean }> {
   const out: Array<{ id: number; row: SignalRow; again: boolean }> = []
   for (const s of stored) {
@@ -143,10 +160,45 @@ export function selectAlertRows(
     if (!row || typeof row !== 'object' || typeof row.key !== 'string') continue
     const again = reoccurred.has(row.key) && s.alerted_at != null
     if (s.alerted_at != null && !again) continue
+    if (again && now.getTime() - new Date(s.alerted_at as Date | string).getTime() < realertMs) {
+      continue
+    }
     if (isSnoozed(row, signal, snoozes, now)) continue
     out.push({ id: s.id, row, again })
   }
   return out
+}
+
+/**
+ * Give every alerted row that points at a record its friendly id — the same
+ * lookup the console page does (`resolveFriendlyIds`), one call per
+ * collection, never per row. A failed lookup leaves those lines unlabelled;
+ * the alert still goes out. Mutates the rows (already parsed copies).
+ */
+export async function labelAlertRows(rows: SignalRow[]): Promise<void> {
+  const want = new Map<string, Set<string>>()
+  for (const r of rows) {
+    if (!r.record || r.record.label) continue
+    if (!want.has(r.record.collection)) want.set(r.record.collection, new Set())
+    want.get(r.record.collection)?.add(String(r.record.id))
+  }
+  if (want.size === 0) return
+  const { resolveFriendlyIds } = await import('./workflow-transitions.js')
+  const labels = new Map<string, string>()
+  for (const [collection, ids] of want) {
+    try {
+      for (const [id, label] of await resolveFriendlyIds(collection, [...ids])) {
+        labels.set(`${collection}:${id}`, label)
+      }
+    } catch {
+      // Leave this collection's lines unlabelled.
+    }
+  }
+  for (const r of rows) {
+    if (!r.record || r.record.label) continue
+    const label = labels.get(`${r.record.collection}:${r.record.id}`)
+    if (label) r.record.label = label
+  }
 }
 
 export function digestLine(label: string, open: number, fresh: number): string {
@@ -180,15 +232,17 @@ export async function deliverSignalAlerts(summary: CycleSummary): Promise<void> 
 async function deliver(summary: CycleSummary): Promise<void> {
   const app = _app
   if (!app) return
-  const pending = summary.results.filter((r) => !r.error && r.new_keys.length > 0)
-  if (pending.length === 0) return
-  const { maintenanceState } = await import('./security.js')
-  if ((await maintenanceState()).on) return
+  // Every signal that evaluated cleanly — not only those with new keys: a row
+  // an earlier delivery failed to get to anyone is retried below.
+  const ready = summary.results.filter((r) => !r.error)
+  if (ready.length === 0) return
 
   const subs = (await db('nivaro_integration_signal_subscriptions')
     .where({ mode: 'realtime' })
     .select('id', 'user', 'signal', 'mode')) as SubscriptionRow[]
   if (subs.length === 0) return
+  const { maintenanceState } = await import('./security.js')
+  if ((await maintenanceState()).on) return
 
   // Computed ONCE for every subscriber this cycle touches, never per signal —
   // a demoted or offboarded subscriber must not hear about ANY of them.
@@ -197,8 +251,9 @@ async function deliver(summary: CycleSummary): Promise<void> {
   const { notifyUser } = await import('./notification-channels.js')
   const snoozes = await loadActiveSnoozes()
   const now = new Date()
+  const retrySince = new Date(now.getTime() - RETRY_WINDOW_MS)
 
-  for (const r of pending) {
+  for (const r of ready) {
     const def = getIntegrationSignal(r.signal)
     if (!def) continue
     const settings = await resolveThresholds(def)
@@ -212,22 +267,35 @@ async function deliver(summary: CycleSummary): Promise<void> {
 
     // The DB row_key is the key truncated to 300 — look the rows up by that.
     const rowKeys = [...new Set(r.new_keys.map((k) => k.slice(0, 300)))]
-    const stored: StoredAlertRow[] = []
+    const byId = new Map<number, StoredAlertRow>()
     for (const chunk of chunkArray(rowKeys, 1000)) {
-      stored.push(
-        ...((await db('nivaro_integration_signal_rows')
-          .where({ signal: def.id })
-          .whereNull('cleared_at')
-          .whereIn('row_key', chunk)
-          .select('id', 'row_key', 'alerted_at', 'payload')) as StoredAlertRow[])
-      )
+      for (const row of (await db('nivaro_integration_signal_rows')
+        .where({ signal: def.id })
+        .whereNull('cleared_at')
+        .whereIn('row_key', chunk)
+        .select('id', 'row_key', 'alerted_at', 'payload')) as StoredAlertRow[]) {
+        byId.set(row.id, row)
+      }
     }
+    // Rows nobody has been told about yet (an earlier delivery reached no one)
+    // are offered again for a day after they appeared.
+    for (const row of (await db('nivaro_integration_signal_rows')
+      .where({ signal: def.id })
+      .whereNull('cleared_at')
+      .whereNull('alerted_at')
+      .where('first_seen', '>=', retrySince)
+      .select('id', 'row_key', 'alerted_at', 'payload')) as StoredAlertRow[]) {
+      byId.set(row.id, row)
+    }
+    const stored = [...byId.values()]
+    if (stored.length === 0) continue
     const fresh = selectAlertRows(def.id, stored, new Set(r.reoccurred_keys), snoozes, now)
     if (fresh.length === 0) continue
 
+    await labelAlertRows(fresh.map((f) => f.row)).catch(() => undefined)
     const { subject, message } = alertMessage(
       def.label,
-      fresh.map((f) => ({ title: f.row.title, again: f.again }))
+      fresh.map((f) => ({ title: f.row.title, again: f.again, label: f.row.record?.label }))
     )
     // One recipient's failure — or being dropped downstream (suspended,
     // redacted, muted) — must never silently count as "this went out"; a row

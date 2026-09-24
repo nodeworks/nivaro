@@ -106,14 +106,46 @@ export function registerCoreIntegrationSignals(): void {
       }>
       const byApi = new Map<number, typeof calls>()
       for (const c of calls) byApi.set(c.api_id, [...(byApi.get(c.api_id) ?? []), c])
-      const rows: SignalRow[] = []
+      const flagged: Array<{ apiId: number; list: typeof calls; streak: number; auth: boolean }> =
+        []
       for (const [apiId, list] of byApi) {
         const { streak, auth } = failureStreak(
           list.map((c) => ({ ok: !!c.ok, status: c.status, error: c.error }))
         )
         if (streak === 0 || (!auth && streak < thresholds.streak)) continue
+        flagged.push({ apiId, list, streak, auth })
+      }
+      // A streak that fills the whole window began before it — the oldest
+      // call the window still holds is NOT the start, and would slide forward
+      // every cycle. Ask the log for the first call after the last success.
+      const starts = new Map<number, { id: number; at: Date }>()
+      const unbounded = flagged.filter((f) => f.streak === f.list.length).map((f) => f.apiId)
+      if (unbounded.length > 0) {
+        const found = (await selectInChunks(unbounded, 1000, (chunk) =>
+          db.raw(
+            `SELECT l.api_id, MIN(l.id) AS first_id, MIN(l.created_at) AS first_at
+               FROM nivaro_outbound_log l
+              WHERE l.api_id IN (${chunk.map(() => '?').join(',')})
+                AND l.id > ISNULL((SELECT MAX(s.id) FROM nivaro_outbound_log s
+                                    WHERE s.api_id = l.api_id AND s.ok = 1), 0)
+              GROUP BY l.api_id`,
+            chunk
+          )
+        )) as Array<{ api_id: number; first_id: number | null; first_at: Date | null }>
+        for (const f of found) {
+          if (f.first_id != null && f.first_at != null) {
+            starts.set(Number(f.api_id), { id: Number(f.first_id), at: new Date(f.first_at) })
+          }
+        }
+      }
+      const rows: SignalRow[] = []
+      for (const { apiId, list, streak, auth } of flagged) {
         const newest = list[0]
         const firstFail = list[streak - 1]
+        const start = starts.get(apiId) ?? {
+          id: firstFail.id,
+          at: new Date(firstFail.created_at)
+        }
         const name = newest.api_name ?? `API #${apiId}`
         rows.push({
           key: `api:${apiId}`,
@@ -121,10 +153,12 @@ export function registerCoreIntegrationSignals(): void {
             ? `${name}: authentication failing`
             : `${name}: ${streak} failed calls in a row`,
           detail: newest.error ?? (newest.status != null ? `HTTP ${newest.status}` : 'No response'),
-          since: new Date(firstFail.created_at).toISOString(),
-          // The newest failing call — unchanged while the streak just keeps
-          // going between evaluations, moves the moment a FRESH failure lands.
-          occurrence: `call:${newest.id}`,
+          since: start.at.toISOString(),
+          // The FIRST failing call of this streak (the first failure after the
+          // last success) — unchanged for as long as the outage lasts, so a
+          // steady outage never reads as "it happened again". A success ends
+          // the streak (the row clears); the next failure starts a new one.
+          occurrence: `call:${start.id}`,
           api: name,
           actions: [{ kind: 'explain', label: 'Partner detail', payload: { api_id: apiId } }]
         })
@@ -307,6 +341,61 @@ export function registerCoreIntegrationSignals(): void {
         const errors = Number(r.errors)
         return calls >= thresholds.min_calls && (errors / calls) * 100 >= thresholds.error_pct
       })
+      // When did each flagged caller's CURRENT bout of errors begin: the
+      // first error after a quiet spell longer than the window (an hour with
+      // no error at all). A caller erroring steadily keeps that start, so a
+      // continuing spike never reads as "it happened again"; a fresh spike
+      // after a quiet hour is a new one. Bounded to the log's own retention.
+      const episodeStarts = new Map<string, Date>()
+      const callerKey = (u: string | null, k: number | null) =>
+        k != null ? `key:${k}` : `user:${String(u ?? 'none').toUpperCase()}`
+      if (flagged.length > 0) {
+        const episodeUsers = [
+          ...new Set(flagged.filter((r) => r.api_key_id == null && r.user_id).map((r) => r.user_id))
+        ] as string[]
+        const episodeKeys = [
+          ...new Set(flagged.map((r) => r.api_key_id).filter((v): v is number => v != null))
+        ]
+        const clauses: string[] = []
+        const bindings: Array<Date | string | number> = [new Date(Date.now() - 14 * 86_400_000)]
+        if (episodeUsers.length > 0) {
+          clauses.push(
+            `(l.api_key_id IS NULL AND l.[user] IN (${episodeUsers.map(() => '?').join(',')}))`
+          )
+          bindings.push(...episodeUsers)
+        }
+        if (episodeKeys.length > 0) {
+          clauses.push(`l.api_key_id IN (${episodeKeys.map(() => '?').join(',')})`)
+          bindings.push(...episodeKeys)
+        }
+        if (clauses.length > 0) {
+          const starts = (await db.raw(
+            `SELECT user_id, api_key_id, MAX(created_at) AS episode_start FROM (
+               SELECT l.[user] AS user_id, l.api_key_id, l.created_at,
+                      LAG(l.created_at) OVER (PARTITION BY l.[user], l.api_key_id
+                                              ORDER BY l.created_at, l.id) AS prev_at
+                 FROM nivaro_api_logs l
+                WHERE l.created_at >= ? AND l.auth IN ('token', 'api_key') AND l.status >= 400
+                  AND (${clauses.join(' OR ')})
+             ) x
+            WHERE prev_at IS NULL OR DATEDIFF(second, prev_at, created_at) > 3600
+            GROUP BY user_id, api_key_id`,
+            bindings
+          )) as Array<{
+            user_id: string | null
+            api_key_id: number | null
+            episode_start: Date | null
+          }>
+          for (const e of starts) {
+            if (e.episode_start) {
+              episodeStarts.set(
+                callerKey(e.user_id, e.api_key_id != null ? Number(e.api_key_id) : null),
+                new Date(e.episode_start)
+              )
+            }
+          }
+        }
+      }
       // Two lookups total, however many distinct callers are flagged — never
       // one query per row.
       const userIds = [...new Set(flagged.map((r) => r.user_id).filter((v): v is string => !!v))]
@@ -344,15 +433,22 @@ export function registerCoreIntegrationSignals(): void {
         const calls = Number(r.calls)
         const errors = Number(r.errors)
         const who = formatInboundCaller(r.user_id, r.api_key_id, userNames, keyNames)
-        const since = r.last_error_at ? new Date(r.last_error_at).toISOString() : undefined
+        const episode = episodeStarts.get(
+          callerKey(r.user_id, r.api_key_id != null ? Number(r.api_key_id) : null)
+        )
+        const since = episode
+          ? episode.toISOString()
+          : r.last_error_at
+            ? new Date(r.last_error_at).toISOString()
+            : undefined
         out.push({
           key: r.api_key_id ? `key:${r.api_key_id}` : `user:${r.user_id ?? 'none'}`,
           title: `${who}: ${Math.round((errors / calls) * 100)}% of calls failing`,
           detail: `${errors} of ${calls} calls in the last hour`,
           since,
-          // The newest error in the window — a caller still erroring between
-          // evaluations keeps the same value; a fresh error after a quiet
-          // spell moves it, which is exactly "it happened again."
+          // The start of this bout of errors (see episodeStarts above) — the
+          // same for as long as the caller keeps erroring; a fresh bout after
+          // a quiet hour moves it, which is exactly "it happened again".
           occurrence: since,
           actions: [
             {
@@ -376,7 +472,12 @@ export function registerCoreIntegrationSignals(): void {
     thresholds: [],
     evaluate: async () => {
       const rows = (await db.raw(
-        `SELECT q.import_key, d.label, q.id, q.finished_at, LEFT(CAST(q.logs AS nvarchar(max)), 300) AS logs
+        `SELECT q.import_key, d.label, q.id, q.finished_at, LEFT(CAST(q.logs AS nvarchar(max)), 300) AS logs,
+                (SELECT MIN(e.id) FROM nivaro_import_queue e
+                  WHERE e.import_key = q.import_key AND e.status = 'error'
+                    AND e.id > ISNULL((SELECT MAX(c.id) FROM nivaro_import_queue c
+                                        WHERE c.import_key = q.import_key AND c.status = 'completed'), 0)
+                ) AS first_fail_run_id
            FROM nivaro_import_queue q
            JOIN nivaro_import_definitions d ON d.id = q.definition
           WHERE q.id IN (SELECT MAX(id) FROM nivaro_import_queue WHERE status IN ('completed','error') GROUP BY import_key)
@@ -388,16 +489,18 @@ export function registerCoreIntegrationSignals(): void {
         id: number
         finished_at: Date | null
         logs: string | null
+        first_fail_run_id: number | null
       }>
       const out: SignalRow[] = rows.map((r) => ({
         key: `import:${r.import_key}`,
         title: `${r.label}: last run failed`,
         detail: r.logs ?? undefined,
         since: r.finished_at ? new Date(r.finished_at).toISOString() : undefined,
-        // The failing run itself — the SAME failed run stays dismissed; the
-        // next run (whether it fails again or succeeds and later fails) is a
-        // new run id, so it shows again.
-        occurrence: `run:${r.id}`,
+        // The FIRST failed run since the import last completed — an import
+        // that keeps failing run after run is one problem, not a new one per
+        // run. A completed run ends it; the next failure starts a new one.
+        // The drill still opens the NEWEST failed run (its log is current).
+        occurrence: `run:${r.first_fail_run_id ?? r.id}`,
         actions: [{ kind: 'explain', label: 'Open run', payload: { import_run: r.id } }],
         drill: { kind: 'import_run', id: String(r.id) }
       }))
@@ -484,8 +587,16 @@ export function registerCoreIntegrationSignals(): void {
       const since = new Date(Date.now() - thresholds.window_hours * 3600_000)
       const rows = (await db.raw(
         `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
-                (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors
+                (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors,
+                ff.id AS first_fail_run_id, ff.started_at AS first_fail_at
            FROM nivaro_flows f
+           OUTER APPLY (
+             SELECT TOP 1 e.id, e.started_at FROM nivaro_flow_runs e
+              WHERE e.flow = f.id AND e.status = 'error'
+                AND e.id > ISNULL((SELECT MAX(s.id) FROM nivaro_flow_runs s
+                                    WHERE s.flow = f.id AND s.status = 'success'), 0)
+              ORDER BY e.id ASC
+           ) ff
            JOIN nivaro_flow_runs r ON r.id = (SELECT TOP 1 id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC)
           WHERE r.status = 'error' AND r.started_at >= ?
           ORDER BY r.started_at DESC, f.id`,
@@ -497,15 +608,18 @@ export function registerCoreIntegrationSignals(): void {
         error_message: string | null
         started_at: Date
         errors: number
+        first_fail_run_id: number | null
+        first_fail_at: Date | null
       }>
       const out: SignalRow[] = rows.map((r) => ({
         key: `flow:${r.id}`,
         title: `${r.name}: failing`,
         detail: `${r.error_message ?? 'error'} · ${r.errors} failed run${Number(r.errors) === 1 ? '' : 's'} in ${thresholds.window_hours} h`,
-        since: new Date(r.started_at).toISOString(),
-        // The most recent failing run — a NEW failed run (this one succeeds
-        // then fails again, or just runs and fails once more) moves it.
-        occurrence: `run:${r.run_id}`,
+        since: new Date(r.first_fail_at ?? r.started_at).toISOString(),
+        // The FIRST failing run since the flow's last successful one — the
+        // same for as long as it keeps failing; a success ends the streak and
+        // the next failure starts a new one ("it happened again").
+        occurrence: `run:${r.first_fail_run_id ?? r.run_id}`,
         actions: [{ kind: 'explain', label: 'Open flow', payload: { flow: r.id } }]
       }))
       return { count: out.length, rows: out }

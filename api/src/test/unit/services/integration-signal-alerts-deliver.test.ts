@@ -8,8 +8,19 @@ function qb(name: string) {
   const filters: Array<(r: Row) => boolean> = []
   const apply = () => rows().filter((r) => filters.every((f) => f(r)))
   const api = {
-    where(o: Row) {
-      filters.push((r) => Object.entries(o).every(([k, v]) => r[k] === v))
+    where(o: Row | string, op?: string, v?: unknown) {
+      if (typeof o === 'string') {
+        const col = o
+        filters.push((r) => {
+          const x = r[col]
+          if (x == null || v == null) return false
+          const a = new Date(x as Date).getTime()
+          const b = new Date(v as Date).getTime()
+          return op === '>=' ? a >= b : op === '<' ? a < b : a === b
+        })
+        return api
+      }
+      filters.push((r) => Object.entries(o).every(([k, val]) => r[k] === val))
       return api
     },
     whereNull(k: string) {
@@ -95,6 +106,10 @@ vi.mock('../../../services/integration-signal-settings.js', async (orig) => ({
   loadActiveSnoozes: async () => [],
   resolveThresholds: async () => ({ enabled: true, severity: 'warn', thresholds: {} })
 }))
+const resolveFriendlyIds = vi.fn(
+  async (_collection: string, ids: string[]) => new Map(ids.map((id) => [id, `REC-${id}`]))
+)
+vi.mock('../../../services/workflow-transitions.js', () => ({ resolveFriendlyIds }))
 vi.mock('../../../services/integration-signals.js', () => ({
   getIntegrationSignal: (id: string) =>
     id === 'core:push-failed'
@@ -171,7 +186,7 @@ describe('deliverSignalAlerts', () => {
   })
 
   it('a re-occurrence of an alerted row is news — "happened again"', async () => {
-    tables.nivaro_integration_signal_rows[0].alerted_at = new Date()
+    tables.nivaro_integration_signal_rows[0].alerted_at = new Date(Date.now() - 7 * 3600_000)
     await deliverSignalAlerts(summary(['workflows:1:P:/x'], ['workflows:1:P:/x']))
     expect(notifyUser).toHaveBeenCalledTimes(1)
     const [, , opts] = notifyUser.mock.calls[0] as unknown as [unknown, string, Row]
@@ -244,5 +259,92 @@ describe('deliverSignalAlerts', () => {
     notifyUser.mockResolvedValueOnce({ id: 2, decision: { dropped: false }, lane: null }) // DIGESTER
     await deliverSignalAlerts(summary(['workflows:1:P:/x']))
     expect(tables.nivaro_integration_signal_rows[0].alerted_at).toBeInstanceOf(Date)
+  })
+
+  // ── steady outage / recovery / retry ─────────────────────────────────────
+
+  it('a steady outage over three cycles alerts exactly once; recovery then a new failure alerts again', async () => {
+    const k = 'workflows:1:P:/x'
+    // Cycle 1: the row is new.
+    await deliverSignalAlerts(summary([k]))
+    // Cycles 2 and 3: the same problem, still going — even if its occurrence
+    // were to move, the re-alert window keeps it quiet.
+    await deliverSignalAlerts(summary([k], [k]))
+    await deliverSignalAlerts(summary([k], [k]))
+    expect(notifyUser).toHaveBeenCalledTimes(1)
+
+    // Recovery: the row cleared. A new failure later is a brand-new row.
+    tables.nivaro_integration_signal_rows[0].cleared_at = new Date()
+    tables.nivaro_integration_signal_rows.push({
+      id: 11,
+      signal: 'core:push-failed',
+      row_key: k,
+      cleared_at: null,
+      alerted_at: null,
+      first_seen: new Date(),
+      payload: JSON.stringify({ key: k, title: 'P /x', actions: [] })
+    })
+    await deliverSignalAlerts(summary([k]))
+    expect(notifyUser).toHaveBeenCalledTimes(2)
+  })
+
+  it('a row left unstamped by a failed delivery is offered again on the next cycle', async () => {
+    tables.nivaro_integration_signal_rows[0].first_seen = new Date()
+    notifyUser.mockRejectedValueOnce(new Error('boom'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await deliverSignalAlerts(summary(['workflows:1:P:/x']))
+    warn.mockRestore()
+    expect(tables.nivaro_integration_signal_rows[0].alerted_at).toBeNull()
+
+    // Next cycle: nothing new for this signal — the row is retried anyway.
+    await deliverSignalAlerts(summary([]))
+    expect(notifyUser).toHaveBeenCalledTimes(2)
+    expect(tables.nivaro_integration_signal_rows[0].alerted_at).toBeInstanceOf(Date)
+  })
+
+  it('an unstamped row older than a day is not retried', async () => {
+    tables.nivaro_integration_signal_rows[0].first_seen = new Date(Date.now() - 2 * 86_400_000)
+    await deliverSignalAlerts(summary([]))
+    expect(notifyUser).not.toHaveBeenCalled()
+  })
+
+  it('each line names the record it is about — one lookup per collection', async () => {
+    resolveFriendlyIds.mockClear()
+    tables.nivaro_integration_signal_rows = [
+      {
+        id: 10,
+        signal: 'core:push-failed',
+        row_key: 'workflows:1:P:/x',
+        cleared_at: null,
+        alerted_at: null,
+        payload: JSON.stringify({
+          key: 'workflows:1:P:/x',
+          title: 'P /x',
+          record: { collection: 'workflows', id: '1' },
+          actions: []
+        })
+      },
+      {
+        id: 12,
+        signal: 'core:push-failed',
+        row_key: 'workflows:2:P:/x',
+        cleared_at: null,
+        alerted_at: null,
+        payload: JSON.stringify({
+          key: 'workflows:2:P:/x',
+          title: 'P /x',
+          record: { collection: 'workflows', id: '2', label: 'Already named' },
+          actions: []
+        })
+      }
+    ]
+    await deliverSignalAlerts(summary(['workflows:1:P:/x', 'workflows:2:P:/x']))
+    const [, , opts] = notifyUser.mock.calls[0] as unknown as [unknown, string, Row]
+    expect(String(opts.message).split('\n').sort()).toEqual([
+      'P /x · Already named',
+      'P /x · REC-1'
+    ])
+    expect(resolveFriendlyIds).toHaveBeenCalledTimes(1)
+    expect(resolveFriendlyIds).toHaveBeenCalledWith('workflows', ['1'])
   })
 })
