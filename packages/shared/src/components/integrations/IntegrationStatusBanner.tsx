@@ -86,37 +86,68 @@ function SendNowButton({
           : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
       )}
     >
-      {send.isPending ? (
-        <Loader2 className='h-3 w-3 animate-spin' />
-      ) : (
-        <Send className='h-3 w-3' />
-      )}
+      {send.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <Send className='h-3 w-3' />}
       {armed ? 'Confirm send?' : 'Send now'}
     </button>
   )
 }
 
-export function IntegrationStatusBanner({ collection, itemId }: IntegrationStatusBannerProps) {
+/** The record's obligations, one cached read shared by the banner, the
+ *  header Integrations chip and its popup — every transition / retry
+ *  invalidates this exact key, so all three move together. */
+export function useRecordObligations(collection: string, itemId: string | number) {
   const client = useNivaroClient()
-  const { data } = useQuery({
+  const query = useQuery({
     queryKey: ['integration-obligations', 'record', collection, String(itemId)],
     queryFn: () =>
       client.request<{
         data: Parameters<typeof bannerLines>[0]
         remediation_enabled?: boolean
-      }>(get(`/integration-obligations/record/${collection}/${encodeURIComponent(String(itemId))}`)),
+      }>(
+        get(`/integration-obligations/record/${collection}/${encodeURIComponent(String(itemId))}`)
+      ),
     enabled: !!collection && !!itemId,
     staleTime: 30_000,
     // A 403 means this viewer may not read the record's integrations — that
     // is an answer, not something to retry.
     retry: false
   })
-  const lines = bannerLines(data?.data ?? [])
-  if (lines.length === 0) return null
-  const remediationEnabled = data?.remediation_enabled === true
+  return {
+    ...query,
+    lines: bannerLines(query.data?.data ?? []),
+    remediationEnabled: query.data?.remediation_enabled === true
+  }
+}
 
+export function IntegrationStatusBanner({ collection, itemId }: IntegrationStatusBannerProps) {
+  const { lines, remediationEnabled } = useRecordObligations(collection, itemId)
+  if (lines.length === 0) return null
   return (
-    <div className='nvr-expand-in space-y-1.5' data-integration-banner>
+    <div className='nvr-expand-in' data-integration-banner>
+      <IntegrationStatusLines
+        collection={collection}
+        itemId={itemId}
+        lines={lines}
+        remediationEnabled={remediationEnabled}
+      />
+    </div>
+  )
+}
+
+/** The lines themselves — one per partner — without the fetch, so the
+ *  Integrations popup (which already holds the data) renders the same rows. */
+export function IntegrationStatusLines({
+  collection,
+  itemId,
+  lines,
+  remediationEnabled
+}: IntegrationStatusBannerProps & {
+  lines: ReturnType<typeof bannerLines>
+  remediationEnabled: boolean
+}) {
+  if (lines.length === 0) return null
+  return (
+    <div className='space-y-1.5' data-integration-lines>
       {lines.map((l) => {
         const role = roleForTone(l.tone)
         const [accent, accentDark] = role ? colorPair(role) : [null, null]
@@ -161,7 +192,11 @@ export function IntegrationStatusBanner({ collection, itemId }: IntegrationStatu
               </span>
             </p>
             {canSend && (
-              <SendNowButton obligationId={l.obligation_id} collection={collection} itemId={itemId} />
+              <SendNowButton
+                obligationId={l.obligation_id}
+                collection={collection}
+                itemId={itemId}
+              />
             )}
           </div>
         )

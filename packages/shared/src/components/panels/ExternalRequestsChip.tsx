@@ -4,18 +4,28 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { integrationChipSummary } from '../../lib/integration-chip'
 import { cn, formatRelative } from '../../lib/utils'
 import { type ErpSubmission, SubmissionRow } from '../integrations/console/SubmissionRow'
+import {
+  IntegrationStatusLines,
+  useRecordObligations
+} from '../integrations/IntegrationStatusBanner'
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
 
 /**
- * Item-header chip summarizing every external (ERP) request this record has
- * sent — badge counts by outcome, click for the full request/response log
- * (each request drills into every attempt). Always renders: a skeleton while
- * loading, a quiet 'No external requests' when nothing was sent. Shares the
- * ['erp-submissions', collection, item] cache with ErpFailureBanner, so
- * transition writebacks refresh both.
+ * Item-header "Integrations" chip: one dot per partner (was it told —
+ * obligations — else the newest request's outcome), a green badge for
+ * partners told OK and a red badge for what a person must act on (a partner
+ * not told, a failed send). Click for the popup: the partner-status lines
+ * (told / never told / send now — the rows the record body used to carry
+ * as a banner; Rob 2026-09-24: "move the integration slot into the
+ * Integrations button popup") above the full request/response log (each
+ * request drills into every attempt). Always renders: a skeleton while
+ * loading, a quiet 'No external requests' when there is nothing to say.
+ * Shares the ['erp-submissions', …] and ['integration-obligations','record',…]
+ * caches, so transition writebacks and retries refresh it.
  */
 export function ExternalRequestsChip({
   collection,
@@ -61,8 +71,14 @@ export function ExternalRequestsChip({
     onError: () => toast.error('Retry failed')
   })
 
+  const {
+    lines,
+    remediationEnabled,
+    isLoading: linesLoading
+  } = useRecordObligations(collection, itemId)
+
   const subs = data ?? []
-  if (isLoading) {
+  if (isLoading || linesLoading) {
     return (
       <span
         className='flex shrink-0 items-center gap-1.5 self-center rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400 dark:border-border'
@@ -73,7 +89,8 @@ export function ExternalRequestsChip({
       </span>
     )
   }
-  if (subs.length === 0) {
+  const summary = integrationChipSummary(lines, subs, (iso) => (iso ? formatRelative(iso) : ''))
+  if (subs.length === 0 && summary.partners.length === 0) {
     return (
       <span
         className='flex shrink-0 items-center gap-1.5 self-center rounded-md border border-dashed border-slate-200 px-2 py-1 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'
@@ -85,22 +102,13 @@ export function ExternalRequestsChip({
       </span>
     )
   }
-  const ok = subs.filter((s) => s.status === 'accepted').length
-  const failed = subs.filter((s) => s.status === 'failed').length
-  const pending = subs.length - ok - failed
-  // #30 — one pill per integration: the LATEST push's status for this record
-  // (rows arrive newest first), so a header reads "MWF ✓ · Fusion ✕" at a glance.
-  const perIntegration = new Map<string, ErpSubmission>()
-  for (const s of subs) {
-    const key = s.external_api_name ?? (s.external_api != null ? `#${s.external_api}` : 'External')
-    if (!perIntegration.has(key)) perIntegration.set(key, s)
+  const DOT: Record<(typeof summary.partners)[number]['status'], string> = {
+    ok: 'bg-emerald-500',
+    attention: 'bg-red-500',
+    pending: 'bg-sky-500',
+    neutral: 'bg-slate-400 dark:bg-slate-500'
   }
-  const tone = (status: string) =>
-    status === 'accepted'
-      ? 'bg-emerald-500'
-      : status === 'failed' || status === 'rejected'
-        ? 'bg-red-500'
-        : 'bg-sky-500'
+  const needs = summary.attention
 
   return (
     <>
@@ -108,42 +116,61 @@ export function ExternalRequestsChip({
         type='button'
         onClick={() => setOpen(true)}
         data-nvr-external-requests
-        className='flex shrink-0 items-center gap-1.5 self-center rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-white/5'
-        title='External requests sent for this record'
+        data-integrations-ok={summary.ok}
+        data-integrations-attention={needs}
+        className={cn(
+          'flex shrink-0 items-center gap-1.5 self-center rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
+          needs > 0
+            ? 'border-red-200 text-slate-700 hover:bg-red-50/60 dark:border-red-500/40 dark:text-slate-200 dark:hover:bg-red-500/10'
+            : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-white/5'
+        )}
+        title={
+          needs > 0
+            ? `${needs} integration ${needs === 1 ? 'issue needs' : 'issues need'} attention — click for details`
+            : 'Integrations for this record — partner status and every request sent'
+        }
       >
-        <Satellite className='h-3.5 w-3.5 text-nvr-cyan' />
-        {perIntegration.size <= 3 ? (
-          [...perIntegration.entries()].map(([name, s]) => (
+        <Satellite className={cn('h-3.5 w-3.5', needs > 0 ? 'text-red-500' : 'text-nvr-cyan')} />
+        {summary.partners.length <= 3 ? (
+          summary.partners.map((p) => (
             <span
-              key={name}
+              key={p.name}
               className='inline-flex items-center gap-1'
-              data-integration-chip={name}
-              data-integration-status={s.status}
-              data-tip={`${name} · ${s.status} · ${formatRelative(s.updated_at ?? s.created_at)}${s.last_error ? ` — ${s.last_error.slice(0, 120)}` : ''}`}
+              data-integration-chip={p.name}
+              data-integration-status={p.status}
+              data-tip={p.tip}
             >
-              <span className={cn('h-1.5 w-1.5 rounded-full', tone(s.status))} />
-              {name}
+              <span className={cn('h-1.5 w-1.5 rounded-full', DOT[p.status])} />
+              {p.name}
             </span>
           ))
         ) : (
-          <>
-            External requests
-            {ok > 0 && (
-              <span className='rounded bg-emerald-50 px-1 text-[10.5px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'>
-                {ok}
-              </span>
-            )}
-            {pending > 0 && (
-              <span className='rounded bg-sky-50 px-1 text-[10.5px] font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-400'>
-                {pending}
-              </span>
-            )}
-            {failed > 0 && (
-              <span className='rounded bg-red-50 px-1 text-[10.5px] font-semibold text-red-700 dark:bg-red-500/10 dark:text-red-400'>
-                {failed}
-              </span>
-            )}
-          </>
+          <span>Integrations</span>
+        )}
+        {/* The badges: told OK (green) · needs attention (red) · awaiting ack (blue). */}
+        {summary.ok > 0 && (
+          <span
+            data-integrations-badge='ok'
+            className='rounded bg-emerald-50 px-1 text-[10.5px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+          >
+            {summary.ok}
+          </span>
+        )}
+        {summary.pending > 0 && (
+          <span
+            data-integrations-badge='pending'
+            className='rounded bg-sky-50 px-1 text-[10.5px] font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-400'
+          >
+            {summary.pending}
+          </span>
+        )}
+        {needs > 0 && (
+          <span
+            data-integrations-badge='attention'
+            className='rounded bg-red-50 px-1 text-[10.5px] font-semibold text-red-700 dark:bg-red-500/10 dark:text-red-400'
+          >
+            {needs}
+          </span>
         )}
       </button>
       {open && (
@@ -152,13 +179,42 @@ export function ExternalRequestsChip({
             <DialogHeader>
               <DialogTitle className='flex items-center gap-2 text-[15px]'>
                 <Satellite className='h-4 w-4 text-nvr-cyan' />
-                External requests
+                Integrations
                 <span className='text-[12px] font-normal text-slate-400'>
+                  {summary.partners.length} partner{summary.partners.length !== 1 ? 's' : ''} ·{' '}
                   {subs.length} request{subs.length !== 1 ? 's' : ''}
+                  {needs > 0 && (
+                    <span className='ml-1 text-red-600 dark:text-red-400'>
+                      · {needs} need{needs === 1 ? 's' : ''} attention
+                    </span>
+                  )}
                 </span>
               </DialogTitle>
             </DialogHeader>
             <DialogBody className='max-h-[65vh] space-y-2 overflow-y-auto'>
+              {lines.length > 0 && (
+                <div className='space-y-1.5 pb-2' data-integrations-partner-status>
+                  <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                    Partner status
+                  </p>
+                  <IntegrationStatusLines
+                    collection={collection}
+                    itemId={itemId}
+                    lines={lines}
+                    remediationEnabled={remediationEnabled}
+                  />
+                </div>
+              )}
+              {subs.length > 0 && (
+                <p className='pt-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                  Requests sent
+                </p>
+              )}
+              {subs.length === 0 && (
+                <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                  No request has been sent from this record yet.
+                </p>
+              )}
               {subs.map((s) => (
                 <SubmissionRow
                   key={s.id}
