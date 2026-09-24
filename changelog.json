@@ -1,10 +1,218 @@
 {
-  "generated_at": "2026-09-24T12:53:57.687Z",
+  "generated_at": "2026-09-24T19:08:47.957Z",
   "releases": [
+    {
+      "version": "0.1.336",
+      "tag": "v0.1.336",
+      "date": "2026-09-24T15:08:32-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "workflows",
+              "text": "review_when may follow one M2O hop",
+              "hash": "b86ad1b6"
+            },
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "show the integration path from the record",
+              "hash": "2dcb1dd6"
+            },
+            {
+              "section": "Added",
+              "scope": "console",
+              "text": "open any integration event into its full path",
+              "hash": "3629f535"
+            },
+            {
+              "section": "Added",
+              "scope": "console",
+              "text": "event path types, hooks and path model",
+              "hash": "3e1f58fe"
+            },
+            {
+              "section": "Added",
+              "scope": "workflows",
+              "text": "pad_start filter, child m2o pickers, optional_when in_query",
+              "hash": "e859dd0d"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "event path and record integration-activity routes",
+              "hash": "1f561a00"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "build an event's path from its chain",
+              "hash": "7758be61"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "event-source registry with outbound and inbound sources",
+              "hash": "e587259a"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "ctx.chain",
+              "hash": "df8096df"
+            },
+            {
+              "section": "Added",
+              "scope": "chains",
+              "text": "link replays to their original chain, nest retries",
+              "hash": "f4eeba4a"
+            },
+            {
+              "section": "Added",
+              "scope": "chains",
+              "text": "stamp activity, pushes, attempts, call logs, flows and transitions",
+              "hash": "eb9c8642"
+            },
+            {
+              "section": "Added",
+              "scope": "chains",
+              "text": "start a chain per request, cron tick and import run",
+              "hash": "88d5419a"
+            },
+            {
+              "section": "Added",
+              "scope": "chains",
+              "text": "migration 351 and chain roots",
+              "hash": "965e458b"
+            },
+            {
+              "section": "Added",
+              "scope": "chains",
+              "text": "chain context and per-tenant column probe",
+              "hash": "3adc17a4"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "catalog",
+              "text": "per-line submission errors for any partner's payload shape",
+              "hash": "7c92f977"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "open a partner obligation when the run reaches the push, not when the flow fires",
+              "hash": "53294be5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "record partner lines refresh after every transition, read as \"5m ago (2:09 PM)\"",
+              "hash": "bad901ba"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "final review fixes for event paths",
+              "hash": "2e526f15"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "look note events up by id; record activity lists machines only",
+              "hash": "e5766fca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "every transition button saves first; requirements dialog stays busy through the transition",
+              "hash": "5e350236"
+            },
+            {
+              "section": "Fixed",
+              "scope": "console",
+              "text": "path sheet scrolls once and replay links open their chain",
+              "hash": "3586f599"
+            },
+            {
+              "section": "Fixed",
+              "scope": "workflows",
+              "text": "no obligation for a push that does not apply; review lines after a failed push",
+              "hash": "333f7d27"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "keep partner secrets and hidden records out of event paths",
+              "hash": "248722e0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "listable event sources, inbound paging that reaches older writes",
+              "hash": "6bd1b371"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chains",
+              "text": "stamp raw submission inserts with the current chain",
+              "hash": "f4d6fb5f"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "integrations",
+              "text": "event paths",
+              "hash": "0c07ecf1"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fusion:cifa-tasks script entry (efp-ops)",
+              "hash": "cb3a817a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "refresh record header + child grids after a pipeline transition",
+              "hash": "972258cb"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "fusion:inbound-identity script entry",
+              "hash": "1deef2e4"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "fusion:transfer-orders script entry",
+              "hash": "67601678"
+            }
+          ]
+        }
+      ],
+      "count": 30
+    },
     {
       "version": "0.1.335",
       "tag": "v0.1.335",
-      "date": "2026-09-24T08:53:45-04:00",
+      "date": "2026-09-24T08:53:57-04:00",
       "sections": [
         {
           "label": "Added",
