@@ -17,7 +17,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { DigestLine, DigestSection } from './daily-digest.js'
-import { chunkArray } from './db-batch.js'
+import { chunkArray, selectInChunks } from './db-batch.js'
 import {
   isSnoozed,
   loadActiveSnoozes,
@@ -70,6 +70,31 @@ export function pickRecipients(
   return [...out.values()]
 }
 
+/**
+ * A subscriber survives to delivery only when they are still a live admin at
+ * the moment we're about to tell them something: status not suspended, not
+ * redacted, and their CURRENT role still carries admin_access. A demoted or
+ * offboarded person's subscription row is not deleted (they may get their
+ * access back), but nothing goes out to them while it's gone — alerts
+ * describe the admin-only console and link straight into it.
+ *
+ * One join, chunked ≤1000 ids — computed ONCE for a whole delivery/digest
+ * pass, never re-queried per signal or per recipient.
+ */
+export async function filterActiveAdminUserIds(userIds: string[]): Promise<Set<string>> {
+  const unique = [...new Set(userIds.map((id) => String(id)))]
+  const rows = (await selectInChunks(unique, 1000, (chunk) =>
+    db('nivaro_users as u')
+      .join('nivaro_roles as r', 'r.id', 'u.role')
+      .whereIn('u.id', chunk)
+      .whereNot('u.status', 'suspended')
+      .where('u.is_redacted', false)
+      .where('r.admin_access', true)
+      .select('u.id')
+  )) as Array<{ id: string }>
+  return new Set(rows.map((r) => String(r.id).toUpperCase()))
+}
+
 /** "3 new · Failed pushes" + up to five titles, then "and N more". */
 export function alertMessage(
   signalLabel: string,
@@ -93,6 +118,12 @@ export interface StoredAlertRow {
  * Which of the cycle's new rows are worth telling anyone about: not hidden
  * by a snooze or Dismiss (`isSnoozed` — the page's own rule), and not already
  * alerted — unless it re-occurred, which is news in its own right.
+ *
+ * "Happened again" only reads true when the row had actually been alerted
+ * BEFORE this reoccurrence (`alerted_at != null`) — a row that reoccurred
+ * without anyone ever having heard about it (nobody was subscribed yet, or
+ * the last delivery failed for everyone) is, to whoever hears about it now,
+ * simply new. `reoccurred` alone can't tell those two cases apart.
  */
 export function selectAlertRows(
   signal: string,
@@ -110,7 +141,7 @@ export function selectAlertRows(
       continue
     }
     if (!row || typeof row !== 'object' || typeof row.key !== 'string') continue
-    const again = reoccurred.has(row.key)
+    const again = reoccurred.has(row.key) && s.alerted_at != null
     if (s.alerted_at != null && !again) continue
     if (isSnoozed(row, signal, snoozes, now)) continue
     out.push({ id: s.id, row, again })
@@ -159,6 +190,10 @@ async function deliver(summary: CycleSummary): Promise<void> {
     .select('id', 'user', 'signal', 'mode')) as SubscriptionRow[]
   if (subs.length === 0) return
 
+  // Computed ONCE for every subscriber this cycle touches, never per signal —
+  // a demoted or offboarded subscriber must not hear about ANY of them.
+  const activeAdmins = await filterActiveAdminUserIds(subs.map((s) => s.user))
+
   const { notifyUser } = await import('./notification-channels.js')
   const snoozes = await loadActiveSnoozes()
   const now = new Date()
@@ -168,7 +203,11 @@ async function deliver(summary: CycleSummary): Promise<void> {
     if (!def) continue
     const settings = await resolveThresholds(def)
     if (!settings.enabled) continue
-    const recipients = pickRecipients(subs, { id: def.id, severity: settings.severity }, 'realtime')
+    const recipients = pickRecipients(
+      subs,
+      { id: def.id, severity: settings.severity },
+      'realtime'
+    ).filter((id) => activeAdmins.has(String(id).toUpperCase()))
     if (recipients.length === 0) continue
 
     // The DB row_key is the key truncated to 300 — look the rows up by that.
@@ -190,19 +229,35 @@ async function deliver(summary: CycleSummary): Promise<void> {
       def.label,
       fresh.map((f) => ({ title: f.row.title, again: f.again }))
     )
+    // One recipient's failure — or being dropped downstream (suspended,
+    // redacted, muted) — must never silently count as "this went out"; a row
+    // is only stamped alerted once SOMEONE actually heard about it, so a
+    // total failure retries on the next cycle instead of going quiet forever.
+    let delivered = 0
     for (const userId of recipients) {
-      await notifyUser(app, userId, {
-        subject,
-        message,
-        category: 'integrations',
-        why: WHY,
-        target: {
-          kind: 'integration',
-          query: `tab=firefight&signal=${encodeURIComponent(def.id)}`,
-          action: 'review'
-        },
-        source: { kind: 'integration-signal', label: def.label, id: def.id }
-      }).catch(() => undefined)
+      try {
+        const result = await notifyUser(app, userId, {
+          subject,
+          message,
+          category: 'integrations',
+          why: WHY,
+          target: {
+            kind: 'integration',
+            query: `tab=firefight&signal=${encodeURIComponent(def.id)}`,
+            action: 'review'
+          },
+          source: { kind: 'integration-signal', label: def.label, id: def.id }
+        })
+        if (!result?.decision?.dropped) delivered++
+      } catch {
+        // Keep going — the rest of the recipients still deserve a try.
+      }
+    }
+    if (delivered === 0) {
+      console.warn(
+        `[integration-signal-alerts] ${def.id}: notifyUser reached none of ${recipients.length} recipient(s) — leaving ${fresh.length} row(s) unstamped for the next cycle to retry`
+      )
+      continue
     }
 
     for (const chunk of chunkArray(
@@ -238,6 +293,18 @@ let openCache: {
  * Open + new-since-yesterday per signal, net of snoozes — computed ONCE per
  * digest pass (the provider runs per user, the numbers do not depend on who
  * asks), never per subscriber.
+ *
+ * "New since yesterday" is whichever column actually marks a row ENTERING
+ * the board within the window: `first_seen` for a genuinely brand-new row
+ * (this table has no separate snapshot-insert-time column — `first_seen` IS
+ * it), OR'd with `alerted_at` for a row that reoccurred — a reoccurrence
+ * stays a plain UPDATE and never re-stamps `first_seen` (see
+ * `SnapshotWritePlan.reoccurredKeys`), so `alerted_at` is the only column
+ * that moves when the SAME row is surfaced again. KNOWN LIMITATION: a
+ * reoccurring row with nobody subscribed real-time never sets `alerted_at`
+ * either, so it will only ever count as fresh on its very first appearance —
+ * closing that needs a dedicated "entered the board" column this schema
+ * doesn't have.
  */
 async function signalCounts(): Promise<Map<string, { open: number; fresh: number }>> {
   if (openCache && Date.now() - openCache.at < DIGEST_CACHE_MS) return openCache.bySignal
@@ -246,10 +313,11 @@ async function signalCounts(): Promise<Map<string, { open: number; fresh: number
   const snoozes = await loadActiveSnoozes()
   const rows = (await db('nivaro_integration_signal_rows')
     .whereNull('cleared_at')
-    .select('signal', 'payload', 'first_seen')) as Array<{
+    .select('signal', 'payload', 'first_seen', 'alerted_at')) as Array<{
     signal: string
     payload: string
     first_seen: Date
+    alerted_at: Date | string | null
   }>
   const bySignal = new Map<string, { open: number; fresh: number }>()
   for (const r of rows) {
@@ -262,20 +330,24 @@ async function signalCounts(): Promise<Map<string, { open: number; fresh: number
     if (isSnoozed(row, r.signal, snoozes, now)) continue
     const c = bySignal.get(r.signal) ?? { open: 0, fresh: 0 }
     c.open++
-    if (new Date(r.first_seen).getTime() >= since) c.fresh++
+    const firstSeenFresh = new Date(r.first_seen).getTime() >= since
+    const alertedFresh = r.alerted_at != null && new Date(r.alerted_at).getTime() >= since
+    if (firstSeenFresh || alertedFresh) c.fresh++
     bySignal.set(r.signal, c)
   }
   openCache = { at: Date.now(), bySignal }
   return bySignal
 }
 
-/** Users with at least one digest subscription — they get a daily summary
- *  even if nothing else would have sent them one. */
+/** Users with at least one digest subscription who are still a live admin —
+ *  they get a daily summary even if nothing else would have sent them one. */
 export async function integrationSignalsDigestAudience(): Promise<string[]> {
   const rows = (await db('nivaro_integration_signal_subscriptions')
     .where({ mode: 'digest' })
     .distinct('user')) as Array<{ user: string }>
-  return rows.map((r) => String(r.user))
+  const ids = rows.map((r) => String(r.user))
+  const allowed = await filterActiveAdminUserIds(ids)
+  return ids.filter((id) => allowed.has(id.toUpperCase()))
 }
 
 /**
@@ -284,6 +356,12 @@ export async function integrationSignalsDigestAudience(): Promise<string[]> {
  * linking to that signal on the console.
  */
 export async function integrationSignalsDigest(userId: string): Promise<DigestSection | null> {
+  // The daily digest runs for anyone with a digest reason at all, not just
+  // this section's own audience — a demoted subscriber can still receive a
+  // summary for something else, and must not see this section in it.
+  const allowed = await filterActiveAdminUserIds([userId])
+  if (!allowed.has(String(userId).toUpperCase())) return null
+
   const subs = (await db('nivaro_integration_signal_subscriptions')
     .where({ user: userId, mode: 'digest' })
     .select('signal')) as Array<{ signal: string }>

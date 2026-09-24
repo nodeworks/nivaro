@@ -144,12 +144,19 @@ function MyAlertsSection({
 }) {
   const subs = useAlertSubscriptions()
   const list = subs.data ?? []
+  // `*critical` is a standing pseudo-signal, never stale. Anything else has
+  // to still be a registered problem — one this instance no longer checks
+  // (a code change, an extension removed) leaves a subscription row behind
+  // with nothing to turn back on.
+  const knownIds = useMemo(() => new Set(entries.map((e) => e.id)), [entries])
+  const known = list.filter((s) => s.signal === CRITICAL || knownIds.has(s.signal))
+  const stale = list.filter((s) => s.signal !== CRITICAL && !knownIds.has(s.signal))
   const criticalRealtime = list.some((s) => s.signal === CRITICAL && s.mode === 'realtime')
   const criticalDigest = list.some((s) => s.signal === CRITICAL && s.mode === 'digest')
   const criticalCount = entries.filter(
     (e) => e.settings.enabled && e.settings.severity === 'critical'
   ).length
-  const active = list.length
+  const active = known.length
   const lastSent = list
     .map((s) => s.last_notified_at)
     .filter((x): x is string => !!x)
@@ -160,7 +167,8 @@ function MyAlertsSection({
     <section className='space-y-3' data-ic-my-alerts>
       <SectionHead title='My alerts'>
         Nothing is sent unless you turn it on here. Delivery follows your notification rules for
-        Integrations.
+        Integrations. A problem already on the board while snoozed or during maintenance won't alert
+        when it resurfaces unless it happens again.
       </SectionHead>
 
       {subs.isLoading ? (
@@ -233,11 +241,62 @@ function MyAlertsSection({
                   criticalDigest={criticalDigest}
                 />
               ))}
+              {stale.length > 0 && (
+                <>
+                  <tr className='border-t border-border bg-muted/40'>
+                    <th
+                      scope='colgroup'
+                      colSpan={4}
+                      className='py-1.5 pl-4 pr-3 text-[11.5px] font-medium text-foreground'
+                    >
+                      No longer available
+                    </th>
+                  </tr>
+                  {stale.map((s) => (
+                    <StaleSubscriptionRow key={s.id} sub={s} />
+                  ))}
+                </>
+              )}
             </tbody>
           </table>
         </div>
       )}
     </section>
+  )
+}
+
+function StaleSubscriptionRow({ sub }: { sub: AlertSubscription }) {
+  const toggle = useToggleSubscription()
+  return (
+    <tr className='border-t border-border align-middle' data-ic-stale-sub={sub.id}>
+      {/* One cell, flexed — a split colSpan={3}+td pair would leave the
+          button stranded in the spacer column's leftover width on a wide
+          screen, far from the text it belongs to. */}
+      <td className='py-3 pl-4 pr-4' colSpan={4}>
+        <div className='flex flex-wrap items-center justify-between gap-3'>
+          <div className='min-w-0'>
+            <p className='text-[13px] font-medium text-foreground'>{sub.signal}</p>
+            <p className='mt-0.5 text-[12px] text-muted-foreground'>
+              {sub.mode === 'realtime' ? 'Real-time' : 'Daily summary'} — this problem is no longer
+              registered on this instance.
+            </p>
+          </div>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8 shrink-0'
+            disabled={toggle.isPending}
+            onClick={() =>
+              toggle.mutate({ signal: sub.signal, mode: sub.mode, on: false, id: sub.id })
+            }
+            data-ic-stale-remove={sub.id}
+          >
+            {toggle.isPending && <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden />}
+            Remove
+          </Button>
+        </div>
+      </td>
+    </tr>
   )
 }
 

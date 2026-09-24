@@ -102,6 +102,12 @@ describe('selectAlertRows', () => {
     expect(out.map((o) => [o.row.key, o.again])).toEqual([['k3', true]])
   })
 
+  it('"happened again" only when the row was actually alerted before — reoccurring with no prior alert reads as new', () => {
+    const stored = [row('k4')] // alerted_at: null — nobody was ever told
+    const out = selectAlertRows('core:push-failed', stored, new Set(['k4']), [], now)
+    expect(out.map((o) => [o.row.key, o.again])).toEqual([['k4', false]])
+  })
+
   it('a dismissed occurrence never alerts; a NEW occurrence of that row does', () => {
     const dismissed = snooze({ row_key: 'k1', until_occurrence: 'run:5' })
     const same = selectAlertRows(

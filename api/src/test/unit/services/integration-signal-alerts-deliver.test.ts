@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// A tiny in-memory stand-in for the three tables delivery touches.
+// A tiny in-memory stand-in for the tables delivery touches.
 type Row = Record<string, unknown>
 const tables: Record<string, Row[]> = {}
 function qb(name: string) {
@@ -31,11 +31,64 @@ function qb(name: string) {
   }
   return api
 }
-vi.mock('../../../db/index.js', () => ({ db: (t: string) => qb(t) }))
+
+/**
+ * `db('nivaro_users as u').join('nivaro_roles as r', 'r.id', 'u.role')...` —
+ * a hand-rolled stand-in for exactly this one query shape (join always
+ * present; filters recorded by column name), backed by `tables.nivaro_users`
+ * / `tables.nivaro_roles`. Good enough to prove the CALLING code's behavior
+ * without building a general SQL engine.
+ */
+function usersRolesQb() {
+  const ids: string[] = []
+  let excludeStatus: string | null = null
+  let requireLive = false
+  let requireAdmin = false
+  const api = {
+    join() {
+      return api
+    },
+    whereIn(_col: string, vs: string[]) {
+      ids.push(...vs)
+      return api
+    },
+    whereNot(col: string, v: string) {
+      if (col === 'u.status') excludeStatus = v
+      return api
+    },
+    where(col: string, v: unknown) {
+      if (col === 'u.is_redacted') requireLive = v === false
+      if (col === 'r.admin_access') requireAdmin = v === true
+      return api
+    },
+    async select() {
+      const users = (tables.nivaro_users ?? []) as Row[]
+      const roles = (tables.nivaro_roles ?? []) as Row[]
+      return users
+        .filter((u) => ids.includes(String(u.id)))
+        .filter((u) => !excludeStatus || u.status !== excludeStatus)
+        .filter((u) => !requireLive || u.is_redacted === false)
+        .filter((u) => {
+          if (!requireAdmin) return true
+          const role = roles.find((r) => r.id === u.role)
+          return !!role?.admin_access
+        })
+        .map((u) => ({ id: u.id }))
+    }
+  }
+  return api
+}
+
+vi.mock('../../../db/index.js', () => ({
+  db: (t: string) => (t.startsWith('nivaro_users') ? usersRolesQb() : qb(t))
+}))
 
 const maint = { on: false }
 vi.mock('../../../services/security.js', () => ({ maintenanceState: async () => ({ ...maint }) }))
-const notifyUser = vi.fn(async () => ({ id: 1 }))
+type NotifyResult = { id: number | null; decision: { dropped: boolean }; lane: null }
+const notifyUser = vi.fn(
+  async (): Promise<NotifyResult> => ({ id: 1, decision: { dropped: false }, lane: null })
+)
 vi.mock('../../../services/notification-channels.js', () => ({ notifyUser }))
 vi.mock('../../../services/integration-signal-settings.js', async (orig) => ({
   ...(await orig<typeof import('../../../services/integration-signal-settings.js')>()),
@@ -63,6 +116,17 @@ describe('deliverSignalAlerts', () => {
   beforeEach(() => {
     maint.on = false
     notifyUser.mockClear()
+    notifyUser.mockImplementation(
+      async (): Promise<NotifyResult> => ({ id: 1, decision: { dropped: false }, lane: null })
+    )
+    tables.nivaro_roles = [
+      { id: 'role-admin', admin_access: true },
+      { id: 'role-user', admin_access: false }
+    ]
+    tables.nivaro_users = [
+      { id: 'AUTO', status: 'active', is_redacted: false, role: 'role-admin' },
+      { id: 'DIGESTER', status: 'active', is_redacted: false, role: 'role-admin' }
+    ]
     tables.nivaro_integration_signal_subscriptions = [
       { id: 1, user: 'AUTO', signal: 'core:push-failed', mode: 'realtime', last_notified_at: null },
       {
@@ -127,5 +191,58 @@ describe('deliverSignalAlerts', () => {
   it('never throws out of the cycle', async () => {
     notifyUser.mockRejectedValueOnce(new Error('boom'))
     await expect(deliverSignalAlerts(summary(['workflows:1:P:/x']))).resolves.toBeUndefined()
+  })
+
+  // ── item 1: recipients must still be admins at delivery ──────────────────
+
+  it('a demoted subscriber (role lost admin_access) gets no real-time alert', async () => {
+    ;(tables.nivaro_users.find((u) => u.id === 'AUTO') as Row).role = 'role-user'
+    await deliverSignalAlerts(summary(['workflows:1:P:/x']))
+    expect(notifyUser).not.toHaveBeenCalled()
+    expect(tables.nivaro_integration_signal_rows[0].alerted_at).toBeNull()
+  })
+
+  it('a suspended subscriber gets no real-time alert', async () => {
+    ;(tables.nivaro_users.find((u) => u.id === 'AUTO') as Row).status = 'suspended'
+    await deliverSignalAlerts(summary(['workflows:1:P:/x']))
+    expect(notifyUser).not.toHaveBeenCalled()
+  })
+
+  it('a redacted subscriber gets no real-time alert', async () => {
+    ;(tables.nivaro_users.find((u) => u.id === 'AUTO') as Row).is_redacted = true
+    await deliverSignalAlerts(summary(['workflows:1:P:/x']))
+    expect(notifyUser).not.toHaveBeenCalled()
+  })
+
+  // ── item 3: only stamp when at least one recipient actually heard it ──────
+
+  it('leaves the row unstamped when notifyUser throws for every recipient — retried next cycle', async () => {
+    notifyUser.mockRejectedValueOnce(new Error('boom'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await deliverSignalAlerts(summary(['workflows:1:P:/x']))
+    expect(tables.nivaro_integration_signal_rows[0].alerted_at).toBeNull()
+    expect(tables.nivaro_integration_signal_subscriptions[0].last_notified_at).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('leaves the row unstamped when every recipient is dropped downstream (e.g. muted)', async () => {
+    notifyUser.mockResolvedValueOnce({ id: null, decision: { dropped: true }, lane: null })
+    await deliverSignalAlerts(summary(['workflows:1:P:/x']))
+    expect(tables.nivaro_integration_signal_rows[0].alerted_at).toBeNull()
+  })
+
+  it('stamps once at least one recipient actually heard it, even if others were dropped', async () => {
+    tables.nivaro_integration_signal_subscriptions.push({
+      id: 3,
+      user: 'DIGESTER',
+      signal: 'core:push-failed',
+      mode: 'realtime',
+      last_notified_at: null
+    })
+    notifyUser.mockResolvedValueOnce({ id: null, decision: { dropped: true }, lane: null }) // AUTO
+    notifyUser.mockResolvedValueOnce({ id: 2, decision: { dropped: false }, lane: null }) // DIGESTER
+    await deliverSignalAlerts(summary(['workflows:1:P:/x']))
+    expect(tables.nivaro_integration_signal_rows[0].alerted_at).toBeInstanceOf(Date)
   })
 })

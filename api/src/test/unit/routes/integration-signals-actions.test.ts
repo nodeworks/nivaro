@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   dedupeRowKeys,
   fillRecordLabels,
+  isUniqueConstraintViolation,
   planActionTargets,
   validateSnoozeScope,
   validateSubscription
@@ -83,6 +84,23 @@ describe('fillRecordLabels', () => {
     expect(rows.every((r) => (r.record as { label?: string }).label === `R-${r.record.id}`)).toBe(
       true
     )
+  })
+})
+
+describe('isUniqueConstraintViolation', () => {
+  it('recognizes MSSQL 2627 and 2601 on the error itself', () => {
+    expect(isUniqueConstraintViolation({ number: 2627 })).toBe(true)
+    expect(isUniqueConstraintViolation({ number: 2601 })).toBe(true)
+  })
+  it('recognizes them nested in an AggregateError-shaped .errors[]', () => {
+    expect(isUniqueConstraintViolation({ errors: [{ number: 547 }, { number: 2627 }] })).toBe(true)
+  })
+  it('rejects an unrelated error (e.g. an FK violation) and non-error values', () => {
+    expect(isUniqueConstraintViolation({ number: 547 })).toBe(false)
+    expect(isUniqueConstraintViolation({ errors: [{ number: 547 }] })).toBe(false)
+    expect(isUniqueConstraintViolation(new Error('boom'))).toBe(false)
+    expect(isUniqueConstraintViolation(null)).toBe(false)
+    expect(isUniqueConstraintViolation('nope')).toBe(false)
   })
 })
 

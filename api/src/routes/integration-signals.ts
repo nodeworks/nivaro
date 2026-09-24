@@ -167,6 +167,26 @@ export function validateSubscription(
   return { ok: true, signal, mode: b.mode }
 }
 
+/**
+ * Two concurrent POSTs for the same (user, signal, mode) both pass the
+ * pre-check "no existing row" and race to insert — one lands, the other hits
+ * `UNIQUE(user, signal, mode)` (MSSQL 2627 "Violation of UNIQUE KEY
+ * constraint" / 2601 "Cannot insert duplicate key row"). That is not a
+ * failure from the caller's point of view: the row it wanted now exists.
+ * knex/mssql sometimes wraps the driver error in an AggregateError whose own
+ * `.number` is unset and the real one sits on `.errors[]` — check both.
+ */
+export function isUniqueConstraintViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const isCode = (n: unknown): boolean => n === 2627 || n === 2601
+  const top = err as { number?: unknown; errors?: unknown }
+  if (isCode(top.number)) return true
+  if (Array.isArray(top.errors)) {
+    return top.errors.some((e) => isCode((e as { number?: unknown })?.number))
+  }
+  return false
+}
+
 const PREVIEW_BUDGET_MS = 10_000
 
 function authHeaders(req: FastifyRequest): Record<string, string> {
@@ -518,10 +538,23 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
         .where({ user: userId, signal: v.signal, mode: v.mode })
         .first('id')) as { id: number } | undefined
       if (existing) return { data: { id: existing.id, signal: v.signal, mode: v.mode } }
-      const [ins] = await db('nivaro_integration_signal_subscriptions')
-        .insert({ user: userId, signal: v.signal, mode: v.mode, created_at: new Date() })
-        .returning('id')
-      const id = typeof ins === 'object' ? (ins as { id: number }).id : ins
+      let id: number
+      try {
+        const [ins] = await db('nivaro_integration_signal_subscriptions')
+          .insert({ user: userId, signal: v.signal, mode: v.mode, created_at: new Date() })
+          .returning('id')
+        id = typeof ins === 'object' ? (ins as { id: number }).id : ins
+      } catch (err) {
+        if (!isUniqueConstraintViolation(err)) throw err
+        // A concurrent POST for the same (user, signal, mode) won the race —
+        // that row is exactly what this request wanted, so hand it back as
+        // if this request had made it, rather than 500 on a non-error.
+        const raced = (await db('nivaro_integration_signal_subscriptions')
+          .where({ user: userId, signal: v.signal, mode: v.mode })
+          .first('id')) as { id: number } | undefined
+        if (!raced) throw err
+        return { data: { id: raced.id, signal: v.signal, mode: v.mode } }
+      }
       await logActivity({
         action: 'integration-signal-subscribe',
         collection: 'nivaro_integration_signal_subscriptions',
