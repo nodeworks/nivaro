@@ -54,6 +54,7 @@ import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
 import { runLongSql } from '../services/run-long.js'
+import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
 
 /** Every extension call lands in the external API's Call Logs. A caller that
  *  names its own trigger (`_log.triggeredBy`) keeps it; one that passes nothing
@@ -954,7 +955,9 @@ async function loadExtension(
           )
         },
         openObligation: async (ctx, opts) => {
-          const { openObligationForTrigger } = await import('../services/integration-obligations.js')
+          const { openObligationForTrigger } = await import(
+            '../services/integration-obligations.js'
+          )
           return openObligationForTrigger(ctx, opts)
         },
         resolveObligation: async (id, patch) => {
@@ -964,15 +967,10 @@ async function loadExtension(
         registerSignal: (def) => {
           note('integrations')
           own('integration_signals', `${def.id} · ${def.label}`)
-          void import('../services/integration-signals.js').then(({ registerIntegrationSignal }) =>
-            registerIntegrationSignal(def, ext.id ?? 'extension')
-          )
+          void registerExtensionSignal(def, ext.id ?? 'extension', ctx.logger)
         },
         registerSignalAction: (def) => {
-          void import('../services/integration-signals.js').then(
-            ({ registerIntegrationSignalAction }) =>
-              registerIntegrationSignalAction(def, ext.id ?? 'extension')
-          )
+          void registerExtensionSignalAction(def, ext.id ?? 'extension', ctx.logger)
         }
       },
       integrity: {
@@ -1341,12 +1339,14 @@ export async function loadCloudExtensions(
         },
         integrations: {
           registerObligationKind: (def) => {
-            void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
-              registerObligationKind(def)
+            void import('../services/integration-obligations.js').then(
+              ({ registerObligationKind }) => registerObligationKind(def)
             )
           },
           openObligation: async (ctx, opts) => {
-            const { openObligationForTrigger } = await import('../services/integration-obligations.js')
+            const { openObligationForTrigger } = await import(
+              '../services/integration-obligations.js'
+            )
             return openObligationForTrigger(ctx, opts)
           },
           resolveObligation: async (id, patch) => {
@@ -1354,16 +1354,10 @@ export async function loadCloudExtensions(
             return resolveObligation(id, patch)
           },
           registerSignal: (def) => {
-            void import('../services/integration-signals.js').then(
-              ({ registerIntegrationSignal }) =>
-                registerIntegrationSignal(def, ext.id ?? 'extension')
-            )
+            void registerExtensionSignal(def, ext.id ?? 'extension', ctx.logger)
           },
           registerSignalAction: (def) => {
-            void import('../services/integration-signals.js').then(
-              ({ registerIntegrationSignalAction }) =>
-                registerIntegrationSignalAction(def, ext.id ?? 'extension')
-            )
+            void registerExtensionSignalAction(def, ext.id ?? 'extension', ctx.logger)
           }
         },
         integrity: {
