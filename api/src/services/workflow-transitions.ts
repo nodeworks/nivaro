@@ -62,6 +62,8 @@ export interface WorkflowTransition {
   group_label: string | null
   condition_rules: string | null
   requirements: string | null
+  /** A plain sentence for mail / notifications; NULL = the label (migration 352). */
+  notify_text?: string | null
 }
 
 export interface WorkflowInstance {
@@ -409,7 +411,7 @@ export async function evaluateSkipCriteria(
  * record_url, resolved owners of the new state.
  */
 const MACHINE_COMMENT =
-  /^(state-merge|legacy-|reforecast|linx-state-sync|instance-migration|natural-key upsert|import:)/i
+  /^(auto: |state-merge|legacy-|reforecast|linx-state-sync|instance-migration|natural-key upsert|import:)/i
 
 async function buildTransitionEventPayload(args: {
   instance: Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'template'>
@@ -417,6 +419,8 @@ async function buildTransitionEventPayload(args: {
   prevStateObj: Pick<WorkflowState, 'key' | 'label'> | null
   transitionId: string | null
   transitionLabel: string
+  /** The transition's notify_text — how people are told about it. */
+  transitionText?: string | null
   source: string
   comment: string | null
   userId: string | null
@@ -496,6 +500,9 @@ async function buildTransitionEventPayload(args: {
     template: instance.template,
     transition_id: args.transitionId,
     transition_label: args.transitionLabel,
+    // A plain sentence for the reader ("Fusion accepted the transfer order,
+    // so the request is complete.") — the label is the route's NAME.
+    transition_text: args.transitionText?.trim() || null,
     source: args.source,
     comment: args.comment,
     transitioned_at: (args.asOf ?? new Date()).toISOString(),
@@ -507,7 +514,13 @@ async function buildTransitionEventPayload(args: {
       : null,
     user_id: args.userId,
     from_state: prevStateObj ? { key: prevStateObj.key, label: prevStateObj.label } : null,
-    to_state: newStateObj ? { key: newStateObj.key, label: newStateObj.label } : null,
+    to_state: newStateObj
+      ? {
+          key: newStateObj.key,
+          label: newStateObj.label,
+          is_terminal: coerceBool(newStateObj.is_terminal)
+        }
+      : null,
     owners,
     owner_emails: owners
       .map((o) => o.email)
@@ -581,6 +594,7 @@ export async function buildTransitionPayloadFromHistory(
     prevStateObj: fromState ?? null,
     transitionId: h.transition,
     transitionLabel: transition?.label ?? (h.from_state ? 'Moved' : 'Started'),
+    transitionText: transition?.notify_text ?? null,
     source: 'harness',
     comment: h.comment,
     userId: h.user,
@@ -1103,6 +1117,7 @@ export async function applyTransition(opts: {
       prevStateObj: prevStateObj ?? null,
       transitionId: transition.id,
       transitionLabel: transition.label,
+      transitionText: transition.notify_text ?? null,
       source: opts.source ?? 'manual',
       comment: opts.comment ?? null,
       userId: opts.userId ?? null,

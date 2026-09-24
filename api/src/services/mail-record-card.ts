@@ -133,30 +133,75 @@ export async function buildRecordCard(
           'field',
           assignments.map((a) => a.field.split('.')[0])
         )
-        .select('field', 'label', 'options', 'type')) as Array<{
+        .select(
+          'field',
+          'label',
+          'options',
+          'type',
+          'computed_type',
+          'computed_formula'
+        )) as Array<{
         field: string
         label: string | null
         options: string | null
         type: string | null
+        computed_type: string | null
+        computed_formula: string | null
       }>
       const metaByField = new Map(fieldMeta.map((f) => [f.field, f]))
       const relationsCache = new Map()
+      // A virtual (read-computed) header field has no column to resolve —
+      // evaluate it over the raw row the way readOne does, once, lazily.
+      let computedRow: Record<string, unknown> | null | undefined
+      const computedValue = async (field: string): Promise<string> => {
+        if (computedRow === undefined) {
+          computedRow = null
+          try {
+            const row = (await db(collection).where({ id: itemId }).first()) as
+              | Record<string, unknown>
+              | undefined
+            if (row) {
+              const { applyReadComputedFields } = await import('./items.js')
+              await applyReadComputedFields(collection, [row])
+              computedRow = row
+            }
+          } catch {
+            computedRow = null
+          }
+        }
+        const v = computedRow?.[field]
+        return v == null ? '' : String(v)
+      }
       for (const a of assignments) {
         const segments = a.field.split('.')
         let value = ''
         try {
-          const resolved = await resolvePathValues(collection, [itemId], segments, relationsCache)
-          value = resolved.get(itemId)?.value ?? ''
+          const fmeta = metaByField.get(segments[0])
+          value =
+            segments.length === 1 && fmeta?.computed_type === 'read' && fmeta.computed_formula
+              ? await computedValue(segments[0])
+              : ((await resolvePathValues(collection, [itemId], segments, relationsCache)).get(
+                  itemId
+                )?.value ?? '')
         } catch {
           value = ''
         }
         const fm = metaByField.get(segments[0])
-        const fmOptions = parseJson<{ format?: string }>(fm?.options)
+        const fmOptions = parseJson<{
+          format?: string
+          choices?: Array<{ text?: string; value?: unknown }>
+        }>(fm?.options)
         const format = a.format ?? fmOptions?.format ?? (fm?.type === 'boolean' ? 'boolean' : null)
+        // A dropdown's stored value is a key ("requested"); the card shows the
+        // choice's text ("Order Sent"), as the form does.
+        const choice =
+          segments.length === 1 && Array.isArray(fmOptions?.choices)
+            ? fmOptions.choices.find((c) => String(c.value) === String(value))
+            : undefined
         fields.push({
           key: a.field,
           label: a.label ?? (segments.length === 1 ? fm?.label : null) ?? titleCase(a.field),
-          value: formatValue(value, format)
+          value: choice?.text ? String(choice.text) : formatValue(value, format)
         })
       }
     }

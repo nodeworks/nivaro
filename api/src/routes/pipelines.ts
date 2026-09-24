@@ -94,6 +94,8 @@ interface WorkflowTransition {
   to_previous?: boolean | number
   /** Offered from list-row Actions menus (migration 312; default true). */
   in_row_menu?: boolean | number | null
+  /** How the move is described to people in mail / notifications (migration 352). */
+  notify_text?: string | null
   sort: number
   group_label: string | null
   condition_rules: string | null
@@ -1296,6 +1298,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'auto_trigger'
       | 'to_previous'
       | 'in_row_menu'
+      | 'notify_text'
       | 'sort'
       | 'group_label'
       | 'condition_rules'
@@ -1320,6 +1323,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       auto_trigger: body.auto_trigger ? 1 : 0,
       to_previous: body.to_previous ? 1 : 0,
       in_row_menu: body.in_row_menu === false ? 0 : 1,
+      notify_text: body.notify_text?.trim() || null,
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
       condition_rules: toJsonStr(body.condition_rules),
@@ -1367,6 +1371,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         to_previous: body.to_previous !== undefined ? (body.to_previous ? 1 : 0) : tx.to_previous,
         in_row_menu:
           body.in_row_menu !== undefined ? (body.in_row_menu === false ? 0 : 1) : tx.in_row_menu,
+        notify_text:
+          body.notify_text !== undefined ? body.notify_text?.trim() || null : tx.notify_text,
         sort: body.sort ?? tx.sort,
         group_label:
           body.group_label !== undefined ? body.group_label?.trim() || null : tx.group_label,

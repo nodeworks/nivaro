@@ -704,6 +704,7 @@ type RouteEntry = {
   auto_trigger: boolean
   to_previous: boolean
   in_row_menu: boolean
+  notify_text: string | null
   comment_mode: string
   actions: TransitionAction[] | null
   minSort: number
@@ -775,6 +776,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         auto_trigger: !!tx.auto_trigger,
         to_previous: !!(tx as { to_previous?: boolean }).to_previous,
         in_row_menu: (tx as { in_row_menu?: boolean }).in_row_menu !== false,
+        notify_text: (tx as { notify_text?: string | null }).notify_text ?? null,
         comment_mode: tx.comment_mode ?? 'none',
         actions: (tx.actions as TransitionAction[] | null) ?? null,
         minSort: tx.sort
@@ -1493,6 +1495,8 @@ interface TransitionFormData {
   auto_trigger: boolean
   to_previous: boolean
   in_row_menu: boolean
+  /** A plain sentence for emails / notifications; null = the label. */
+  notify_text: string | null
   comment_mode: string
   actions: TransitionAction[] | null
 }
@@ -1791,6 +1795,7 @@ function TransitionForm({
     auto_trigger: initial.auto_trigger ?? false,
     to_previous: initial.to_previous ?? false,
     in_row_menu: initial.in_row_menu ?? true,
+    notify_text: initial.notify_text ?? null,
     comment_mode: initial.comment_mode ?? 'none',
     actions: initial.actions ?? null
   })
@@ -1961,6 +1966,28 @@ function TransitionForm({
           data-transition-in-row-menu
         />
       </label>
+
+      <div className='rounded-lg border border-slate-200 bg-white px-3 py-2'>
+        <label className='block text-[12px] font-medium text-slate-700' htmlFor='transition-notify-text'>
+          How to describe this move to people
+        </label>
+        <p className='mb-1.5 text-[11px] text-slate-400'>
+          One plain sentence for the emails and notifications this move sends — what happened and
+          why, as a requester would say it (“Fusion accepted the transfer order, so the request is
+          complete.”). Empty means the label above is used, which for an automatic route reads like
+          a rule name.
+        </p>
+        <input
+          id='transition-notify-text'
+          type='text'
+          maxLength={500}
+          value={form.notify_text ?? ''}
+          onChange={(e) => set('notify_text', e.target.value || null)}
+          placeholder='e.g. Fusion accepted the transfer order, so the request is complete.'
+          className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[12.5px] text-slate-800 outline-none focus:border-slate-400 dark:border-border dark:bg-card dark:text-foreground'
+          data-transition-notify-text
+        />
+      </div>
 
       <label className='flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2 dark:border-border'>
         <div>
@@ -2858,6 +2885,7 @@ export function PipelineEditorView({
         auto_trigger: data.auto_trigger,
         to_previous: data.to_previous,
         in_row_menu: data.in_row_menu,
+        notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         group_label: null,
         actions: data.actions,
@@ -2894,6 +2922,7 @@ export function PipelineEditorView({
           auto_trigger: data.auto_trigger,
           to_previous: data.to_previous,
           in_row_menu: data.in_row_menu,
+          notify_text: data.notify_text,
           group_label: null,
           actions: data.actions,
           sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
@@ -2929,6 +2958,7 @@ export function PipelineEditorView({
         auto_trigger: data.auto_trigger,
         to_previous: data.to_previous,
         in_row_menu: data.in_row_menu,
+        notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         actions: data.actions
       }
@@ -3460,6 +3490,7 @@ export function PipelineEditorView({
                                               auto_trigger: route.auto_trigger,
                                               to_previous: route.to_previous,
                                               in_row_menu: route.in_row_menu,
+                                              notify_text: route.notify_text,
                                               // Without this the form always opened
                                               // on 'No note', whatever was stored —
                                               // and saving then wrote that back.

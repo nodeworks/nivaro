@@ -431,9 +431,11 @@ async function getComputedFields(collection: string): Promise<ComputedFieldRow[]
 
 /**
  * Apply read-time computed fields to an array of item objects.
- * Mutates each item in place.
+ * Mutates each item in place. Exported for readers that fetch rows
+ * outside readItems (the mail record card) and still owe virtual fields
+ * their value.
  */
-async function applyReadComputedFields(
+export async function applyReadComputedFields(
   collection: string,
   items: Record<string, unknown>[],
   requestedFields?: string[]

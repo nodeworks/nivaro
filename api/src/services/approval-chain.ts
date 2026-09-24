@@ -82,8 +82,11 @@ export async function buildApprovalChain(
           : 'skipped'
     else status = e.skipped ? 'skipped' : 'upcoming'
     const acted = actedAt.get(s.id)
+    // A finished record waits on nobody: a terminal state's owners are who
+    // gets told, not who acts next — "Completed · waiting on Rob" reads wrong.
+    const terminal = s.is_terminal === true || s.is_terminal === 1
     const owners =
-      status === 'current' || status === 'upcoming'
+      (status === 'current' || status === 'upcoming') && !terminal
         ? e.owners
             .map((o) => nameOf(o) ?? '')
             .filter(Boolean)
