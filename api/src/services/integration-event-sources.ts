@@ -119,8 +119,10 @@ function allSources(): EventSourceDef[] {
 
 export function describeEventSources(): Array<{
   id: string
+  collection: string | null
   label: string
   direction: EventDirection
+  can_list: boolean
   can_replay: boolean
 }> {
   const replayable = new Set(
@@ -129,10 +131,15 @@ export function describeEventSources(): Array<{
       .filter((p) => p.can_replay)
       .map((p) => p.id)
   )
+  const collections = new Map(relatedNoteRegistry.describe().map((p) => [p.id, p.collection]))
+  // Every registered source can list — that is what makes it a source; the
+  // console's source picker keys on can_list.
   return allSources().map((s) => ({
     id: s.id,
+    collection: collections.get(s.id) ?? null,
     label: s.label,
     direction: s.direction,
+    can_list: true,
     can_replay: replayable.has(s.id)
   }))
 }
@@ -334,6 +341,14 @@ const outbound: EventSourceDef = {
 
 // ── core:inbound — partner writes that reached us ─────────────────────────
 
+/** Rows per inbound batch, and how many batches one page may scan. */
+const INBOUND_BATCH_MAX = 1000
+export const INBOUND_MAX_BATCHES = 5
+
+export function inboundBatchSize(limit: number): number {
+  return Math.min(Math.max(limit * 2, 20), INBOUND_BATCH_MAX)
+}
+
 const inbound: EventSourceDef = {
   id: 'core:inbound',
   label: 'Inbound calls',
@@ -341,86 +356,118 @@ const inbound: EventSourceDef = {
   async list(opts) {
     if (opts.status === 'info') return []
     const stamp = await hasChainColumns('nivaro_api_logs')
-    const q = db('nivaro_api_logs as l')
-      .leftJoin('nivaro_users as u', 'u.id', 'l.user')
-      .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
-      .whereIn('l.auth', ['token', 'api_key'])
-      .whereNot('l.method', 'GET')
-      .select(
-        'l.id',
-        'l.method',
-        'l.path',
-        'l.status',
-        'l.user',
-        'l.api_key_id',
-        'l.created_at',
-        'l.request_body',
-        'l.collection',
-        'u.first_name',
-        'u.last_name',
-        'u.email',
-        'u.account_kind',
-        'k.name as key_name',
-        ...(stamp ? ['l.chain_id'] : [])
-      )
-      .orderBy('l.created_at', 'desc')
-      .orderBy('l.id', 'desc')
-      // GraphQL rows are post-filtered for mutations; over-fetch to fill a page.
-      .limit(Math.min(opts.limit * 4, 2000))
-    // A request that adopted a caller's chain (an in-process app.inject) is
-    // an internal step of that chain, not a partner call.
-    if (stamp) q.whereNull('l.chain_parent')
-    if (!opts.includePeople) {
-      q.where((w) => w.whereNotNull('u.account_kind').orWhereNotNull('l.api_key_id'))
-    }
-    if (opts.before) q.where('l.created_at', '<', new Date(opts.before))
     const chainSet = new Set(stamp ? chainList(opts) : [])
-    if (opts.record) {
-      const { collection } = opts.record
-      q.where((w) => {
-        w.where('l.collection', collection)
-        if (chainSet.size) w.orWhereIn('l.chain_id', [...chainSet])
-      })
-    }
-    if (opts.status === 'error') q.where('l.status', '>=', 400)
-    if (opts.status === 'ok') q.where('l.status', '<', 400)
-    if (opts.caller) {
-      const caller = opts.caller
-      q.where((w) => {
-        w.where('l.user', caller)
-        if (/^\d+$/.test(caller)) w.orWhere('l.api_key_id', Number(caller))
-      })
-    }
-    const rows = (await q) as Array<Record<string, unknown>>
-    const out: EventEntry[] = []
-    for (const r of rows) {
-      const path = String(r.path ?? '')
-      if (/graphql/i.test(path) && !isGraphqlMutation(r.request_body as string | null)) continue
-      const target = itemFromPath(path)
-      if (opts.record && !(r.chain_id && chainSet.has(String(r.chain_id)))) {
-        const coll = target?.collection ?? (r.collection as string | null)
-        if (coll !== opts.record.collection || (target && target.item !== opts.record.item))
-          continue
+    const batch = inboundBatchSize(opts.limit)
+
+    // One batch older than `cursor` (the oldest row the previous batch
+    // scanned, id as the tiebreak) — or older than the page cursor first.
+    const fetchBatch = (cursor: { at: Date; id: number } | null) => {
+      const q = db('nivaro_api_logs as l')
+        .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+        .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
+        .whereIn('l.auth', ['token', 'api_key'])
+        .whereNot('l.method', 'GET')
+        // Candidates only, so the limit counts rows that can make the page:
+        // a GraphQL call is a candidate when its body mentions a mutation
+        // (isGraphqlMutation below confirms it).
+        .where((w) =>
+          w.whereNot('l.path', 'like', '%graphql%').orWhere('l.request_body', 'like', '%mutation%')
+        )
+        .select(
+          'l.id',
+          'l.method',
+          'l.path',
+          'l.status',
+          'l.user',
+          'l.api_key_id',
+          'l.created_at',
+          'l.request_body',
+          'l.collection',
+          'u.first_name',
+          'u.last_name',
+          'u.email',
+          'u.account_kind',
+          'k.name as key_name',
+          ...(stamp ? ['l.chain_id'] : [])
+        )
+        .orderBy('l.created_at', 'desc')
+        .orderBy('l.id', 'desc')
+        .limit(batch)
+      // A request that adopted a caller's chain (an in-process app.inject) is
+      // an internal step of that chain, not a partner call.
+      if (stamp) q.whereNull('l.chain_parent')
+      if (!opts.includePeople) {
+        q.where((w) => w.whereNotNull('u.account_kind').orWhereNotNull('l.api_key_id'))
       }
-      const person = [r.first_name, r.last_name].filter(Boolean).join(' ')
-      const who =
-        (r.key_name as string | null) || person || (r.email as string | null) || 'Unknown caller'
-      out.push({
-        id: String(r.id),
-        source: 'core:inbound',
-        direction: 'in',
-        label: who,
-        text: `${r.method} ${path} · ${r.status}`,
-        created_at: new Date(r.created_at as string).toISOString(),
-        status: Number(r.status) >= 400 ? 'error' : 'ok',
-        user: (r.user as string | null) ?? null,
-        collection: target?.collection ?? (r.collection as string | null) ?? null,
-        item_id: target?.item ?? null,
-        record_count: target ? 1 : 0,
-        caller: r.api_key_id != null ? String(r.api_key_id) : ((r.user as string | null) ?? null),
-        chain_id: (r.chain_id as string | null | undefined) ?? null
-      })
-      if (out.length >= opts.limit) break
+      if (cursor) {
+        const { at, id } = cursor
+        q.where((w) =>
+          w
+            .where('l.created_at', '<', at)
+            .orWhere((w2) => w2.where('l.created_at', '=', at).andWhere('l.id', '<', id))
+        )
+      } else if (opts.before) {
+        q.where('l.created_at', '<', new Date(opts.before))
+      }
+      if (opts.record) {
+        const { collection, item } = opts.record
+        // The record's own REST writes, plus any call on a chain that
+        // touched it (GraphQL paths carry no item, so only chain-linked
+        // GraphQL calls can match).
+        const path = `/api/items/${collection}/${encodeURIComponent(item)}`
+        q.where((w) => {
+          w.where('l.path', path)
+          if (chainSet.size) w.orWhereIn('l.chain_id', [...chainSet])
+        })
+      }
+      if (opts.status === 'error') q.where('l.status', '>=', 400)
+      if (opts.status === 'ok') q.where('l.status', '<', 400)
+      if (opts.caller) {
+        const caller = opts.caller
+        q.where((w) => {
+          w.where('l.user', caller)
+          if (/^\d+$/.test(caller)) w.orWhere('l.api_key_id', Number(caller))
+        })
+      }
+      return q as unknown as Promise<Array<Record<string, unknown>>>
+    }
+
+    const out: EventEntry[] = []
+    let cursor: { at: Date; id: number } | null = null
+    for (let n = 0; n < INBOUND_MAX_BATCHES && out.length < opts.limit; n++) {
+      const rows = await fetchBatch(cursor)
+      for (const r of rows) {
+        const path = String(r.path ?? '')
+        if (/graphql/i.test(path) && !isGraphqlMutation(r.request_body as string | null)) continue
+        const target = itemFromPath(path)
+        if (opts.record && !(r.chain_id && chainSet.has(String(r.chain_id)))) {
+          if (target?.collection !== opts.record.collection || target.item !== opts.record.item)
+            continue
+        }
+        const person = [r.first_name, r.last_name].filter(Boolean).join(' ')
+        const who =
+          (r.key_name as string | null) || person || (r.email as string | null) || 'Unknown caller'
+        out.push({
+          id: String(r.id),
+          source: 'core:inbound',
+          direction: 'in',
+          label: who,
+          text: `${r.method} ${path} · ${r.status}`,
+          created_at: new Date(r.created_at as string).toISOString(),
+          status: Number(r.status) >= 400 ? 'error' : 'ok',
+          user: (r.user as string | null) ?? null,
+          collection: target?.collection ?? (r.collection as string | null) ?? null,
+          item_id: target?.item ?? null,
+          record_count: target ? 1 : 0,
+          caller: r.api_key_id != null ? String(r.api_key_id) : ((r.user as string | null) ?? null),
+          chain_id: (r.chain_id as string | null | undefined) ?? null
+        })
+        if (out.length >= opts.limit) break
+      }
+      // Fewer rows than asked for = nothing older left to scan.
+      if (rows.length < batch) break
+      const last = rows[rows.length - 1]
+      cursor = { at: new Date(last.created_at as string), id: Number(last.id) }
     }
     return out
   },

@@ -4,13 +4,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // returns the builder; awaiting it yields `rows`.
 const calls: Array<{ method: string; args: unknown[] }> = []
 let rows: unknown[] = []
+// When set, each awaited query takes the next entry (a batch per call).
+let batches: unknown[][] | null = null
+let awaited = 0
 let chainColumns = true
 
 function builder(): unknown {
   const target = {
     // biome-ignore lint/suspicious/noThenProperty: a knex builder is thenable
-    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject)
+    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+      awaited++
+      const result = batches ? (batches.shift() ?? []) : rows
+      return Promise.resolve(result).then(resolve, reject)
+    }
   }
   const proxy: unknown = new Proxy(target, {
     get(t, prop) {
@@ -44,6 +50,9 @@ import { relatedNoteRegistry } from '../../../extensions/related-notes.js'
 import { resetChainColumnProbe } from '../../../services/chain-columns.js'
 import { chainIdsForRoots } from '../../../services/chain-roots.js'
 import {
+  describeEventSources,
+  INBOUND_MAX_BATCHES,
+  inboundBatchSize,
   isGraphqlMutation,
   itemFromPath,
   listEvents
@@ -89,6 +98,8 @@ describe('core:inbound', () => {
   beforeEach(() => {
     calls.length = 0
     rows = []
+    batches = null
+    awaited = 0
     resetChainColumnProbe()
   })
 
@@ -195,5 +206,102 @@ describe('listEvents record search', () => {
     } finally {
       relatedNoteRegistry.unregister('test:feed')
     }
+  })
+})
+
+const logRow = (id: number, path: string, body: string | null, minutesAgo = id) => ({
+  id,
+  method: 'POST',
+  path,
+  status: 200,
+  user: 'U1',
+  api_key_id: null,
+  created_at: new Date(Date.UTC(2026, 8, 24, 12, 0) - minutesAgo * 60_000).toISOString(),
+  request_body: body,
+  collection: null,
+  first_name: 'Link',
+  last_name: 'Bot',
+  email: 'l@x',
+  account_kind: 'integration',
+  key_name: null,
+  chain_id: null
+})
+
+describe('core:inbound candidate filter and fill loop', () => {
+  beforeEach(() => {
+    calls.length = 0
+    rows = []
+    batches = null
+    awaited = 0
+    chainColumns = true
+    resetChainColumnProbe()
+  })
+
+  it('selects candidates in SQL: non-GraphQL paths, or bodies that mention a mutation', async () => {
+    await listEvents({ limit: 10, source: 'core:inbound' })
+    expect(calls).toContainEqual({ method: 'whereNot', args: ['l.path', 'like', '%graphql%'] })
+    expect(calls).toContainEqual({
+      method: 'orWhere',
+      args: ['l.request_body', 'like', '%mutation%']
+    })
+  })
+
+  it('stops after one batch when the rows run out', async () => {
+    const size = inboundBatchSize(10)
+    batches = [[logRow(1, '/graphql', '{"query":"{ read }"}')]]
+    const out = await listEvents({ limit: 10, source: 'core:inbound' })
+    expect(out).toEqual([])
+    expect(size).toBeGreaterThan(1)
+    expect(awaited).toBe(1)
+  })
+
+  it('keeps scanning older batches until the page fills, then stops at the cap', async () => {
+    const size = inboundBatchSize(10)
+    // Every batch is full and every row is a GraphQL read the JS check rejects.
+    const fullOfReads = (start: number) =>
+      Array.from({ length: size }, (_, i) =>
+        logRow(start + i, '/graphql', '{"query":"{ read } # mutation"}')
+      )
+    batches = Array.from({ length: INBOUND_MAX_BATCHES + 3 }, (_, n) => fullOfReads(n * size))
+    const out = await listEvents({ limit: 10, source: 'core:inbound' })
+    expect(out).toEqual([])
+    expect(awaited).toBe(INBOUND_MAX_BATCHES)
+    // Each follow-up batch starts older than the last row already scanned.
+    expect(calls.filter((c) => c.method === 'andWhere' && c.args[0] === 'l.id')).toHaveLength(
+      INBOUND_MAX_BATCHES - 1
+    )
+  })
+
+  it('fills the page from a later batch once earlier rows are rejected', async () => {
+    const size = inboundBatchSize(2)
+    batches = [
+      Array.from({ length: size }, (_, i) =>
+        logRow(i + 1, '/graphql', '{"query":"{ read } # mutation"}')
+      ),
+      [logRow(100, '/api/items/workflows/7', null), logRow(101, '/api/items/workflows/8', null)]
+    ]
+    const out = await listEvents({ limit: 2, source: 'core:inbound' })
+    expect(out.map((e) => e.id)).toEqual(['100', '101'])
+    expect(awaited).toBe(2)
+  })
+
+  it('narrows a record search in SQL to the record path or its chains', async () => {
+    await listEvents({
+      limit: 10,
+      source: 'core:inbound',
+      record: { collection: 'workflows', item: '7' },
+      chainIds: ['c-1']
+    })
+    expect(calls).toContainEqual({ method: 'where', args: ['l.path', '/api/items/workflows/7'] })
+    expect(calls).toContainEqual({ method: 'orWhereIn', args: ['l.chain_id', ['c-1']] })
+  })
+})
+
+describe('describeEventSources', () => {
+  it('marks every source listable, so the console source picker shows them', () => {
+    const described = describeEventSources()
+    const inbound = described.find((d) => d.id === 'core:inbound')
+    expect(inbound).toMatchObject({ can_list: true, collection: null, direction: 'in' })
+    expect(described.every((d) => d.can_list === true)).toBe(true)
   })
 })
