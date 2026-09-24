@@ -1,3 +1,4 @@
+import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -405,37 +406,38 @@ export function CatalogPickerField({
   // unresolved tokens gate the section list ("pick the type first"
   // behaviour).
   const parentDraft = parentDraftCtx?.draft
-  const { resolvedFilter, resolvedSectionFilter, resolvedLinkFilter, missingParents } = useMemo(() => {
-    const missing: string[] = []
-    const sub = (v: unknown): unknown => {
-      if (typeof v === 'string' && v.startsWith('$parent.')) {
-        const key = v.slice('$parent.'.length)
-        const pv = parentDraft?.[key]
-        if (pv === null || pv === undefined || pv === '') {
-          missing.push(key)
-          return v
+  const { resolvedFilter, resolvedSectionFilter, resolvedLinkFilter, missingParents } =
+    useMemo(() => {
+      const missing: string[] = []
+      const sub = (v: unknown): unknown => {
+        if (typeof v === 'string' && v.startsWith('$parent.')) {
+          const key = v.slice('$parent.'.length)
+          const pv = parentDraft?.[key]
+          if (pv === null || pv === undefined || pv === '') {
+            missing.push(key)
+            return v
+          }
+          return pv
         }
-        return pv
+        if (Array.isArray(v)) return v.map(sub)
+        if (v && typeof v === 'object')
+          return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sub(x)]))
+        return v
       }
-      if (Array.isArray(v)) return v.map(sub)
-      if (v && typeof v === 'object')
-        return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sub(x)]))
-      return v
-    }
-    const f = config.filter ? (sub(config.filter) as Record<string, unknown>) : undefined
-    const sf = config.section_filter
-      ? (sub(config.section_filter) as Record<string, unknown>)
-      : undefined
-    const lf = config.link_filter
-      ? (sub(config.link_filter) as Record<string, unknown>)
-      : undefined
-    return {
-      resolvedFilter: f,
-      resolvedSectionFilter: sf,
-      resolvedLinkFilter: lf,
-      missingParents: [...new Set(missing)]
-    }
-  }, [config.filter, config.section_filter, config.link_filter, parentDraft])
+      const f = config.filter ? (sub(config.filter) as Record<string, unknown>) : undefined
+      const sf = config.section_filter
+        ? (sub(config.section_filter) as Record<string, unknown>)
+        : undefined
+      const lf = config.link_filter
+        ? (sub(config.link_filter) as Record<string, unknown>)
+        : undefined
+      return {
+        resolvedFilter: f,
+        resolvedSectionFilter: sf,
+        resolvedLinkFilter: lf,
+        missingParents: [...new Set(missing)]
+      }
+    }, [config.filter, config.section_filter, config.link_filter, parentDraft])
   // The catalog read narrows to items linked to an in-scope section, so the
   // zone/type rules live once, on the section, instead of per item.
   const itemFilter = useMemo(() => {
@@ -880,19 +882,9 @@ export function CatalogPickerField({
   const failedSubmission = useMemo(() => {
     const latest = (erpSubs ?? [])[0]
     if (!latest || latest.status !== 'failed') return null
-    const body = latest.payload as { products?: Array<Record<string, unknown>> } | null
-    const idents = new Set<string>()
-    // Vendor-agnostic: every primitive value of each payload line item is a
-    // candidate identifier (ERPs disagree on key names — cifaNumber,
-    // productNumber, sku…); matching against row label + configured columns
-    // filters the noise.
-    for (const prod of Array.isArray(body?.products) ? body.products : []) {
-      for (const v of Object.values(prod ?? {})) {
-        if ((typeof v === 'string' || typeof v === 'number') && v !== '') idents.add(String(v))
-      }
-    }
-    if (idents.size === 0) return null
-    return { idents, error: latest.last_error ?? 'Submission failed' }
+    // Which rows the failed submission was about, and which reason is whose —
+    // vendor-agnostic (lib/submission-errors.ts).
+    return submissionLineErrors(latest.payload as Record<string, unknown> | null, latest.last_error)
   }, [erpSubs])
   // The payload usually identifies products by columns the catalog fetch never
   // selects (product_number vs the item-number label) — fetch the configured
@@ -931,9 +923,9 @@ export function CatalogPickerField({
         return v != null && v !== '' ? String(v) : null
       })
     ]
-    return candidates.some((c) => c && failedSubmission.idents.has(c))
-      ? failedSubmission.error
-      : null
+      .filter((c): c is string => !!c)
+      .map(normalizeIdent)
+    return failedSubmission.reasonFor(candidates)
   }
 
   // summary_fields m2m entries: junction rows for the saved child rows resolve
@@ -1218,7 +1210,16 @@ export function CatalogPickerField({
         items: items.sort((a, b) => a.label.localeCompare(b.label))
       }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogRows, tmpl, search, config.section_by, sectionAliasRel, sectionNamesByItem, sectionsPending, resolvedLinkFilter])
+  }, [
+    catalogRows,
+    tmpl,
+    search,
+    config.section_by,
+    sectionAliasRel,
+    sectionNamesByItem,
+    sectionsPending,
+    resolvedLinkFilter
+  ])
 
   // First load: collapse everything except sections holding picked rows
   if (!collapseInitRef.current && sections.length > 0) {
@@ -1579,9 +1580,12 @@ export function CatalogPickerField({
                 <Loader2 className='h-4 w-4 animate-spin' /> Loading catalog…
               </div>
             )}
-            {missingParents.length === 0 && !catalogLoading && !sectionsPending && sections.length === 0 && (
-              <p className='px-3 py-6 text-center text-slate-400'>No catalog items</p>
-            )}
+            {missingParents.length === 0 &&
+              !catalogLoading &&
+              !sectionsPending &&
+              sections.length === 0 && (
+                <p className='px-3 py-6 text-center text-slate-400'>No catalog items</p>
+              )}
 
             {config.favorites && (
               <Fragment>
