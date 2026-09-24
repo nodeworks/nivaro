@@ -10,7 +10,7 @@ export { SubmissionDrill, type SubmissionDrillProps } from './SubmissionDrill'
 export { HttpStatusChip, StatusPill } from './status'
 export {
   type CallTriggerInfo,
-  type CallTriggerUser,
+  callTriggerRequester,
   describeCallTrigger,
   TriggerChip
 } from './trigger'

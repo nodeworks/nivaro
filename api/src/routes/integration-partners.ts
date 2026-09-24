@@ -15,6 +15,11 @@ import { selectInChunks } from '../services/db-batch.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
 import { maskHeaders, mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
 import { isAuthFailure } from '../services/integration-signals-core.js'
+import {
+  type FactUser,
+  type RequesterUser,
+  toRequesterUser
+} from '../services/submission-detail.js'
 
 export function percentile(sorted: number[], p: number): number | null {
   if (sorted.length === 0) return null
@@ -90,13 +95,6 @@ export interface OutboundListRow {
   error: string | null
 }
 
-export interface CallListUserRow {
-  id: string
-  first_name: string | null
-  last_name: string | null
-  email: string | null
-}
-
 export interface PartnerCallListItem {
   /** Stable React key — `id` alone can collide across the two source tables. */
   key: string
@@ -111,7 +109,10 @@ export interface PartnerCallListItem {
   error: string | null
   triggered_by: string | null
   has_body: boolean
-  user: { id: string; name: string; email: string | null } | null
+  /** Resolved the SAME way the push drill-down resolves a requester — a
+   *  suspended/redacted/machine account carries its `inactive`/`account_kind`
+   *  facts here too, not just a bare name. */
+  user: RequesterUser | null
 }
 
 /** The stored `url` reduced to what the list shows — a plain path (+ query),
@@ -125,11 +126,6 @@ export function pathFromUrl(url: string | null | undefined): string | null {
   } catch {
     return url.length > 300 ? `${url.slice(0, 300)}…` : url
   }
-}
-
-function callUserName(u: CallListUserRow): string {
-  const n = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
-  return n || u.email || u.id
 }
 
 const httpOk = (status: number | null): boolean => status != null && status >= 200 && status < 300
@@ -150,12 +146,16 @@ const sameSecond = (a: Date | string, b: Date | string): boolean =>
 export function mergeCallHistory(
   logs: CallLogListRow[],
   outbound: OutboundListRow[],
-  users: CallListUserRow[]
+  users: FactUser[]
 ): PartnerCallListItem[] {
+  // Same resolution the push drill-down uses (`toRequesterUser`) — a
+  // suspended or machine account on a call carries the same `inactive`/
+  // `account_kind` facts here as it does on a `Requester` elsewhere in the
+  // console, instead of a bare name that hides it.
   const userOf = (id: string | null): PartnerCallListItem['user'] => {
     if (!id) return null
     const u = users.find((x) => x.id === id)
-    return u ? { id: u.id, name: callUserName(u), email: u.email } : null
+    return u ? toRequesterUser(u) : null
   }
   const fromLogs: PartnerCallListItem[] = logs.map((l) => ({
     key: `log:${l.id}`,
@@ -238,8 +238,10 @@ async function buildCallHistory(apiId: number): Promise<PartnerCallListItem[]> {
   const userIds = [...new Set(logs.map((l) => l.user_id).filter((v): v is string => !!v))]
   const users = userIds.length
     ? ((await selectInChunks(userIds, 500, (chunk) =>
-        db('nivaro_users').whereIn('id', chunk).select('id', 'first_name', 'last_name', 'email')
-      )) as CallListUserRow[])
+        db('nivaro_users')
+          .whereIn('id', chunk)
+          .select('id', 'first_name', 'last_name', 'email', 'status', 'is_redacted', 'account_kind')
+      )) as FactUser[])
     : []
   return mergeCallHistory(logs, outbound, users)
 }
@@ -509,8 +511,16 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
       if (row.user_id) {
         const u = (await db('nivaro_users')
           .where({ id: row.user_id })
-          .first('id', 'first_name', 'last_name', 'email')) as CallListUserRow | undefined
-        if (u) user = { id: u.id, name: callUserName(u), email: u.email }
+          .first(
+            'id',
+            'first_name',
+            'last_name',
+            'email',
+            'status',
+            'is_redacted',
+            'account_kind'
+          )) as FactUser | undefined
+        if (u) user = toRequesterUser(u)
       }
 
       return {

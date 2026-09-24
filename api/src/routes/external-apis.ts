@@ -11,6 +11,7 @@ import {
 } from '../services/external-api-contracts.js'
 import {
   instanceOverrideFor,
+  maskHeaders,
   mockConfigFor,
   resolveAuth,
   resolveInstanceRow,
@@ -1669,6 +1670,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
     created_at: Date
   }
 
+  // Re-masks on every read, same as the integration-partners call-detail
+  // route — a row written before a masking fix landed (or by any caller that
+  // ever bypasses `writeApiCallLog`) must never hand a secret back regardless
+  // of what actually landed in the column.
   function serializeLog(r: LogRow) {
     return {
       id: r.id,
@@ -1677,10 +1682,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
       triggered_by: r.triggered_by,
       method: r.method,
       url: r.url,
-      request_headers: r.request_headers ? JSON.parse(r.request_headers) : null,
+      request_headers: r.request_headers ? maskHeaders(JSON.parse(r.request_headers)) : null,
       request_body: r.request_body,
       response_status: r.response_status,
-      response_headers: r.response_headers ? JSON.parse(r.response_headers) : null,
+      response_headers: r.response_headers ? maskHeaders(JSON.parse(r.response_headers)) : null,
       response_body: r.response_body,
       duration_ms: r.duration_ms,
       error: r.error,

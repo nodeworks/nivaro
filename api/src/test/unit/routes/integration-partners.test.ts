@@ -16,7 +16,6 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../../../db/index.js'
 import {
-  type CallListUserRow,
   type CallLogListRow,
   healthWord,
   hourBuckets,
@@ -26,6 +25,7 @@ import {
   pathFromUrl,
   percentile
 } from '../../../routes/integration-partners.js'
+import type { FactUser } from '../../../services/submission-detail.js'
 
 describe('percentile', () => {
   it('nearest-rank on a sorted list', () => {
@@ -152,7 +152,7 @@ describe('pathFromUrl', () => {
     )
   })
   it('parses a mock:// url (the mock-mode call log shape) as a path too', () => {
-    expect(pathFromUrl('mock://NAMI/api/hubs')).toBe('/api/hubs')
+    expect(pathFromUrl('mock://PARTNER/api/hubs')).toBe('/api/hubs')
   })
   it('falls back to the raw string when it does not parse as a URL, capped at 300 chars', () => {
     expect(pathFromUrl('not a url')).toBe('not a url')
@@ -193,11 +193,14 @@ describe('mergeCallHistory — Task 15e list merge', () => {
     duration_ms: 80,
     error: 'HTTP 401'
   }
-  const USER: CallListUserRow = {
+  const USER: FactUser = {
     id: 'U1',
     first_name: 'Dana',
     last_name: 'Reyes',
-    email: 'dana@example.com'
+    email: 'dana@example.com',
+    status: 'active',
+    is_redacted: false,
+    account_kind: null
   }
 
   it('a call-log row carries its resolved user, has_body, and a path derived from the url', () => {
@@ -216,9 +219,51 @@ describe('mergeCallHistory — Task 15e list merge', () => {
         error: null,
         triggered_by: 'transition-action',
         has_body: true,
-        user: { id: 'U1', name: 'Dana Reyes', email: 'dana@example.com' }
+        user: {
+          id: 'U1',
+          name: 'Dana Reyes',
+          email: 'dana@example.com',
+          inactive: null,
+          account_kind: null
+        }
       }
     ])
+  })
+
+  it('resolves a call user the SAME way the push drill-down does — a suspended or machine account carries its facts too', () => {
+    const suspended: FactUser = {
+      ...USER,
+      id: 'U2',
+      status: 'suspended',
+      is_redacted: false,
+      account_kind: null
+    }
+    const machine: FactUser = {
+      ...USER,
+      id: 'U3',
+      first_name: 'Sync',
+      last_name: 'Bot',
+      email: null,
+      status: 'active',
+      account_kind: 'integration'
+    }
+    const suspendedLog: CallLogListRow = { ...LOG, id: 2, user_id: 'U2' }
+    const machineLog: CallLogListRow = { ...LOG, id: 3, user_id: 'U3' }
+    const merged = mergeCallHistory([suspendedLog, machineLog], [], [suspended, machine])
+    expect(merged.find((c) => c.id === 2)?.user).toEqual({
+      id: 'U2',
+      name: 'Dana Reyes',
+      email: 'dana@example.com',
+      inactive: 'suspended',
+      account_kind: null
+    })
+    expect(merged.find((c) => c.id === 3)?.user).toEqual({
+      id: 'U3',
+      name: 'Sync Bot',
+      email: null,
+      inactive: null,
+      account_kind: 'integration'
+    })
   })
 
   it('an outbound row with no matching call-log second still appears, marked "outbound" with no trigger/body', () => {
@@ -337,7 +382,7 @@ describe('GET /integration-partners/:id/calls/:callId', () => {
         api_id: 9,
         created_at: CREATED,
         method: 'GET',
-        url: 'https://nami.example/api/hubs',
+        url: 'https://partner-a.example/api/hubs',
         // Written before the write-side masking fix — a raw bearer token
         // that MUST NOT reach the response.
         request_headers: JSON.stringify({ Authorization: 'Bearer super-secret-token' }),
@@ -347,12 +392,20 @@ describe('GET /integration-partners/:id/calls/:callId', () => {
         response_body: '{"hubs":[]}',
         duration_ms: 210,
         error: null,
-        triggered_by: 'cron:nami-sync',
+        triggered_by: 'cron:inventory-sync',
         user_id: 'U1'
       }
     })
     const usersChain = makeChain({
-      first: { id: 'U1', first_name: 'Dana', last_name: 'Reyes', email: 'dana@example.com' }
+      first: {
+        id: 'U1',
+        first_name: 'Dana',
+        last_name: 'Reyes',
+        email: 'dana@example.com',
+        status: 'active',
+        is_redacted: false,
+        account_kind: null
+      }
     })
     vi.mocked(db).mockImplementation(((table: string) => {
       if (table === 'nivaro_external_api_logs') return logsChain
@@ -367,8 +420,63 @@ describe('GET /integration-partners/:id/calls/:callId', () => {
     expect(d.request_headers.Authorization).toBe('Bearer ••••••')
     expect(d.response_headers['set-cookie']).toBe('••••••')
     expect(d.response_body).toBe('{"hubs":[]}')
-    expect(d.triggered_by).toBe('cron:nami-sync')
-    expect(d.user).toEqual({ id: 'U1', name: 'Dana Reyes', email: 'dana@example.com' })
+    expect(d.triggered_by).toBe('cron:inventory-sync')
+    expect(d.user).toEqual({
+      id: 'U1',
+      name: 'Dana Reyes',
+      email: 'dana@example.com',
+      inactive: null,
+      account_kind: null
+    })
+    await app.close()
+  })
+
+  it('resolves a suspended account exactly as the push drill-down does, at the route level', async () => {
+    const logsChain = makeChain({
+      first: {
+        id: 57,
+        api_id: 9,
+        created_at: CREATED,
+        method: 'POST',
+        url: 'https://partner-a.example/api/hubs',
+        request_headers: null,
+        request_body: null,
+        response_status: 200,
+        response_headers: null,
+        response_body: '{}',
+        duration_ms: 90,
+        error: null,
+        triggered_by: 'erp-submission',
+        user_id: 'U9'
+      }
+    })
+    const usersChain = makeChain({
+      first: {
+        id: 'U9',
+        first_name: 'Old',
+        last_name: 'Integration',
+        email: 'old@example.com',
+        status: 'suspended',
+        is_redacted: false,
+        account_kind: null
+      }
+    })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_api_logs') return logsChain
+      if (table === 'nivaro_users') return usersChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/9/calls/57' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.user).toEqual({
+      id: 'U9',
+      name: 'Old Integration',
+      email: 'old@example.com',
+      inactive: 'suspended',
+      account_kind: null
+    })
     await app.close()
   })
 
@@ -379,7 +487,7 @@ describe('GET /integration-partners/:id/calls/:callId', () => {
         api_id: 9,
         created_at: CREATED,
         method: 'GET',
-        url: 'https://linx.example/status',
+        url: 'https://partner-b.example/status',
         request_headers: null,
         request_body: null,
         response_status: 401,
@@ -387,7 +495,7 @@ describe('GET /integration-partners/:id/calls/:callId', () => {
         response_body: '{"error":"unauthorized"}',
         duration_ms: 30,
         error: 'HTTP 401',
-        triggered_by: 'extension:efp-ops',
+        triggered_by: 'extension:ops-toolkit',
         user_id: null
       }
     })

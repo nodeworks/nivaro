@@ -105,11 +105,18 @@ export interface PartnersSummary {
   not_healthy: number
 }
 
-/** One user recorded on a call — via nivaro_users, batch-resolved server-side. */
+/** One user recorded on a call — via nivaro_users, batch-resolved server-side
+ *  through the same helper the push drill-down uses, so a suspended or
+ *  machine account carries the same `inactive`/`account_kind` facts here as
+ *  it does on a `Requester` elsewhere in the console. */
 export interface PartnerCallUser {
   id: string
   name: string
   email: string | null
+  /** 'suspended' / 'inactive' / 'redacted' — a person who can no longer act. */
+  inactive: string | null
+  /** integration | bot | service | placeholder — never a person. */
+  account_kind: string | null
 }
 
 /**

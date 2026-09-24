@@ -165,6 +165,16 @@ const SENSITIVE_HEADER_NAMES = new Set([
   'proxy-authorization'
 ])
 
+/** Anything a header's lowercased name even LOOKS like it might carry a
+ *  credential under — a partner can invent any header name it likes for a
+ *  session id, a signature, or a bearer token under its own scheme, and a
+ *  hand-picked name list can never keep up with that. Broader on purpose:
+ *  masked-and-wrong (content-type never matches this) costs nothing, shown-
+ *  and-a-real-leak costs everything. `SENSITIVE_HEADER_NAMES` above stays as
+ *  the explicit, always-masked baseline this widens, never replaces. */
+const SENSITIVE_HEADER_PATTERN =
+  /secret|token|password|passwd|key|cookie|auth|session|signature|credential/
+
 /** Exported so a reader (the integration-partners call detail route) can
  *  re-mask on the way out — a defence against any row written before a
  *  masking fix landed, or by a caller that hands a header object straight
@@ -173,13 +183,7 @@ export function maskHeaders(headers: Record<string, string>): Record<string, str
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(headers)) {
     const lk = k.toLowerCase()
-    const isSensitive =
-      SENSITIVE_HEADER_NAMES.has(lk) ||
-      lk.includes('secret') ||
-      lk.includes('token') ||
-      lk.includes('password') ||
-      lk.includes('api-key') ||
-      lk.includes('apikey')
+    const isSensitive = SENSITIVE_HEADER_NAMES.has(lk) || SENSITIVE_HEADER_PATTERN.test(lk)
     if (isSensitive && v) {
       if (lk === 'authorization') {
         const parts = v.split(' ')
