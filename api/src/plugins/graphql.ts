@@ -1,6 +1,7 @@
 import { execute, type GraphQLSchema, parse, validate } from 'graphql'
 import { makeServer as makeWsServer } from 'graphql-ws'
 import { WebSocket, WebSocketServer } from 'ws'
+import { config } from '../config.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { buildGraphQLSchema } from '../services/schema-builder.js'
 
@@ -52,14 +53,25 @@ const GRAPHIQL_HTML = /* html */ `<!DOCTYPE html>
 </html>`
 
 let _schema: GraphQLSchema | null = null
+// One build at a time: a request arriving mid-build awaits the same promise
+// instead of starting a second scan of every collection.
+let _building: Promise<GraphQLSchema> | null = null
 
 async function getSchema(): Promise<GraphQLSchema> {
-  if (!_schema) {
-    _schema = await buildGraphQLSchema()
-    const { recordGraphQLSchema } = await import('../services/api-changelog.js')
-    void recordGraphQLSchema(_schema)
+  if (_schema) return _schema
+  if (!_building) {
+    _building = buildGraphQLSchema()
+      .then(async (schema) => {
+        _schema = schema
+        const { recordGraphQLSchema } = await import('../services/api-changelog.js')
+        void recordGraphQLSchema(schema)
+        return schema
+      })
+      .finally(() => {
+        _building = null
+      })
   }
-  return _schema
+  return _building
 }
 
 // ─── Persisted queries ───────────────────────────────────────────────────────
@@ -172,16 +184,21 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
     await new Promise<void>((resolve) => wss.close(() => resolve()))
   })
 
-  // Build schema after server is ready
+  // Build the schema at startup. In production this blocks `ready` so the
+  // first GraphQL request is never the slow one. In development it is the
+  // largest single cost of a restart (~13s cold: one read per collection,
+  // field and relation table), so the build runs in the background and the
+  // port opens at once — the first GraphQL request simply awaits it.
   app.addHook('onReady', async () => {
-    try {
-      _schema = await buildGraphQLSchema()
-      app.log.info('GraphQL schema built')
-      const { recordGraphQLSchema } = await import('../services/api-changelog.js')
-      void recordGraphQLSchema(_schema)
-    } catch (err) {
-      app.log.warn({ err }, 'GraphQL schema build failed at startup — will retry on first request')
-    }
+    const build = getSchema()
+      .then(() => app.log.info('GraphQL schema built'))
+      .catch((err) =>
+        app.log.warn(
+          { err },
+          'GraphQL schema build failed at startup — will retry on first request'
+        )
+      )
+    if (config.NODE_ENV !== 'development') await build
   })
 
   // ── GraphiQL explorer ────────────────────────────────────────────────────

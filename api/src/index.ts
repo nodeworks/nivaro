@@ -19,6 +19,7 @@ import { registerSlaHooks, setApp as setSlaApp } from './hooks/sla.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
+import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
@@ -91,8 +92,28 @@ async function main() {
     setAggregateCapApp(app)
   }
 
-  await app.listen({ port: config.PORT, host: '0.0.0.0' })
+  // A development restart can race the previous child still releasing the
+  // port (tsx watch starts the new process while the old one drains), and tsx
+  // does not retry a child that exits at boot — an EADDRINUSE here would sit
+  // as a silent "hang" until the next save. Retry briefly in development.
+  const attempts = config.NODE_ENV === 'development' ? 20 : 1
+  for (let i = 1; ; i++) {
+    try {
+      await app.listen({ port: config.PORT, host: '0.0.0.0' })
+      break
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'EADDRINUSE' || i >= attempts) throw err
+      if (i === 1)
+        app.log.warn(
+          `port ${config.PORT} still in use — waiting for the previous process to release it`
+        )
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
   app.log.info(`Nivaro API v${NIVARO_VERSION} listening on port ${config.PORT}`)
+  // Development: an edit under a loaded extension restarts this process (tsx
+  // watch never sees those files — they are loaded by dynamic import).
+  startDevExtensionWatch(config.NODE_ENV, (m) => app.log.info(m))
 
   // Graceful shutdown — stop accepting connections, let in-flight requests
   // drain (fastify close), then release DB pools.
@@ -101,6 +122,17 @@ async function main() {
     if (shuttingDown) return
     shuttingDown = true
     app.log.info(`${signal} received — draining in-flight requests`)
+    // A drain that never finishes (a pool that will not release, a socket
+    // that will not close) must not keep the old process alive: tsx watch
+    // waits for it before starting the new one, so in development a hung
+    // drain read as "the API hangs after every save". Production gets a
+    // longer budget for genuinely in-flight requests.
+    const deadlineMs = config.NODE_ENV === 'development' ? 3_000 : 15_000
+    const deadline = setTimeout(() => {
+      app.log.warn(`Shutdown did not finish within ${deadlineMs}ms — exiting`)
+      process.exit(0)
+    }, deadlineMs)
+    deadline.unref()
     try {
       // #313 — report what the shutdown cuts: running job runs are marked
       // interrupted NOW (with a shutdown note) rather than discovered as
