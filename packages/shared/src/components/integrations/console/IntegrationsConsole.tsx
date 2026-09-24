@@ -3,6 +3,7 @@ import { cn } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
 import { useSignals } from './api'
 import { FirefightView } from './FirefightView'
+import { InboundView } from './InboundView'
 import { PartnersView } from './PartnersView'
 import { TONE_SOFT, TONE_TEXT } from './tone'
 
@@ -21,6 +22,8 @@ export interface IntegrationsConsoleProps {
   onOpenRecord?: (collection: string, id: string) => void
   /** Expand this Firefight signal on first load. */
   focusSignal?: string
+  /** Host content rendered at the end of the Inbound tab (a deployment's own queues). */
+  inboundExtra?: ReactNode
   className?: string
 }
 
@@ -44,6 +47,7 @@ export function IntegrationsConsole({
   onTabChange,
   onOpenRecord,
   focusSignal,
+  inboundExtra,
   className
 }: IntegrationsConsoleProps) {
   const [localTab, setLocalTab] = useState('firefight')
@@ -84,9 +88,7 @@ export function IntegrationsConsole({
     {
       key: 'inbound',
       label: 'Inbound',
-      render: () => (
-        <NextPhase what='Who is calling in, their request log and whether scheduled imports are running on time.' />
-      )
+      render: () => <InboundView extra={inboundExtra} />
     },
     {
       key: 'alerts',

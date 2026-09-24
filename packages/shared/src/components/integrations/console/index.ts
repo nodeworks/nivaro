@@ -9,6 +9,7 @@ export {
   useSnooze
 } from './api'
 export { FirefightView, type FirefightViewProps, rankSignals } from './FirefightView'
+export { InboundView, type InboundViewProps } from './InboundView'
 export {
   type ConsoleTab as IntegrationsConsoleTab,
   IntegrationsConsole,

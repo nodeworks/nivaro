@@ -10,6 +10,7 @@ import { Label } from '../ui/label'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import { ImportStalenessChip, ImportStalenessControl } from './ImportStalenessControl'
 import { StagingColumnsBuilder, ValidationBuilder } from './SchemaValidationBuilders'
 import { ServiceConfigBuilder } from './ServiceConfigBuilder'
 import { definitionTitle, type ImportDefinition } from './types'
@@ -382,6 +383,7 @@ export function DefinitionsPanel({
                   >
                     {definitionTitle(d)}
                   </span>
+                  <ImportStalenessChip importKey={d.key} />
                   {runCounts[d.key] != null && (
                     <span className='ml-auto shrink-0 text-[10.5px] tabular-nums text-slate-400'>
                       {formatNumber(runCounts[d.key])}
@@ -522,6 +524,22 @@ export function DefinitionsPanel({
                     { value: 'service', label: 'Items service (revisioned)' }
                   ]}
                   className='h-8 text-[12.5px]'
+                />
+              </Field>
+
+              <Field
+                label='Staleness'
+                hint={
+                  selectedId === NEW
+                    ? undefined
+                    : `Saves on its own, separate from Save changes below. The Integrations console edits the same setting.${
+                        draft.is_active ? '' : ' Only active imports are watched.'
+                      }`
+                }
+              >
+                <ImportStalenessControl
+                  importKey={selectedId === NEW ? null : selected?.key}
+                  label={selected ? definitionTitle(selected) : undefined}
                 />
               </Field>
 

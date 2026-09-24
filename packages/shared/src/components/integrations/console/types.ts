@@ -122,15 +122,6 @@ export interface PartnerDetailData {
   contracts: PartnerContract[]
 }
 
-export interface ImportHealthRow {
-  key: string
-  label: string
-  last_status: string | null
-  last_run_at: string | null
-  last_ok_at: string | null
-  failures7d: number
-  cadence_hours: number
-  stale: boolean
-}
+export type { ImportHealthRow } from '../../imports/ImportStalenessControl'
 
 export type ActionResult = { key: string; ok: boolean; message: string }

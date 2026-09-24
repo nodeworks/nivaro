@@ -3,7 +3,6 @@ import { useNivaroClient } from '../../../context'
 import { del, get, post } from '../../../lib/commands'
 import type {
   ActionResult,
-  ImportHealthRow,
   PartnerCard,
   PartnerDetailData,
   PartnersSummary,
@@ -99,13 +98,5 @@ export function usePartner(id: number | null) {
   })
 }
 
-export function useImportHealth() {
-  const client = useNivaroClient()
-  return useQuery({
-    queryKey: ['integration-partners', 'imports'],
-    queryFn: () =>
-      client
-        .request<{ data: ImportHealthRow[] }>(get('/integration-partners/imports'))
-        .then((r) => r.data)
-  })
-}
+/** One query key with the Import Console's staleness control — edits in either refresh both. */
+export { useImportHealth } from '../../imports/ImportStalenessControl'

@@ -95,6 +95,13 @@ export type {
   ImportConsoleProps
 } from './components/imports/ImportConsole'
 export { ImportConsole } from './components/imports/ImportConsole'
+export {
+  ImportDefaultCadenceControl,
+  ImportStalenessChip,
+  ImportStalenessControl,
+  type ImportStalenessControlProps,
+  useSetImportCadence
+} from './components/imports/ImportStalenessControl'
 export { NewImportDialog } from './components/imports/NewImportDialog'
 export type {
   ImportDefinition,
@@ -107,13 +114,16 @@ export type {
   ImportRunStatus,
   ImportStats
 } from './components/imports/types'
+export * from './components/integrations/console'
 export type { IntegrationDotsProps } from './components/integrations/IntegrationDots'
-export { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './components/integrations/IntegrationDots'
+export {
+  INTEGRATIONS_FILTER_OPTIONS,
+  IntegrationDots
+} from './components/integrations/IntegrationDots'
 export type { IntegrationObligationsViewProps } from './components/integrations/IntegrationObligationsView'
 export { IntegrationObligationsView } from './components/integrations/IntegrationObligationsView'
 export type { IntegrationStatusBannerProps } from './components/integrations/IntegrationStatusBanner'
 export { IntegrationStatusBanner } from './components/integrations/IntegrationStatusBanner'
-export * from './components/integrations/console'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export {
   ChangeReasonDialog,
@@ -297,6 +307,7 @@ export {
 } from './lib/fiscal'
 export * from './lib/format-value'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
+export { dotsForRecord } from './lib/integration-dots'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export { type NotificationSound, playNotificationSound } from './lib/notification-sound'
@@ -312,7 +323,6 @@ export {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from './lib/notification-target'
-export { dotsForRecord } from './lib/integration-dots'
 export type { BannerLine } from './lib/obligation-banner'
 export { bannerLines } from './lib/obligation-banner'
 export type { ObligationFilterState } from './lib/obligation-filters'
