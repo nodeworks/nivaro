@@ -19,6 +19,9 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
 import { registerBriefLine } from '../services/approval-brief-lines.js'
+import { currentChain } from '../services/chain.js'
+import { type ChainTable, chainFields } from '../services/chain-columns.js'
+import { beginChainRoot } from '../services/chain-roots.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import {
   type ExtensionEventHandler,
@@ -247,6 +250,18 @@ export interface ExtensionContext {
     /** Register a scored check on the go-live readiness scorecard. */
     registerCheck(check: import('../services/readiness.js').ReadinessCheck): void
   }
+  chain: {
+    /** Start a chain for one feed event (e.g. one shipment) and run fn inside it. */
+    begin<T>(root: { source: string; ref: string }, fn: () => Promise<T>): Promise<T>
+    /** The chain currently open, or null. */
+    current(): { chain_id: string; parent: string | null } | null
+    /** chain_id/chain_parent for an insert into a core table (probe-aware).
+     *  A table outside ChainTable (extensions pass plain strings) yields {}. */
+    fields(
+      table: ChainTable | (string & {}),
+      opts?: { parent?: string | null }
+    ): Promise<Record<string, string | null>>
+  }
   integrations: {
     /** Declare an outbound obligation kind: what the partner expects, how a
      *  decision point is attributed to it, and how to derive from DATA the
@@ -458,6 +473,26 @@ export interface ExtensionSettingDecl {
 
 export const extensionSettingsDecls = new Map<string, NonNullable<Extension['settings']>>()
 
+const CHAIN_TABLES: ReadonlySet<string> = new Set<ChainTable>([
+  'nivaro_activity',
+  'nivaro_api_logs',
+  'nivaro_erp_submissions',
+  'nivaro_erp_submission_attempts',
+  'nivaro_external_api_logs',
+  'nivaro_workflow_history',
+  'nivaro_flow_runs'
+])
+
+/** ctx.chain — shared by the self-hosted and cloud ctx builds. */
+export function buildChainContext(): ExtensionContext['chain'] {
+  return {
+    begin: (root, fn) => beginChainRoot({ source: root.source, ref: root.ref }, fn),
+    current: () => currentChain(),
+    fields: async (table, opts) =>
+      CHAIN_TABLES.has(table) ? chainFields(table as ChainTable, opts) : {}
+  }
+}
+
 /** The declared settings schema for an extension, types normalized (#505). */
 export function getExtensionSettingsSchema(extId: string): ExtensionSettingDecl[] {
   return (extensionSettingsDecls.get(extId) ?? []).map((d) => ({
@@ -626,6 +661,7 @@ async function loadExtension(
   ctx: Omit<
     ExtensionContext,
     | 'hooks'
+    | 'chain'
     | 'cron'
     | 'logActivity'
     | 'sql'
@@ -948,6 +984,7 @@ async function loadExtension(
           registerReadinessCheck(check)
         }
       },
+      chain: buildChainContext(),
       integrations: {
         registerObligationKind: (def) => {
           void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
@@ -1114,6 +1151,7 @@ export async function loadExtensions(
   ctx: Omit<
     ExtensionContext,
     | 'hooks'
+    | 'chain'
     | 'cron'
     | 'logActivity'
     | 'sql'
@@ -1248,6 +1286,7 @@ export async function loadCloudExtensions(
   ctx: Omit<
     ExtensionContext,
     | 'hooks'
+    | 'chain'
     | 'cron'
     | 'logActivity'
     | 'sql'
@@ -1337,6 +1376,7 @@ export async function loadCloudExtensions(
         readiness: {
           registerCheck: (check) => registerReadinessCheck(check)
         },
+        chain: buildChainContext(),
         integrations: {
           registerObligationKind: (def) => {
             void import('../services/integration-obligations.js').then(
@@ -1532,6 +1572,7 @@ export async function scanNewExtensions(
   ctx: Omit<
     ExtensionContext,
     | 'hooks'
+    | 'chain'
     | 'cron'
     | 'logActivity'
     | 'sql'
