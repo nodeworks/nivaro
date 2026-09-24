@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../../db/index.js', () => ({
   db: { schema: { hasColumn: vi.fn() } }
 }))
+const tenant: { id: string | undefined } = { id: undefined }
+vi.mock('../../../db/tenant-context.js', () => ({ getTenantId: () => tenant.id }))
 
 import { db } from '../../../db/index.js'
 import {
@@ -15,6 +17,7 @@ type SchemaDb = { schema: { hasColumn: ReturnType<typeof vi.fn> } }
 const hasColumn = () => (db as unknown as SchemaDb).schema.hasColumn as ReturnType<typeof vi.fn>
 
 afterEach(() => {
+  tenant.id = undefined
   resetRequesterColumnProbe()
   vi.clearAllMocks()
   vi.useRealTimers()
@@ -115,5 +118,19 @@ describe('requesterSelectColumns', () => {
       'requested_by',
       'requested_via'
     ])
+  })
+})
+
+describe('per tenant', () => {
+  it("one tenant's migrated table never makes another, un-migrated tenant name the columns", async () => {
+    tenant.id = 'tenant-a'
+    hasColumn().mockResolvedValue(true)
+    expect(await requesterSelectColumns('nivaro_erp_submissions')).toHaveLength(2)
+    tenant.id = 'tenant-b'
+    hasColumn().mockResolvedValue(false)
+    expect(await requesterSelectColumns('nivaro_erp_submissions')).toEqual([])
+    tenant.id = 'tenant-a'
+    expect(await requesterSelectColumns('nivaro_erp_submissions')).toHaveLength(2)
+    expect(hasColumn()).toHaveBeenCalledTimes(2)
   })
 })

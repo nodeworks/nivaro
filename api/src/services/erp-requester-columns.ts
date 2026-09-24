@@ -20,8 +20,13 @@
  * already there — so a database that catches up should be picked up
  * without a restart. A HIT is permanent: a column, once added, is never
  * dropped from under a running process.
+ *
+ * Probes are kept PER TENANT (cloud mode: `db` is a per-request tenant
+ * proxy, and one tenant may be migrated while another is not yet) — one
+ * key per tenant id, a single key when self-hosted.
  */
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
 
 export type RequesterTable = 'nivaro_erp_submissions' | 'nivaro_erp_submission_attempts'
 
@@ -33,10 +38,11 @@ interface ProbeState {
   inflight: Promise<boolean> | null
 }
 
-const probes = new Map<RequesterTable, ProbeState>()
+const probes = new Map<string, ProbeState>()
 
 async function probe(table: RequesterTable): Promise<boolean> {
-  const p = probes.get(table)
+  const key = `${getTenantId() ?? ''}\u0000${table}`
+  const p = probes.get(key)
   if (p?.hit) return true
   if (p?.inflight) return p.inflight
   if (p && Date.now() - p.at < MISS_TTL_MS) return false
@@ -47,9 +53,9 @@ async function probe(table: RequesterTable): Promise<boolean> {
       return false
     }
   })()
-  probes.set(table, { hit: false, at: p?.at ?? 0, inflight })
+  probes.set(key, { hit: false, at: p?.at ?? 0, inflight })
   const hit = await inflight
-  probes.set(table, { hit, at: Date.now(), inflight: null })
+  probes.set(key, { hit, at: Date.now(), inflight: null })
   return hit
 }
 

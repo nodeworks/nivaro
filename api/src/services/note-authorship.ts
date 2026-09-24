@@ -61,7 +61,8 @@ export function originOfRow(row: {
 }
 
 // The origin column arrives with migration 340; an instance that has not run
-// it yet must keep writing history. Probed once per table per process.
+// it yet must keep writing history. Probed once per table per TENANT (cloud
+// mode: one tenant may be migrated while another is not), per process.
 const hasOrigin = new Map<string, Promise<boolean>>()
 
 /** `{origin}` for an insert into `table`, or `{}` before migration 340 ran. */
@@ -69,7 +70,9 @@ export async function originFields(
   table: string,
   origin: NoteOrigin
 ): Promise<{ origin?: NoteOrigin }> {
-  let p = hasOrigin.get(table)
+  const { getTenantId } = await import('../db/tenant-context.js')
+  const key = `${getTenantId() ?? ''}\u0000${table}`
+  let p = hasOrigin.get(key)
   if (!p) {
     p = (async () => {
       try {
@@ -79,7 +82,7 @@ export async function originFields(
         return false
       }
     })()
-    hasOrigin.set(table, p)
+    hasOrigin.set(key, p)
   }
   return (await p) ? { origin } : {}
 }

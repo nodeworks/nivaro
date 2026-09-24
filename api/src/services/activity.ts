@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
 // 'pulse' socket room when the server has registered itself here.
@@ -9,20 +10,26 @@ export function setPulseApp(app: FastifyInstance): void {
 }
 
 // The origin column arrives with migration 340; until an instance has run it,
-// writing the key would fail every activity insert. Probe once per process.
-let hasOriginCol: Promise<boolean> | null = null
+// writing the key would fail every activity insert. Probe once per tenant
+// (cloud mode: one tenant may be migrated while another is not) per process.
+const hasOriginCol = new Map<string, Promise<boolean>>()
 async function originColumn(
   origin: string | null | undefined,
   comment: string | undefined
 ): Promise<Record<string, string>> {
-  hasOriginCol ??= (async () => {
-    try {
-      return await db.schema.hasColumn('nivaro_activity', 'origin')
-    } catch {
-      return false
-    }
-  })()
-  if (!(await hasOriginCol)) return {}
+  const tenant = getTenantId() ?? ''
+  let probe = hasOriginCol.get(tenant)
+  if (!probe) {
+    probe = (async () => {
+      try {
+        return await db.schema.hasColumn('nivaro_activity', 'origin')
+      } catch {
+        return false
+      }
+    })()
+    hasOriginCol.set(tenant, probe)
+  }
+  if (!(await probe)) return {}
   const o = origin ?? (/^import:/i.test(String(comment ?? '').trim()) ? 'import' : null)
   return o ? { origin: o } : {}
 }
