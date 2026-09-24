@@ -13,6 +13,7 @@ import {
   resolveAutoIdTokensDetailed,
   validateAutoIdPattern
 } from '../services/auto-ids.js'
+import { chainFields } from '../services/chain-columns.js'
 import {
   CollectionNotFoundError,
   createOne,
@@ -348,6 +349,7 @@ export async function itemsRoutes(app: FastifyInstance) {
           })
 
         await db('nivaro_workflow_history').insert({
+          ...(await chainFields('nivaro_workflow_history')),
           instance: instance.id,
           transition: transition.id,
           from_state: instance.current_state,

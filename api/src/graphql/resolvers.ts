@@ -8,6 +8,7 @@ import {
   GraphQLString
 } from 'graphql'
 import { db } from '../db/index.js'
+import { chainFields } from '../services/chain-columns.js'
 import {
   buildInstancePayload,
   coerceBool,
@@ -704,6 +705,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
               completed_at: resolved && coerceBool(resolved.is_terminal) ? new Date() : null
             })
           await db('nivaro_workflow_history').insert({
+            ...(await chainFields('nivaro_workflow_history')),
             instance: instanceId,
             transition: null,
             from_state: initialState.id,
@@ -803,6 +805,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
           completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
         })
       await db('nivaro_workflow_history').insert({
+        ...(await chainFields('nivaro_workflow_history')),
         instance: instance.id,
         transition: transition.id,
         from_state: previousState,
@@ -886,6 +889,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
               completed_at: resolved && coerceBool(resolved.is_terminal) ? new Date() : null
             })
           await db('nivaro_workflow_history').insert({
+            ...(await chainFields('nivaro_workflow_history')),
             instance: instanceId,
             transition: null,
             from_state: initialState.id,
@@ -985,6 +989,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
           completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
         })
       await db('nivaro_workflow_history').insert({
+        ...(await chainFields('nivaro_workflow_history')),
         instance: instance.id,
         transition: transition.id,
         from_state: previousState,

@@ -24,6 +24,7 @@
  *    fresh `nivaro_erp_submissions` row rather than rewritten in place.
  */
 import { db } from '../db/index.js'
+import { withChainStep } from './chain.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
 import {
   allObligationKinds,
@@ -213,16 +214,19 @@ async function resendSubmission(
     return { detail: 'the original request is not readable' }
   }
 
-  const outcome = await sendPayload(sub.external_api, stored, userId ?? undefined)
-
-  await applySendOutcome({
-    submissionId,
-    outcome,
-    priorExternalRef: sub.external_ref,
-    priorAttempts: sub.attempts,
-    // A person's "Send now" is a resend; the retry ladder has nobody behind it.
-    requestedBy: userId,
-    requestedVia: userId ? 'resend' : 'cron'
+  // The resend's call log + attempt row nest under the submission it re-sends.
+  const outcome = await withChainStep(`submission:${submissionId}`, async () => {
+    const sent = await sendPayload(sub.external_api, stored, userId ?? undefined)
+    await applySendOutcome({
+      submissionId,
+      outcome: sent,
+      priorExternalRef: sub.external_ref,
+      priorAttempts: sub.attempts,
+      // A person's "Send now" is a resend; the retry ladder has nobody behind it.
+      requestedBy: userId,
+      requestedVia: userId ? 'resend' : 'cron'
+    })
+    return sent
   })
   await propagateSubmissionStatus({
     submissionId,
@@ -320,15 +324,17 @@ async function refireFromPrior(
   const { sendPayload } = await import('../routes/erp-submissions.js')
   const { applySendOutcome, propagateSubmissionStatus } = await import('./erp-submission-status.js')
 
-  const outcome = await sendPayload(prior.external_api, stored, userId ?? undefined)
-
-  await applySendOutcome({
-    submissionId: newId,
-    outcome,
-    priorExternalRef: null,
-    priorAttempts: 0,
-    requestedBy: userId,
-    requestedVia: userId ? 'resend' : 'cron'
+  const outcome = await withChainStep(`submission:${newId}`, async () => {
+    const sent = await sendPayload(prior.external_api, stored, userId ?? undefined)
+    await applySendOutcome({
+      submissionId: newId,
+      outcome: sent,
+      priorExternalRef: null,
+      priorAttempts: 0,
+      requestedBy: userId,
+      requestedVia: userId ? 'resend' : 'cron'
+    })
+    return sent
   })
   // resolveObligation (inside propagateSubmissionStatus) is what points the
   // re-firing obligation's own submission_id at the NEW row — the prior

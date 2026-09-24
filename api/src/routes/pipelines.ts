@@ -7,6 +7,7 @@ import { logActivity } from '../services/activity.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
 import { withChainStep } from '../services/chain.js'
+import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { originFields } from '../services/note-authorship.js'
@@ -685,6 +686,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           started_at: new Date()
         })
         await db('nivaro_workflow_history').insert({
+          ...(await chainFields('nivaro_workflow_history')),
           instance: instId,
           from_state: null,
           to_state: initial.id,
@@ -847,6 +849,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           .where({ id: inst.id })
           .update({ current_state: target.id })
         await db('nivaro_workflow_history').insert({
+          ...(await chainFields('nivaro_workflow_history')),
           instance: inst.id,
           from_state: b.from_state,
           to_state: target.id,
@@ -2103,6 +2106,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
             completed_at: resolvedState && coerceBool(resolvedState.is_terminal) ? new Date() : null
           })
         await db('nivaro_workflow_history').insert({
+          ...(await chainFields('nivaro_workflow_history')),
           instance: instanceId,
           transition: null,
           from_state: initialState.id,

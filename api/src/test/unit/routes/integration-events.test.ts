@@ -24,8 +24,14 @@ vi.mock('../../../services/workflow-transitions.js', () => ({
   })
 }))
 
+vi.mock('../../../services/chain-roots.js', () => ({
+  chainIdsForRoots: vi.fn(async () => new Map()),
+  recordReplayRoot: vi.fn(async () => undefined)
+}))
+
 import { relatedNoteRegistry } from '../../../extensions/related-notes.js'
 import { integrationEventsRoutes } from '../../../routes/integration-events.js'
+import { chainIdsForRoots, recordReplayRoot } from '../../../services/chain-roots.js'
 import { resolveFriendlyIds } from '../../../services/workflow-transitions.js'
 
 type Row = Parameters<NonNullable<Parameters<typeof relatedNoteRegistry.register>[0]['list']>>[0]
@@ -63,6 +69,7 @@ afterEach(() => {
   vi.clearAllMocks()
   relatedNoteRegistry.unregister('test:a')
   relatedNoteRegistry.unregister('test:b')
+  relatedNoteRegistry.unregister('efp-ops:mdsi')
 })
 
 describe('GET /integration-events', () => {
@@ -113,6 +120,60 @@ describe('GET /integration-events', () => {
     })
     const ids = (res.json().data.entries as Array<{ id: number }>).map((e) => e.id)
     expect(ids).toEqual([3, 4])
+    await app.close()
+  })
+})
+
+describe('POST /integration-events/:provider/replay', () => {
+  it('records the replay as a chain root pointing at the original chain', async () => {
+    const replay = vi.fn(async () => ({ detail: 'replayed' }))
+    relatedNoteRegistry.register({
+      id: 'efp-ops:mdsi',
+      collection: 'orders',
+      label: 'MDSi',
+      load: async () => [],
+      replay
+    })
+    vi.mocked(chainIdsForRoots).mockResolvedValue(new Map([['145266', 'orig-chain']]))
+    const app = buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/integration-events/efp-ops:mdsi/replay',
+      payload: { entry_id: '145266' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(vi.mocked(chainIdsForRoots)).toHaveBeenCalledWith('efp-ops:mdsi', ['145266'])
+    expect(recordReplayRoot).toHaveBeenCalledWith({
+      source: 'efp-ops:mdsi',
+      ref: 'replay:145266',
+      replayOf: 'orig-chain'
+    })
+    expect(vi.mocked(recordReplayRoot).mock.invocationCallOrder[0]).toBeLessThan(
+      replay.mock.invocationCallOrder[0]
+    )
+    await app.close()
+  })
+
+  it('records a replay with no known original chain as replayOf null', async () => {
+    relatedNoteRegistry.register({
+      id: 'efp-ops:mdsi',
+      collection: 'orders',
+      label: 'MDSi',
+      load: async () => [],
+      replay: async () => ({ detail: 'ok' })
+    })
+    const app = buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/integration-events/efp-ops:mdsi/replay',
+      payload: { entry_id: 7 }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(recordReplayRoot).toHaveBeenCalledWith({
+      source: 'efp-ops:mdsi',
+      ref: 'replay:7',
+      replayOf: null
+    })
     await app.close()
   })
 })

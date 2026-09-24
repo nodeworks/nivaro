@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { syncStateField } from '../services/workflow-transitions.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { chainFields } from '../services/chain-columns.js'
 import { can } from '../services/permissions.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 
@@ -214,6 +215,7 @@ async function checkJoin(childInstanceId: string, userId: string | null) {
         completed_at: coerceBool(joinState.is_terminal) ? now : null
       })
     await db('nivaro_workflow_history').insert({
+      ...(await chainFields('nivaro_workflow_history')),
       instance: parentId,
       transition: null,
       from_state: parent.current_state,
@@ -407,6 +409,7 @@ export async function workflowsRoutes(app: FastifyInstance) {
         completed_at: coerceBool(state.is_terminal) ? now : null
       })
       await db('nivaro_workflow_history').insert({
+        ...(await chainFields('nivaro_workflow_history')),
         instance: childId,
         transition: null,
         from_state: null,
@@ -419,6 +422,7 @@ export async function workflowsRoutes(app: FastifyInstance) {
 
     // Record the split on the parent (children + join target encoded in comment JSON).
     await db('nivaro_workflow_history').insert({
+      ...(await chainFields('nivaro_workflow_history')),
       instance: id,
       transition: null,
       from_state: instance.current_state,
@@ -610,6 +614,7 @@ export async function workflowsRoutes(app: FastifyInstance) {
         completed_at: isTerminal ? now : null
       })
     await db('nivaro_workflow_history').insert({
+      ...(await chainFields('nivaro_workflow_history')),
       instance: id,
       transition: transition.id,
       from_state: instance.current_state,

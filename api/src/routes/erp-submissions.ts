@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { withChainStep } from '../services/chain.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
@@ -554,19 +555,23 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Submission has no stored payload to retry' })
       }
 
-      const outcome = await sendPayload(row.external_api, stored, req.user?.id)
+      // A retry's call log and attempt row hang under the submission it retries.
+      const outcome = await withChainStep(`submission:${row.id}`, async () => {
+        const sent = await sendPayload(row.external_api, stored, req.user?.id)
 
-      // One function for the row update (#628: writes error_class too) so
-      // this route can never drift from the bulk sweep or Task 19's own
-      // send paths about which columns a retry touches.
-      const { applySendOutcome } = await import('../services/erp-submission-status.js')
-      await applySendOutcome({
-        submissionId: id,
-        outcome,
-        priorExternalRef: row.external_ref,
-        priorAttempts: row.attempts,
-        requestedBy: req.user?.id ?? null,
-        requestedVia: 'retry'
+        // One function for the row update (#628: writes error_class too) so
+        // this route can never drift from the bulk sweep or Task 19's own
+        // send paths about which columns a retry touches.
+        const { applySendOutcome } = await import('../services/erp-submission-status.js')
+        await applySendOutcome({
+          submissionId: id,
+          outcome: sent,
+          priorExternalRef: row.external_ref,
+          priorAttempts: row.attempts,
+          requestedBy: req.user?.id ?? null,
+          requestedVia: 'retry'
+        })
+        return sent
       })
       await propagateSubmissionStatus({
         submissionId: id,
@@ -625,18 +630,21 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           continue
         }
         try {
-          const outcome = await sendPayload(row.external_api, stored, req.user?.id)
-          // Same shared function every other writer uses now (#628: writes
-          // error_class too), so a bulk-retried failure is no longer
-          // invisible to runRetryPass just for having gone through this route.
-          const { applySendOutcome } = await import('../services/erp-submission-status.js')
-          await applySendOutcome({
-            submissionId: id,
-            outcome,
-            priorExternalRef: row.external_ref,
-            priorAttempts: row.attempts,
-            requestedBy: req.user?.id ?? null,
-            requestedVia: 'retry'
+          const outcome = await withChainStep(`submission:${row.id}`, async () => {
+            const sent = await sendPayload(row.external_api, stored, req.user?.id)
+            // Same shared function every other writer uses now (#628: writes
+            // error_class too), so a bulk-retried failure is no longer
+            // invisible to runRetryPass just for having gone through this route.
+            const { applySendOutcome } = await import('../services/erp-submission-status.js')
+            await applySendOutcome({
+              submissionId: id,
+              outcome: sent,
+              priorExternalRef: row.external_ref,
+              priorAttempts: row.attempts,
+              requestedBy: req.user?.id ?? null,
+              requestedVia: 'retry'
+            })
+            return sent
           })
           // A fourth writer of `status`, alongside /retry, the PATCH override
           // and the automatic sweep — moves the obligation the same way they
@@ -783,28 +791,34 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
     const stored = parseJson<StoredPayload>(row.payload)
     if (!stored?.endpoint_path) continue
     attempted++
-    const outcome = await sendPayload(row.external_api, stored, undefined)
-    const ok = outcome.status !== 'failed'
-    if (ok) landed++
-    // ONE write to the row: the shared columns (#628: incl. error_class) plus
-    // this sweep's own backoff bookkeeping (retry_count/next_retry_at, which
-    // applySendOutcome knows nothing about) merged into the same .update().
-    const { applySendOutcome } = await import('../services/erp-submission-status.js')
-    await applySendOutcome({
-      submissionId: row.id,
-      outcome,
-      priorExternalRef: row.external_ref,
-      priorAttempts: row.attempts,
-      requestedBy: null,
-      requestedVia: 'cron',
-      extra: {
-        retry_count: retries + 1,
-        // Exponential-ish backoff: base * 2^retries, capped at a day.
-        next_retry_at: ok
-          ? null
-          : new Date(now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000)
-      }
+    // Each retry's call log + attempt row nest under the submission it retries.
+    const outcome = await withChainStep(`submission:${row.id}`, async () => {
+      const sent = await sendPayload(row.external_api, stored, undefined)
+      const ok = sent.status !== 'failed'
+      // ONE write to the row: the shared columns (#628: incl. error_class) plus
+      // this sweep's own backoff bookkeeping (retry_count/next_retry_at, which
+      // applySendOutcome knows nothing about) merged into the same .update().
+      const { applySendOutcome } = await import('../services/erp-submission-status.js')
+      await applySendOutcome({
+        submissionId: row.id,
+        outcome: sent,
+        priorExternalRef: row.external_ref,
+        priorAttempts: row.attempts,
+        requestedBy: null,
+        requestedVia: 'cron',
+        extra: {
+          retry_count: retries + 1,
+          // Exponential-ish backoff: base * 2^retries, capped at a day.
+          next_retry_at: ok
+            ? null
+            : new Date(
+                now.getTime() + Math.min(1440, policy.backoff_minutes * 2 ** retries) * 60_000
+              )
+        }
+      })
+      return sent
     })
+    if (outcome.status !== 'failed') landed++
     await propagateSubmissionStatus({
       submissionId: row.id,
       status: outcome.status,

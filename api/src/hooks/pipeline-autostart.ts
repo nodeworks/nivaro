@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
+import { chainFields } from '../services/chain-columns.js'
 import { hooks } from './registry.js'
 
 function coerceBool(val: unknown): boolean {
@@ -53,6 +54,7 @@ export function registerPipelineAutostartHooks() {
       })
 
       await db('nivaro_workflow_history').insert({
+        ...(await chainFields('nivaro_workflow_history')),
         instance: instanceId,
         transition: null,
         from_state: null,

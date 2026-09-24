@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { chainIdsForRoots, recordReplayRoot } from '../services/chain-roots.js'
 import { can } from '../services/permissions.js'
 import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 
@@ -77,8 +78,17 @@ export async function integrationEventsRoutes(app: FastifyInstance) {
     if (!req.isAdmin && !(await can(req.user!, 'update', provider.collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    const entryId = String(body.entry_id)
+    // The replay runs on this request's chain; mark it as a replay of the
+    // chain the original event started (null when that one predates chains).
+    const original = (await chainIdsForRoots(provider.id, [entryId])).get(entryId)
+    await recordReplayRoot({
+      source: provider.id,
+      ref: `replay:${entryId}`,
+      replayOf: original ?? null
+    })
     try {
-      const result = await provider.replay(String(body.entry_id), { userId: req.user?.id ?? null })
+      const result = await provider.replay(entryId, { userId: req.user?.id ?? null })
       await logActivity({
         action: 'integration-event-replay',
         user: req.user?.id,

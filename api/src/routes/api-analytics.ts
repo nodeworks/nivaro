@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { recordReplayRoot } from '../services/chain-roots.js'
 
 const LATENCY_SAMPLE_CAP = 50000
 
@@ -329,6 +330,14 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         'content-type': 'application/json',
         'x-nivaro-replay-of': String(row.id)
       }
+      // The injected request adopts this route's chain, so the replayed
+      // writes land under it; point it at the original request's chain.
+      // `.first()` reads every column, so chain_id is present once 351 ran.
+      await recordReplayRoot({
+        source: 'core:inbound',
+        ref: `replay:${row.id}`,
+        replayOf: (row as { chain_id?: string | null }).chain_id ?? null
+      })
       const auth = req.headers.authorization
       if (typeof auth === 'string') headers.authorization = auth
       const cookie = req.headers.cookie

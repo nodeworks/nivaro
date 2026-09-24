@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { withChainStep } from './chain.js'
+import { chainFields } from './chain-columns.js'
 import { parseJson } from './pipeline-engine.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { TransitionBlockedError } from './workflow-actions.js'
@@ -109,6 +110,7 @@ export async function startWorkflowInstance(opts: {
           completed_at: resolvedState && coerceBool(resolvedState.is_terminal) ? new Date() : null
         })
       await db('nivaro_workflow_history').insert({
+        ...(await chainFields('nivaro_workflow_history')),
         instance: instanceId,
         transition: null,
         from_state: initialState.id,
