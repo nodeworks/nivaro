@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import { db } from '../db/index.js'
+import { hasChainColumns } from '../services/chain-columns.js'
 
 interface ApiLogRow {
   method: string
@@ -16,6 +17,8 @@ interface ApiLogRow {
   error: string | null
   request_body: string | null
   created_at: Date
+  /** The request's integration chain (plugins/chain.ts) — the chain ROOT row. */
+  chain_id?: string | null
 }
 
 // #67 — keep the JSON body of an inbound INTEGRATION write (token / api-key
@@ -105,9 +108,13 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     const rows = buffer
     buffer = []
     try {
+      // A tenant that has not run migration 351 has no chain_id column —
+      // drop the field rather than fail the whole flush.
+      const stamp = await hasChainColumns('nivaro_api_logs')
+      const shaped = stamp ? rows : rows.map(({ chain_id: _c, ...rest }) => rest)
       // Insert in modest chunks to stay under MSSQL parameter limits
-      for (let i = 0; i < rows.length; i += 50) {
-        await db('nivaro_api_logs').insert(rows.slice(i, i + 50))
+      for (let i = 0; i < shaped.length; i += 50) {
+        await db('nivaro_api_logs').insert(shaped.slice(i, i + 50))
       }
       if (Math.random() < CLEANUP_PROBABILITY) {
         const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000)
@@ -201,7 +208,8 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
           headers: Record<string, unknown>
         }
       ),
-      created_at: new Date()
+      created_at: new Date(),
+      chain_id: req.chainId ?? null
     })
 
     // Live traffic view (#276): stream to admin watchers only when someone is

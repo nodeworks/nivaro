@@ -14,6 +14,7 @@ import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
+import { chainPlugin } from './plugins/chain.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
 import { inngestPlugin } from './plugins/inngest.js'
@@ -148,6 +149,9 @@ export async function buildServer() {
   // ─── Rate limiting + API analytics logging ────────────────────────────────
   // Tracing goes first so its onRequest hook opens the phase context before
   // anything downstream can want to record a span into it.
+  // Integration event chain per request (or adopted from an in-process
+  // app.inject caller) — the API log row and every write it causes carry it.
+  await app.register(chainPlugin)
   await app.register(requestTracePlugin)
   await app.register(rateLimitPlugin)
   await app.register(apiLoggerPlugin)

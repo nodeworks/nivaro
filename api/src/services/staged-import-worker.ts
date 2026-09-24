@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
 import { notifyUser } from './notification-channels.js'
 import type { ImportDefinition } from './staged-imports.js'
@@ -191,20 +192,30 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
       buffer = await readFileBuffer(stored)
     }
 
-    const { rowCount, durationSeconds, summary } = await runStagedImport({
-      definition,
-      buffer,
-      createdBy: next.created_by ? String(next.created_by) : null,
-      runId: Number(next.id),
-      onProgress: async (stage, data) => {
-        if (stage === 'row_count') {
-          await db('nivaro_import_queue')
-            .where('id', next.id)
-            .update({ row_count: Number(data?.row_count ?? 0) })
-        }
-        app.io?.emit('import:progress', { id: next.id, stage, ...data })
-      }
-    })
+    // One integration event chain per run: the load, and the post-run flows
+    // it fans out to (PO completion sweep, partner pushes), share it.
+    const fileBuffer = buffer
+    const chainId = newChainId()
+    const chainRoot = `import_run:${next.id}`
+    const { rowCount, durationSeconds, summary } = await startChain(
+      chainRoot,
+      () =>
+        runStagedImport({
+          definition,
+          buffer: fileBuffer,
+          createdBy: next.created_by ? String(next.created_by) : null,
+          runId: Number(next.id),
+          onProgress: async (stage, data) => {
+            if (stage === 'row_count') {
+              await db('nivaro_import_queue')
+                .where('id', next.id)
+                .update({ row_count: Number(data?.row_count ?? 0) })
+            }
+            app.io?.emit('import:progress', { id: next.id, stage, ...data })
+          }
+        }),
+      chainId
+    )
 
     await db('nivaro_import_queue')
       .where('id', next.id)
@@ -224,16 +235,21 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
       summary ? summary.split('\n')[0] : `Imported ${rowCount} rows.`
     )
     app.io?.emit('import:progress', { id: next.id, stage: 'completed', row_count: rowCount })
-    afterImportCompleted(app, definition, {
-      run_id: String(next.id),
-      import_key: String(next.import_key),
-      definition_label: definition.label ?? null,
-      staging_table: definition.staging_table ?? null,
-      procedure: definition.procedure ?? null,
-      row_count: rowCount,
-      duration_seconds: durationSeconds,
-      created_by: next.created_by ? String(next.created_by) : null
-    })
+    startChain(
+      chainRoot,
+      () =>
+        afterImportCompleted(app, definition, {
+          run_id: String(next.id),
+          import_key: String(next.import_key),
+          definition_label: definition.label ?? null,
+          staging_table: definition.staging_table ?? null,
+          procedure: definition.procedure ?? null,
+          row_count: rowCount,
+          duration_seconds: durationSeconds,
+          created_by: next.created_by ? String(next.created_by) : null
+        }),
+      chainId
+    )
   } catch (err) {
     // Defence in depth: the share loader sanitises its own failures, but ANY
     // thrower here reaches a persisted log and a user-facing notification.

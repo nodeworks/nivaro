@@ -1,6 +1,7 @@
 import { Cron } from 'croner'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
+import { startChain } from '../services/chain.js'
 import { startJobRun } from '../services/job-runs.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -328,7 +329,8 @@ export class CronManager {
             )
           }, budget)
           try {
-            await fn()
+            // Every tick is its own integration event chain.
+            await startChain(`cron:${id}`, () => fn())
             await run.complete()
             this.triggerChained(id)
           } catch (err) {
@@ -386,7 +388,10 @@ export class CronManager {
       triggeredBy: triggeredBy ?? null
     })
     try {
-      await entry.fn()
+      // A NEW chain even when run-now comes from an HTTP request: the job's
+      // writes are the cron's, not the admin click's (the click is recorded
+      // on nivaro_job_runs.triggered_by).
+      await startChain(`cron:${id}`, () => entry.fn())
       await run.complete()
       this.triggerChained(id)
     } catch (err) {
