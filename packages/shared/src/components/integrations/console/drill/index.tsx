@@ -4,10 +4,16 @@ import { SubmissionDrill } from './SubmissionDrill'
 
 export { AttemptHistory } from './attempts'
 export { ImportRunDrill } from './ImportRunDrill'
-export { CodeBlock, pretty } from './json'
+export { CodeBlock, HeaderTable, isTruncatedBody, pretty } from './json'
 export { RequesterChip } from './requester'
 export { SubmissionDrill, type SubmissionDrillProps } from './SubmissionDrill'
-export { StatusPill } from './status'
+export { HttpStatusChip, StatusPill } from './status'
+export {
+  type CallTriggerInfo,
+  type CallTriggerUser,
+  describeCallTrigger,
+  TriggerChip
+} from './trigger'
 
 /** The drill kinds this console knows how to open. */
 export const DRILL_KINDS = new Set(['submission', 'import_run'])

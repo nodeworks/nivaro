@@ -105,8 +105,24 @@ export interface PartnersSummary {
   not_healthy: number
 }
 
+/** One user recorded on a call — via nivaro_users, batch-resolved server-side. */
+export interface PartnerCallUser {
+  id: string
+  name: string
+  email: string | null
+}
+
+/**
+ * One row of Partner detail's Recent calls list (GET /integration-partners/:id).
+ * `source: 'log'` carries a real body to open (GET .../calls/:callId);
+ * `'outbound'` is the always-on counter row for a call that never landed one
+ * (before Task 15's extension-call fix, or any caller still passing no
+ * `_log`) — it opens to "nothing recorded", never a fetch.
+ */
 export interface PartnerCall {
+  key: string
   id: number
+  source: 'log' | 'outbound'
   created_at: string
   method: string | null
   path: string | null
@@ -114,6 +130,28 @@ export interface PartnerCall {
   ok: boolean | number
   duration_ms: number | null
   error: string | null
+  triggered_by: string | null
+  has_body: boolean
+  user: PartnerCallUser | null
+}
+
+/** GET /integration-partners/:id/calls/:callId — one call's full request and
+ *  response. Headers are re-masked on the way out regardless of what the row
+ *  stores. */
+export interface PartnerCallDetail {
+  id: number
+  created_at: string
+  method: string | null
+  url: string | null
+  request_headers: Record<string, string> | null
+  request_body: string | null
+  response_status: number | null
+  response_headers: Record<string, string> | null
+  response_body: string | null
+  duration_ms: number | null
+  error: string | null
+  triggered_by: string | null
+  user: PartnerCallUser | null
 }
 
 export interface PartnerContract {

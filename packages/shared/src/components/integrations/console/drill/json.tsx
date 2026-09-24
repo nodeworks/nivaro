@@ -22,6 +22,19 @@ export function pretty(v: unknown): string | null {
 /** Past this many lines a block starts folded — the rest is one click away. */
 export const FOLD_LINES = 40
 
+/** The exact suffix `services/external-apis.ts` appends when a stored body
+ *  hit the log's size cap — detecting it here (rather than a byte-length
+ *  guess) is exact regardless of what the size cap is set to. */
+const TRUNCATION_SUFFIX = '… [truncated]'
+
+/** Whether a stored body was cut short at the log's size cap. Checked on the
+ *  RAW value, before `pretty()` — a truncated JSON body is no longer valid
+ *  JSON, so `pretty()` already falls back to showing it as-is with the
+ *  marker visible; this drives the separate note. */
+export function isTruncatedBody(raw: string | null | undefined): boolean {
+  return typeof raw === 'string' && raw.endsWith(TRUNCATION_SUFFIX)
+}
+
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)
   return (
@@ -55,12 +68,16 @@ export function CodeBlock({
   label,
   value,
   fold = false,
-  className
+  className,
+  truncated = false
 }: {
   label: string
   value: string | null
   fold?: boolean
   className?: string
+  /** The stored copy was cut short at the log's size cap — the value shown
+   *  is real but partial. `isTruncatedBody(rawValue)` computes this. */
+  truncated?: boolean
 }) {
   const lines = value ? value.split('\n').length : 0
   const foldable = fold && lines > FOLD_LINES
@@ -106,9 +123,53 @@ export function CodeBlock({
               {open ? 'Show less' : `Show all ${lines} lines`}
             </button>
           )}
+          {truncated && (
+            <p className='mt-1 text-[11px] italic text-muted-foreground' data-ic-truncated={label}>
+              Truncated — only the first part of this body was kept.
+            </p>
+          )}
         </>
       ) : (
         <p className='text-[11.5px] italic text-muted-foreground'>Nothing stored</p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A request/response header set as a two-column key/value table — mono
+ * throughout (every value here is a machine one), the key column tinted so
+ * scanning a long list stays easy. `null`/empty reads as "None recorded",
+ * never a blank table.
+ */
+export function HeaderTable({
+  headers,
+  label = 'Headers'
+}: {
+  headers: Record<string, string> | null
+  label?: string
+}) {
+  const entries = headers ? Object.entries(headers) : []
+  return (
+    <div className='min-w-0' data-ic-headers={label}>
+      <p className='mb-1 text-[11.5px] font-semibold text-muted-foreground'>{label}</p>
+      {entries.length === 0 ? (
+        <p className='text-[11.5px] italic text-muted-foreground'>None recorded</p>
+      ) : (
+        <div className='overflow-hidden rounded-md border border-border'>
+          <table className='w-full text-[11px]'>
+            <tbody className='divide-y divide-border'>
+              {entries.map(([k, v]) => (
+                <tr key={k}>
+                  <td className='w-1/3 whitespace-nowrap bg-muted/40 px-2 py-1 align-top font-mono font-medium text-foreground'>
+                    {k}
+                  </td>
+                  <td className='break-all px-2 py-1 font-mono text-muted-foreground'>{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

@@ -165,7 +165,11 @@ const SENSITIVE_HEADER_NAMES = new Set([
   'proxy-authorization'
 ])
 
-function maskHeaders(headers: Record<string, string>): Record<string, string> {
+/** Exported so a reader (the integration-partners call detail route) can
+ *  re-mask on the way out — a defence against any row written before a
+ *  masking fix landed, or by a caller that hands a header object straight
+ *  through without going via `writeApiCallLog`. */
+export function maskHeaders(headers: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(headers)) {
     const lk = k.toLowerCase()
@@ -228,7 +232,12 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
         : null,
       request_body: truncate(entry.request_body),
       response_status: entry.response_status ?? null,
-      response_headers: entry.response_headers ? JSON.stringify(entry.response_headers) : null,
+      // The partner's own response can carry a session cookie or an echoed
+      // auth header — mask it exactly like the request side, not just the
+      // credentials WE sent.
+      response_headers: entry.response_headers
+        ? JSON.stringify(maskHeaders(entry.response_headers))
+        : null,
       response_body: truncate(entry.response_body),
       duration_ms: entry.duration_ms ?? null,
       error: entry.error ?? null,

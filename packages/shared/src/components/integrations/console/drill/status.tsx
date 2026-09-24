@@ -1,4 +1,5 @@
 import { cn } from '../../../../lib/utils'
+import { TONE_SOFT, TONE_TEXT } from '../tone'
 
 const STATUS_TONE: Record<string, string> = {
   accepted: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400',
@@ -18,6 +19,24 @@ export function StatusPill({ status }: { status: string }) {
       )}
     >
       {status}
+    </span>
+  )
+}
+
+/** An HTTP status from a Recent-calls row — 2xx reads positive, anything
+ *  else (including no response at all) negative. Distinct from `StatusPill`,
+ *  whose tones are submission LIFECYCLE words, not response codes. */
+export function HttpStatusChip({ status, ok }: { status: number | null; ok: boolean }) {
+  const tone = ok ? 'positive' : 'negative'
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums',
+        TONE_SOFT[tone],
+        TONE_TEXT[tone]
+      )}
+    >
+      {status ?? 'No response'}
     </span>
   )
 }

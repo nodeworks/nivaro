@@ -1,16 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Play, Search } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ChevronDown, Loader2, Play, Search } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get, post } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../../ui/sheet'
 import { IntegrationObligationsView } from '../IntegrationObligationsView'
-import { usePartner } from './api'
+import { useCallDetail, usePartner } from './api'
+import {
+  CodeBlock,
+  describeCallTrigger,
+  HeaderTable,
+  HttpStatusChip,
+  isTruncatedBody,
+  pretty,
+  TriggerChip
+} from './drill'
 import { fmtMs, fmtPct, HealthPill, HourlyBars, PartnerFlags } from './PartnerBits'
 import { type ErpSubmission, SubmissionRow } from './SubmissionRow'
 import { agoText, exactTime, TONE_SOFT, TONE_TEXT } from './tone'
 import type { PartnerCall, PartnerDetailData } from './types'
+
+function httpOk(status: number | null): boolean {
+  return status != null && status >= 200 && status < 300
+}
 
 type DetailTab = 'calls' | 'submissions' | 'obligations' | 'contracts'
 
@@ -32,12 +45,27 @@ export function PartnerDetail({ apiId, onClose, initialTab = 'calls' }: PartnerD
   const [tab, setTab] = useState<DetailTab>(initialTab)
   const card = data?.card
 
+  // A call row's own Escape closes JUST that row (see CallRow) — but Radix's
+  // Escape-to-dismiss runs in a CAPTURE-phase document listener, ahead of any
+  // bubble-phase handler a nested row could ever install, so stopPropagation
+  // down there can't defeat it. This is the sheet's half of that same fix:
+  // while any row is expanded, swallow the dismiss via the one escape hatch
+  // Radix's own dismissable layer checks (`event.preventDefault()` inside
+  // `onEscapeKeyDown`) — the row's handler still runs afterward and collapses.
+  const openCallCount = useRef(0)
+  const onCallOpenChange = (open: boolean) => {
+    openCallCount.current += open ? 1 : -1
+  }
+
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         className='flex flex-col gap-0 overflow-hidden p-0'
         style={{ width: 1040, maxWidth: '94vw' }}
         data-ic-partner-detail={apiId}
+        onEscapeKeyDown={(e) => {
+          if (openCallCount.current > 0) e.preventDefault()
+        }}
       >
         <div className='shrink-0 border-b border-border px-6 pb-0 pt-5'>
           {isLoading || !card ? (
@@ -90,7 +118,9 @@ export function PartnerDetail({ apiId, onClose, initialTab = 'calls' }: PartnerD
           )}
         </div>
         <div className='min-h-0 flex-1 overflow-y-auto bg-muted/30 px-6 py-5'>
-          {data && tab === 'calls' && <CallsTab calls={data.calls} />}
+          {data && tab === 'calls' && (
+            <CallsTab apiId={apiId} calls={data.calls} onCallOpenChange={onCallOpenChange} />
+          )}
           {data && tab === 'submissions' && <SubmissionsTab apiId={apiId} />}
           {data && tab === 'obligations' && <IntegrationObligationsView api={data.card.name} />}
           {data && tab === 'contracts' && <ContractsTab apiId={apiId} data={data} />}
@@ -100,7 +130,15 @@ export function PartnerDetail({ apiId, onClose, initialTab = 'calls' }: PartnerD
   )
 }
 
-function CallsTab({ calls }: { calls: PartnerCall[] }) {
+function CallsTab({
+  apiId,
+  calls,
+  onCallOpenChange
+}: {
+  apiId: number
+  calls: PartnerCall[]
+  onCallOpenChange: (open: boolean) => void
+}) {
   const [failuresOnly, setFailuresOnly] = useState(false)
   const failures = calls.filter((c) => !c.ok).length
   const rows = failuresOnly ? calls.filter((c) => !c.ok) : calls
@@ -129,49 +167,218 @@ function CallsTab({ calls }: { calls: PartnerCall[] }) {
             : 'No calls recorded in the last 14 days.'}
         </p>
       ) : (
-        <div className='overflow-hidden rounded-lg border border-border bg-card'>
-          <table className='w-full text-[12px]' data-ic-calls>
-            <thead>
-              <tr className='border-b border-border text-left text-[11px] font-medium text-muted-foreground'>
-                <th className='px-3 py-2 font-medium'>When</th>
-                <th className='px-3 py-2 font-medium'>Request</th>
-                <th className='px-3 py-2 text-right font-medium'>Status</th>
-                <th className='px-3 py-2 text-right font-medium'>Took</th>
-                <th className='px-3 py-2 font-medium'>Error</th>
-              </tr>
-            </thead>
-            <tbody className='divide-y divide-border'>
-              {rows.map((c) => (
-                <tr key={c.id} data-ic-call={c.ok ? 'ok' : 'failed'}>
-                  <td className='whitespace-nowrap px-3 py-1.5 text-muted-foreground'>
-                    <span data-tip={exactTime(c.created_at)}>{agoText(c.created_at)}</span>
-                  </td>
-                  <td className='max-w-[360px] truncate px-3 py-1.5 font-mono text-[11.5px] text-foreground'>
-                    <span className='text-muted-foreground'>{c.method ?? ''}</span> {c.path ?? '—'}
-                  </td>
-                  <td
-                    className={cn(
-                      'px-3 py-1.5 text-right font-medium tabular-nums',
-                      c.ok ? TONE_TEXT.positive : TONE_TEXT.negative
-                    )}
-                  >
-                    {c.status ?? (c.ok ? 'ok' : 'none')}
-                  </td>
-                  <td className='px-3 py-1.5 text-right tabular-nums text-muted-foreground'>
-                    {fmtMs(c.duration_ms)}
-                  </td>
-                  <td
-                    className={cn('max-w-[320px] truncate px-3 py-1.5', TONE_TEXT.negative)}
-                    data-tip={c.error && c.error.length > 50 ? c.error.slice(0, 900) : undefined}
-                  >
-                    {c.error ?? ''}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul
+          className='divide-y divide-border overflow-hidden rounded-lg border border-border bg-card'
+          data-ic-calls
+        >
+          {rows.map((c) => (
+            <CallRow key={c.key} apiId={apiId} call={c} onOpenChange={onCallOpenChange} />
+          ))}
+        </ul>
       )}
+    </div>
+  )
+}
+
+/**
+ * One call — expands in place to its full request/response (Enter/Space on
+ * the toggle, Esc from anywhere inside collapses and returns focus to it).
+ * An `outbound`-sourced row (the always-on counter with no call-log entry)
+ * says so instead of fetching — there is nothing under this id to open.
+ */
+function CallRow({
+  apiId,
+  call,
+  onOpenChange
+}: {
+  apiId: number
+  call: PartnerCall
+  /** Tells the hosting sheet whether ANY row is expanded, so it can swallow
+   *  Escape at the Radix layer (see PartnerDetail's `onEscapeKeyDown`). */
+  onOpenChange: (open: boolean) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const toggleRef = useRef<HTMLButtonElement>(null)
+  const trigger = describeCallTrigger(call.triggered_by, call.user)
+  const collapse = () => {
+    setOpen(false)
+    toggleRef.current?.focus()
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: onOpenChange only mutates a ref in the parent — depending on it would double-count on every unrelated re-render
+  useEffect(() => {
+    if (!open) return
+    onOpenChange(true)
+    return () => onOpenChange(false)
+  }, [open])
+  return (
+    <li
+      data-ic-call={call.id}
+      data-ic-call-source={call.source}
+      className={cn(open && 'bg-muted/30')}
+    >
+      <button
+        ref={toggleRef}
+        type='button'
+        aria-expanded={open}
+        data-ic-call-toggle={call.id}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && open) {
+            // Focus never leaves the toggle in this case — nothing to
+            // refocus — but stop the sheet hosting this list from ALSO
+            // reacting to the same Escape.
+            e.preventDefault()
+            e.stopPropagation()
+            setOpen(false)
+          }
+        }}
+        className='flex w-full items-center gap-3 px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+      >
+        <span
+          className='w-16 shrink-0 text-[11.5px] text-muted-foreground'
+          data-tip={exactTime(call.created_at)}
+        >
+          {agoText(call.created_at)}
+        </span>
+        <span className='min-w-0 flex-1 truncate font-mono text-[11.5px] text-foreground'>
+          <span className='text-muted-foreground'>{call.method ?? ''}</span> {call.path ?? '—'}
+        </span>
+        <span
+          className={cn(
+            'w-10 shrink-0 text-right text-[11.5px] font-medium tabular-nums',
+            call.ok ? TONE_TEXT.positive : TONE_TEXT.negative
+          )}
+        >
+          {call.status ?? (call.ok ? 'ok' : 'none')}
+        </span>
+        <span className='w-14 shrink-0 text-right text-[11.5px] tabular-nums text-muted-foreground'>
+          {fmtMs(call.duration_ms)}
+        </span>
+        {call.error && (
+          <span
+            className={cn(
+              'min-w-0 max-w-[200px] shrink truncate text-[11.5px]',
+              TONE_TEXT.negative
+            )}
+            data-tip={call.error.length > 50 ? call.error.slice(0, 900) : undefined}
+          >
+            {call.error}
+          </span>
+        )}
+        <span
+          className='min-w-0 max-w-[160px] shrink truncate text-[11px] text-muted-foreground'
+          data-tip={call.user?.email ?? undefined}
+        >
+          {trigger.label}
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform',
+            open && 'rotate-180'
+          )}
+          aria-hidden
+        />
+      </button>
+      {open && (
+        // Esc anywhere inside the open detail (a copy button, a folded
+        // body) collapses it and returns focus to the row's own toggle.
+        // `defaultPrevented` is NOT a "someone already handled this" signal
+        // here — the sheet's own onEscapeKeyDown (above, in PartnerDetail)
+        // sets it on EVERY Escape while a row is open, purely to stop Radix's
+        // capture-phase listener from also closing the whole sheet — so this
+        // handler must act regardless of that flag.
+        <section
+          aria-label={`Call detail — ${call.method ?? ''} ${call.path ?? ''}`.trim()}
+          data-ic-call-open={call.id}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation()
+              collapse()
+            }
+          }}
+          className='border-t border-border px-3 py-3'
+        >
+          {call.source === 'outbound' ? (
+            <p className='text-[12px] italic text-muted-foreground' data-ic-call-empty>
+              No request/response recorded for this call.
+            </p>
+          ) : (
+            <CallDetailBody apiId={apiId} callId={call.id} />
+          )}
+        </section>
+      )}
+    </li>
+  )
+}
+
+function CallDetailBody({ apiId, callId }: { apiId: number; callId: number }) {
+  const { data, isLoading, isError } = useCallDetail(apiId, callId)
+  if (isLoading) {
+    return (
+      <div className='space-y-2'>
+        <div className='h-4 w-40 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]' />
+        <div className='grid gap-3 lg:grid-cols-2'>
+          <div className='h-28 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]' />
+          <div className='h-28 animate-pulse rounded bg-[hsl(var(--nvr-skeleton))]' />
+        </div>
+      </div>
+    )
+  }
+  if (isError || !data) {
+    return <p className={cn('text-[12.5px]', TONE_TEXT.negative)}>Couldn't load this call.</p>
+  }
+  return (
+    <div className='space-y-3'>
+      <div className='flex flex-wrap items-center gap-2' data-ic-call-section='trigger'>
+        <span className='text-[11.5px] font-semibold text-muted-foreground'>Triggered by</span>
+        <TriggerChip triggeredBy={data.triggered_by} user={data.user} />
+      </div>
+      <div className='grid gap-3 lg:grid-cols-2'>
+        <div className='min-w-0 space-y-2' data-ic-call-section='request'>
+          <p className='text-[11.5px] font-semibold text-muted-foreground'>Request</p>
+          <p
+            className='truncate font-mono text-[11.5px] text-foreground'
+            data-tip={data.url ?? undefined}
+          >
+            <span className='font-semibold text-muted-foreground'>{data.method ?? '—'}</span>{' '}
+            {data.url ?? '—'}
+          </p>
+          <HeaderTable headers={data.request_headers} />
+          <CodeBlock
+            label='Body'
+            value={pretty(data.request_body)}
+            fold
+            truncated={isTruncatedBody(data.request_body)}
+          />
+        </div>
+        <div className='min-w-0 space-y-2' data-ic-call-section='response'>
+          <p className='text-[11.5px] font-semibold text-muted-foreground'>Response</p>
+          <div className='flex items-center gap-2'>
+            <HttpStatusChip status={data.response_status} ok={httpOk(data.response_status)} />
+            <span className='text-[11.5px] tabular-nums text-muted-foreground'>
+              {fmtMs(data.duration_ms)}
+            </span>
+          </div>
+          {data.error && (
+            <p
+              className={cn(
+                'rounded px-2 py-1.5 text-[11.5px]',
+                TONE_SOFT.negative,
+                TONE_TEXT.negative
+              )}
+            >
+              {data.error}
+            </p>
+          )}
+          <HeaderTable headers={data.response_headers} />
+          <CodeBlock
+            label='Body'
+            value={pretty(data.response_body)}
+            fold
+            truncated={isTruncatedBody(data.response_body)}
+          />
+        </div>
+      </div>
     </div>
   )
 }

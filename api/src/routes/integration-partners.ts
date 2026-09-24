@@ -11,8 +11,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { selectInChunks } from '../services/db-batch.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
-import { mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
+import { maskHeaders, mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
 import { isAuthFailure } from '../services/integration-signals-core.js'
 
 export function percentile(sorted: number[], p: number): number | null {
@@ -54,6 +55,229 @@ export function hourBuckets(
     else out[i].failed++
   }
   return out
+}
+
+// ─── Recent calls (Task 15e) ────────────────────────────────────────────────
+// A call's bodies live in `nivaro_external_api_logs` — written only when the
+// caller passes `_log` (every core call site does; extension calls only
+// since 523205cf). `nivaro_outbound_log` is the counter row written for
+// EVERY call regardless, so a call from before that fix — or from any caller
+// that still passes no `_log` — has an outbound row and no call-log row. It
+// still belongs in the list, just with nothing to open (`source: 'outbound'`,
+// no trigger, no body).
+
+export interface CallLogListRow {
+  id: number
+  created_at: Date | string
+  method: string
+  url: string
+  response_status: number | null
+  duration_ms: number | null
+  error: string | null
+  triggered_by: string | null
+  user_id: string | null
+  has_body: boolean | number
+}
+
+export interface OutboundListRow {
+  id: number
+  created_at: Date | string
+  method: string
+  path: string | null
+  status: number | null
+  ok: boolean | number
+  duration_ms: number | null
+  error: string | null
+}
+
+export interface CallListUserRow {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+}
+
+export interface PartnerCallListItem {
+  /** Stable React key — `id` alone can collide across the two source tables. */
+  key: string
+  id: number
+  source: 'log' | 'outbound'
+  created_at: string
+  method: string | null
+  path: string | null
+  status: number | null
+  ok: boolean
+  duration_ms: number | null
+  error: string | null
+  triggered_by: string | null
+  has_body: boolean
+  user: { id: string; name: string; email: string | null } | null
+}
+
+/** The stored `url` reduced to what the list shows — a plain path (+ query),
+ *  falling back to the raw string (capped) for anything that isn't a real
+ *  URL rather than dropping it. */
+export function pathFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    return `${u.pathname}${u.search}` || '/'
+  } catch {
+    return url.length > 300 ? `${url.slice(0, 300)}…` : url
+  }
+}
+
+function callUserName(u: CallListUserRow): string {
+  const n = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+  return n || u.email || u.id
+}
+
+const httpOk = (status: number | null): boolean => status != null && status >= 200 && status < 300
+
+/** Coarse deliberately, per spec: two independent calls that land in the
+ *  exact same second with neither carrying a call-log row of its own would
+ *  collapse to one outbound entry here — accepted as the cost of a cheap,
+ *  reliable match with no shared identifier to key on. */
+const sameSecond = (a: Date | string, b: Date | string): boolean =>
+  Math.floor(+new Date(a) / 1000) === Math.floor(+new Date(b) / 1000)
+
+/**
+ * Newest-first merge of the two logs for one partner. Every call-log row
+ * appears with its full facts; an outbound row is added only when nothing in
+ * `logs` shares its second, so a partner whose calls have always carried
+ * `_log` never shows a phantom "outbound" duplicate of a row it already has.
+ */
+export function mergeCallHistory(
+  logs: CallLogListRow[],
+  outbound: OutboundListRow[],
+  users: CallListUserRow[]
+): PartnerCallListItem[] {
+  const userOf = (id: string | null): PartnerCallListItem['user'] => {
+    if (!id) return null
+    const u = users.find((x) => x.id === id)
+    return u ? { id: u.id, name: callUserName(u), email: u.email } : null
+  }
+  const fromLogs: PartnerCallListItem[] = logs.map((l) => ({
+    key: `log:${l.id}`,
+    id: l.id,
+    source: 'log',
+    created_at: new Date(l.created_at).toISOString(),
+    method: l.method,
+    path: pathFromUrl(l.url),
+    status: l.response_status,
+    ok: httpOk(l.response_status),
+    duration_ms: l.duration_ms,
+    error: l.error,
+    triggered_by: l.triggered_by,
+    has_body: !!l.has_body,
+    user: userOf(l.user_id)
+  }))
+  const fromOutbound: PartnerCallListItem[] = outbound
+    .filter((o) => !logs.some((l) => sameSecond(l.created_at, o.created_at)))
+    .map((o) => ({
+      key: `outbound:${o.id}`,
+      id: o.id,
+      source: 'outbound',
+      created_at: new Date(o.created_at).toISOString(),
+      method: o.method,
+      path: o.path,
+      status: o.status,
+      ok: !!o.ok,
+      duration_ms: o.duration_ms,
+      error: o.error,
+      triggered_by: null,
+      has_body: false,
+      user: null
+    }))
+  return [...fromLogs, ...fromOutbound].sort(
+    (a, b) => +new Date(b.created_at) - +new Date(a.created_at)
+  )
+}
+
+const CALLS_WINDOW_DAYS = 14
+const CALLS_LIMIT = 200
+
+async function buildCallHistory(apiId: number): Promise<PartnerCallListItem[]> {
+  const since = new Date(Date.now() - CALLS_WINDOW_DAYS * 86_400_000)
+  const [logs, outbound] = await Promise.all([
+    db('nivaro_external_api_logs')
+      .where({ api_id: apiId })
+      .where('created_at', '>=', since)
+      .orderBy('id', 'desc')
+      .limit(CALLS_LIMIT)
+      .select(
+        'id',
+        'created_at',
+        'method',
+        'url',
+        'response_status',
+        'duration_ms',
+        'error',
+        'triggered_by',
+        'user_id',
+        db.raw(
+          'CASE WHEN request_body IS NOT NULL OR response_body IS NOT NULL THEN 1 ELSE 0 END as has_body'
+        )
+      ) as Promise<CallLogListRow[]>,
+    db('nivaro_outbound_log')
+      .where({ api_id: apiId })
+      .where('created_at', '>=', since)
+      .orderBy('id', 'desc')
+      .limit(CALLS_LIMIT)
+      .select(
+        'id',
+        'created_at',
+        'method',
+        'path',
+        'status',
+        'ok',
+        'duration_ms',
+        'error'
+      ) as Promise<OutboundListRow[]>
+  ])
+  const userIds = [...new Set(logs.map((l) => l.user_id).filter((v): v is string => !!v))]
+  const users = userIds.length
+    ? ((await selectInChunks(userIds, 500, (chunk) =>
+        db('nivaro_users').whereIn('id', chunk).select('id', 'first_name', 'last_name', 'email')
+      )) as CallListUserRow[])
+    : []
+  return mergeCallHistory(logs, outbound, users)
+}
+
+/** `null`/unparsable in, `null` out — never throws on a corrupt or absent
+ *  stored headers column. */
+function parseHeadersColumn(v: string | null | undefined): Record<string, string> | null {
+  if (!v) return null
+  try {
+    const parsed: unknown = JSON.parse(v)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : null
+  } catch {
+    return null
+  }
+}
+
+/** Re-masks on every read — a row stored before a masking fix (or by a
+ *  caller that ever bypasses one) must never hand a secret back regardless
+ *  of what actually landed in the column. */
+function maskStoredHeaders(v: string | null | undefined): Record<string, string> | null {
+  const parsed = parseHeadersColumn(v)
+  return parsed ? maskHeaders(parsed) : null
+}
+
+interface CallLogFullRow {
+  id: number
+  created_at: Date | string
+  method: string
+  url: string
+  request_headers: string | null
+  request_body: string | null
+  response_status: number | null
+  response_headers: string | null
+  response_body: string | null
+  duration_ms: number | null
+  error: string | null
+  triggered_by: string | null
+  user_id: string | null
 }
 
 // Mirrors the private `AuthType` union in services/external-apis.ts — needed
@@ -248,11 +472,7 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
     }
     const [card] = await buildCards(id)
     if (!card) return reply.code(404).send({ error: 'Not found' })
-    const calls = await db('nivaro_outbound_log')
-      .where({ api_id: id })
-      .orderBy('id', 'desc')
-      .limit(200)
-      .select('id', 'created_at', 'method', 'path', 'status', 'ok', 'duration_ms', 'error')
+    const calls = await buildCallHistory(id)
     const contracts = await db('nivaro_external_api_endpoints')
       .where({ api_id: id })
       .whereNotNull('contract')
@@ -266,4 +486,50 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
       .catch(() => [])
     return { data: { card, calls, contracts } }
   })
+
+  // One call's full request/response — never fetched as part of the list
+  // (bodies can run to tens of KB each), only when a row is expanded.
+  app.get<{ Params: { id: string; callId: string } }>(
+    '/integration-partners/:id/calls/:callId',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      const callId = Number(req.params.callId)
+      if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(callId) || callId <= 0) {
+        return reply.code(400).send({ error: 'Invalid id' })
+      }
+      // Scoped by (id, api_id) together — a callId belonging to a DIFFERENT
+      // partner reads as unknown, never as a row to filter out client-side.
+      const row = (await db('nivaro_external_api_logs')
+        .where({ id: callId, api_id: id })
+        .first()) as CallLogFullRow | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+
+      let user: PartnerCallListItem['user'] = null
+      if (row.user_id) {
+        const u = (await db('nivaro_users')
+          .where({ id: row.user_id })
+          .first('id', 'first_name', 'last_name', 'email')) as CallListUserRow | undefined
+        if (u) user = { id: u.id, name: callUserName(u), email: u.email }
+      }
+
+      return {
+        data: {
+          id: row.id,
+          created_at: row.created_at,
+          method: row.method,
+          url: row.url,
+          request_headers: maskStoredHeaders(row.request_headers),
+          request_body: row.request_body ?? null,
+          response_status: row.response_status,
+          response_headers: maskStoredHeaders(row.response_headers),
+          response_body: row.response_body ?? null,
+          duration_ms: row.duration_ms,
+          error: row.error,
+          triggered_by: row.triggered_by,
+          user
+        }
+      }
+    }
+  )
 }

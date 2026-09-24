@@ -14,10 +14,16 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
+import { db } from '../../../db/index.js'
 import {
+  type CallListUserRow,
+  type CallLogListRow,
   healthWord,
   hourBuckets,
   integrationPartnersRoutes,
+  mergeCallHistory,
+  type OutboundListRow,
+  pathFromUrl,
   percentile
 } from '../../../routes/integration-partners.js'
 
@@ -136,5 +142,269 @@ describe('GET /integration-partners/:id — id validation', () => {
     const app = buildApp()
     const res = await app.inject({ method: 'GET', url: '/integration-partners/1.5' })
     expect(res.statusCode).toBe(400)
+  })
+})
+
+describe('pathFromUrl', () => {
+  it('reduces a full URL to its path + query', () => {
+    expect(pathFromUrl('https://partner.example/api/v1/hubs?limit=50')).toBe(
+      '/api/v1/hubs?limit=50'
+    )
+  })
+  it('parses a mock:// url (the mock-mode call log shape) as a path too', () => {
+    expect(pathFromUrl('mock://NAMI/api/hubs')).toBe('/api/hubs')
+  })
+  it('falls back to the raw string when it does not parse as a URL, capped at 300 chars', () => {
+    expect(pathFromUrl('not a url')).toBe('not a url')
+    expect(pathFromUrl('x'.repeat(400))).toBe(`${'x'.repeat(300)}…`)
+  })
+  it('null/empty in, null out', () => {
+    expect(pathFromUrl(null)).toBeNull()
+    expect(pathFromUrl('')).toBeNull()
+  })
+})
+
+// Task 15e — Recent calls merges the verbose opt-in call log
+// (nivaro_external_api_logs) with the always-on outbound counter
+// (nivaro_outbound_log): every call-log row appears, PLUS any outbound row
+// that has no call-log row landing in the same second (pre-523205cf
+// extension calls, or any caller that still passes no `_log`) — those read
+// `source: 'outbound'` with no body/trigger/user to open.
+describe('mergeCallHistory — Task 15e list merge', () => {
+  const LOG: CallLogListRow = {
+    id: 1,
+    created_at: new Date('2026-09-23T12:00:05.000Z'),
+    method: 'POST',
+    url: 'https://partner.example/api/v1/update',
+    response_status: 200,
+    duration_ms: 140,
+    error: null,
+    triggered_by: 'transition-action',
+    user_id: 'U1',
+    has_body: 1
+  }
+  const OUTBOUND: OutboundListRow = {
+    id: 100,
+    created_at: new Date('2026-09-23T11:00:00.000Z'),
+    method: 'GET',
+    path: '/api/hubs',
+    status: 401,
+    ok: false,
+    duration_ms: 80,
+    error: 'HTTP 401'
+  }
+  const USER: CallListUserRow = {
+    id: 'U1',
+    first_name: 'Dana',
+    last_name: 'Reyes',
+    email: 'dana@example.com'
+  }
+
+  it('a call-log row carries its resolved user, has_body, and a path derived from the url', () => {
+    const merged = mergeCallHistory([LOG], [], [USER])
+    expect(merged).toEqual([
+      {
+        key: 'log:1',
+        id: 1,
+        source: 'log',
+        created_at: '2026-09-23T12:00:05.000Z',
+        method: 'POST',
+        path: '/api/v1/update',
+        status: 200,
+        ok: true,
+        duration_ms: 140,
+        error: null,
+        triggered_by: 'transition-action',
+        has_body: true,
+        user: { id: 'U1', name: 'Dana Reyes', email: 'dana@example.com' }
+      }
+    ])
+  })
+
+  it('an outbound row with no matching call-log second still appears, marked "outbound" with no trigger/body', () => {
+    const merged = mergeCallHistory([LOG], [OUTBOUND], [USER])
+    const outboundEntry = merged.find((c) => c.source === 'outbound')
+    expect(outboundEntry).toMatchObject({
+      key: 'outbound:100',
+      id: 100,
+      source: 'outbound',
+      method: 'GET',
+      path: '/api/hubs',
+      status: 401,
+      ok: false,
+      triggered_by: null,
+      has_body: false,
+      user: null
+    })
+  })
+
+  it('an outbound row sharing the exact second with a call-log row is dropped — the log row already covers it', () => {
+    const sameSecondOutbound: OutboundListRow = {
+      ...OUTBOUND,
+      id: 101,
+      created_at: new Date('2026-09-23T12:00:05.400Z')
+    }
+    const merged = mergeCallHistory([LOG], [sameSecondOutbound], [USER])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].source).toBe('log')
+  })
+
+  it('sorts newest first across both sources', () => {
+    const older: OutboundListRow = { ...OUTBOUND, id: 102 }
+    const newer: OutboundListRow = {
+      ...OUTBOUND,
+      id: 103,
+      created_at: new Date('2026-09-23T13:00:00.000Z')
+    }
+    const merged = mergeCallHistory([LOG], [older, newer], [USER])
+    expect(merged.map((c) => c.key)).toEqual(['outbound:103', 'log:1', 'outbound:102'])
+  })
+
+  it('a call-log row with no user_id (or one that no longer resolves) carries no user', () => {
+    const noUser: CallLogListRow = { ...LOG, user_id: null }
+    expect(mergeCallHistory([noUser], [], [USER])[0].user).toBeNull()
+    const staleUser: CallLogListRow = { ...LOG, user_id: 'GONE' }
+    expect(mergeCallHistory([staleUser], [], [USER])[0].user).toBeNull()
+  })
+})
+
+// ─── GET /integration-partners/:id/calls/:callId ───────────────────────────
+
+type Chain = Record<string, ReturnType<typeof vi.fn>>
+
+function makeChain(overrides: Partial<{ first: unknown; select: unknown[] }> = {}): Chain {
+  const chain: Chain = {}
+  for (const m of ['where', 'whereIn', 'orderBy', 'limit', 'offset']) {
+    chain[m] = vi.fn(() => chain)
+  }
+  chain.first = vi.fn((..._cols: string[]) => Promise.resolve(overrides.first ?? undefined))
+  chain.select = vi.fn(() => Promise.resolve(overrides.select ?? []))
+  return chain
+}
+
+const CREATED = new Date('2026-09-23T18:42:03.000Z')
+
+describe('GET /integration-partners/:id/calls/:callId', () => {
+  it('rejects a non-numeric id or callId with 400 before ever touching the database', async () => {
+    const app = buildApp()
+    for (const url of [
+      '/integration-partners/abc/calls/1',
+      '/integration-partners/1/calls/abc',
+      '/integration-partners/0/calls/1',
+      '/integration-partners/1/calls/0',
+      '/integration-partners/1/calls/-1'
+    ]) {
+      const res = await app.inject({ method: 'GET', url })
+      expect(res.statusCode).toBe(400)
+    }
+    expect(vi.mocked(db)).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("404s a call id that belongs to a DIFFERENT partner — never leaks another API's call", async () => {
+    // The WHERE clause scopes by (id, api_id) together, so a callId that
+    // exists but under a different api_id resolves to nothing, same as an
+    // unknown id — the row is never fetched and then filtered client-side.
+    const logsChain = makeChain({ first: undefined })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_api_logs') return logsChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/9/calls/55' })
+    expect(res.statusCode).toBe(404)
+    expect(logsChain.where).toHaveBeenCalledWith({ id: 55, api_id: 9 })
+    await app.close()
+  })
+
+  it('404s an unknown call id', async () => {
+    const logsChain = makeChain({ first: undefined })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_api_logs') return logsChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/9/calls/999999' })
+    expect(res.statusCode).toBe(404)
+    await app.close()
+  })
+
+  it('returns the full row with a resolved user, and re-masks stored headers on read', async () => {
+    const logsChain = makeChain({
+      first: {
+        id: 55,
+        api_id: 9,
+        created_at: CREATED,
+        method: 'GET',
+        url: 'https://nami.example/api/hubs',
+        // Written before the write-side masking fix — a raw bearer token
+        // that MUST NOT reach the response.
+        request_headers: JSON.stringify({ Authorization: 'Bearer super-secret-token' }),
+        request_body: null,
+        response_status: 200,
+        response_headers: JSON.stringify({ 'set-cookie': 'sid=abc123' }),
+        response_body: '{"hubs":[]}',
+        duration_ms: 210,
+        error: null,
+        triggered_by: 'cron:nami-sync',
+        user_id: 'U1'
+      }
+    })
+    const usersChain = makeChain({
+      first: { id: 'U1', first_name: 'Dana', last_name: 'Reyes', email: 'dana@example.com' }
+    })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_api_logs') return logsChain
+      if (table === 'nivaro_users') return usersChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/9/calls/55' })
+    expect(res.statusCode).toBe(200)
+    const d = res.json().data
+    expect(d.request_headers.Authorization).toBe('Bearer ••••••')
+    expect(d.response_headers['set-cookie']).toBe('••••••')
+    expect(d.response_body).toBe('{"hubs":[]}')
+    expect(d.triggered_by).toBe('cron:nami-sync')
+    expect(d.user).toEqual({ id: 'U1', name: 'Dana Reyes', email: 'dana@example.com' })
+    await app.close()
+  })
+
+  it('a row with no stored user_id carries no user, and null headers stay null', async () => {
+    const logsChain = makeChain({
+      first: {
+        id: 56,
+        api_id: 9,
+        created_at: CREATED,
+        method: 'GET',
+        url: 'https://linx.example/status',
+        request_headers: null,
+        request_body: null,
+        response_status: 401,
+        response_headers: null,
+        response_body: '{"error":"unauthorized"}',
+        duration_ms: 30,
+        error: 'HTTP 401',
+        triggered_by: 'extension:efp-ops',
+        user_id: null
+      }
+    })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_external_api_logs') return logsChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const app = buildApp()
+    const res = await app.inject({ method: 'GET', url: '/integration-partners/9/calls/56' })
+    expect(res.statusCode).toBe(200)
+    const d = res.json().data
+    expect(d.user).toBeNull()
+    expect(d.request_headers).toBeNull()
+    expect(d.response_headers).toBeNull()
+    expect(d.response_status).toBe(401)
+    expect(d.error).toBe('HTTP 401')
+    await app.close()
   })
 })

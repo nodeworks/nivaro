@@ -12,6 +12,7 @@ import type {
   EventProvider,
   EventStatus,
   IntegrationEvent,
+  PartnerCallDetail,
   PartnerCard,
   PartnerDetailData,
   PartnersSummary,
@@ -170,6 +171,23 @@ export function usePartner(id: number | null) {
       client
         .request<{ data: PartnerDetailData }>(get(`/integration-partners/${id}`))
         .then((r) => r.data)
+  })
+}
+
+/** One call's full request/response — fetched only on expand (a row list
+ *  never carries bodies), and only for a call-log-backed row: `enabled`
+ *  should gate on `source === 'log'`, since an outbound-only row has nothing
+ *  under this id in the table this route reads. */
+export function useCallDetail(apiId: number, callId: number | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: ['integration-partner-call', apiId, callId],
+    enabled: callId != null,
+    queryFn: () =>
+      client
+        .request<{ data: PartnerCallDetail }>(get(`/integration-partners/${apiId}/calls/${callId}`))
+        .then((r) => r.data),
+    staleTime: 15_000
   })
 }
 
