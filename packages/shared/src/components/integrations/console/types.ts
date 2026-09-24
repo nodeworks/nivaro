@@ -34,6 +34,8 @@ export interface RowView {
   api?: string
   record?: { collection: string; id: string; label?: string }
   actions: SignalAction[]
+  /** What opens in place under this row — the failed push, the import run. */
+  drill?: SignalDrill
   /** When the snapshot first saw this problem. */
   first_seen: string
   /** Present only on rows in `snoozed`. */
@@ -158,3 +160,93 @@ export interface IntegrationEvent {
 }
 
 export type ActionResult = { key: string; ok: boolean; message: string }
+
+/** A typed "Details" reference on a signal row (GET /integration-signals). */
+export interface SignalDrill {
+  kind: 'submission' | 'import_run' | (string & {})
+  id: string
+}
+
+/** A user named on a push — a person, or a machine account (`account_kind`). */
+export interface DrillUser {
+  id: string
+  name: string
+  email: string | null
+  /** 'suspended' / 'inactive' / 'redacted' / 'deleted' — can no longer act. */
+  inactive: string | null
+  account_kind: string | null
+}
+
+/** Who started a push (or one attempt of it) — GET /erp-submissions/:id. */
+export interface Requester {
+  kind: 'person' | 'machine' | 'automatic' | 'scheduled' | 'flow' | 'unknown'
+  basis: 'recorded' | 'inferred' | 'none'
+  label: string
+  user: DrillUser | null
+  via: string | null
+  how: string | null
+}
+
+export interface SubmissionDetail {
+  submission: {
+    id: number
+    collection: string
+    item: string
+    external_api: number | null
+    external_api_name: string | null
+    external_ref: string | null
+    status: string
+    attempts: number
+    last_error: string | null
+    endpoint_path: string | null
+    payload: unknown
+    response: unknown
+    created_at: string
+    updated_at: string
+    record_label: string
+    error_class: string | null
+    requested_by: string | null
+    requested_via: string | null
+  }
+  partner: { id: number | null; name: string | null; owner: { id: string; name: string } | null }
+  endpoint: { method: string; path: string | null }
+  obligation: {
+    id: number
+    kind: string
+    outcome: string
+    reason: string | null
+    due_at: string | null
+    resolved_at: string | null
+    trigger: string
+    trigger_ref: string | null
+    open: boolean
+  } | null
+  trigger: { kind: string; label: string; link: string | null; source: string }
+  triggered_by: Requester
+  attempt_requesters: Array<{ attempt: number; requester: Requester }>
+  call_logs: Array<{
+    id: number
+    created_at: string
+    method: string | null
+    url: string | null
+    status: number | null
+    duration_ms: number | null
+    error: string | null
+    triggered_by: string | null
+    user: DrillUser | null
+  }>
+  retry: { eligible: boolean; reason: string | null; warning: string | null }
+}
+
+/** One attempt of a submission — GET /erp-submissions/:id/attempts. */
+export interface SubmissionAttempt {
+  attempt: number
+  status: string
+  http_status: number | null
+  error: string | null
+  source: string
+  at: string
+  endpoint_path: string | null
+  payload: unknown
+  response: unknown
+}

@@ -56,6 +56,19 @@ export interface SignalRow {
   api?: string
   record?: { collection: string; id: string; label?: string }
   actions: SignalAction[]
+  /**
+   * What the console can open in place under this row (Task 15d): the
+   * failed push behind it, or the import run that errored. Extensions reuse
+   * these kinds for rows that are really one of them (a partner's failed
+   * order IS a submission); a kind the console does not know renders nothing.
+   */
+  drill?: SignalDrill
+}
+
+/** A typed "Details" reference on a signal row — see `SignalRow.drill`. */
+export interface SignalDrill {
+  kind: 'submission' | 'import_run'
+  id: string
 }
 
 export interface SignalEvalContext {

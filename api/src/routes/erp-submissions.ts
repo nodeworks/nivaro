@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
 import { can } from '../services/permissions.js'
+import { buildSubmissionDetail, gatherSubmissionFacts } from '../services/submission-detail.js'
 import {
   detectBodyAcceptance,
   detectDefaultBodyRejection,
@@ -217,6 +218,8 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         attempts: 1,
         last_error: outcome.error,
         payload: JSON.stringify(stored),
+        requested_by: req.user?.id ?? null,
+        requested_via: 'api',
         created_at: now,
         updated_at: now
       })
@@ -336,6 +339,40 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       }
     })
     return reply.send({ data, limit, days })
+  })
+
+  // One push in full, for the Firefight drill-down (Task 15d): the stored
+  // request/response, the partner, the obligation it closed or left open,
+  // what sent it and who — plus the matching call-log rows and whether a
+  // retry makes sense. Admin-only: the bodies carry other records' data.
+  // One path segment, so `/:collection/:item` can never shadow it.
+  app.get<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const raw = String(req.params.id)
+    const id = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
+    if (!Number.isSafeInteger(id) || id <= 0) return reply.code(404).send({ error: 'Not found' })
+    const facts = await gatherSubmissionFacts(id, async (collection, item) => {
+      const labels = await resolveFriendlyIds(collection, [item])
+      return labels.get(item) ?? null
+    })
+    if (!facts) return reply.code(404).send({ error: 'Not found' })
+    const row = facts.raw as unknown as ErpSubmissionRow & {
+      error_class?: string | null
+      requested_by?: string | null
+      requested_via?: string | null
+    }
+    return {
+      data: {
+        submission: {
+          ...serialize(row),
+          external_api_name: facts.api?.name ?? null,
+          record_label: facts.record_label ?? String(row.item),
+          error_class: row.error_class ?? null,
+          requested_by: row.requested_by ?? null,
+          requested_via: row.requested_via ?? null
+        },
+        ...buildSubmissionDetail(facts)
+      }
+    }
   })
 
   app.get<{ Params: { collection: string; item: string } }>(
@@ -522,7 +559,9 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         submissionId: id,
         outcome,
         priorExternalRef: row.external_ref,
-        priorAttempts: row.attempts
+        priorAttempts: row.attempts,
+        requestedBy: req.user?.id ?? null,
+        requestedVia: 'retry'
       })
       await propagateSubmissionStatus({
         submissionId: id,
@@ -590,7 +629,9 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
             submissionId: id,
             outcome,
             priorExternalRef: row.external_ref,
-            priorAttempts: row.attempts
+            priorAttempts: row.attempts,
+            requestedBy: req.user?.id ?? null,
+            requestedVia: 'retry'
           })
           // A fourth writer of `status`, alongside /retry, the PATCH override
           // and the automatic sweep — moves the obligation the same way they
@@ -749,6 +790,8 @@ export async function runErpAutoRetries(): Promise<{ attempted: number; landed: 
       outcome,
       priorExternalRef: row.external_ref,
       priorAttempts: row.attempts,
+      requestedBy: null,
+      requestedVia: 'cron',
       extra: {
         retry_count: retries + 1,
         // Exponential-ish backoff: base * 2^retries, capped at a day.

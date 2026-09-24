@@ -1,7 +1,15 @@
-import { AlertOctagon, AlertTriangle, ChevronRight, ExternalLink, Loader2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import {
+  AlertOctagon,
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Loader2
+} from 'lucide-react'
+import { useId, useMemo, useRef, useState } from 'react'
 import { cn, titleCase } from '../../../lib/utils'
 import { useDismissRows, useSignalAction, useSnooze } from './api'
+import { canDrill, RowDrill } from './drill'
 import { DismissButton, SnoozeMenu } from './SnoozeMenu'
 import { ageOf, agoText, exactTime, TONE_FILL, TONE_SOFT, TONE_TEXT } from './tone'
 import type { ActionResult, RowView, SignalAction, SignalView } from './types'
@@ -286,9 +294,7 @@ function RowList({
               ref={(el) => {
                 if (el) el.indeterminate = inSelection.length > 0 && !allChecked
               }}
-              onChange={(e) =>
-                setSelected(new Set(e.target.checked ? rows.map((r) => r.key) : []))
-              }
+              onChange={(e) => setSelected(new Set(e.target.checked ? rows.map((r) => r.key) : []))}
               aria-label='Select every problem'
               data-ic-select-all
               className='h-3.5 w-3.5 accent-[rgb(var(--nvr-cyan-rgb))]'
@@ -450,84 +456,156 @@ function SignalRowView({
     (a) =>
       !(a.kind === 'open' && row.record) && !(a.kind === 'explain' && canExplain?.(a) === false)
   )
+  const [drillOpen, setDrillOpen] = useState(false)
+  const drillId = useId()
+  const disclosureRef = useRef<HTMLButtonElement>(null)
+  const drillable = canDrill(row.drill)
+  // The row's own Retry (when it is a retry of THIS submission) — so a retry
+  // from inside the drill reports its result on the row like the button does.
+  const rowRetry =
+    row.drill?.kind === 'submission'
+      ? row.actions.find((a) => a.kind === 'retry_submission' && a.id === row.drill?.id)
+      : undefined
+  const collapse = () => {
+    setDrillOpen(false)
+    disclosureRef.current?.focus()
+  }
   return (
-    <li data-ic-row={row.key} className='flex gap-3 px-4 py-2.5'>
-      {selectable && (
-        <input
-          type='checkbox'
-          checked={selected}
-          onChange={(e) => onSelect(e.target.checked)}
-          aria-label={`Select ${row.title}`}
-          data-ic-select-row={row.key}
-          className='mt-1 h-3.5 w-3.5 shrink-0 accent-[rgb(var(--nvr-cyan-rgb))]'
-        />
-      )}
-      <div className='min-w-0 flex-1'>
-        <p className='text-[12.5px] font-medium text-foreground'>{row.title}</p>
-        {row.detail && (
-          <p
-            className='mt-0.5 line-clamp-2 break-words text-[12px] leading-snug text-muted-foreground'
-            data-tip={row.detail.length > 140 ? row.detail.slice(0, 900) : undefined}
-          >
-            {row.detail}
-          </p>
+    <li
+      data-ic-row={row.key}
+      data-ic-row-open={drillOpen ? '' : undefined}
+      className={cn(drillOpen && 'bg-muted/30')}
+    >
+      <div className='flex gap-3 px-4 py-2.5'>
+        {selectable && (
+          <input
+            type='checkbox'
+            checked={selected}
+            onChange={(e) => onSelect(e.target.checked)}
+            aria-label={`Select ${row.title}`}
+            data-ic-select-row={row.key}
+            className='mt-1 h-3.5 w-3.5 shrink-0 accent-[rgb(var(--nvr-cyan-rgb))]'
+          />
         )}
-        {/* Under the title on narrower screens; its own column on wide ones. */}
+        <div className='min-w-0 flex-1'>
+          <p className='text-[12.5px] font-medium text-foreground'>{row.title}</p>
+          {row.detail && (
+            <p
+              className='mt-0.5 line-clamp-2 break-words text-[12px] leading-snug text-muted-foreground'
+              data-tip={row.detail.length > 140 ? row.detail.slice(0, 900) : undefined}
+            >
+              {row.detail}
+            </p>
+          )}
+          {/* Under the title on narrower screens; its own column on wide ones. */}
+          <RowMeta
+            since={since}
+            record={row.record}
+            onOpenRecord={onOpenRecord}
+            className='mt-1 flex-wrap gap-x-2 xl:hidden'
+          />
+          {result && (
+            <p
+              role='status'
+              data-ic-result={result.ok ? 'ok' : 'failed'}
+              className={cn(
+                'mt-1 flex items-start gap-1.5 text-[12px] font-medium',
+                TONE_TEXT[result.ok ? 'positive' : 'negative']
+              )}
+            >
+              <span
+                className={cn(
+                  'mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full',
+                  TONE_FILL[result.ok ? 'positive' : 'negative']
+                )}
+              />
+              {result.message}
+            </p>
+          )}
+        </div>
         <RowMeta
           since={since}
           record={row.record}
           onOpenRecord={onOpenRecord}
-          className='mt-1 flex-wrap gap-x-2 xl:hidden'
+          className='hidden w-[210px] shrink-0 flex-col items-start gap-0.5 pt-0.5 xl:flex'
+          stacked
         />
-        {result && (
-          <p
-            role='status'
-            data-ic-result={result.ok ? 'ok' : 'failed'}
-            className={cn(
-              'mt-1 flex items-start gap-1.5 text-[12px] font-medium',
-              TONE_TEXT[result.ok ? 'positive' : 'negative']
-            )}
-          >
-            <span
+        <div className='flex shrink-0 items-start gap-1'>
+          {drillable && (
+            <button
+              ref={disclosureRef}
+              type='button'
+              data-ic-drill-toggle={`${row.drill?.kind}:${row.drill?.id}`}
+              aria-expanded={drillOpen}
+              aria-controls={drillOpen ? drillId : undefined}
+              onClick={() => setDrillOpen((v) => !v)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && drillOpen) {
+                  e.preventDefault()
+                  setDrillOpen(false)
+                }
+              }}
               className={cn(
-                'mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full',
-                TONE_FILL[result.ok ? 'positive' : 'negative']
+                'inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                drillOpen
+                  ? 'border-[color:rgb(var(--nvr-cyan-rgb)/0.45)] bg-[color:rgb(var(--nvr-cyan-rgb)/0.10)] text-foreground dark:bg-[color:rgb(var(--nvr-cyan-rgb)/0.16)]'
+                  : 'border-border bg-card text-foreground hover:bg-muted'
               )}
-            />
-            {result.message}
-          </p>
-        )}
+            >
+              Details
+              <ChevronDown
+                className={cn(
+                  'h-3 w-3 transition-transform duration-200',
+                  drillOpen && 'rotate-180'
+                )}
+                aria-hidden
+              />
+            </button>
+          )}
+          {buttons.map((a) => (
+            <button
+              key={actionKey(a)}
+              type='button'
+              data-ic-action={a.kind}
+              disabled={busy}
+              onClick={() => onAction(a)}
+              className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+            >
+              {busy && a.kind !== 'explain' && <Loader2 className='h-3 w-3 animate-spin' />}
+              {a.label}
+            </button>
+          ))}
+          <DismissButton signal={signal.id} rowKey={row.key} />
+          <SnoozeMenu
+            signal={signal.id}
+            signalLabel={signal.label}
+            rowKey={row.key}
+            group={row.group ? { key: row.group, label: row.group_label ?? row.group } : undefined}
+            compact
+          />
+        </div>
       </div>
-      <RowMeta
-        since={since}
-        record={row.record}
-        onOpenRecord={onOpenRecord}
-        className='hidden w-[210px] shrink-0 flex-col items-start gap-0.5 pt-0.5 xl:flex'
-        stacked
-      />
-      <div className='flex shrink-0 items-start gap-1'>
-        {buttons.map((a) => (
-          <button
-            key={actionKey(a)}
-            type='button'
-            data-ic-action={a.kind}
-            disabled={busy}
-            onClick={() => onAction(a)}
-            className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-          >
-            {busy && a.kind !== 'explain' && <Loader2 className='h-3 w-3 animate-spin' />}
-            {a.label}
-          </button>
-        ))}
-        <DismissButton signal={signal.id} rowKey={row.key} />
-        <SnoozeMenu
-          signal={signal.id}
-          signalLabel={signal.label}
-          rowKey={row.key}
-          group={row.group ? { key: row.group, label: row.group_label ?? row.group } : undefined}
-          compact
-        />
-      </div>
+      {drillOpen && drillable && row.drill && (
+        // Esc anywhere inside the open drill collapses it.
+        <section
+          id={drillId}
+          aria-label={`Details: ${row.title}`}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && !e.defaultPrevented) {
+              e.stopPropagation()
+              collapse()
+            }
+          }}
+          className='border-t border-border pb-4 pl-11 pr-4 pt-3'
+        >
+          <RowDrill
+            drill={row.drill}
+            onOpenRecord={onOpenRecord}
+            onRetry={rowRetry ? () => onAction(rowRetry) : undefined}
+            retryBusy={busy}
+          />
+        </section>
+      )}
     </li>
   )
 }

@@ -206,7 +206,8 @@ export function registerCoreIntegrationSignals(): void {
           actions: [
             { kind: 'retry_submission', label: 'Retry', id: String(r.id) },
             open(r.collection, r.item)
-          ]
+          ],
+          drill: { kind: 'submission', id: String(r.id) }
         }))
       )
       return { count: out.length, rows: out }
@@ -397,7 +398,8 @@ export function registerCoreIntegrationSignals(): void {
         // next run (whether it fails again or succeeds and later fails) is a
         // new run id, so it shows again.
         occurrence: `run:${r.id}`,
-        actions: [{ kind: 'explain', label: 'Open run', payload: { import_run: r.id } }]
+        actions: [{ kind: 'explain', label: 'Open run', payload: { import_run: r.id } }],
+        drill: { kind: 'import_run', id: String(r.id) }
       }))
       return { count: out.length, rows: out }
     }

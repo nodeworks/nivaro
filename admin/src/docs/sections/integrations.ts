@@ -24,7 +24,18 @@ POST /api/erp-submissions                              # record a submission
 PATCH /api/erp-submissions/:id      # update status (e.g. from a callback/webhook)
 { "status": "accepted", "response": { "erp_id": "SO-1001" } }
 
-POST /api/erp-submissions/:id/retry # re-run the submission`
+POST /api/erp-submissions/:id/retry # re-run the submission
+GET  /api/erp-submissions/:id       # one push in full (admin): partner, obligation,
+                                    # trigger, who sent it, matched call logs, retry eligibility`
+    },
+    { type: 'h3', text: 'Who sent a push' },
+    {
+      type: 'p',
+      text: "Every submission and every attempt records `requested_by` (the user, when a person was behind it) and `requested_via` (transition, auto-transition, flow, item-action, retry, resend, cron or api). A later Retry by someone else is that attempt's own requester. Pushes recorded before these columns existed are answered by inference — the partner call log's user, the transition made moments before, a person's edit of the record just before, or the schedule/flow that ran it — and the Integrations console marks those answers as inferred. Anything still unresolved reads \"Not recorded\"; machine accounts read as the account, never as a person."
+    },
+    {
+      type: 'p',
+      text: 'In the Integrations console, a Failed pushes row (and any row that is really a push or an import run) has a Details button that opens the push in place: the full error, every attempt with who started it, the request and response, what sent it and who, the matched call-log rows and a Retry that says why when it is not offered.'
     },
     {
       type: 'ul',

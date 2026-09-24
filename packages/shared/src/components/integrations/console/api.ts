@@ -16,7 +16,9 @@ import type {
   PartnerDetailData,
   PartnersSummary,
   RowView,
-  SignalsSnapshot
+  SignalsSnapshot,
+  SubmissionAttempt,
+  SubmissionDetail
 } from './types'
 
 export function useSignals(tab?: string) {
@@ -53,6 +55,52 @@ export function useSignalAction() {
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ['integration-signals'] })
       void qc.invalidateQueries({ queryKey: ['erp-submissions'] })
+      void qc.invalidateQueries({ queryKey: ['erp-submission-attempts'] })
+    }
+  })
+}
+
+/** One push in full — the Firefight drill-down's data (admin-only route). */
+export function useSubmissionDetail(id: number | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    // Under 'erp-submissions' so every existing retry invalidation refreshes it.
+    queryKey: ['erp-submissions', 'detail', id],
+    enabled: id != null,
+    queryFn: () =>
+      client.request<{ data: SubmissionDetail }>(get(`/erp-submissions/${id}`)).then((r) => r.data),
+    staleTime: 15_000
+  })
+}
+
+/** Every attempt of one submission, newest first — the key the External
+ *  requests dialog and the partner detail already share. */
+export function useSubmissionAttempts(id: number | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: ['erp-submission-attempts', id],
+    enabled: id != null,
+    queryFn: () =>
+      client
+        .request<{ data: { attempts: SubmissionAttempt[]; total: number; unrecorded: number } }>(
+          get(`/erp-submissions/${id}/attempts`)
+        )
+        .then((r) => r.data),
+    staleTime: 15_000
+  })
+}
+
+/** Re-send one stored push (the same route the record's External requests
+ *  dialog uses) — for a drill shown outside a Firefight row. */
+export function useRetrySubmission() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => client.request(post(`/erp-submissions/${id}/retry`)),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['integration-signals'] })
+      void qc.invalidateQueries({ queryKey: ['erp-submissions'] })
+      void qc.invalidateQueries({ queryKey: ['erp-submission-attempts'] })
     }
   })
 }
