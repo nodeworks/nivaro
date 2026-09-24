@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-09-24T19:08:47.957Z",
+  "generated_at": "2026-09-24T19:23:38.551Z",
   "releases": [
+    {
+      "version": "0.1.337",
+      "tag": "v0.1.337",
+      "date": "2026-09-24T15:23:24-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "flow-failed signal compared uuid run ids to an int",
+              "hash": "b663fe46"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www/docs.html (transition requirements: m2o child fields, optional_when in_query, review_when)",
+              "hash": "26ad0941"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.1.336",
       "tag": "v0.1.336",
-      "date": "2026-09-24T15:08:32-04:00",
+      "date": "2026-09-24T15:08:48-04:00",
       "sections": [
         {
           "label": "Added",
