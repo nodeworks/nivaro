@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-25T12:56:24.317Z",
+  "generated_at": "2026-09-25T13:18:49.258Z",
   "releases": [
+    {
+      "version": "0.1.342",
+      "tag": "v0.1.342",
+      "date": "2026-09-25T09:18:35-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "registry checks read stdout only; the chain child never inherits NODE_TLS_REJECT_UNAUTHORIZED",
+              "hash": "adf261c4"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.341",
       "tag": "v0.1.341",
-      "date": "2026-09-25T08:56:12-04:00",
+      "date": "2026-09-25T08:56:24-04:00",
       "sections": [
         {
           "label": "Added",
