@@ -51,7 +51,7 @@ export const HEADER_TILES =
  * ancestor carries the attribute.
  */
 export const HEADER_CELL_DENSE =
-  '[[data-header-dense]_&]:min-h-[34px] [[data-header-dense]_&]:flex-row [[data-header-dense]_&]:items-baseline [[data-header-dense]_&]:gap-x-2 [[data-header-dense]_&]:pr-3 [[data-header-dense]_&]:pl-4 [[data-header-dense]_&]:pt-[7px] [[data-header-dense]_&]:pb-[7px] [[data-header-dense]_&]:max-w-none'
+  '[[data-header-dense]_&]:min-h-[34px] [[data-header-dense]_&]:flex-row [[data-header-dense]_&]:items-center [[data-header-dense]_&]:gap-x-2 [[data-header-dense]_&]:pr-3 [[data-header-dense]_&]:pl-4 [[data-header-dense]_&]:pt-[7px] [[data-header-dense]_&]:pb-[7px] [[data-header-dense]_&]:max-w-none'
 
 /**
  * LIST format: the "+N more" popover (HeaderOverflowChip) sets
@@ -112,7 +112,7 @@ export const HEADER_SUB =
  *  top (labels: pt-[9px] + 10px + gap 4; values: this box; 9+10+4+20+8
  *  = 51 ≤ the 52px tile). */
 export const HEADER_VALUE_LINE =
-  'flex h-5 items-end gap-x-1.5 [[data-header-dense]_&]:h-auto [[data-header-dense]_&]:items-baseline [[data-header-list]_&]:h-auto [[data-header-list]_&]:items-baseline [[data-header-list]_&]:justify-end [[data-header-list]_&]:text-right'
+  'flex h-5 items-end gap-x-1.5 [[data-header-dense]_&]:h-auto [[data-header-dense]_&]:items-center [[data-header-list]_&]:h-auto [[data-header-list]_&]:items-baseline [[data-header-list]_&]:justify-end [[data-header-list]_&]:text-right'
 
 /**
  * Would the stacked tiles fit one row? Each cell's stacked width (widest of
