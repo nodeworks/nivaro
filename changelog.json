@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-25T21:33:22.926Z",
+  "generated_at": "2026-09-25T21:45:20.938Z",
   "releases": [
+    {
+      "version": "0.1.346",
+      "tag": "v0.1.346",
+      "date": "2026-09-25T17:45:10-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "pipeline track: a state the record jumped over reads as skipped",
+              "hash": "0005fa6b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.1.345",
       "tag": "v0.1.345",
-      "date": "2026-09-25T17:33:12-04:00",
+      "date": "2026-09-25T17:33:22-04:00",
       "sections": [
         {
           "label": "Fixed",
