@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { ReleaseCard } from '@/components/release-card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -120,6 +121,7 @@ export default function Environments() {
           </Button>
         </div>
       </header>
+      <ReleaseCard />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
