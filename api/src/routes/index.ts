@@ -151,6 +151,7 @@ import { recordPromotionRoutes } from './record-promotion.js'
 import { recordTemplatesRoutes } from './record-templates.js'
 import { recordViewRoutes } from './record-views.js'
 import { referencedByRoutes } from './referenced-by.js'
+import { releaseRunsRoutes } from './release-runs.js'
 import { remindersRoutes } from './reminders.js'
 import { reportStudioRoutes } from './report-studio.js'
 import { reportsRoutes } from './reports.js'
@@ -272,6 +273,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(traceRoutes)
   await app.register(configDiffRoutes)
   await app.register(environmentRoutes, { prefix: '/environments' })
+  await app.register(releaseRunsRoutes, { prefix: '/release' })
   await app.register(integrationEventsRoutes, { prefix: '/integration-events' })
   await app.register(inboundMappingsRoutes, { prefix: '/inbound-mappings' })
   await app.register(inboundRoutes, { prefix: '/inbound' })
