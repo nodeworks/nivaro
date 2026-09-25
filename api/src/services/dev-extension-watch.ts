@@ -49,22 +49,48 @@ export function isRestartWorthy(rel: string | null | undefined): boolean {
   return /\.(ts|js|mjs|liquid)$/.test(p)
 }
 
+/** api/src/index.ts — the entry tsx watch tracks; touching it restarts the API. */
+const ENTRY = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'index.ts')
+
+/**
+ * Ask tsx watch to restart this API by touching its entry file (mtime only,
+ * no content change). Development only; anywhere else there is no source
+ * tree and no watcher, so it answers `ok: false` and touches nothing.
+ */
+export function requestDevRestart(
+  nodeEnv: string,
+  log: (msg: string) => void,
+  entry: string = ENTRY
+): Promise<{ ok: boolean; reason?: string }> {
+  if (nodeEnv !== 'development')
+    return Promise.resolve({ ok: false, reason: 'not a development API' })
+  if (!existsSync(entry)) return Promise.resolve({ ok: false, reason: 'no source tree' })
+  return new Promise((done) => {
+    const now = new Date()
+    utimes(entry, now, now, (err) => {
+      if (err) {
+        log(`could not touch ${entry} (${err.message}) — restart the API by hand`)
+        done({ ok: false, reason: err.message })
+      } else {
+        log(`touched ${entry} — tsx watch restarts the API`)
+        done({ ok: true })
+      }
+    })
+  })
+}
+
 export function startDevExtensionWatch(nodeEnv: string, log: (msg: string) => void): void {
   if (started || nodeEnv !== 'development') return
   if (process.platform !== 'darwin' && process.platform !== 'win32') return // recursive watch is native there
   started = true
   const startedAt = Date.now()
   let timer: NodeJS.Timeout | null = null
-  const entry = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'index.ts')
   const restart = (id: string, rel: string) => {
     if (timer) return
     timer = setTimeout(() => {
       timer = null
-      log(`extension ${id} changed (${rel}) — touching ${entry} so tsx watch restarts the API`)
-      const now = new Date()
-      utimes(entry, now, now, (err) => {
-        if (err) log(`could not touch ${entry} (${err.message}) — restart the API by hand`)
-      })
+      log(`extension ${id} changed (${rel})`)
+      void requestDevRestart(nodeEnv, log)
     }, SETTLE_MS)
     timer.unref()
   }

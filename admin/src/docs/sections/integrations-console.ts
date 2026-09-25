@@ -327,6 +327,10 @@ PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:ord
 PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": 0 }     // not monitored
 PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": null }  // back to the default`
     },
+    {
+      type: 'p',
+      text: 'Bulk: tick imports in the Inbound tab\'s table (or the select-all box) and the bar above it sets every selected import together — a number of hours, **Back to default**, or **Stop monitoring** — in one request. Only imports still on the page are written; the selection clears after a successful save.'
+    },
 
     { type: 'h2', id: 'ic-alerts', text: 'Alerts — opt-in real-time and daily-summary' },
     {

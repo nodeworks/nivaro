@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { requestDevRestart } from '../services/dev-extension-watch.js'
 import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { NIVARO_REACT_VERSION, NIVARO_VERSION } from '../version.js'
@@ -36,6 +37,18 @@ export async function healthRoutes(app: FastifyInstance) {
       cloud: !!process.env.CLOUD_META_DB_URL,
       ...(dev ? { dev } : {})
     })
+  })
+
+  // POST /dev/restart — the stale-code banner's button. Development only:
+  // touches api/src/index.ts so tsx watch kills and respawns this process
+  // (tsx never respawns a child that exits on its own). 404 everywhere else,
+  // like every dev-only route. The reply carries the CURRENT started_at so the
+  // client can poll /version until a different one answers.
+  app.post('/dev/restart', { preHandler: requireAdmin }, async (req, reply) => {
+    const dev = devStaleness()
+    const res = await requestDevRestart(config.NODE_ENV, (m) => req.log.info(m))
+    if (!res.ok) return reply.code(404).send({ error: res.reason ?? 'not available' })
+    return reply.send({ ok: true, started_at: dev?.started_at ?? null })
   })
 
   /**

@@ -28,9 +28,15 @@ export function staleMessages(dev: DevInfo | null): string[] {
   return out
 }
 
+type Restart =
+  | { state: 'idle' }
+  | { state: 'restarting'; from: string }
+  | { state: 'failed'; text: string }
+
 export function DevStaleBanner() {
   const [dev, setDev] = useState<DevInfo | null>(null)
   const [hidden, setHidden] = useState(false)
+  const [restart, setRestart] = useState<Restart>({ state: 'idle' })
 
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -52,6 +58,55 @@ export function DevStaleBanner() {
     }
   }, [])
 
+  // After a restart request, poll every 2s until a process with a different
+  // started_at answers; the banner then clears on its own (fresh code, not
+  // stale). 60s without a new process = the restart did not happen.
+  useEffect(() => {
+    if (restart.state !== 'restarting') return
+    let stop = false
+    const started = Date.now()
+    const tick = () => {
+      if (stop) return
+      fetch('/api/version', { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (stop) return
+          const now = (j?.dev as DevInfo | undefined) ?? null
+          if (now && now.started_at !== restart.from) {
+            setDev(now)
+            setRestart({ state: 'idle' })
+            return
+          }
+          if (Date.now() - started > 60_000) {
+            setRestart({
+              state: 'failed',
+              text: 'No new process answered in 60s — restart it by hand.'
+            })
+            return
+          }
+          setTimeout(tick, 2_000)
+        })
+        .catch(() => setTimeout(tick, 2_000))
+    }
+    setTimeout(tick, 2_000)
+    return () => {
+      stop = true
+    }
+  }, [restart])
+
+  const requestRestart = () => {
+    if (!dev) return
+    fetch('/api/dev/restart', { method: 'POST', credentials: 'include' })
+      .then(async (r) => {
+        if (r.ok) setRestart({ state: 'restarting', from: dev.started_at })
+        else {
+          const j = await r.json().catch(() => null)
+          setRestart({ state: 'failed', text: j?.error ?? `restart refused (${r.status})` })
+        }
+      })
+      .catch((e) => setRestart({ state: 'failed', text: String(e) }))
+  }
+
   const lines = staleMessages(dev)
   if (!import.meta.env.DEV || hidden || lines.length === 0) return null
   return (
@@ -66,7 +121,21 @@ export function DevStaleBanner() {
             {l}
           </p>
         ))}
+        {restart.state === 'failed' && (
+          <p className='text-rose-700 dark:text-rose-300' data-dev-stale-restart-error>
+            {restart.text}
+          </p>
+        )}
       </div>
+      <button
+        type='button'
+        onClick={requestRestart}
+        disabled={restart.state === 'restarting'}
+        className='shrink-0 rounded border border-amber-400 bg-white px-2 py-0.5 text-[12px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-400/10'
+        data-dev-stale-restart
+      >
+        {restart.state === 'restarting' ? 'Restarting…' : 'Restart the API'}
+      </button>
       <button
         type='button'
         onClick={() => setHidden(true)}

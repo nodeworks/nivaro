@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { isRealChange, isRestartWorthy } from '../../../services/dev-extension-watch.js'
+import {
+  isRealChange,
+  isRestartWorthy,
+  requestDevRestart
+} from '../../../services/dev-extension-watch.js'
 
 describe('isRestartWorthy', () => {
   it('restarts on extension source', () => {
@@ -28,5 +32,31 @@ describe('isRealChange', () => {
   it('restarts on a file written after boot, and on a deleted file', () => {
     expect(isRealChange(boot + 20_000, boot, boot + 30_000)).toBe(true)
     expect(isRealChange(null, boot, boot + 30_000)).toBe(true)
+  })
+})
+
+describe('requestDevRestart', () => {
+  it('refuses outside development and touches nothing', async () => {
+    const res = await requestDevRestart('production', () => {}, '/nonexistent/index.ts')
+    expect(res.ok).toBe(false)
+  })
+  it('refuses when the entry file is missing', async () => {
+    const res = await requestDevRestart('development', () => {}, '/nonexistent/index.ts')
+    expect(res).toEqual({ ok: false, reason: 'no source tree' })
+  })
+  it('bumps the entry file mtime in development', async () => {
+    const { mkdtempSync, writeFileSync, utimesSync, statSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'devrestart-'))
+    const entry = join(dir, 'index.ts')
+    writeFileSync(entry, 'export {}\n')
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(entry, old, old)
+    const logs: string[] = []
+    const res = await requestDevRestart('development', (m) => logs.push(m), entry)
+    expect(res).toEqual({ ok: true })
+    expect(statSync(entry).mtimeMs).toBeGreaterThan(old.getTime() + 1_000)
+    expect(logs[0]).toContain('tsx watch restarts')
   })
 })
