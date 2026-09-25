@@ -202,6 +202,7 @@ import {
   useItemLock,
   WorkflowPanel
 } from './panels'
+import { RecordEventPathSheet } from './panels/IntegrationActivitySection'
 import type { PendingTask } from './panels/TaskPanel'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
@@ -918,6 +919,125 @@ export function partitionRuleResults(
 }
 
 // ─── ItemEditForm ──────────────────────────────────────────────────────────────
+
+/**
+ * Provenance chip for a record an integration or script created through the
+ * API (token / API-key request): the chip names the caller kind, and opens
+ * into the request that made it — method, path, who, when, the ORIGINAL
+ * payload (admins) and a "Show the path" that opens the event path: every
+ * write, transition, flow and partner push that request set off, which is
+ * how the record's values got from that payload to what it holds now.
+ */
+function ApiProvenanceChip({
+  collection,
+  itemId,
+  origin,
+  userName,
+  timestamp,
+  api
+}: {
+  collection: string
+  itemId: string
+  origin: string
+  userName: string | null
+  timestamp: string
+  api: {
+    log_id: number
+    method: string
+    path: string
+    auth: string
+    api_key_name: string | null
+    at: string
+    chain_id: string | null
+    body: unknown
+    body_withheld?: boolean
+  }
+}) {
+  const [pathOpen, setPathOpen] = useState(false)
+  const bodyText =
+    api.body == null
+      ? null
+      : typeof api.body === 'string'
+        ? api.body
+        : JSON.stringify(api.body, null, 2)
+  const caller = api.api_key_name
+    ? `API key "${api.api_key_name}"`
+    : userName
+      ? `${userName}'s token`
+      : 'a token'
+  return (
+    <>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            data-provenance-chip
+            data-provenance-api={api.log_id}
+            className='inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[9.5px] font-medium text-sky-800 hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300'
+            data-tip={`Created through the API by ${caller} · ${new Date(timestamp).toLocaleString()} — click for the request`}
+          >
+            {origin}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align='start' className='w-[420px] max-w-[92vw] p-3 text-[12px]'>
+          <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
+            Created through the API
+          </p>
+          <dl className='mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1'>
+            <dt className='text-slate-400'>Request</dt>
+            <dd className='break-all font-mono text-[11px] text-slate-700 dark:text-slate-200'>
+              {api.method} {api.path}
+            </dd>
+            <dt className='text-slate-400'>Caller</dt>
+            <dd className='text-slate-700 dark:text-slate-200'>{caller}</dd>
+            <dt className='text-slate-400'>When</dt>
+            <dd className='text-slate-700 dark:text-slate-200'>
+              {new Date(api.at).toLocaleString()}
+            </dd>
+          </dl>
+          <p className='mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
+            Original payload
+          </p>
+          {bodyText ? (
+            <pre
+              data-provenance-payload
+              className='mt-1 max-h-56 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[10.5px] leading-snug text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
+            >
+              {bodyText}
+            </pre>
+          ) : (
+            <p className='mt-1 text-[11.5px] text-slate-400'>
+              {api.body_withheld
+                ? 'Only administrators can see the request body.'
+                : 'The request body was not recorded — bodies are kept for token and API-key writes since request logging was added.'}
+            </p>
+          )}
+          <div className='mt-2 flex justify-end'>
+            <button
+              type='button'
+              data-provenance-path
+              onClick={() => setPathOpen(true)}
+              className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-slate-200 dark:hover:bg-muted'
+            >
+              Show the path it took
+            </button>
+          </div>
+        </PopoverContent>
+      </Popover>
+      {pathOpen && (
+        <RecordEventPathSheet
+          target={{
+            source: 'core:inbound',
+            id: String(api.log_id),
+            record: { collection, item: itemId }
+          }}
+          event={{ label: `${api.method} ${api.path}` }}
+          onClose={() => setPathOpen(false)}
+        />
+      )}
+    </>
+  )
+}
 
 export function ItemEditForm({
   collection,
@@ -5388,9 +5508,24 @@ export function ItemEditForm({
     queryKey: ['provenance', collection, String(itemId)],
     queryFn: () =>
       client
-        .request<{ data: { origin: string; timestamp: string; user_name: string | null } | null }>(
-          get(`/provenance/${collection}/${encodeURIComponent(String(itemId))}`)
-        )
+        .request<{
+          data: {
+            origin: string
+            timestamp: string
+            user_name: string | null
+            api?: {
+              log_id: number
+              method: string
+              path: string
+              auth: string
+              api_key_name: string | null
+              at: string
+              chain_id: string | null
+              body: unknown
+              body_withheld?: boolean
+            } | null
+          } | null
+        }>(get(`/provenance/${collection}/${encodeURIComponent(String(itemId))}`))
         .then((r) => r.data)
         .catch(() => null),
     enabled: !isNew && !!itemId,
@@ -8574,7 +8709,7 @@ export function ItemEditForm({
                                               </span>
                                             </span>
                                           )}
-                                          {provenance && (
+                                          {provenance && !provenance.api && (
                                             <span
                                               data-provenance-chip
                                               className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
@@ -8582,6 +8717,16 @@ export function ItemEditForm({
                                             >
                                               {provenance.origin}
                                             </span>
+                                          )}
+                                          {provenance?.api && (
+                                            <ApiProvenanceChip
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                              origin={provenance.origin}
+                                              userName={provenance.user_name}
+                                              timestamp={provenance.timestamp}
+                                              api={provenance.api}
+                                            />
                                           )}
                                           {/* Admin-only: the route 403s everyone else anyway. */}
                                           {isAdmin && !isNew && itemId && (

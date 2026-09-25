@@ -32,7 +32,9 @@ export interface O2MFieldInfo {
 }
 
 interface Revision {
-  id: string
+  /** null for a folded-in event (transition, pipeline start, child-row write). */
+  id: string | null
+  activity?: number | null
   collection: string
   item: string
   action: string | null
@@ -43,7 +45,26 @@ interface Revision {
   user_email: string | null
   first_name: string | null
   last_name: string | null
+  comment?: string | null
+  event?: {
+    kind: 'transition' | 'start'
+    history_id?: number
+    from_label: string | null
+    to_label: string | null
+    transition_label: string | null
+    source: string | null
+  } | null
 }
+
+/** A snapshot row (create / update / delete with a stored copy) — the rows
+ *  the diff, time-travel and time-lapse tools can work from. Events have none. */
+const isSnapshot = (r: Revision) =>
+  r.id != null && (r.action === 'create' || r.action === 'update' || r.action === 'delete')
+const isEvent = (r: Revision) => !isSnapshot(r)
+const rowKey = (r: Revision) =>
+  r.id != null
+    ? `r${r.id}`
+    : `e${r.event?.history_id ?? ''}-${r.activity ?? ''}-${r.timestamp ?? ''}`
 
 // ─── Field metadata: friendly labels + system-field classification ──────────
 // The panel fetches the collection's field config ONCE and every view renders
@@ -693,6 +714,125 @@ function revisionSentence(rev: Revision, humanCount: number, systemCount: number
   return 'saved this record'
 }
 
+/** A pipeline transition / start or a child-row write, in the same rail as
+ *  the snapshots: who, what moved, the comment they left — nothing to diff. */
+function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean }) {
+  const ev = revision.event
+  const auto = ev?.source === 'auto' || (!revision.user_id && ev?.kind === 'transition')
+  const who = auto ? 'Automatic rule' : revisionUserName(revision)
+  let sentence: React.ReactNode
+  if (ev?.kind === 'transition') {
+    sentence = (
+      <>
+        moved it{' '}
+        {ev.from_label && (
+          <>
+            from{' '}
+            <span className='font-medium text-slate-700 dark:text-slate-200'>
+              {ev.from_label}
+            </span>{' '}
+          </>
+        )}
+        to{' '}
+        <span className='font-medium text-slate-700 dark:text-slate-200'>{ev.to_label ?? '—'}</span>
+        {ev.transition_label && <span className='text-slate-400'> · {ev.transition_label}</span>}
+      </>
+    )
+  } else if (ev?.kind === 'start') {
+    sentence = (
+      <>
+        started the pipeline
+        {revision.comment
+          ? ` — ${revision.comment.replace(/^Started pipeline\s*[—-]?\s*/i, '')}`
+          : ''}
+      </>
+    )
+  } else if (revision.action?.startsWith('o2m-')) {
+    sentence = (
+      <>
+        {revision.action === 'o2m-create'
+          ? 'added'
+          : revision.action === 'o2m-delete'
+            ? 'removed'
+            : 'changed'}{' '}
+        related rows{revision.comment ? ` — ${revision.comment}` : ''}
+      </>
+    )
+  } else {
+    sentence = (
+      <>
+        {revision.action ?? 'event'}
+        {revision.comment ? ` — ${revision.comment}` : ''}
+      </>
+    )
+  }
+  const exactTime = revision.timestamp
+    ? new Date(revision.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : '—'
+  return (
+    <div className='relative pl-9' data-revision-event={ev?.kind ?? revision.action ?? ''}>
+      <span
+        className={cn(
+          'absolute left-[11px] top-[18px] h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-card',
+          ev?.kind === 'transition'
+            ? 'bg-violet-500'
+            : ev?.kind === 'start'
+              ? 'bg-violet-300'
+              : 'bg-slate-300'
+        )}
+        aria-hidden
+      />
+      {!isLast && (
+        <span
+          className='absolute bottom-0 left-[15.5px] top-[30px] w-px bg-slate-200 dark:bg-border'
+          aria-hidden
+        />
+      )}
+      <div className='flex w-full items-start gap-2.5 rounded-md px-2 py-2.5 text-left'>
+        {auto ? (
+          <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-[10px] font-semibold text-violet-700 dark:text-violet-300'>
+            ⚡
+          </span>
+        ) : (
+          <UserAvatar
+            userId={revision.user_id}
+            className='h-6 w-6'
+            fallback={
+              <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                {who
+                  .split(' ')
+                  .map((p) => p[0])
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .join('')
+                  .toUpperCase()}
+              </span>
+            }
+          />
+        )}
+        <span className='min-w-0 flex-1 text-[12.5px] text-slate-700 dark:text-slate-200'>
+          <span className='font-medium'>{who}</span>{' '}
+          <span className='text-slate-500 dark:text-slate-400'>{sentence}</span>
+          {ev?.kind === 'transition' && revision.comment && (
+            <span
+              className='mt-0.5 block truncate text-[11.5px] italic text-slate-500 dark:text-slate-400'
+              title={revision.comment}
+            >
+              “{revision.comment}”
+            </span>
+          )}
+        </span>
+        <span
+          className='shrink-0 text-[11px] tabular-nums text-slate-400'
+          title={revision.timestamp ? new Date(revision.timestamp).toLocaleString() : undefined}
+        >
+          {exactTime}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 function RevisionRow({
   revision,
   previousData,
@@ -932,7 +1072,7 @@ function RevisionRow({
             </div>
           </div>
 
-          {showNotes && <RevisionAnnotations revisionId={revision.id} />}
+          {showNotes && <RevisionAnnotations revisionId={revision.id ?? ''} />}
 
           <FieldChangeList
             before={sideBefore}
@@ -1252,6 +1392,7 @@ function RevisionsList({
     staleTime: 30_000
   })
   const count = data?.length ?? 0
+  const snapshots = useMemo(() => (data ?? []).filter(isSnapshot), [data])
 
   const groups = useMemo(() => {
     const out: Array<{ day: string; revisions: Revision[] }> = []
@@ -1285,8 +1426,10 @@ function RevisionsList({
 
   return (
     <div className='space-y-3 pt-3'>
-      <TimeTravelTools data={data ?? []} meta={meta} />
-      {(data?.length ?? 0) >= 3 && <TimeLapseBar revisions={data ?? []} meta={meta} />}
+      <TimeTravelTools data={snapshots} meta={meta} />
+      {snapshots.length >= 3 && (
+        <TimeLapseBar revisions={snapshots as Array<Revision & { id: string }>} meta={meta} />
+      )}
       <div>
         {groups.map((g) => (
           <div key={g.day}>
@@ -1297,15 +1440,26 @@ function RevisionsList({
             </div>
             {g.revisions.map((rev) => {
               const globalIdx = (data ?? []).indexOf(rev)
+              const isLast = globalIdx === (data?.length ?? 1) - 1
+              if (isEvent(rev)) {
+                return (
+                  <div key={rowKey(rev)} className='nvr-fade-in'>
+                    <EventRow revision={rev} isLast={isLast} />
+                  </div>
+                )
+              }
+              // The previous SNAPSHOT — an event row between two saves must
+              // not make the later save read as "every field changed".
+              const prev = (data ?? []).slice(globalIdx + 1).find(isSnapshot)
               return (
-                <div key={rev.id} className='nvr-fade-in'>
+                <div key={rowKey(rev)} className='nvr-fade-in'>
                   <RevisionRow
                     revision={rev}
-                    previousData={data?.[globalIdx + 1]?.data ?? null}
+                    previousData={prev?.data ?? null}
                     meta={meta}
                     onRollback={onRollback}
                     inlineTableFields={inlineTableFields}
-                    isLast={globalIdx === (data?.length ?? 1) - 1}
+                    isLast={isLast}
                   />
                 </div>
               )
