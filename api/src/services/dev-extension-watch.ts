@@ -1,5 +1,6 @@
-import { existsSync, stat, watch } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, stat, utimes, watch } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { extensionRegistry } from '../extensions/loader.js'
 
 /**
@@ -9,8 +10,12 @@ import { extensionRegistry } from '../extensions/loader.js'
  * `tsx watch` never restarts on an edit under api/extensions — and asking it
  * to (`--include extensions/**`) made every start crawl that tree for minutes.
  * `fs.watch` with `recursive` is native on macOS and Windows and costs no
- * crawl. On a change this process exits; tsx watch starts a fresh one, which
- * is the only way an extension's hooks, crons and routes get re-registered.
+ * crawl. On a change this process TOUCHES api/src/index.ts (mtime only): tsx
+ * watch tracks that file, kills this process and starts a fresh one — the
+ * only way an extension's hooks, crons and routes get re-registered. It must
+ * not simply exit: tsx watch never respawns a child that exited on its own,
+ * it waits for the next file change, and the API stayed dead until someone
+ * saved something under api/src.
  *
  * Only the folders of extensions that actually loaded are watched; scripts,
  * tests and data under them are ignored. Never runs in production (no source
@@ -50,11 +55,16 @@ export function startDevExtensionWatch(nodeEnv: string, log: (msg: string) => vo
   started = true
   const startedAt = Date.now()
   let timer: NodeJS.Timeout | null = null
+  const entry = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'index.ts')
   const restart = (id: string, rel: string) => {
     if (timer) return
     timer = setTimeout(() => {
-      log(`extension ${id} changed (${rel}) — restarting`)
-      process.kill(process.pid, 'SIGTERM')
+      timer = null
+      log(`extension ${id} changed (${rel}) — touching ${entry} so tsx watch restarts the API`)
+      const now = new Date()
+      utimes(entry, now, now, (err) => {
+        if (err) log(`could not touch ${entry} (${err.message}) — restart the API by hand`)
+      })
     }, SETTLE_MS)
     timer.unref()
   }
