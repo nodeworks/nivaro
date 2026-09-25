@@ -1600,7 +1600,10 @@ export function RecordReadView({
           <div className='h-56 animate-pulse rounded-xl bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
         </div>
       )}
-      {trailingSlots && <div className='mt-1'>{trailingSlots}</div>}
+      {/* Same 16px as the board's gap-4 between sections: the trailing slots
+          (Comments, Tasks) are more cards in the same column, not a footnote.
+          The inner mt-3 collapses into this. */}
+      {trailingSlots && <div className='mt-4'>{trailingSlots}</div>}
     </div>
   )
 }
