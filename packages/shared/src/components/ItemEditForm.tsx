@@ -9940,7 +9940,7 @@ export function ItemEditForm({
                                                   f.displayFormat === 'currency' ||
                                                   fmtOpts.format === 'currency' ||
                                                   f.cmsField?.computed_type === 'rollup'
-                                                const textCls = `${hero ? 'text-[15px] tracking-[-0.01em] [[data-header-dense]_&]:text-[13px]' : 'text-[13px]'} ${hColorClass} ${hWeightClass}`
+                                                const textCls = `text-[13px] ${hero ? 'tracking-[-0.01em]' : ''} ${hColorClass} ${hWeightClass}`
                                                 const isEmpty =
                                                   raw == null ||
                                                   raw === '' ||

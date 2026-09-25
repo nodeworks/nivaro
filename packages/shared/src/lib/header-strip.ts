@@ -69,11 +69,11 @@ export const HEADER_CELL_LIST =
  *  container clips the last row's line so the band border takes over. */
 export const HEADER_TILE = `group relative flex min-h-[52px] min-w-[96px] max-w-[264px] flex-none flex-col justify-start gap-1 px-4 pt-[9px] pb-2 shadow-[-1px_1px_0_0_#e2e8f0] data-[empty=true]:min-w-0 data-[empty=true]:px-3 data-[empty=true]:opacity-60 dark:shadow-[-1px_1px_0_0_hsl(var(--border))] ${HEADER_CELL_DENSE} ${HEADER_CELL_LIST}`
 
-/** A money / count figure is the reason the band exists: it gets one size
- *  up, so the eye lands on the numbers first and the ids and statuses read
- *  as their supporting facts. */
+/** A money / count figure: same 13px as everything else (Rob, 2026-09-25 —
+ *  one size across the band, stacked or dense), set apart by weight,
+ *  tabular figures and tighter tracking rather than size. */
 export const HEADER_VALUE_HERO =
-  'truncate text-[15px] font-semibold leading-tight tabular-nums tracking-[-0.01em] text-slate-900 dark:text-slate-100 [[data-header-dense]_&]:text-[13px]'
+  'truncate text-[13px] font-semibold leading-tight tabular-nums tracking-[-0.01em] text-slate-900 dark:text-slate-100'
 
 /** Small, tracked, muted — reads as a caption over the figure. */
 export const HEADER_LABEL =
