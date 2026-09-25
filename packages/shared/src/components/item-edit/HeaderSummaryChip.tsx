@@ -2,6 +2,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
+import {
+  HEADER_LABEL,
+  HEADER_SUB,
+  HEADER_TILE,
+  HEADER_VALUE_HERO,
+  HEADER_VALUE_LINE
+} from '../../lib/header-strip'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -126,30 +133,29 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
           type='button'
           disabled={!canOpen}
           className={cn(
-            'group relative flex flex-[1_0_auto] min-w-[128px] flex-col justify-start px-4 py-2 text-left shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors',
+            HEADER_TILE,
+            'text-left',
             canOpen
-              ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-white/[0.025]'
-              : 'cursor-default'
+              ? 'cursor-pointer'
+              : 'cursor-default hover:bg-transparent dark:hover:bg-transparent'
           )}
           data-tip={canOpen ? `Which ${countLabel} contribute` : undefined}
           data-header-summary={field}
+          data-header-money=''
         >
-          <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
+          <span className={HEADER_LABEL} data-header-label>
             {config.label}
           </span>
-          <span
-            className={cn(
-              'mt-1 text-[13px] font-semibold tabular-nums leading-none',
-              isLoading && !data && 'text-slate-300'
-            )}
-          >
-            {value}
-          </span>
-          {data && (
-            <span className='mt-1 text-[10.5px] leading-none text-slate-500 dark:text-slate-400'>
-              across {data.count} {data.count === 1 ? countLabel.replace(/s$/, '') : countLabel}
+          <span className={`${HEADER_VALUE_LINE} items-baseline`} data-header-value>
+            <span className={cn(HEADER_VALUE_HERO, isLoading && !data && 'text-slate-300')}>
+              {value}
             </span>
-          )}
+            {data && (
+              <span className={HEADER_SUB}>
+                across {data.count} {data.count === 1 ? countLabel.replace(/s$/, '') : countLabel}
+              </span>
+            )}
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent align='start' className='w-[360px] p-2 text-[11.5px]'>

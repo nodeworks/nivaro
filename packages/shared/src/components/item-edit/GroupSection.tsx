@@ -539,7 +539,12 @@ export function UserRosterCluster({
       .slice(0, 2)
       .join('')
       .toUpperCase()
-  if (users.length === 0) return <span className='text-[11px] text-slate-400'>—</span>
+  if (users.length === 0)
+    return (
+      <span className='text-[11px] text-slate-400' data-roster-empty>
+        —
+      </span>
+    )
   const shown = users.slice(0, 4)
   const extra = users.length - shown.length
   // NOTE: solid tint hex, never bg-nvr-cyan/N — the opacity modifier is a
@@ -1212,7 +1217,7 @@ function StripRelationCell({
     <RelationCell
       relCollection={relCollection}
       id={id}
-      className='text-[13px] text-slate-700 underline decoration-slate-400 underline-offset-2 group-hover/drill:decoration-[#0284c7] group-hover/drill:text-[#0284c7] dark:text-slate-200 dark:decoration-slate-500'
+      className='text-[13px] text-slate-700 underline decoration-slate-300 underline-offset-[3px] group-hover/drill:decoration-[#0284c7] group-hover/drill:text-[#0284c7] dark:text-slate-200 dark:decoration-slate-600'
     />
   )
   return (
@@ -1281,7 +1286,9 @@ export function StripFieldValue({
   textClassName?: string
 }) {
   const pulse = useChangePulse(val)
-  const base = cn(textClassName ?? 'text-slate-900 dark:text-slate-100', pulse)
+  // The host sets the size (a stat-band tile passes 13px or the 15px hero);
+  // the default is the ordinary 13px figure.
+  const base = cn(textClassName ?? 'text-[13px] text-slate-900 dark:text-slate-100', pulse)
   // Header relations drill by default (the strip is read-only — clicking a
   // related record to inspect it is the only sensible interaction); an explicit
   // drilldown override still supplies the layout/width.
@@ -1365,7 +1372,7 @@ export function StripFieldValue({
     const num = Number(val)
     if (displayFormat === 'currency' && !isNaN(num)) {
       return (
-        <span className={`text-[13px] font-semibold ${base}`}>
+        <span className={`font-semibold ${base}`}>
           {new Intl.NumberFormat(undefined, {
             style: 'currency',
             currency: 'USD',
@@ -1376,21 +1383,21 @@ export function StripFieldValue({
     }
     if (displayFormat === 'integer' && !isNaN(num)) {
       return (
-        <span className={`text-[13px] font-semibold ${base}`}>
+        <span className={`font-semibold ${base}`}>
           {new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Math.round(num))}
         </span>
       )
     }
     if (displayFormat === 'decimal' && !isNaN(num)) {
       return (
-        <span className={`text-[13px] font-semibold ${base}`}>
+        <span className={`font-semibold ${base}`}>
           {new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(num)}
         </span>
       )
     }
     if (displayFormat === 'percent' && !isNaN(num)) {
       return (
-        <span className={`text-[13px] font-semibold ${base}`}>
+        <span className={`font-semibold ${base}`}>
           {new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(
             num / 100
           )}
@@ -1400,7 +1407,7 @@ export function StripFieldValue({
     if (displayFormat === 'date') {
       try {
         return (
-          <span className={`text-[13px] font-semibold ${base}`}>
+          <span className={`font-semibold ${base}`}>
             {new Date(String(val)).toLocaleDateString()}
           </span>
         )
@@ -1411,9 +1418,7 @@ export function StripFieldValue({
     if (displayFormat === 'datetime') {
       try {
         return (
-          <span className={`text-[13px] font-semibold ${base}`}>
-            {new Date(String(val)).toLocaleString()}
-          </span>
+          <span className={`font-semibold ${base}`}>{new Date(String(val)).toLocaleString()}</span>
         )
       } catch {
         /* fall through */
@@ -1421,9 +1426,7 @@ export function StripFieldValue({
     }
   }
 
-  return (
-    <span className={`text-[13px] font-semibold ${base}`}>{formatDisplayValue(val, field)}</span>
-  )
+  return <span className={`font-semibold ${base}`}>{formatDisplayValue(val, field)}</span>
 }
 
 function SummaryStrip({

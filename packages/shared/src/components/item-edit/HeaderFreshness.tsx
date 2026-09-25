@@ -51,8 +51,8 @@ export function HeaderFreshness({
       data-copy-skip
       className={
         machine
-          ? 'mt-0.5 block truncate text-[10px] leading-none text-amber-700/80 dark:text-amber-300/80'
-          : 'mt-0.5 block truncate text-[10px] leading-none text-slate-400 dark:text-slate-500'
+          ? 'mt-0.5 block truncate text-[10px] leading-none text-amber-700/80 dark:text-amber-300/80 [[data-header-dense]_&]:hidden'
+          : 'mt-0.5 block truncate text-[10px] leading-none text-slate-400 dark:text-slate-500 [[data-header-dense]_&]:hidden'
       }
       data-tip={`${t.who} · ${formatDateTime(t.at)}`}
     >

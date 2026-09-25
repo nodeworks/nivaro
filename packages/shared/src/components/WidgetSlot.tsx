@@ -68,6 +68,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useDrilldown, useOptionalNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
+import {
+  HEADER_CELL_DENSE,
+  HEADER_CELL_LIST,
+  HEADER_LABEL,
+  HEADER_VALUE,
+  HEADER_VALUE_HERO,
+  HEADER_VALUE_LINE
+} from '../lib/header-strip'
 import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
@@ -194,20 +202,32 @@ function StripCell({
   const suffix = (display.suffix ?? '') as string
   const formatted = loading ? null : formatStatValue(value, (display.format ?? '') as string)
   return (
-    <div className='flex flex-col justify-start px-4 py-2 min-w-0'>
-      <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-400 dark:text-slate-500'>
+    // Same label / value vocabulary as a field tile in the record sub-header
+    // (lib/header-strip.ts) — the two kinds of cell read as one row.
+    <div
+      className={`flex h-full min-w-0 flex-col justify-start gap-1 px-4 pt-[9px] pb-2 ${HEADER_CELL_DENSE} ${HEADER_CELL_LIST}`}
+    >
+      <span className={HEADER_LABEL} data-header-label>
         {label}
       </span>
-      {/* leading-tight, not leading-none: a field chip in the same strip uses
-          it, and the shorter line box sat the value 2px higher — enough for the
-          two kinds of cell to read as different rows. */}
-      <span className='mt-1 leading-tight truncate max-w-[220px]'>
+      <span
+        data-header-value
+        className={`${HEADER_VALUE_LINE} max-w-[232px] items-baseline truncate leading-tight`}
+      >
         {loading ? (
           <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
         ) : awaiting && value == null ? (
           <AwaitingValue awaiting={awaiting} />
         ) : (
-          <span className='text-[13px] font-semibold tabular-nums text-slate-900 dark:text-slate-100'>
+          <span
+            // Money is the hero figure whichever way the widget spells it —
+            // a currency format, or a plain number carrying a currency prefix.
+            className={
+              String(display.format ?? '').startsWith('currency') || /^[$€£¥]/.test(prefix)
+                ? HEADER_VALUE_HERO
+                : HEADER_VALUE
+            }
+          >
             {prefix}
             {formatted}
             {suffix}
@@ -231,7 +251,8 @@ function StripDisplay({
   widgetConfig?: Record<string, unknown> | null
   awaiting?: string | null
 }) {
-  const wrapper = 'h-full flex items-stretch divide-x divide-slate-200 dark:divide-border'
+  const wrapper =
+    'h-full flex items-stretch divide-x divide-slate-200 dark:divide-border [[data-header-list]_&]:w-full [[data-header-list]_&]:flex-col [[data-header-list]_&]:divide-x-0'
 
   if (data && 'values' in data) {
     const values = (data.values ?? []) as Array<{
@@ -1456,7 +1477,7 @@ export function WidgetSlot({
     if (strip) {
       if (defLoading) {
         return (
-          <div className='flex flex-col justify-center border-r border-slate-200 dark:border-border px-4 py-2.5 w-36'>
+          <div className='flex h-full w-36 flex-col justify-center px-4 py-2.5'>
             <span className='animate-pulse h-2 w-10 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] mb-1' />
             <span className='animate-pulse h-3.5 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
           </div>

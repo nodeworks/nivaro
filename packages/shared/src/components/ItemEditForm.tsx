@@ -98,6 +98,7 @@ import {
 } from './item-edit/GroupSection'
 import { HeaderFreshness } from './item-edit/HeaderFreshness'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
+import { HeaderOverflowChip } from './item-edit/HeaderOverflowChip'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
 import {
@@ -135,6 +136,22 @@ import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
 import { invalidateRecordInsights, RecordInsightsButton } from './item-edit/RecordInsights'
+import {
+  HEADER_BAND,
+  HEADER_DOCK,
+  HEADER_DOCK_CELL,
+  HEADER_LABEL,
+  HEADER_ROW,
+  HEADER_TILE,
+  HEADER_TILES,
+  HEADER_VALUE,
+  HEADER_VALUE_HERO,
+  HEADER_VALUE_LINE,
+  headerNeedsDense,
+  type FoldedCell,
+  HEADER_DOCK_INLINE,
+  headerFoldedCells
+} from '../lib/header-strip'
 import { RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
@@ -1330,6 +1347,71 @@ export function ItemEditForm({
   // Only condense when the body can still scroll past the expand threshold
   // AFTER the strip is gone; otherwise the header simply stays as it is.
   const headerStripRef = useRef<HTMLDivElement | null>(null)
+  // Stacked (label over value, 52px) while the tiles fit one row; dense
+  // (label · value inline, 34px, wrapping) the moment they would not —
+  // lib/header-strip.ts. Measured, not breakpointed: it is the record's own
+  // tile count and values that decide.
+  const [headerDense, setHeaderDense] = useState(false)
+  const headerDenseRef = useRef(false)
+  headerDenseRef.current = headerDense
+  // Dense and STILL past two rows: tile indices folded behind "+N more"
+  // (empties first). Empty = all shown.
+  const [headerFolded, setHeaderFolded] = useState<FoldedCell[]>([])
+  const headerFoldedRef = useRef<FoldedCell[]>([])
+  headerFoldedRef.current = headerFolded
+  const headerWidthCache = useRef(new Map<number, number>())
+  const headerStackedCache = useRef(new Map<number, number>())
+  // Callback ref: the band mounts only once the layout has loaded, so a
+  // mount-time effect would never see it.
+  const headerTilesCleanup = useRef<(() => void) | null>(null)
+  const headerTilesRef = useCallback((el: HTMLDivElement | null) => {
+    headerTilesCleanup.current?.()
+    headerTilesCleanup.current = null
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      const dense = headerNeedsDense(el, headerDenseRef.current, headerStackedCache.current)
+      if (dense !== headerDenseRef.current) setHeaderDense(dense)
+      const folded = dense
+        ? headerFoldedCells(el, headerDenseRef.current, headerWidthCache.current)
+        : []
+      const key = (list: FoldedCell[]) => list.map((c) => `${c.index}${c.empty ? 'e' : ''}`).join()
+      if (key(folded) !== key(headerFoldedRef.current)) setHeaderFolded(folded)
+    }
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(measure)
+    }
+    const ro = new ResizeObserver(schedule)
+    ro.observe(el)
+    for (const child of el.children) ro.observe(child)
+    const mo = new MutationObserver((records) => {
+      for (const child of el.children) ro.observe(child)
+      // Something changed inside a cell (a value loaded, a rollup updated):
+      // its remembered widths are stale. Changes at the group level itself
+      // are our own folding; the "+N more" chip's count is not a cell.
+      if (
+        records.some((r) => {
+          if (r.target === el) return false
+          const node = r.target instanceof Element ? r.target : r.target.parentElement
+          return !node?.closest('[data-header-more]')
+        })
+      ) {
+        headerWidthCache.current.clear()
+        headerStackedCache.current.clear()
+      }
+      schedule()
+    })
+    mo.observe(el, { childList: true, subtree: true, characterData: true })
+    // Synchronous first pass: runs in the commit phase, so the first painted
+    // frame already has the right format (no stacked→dense jump on load).
+    measure()
+    headerTilesCleanup.current = () => {
+      ro.disconnect()
+      mo.disconnect()
+      if (frame) window.cancelAnimationFrame(frame)
+    }
+  }, [])
   const condenseOnScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const el = e.target as HTMLDivElement
     const top = el.scrollTop
@@ -9563,433 +9645,548 @@ export function ItemEditForm({
                                     // "reloading" on scroll-up.
                                     <div
                                       ref={headerStripRef}
-                                      // A stat band. Tiles start at their content width and GROW to
-                                      // fill the row, so the band always spans the record — 14 tiles
-                                      // spread across a wide window, and on a narrow one whole tiles
-                                      // wrap onto a second row that fills the width too. Each tile
-                                      // draws its own top + left hairline; the inner box clips the
-                                      // outer ones, so dividers are continuous and nothing hangs.
-                                      // The px-4 gutter lines the first tile up with the form body.
-                                      className={`shrink-0 px-4 bg-white dark:bg-card shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)] ${headerCondensed ? 'hidden' : 'block'}`}
+                                      // A stat band (lib/header-strip.ts): tiles are content-sized
+                                      // and grow only to a cap, so a wide window shows a compact
+                                      // cluster on the left and the status dock pinned right — not
+                                      // six labels stretched 300px apart. Narrow windows wrap whole
+                                      // tiles; every tile draws its own top + left hairline and the
+                                      // row clips the outer ones, so dividers stay continuous.
+                                      className={`${HEADER_BAND} ${headerCondensed ? 'hidden' : 'block'}`}
+                                      data-header-dense={headerDense ? '' : undefined}
                                     >
-                                      <div className='flex flex-wrap items-stretch overflow-hidden'>
-                                        {[
-                                          ...headerWidgets.map((w) => ({
-                                            type: 'widget' as const,
-                                            sort: w.sort,
-                                            key: w.field,
-                                            data: w
-                                          })),
-                                          ...headerFields.map((f) => ({
-                                            type: 'field' as const,
-                                            sort: f.sort,
-                                            key: f.field,
-                                            data: f
-                                          })),
-                                          ...headerSummaries.map((h) => ({
-                                            type: 'summary' as const,
-                                            sort: 9_000,
-                                            key: `__summary__${h.field}`,
-                                            data: h
-                                          }))
-                                        ]
-                                          .sort((a, b) => a.sort - b.sort)
-                                          .map((item) => {
-                                            const copyCell = (
-                                              el: HTMLElement | null,
-                                              field: string
-                                            ) => {
-                                              if (!el) return
-                                              const clone = el.cloneNode(true) as HTMLElement
-                                              clone
-                                                .querySelectorAll('[data-copy-skip], button')
-                                                .forEach((n) => n.remove())
-                                              const text = clone.textContent?.trim() ?? ''
-                                              if (text) {
-                                                navigator.clipboard.writeText(text).catch(() => {})
-                                                setCopiedHeaderField(field)
-                                                setTimeout(
-                                                  () =>
-                                                    setCopiedHeaderField((prev) =>
-                                                      prev === field ? null : prev
-                                                    ),
-                                                  1500
-                                                )
-                                              }
-                                            }
+                                      <div className={HEADER_ROW}>
+                                        <div className={HEADER_TILES} ref={headerTilesRef}>
+                                          {(() => {
+                                            const tiles = [
+                                              ...headerWidgets.map((w) => ({
+                                                type: 'widget' as const,
+                                                sort: w.sort,
+                                                key: w.field,
+                                                data: w
+                                              })),
+                                              ...headerFields.map((f) => ({
+                                                type: 'field' as const,
+                                                sort: f.sort,
+                                                key: f.field,
+                                                data: f
+                                              })),
+                                              ...headerSummaries.map((h) => ({
+                                                type: 'summary' as const,
+                                                sort: 9_000,
+                                                key: `__summary__${h.field}`,
+                                                data: h
+                                              }))
+                                            ]
+                                              .sort((a, b) => a.sort - b.sort)
+                                              .map((item) => {
+                                                const copyCell = (
+                                                  el: HTMLElement | null,
+                                                  field: string
+                                                ) => {
+                                                  if (!el) return
+                                                  const clone = el.cloneNode(true) as HTMLElement
+                                                  clone
+                                                    .querySelectorAll('[data-copy-skip], button')
+                                                    .forEach((n) => n.remove())
+                                                  const text = clone.textContent?.trim() ?? ''
+                                                  if (text) {
+                                                    navigator.clipboard
+                                                      .writeText(text)
+                                                      .catch(() => {})
+                                                    setCopiedHeaderField(field)
+                                                    setTimeout(
+                                                      () =>
+                                                        setCopiedHeaderField((prev) =>
+                                                          prev === field ? null : prev
+                                                        ),
+                                                      1500
+                                                    )
+                                                  }
+                                                }
 
-                                            if (item.type === 'summary') {
-                                              const h = item.data
-                                              return (
-                                                <HeaderSummaryChip
-                                                  key={item.key}
-                                                  collection={collection}
-                                                  itemId={itemId}
-                                                  field={h.field}
-                                                  config={h.config}
-                                                  onOpen={(t) => {
-                                                    jumpToField(h.field)
-                                                    // The grid may only mount after the tab
-                                                    // switch above — ask a few times.
-                                                    const detail = {
-                                                      collection: t.childCollection,
-                                                      field: t.fkField,
-                                                      rowId: t.rowId
+                                                if (item.type === 'summary') {
+                                                  const h = item.data
+                                                  return (
+                                                    <HeaderSummaryChip
+                                                      key={item.key}
+                                                      collection={collection}
+                                                      itemId={itemId}
+                                                      field={h.field}
+                                                      config={h.config}
+                                                      onOpen={(t) => {
+                                                        jumpToField(h.field)
+                                                        // The grid may only mount after the tab
+                                                        // switch above — ask a few times.
+                                                        const detail = {
+                                                          collection: t.childCollection,
+                                                          field: t.fkField,
+                                                          rowId: t.rowId
+                                                        }
+                                                        for (const ms of [150, 500, 1100]) {
+                                                          window.setTimeout(
+                                                            () =>
+                                                              window.dispatchEvent(
+                                                                new CustomEvent(
+                                                                  'nvr:grid-open-row',
+                                                                  {
+                                                                    detail
+                                                                  }
+                                                                )
+                                                              ),
+                                                            ms
+                                                          )
+                                                        }
+                                                      }}
+                                                    />
+                                                  )
+                                                }
+                                                if (item.type === 'widget') {
+                                                  const w = item.data
+                                                  const isBtnGroup =
+                                                    headerWidgetTypes[w.field] === 'button-group'
+                                                  return (
+                                                    <div
+                                                      key={w.field}
+                                                      // A widget may hold several figures side by side (a budget pair), so
+                                                      // the single-tile cap does not apply to it — each figure is
+                                                      // content-sized inside (StripCell).
+                                                      className={`${HEADER_TILE} !max-w-none !gap-0 !px-0 !py-0 !justify-stretch [[data-header-list]_&]:!h-auto [[data-header-list]_&]:!flex-col`}
+                                                      // Its figures are money: fold them last.
+                                                      data-header-money=''
+                                                    >
+                                                      <WidgetSlot
+                                                        widgetId={w.widgetId}
+                                                        inputBindings={w.inputBindings}
+                                                        itemDraft={effectiveDraft}
+                                                        itemCollection={collection}
+                                                        label={w.label ?? undefined}
+                                                        compact={true}
+                                                        strip={true}
+                                                        onWidgetType={(t) =>
+                                                          setHeaderWidgetTypes((prev) => ({
+                                                            ...prev,
+                                                            [w.field]: t
+                                                          }))
+                                                        }
+                                                      />
+                                                      {!isBtnGroup &&
+                                                        (copiedHeaderField === w.field ? (
+                                                          <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                                        ) : (
+                                                          <button
+                                                            type='button'
+                                                            className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                            onClick={(e) =>
+                                                              copyCell(
+                                                                e.currentTarget.closest<HTMLElement>(
+                                                                  '.group'
+                                                                ),
+                                                                w.field
+                                                              )
+                                                            }
+                                                          >
+                                                            <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                                                          </button>
+                                                        ))}
+                                                    </div>
+                                                  )
+                                                }
+                                                const f = item.data
+                                                if (f.field === '__owners__') {
+                                                  return (
+                                                    <div
+                                                      key='__owners__'
+                                                      // Empty roster reads as an empty cell (dim, folds first).
+                                                      className={`${HEADER_TILE} [&:has([data-roster-empty])]:opacity-60`}
+                                                    >
+                                                      <span
+                                                        className={HEADER_LABEL}
+                                                        data-header-label
+                                                      >
+                                                        {f.label}
+                                                      </span>
+                                                      <div
+                                                        className={HEADER_VALUE_LINE}
+                                                        data-header-value
+                                                      >
+                                                        <OwnersInlineCompact
+                                                          collection={pipelineCollection}
+                                                          itemId={pipelineItem}
+                                                        />
+                                                      </div>
+                                                      {copiedHeaderField === '__owners__' ? (
+                                                        <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                                      ) : (
+                                                        <button
+                                                          type='button'
+                                                          className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                          onClick={(e) =>
+                                                            copyCell(
+                                                              e.currentTarget.closest<HTMLElement>(
+                                                                '.group'
+                                                              ),
+                                                              '__owners__'
+                                                            )
+                                                          }
+                                                        >
+                                                          <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                                                        </button>
+                                                      )}
+                                                    </div>
+                                                  )
+                                                }
+                                                // M2M alias fields have no draft column — their value is the
+                                                // committed junction id set the form already tracks (same
+                                                // source SummaryPanel uses). Without this every M2M header
+                                                // field renders '—' regardless of how many links exist.
+                                                const aliasState = m2mAliasFieldStates[f.field]
+                                                // A rollup header reads the live total while its grid is on
+                                                // screen; otherwise the stored value, which is what the server
+                                                // will recalculate to anyway.
+                                                const liveRollup = liveRollupValues.get(f.field)
+                                                const raw = aliasState
+                                                  ? aliasState.ids
+                                                  : (liveRollup ?? effectiveDraft[f.field])
+                                                // Addendum view: a header value the addendum CHANGES reads amber,
+                                                // matching the proposed-change styling everywhere else.
+                                                // A rollup the addendum's proposed rows move counts too — the
+                                                // addendum never stores the total itself.
+                                                const changedByAddendum =
+                                                  viewingAddendum &&
+                                                  !aliasState &&
+                                                  ((addendumViewData != null &&
+                                                    f.field in addendumViewData &&
+                                                    String(draft[f.field] ?? '') !==
+                                                      String(addendumViewData[f.field] ?? '')) ||
+                                                    (liveRollup !== undefined &&
+                                                      Math.round(
+                                                        Number(draft[f.field] ?? 0) * 100
+                                                      ) !== Math.round(liveRollup * 100)))
+                                                const thrColor = (() => {
+                                                  const rules = (
+                                                    f as {
+                                                      thresholds?: Array<{
+                                                        op: string
+                                                        value: number
+                                                        color: string
+                                                      }>
                                                     }
-                                                    for (const ms of [150, 500, 1100]) {
-                                                      window.setTimeout(
-                                                        () =>
-                                                          window.dispatchEvent(
-                                                            new CustomEvent('nvr:grid-open-row', {
-                                                              detail
-                                                            })
-                                                          ),
-                                                        ms
-                                                      )
-                                                    }
-                                                  }}
-                                                />
-                                              )
-                                            }
-                                            if (item.type === 'widget') {
-                                              const w = item.data
-                                              const isBtnGroup =
-                                                headerWidgetTypes[w.field] === 'button-group'
-                                              return (
-                                                <div
-                                                  key={w.field}
-                                                  className='group relative flex-[1_0_auto] min-w-0 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))]'
-                                                >
-                                                  <WidgetSlot
-                                                    widgetId={w.widgetId}
-                                                    inputBindings={w.inputBindings}
-                                                    itemDraft={effectiveDraft}
-                                                    itemCollection={collection}
-                                                    label={w.label ?? undefined}
-                                                    compact={true}
-                                                    strip={true}
-                                                    onWidgetType={(t) =>
-                                                      setHeaderWidgetTypes((prev) => ({
-                                                        ...prev,
-                                                        [w.field]: t
-                                                      }))
-                                                    }
-                                                  />
-                                                  {!isBtnGroup &&
-                                                    (copiedHeaderField === w.field ? (
+                                                  ).thresholds
+                                                  if (!rules?.length) return undefined
+                                                  const n =
+                                                    typeof raw === 'number'
+                                                      ? raw
+                                                      : typeof raw === 'string' && raw.trim() !== ''
+                                                        ? Number(raw)
+                                                        : Number.NaN
+                                                  if (!Number.isFinite(n)) return undefined
+                                                  const hit = rules.find((r) =>
+                                                    r.op === 'lt'
+                                                      ? n < r.value
+                                                      : r.op === 'lte'
+                                                        ? n <= r.value
+                                                        : r.op === 'gt'
+                                                          ? n > r.value
+                                                          : r.op === 'gte'
+                                                            ? n >= r.value
+                                                            : r.op === 'eq'
+                                                              ? n === r.value
+                                                              : false
+                                                  )
+                                                  return hit?.color
+                                                })()
+                                                const fColor = thrColor ?? f.color
+                                                const hColorClass = changedByAddendum
+                                                  ? 'text-amber-600 dark:text-amber-400'
+                                                  : fColor === 'cyan'
+                                                    ? 'text-nvr-cyan'
+                                                    : fColor === 'blue'
+                                                      ? 'text-blue-600 dark:text-blue-400'
+                                                      : fColor === 'green'
+                                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                                        : fColor === 'amber'
+                                                          ? 'text-amber-600 dark:text-amber-400'
+                                                          : fColor === 'red'
+                                                            ? 'text-red-600 dark:text-red-400'
+                                                            : fColor === 'purple'
+                                                              ? 'text-purple-600 dark:text-purple-400'
+                                                              : 'text-slate-900 dark:text-slate-100'
+                                                const hWeightClass =
+                                                  f.weight === 'bold'
+                                                    ? 'font-bold'
+                                                    : f.weight === 'semibold'
+                                                      ? 'font-semibold'
+                                                      : f.weight === 'medium'
+                                                        ? 'font-medium'
+                                                        : 'font-semibold'
+                                                // Money figures lead the band (one size up); anything
+                                                // without a value steps back so the populated facts
+                                                // carry the row.
+                                                const fmtOpts = f.cmsField
+                                                  ? (() => {
+                                                      try {
+                                                        const o = f.cmsField.options
+                                                        return (
+                                                          typeof o === 'string'
+                                                            ? JSON.parse(o)
+                                                            : (o ?? {})
+                                                        ) as { format?: string }
+                                                      } catch {
+                                                        return {} as { format?: string }
+                                                      }
+                                                    })()
+                                                  : ({} as { format?: string })
+                                                const hero =
+                                                  f.displayFormat === 'currency' ||
+                                                  fmtOpts.format === 'currency' ||
+                                                  f.cmsField?.computed_type === 'rollup'
+                                                const textCls = `${hero ? 'text-[15px] tracking-[-0.01em] [[data-header-dense]_&]:text-[13px]' : 'text-[13px]'} ${hColorClass} ${hWeightClass}`
+                                                const isEmpty =
+                                                  raw == null ||
+                                                  raw === '' ||
+                                                  (Array.isArray(raw) && raw.length === 0)
+                                                const isPill = f.displayAs === 'pill'
+                                                const isTag = f.displayAs === 'tag'
+                                                return (
+                                                  <div
+                                                    key={f.field}
+                                                    data-header-field={f.field}
+                                                    data-empty={isEmpty}
+                                                    data-header-money={hero ? '' : undefined}
+                                                    // self-stretch so the label sits the same distance from the
+                                                    // top as a widget cell's. The row is items-center, and a
+                                                    // widget stat cell already stretches to full height — a
+                                                    // centred field chip is shorter, so its label landed a few
+                                                    // pixels lower and the two read as misaligned.
+                                                    className={HEADER_TILE}
+                                                  >
+                                                    <span
+                                                      className={HEADER_LABEL}
+                                                      data-header-label
+                                                    >
+                                                      {f.label}
+                                                    </span>
+                                                    <span
+                                                      data-header-value
+                                                      className={[
+                                                        HEADER_VALUE_LINE,
+                                                        isPill || isTag
+                                                          ? 'max-w-[232px] truncate leading-tight'
+                                                          : 'max-w-[232px] items-baseline truncate leading-tight',
+                                                        isPill
+                                                          ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10`
+                                                          : isTag
+                                                            ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}`
+                                                            : ''
+                                                      ]
+                                                        .filter(Boolean)
+                                                        .join(' ')}
+                                                    >
+                                                      {(() => {
+                                                        if (
+                                                          addendumRollupLoading &&
+                                                          f.cmsField?.computed_type === 'rollup' &&
+                                                          !aliasState
+                                                        ) {
+                                                          return (
+                                                            <span
+                                                              aria-label='Loading'
+                                                              className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'
+                                                            />
+                                                          )
+                                                        }
+                                                        const inner = f.cmsField ? (
+                                                          <>
+                                                            <StripFieldValue
+                                                              field={f.cmsField}
+                                                              val={raw}
+                                                              relations={relations}
+                                                              collection={collection}
+                                                              displayFormat={f.displayFormat}
+                                                              textClassName={textCls}
+                                                            />
+                                                            {/* A figure explains its arithmetic; a computed
+                                                              STATUS ("coalesce(∅, shipped)") would only leak
+                                                              its formula — the explainer rides numbers. */}
+                                                            {(f.cmsField.computed_type ===
+                                                              'rollup' ||
+                                                              ((f.cmsField.computed_type ===
+                                                                'read' ||
+                                                                f.cmsField.computed_type ===
+                                                                  'write') &&
+                                                                hero)) &&
+                                                              !isNew &&
+                                                              !viewingAddendum && (
+                                                                <HeaderRollupExplainer
+                                                                  collection={collection}
+                                                                  itemId={itemId}
+                                                                  field={f.cmsField.field}
+                                                                />
+                                                              )}
+                                                            {!f.cmsField.computed_type &&
+                                                              !isNew &&
+                                                              !viewingAddendum && (
+                                                                <HeaderFreshness
+                                                                  collection={collection}
+                                                                  itemId={itemId}
+                                                                  field={f.cmsField.field}
+                                                                  fields={headerTouchFields}
+                                                                />
+                                                              )}
+                                                          </>
+                                                        ) : (
+                                                          <span
+                                                            className={`${hero ? HEADER_VALUE_HERO : HEADER_VALUE} ${textCls}`}
+                                                          >
+                                                            {formatHeaderFieldValue(
+                                                              raw,
+                                                              f.displayFormat
+                                                            )}
+                                                          </span>
+                                                        )
+                                                        // Configured link template ({{value}} + any {{field}} from
+                                                        // the draft) turns the header value into an external link
+                                                        // — how e.g. an external system id deep-links to that system with
+                                                        // zero hardcoding (Table Editor header chip ⚙ → Link URL).
+                                                        const linkTemplate = (
+                                                          f as { linkTemplate?: string }
+                                                        ).linkTemplate
+                                                        if (
+                                                          !linkTemplate ||
+                                                          raw === null ||
+                                                          raw === undefined ||
+                                                          raw === '' ||
+                                                          Array.isArray(raw)
+                                                        )
+                                                          return inner
+                                                        const href = linkTemplate
+                                                          .replace(
+                                                            /\{\{\s*value\s*\}\}/g,
+                                                            encodeURIComponent(String(raw))
+                                                          )
+                                                          .replace(
+                                                            /\{\{\s*([\w.]+)\s*\}\}/g,
+                                                            (_m, k: string) =>
+                                                              encodeURIComponent(
+                                                                String(draft[k] ?? '')
+                                                              )
+                                                          )
+                                                        if (!/^https?:\/\//i.test(href))
+                                                          return inner
+                                                        return (
+                                                          <a
+                                                            href={href}
+                                                            target='_blank'
+                                                            rel='noopener noreferrer'
+                                                            className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
+                                                            onClick={(e) => e.stopPropagation()}
+                                                          >
+                                                            {inner}
+                                                          </a>
+                                                        )
+                                                      })()}
+                                                    </span>
+                                                    {copiedHeaderField === f.field ? (
                                                       <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                                                     ) : (
                                                       <button
                                                         type='button'
                                                         className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                                                        onClick={(e) =>
-                                                          copyCell(
+                                                        onClick={(e) => {
+                                                          const cell =
                                                             e.currentTarget.closest<HTMLElement>(
                                                               '.group'
-                                                            ),
-                                                            w.field
-                                                          )
-                                                        }
+                                                            )
+                                                          const valueSpan =
+                                                            cell?.querySelectorAll<HTMLElement>(
+                                                              ':scope > span'
+                                                            )[1]
+                                                          let text = ''
+                                                          if (valueSpan) {
+                                                            const clone = valueSpan.cloneNode(
+                                                              true
+                                                            ) as HTMLElement
+                                                            clone
+                                                              .querySelectorAll('[data-copy-skip]')
+                                                              .forEach((el) => el.remove())
+                                                            text = clone.textContent?.trim() ?? ''
+                                                          }
+                                                          if (text) {
+                                                            navigator.clipboard
+                                                              .writeText(text)
+                                                              .catch(() => {})
+                                                            setCopiedHeaderField(f.field)
+                                                            setTimeout(
+                                                              () =>
+                                                                setCopiedHeaderField((prev) =>
+                                                                  prev === f.field ? null : prev
+                                                                ),
+                                                              1500
+                                                            )
+                                                          }
+                                                        }}
                                                       >
                                                         <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                       </button>
-                                                    ))}
-                                                </div>
-                                              )
-                                            }
-                                            const f = item.data
-                                            if (f.field === '__owners__') {
-                                              return (
-                                                <div
-                                                  key='__owners__'
-                                                  className='group relative flex flex-col justify-start px-4 py-2 min-w-0 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors hover:bg-white/60 dark:hover:bg-white/[0.025]'
-                                                >
-                                                  <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
-                                                    {f.label}
-                                                  </span>
-                                                  <div className='mt-1'>
-                                                    <OwnersInlineCompact
-                                                      collection={pipelineCollection}
-                                                      itemId={pipelineItem}
+                                                    )}
+                                                  </div>
+                                                )
+                                              })
+                                            const foldedCells = headerDense ? headerFolded : []
+                                            const foldSet = new Set(foldedCells.map((c) => c.index))
+                                            const folded = tiles.filter((_, k) => foldSet.has(k))
+                                            return (
+                                              <>
+                                                {tiles.map((t, k) =>
+                                                  foldSet.has(k) ? (
+                                                    // Folded: out of flow but in the DOM, in place, so the
+                                                    // measurer's cell index stays the tile index.
+                                                    <div
+                                                      key={`__folded_${k}`}
+                                                      data-header-folded
+                                                      aria-hidden='true'
+                                                      className='pointer-events-none invisible absolute'
+                                                    >
+                                                      {t}
+                                                    </div>
+                                                  ) : (
+                                                    t
+                                                  )
+                                                )}
+                                                {folded.length > 0 && (
+                                                  <HeaderOverflowChip
+                                                    count={folded.length}
+                                                    allEmpty={foldedCells.every((c) => c.empty)}
+                                                    labels={foldedCells.map((c) => c.label)}
+                                                  >
+                                                    {folded}
+                                                  </HeaderOverflowChip>
+                                                )}
+                                                {!isNew && itemId && (
+                                                  // Below lg the Integrations chip ends the last row
+                                                  // (the column dock is lg-only) — never a third shelf.
+                                                  <div
+                                                    className={HEADER_DOCK_INLINE}
+                                                    data-header-tail
+                                                  >
+                                                    <ExternalRequestsChip
+                                                      collection={collection}
+                                                      itemId={String(itemId)}
                                                     />
                                                   </div>
-                                                  {copiedHeaderField === '__owners__' ? (
-                                                    <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
-                                                  ) : (
-                                                    <button
-                                                      type='button'
-                                                      className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                                                      onClick={(e) =>
-                                                        copyCell(
-                                                          e.currentTarget.closest<HTMLElement>(
-                                                            '.group'
-                                                          ),
-                                                          '__owners__'
-                                                        )
-                                                      }
-                                                    >
-                                                      <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
-                                                    </button>
-                                                  )}
-                                                </div>
-                                              )
-                                            }
-                                            // M2M alias fields have no draft column — their value is the
-                                            // committed junction id set the form already tracks (same
-                                            // source SummaryPanel uses). Without this every M2M header
-                                            // field renders '—' regardless of how many links exist.
-                                            const aliasState = m2mAliasFieldStates[f.field]
-                                            // A rollup header reads the live total while its grid is on
-                                            // screen; otherwise the stored value, which is what the server
-                                            // will recalculate to anyway.
-                                            const liveRollup = liveRollupValues.get(f.field)
-                                            const raw = aliasState
-                                              ? aliasState.ids
-                                              : (liveRollup ?? effectiveDraft[f.field])
-                                            // Addendum view: a header value the addendum CHANGES reads amber,
-                                            // matching the proposed-change styling everywhere else.
-                                            // A rollup the addendum's proposed rows move counts too — the
-                                            // addendum never stores the total itself.
-                                            const changedByAddendum =
-                                              viewingAddendum &&
-                                              !aliasState &&
-                                              ((addendumViewData != null &&
-                                                f.field in addendumViewData &&
-                                                String(draft[f.field] ?? '') !==
-                                                  String(addendumViewData[f.field] ?? '')) ||
-                                                (liveRollup !== undefined &&
-                                                  Math.round(Number(draft[f.field] ?? 0) * 100) !==
-                                                    Math.round(liveRollup * 100)))
-                                            const thrColor = (() => {
-                                              const rules = (
-                                                f as {
-                                                  thresholds?: Array<{
-                                                    op: string
-                                                    value: number
-                                                    color: string
-                                                  }>
-                                                }
-                                              ).thresholds
-                                              if (!rules?.length) return undefined
-                                              const n =
-                                                typeof raw === 'number'
-                                                  ? raw
-                                                  : typeof raw === 'string' && raw.trim() !== ''
-                                                    ? Number(raw)
-                                                    : Number.NaN
-                                              if (!Number.isFinite(n)) return undefined
-                                              const hit = rules.find((r) =>
-                                                r.op === 'lt'
-                                                  ? n < r.value
-                                                  : r.op === 'lte'
-                                                    ? n <= r.value
-                                                    : r.op === 'gt'
-                                                      ? n > r.value
-                                                      : r.op === 'gte'
-                                                        ? n >= r.value
-                                                        : r.op === 'eq'
-                                                          ? n === r.value
-                                                          : false
-                                              )
-                                              return hit?.color
-                                            })()
-                                            const fColor = thrColor ?? f.color
-                                            const hColorClass = changedByAddendum
-                                              ? 'text-amber-600 dark:text-amber-400'
-                                              : fColor === 'cyan'
-                                                ? 'text-nvr-cyan'
-                                                : fColor === 'blue'
-                                                  ? 'text-blue-600 dark:text-blue-400'
-                                                  : fColor === 'green'
-                                                    ? 'text-emerald-600 dark:text-emerald-400'
-                                                    : fColor === 'amber'
-                                                      ? 'text-amber-600 dark:text-amber-400'
-                                                      : fColor === 'red'
-                                                        ? 'text-red-600 dark:text-red-400'
-                                                        : fColor === 'purple'
-                                                          ? 'text-purple-600 dark:text-purple-400'
-                                                          : 'text-slate-900 dark:text-slate-100'
-                                            const hWeightClass =
-                                              f.weight === 'bold'
-                                                ? 'font-bold'
-                                                : f.weight === 'semibold'
-                                                  ? 'font-semibold'
-                                                  : f.weight === 'medium'
-                                                    ? 'font-medium'
-                                                    : 'font-semibold'
-                                            const textCls = `${hColorClass} ${hWeightClass}`
-                                            const isPill = f.displayAs === 'pill'
-                                            const isTag = f.displayAs === 'tag'
-                                            return (
-                                              <div
-                                                key={f.field}
-                                                data-header-field={f.field}
-                                                // self-stretch so the label sits the same distance from the
-                                                // top as a widget cell's. The row is items-center, and a
-                                                // widget stat cell already stretches to full height — a
-                                                // centred field chip is shorter, so its label landed a few
-                                                // pixels lower and the two read as misaligned.
-                                                className='group relative flex flex-[1_0_auto] min-w-[128px] flex-col justify-start px-4 py-2 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.025]'
-                                              >
-                                                <span className='flex h-4 items-end truncate text-[10px] font-medium leading-none text-slate-500 dark:text-slate-400'>
-                                                  {f.label}
-                                                </span>
-                                                <span
-                                                  className={[
-                                                    'mt-1 leading-tight truncate max-w-[220px] pb-px',
-                                                    isPill
-                                                      ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10`
-                                                      : isTag
-                                                        ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}`
-                                                        : ''
-                                                  ]
-                                                    .filter(Boolean)
-                                                    .join(' ')}
-                                                >
-                                                  {(() => {
-                                                    if (
-                                                      addendumRollupLoading &&
-                                                      f.cmsField?.computed_type === 'rollup' &&
-                                                      !aliasState
-                                                    ) {
-                                                      return (
-                                                        <span
-                                                          aria-label='Loading'
-                                                          className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'
-                                                        />
-                                                      )
-                                                    }
-                                                    const inner = f.cmsField ? (
-                                                      <>
-                                                        <StripFieldValue
-                                                          field={f.cmsField}
-                                                          val={raw}
-                                                          relations={relations}
-                                                          collection={collection}
-                                                          displayFormat={f.displayFormat}
-                                                          textClassName={textCls}
-                                                        />
-                                                        {(f.cmsField.computed_type === 'rollup' ||
-                                                          f.cmsField.computed_type === 'read' ||
-                                                          f.cmsField.computed_type === 'write') &&
-                                                          !isNew &&
-                                                          !viewingAddendum && (
-                                                            <HeaderRollupExplainer
-                                                              collection={collection}
-                                                              itemId={itemId}
-                                                              field={f.cmsField.field}
-                                                            />
-                                                          )}
-                                                        {!f.cmsField.computed_type &&
-                                                          !isNew &&
-                                                          !viewingAddendum && (
-                                                            <HeaderFreshness
-                                                              collection={collection}
-                                                              itemId={itemId}
-                                                              field={f.cmsField.field}
-                                                              fields={headerTouchFields}
-                                                            />
-                                                          )}
-                                                      </>
-                                                    ) : (
-                                                      <span className={`text-[13px] ${textCls}`}>
-                                                        {formatHeaderFieldValue(
-                                                          raw,
-                                                          f.displayFormat
-                                                        )}
-                                                      </span>
-                                                    )
-                                                    // Configured link template ({{value}} + any {{field}} from
-                                                    // the draft) turns the header value into an external link
-                                                    // — how e.g. an external system id deep-links to that system with
-                                                    // zero hardcoding (Table Editor header chip ⚙ → Link URL).
-                                                    const linkTemplate = (
-                                                      f as { linkTemplate?: string }
-                                                    ).linkTemplate
-                                                    if (
-                                                      !linkTemplate ||
-                                                      raw === null ||
-                                                      raw === undefined ||
-                                                      raw === '' ||
-                                                      Array.isArray(raw)
-                                                    )
-                                                      return inner
-                                                    const href = linkTemplate
-                                                      .replace(
-                                                        /\{\{\s*value\s*\}\}/g,
-                                                        encodeURIComponent(String(raw))
-                                                      )
-                                                      .replace(
-                                                        /\{\{\s*([\w.]+)\s*\}\}/g,
-                                                        (_m, k: string) =>
-                                                          encodeURIComponent(String(draft[k] ?? ''))
-                                                      )
-                                                    if (!/^https?:\/\//i.test(href)) return inner
-                                                    return (
-                                                      <a
-                                                        href={href}
-                                                        target='_blank'
-                                                        rel='noopener noreferrer'
-                                                        className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
-                                                        onClick={(e) => e.stopPropagation()}
-                                                      >
-                                                        {inner}
-                                                      </a>
-                                                    )
-                                                  })()}
-                                                </span>
-                                                {copiedHeaderField === f.field ? (
-                                                  <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
-                                                ) : (
-                                                  <button
-                                                    type='button'
-                                                    className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                                                    onClick={(e) => {
-                                                      const cell =
-                                                        e.currentTarget.closest<HTMLElement>(
-                                                          '.group'
-                                                        )
-                                                      const valueSpan =
-                                                        cell?.querySelectorAll<HTMLElement>(
-                                                          ':scope > span'
-                                                        )[1]
-                                                      let text = ''
-                                                      if (valueSpan) {
-                                                        const clone = valueSpan.cloneNode(
-                                                          true
-                                                        ) as HTMLElement
-                                                        clone
-                                                          .querySelectorAll('[data-copy-skip]')
-                                                          .forEach((el) => el.remove())
-                                                        text = clone.textContent?.trim() ?? ''
-                                                      }
-                                                      if (text) {
-                                                        navigator.clipboard
-                                                          .writeText(text)
-                                                          .catch(() => {})
-                                                        setCopiedHeaderField(f.field)
-                                                        setTimeout(
-                                                          () =>
-                                                            setCopiedHeaderField((prev) =>
-                                                              prev === f.field ? null : prev
-                                                            ),
-                                                          1500
-                                                        )
-                                                      }
-                                                    }}
-                                                  >
-                                                    <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
-                                                  </button>
                                                 )}
-                                              </div>
+                                              </>
                                             )
-                                          })}
+                                          })()}
+                                        </div>
                                         {!isNew && itemId && (
-                                          <div className='ml-auto flex items-center px-4 py-2 shadow-[-1px_-1px_0_0_#e2e8f0] dark:shadow-[-1px_-1px_0_0_hsl(var(--border))]'>
-                                            <ExternalRequestsChip
-                                              collection={collection}
-                                              itemId={String(itemId)}
-                                            />
+                                          <div className={HEADER_DOCK} data-header-dock>
+                                            <div className={HEADER_DOCK_CELL}>
+                                              <ExternalRequestsChip
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                              />
+                                            </div>
                                           </div>
                                         )}
                                       </div>

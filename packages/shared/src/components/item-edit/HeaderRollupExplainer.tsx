@@ -220,13 +220,15 @@ export function HeaderRollupExplainer({
           data-copy-skip
           onClick={(e) => e.stopPropagation()}
           className={cn(
-            'mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-left text-[10.5px] leading-none text-slate-500 hover:text-nvr-cyan dark:text-slate-400',
+            'inline-flex max-w-full items-baseline gap-1 truncate text-left text-[11px] font-medium leading-none tabular-nums text-slate-400 hover:text-nvr-cyan dark:text-slate-500',
+            // Dense band (lib/header-strip.ts): the Σ alone carries the affordance.
+            '[[data-header-dense]_&]:shrink-0 [[data-header-dense]_&]:self-center',
             open && 'text-nvr-cyan'
           )}
           data-tip='Where this number comes from'
         >
-          <Sigma className='h-2.5 w-2.5 shrink-0' aria-hidden='true' />
-          <span className='truncate'>{summary ?? '…'}</span>
+          <Sigma className='h-2.5 w-2.5 shrink-0 self-center' aria-hidden='true' />
+          <span className='truncate [[data-header-dense]_&]:hidden'>{summary ?? '…'}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent
