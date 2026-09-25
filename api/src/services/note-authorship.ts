@@ -65,6 +65,12 @@ export function originOfRow(row: {
 // mode: one tenant may be migrated while another is not), per process.
 const hasOrigin = new Map<string, Promise<boolean>>()
 
+/** `['<alias>.origin']` for a select from `table`, or `[]` before migration 340 ran. */
+export async function originSelect(table: string, alias = table): Promise<string[]> {
+  const probe = await originFields(table, 'person')
+  return probe.origin ? [`${alias}.origin`] : []
+}
+
 /** `{origin}` for an insert into `table`, or `{}` before migration 340 ran. */
 export async function originFields(
   table: string,

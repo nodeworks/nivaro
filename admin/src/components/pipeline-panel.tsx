@@ -10,7 +10,8 @@ import {
   Search,
   UserPlus,
   Users,
-  X
+  X,
+  Zap
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -23,12 +24,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   api,
   type PipelineHistoryEntry,
@@ -124,8 +120,7 @@ function StateTrack({
       .filter((s) => {
         const v = s.stage_visibility ?? 'always'
         if (v === 'hide') return false
-        if (v === 'hide_unless_active')
-          return visitedIds.has(s.id) || s.id === currentStateId
+        if (v === 'hide_unless_active') return visitedIds.has(s.id) || s.id === currentStateId
         return true
       })
       .sort((a, b) => a.sort - b.sort)
@@ -154,6 +149,9 @@ function StateTrack({
   }
 
   function entryInitials(h: PipelineHistoryEntry) {
+    if (isMachineEntry(h)) {
+      return <Zap className='inline h-2.5 w-2.5' aria-label={machineHeadline(h)} />
+    }
     const f = h.first_name?.[0] ?? ''
     const l = h.last_name?.[0] ?? ''
     return (f + l).toUpperCase() || h.user_email?.[0]?.toUpperCase() || '?'
@@ -165,106 +163,126 @@ function StateTrack({
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className='flex w-full items-start'>
-      {relevant.map((s, i) => {
-        const isCurrent = s.id === currentStateId
-        const isVisited = visitedIds.has(s.id)
-        const isDone = isVisited && !isCurrent
-        const nodeColor = s.color ?? '#94a3b8'
-        const isLast = i === relevant.length - 1
-        const nextState = !isLast ? relevant[i + 1] : null
-        const edge = nextState ? edgeEntries(s.id, nextState.id) : []
-        const hasEdge = edge.length > 0
+      <div className='flex w-full items-start'>
+        {relevant.map((s, i) => {
+          const isCurrent = s.id === currentStateId
+          const isVisited = visitedIds.has(s.id)
+          const isDone = isVisited && !isCurrent
+          const nodeColor = s.color ?? '#94a3b8'
+          const isLast = i === relevant.length - 1
+          const nextState = !isLast ? relevant[i + 1] : null
+          const edge = nextState ? edgeEntries(s.id, nextState.id) : []
+          const hasEdge = edge.length > 0
 
-        return (
-          <div key={s.id} className='flex min-w-[48px] flex-1 items-start'>
-            {/* Node + label */}
-            <div className='flex min-w-0 flex-1 flex-col items-center gap-1.5 px-1'>
-              <div
-                className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full'
-                style={{
-                  backgroundColor: isCurrent || isDone ? nodeColor : '#f1f5f9',
-                  border: isCurrent || isDone ? 'none' : '1.5px solid #e2e8f0',
-                  boxShadow: isCurrent
-                    ? `0 0 0 3px white, 0 0 0 5px ${nodeColor}`
-                    : undefined
-                }}
-              >
-                {isDone ? (
-                  <Check className='h-3.5 w-3.5 text-white' strokeWidth={2.5} />
-                ) : isCurrent ? (
-                  <div className='h-2.5 w-2.5 rounded-full bg-white/80' />
-                ) : (
-                  <div className='h-2 w-2 rounded-full bg-slate-300' />
-                )}
+          return (
+            <div key={s.id} className='flex min-w-[48px] flex-1 items-start'>
+              {/* Node + label */}
+              <div className='flex min-w-0 flex-1 flex-col items-center gap-1.5 px-1'>
+                <div
+                  className='flex h-7 w-7 shrink-0 items-center justify-center rounded-full'
+                  style={{
+                    backgroundColor: isCurrent || isDone ? nodeColor : '#f1f5f9',
+                    border: isCurrent || isDone ? 'none' : '1.5px solid #e2e8f0',
+                    boxShadow: isCurrent ? `0 0 0 3px white, 0 0 0 5px ${nodeColor}` : undefined
+                  }}
+                >
+                  {isDone ? (
+                    <Check className='h-3.5 w-3.5 text-white' strokeWidth={2.5} />
+                  ) : isCurrent ? (
+                    <div className='h-2.5 w-2.5 rounded-full bg-white/80' />
+                  ) : (
+                    <div className='h-2 w-2 rounded-full bg-slate-300' />
+                  )}
+                </div>
+                <span
+                  className='w-full break-words text-center leading-snug'
+                  style={{
+                    fontSize: '11px',
+                    color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
+                    fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
+                    wordBreak: 'break-word'
+                  }}
+                >
+                  {s.label}
+                </span>
               </div>
-              <span
-                className='w-full break-words text-center leading-snug'
-                style={{
-                  fontSize: '11px',
-                  color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
-                  fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
-                  wordBreak: 'break-word'
-                }}
-              >
-                {s.label}
-              </span>
+
+              {/* Connector: line + transition history chips */}
+              {!isLast && (
+                <div className='mt-[13px] flex w-10 shrink-0 flex-col items-center gap-1.5'>
+                  {/* Line with arrowhead */}
+                  {(() => {
+                    const lineColor = isDone ? `${nodeColor}55` : '#e8ecf0'
+                    return (
+                      <div className='flex w-full shrink-0 items-center'>
+                        <div
+                          className='h-0.5 flex-1 rounded-l-sm'
+                          style={{ backgroundColor: lineColor }}
+                        />
+                        <div
+                          style={{
+                            width: 0,
+                            height: 0,
+                            borderTop: '3px solid transparent',
+                            borderBottom: '3px solid transparent',
+                            borderLeft: `5px solid ${lineColor}`
+                          }}
+                        />
+                      </div>
+                    )
+                  })()}
+
+                  {/* History chips — one per transition on this edge */}
+                  {hasEdge &&
+                    edge.map((h) => {
+                      const isSendback = h.from_state !== s.id
+                      return (
+                        <Tooltip key={h.id}>
+                          <TooltipTrigger asChild>
+                            <div className='flex w-full cursor-default flex-col items-center gap-0.5'>
+                              <span
+                                className='text-center font-mono text-[9px] font-semibold leading-none'
+                                style={{ color: isSendback ? '#d97706' : '#475569' }}
+                              >
+                                {isSendback && '↩ '}
+                                {entryInitials(h)}
+                              </span>
+                              <span className='text-[8.5px] leading-none text-slate-400'>
+                                {formatRelative(h.timestamp)}
+                              </span>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side='top' className='space-y-0.5 text-[12px]'>
+                            {isMachineEntry(h) ? (
+                              <>
+                                <p className='font-medium'>
+                                  {isSendback ? '↩ Sent back · ' : ''}
+                                  {machineHeadline(h)}
+                                </p>
+                                {machineDetail(h) && (
+                                  <p className='max-w-[280px] text-muted-foreground'>
+                                    {machineDetail(h)}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <p className='font-medium'>
+                                {isSendback ? '↩ Sent back by' : 'Approved by'} {entryName(h)}
+                              </p>
+                            )}
+                            <p className='text-muted-foreground'>
+                              {new Date(h.timestamp).toLocaleString()}
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )
+                    })}
+                </div>
+              )}
             </div>
-
-            {/* Connector: line + transition history chips */}
-            {!isLast && (
-              <div className='mt-[13px] flex w-10 shrink-0 flex-col items-center gap-1.5'>
-                {/* Line with arrowhead */}
-                {(() => {
-                  const lineColor = isDone ? `${nodeColor}55` : '#e8ecf0'
-                  return (
-                    <div className='flex w-full shrink-0 items-center'>
-                      <div className='h-0.5 flex-1 rounded-l-sm' style={{ backgroundColor: lineColor }} />
-                      <div style={{
-                        width: 0, height: 0,
-                        borderTop: '3px solid transparent',
-                        borderBottom: '3px solid transparent',
-                        borderLeft: `5px solid ${lineColor}`
-                      }} />
-                    </div>
-                  )
-                })()}
-
-                {/* History chips — one per transition on this edge */}
-                {hasEdge && edge.map((h) => {
-                  const isSendback = h.from_state !== s.id
-                  return (
-                    <Tooltip key={h.id}>
-                      <TooltipTrigger asChild>
-                        <div className='flex w-full cursor-default flex-col items-center gap-0.5'>
-                          <span
-                            className='text-center font-mono text-[9px] font-semibold leading-none'
-                            style={{ color: isSendback ? '#d97706' : '#475569' }}
-                          >
-                            {isSendback && '↩ '}{entryInitials(h)}
-                          </span>
-                          <span className='text-[8.5px] leading-none text-slate-400'>
-                            {formatRelative(h.timestamp)}
-                          </span>
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side='top' className='space-y-0.5 text-[12px]'>
-                        <p className='font-medium'>
-                          {isSendback ? '↩ Sent back by' : 'Approved by'} {entryName(h)}
-                        </p>
-                        <p className='text-muted-foreground'>
-                          {new Date(h.timestamp).toLocaleString()}
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
+          )
+        })}
+      </div>
     </TooltipProvider>
   )
 }
@@ -297,6 +315,35 @@ function StateBadge({
 
 // ─── History timeline ─────────────────────────────────────────────────────────
 
+/** A move nobody made by hand: the engine, an import, or an integration. */
+function isMachineEntry(h: PipelineHistoryEntry): boolean {
+  return !(h.first_name || h.last_name || h.user_email)
+}
+
+/** "Moved automatically", "Imported", "Synced from another system" — what stood in for a person. */
+function machineHeadline(h: PipelineHistoryEntry): string {
+  const stamp = (h.comment ?? '').trim().toLowerCase()
+  if (h.origin === 'import' || stamp.startsWith('import:')) return 'Imported'
+  if (h.origin === 'integration') return 'By an integration'
+  if (/-state-sync$/.test(stamp) || stamp.startsWith('legacy-')) return 'Synced from another system'
+  if (stamp === 'state-merge' || stamp === 'instance-migration') return 'Moved by an admin script'
+  return 'Moved automatically'
+}
+
+/** The rule behind an automatic move: the transition's own sentence, else its label. */
+function machineDetail(h: PipelineHistoryEntry): string | null {
+  if (h.transition_text) return h.transition_text
+  if (h.transition_label) return `Rule: ${h.transition_label}`
+  const stamp = (h.comment ?? '').trim()
+  const auto = /^auto: (.+)$/i.exec(stamp)
+  if (auto) return `Rule: ${auto[1]}`
+  if (/-state-sync$/i.test(stamp))
+    return 'The state was copied in from the system that owned this record'
+  if (/^instance-migration/i.test(stamp)) return 'Moved when the pipeline was reshaped'
+  if (/^state-merge/i.test(stamp)) return 'Moved when two states were merged'
+  return null
+}
+
 function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
   if (history.length === 0) {
     return <p className='text-[12px] text-slate-400 italic'>No transitions yet.</p>
@@ -304,10 +351,13 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
   return (
     <div className='space-y-3'>
       {history.map((h) => {
-        const userName =
-          h.first_name || h.last_name
-            ? [h.first_name, h.last_name].filter(Boolean).join(' ')
-            : (h.user_email ?? 'System')
+        const machine = isMachineEntry(h)
+        const userName = machine
+          ? machineHeadline(h)
+          : [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email
+        // The engine's own stamp ("auto: <rule>") is not a note anyone wrote.
+        const note = h.comment && !machine ? h.comment : null
+        const detail = machine ? machineDetail(h) : null
         return (
           <div key={h.id} className='flex items-start gap-2.5 text-[12px]'>
             <div className='mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-200' />
@@ -321,11 +371,11 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
                 <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
                 <StateBadge label={h.to_state_label} color={h.to_state_color} small />
               </div>
-              {h.comment && (
-                <p className='mt-1 text-slate-500 italic'>"{h.comment}"</p>
-              )}
+              {note && <p className='mt-1 text-slate-500 italic'>"{note}"</p>}
               <p className='mt-0.5 text-slate-400'>
-                {userName} · {formatRelative(h.timestamp)}
+                {machine && <Zap className='mr-1 inline h-3 w-3' aria-hidden />}
+                {userName}
+                {detail ? ` · ${detail}` : ''} · {formatRelative(h.timestamp)}
               </p>
             </div>
           </div>
@@ -346,13 +396,7 @@ function ownerInitials(o: { first_name: string | null; last_name: string | null;
 
 // ─── Async user picker ────────────────────────────────────────────────────────
 
-function AsyncUserPicker({
-  value,
-  onChange
-}: {
-  value: string
-  onChange: (v: string) => void
-}) {
+function AsyncUserPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -377,7 +421,11 @@ function AsyncUserPicker({
     queryFn: () =>
       api
         .get<{ data: User[]; total: number }>('/users', {
-          params: { limit: 50, sort: 'first_name', ...(debouncedQuery ? { search: debouncedQuery } : {}) }
+          params: {
+            limit: 50,
+            sort: 'first_name',
+            ...(debouncedQuery ? { search: debouncedQuery } : {})
+          }
         })
         .then((r) => r.data.data),
     enabled: open,
@@ -764,7 +812,19 @@ interface PipelinePanelData {
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
 }
 
-export function PipelinePanel({ collection, item, defaultExpanded, title, onBeforeTransition }: { collection: string; item: string; defaultExpanded?: boolean; title?: string; onBeforeTransition?: () => boolean }) {
+export function PipelinePanel({
+  collection,
+  item,
+  defaultExpanded,
+  title,
+  onBeforeTransition
+}: {
+  collection: string
+  item: string
+  defaultExpanded?: boolean
+  title?: string
+  onBeforeTransition?: () => boolean
+}) {
   if (item === 'new') return null
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
@@ -772,7 +832,10 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
   const [showHistory, setShowHistory] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const trySetPending = (txId: string) => {
-    if (pendingTransition === txId) { setPendingTransition(null); return }
+    if (pendingTransition === txId) {
+      setPendingTransition(null)
+      return
+    }
     if (onBeforeTransition && !onBeforeTransition()) return
     setPendingTransition(txId)
   }
@@ -789,19 +852,17 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
   const { data, isLoading } = useQuery<PipelinePanelData>({
     queryKey,
     queryFn: () =>
-      api
-        .get<{ data: PipelinePanelData | null }>(`/pipelines/instance/${collection}/${item}`)
-        .then(
-          (r) =>
-            r.data.data ?? {
-              instance: null,
-              states: [],
-              available_transitions: [],
-              all_transitions: [],
-              history: [],
-              binding: null
-            }
-        ),
+      api.get<{ data: PipelinePanelData | null }>(`/pipelines/instance/${collection}/${item}`).then(
+        (r) =>
+          r.data.data ?? {
+            instance: null,
+            states: [],
+            available_transitions: [],
+            all_transitions: [],
+            history: [],
+            binding: null
+          }
+      ),
     staleTime: 10_000
   })
 
@@ -883,7 +944,9 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
             </span>
           )}
           {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
-          {instance && !currentState && <span className='text-[12px] italic text-slate-400'>Unknown state</span>}
+          {instance && !currentState && (
+            <span className='text-[12px] italic text-slate-400'>Unknown state</span>
+          )}
         </div>
         {/* Inline transition buttons when collapsed */}
         {!expanded && hasTransitions && (
@@ -891,20 +954,30 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
             {(() => {
               const byLabel = new Map<string, PipelineTransition[]>()
               for (const tx of transitions ?? []) {
-                const list = byLabel.get(tx.label) ?? []; list.push(tx); byLabel.set(tx.label, list)
+                const list = byLabel.get(tx.label) ?? []
+                list.push(tx)
+                byLabel.set(tx.label, list)
               }
               return Array.from(byLabel.entries()).map(([label, txs]) => {
                 const txColor = txs[0]?.color ?? null
-                const isActive = txs.some(t => t.id === pendingTransition)
-                const colorStyle = (active: boolean) => txColor
-                  ? active ? { backgroundColor: txColor, borderColor: txColor } : { borderColor: txColor, color: txColor }
-                  : undefined
+                const isActive = txs.some((t) => t.id === pendingTransition)
+                const colorStyle = (active: boolean) =>
+                  txColor
+                    ? active
+                      ? { backgroundColor: txColor, borderColor: txColor }
+                      : { borderColor: txColor, color: txColor }
+                    : undefined
                 if (txs.length === 1) {
                   const tx = txs[0]
                   return (
-                    <Button key={label} size='sm' variant={isActive ? 'default' : 'outline'}
-                      className='h-7 gap-1 text-[11px]' style={colorStyle(isActive)}
-                      onClick={() => trySetPending(tx.id)}>
+                    <Button
+                      key={label}
+                      size='sm'
+                      variant={isActive ? 'default' : 'outline'}
+                      className='h-7 gap-1 text-[11px]'
+                      style={colorStyle(isActive)}
+                      onClick={() => trySetPending(tx.id)}
+                    >
                       {label}
                     </Button>
                   )
@@ -912,18 +985,34 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
                 return (
                   <DropdownMenu key={label}>
                     <DropdownMenuTrigger asChild>
-                      <Button size='sm' variant={isActive ? 'default' : 'outline'}
-                        className='h-7 gap-1 text-[11px]' style={colorStyle(isActive)}>
-                        {label}<ChevronDown className='h-3 w-3' />
+                      <Button
+                        size='sm'
+                        variant={isActive ? 'default' : 'outline'}
+                        className='h-7 gap-1 text-[11px]'
+                        style={colorStyle(isActive)}
+                      >
+                        {label}
+                        <ChevronDown className='h-3 w-3' />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align='start'>
-                      {[...txs].sort((a,b)=>(stateById.get(a.to_state)?.sort??999)-(stateById.get(b.to_state)?.sort??999)).map(tx => (
-                        <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
-                          {tx.color && <span className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full' style={{backgroundColor:tx.color}} />}
-                          {stateById.get(tx.to_state)?.label ?? tx.to_state}
-                        </DropdownMenuItem>
-                      ))}
+                      {[...txs]
+                        .sort(
+                          (a, b) =>
+                            (stateById.get(a.to_state)?.sort ?? 999) -
+                            (stateById.get(b.to_state)?.sort ?? 999)
+                        )
+                        .map((tx) => (
+                          <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
+                            {tx.color && (
+                              <span
+                                className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                                style={{ backgroundColor: tx.color }}
+                              />
+                            )}
+                            {stateById.get(tx.to_state)?.label ?? tx.to_state}
+                          </DropdownMenuItem>
+                        ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )
@@ -932,15 +1021,32 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
           </div>
         )}
         {!expanded && !instance && data?.binding && (
-          <Button size='sm' variant='outline' className='h-7 gap-1.5 text-[11px]'
-            onClick={() => startPipeline.mutate()} disabled={startPipeline.isPending}>
-            {startPipeline.isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <GitBranch className='h-3 w-3' />}
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 gap-1.5 text-[11px]'
+            onClick={() => startPipeline.mutate()}
+            disabled={startPipeline.isPending}
+          >
+            {startPipeline.isPending ? (
+              <Loader2 className='h-3 w-3 animate-spin' />
+            ) : (
+              <GitBranch className='h-3 w-3' />
+            )}
             Start
           </Button>
         )}
-        <button type='button' onClick={() => setExpanded(v => !v)}
-          className='ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'>
-          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-150', expanded && 'rotate-180')} />
+        <button
+          type='button'
+          onClick={() => setExpanded((v) => !v)}
+          className='ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted dark:hover:text-slate-300'
+        >
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 transition-transform duration-150',
+              expanded && 'rotate-180'
+            )}
+          />
         </button>
       </div>
 
@@ -949,7 +1055,9 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
         <div className='border-t border-slate-100 px-4 py-3 space-y-2'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
-            {pendingTx && <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>}
+            {pendingTx && (
+              <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>
+            )}
             {currentState && pendingToState && (
               <div className='ml-auto flex items-center gap-1.5'>
                 <StateBadge label={currentState.label} color={currentState.color} small />
@@ -958,277 +1066,318 @@ export function PipelinePanel({ collection, item, defaultExpanded, title, onBefo
               </div>
             )}
           </div>
-          <input type='text' value={comment} onChange={e => setComment(e.target.value)}
+          <input
+            type='text'
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
             placeholder='Add a comment (optional)'
-            className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30' />
+            className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
+          />
           <div className='flex justify-end gap-2'>
-            <Button type='button' size='sm' variant='ghost' className='h-7 text-[12px]' onClick={() => setPendingTransition(null)}>Cancel</Button>
-            <Button type='button' size='sm' className='h-7 gap-1.5 text-[12px]' disabled={executeTransition.isPending}
-              onClick={() => executeTransition.mutate({ transition_id: pendingTransition, comment: comment.trim() || undefined })}>
-              {executeTransition.isPending ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : <>Confirm<Check className='h-3 w-3' /></>}
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              className='h-7 text-[12px]'
+              onClick={() => setPendingTransition(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              className='h-7 gap-1.5 text-[12px]'
+              disabled={executeTransition.isPending}
+              onClick={() =>
+                executeTransition.mutate({
+                  transition_id: pendingTransition,
+                  comment: comment.trim() || undefined
+                })
+              }
+            >
+              {executeTransition.isPending ? (
+                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+              ) : (
+                <>
+                  Confirm
+                  <Check className='h-3 w-3' />
+                </>
+              )}
             </Button>
           </div>
         </div>
       )}
 
       {/* ── Expanded full panel ── */}
-      {expanded && <div className='border-t border-slate-100'>
-
-      {/* ── Body ── */}
-      {!instance ? (
-        /* Not started */
-        <div className='flex items-center justify-between gap-4 px-5 py-4'>
-          <p className='text-[13px] text-slate-500'>Pipeline not started for this record.</p>
-          <Button
-            size='sm'
-            variant='outline'
-            className='shrink-0 gap-1.5 text-[12px]'
-            onClick={() => startPipeline.mutate()}
-            disabled={startPipeline.isPending}
-          >
-            {startPipeline.isPending ? (
-              <Loader2 className='h-3.5 w-3.5 animate-spin' />
-            ) : (
-              <GitBranch className='h-3.5 w-3.5' />
-            )}
-            Start Pipeline
-          </Button>
-        </div>
-      ) : (
-        <div className='divide-y divide-slate-100'>
-          {/* ── State track ── */}
-          {(states ?? []).length > 1 && (
-            <div className='px-5 py-4'>
-              <StateTrack
-                states={states ?? []}
-                allTransitions={data?.all_transitions ?? []}
-                availableTransitions={transitions ?? []}
-                currentStateId={instance.current_state}
-                history={history ?? []}
-              />
+      {expanded && (
+        <div className='border-t border-slate-100'>
+          {/* ── Body ── */}
+          {!instance ? (
+            /* Not started */
+            <div className='flex items-center justify-between gap-4 px-5 py-4'>
+              <p className='text-[13px] text-slate-500'>Pipeline not started for this record.</p>
+              <Button
+                size='sm'
+                variant='outline'
+                className='shrink-0 gap-1.5 text-[12px]'
+                onClick={() => startPipeline.mutate()}
+                disabled={startPipeline.isPending}
+              >
+                {startPipeline.isPending ? (
+                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                ) : (
+                  <GitBranch className='h-3.5 w-3.5' />
+                )}
+                Start Pipeline
+              </Button>
             </div>
-          )}
-
-          {/* ── Owners ── */}
-          <div className='px-5 py-4'>
-            <OwnersSection collection={collection} item={item} states={states ?? []} />
-          </div>
-
-          {/* ── Transitions ── */}
-          {hasTransitions && (
-            <div className='space-y-3 px-5 py-4'>
-              <div className='flex flex-wrap gap-2'>
-                {(() => {
-                  const byLabel = new Map<string, PipelineTransition[]>()
-                  for (const tx of transitions) {
-                    const list = byLabel.get(tx.label) ?? []
-                    list.push(tx)
-                    byLabel.set(tx.label, list)
-                  }
-                  return Array.from(byLabel.entries()).map(([label, txs]) => {
-                    const txColor = txs[0]?.color ?? null
-                    const isActive = txs.some((t) => t.id === pendingTransition)
-                    const colorStyle = (active: boolean) =>
-                      txColor
-                        ? active
-                          ? { backgroundColor: txColor, borderColor: txColor }
-                          : { borderColor: txColor, color: txColor }
-                        : undefined
-
-                    if (txs.length === 1) {
-                      const tx = txs[0]
-                      return (
-                        <Button
-                          key={label}
-                          size='sm'
-                          variant={isActive ? 'default' : 'outline'}
-                          className='gap-1.5 text-[12px]'
-                          style={colorStyle(isActive)}
-                          onClick={() =>
-                            trySetPending(tx.id)
-                          }
-                        >
-                          {label}
-                        </Button>
-                      )
-                    }
-
-                    const sortedTxs = [...txs].sort(
-                      (a, b) => (stateById.get(a.to_state)?.sort ?? 999) - (stateById.get(b.to_state)?.sort ?? 999)
-                    )
-                    const toStateCount = new Map<string, number>()
-                    for (const tx of sortedTxs) {
-                      toStateCount.set(tx.to_state, (toStateCount.get(tx.to_state) ?? 0) + 1)
-                    }
-
-                    return (
-                      <DropdownMenu key={label}>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            size='sm'
-                            variant={isActive ? 'default' : 'outline'}
-                            className='gap-1.5 text-[12px]'
-                            style={colorStyle(isActive)}
-                          >
-                            {label}
-                            <ChevronDown className='h-3 w-3' />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align='start'>
-                          {sortedTxs.map((tx) => {
-                            const toLabel = stateById.get(tx.to_state)?.label ?? tx.to_state
-                            const fromLabel = tx.from_state
-                              ? (stateById.get(tx.from_state)?.label ?? tx.from_state)
-                              : null
-                            const hasCollision = (toStateCount.get(tx.to_state) ?? 0) > 1
-                            const hasConditions =
-                              tx.condition_rules != null && tx.condition_rules.length > 0
-                            return (
-                              <DropdownMenuItem
-                                key={tx.id}
-                                onSelect={() =>
-                                  setPendingTransition(
-                                    pendingTransition === tx.id ? null : tx.id
-                                  )
-                                }
-                              >
-                                {tx.color && (
-                                  <span
-                                    className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
-                                    style={{ backgroundColor: tx.color }}
-                                  />
-                                )}
-                                <span className='flex items-center gap-1.5'>
-                                  {toLabel}
-                                  {hasCollision && fromLabel && (
-                                    <span className='text-[11px] text-slate-400'>
-                                      from {fromLabel}
-                                    </span>
-                                  )}
-                                  {hasConditions && (
-                                    <span
-                                      className='text-[11px] text-amber-500'
-                                      title='Has conditions'
-                                    >
-                                      ⚡
-                                    </span>
-                                  )}
-                                </span>
-                              </DropdownMenuItem>
-                            )
-                          })}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )
-                  })
-                })()}
-              </div>
-
-              {/* Confirm step */}
-              {pendingTransition && (
-                <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5'>
-                  <div className='flex flex-wrap items-center gap-2'>
-                    <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
-                    {pendingTx && (
-                      <span className='text-[12px] font-medium text-slate-700'>
-                        {pendingTx.label}
-                      </span>
-                    )}
-                    {currentState && pendingToState && (
-                      <div className='ml-auto flex items-center gap-1.5'>
-                        <StateBadge
-                          label={currentState.label}
-                          color={currentState.color}
-                          small
-                        />
-                        <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
-                        <StateBadge
-                          label={pendingToState.label}
-                          color={pendingToState.color}
-                          small
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <input
-                    type='text'
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    placeholder='Add a comment (optional)'
-                    className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
+          ) : (
+            <div className='divide-y divide-slate-100'>
+              {/* ── State track ── */}
+              {(states ?? []).length > 1 && (
+                <div className='px-5 py-4'>
+                  <StateTrack
+                    states={states ?? []}
+                    allTransitions={data?.all_transitions ?? []}
+                    availableTransitions={transitions ?? []}
+                    currentStateId={instance.current_state}
+                    history={history ?? []}
                   />
-                  <div className='flex items-center justify-end gap-2'>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='ghost'
-                      className='h-7 text-[12px]'
-                      onClick={() => setPendingTransition(null)}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type='button'
-                      size='sm'
-                      className='h-7 gap-1.5 text-[12px]'
-                      disabled={executeTransition.isPending}
-                      onClick={() =>
-                        executeTransition.mutate({
-                          transition_id: pendingTransition,
-                          comment: comment.trim() || undefined
-                        })
-                      }
-                    >
-                      {executeTransition.isPending ? (
-                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                      ) : (
-                        <>
-                          Confirm
-                          <Check className='h-3 w-3' />
-                        </>
-                      )}
-                    </Button>
-                  </div>
                 </div>
               )}
+
+              {/* ── Owners ── */}
+              <div className='px-5 py-4'>
+                <OwnersSection collection={collection} item={item} states={states ?? []} />
+              </div>
+
+              {/* ── Transitions ── */}
+              {hasTransitions && (
+                <div className='space-y-3 px-5 py-4'>
+                  <div className='flex flex-wrap gap-2'>
+                    {(() => {
+                      const byLabel = new Map<string, PipelineTransition[]>()
+                      for (const tx of transitions) {
+                        const list = byLabel.get(tx.label) ?? []
+                        list.push(tx)
+                        byLabel.set(tx.label, list)
+                      }
+                      return Array.from(byLabel.entries()).map(([label, txs]) => {
+                        const txColor = txs[0]?.color ?? null
+                        const isActive = txs.some((t) => t.id === pendingTransition)
+                        const colorStyle = (active: boolean) =>
+                          txColor
+                            ? active
+                              ? { backgroundColor: txColor, borderColor: txColor }
+                              : { borderColor: txColor, color: txColor }
+                            : undefined
+
+                        if (txs.length === 1) {
+                          const tx = txs[0]
+                          return (
+                            <Button
+                              key={label}
+                              size='sm'
+                              variant={isActive ? 'default' : 'outline'}
+                              className='gap-1.5 text-[12px]'
+                              style={colorStyle(isActive)}
+                              onClick={() => trySetPending(tx.id)}
+                            >
+                              {label}
+                            </Button>
+                          )
+                        }
+
+                        const sortedTxs = [...txs].sort(
+                          (a, b) =>
+                            (stateById.get(a.to_state)?.sort ?? 999) -
+                            (stateById.get(b.to_state)?.sort ?? 999)
+                        )
+                        const toStateCount = new Map<string, number>()
+                        for (const tx of sortedTxs) {
+                          toStateCount.set(tx.to_state, (toStateCount.get(tx.to_state) ?? 0) + 1)
+                        }
+
+                        return (
+                          <DropdownMenu key={label}>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                size='sm'
+                                variant={isActive ? 'default' : 'outline'}
+                                className='gap-1.5 text-[12px]'
+                                style={colorStyle(isActive)}
+                              >
+                                {label}
+                                <ChevronDown className='h-3 w-3' />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align='start'>
+                              {sortedTxs.map((tx) => {
+                                const toLabel = stateById.get(tx.to_state)?.label ?? tx.to_state
+                                const fromLabel = tx.from_state
+                                  ? (stateById.get(tx.from_state)?.label ?? tx.from_state)
+                                  : null
+                                const hasCollision = (toStateCount.get(tx.to_state) ?? 0) > 1
+                                const hasConditions =
+                                  tx.condition_rules != null && tx.condition_rules.length > 0
+                                return (
+                                  <DropdownMenuItem
+                                    key={tx.id}
+                                    onSelect={() =>
+                                      setPendingTransition(
+                                        pendingTransition === tx.id ? null : tx.id
+                                      )
+                                    }
+                                  >
+                                    {tx.color && (
+                                      <span
+                                        className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                                        style={{ backgroundColor: tx.color }}
+                                      />
+                                    )}
+                                    <span className='flex items-center gap-1.5'>
+                                      {toLabel}
+                                      {hasCollision && fromLabel && (
+                                        <span className='text-[11px] text-slate-400'>
+                                          from {fromLabel}
+                                        </span>
+                                      )}
+                                      {hasConditions && (
+                                        <span
+                                          className='text-[11px] text-amber-500'
+                                          title='Has conditions'
+                                        >
+                                          ⚡
+                                        </span>
+                                      )}
+                                    </span>
+                                  </DropdownMenuItem>
+                                )
+                              })}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )
+                      })
+                    })()}
+                  </div>
+
+                  {/* Confirm step */}
+                  {pendingTransition && (
+                    <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5'>
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
+                        {pendingTx && (
+                          <span className='text-[12px] font-medium text-slate-700'>
+                            {pendingTx.label}
+                          </span>
+                        )}
+                        {currentState && pendingToState && (
+                          <div className='ml-auto flex items-center gap-1.5'>
+                            <StateBadge
+                              label={currentState.label}
+                              color={currentState.color}
+                              small
+                            />
+                            <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
+                            <StateBadge
+                              label={pendingToState.label}
+                              color={pendingToState.color}
+                              small
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type='text'
+                        value={comment}
+                        onChange={(e) => setComment(e.target.value)}
+                        placeholder='Add a comment (optional)'
+                        className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
+                      />
+                      <div className='flex items-center justify-end gap-2'>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='ghost'
+                          className='h-7 text-[12px]'
+                          onClick={() => setPendingTransition(null)}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          className='h-7 gap-1.5 text-[12px]'
+                          disabled={executeTransition.isPending}
+                          onClick={() =>
+                            executeTransition.mutate({
+                              transition_id: pendingTransition,
+                              comment: comment.trim() || undefined
+                            })
+                          }
+                        >
+                          {executeTransition.isPending ? (
+                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                          ) : (
+                            <>
+                              Confirm
+                              <Check className='h-3 w-3' />
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── History ── */}
+              <div className='px-5 py-3'>
+                <button
+                  type='button'
+                  className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-slate-600'
+                  onClick={() => setShowHistory((v) => !v)}
+                >
+                  {showHistory ? (
+                    <ChevronDown className='h-3.5 w-3.5' />
+                  ) : (
+                    <ChevronRight className='h-3.5 w-3.5' />
+                  )}
+                  Transition history
+                  <span className='tabular-nums'>({history?.length ?? 0})</span>
+                </button>
+                {showHistory && (
+                  <div className='mt-3'>
+                    <HistoryTimeline history={history ?? []} />
+                  </div>
+                )}
+              </div>
             </div>
           )}
-
-          {/* ── History ── */}
-          <div className='px-5 py-3'>
-            <button
-              type='button'
-              className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-slate-600'
-              onClick={() => setShowHistory((v) => !v)}
-            >
-              {showHistory ? (
-                <ChevronDown className='h-3.5 w-3.5' />
-              ) : (
-                <ChevronRight className='h-3.5 w-3.5' />
-              )}
-              Transition history
-              <span className='tabular-nums'>({history?.length ?? 0})</span>
-            </button>
-            {showHistory && (
-              <div className='mt-3'>
-                <HistoryTimeline history={history ?? []} />
-              </div>
-            )}
-          </div>
         </div>
       )}
-      </div>}
     </div>
   )
 }
 
-export function PipelineTransitionButtons({ collection, item, onBeforeTransition }: { collection: string; item: string; onBeforeTransition?: () => boolean }) {
+export function PipelineTransitionButtons({
+  collection,
+  item,
+  onBeforeTransition
+}: {
+  collection: string
+  item: string
+  onBeforeTransition?: () => boolean
+}) {
   if (item === 'new') return null
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const trySetPending = (txId: string) => {
-    if (pendingTransition === txId) { setPendingTransition(null); return }
+    if (pendingTransition === txId) {
+      setPendingTransition(null)
+      return
+    }
     if (onBeforeTransition && !onBeforeTransition()) return
     setPendingTransition(txId)
   }
@@ -1238,14 +1387,25 @@ export function PipelineTransitionButtons({ collection, item, onBeforeTransition
   const { data } = useQuery<PipelinePanelData>({
     queryKey,
     queryFn: () =>
-      api.get<{ data: PipelinePanelData | null }>(`/pipelines/instance/${collection}/${item}`)
-        .then(r => r.data.data ?? { instance: null, states: [], available_transitions: [], all_transitions: [], history: [], binding: null }),
+      api.get<{ data: PipelinePanelData | null }>(`/pipelines/instance/${collection}/${item}`).then(
+        (r) =>
+          r.data.data ?? {
+            instance: null,
+            states: [],
+            available_transitions: [],
+            all_transitions: [],
+            history: [],
+            binding: null
+          }
+      ),
     staleTime: 10_000
   })
 
   const executeTransition = useMutation({
     mutationFn: ({ transition_id, comment }: { transition_id: string; comment?: string }) =>
-      api.post(`/pipelines/instance/${collection}/${item}/transition`, { transition_id, comment }).then(r => r.data),
+      api
+        .post(`/pipelines/instance/${collection}/${item}/transition`, { transition_id, comment })
+        .then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey })
       setComment('')
@@ -1255,7 +1415,10 @@ export function PipelineTransitionButtons({ collection, item, onBeforeTransition
     onError: (err: unknown) => {
       const resp = (err as { response?: { status?: number; data?: { error?: string } } })?.response
       toast.error(resp?.data?.error ?? 'Failed to execute transition')
-      if (resp?.status === 409) { queryClient.invalidateQueries({ queryKey }); setPendingTransition(null) }
+      if (resp?.status === 409) {
+        queryClient.invalidateQueries({ queryKey })
+        setPendingTransition(null)
+      }
     }
   })
 
@@ -1264,9 +1427,9 @@ export function PipelineTransitionButtons({ collection, item, onBeforeTransition
   const transitions = data.available_transitions ?? []
   if (transitions.length === 0) return null
 
-  const stateById = new Map((data.states ?? []).map(s => [s.id, s]))
+  const stateById = new Map((data.states ?? []).map((s) => [s.id, s]))
   const currentState = data.instance.current_state_obj ?? null
-  const pendingTx = pendingTransition ? transitions.find(t => t.id === pendingTransition) : null
+  const pendingTx = pendingTransition ? transitions.find((t) => t.id === pendingTransition) : null
   const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
 
   const byLabel = new Map<string, PipelineTransition[]>()
@@ -1281,33 +1444,56 @@ export function PipelineTransitionButtons({ collection, item, onBeforeTransition
       <div className='flex flex-wrap gap-2'>
         {Array.from(byLabel.entries()).map(([label, txs]) => {
           const txColor = txs[0]?.color ?? null
-          const isActive = txs.some(t => t.id === pendingTransition)
-          const colorStyle = (active: boolean) => txColor
-            ? active ? { backgroundColor: txColor, borderColor: txColor } : { borderColor: txColor, color: txColor }
-            : undefined
+          const isActive = txs.some((t) => t.id === pendingTransition)
+          const colorStyle = (active: boolean) =>
+            txColor
+              ? active
+                ? { backgroundColor: txColor, borderColor: txColor }
+                : { borderColor: txColor, color: txColor }
+              : undefined
 
           if (txs.length === 1) {
             const tx = txs[0]
             return (
-              <Button key={label} size='sm' variant={isActive ? 'default' : 'outline'} className='gap-1.5 text-[12px]'
-                style={colorStyle(isActive)} onClick={() => trySetPending(tx.id)}>
+              <Button
+                key={label}
+                size='sm'
+                variant={isActive ? 'default' : 'outline'}
+                className='gap-1.5 text-[12px]'
+                style={colorStyle(isActive)}
+                onClick={() => trySetPending(tx.id)}
+              >
                 {label}
               </Button>
             )
           }
 
-          const sorted = [...txs].sort((a, b) => (stateById.get(a.to_state)?.sort ?? 999) - (stateById.get(b.to_state)?.sort ?? 999))
+          const sorted = [...txs].sort(
+            (a, b) =>
+              (stateById.get(a.to_state)?.sort ?? 999) - (stateById.get(b.to_state)?.sort ?? 999)
+          )
           return (
             <DropdownMenu key={label}>
               <DropdownMenuTrigger asChild>
-                <Button size='sm' variant={isActive ? 'default' : 'outline'} className='gap-1.5 text-[12px]' style={colorStyle(isActive)}>
-                  {label}<ChevronDown className='h-3 w-3' />
+                <Button
+                  size='sm'
+                  variant={isActive ? 'default' : 'outline'}
+                  className='gap-1.5 text-[12px]'
+                  style={colorStyle(isActive)}
+                >
+                  {label}
+                  <ChevronDown className='h-3 w-3' />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align='start'>
-                {sorted.map(tx => (
+                {sorted.map((tx) => (
                   <DropdownMenuItem key={tx.id} onSelect={() => trySetPending(tx.id)}>
-                    {tx.color && <span className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full' style={{ backgroundColor: tx.color }} />}
+                    {tx.color && (
+                      <span
+                        className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
+                        style={{ backgroundColor: tx.color }}
+                      />
+                    )}
                     {stateById.get(tx.to_state)?.label ?? tx.to_state}
                   </DropdownMenuItem>
                 ))}
@@ -1321,7 +1507,9 @@ export function PipelineTransitionButtons({ collection, item, onBeforeTransition
         <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-[11px] font-semibold text-slate-400'>Confirming</span>
-            {pendingTx && <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>}
+            {pendingTx && (
+              <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>
+            )}
             {currentState && pendingToState && (
               <div className='ml-auto flex items-center gap-1.5'>
                 <StateBadge label={currentState.label} color={currentState.color} small />
@@ -1330,14 +1518,43 @@ export function PipelineTransitionButtons({ collection, item, onBeforeTransition
               </div>
             )}
           </div>
-          <input type='text' value={comment} onChange={e => setComment(e.target.value)}
+          <input
+            type='text'
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
             placeholder='Add a comment (optional)'
-            className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30' />
+            className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
+          />
           <div className='flex items-center justify-end gap-2'>
-            <Button type='button' size='sm' variant='ghost' className='h-7 text-[12px]' onClick={() => setPendingTransition(null)}>Cancel</Button>
-            <Button type='button' size='sm' className='h-7 gap-1.5 text-[12px]' disabled={executeTransition.isPending}
-              onClick={() => executeTransition.mutate({ transition_id: pendingTransition, comment: comment.trim() || undefined })}>
-              {executeTransition.isPending ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : <>Confirm<Check className='h-3 w-3' /></>}
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              className='h-7 text-[12px]'
+              onClick={() => setPendingTransition(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              className='h-7 gap-1.5 text-[12px]'
+              disabled={executeTransition.isPending}
+              onClick={() =>
+                executeTransition.mutate({
+                  transition_id: pendingTransition,
+                  comment: comment.trim() || undefined
+                })
+              }
+            >
+              {executeTransition.isPending ? (
+                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+              ) : (
+                <>
+                  Confirm
+                  <Check className='h-3 w-3' />
+                </>
+              )}
             </Button>
           </div>
         </div>

@@ -9,7 +9,8 @@ import {
   Search,
   UserPlus,
   Users,
-  X
+  X,
+  Zap
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -70,6 +71,41 @@ interface PipelineHistoryEntry {
   last_name: string | null
   comment: string | null
   timestamp: string
+  /** The transition that made the move (label + its people-facing sentence). */
+  transition_label?: string | null
+  transition_text?: string | null
+  /** person | machine | import | integration — who kind of actor moved it. */
+  origin?: string | null
+}
+
+/** A move nobody made by hand: the engine, an import, or an integration. */
+function isMachineEntry(h: PipelineHistoryEntry): boolean {
+  if (h.first_name || h.last_name || h.user_email) return false
+  return true
+}
+
+/** "Moved automatically", "Imported", "Synced from another system" — what stood in for a person. */
+function machineHeadline(h: PipelineHistoryEntry): string {
+  const stamp = (h.comment ?? '').trim().toLowerCase()
+  if (h.origin === 'import' || stamp.startsWith('import:')) return 'Imported'
+  if (h.origin === 'integration') return 'By an integration'
+  if (/-state-sync$/.test(stamp) || stamp.startsWith('legacy-')) return 'Synced from another system'
+  if (stamp === 'state-merge' || stamp === 'instance-migration') return 'Moved by an admin script'
+  return 'Moved automatically'
+}
+
+/** The rule behind an automatic move: the transition's own sentence, else its label. */
+function machineDetail(h: PipelineHistoryEntry): string | null {
+  if (h.transition_text) return h.transition_text
+  if (h.transition_label) return `Rule: ${h.transition_label}`
+  const stamp = (h.comment ?? '').trim()
+  const auto = /^auto: (.+)$/i.exec(stamp)
+  if (auto) return `Rule: ${auto[1]}`
+  if (/-state-sync$/i.test(stamp))
+    return 'The state was copied in from the system that owned this record'
+  if (/^instance-migration/i.test(stamp)) return 'Moved when the pipeline was reshaped'
+  if (/^state-merge/i.test(stamp)) return 'Moved when two states were merged'
+  return null
 }
 interface PipelineInstance {
   id: string
@@ -352,6 +388,9 @@ function StateTrack({
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
   }
   function entryInitials(h: PipelineHistoryEntry) {
+    if (isMachineEntry(h)) {
+      return <Zap className='inline h-2.5 w-2.5' aria-label={machineHeadline(h)} />
+    }
     return (
       ((h.first_name?.[0] ?? '') + (h.last_name?.[0] ?? '')).toUpperCase() ||
       h.user_email?.[0]?.toUpperCase() ||
@@ -499,9 +538,23 @@ function StateTrack({
                           </div>
                         </TooltipTrigger>
                         <TooltipContent side='top' className='space-y-0.5 text-[12px]'>
-                          <p className='font-medium'>
-                            {isSendback ? '↩ Sent back by' : 'Approved by'} {entryName(h)}
-                          </p>
+                          {isMachineEntry(h) ? (
+                            <>
+                              <p className='font-medium'>
+                                {isSendback ? '↩ Sent back · ' : ''}
+                                {machineHeadline(h)}
+                              </p>
+                              {machineDetail(h) && (
+                                <p className='max-w-[280px] text-muted-foreground'>
+                                  {machineDetail(h)}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <p className='font-medium'>
+                              {isSendback ? '↩ Sent back by' : 'Approved by'} {entryName(h)}
+                            </p>
+                          )}
                           {hopSpan && (
                             <p className='text-muted-foreground'>→ straight to {hopSpan}</p>
                           )}
@@ -530,10 +583,13 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
   return (
     <div className='space-y-3'>
       {history.map((h) => {
-        const userName =
-          h.first_name || h.last_name
-            ? [h.first_name, h.last_name].filter(Boolean).join(' ')
-            : (h.user_email ?? 'System')
+        const machine = isMachineEntry(h)
+        const userName = machine
+          ? machineHeadline(h)
+          : [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email
+        // The engine's own stamp ("auto: <rule>") is not a note anyone wrote.
+        const note = h.comment && !machine ? h.comment : null
+        const detail = machine ? machineDetail(h) : null
         return (
           <div key={h.id} className='flex items-start gap-2.5 text-[12px]'>
             <div className='mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-200' />
@@ -547,9 +603,11 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
                 <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
                 <StateBadge label={h.to_state_label} color={h.to_state_color} small />
               </div>
-              {h.comment && <p className='mt-1 text-slate-500 italic'>"{h.comment}"</p>}
+              {note && <p className='mt-1 text-slate-500 italic'>"{note}"</p>}
               <p className='mt-0.5 text-slate-400'>
-                {userName} · {formatRelative(h.timestamp)}
+                {machine && <Zap className='mr-1 inline h-3 w-3' aria-hidden />}
+                {userName}
+                {detail ? ` · ${detail}` : ''} · {formatRelative(h.timestamp)}
               </p>
             </div>
           </div>
@@ -1555,7 +1613,6 @@ function PipelinePanelInner({
       }
     }
   })
-
 
   // A page-level "run this transition" request (lib/run-transition.ts — the
   // Integrations popup's "re-run <Submit to Warehouse>" fix) behaves exactly

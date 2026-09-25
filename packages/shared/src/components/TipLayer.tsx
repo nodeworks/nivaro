@@ -73,3 +73,27 @@ export function TipLayer() {
     document.body
   )
 }
+
+/**
+ * A `data-tip` that appears only while the element's text is actually cut off
+ * (`truncate` / `line-clamp`): the full value on hover, nothing when it fits.
+ * Re-measured on resize; the attribute is what TipLayer reads at mouseover.
+ */
+export function useOverflowTip<T extends HTMLElement>(text: string | null | undefined) {
+  const ref = useRef<T>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const apply = () => {
+      const cut = el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1
+      if (cut && text) el.setAttribute('data-tip', text)
+      else el.removeAttribute('data-tip')
+    }
+    apply()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(apply)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [text])
+  return ref
+}

@@ -10,7 +10,7 @@ import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
-import { originFields } from '../services/note-authorship.js'
+import { originFields, originSelect } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
 import {
@@ -2022,6 +2022,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .leftJoin('nivaro_workflow_states as fs', 'h.from_state', 'fs.id')
       .leftJoin('nivaro_workflow_states as ts', 'h.to_state', 'ts.id')
       .leftJoin('nivaro_users as u', 'h.user', 'u.id')
+      .leftJoin('nivaro_workflow_transitions as tr', 'h.transition', 'tr.id')
       .where('h.instance', instance.id)
       .orderBy('h.timestamp', 'desc')
       .select(
@@ -2031,6 +2032,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         'h.to_state',
         'h.comment',
         'h.timestamp',
+        // Who or what moved the record: a person, else the transition that
+        // fired on its own (its label + the people-facing sentence) so the
+        // panel never has to say "System" with a question mark.
+        ...(await originSelect('nivaro_workflow_history', 'h')),
+        'tr.label as transition_label',
+        'tr.notify_text as transition_text',
         'fs.label as from_state_label',
         'fs.color as from_state_color',
         'ts.label as to_state_label',

@@ -469,6 +469,9 @@ export type PipelineHistoryEntry = {
   first_name: string | null
   last_name: string | null
   user_email: string | null
+  transition_label?: string | null
+  transition_text?: string | null
+  origin?: string | null
 }
 
 export type PipelineStateInfo = {

@@ -10,8 +10,17 @@ import {
   Send,
   Workflow
 } from 'lucide-react'
-import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { cn } from '../../../../lib/utils'
+import { useOverflowTip } from '../../../TipLayer'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../../../ui/sheet'
 import { Skeleton } from '../../../ui/skeleton'
 import { type EventPathTarget, eventPathTargetKey, useEventPath } from '../api'
@@ -321,29 +330,14 @@ function StepRow({
               {formatOffset(node.offset_ms)}
             </span>
             {node.who && <span className='font-medium text-foreground'>{node.who}</span>}
-            {rec &&
-              recordLabel &&
-              (onOpenRecord ? (
-                <button
-                  type='button'
-                  data-path-record={`${rec.collection}:${rec.item}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onOpenRecord(rec.collection, rec.item)
-                  }}
-                  className='max-w-[220px] truncate rounded border border-border bg-card px-1.5 text-[11.5px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-                >
-                  {recordLabel}
-                </button>
-              ) : (
-                // No host handler: plain text, so a click falls through to the row.
-                <span
-                  data-path-record={`${rec.collection}:${rec.item}`}
-                  className='max-w-[220px] truncate rounded border border-border bg-card px-1.5 text-[11.5px] font-medium text-foreground'
-                >
-                  {recordLabel}
-                </span>
-              ))}
+            {rec && recordLabel && (
+              <RecordChip
+                collection={rec.collection}
+                item={rec.item}
+                label={recordLabel}
+                onOpenRecord={onOpenRecord}
+              />
+            )}
             <span
               className={cn(
                 'min-w-0 [overflow-wrap:anywhere]',
@@ -584,5 +578,48 @@ export function EventPathSheet({
         </div>
       </SheetContent>
     </Sheet>
+  )
+}
+
+/** The record a step touched — a button when the host can open records, else
+ *  plain text; the full label rides an instant tip whenever it is cut off. */
+function RecordChip({
+  collection,
+  item,
+  label,
+  onOpenRecord
+}: {
+  collection: string
+  item: string
+  label: string
+  onOpenRecord?: (collection: string, id: string) => void
+}) {
+  const ref = useOverflowTip<HTMLElement>(label)
+  const key = `${collection}:${item}`
+  if (onOpenRecord) {
+    return (
+      <button
+        ref={ref as RefObject<HTMLButtonElement>}
+        type='button'
+        data-path-record={key}
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenRecord(collection, item)
+        }}
+        className='max-w-[220px] truncate rounded border border-border bg-card px-1.5 text-[11.5px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+      >
+        {label}
+      </button>
+    )
+  }
+  // No host handler: plain text, so a click falls through to the row.
+  return (
+    <span
+      ref={ref as RefObject<HTMLSpanElement>}
+      data-path-record={key}
+      className='max-w-[220px] truncate rounded border border-border bg-card px-1.5 text-[11.5px] font-medium text-foreground'
+    >
+      {label}
+    </span>
   )
 }
