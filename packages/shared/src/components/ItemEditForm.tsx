@@ -55,6 +55,22 @@ import {
 } from '../lib/draft-store'
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
+import {
+  type FoldedCell,
+  HEADER_BAND,
+  HEADER_DOCK,
+  HEADER_DOCK_CELL,
+  HEADER_DOCK_INLINE,
+  HEADER_LABEL,
+  HEADER_ROW,
+  HEADER_TILE,
+  HEADER_TILES,
+  HEADER_VALUE,
+  HEADER_VALUE_HERO,
+  HEADER_VALUE_LINE,
+  headerFoldedCells,
+  headerNeedsDense
+} from '../lib/header-strip'
 import { extSlotKey } from '../lib/layout-slots'
 import {
   normalizeSummaryModeRules,
@@ -97,8 +113,8 @@ import {
   StripFieldValue
 } from './item-edit/GroupSection'
 import { HeaderFreshness } from './item-edit/HeaderFreshness'
-import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderOverflowChip } from './item-edit/HeaderOverflowChip'
+import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
 import {
@@ -135,23 +151,11 @@ import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
-import { invalidateRecordInsights, RecordInsightsButton } from './item-edit/RecordInsights'
 import {
-  HEADER_BAND,
-  HEADER_DOCK,
-  HEADER_DOCK_CELL,
-  HEADER_LABEL,
-  HEADER_ROW,
-  HEADER_TILE,
-  HEADER_TILES,
-  HEADER_VALUE,
-  HEADER_VALUE_HERO,
-  HEADER_VALUE_LINE,
-  headerNeedsDense,
-  type FoldedCell,
-  HEADER_DOCK_INLINE,
-  headerFoldedCells
-} from '../lib/header-strip'
+  invalidateRecordInsights,
+  invalidateRecordNotes,
+  RecordInsightsButton
+} from './item-edit/RecordInsights'
 import { RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
@@ -6626,6 +6630,9 @@ export function ItemEditForm({
       // mentions) go stale the moment a save lands — refresh them so the
       // popover answers with current data.
       invalidateRecordInsights(qc, collection, String(id))
+      // The Notes thread gains entries from the save itself (change reasons,
+      // rule/hook writes, integration pushes) — some land seconds later.
+      invalidateRecordNotes(qc, collection, String(id))
       // Refresh the attached document so it reflects what was just saved.
       // Fire-and-forget: the save is already committed and the record must not
       // appear to fail because a PDF could not be produced.

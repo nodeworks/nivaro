@@ -282,11 +282,15 @@ export async function updateFileMeta(
     folder?: string | null
     expires_at?: Date | null
     tags?: string[] | null
+    filename_download?: string
   },
   userId?: string
 ): Promise<StoredFile | undefined> {
   const allowed: Record<string, unknown> = {}
   if ('title' in patch) allowed.title = patch.title
+  if (patch.filename_download !== undefined) {
+    allowed.filename_download = cleanDownloadName(patch.filename_download)
+  }
   if ('description' in patch) allowed.description = patch.description
   if ('folder' in patch) allowed.folder = patch.folder
   if ('expires_at' in patch) allowed.expires_at = patch.expires_at
@@ -303,6 +307,81 @@ export async function updateFileMeta(
   allowed.modified_on = new Date()
   await db('nivaro_files').where({ id }).update(allowed)
   return getFile(id)
+}
+
+/** A download name is a single path segment: no separators, no control
+ *  characters, never empty — the Content-Disposition header and the local
+ *  disk both read it. Throws a 400-shaped error on an unusable name. */
+export function cleanDownloadName(raw: string): string {
+  const name = Array.from(String(raw ?? ''))
+    .filter((ch) => ch !== '/' && ch !== '\\' && ch.charCodeAt(0) >= 0x20)
+    .join('')
+    .trim()
+    .slice(0, 255)
+  if (!name || name === '.' || name === '..') {
+    throw Object.assign(new Error('File name cannot be empty'), { statusCode: 400 })
+  }
+  return name
+}
+
+/**
+ * Replace a file's bytes IN PLACE — same id, so every FK, junction row,
+ * attachment chip and share link that names it keeps working; only the
+ * stored object (and the download name, when the upload carries a different
+ * one) changes. The new object gets a fresh disk key (never overwrite the old
+ * key: a CDN or browser cache keyed on it would keep serving stale bytes),
+ * the old object and every cached transform are deleted afterwards, and a
+ * `missing_at` dead-link verdict is cleared — a re-upload is the documented
+ * repair for one.
+ */
+export async function replaceFileContent(
+  id: string,
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
+  userId?: string
+): Promise<StoredFile | undefined> {
+  const existing = await getFile(id)
+  if (!existing) return undefined
+  const diskId = ulid().toLowerCase()
+  const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
+  const diskName = buildDiskName(diskId, ext)
+  const activeDriver = await getActiveStorageDriver()
+  const provider = activeDriver.name === 'local' ? getStorageProviderName() : activeDriver.name
+  await activeDriver.put(diskName, buffer, String(mimeType))
+
+  await db('nivaro_files')
+    .where({ id })
+    .update({
+      storage: provider,
+      storage_provider: provider,
+      filename_disk: diskName,
+      filename_download: cleanDownloadName(filename),
+      type: String(mimeType),
+      filesize: buffer.length,
+      width: null,
+      height: null,
+      missing_at: null,
+      modified_by: userId ?? null,
+      modified_on: new Date()
+    })
+
+  if (existing.filename_disk && existing.filename_disk !== diskName) {
+    await deleteStoredObject(existing.filename_disk).catch(() => null)
+  }
+  await deleteTransforms(id).catch(() => null)
+  const file = await getFile(id)
+  if (file) {
+    await reportFileEvent('created', {
+      slug: getTenantSlug() ?? null,
+      fileKey: file.filename_disk,
+      filename: file.filename_download,
+      mimeType: file.type,
+      sizeBytes: file.filesize,
+      folder: file.folder ?? null
+    })
+  }
+  return file
 }
 
 /** Delete all cached transform renditions for a file. */

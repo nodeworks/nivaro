@@ -83,11 +83,45 @@ export default function Realtime() {
 
 // ─── Force refresh (#285) ────────────────────────────────────────────────────
 
+type RefreshWho = 'everyone' | 'app' | 'people'
+
 function ForceRefreshControl() {
   const [open, setOpen] = useState(false)
   const [seconds, setSeconds] = useState('30')
   const [message, setMessage] = useState('')
+  const [who, setWho] = useState<RefreshWho>('everyone')
+  const [app, setApp] = useState('admin')
+  const [people, setPeople] = useState<Array<{ id: string; name: string }>>([])
+  const [search, setSearch] = useState('')
   const [sending, setSending] = useState(false)
+  const { data: stats } = useQuery<{ sockets: SocketRow[] }>({
+    queryKey: ['realtime-stats'],
+    queryFn: () => api.get('/realtime/stats').then((r) => r.data.data),
+    enabled: open,
+    staleTime: 10_000
+  })
+  const apps = useMemo(() => {
+    const seen = new Set<string>(['admin'])
+    for (const s of stats?.sockets ?? []) if (s.app) seen.add(s.app)
+    return [...seen]
+  }, [stats])
+  const { data: found = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['force-refresh-people', search],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{ id: string; first_name?: string; last_name?: string; email: string }>
+        }>('/users', { params: { search, limit: 8 } })
+        .then((r) =>
+          r.data.data.map((u) => ({
+            id: u.id,
+            name: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email
+          }))
+        ),
+    enabled: open && who === 'people' && search.trim().length >= 2,
+    staleTime: 30_000
+  })
+  const canSend = who !== 'people' || people.length > 0
   return (
     <div className='relative'>
       <button
@@ -99,11 +133,109 @@ function ForceRefreshControl() {
         Force client refresh…
       </button>
       {open && (
-        <div className='absolute right-0 top-full z-20 mt-1 w-[300px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-border dark:bg-card'>
+        <div className='absolute right-0 top-full z-20 mt-1 w-[340px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-border dark:bg-card'>
           <p className='text-[12px] text-slate-600 dark:text-muted-foreground'>
-            Every connected client shows a countdown, then reloads. Use for a deploy that must land
-            now.
+            The targeted clients show a countdown, then reload. Use for a deploy that must land now.
           </p>
+          <div className='mt-2 flex gap-1' data-force-refresh-who={who}>
+            {(
+              [
+                ['everyone', 'Everyone'],
+                ['app', 'One app'],
+                ['people', 'Specific people']
+              ] as Array<[RefreshWho, string]>
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type='button'
+                onClick={() => setWho(key)}
+                className={cn(
+                  'rounded-md px-2 py-1 text-[11.5px] font-medium',
+                  who === key
+                    ? 'bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200'
+                    : 'text-slate-500 hover:bg-muted dark:text-muted-foreground'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {who === 'app' && (
+            <div className='mt-2 flex flex-wrap gap-1'>
+              {apps.map((a) => (
+                <button
+                  key={a}
+                  type='button'
+                  onClick={() => setApp(a)}
+                  className={cn(
+                    'rounded-full border px-2 py-0.5 text-[11.5px]',
+                    app === a
+                      ? 'border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-500/15 dark:text-amber-200'
+                      : 'border-slate-200 text-slate-500 hover:bg-muted dark:border-border'
+                  )}
+                >
+                  {a}
+                </button>
+              ))}
+              <span className='w-full text-[11px] text-slate-400'>
+                Only sockets connected to this API node — apps appear once one of their tabs is
+                open.
+              </span>
+            </div>
+          )}
+          {who === 'people' && (
+            <div className='mt-2'>
+              {people.length > 0 && (
+                <div className='mb-1.5 flex flex-wrap gap-1'>
+                  {people.map((p) => (
+                    <span
+                      key={p.id}
+                      className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11.5px] text-amber-900 dark:bg-amber-500/15 dark:text-amber-200'
+                    >
+                      {p.name}
+                      <button
+                        type='button'
+                        aria-label={`Remove ${p.name}`}
+                        onClick={() => setPeople((cur) => cur.filter((c) => c.id !== p.id))}
+                        className='text-amber-700 hover:text-amber-900 dark:text-amber-300'
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder='Search people by name or email…'
+                className='h-7 w-full rounded-md border border-slate-200 bg-background px-2 text-[12px] dark:border-border'
+              />
+              {search.trim().length >= 2 && (
+                <div className='mt-1 max-h-40 overflow-y-auto rounded-md border border-slate-200 dark:border-border'>
+                  {found.filter((f) => !people.some((p) => p.id === f.id)).length === 0 ? (
+                    <p className='px-2 py-1.5 text-[11.5px] text-slate-400'>No matches</p>
+                  ) : (
+                    found
+                      .filter((f) => !people.some((p) => p.id === f.id))
+                      .map((f) => (
+                        <button
+                          key={f.id}
+                          type='button'
+                          onClick={() => {
+                            setPeople((cur) => [...cur, f])
+                            setSearch('')
+                          }}
+                          className='block w-full px-2 py-1.5 text-left text-[12px] hover:bg-muted'
+                        >
+                          {f.name}
+                        </button>
+                      ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <label className='mt-2 flex items-center gap-2 text-[12px]'>
             Countdown
             <input
@@ -130,15 +262,28 @@ function ForceRefreshControl() {
             </button>
             <button
               type='button'
-              disabled={sending}
+              disabled={sending || !canSend}
               onClick={async () => {
                 setSending(true)
                 try {
-                  await api.post('/realtime/force-refresh', {
+                  const body: Record<string, unknown> = {
                     seconds: Number(seconds) || 30,
                     message
-                  })
-                  toast.success('Refresh pushed to every connected client')
+                  }
+                  if (who === 'app') body.app = app
+                  if (who === 'people') body.user_ids = people.map((p) => p.id)
+                  const r = await api.post<{ data: { sockets: number; users: number } }>(
+                    '/realtime/force-refresh',
+                    body
+                  )
+                  const { sockets, users } = r.data.data
+                  toast.success(
+                    who === 'everyone'
+                      ? 'Refresh pushed to every connected client'
+                      : sockets > 0
+                        ? `Refresh pushed to ${sockets} open tab${sockets === 1 ? '' : 's'} (${users} ${users === 1 ? 'person' : 'people'})`
+                        : 'Refresh sent — nobody matching is connected to this node right now'
+                  )
                   setOpen(false)
                 } catch {
                   toast.error('Failed to send the refresh')
@@ -466,7 +611,6 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)}h`
 }
 
-
 // ─── Hook firehose (#283): hooks/flows/transition actions as they fire ───────
 function FirehoseTab() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([])
@@ -488,8 +632,8 @@ function FirehoseTab() {
     <div className='space-y-3'>
       <div className='flex items-center justify-between'>
         <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-          Hooks, flow operations and transition actions as they fire — payload KEY names only,
-          never values. Streamed only while this tab is open.
+          Hooks, flow operations and transition actions as they fire — payload KEY names only, never
+          values. Streamed only while this tab is open.
         </p>
         <button
           type='button'
@@ -508,9 +652,7 @@ function FirehoseTab() {
           {rows.map((r, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: streaming log
             <p key={i} className='break-words'>
-              <span className='text-slate-400'>
-                {String(r.at ?? '').slice(11, 19)}
-              </span>{' '}
+              <span className='text-slate-400'>{String(r.at ?? '').slice(11, 19)}</span>{' '}
               <span
                 className={
                   r.kind === 'hook'

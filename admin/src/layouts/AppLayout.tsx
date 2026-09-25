@@ -1,4 +1,5 @@
 import {
+  ForceReloadBanner,
   parseThemeAccents,
   resolveAccentColor,
   rumRouteChange,
@@ -66,7 +67,6 @@ import {
   Replace,
   Rocket,
   RotateCcw,
-  RotateCw,
   Scale,
   ScanSearch,
   ScrollText,
@@ -1326,53 +1326,12 @@ function DbOutageBanner() {
 
 function ForceRefreshBanner() {
   const qc = useQueryClient()
-  const [refresh, setRefresh] = useState<{ seconds: number; message: string } | null>(null)
-  const [remaining, setRemaining] = useState(0)
   useEffect(() => {
-    const onForce = (e: Event) => {
-      const d = (e as CustomEvent).detail as { seconds?: number; message?: string }
-      const seconds = Math.max(5, Number(d?.seconds) || 30)
-      setRefresh({ seconds, message: String(d?.message ?? '') })
-      setRemaining(seconds)
-    }
     const onCatchupFull = () => void qc.invalidateQueries()
-    window.addEventListener('nvr:force-refresh', onForce)
     window.addEventListener('nvr:catchup-full', onCatchupFull)
-    return () => {
-      window.removeEventListener('nvr:force-refresh', onForce)
-      window.removeEventListener('nvr:catchup-full', onCatchupFull)
-    }
+    return () => window.removeEventListener('nvr:catchup-full', onCatchupFull)
   }, [qc])
-  useEffect(() => {
-    if (!refresh) return
-    const t = setInterval(() => {
-      setRemaining((r) => {
-        if (r <= 1) {
-          window.location.reload()
-          return 0
-        }
-        return r - 1
-      })
-    }, 1000)
-    return () => clearInterval(t)
-  }, [refresh])
-  if (!refresh) return null
-  return (
-    <div className='fixed inset-x-0 top-0 z-[150] flex items-center justify-center gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2.5 text-[13px] text-amber-900 dark:border-amber-500/40 dark:bg-[#3a2e10] dark:text-amber-200'>
-      <RotateCw className='h-4 w-4 animate-spin' />
-      <span>
-        <span className='font-semibold'>This page will reload in {remaining}s</span>
-        {refresh.message ? ` — ${refresh.message}` : ' — an administrator pushed an update.'}
-      </span>
-      <button
-        type='button'
-        onClick={() => window.location.reload()}
-        className='rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 dark:bg-transparent dark:text-amber-200'
-      >
-        Reload now
-      </button>
-    </div>
-  )
+  return <ForceReloadBanner />
 }
 
 // ─── Session-expiry warning (#199) ───────────────────────────────────────────

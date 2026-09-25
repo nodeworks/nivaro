@@ -7,11 +7,13 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { findOrphanFiles, getFileUsage } from '../services/file-usage.js'
 import {
+  cleanDownloadName,
   createPresignedFile,
   deleteFile,
   getFile,
   listFiles,
   readFileBuffer,
+  replaceFileContent,
   reportFileBandwidth,
   updateFileMeta,
   uploadFile
@@ -286,7 +288,9 @@ export async function filesRoutes(app: FastifyInstance) {
       comment: `${deleted} unreferenced file(s) deleted${failed ? `, ${failed} failed` : ''}`,
       req
     })
-    return reply.send({ data: { deleted, failed, remaining: Math.max(0, (await findOrphanFiles({ limit: 1 })).total) } })
+    return reply.send({
+      data: { deleted, failed, remaining: Math.max(0, (await findOrphanFiles({ limit: 1 })).total) }
+    })
   })
 
   app.get('/:id/meta', async (req, reply) => {
@@ -392,6 +396,7 @@ export async function filesRoutes(app: FastifyInstance) {
       folder?: string | null
       expires_at?: string | null
       tags?: string[] | null
+      filename_download?: string
     }
 
     const existing = await getFile(id)
@@ -399,6 +404,13 @@ export async function filesRoutes(app: FastifyInstance) {
 
     const patch: Parameters<typeof updateFileMeta>[1] = {}
     if ('title' in body) patch.title = body.title
+    if (typeof body.filename_download === 'string') {
+      try {
+        patch.filename_download = cleanDownloadName(body.filename_download)
+      } catch (err) {
+        return reply.code(400).send({ error: (err as Error).message })
+      }
+    }
     if ('description' in body) patch.description = body.description
     if ('folder' in body) patch.folder = body.folder
     if ('tags' in body) patch.tags = body.tags
@@ -420,6 +432,35 @@ export async function filesRoutes(app: FastifyInstance) {
       collection: 'nivaro_files',
       item: id,
       user: req.user?.id,
+      req
+    })
+    return reply.send({ data: file })
+  })
+
+  /** Re-upload: swap the bytes behind an existing file id (see
+   *  replaceFileContent). Multipart, one part named `file`. */
+  app.post('/:id/replace', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const existing = await getFile(id)
+    if (!existing) return reply.code(404).send({ error: 'Not found' })
+    const multipart = await req.file()
+    if (!multipart) return reply.code(400).send({ error: 'No file provided' })
+    const buffer = await multipart.toBuffer()
+    const mimeType =
+      multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream'
+    const file = await replaceFileContent(
+      id,
+      buffer,
+      multipart.filename,
+      String(mimeType),
+      req.user?.id
+    )
+    await logActivity({
+      action: 'file-replace',
+      collection: 'nivaro_files',
+      item: id,
+      user: req.user?.id,
+      comment: `${existing.filename_download} → ${multipart.filename} (${buffer.length} bytes)`,
       req
     })
     return reply.send({ data: file })

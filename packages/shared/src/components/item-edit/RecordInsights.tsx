@@ -59,6 +59,32 @@ export function invalidateRecordData(
   })
   void qc.invalidateQueries({ queryKey: ['child-summary', collection, itemId] })
   void qc.invalidateQueries({ queryKey: ['last-touch', collection, itemId] })
+  invalidateRecordNotes(qc, collection, itemId)
+}
+
+/** How long after a write the Notes thread is re-read a second time. Long
+ *  enough for the writers that land AFTER the response: a transition's post
+ *  actions and the partner push they record, the obligation ledger, the
+ *  record-integrity hook's 1.5s coalesce, the notification hook's bundle. */
+export const NOTES_SETTLE_MS = 4000
+
+/** The Notes thread (`/comments/related`: people's comments + transition
+ *  comments, change reasons, integration events, system notes) after a save
+ *  or a transition — once now, once after the late writers have landed.
+ *  Reloading the page used to be the only way to see those entries. */
+export function invalidateRecordNotes(
+  qc: { invalidateQueries: (o: { queryKey?: unknown[] }) => unknown },
+  collection: string,
+  itemId: string
+): void {
+  const run = () => {
+    void qc.invalidateQueries({ queryKey: ['comments', collection, itemId] })
+    void qc.invalidateQueries({ queryKey: ['comments-related', collection, itemId] })
+  }
+  run()
+  const t = setTimeout(run, NOTES_SETTLE_MS)
+  // Never keep a test runner or a closing tab alive for a cache refresh.
+  ;(t as unknown as { unref?: () => void }).unref?.()
 }
 
 export function RecordInsightsButton({

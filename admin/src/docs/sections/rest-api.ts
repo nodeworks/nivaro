@@ -818,7 +818,8 @@ export const apiFiles: DocSection = {
         ['POST', '/api/files', 'Upload file (multipart/form-data). Field: `file`.'],
         ['GET', '/api/files/:id', 'File metadata (size, mime type, dates).'],
         ['GET', '/api/files/:id/content', 'Serve file with correct Content-Type header.'],
-        ['PATCH', '/api/files/:id', 'Update metadata (title, description, folder, expires_at).'],
+        ['PATCH', '/api/files/:id', 'Update metadata (title, description, folder, expires_at, tags, filename_download — the download name; one path segment, no separators).'],
+        ['POST', '/api/files/:id/replace', 'Re-upload: swap the bytes behind an existing id (multipart, field `file`). Same id, so every reference keeps working; new storage key, old object + cached transforms deleted, a dead-link flag cleared.'],
         ['DELETE', '/api/files/:id', 'Delete file from storage backend + metadata.'],
         ['GET', '/api/files/:id/transform', 'Resize/transcode image (w, h, fit, format, q params).']
       ]

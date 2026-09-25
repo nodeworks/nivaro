@@ -7,11 +7,14 @@ import { db } from '../db/index.js'
 import { canSeeRoom } from '../services/chat.js'
 import { can } from '../services/permissions.js'
 
-let pagePresenceReader: ((path: string) => Array<{ id: string; name: string; since: number }>) | null = null
+let pagePresenceReader:
+  | ((path: string) => Array<{ id: string; name: string; since: number }>)
+  | null = null
 /** Users whose latest page ping is `path` (this replica's sockets). */
 export function usersOnPath(path: string): Array<{ id: string; name: string; since: number }> {
   return pagePresenceReader ? pagePresenceReader(path) : []
 }
+
 import type { User } from '../types.js'
 
 declare module 'fastify' {
@@ -52,6 +55,44 @@ interface SocketMeta {
 }
 const socketMeta = new Map<string, SocketMeta>()
 let _ioRef: SocketIOServer | null = null
+
+/**
+ * Remote client reload (#285, targeted 2026-09-25): tell every connected
+ * client — or only the named people, or only one app's clients — to show a
+ * countdown and reload. User targeting rides the `user:<id>` rooms, which the
+ * Redis adapter fans out across nodes; an `app` filter has to read this
+ * node's socketMeta (client:hello is per-socket state), so it only reaches
+ * sockets connected HERE — the returned counts say what this node saw.
+ */
+export function emitForceRefresh(
+  target: { userIds?: string[]; app?: string | null },
+  payload: { seconds: number; message: string }
+): { sockets: number; users: number } {
+  const io = _ioRef
+  if (!io) return { sockets: 0, users: 0 }
+  const userIds = (target.userIds ?? []).map((u) => String(u).toUpperCase())
+  const app = target.app ? String(target.app).slice(0, 50) : null
+  const wanted = new Set(userIds)
+  let sockets = 0
+  const users = new Set<string>()
+  for (const [id, sock] of io.sockets.sockets) {
+    const meta = socketMeta.get(id)
+    if (!meta?.user) continue
+    if (wanted.size && !wanted.has(meta.user.id.toUpperCase())) continue
+    if (app && meta.app !== app) continue
+    sockets++
+    users.add(meta.user.id)
+    // App-filtered sends are local by construction; the others use rooms
+    // below (cross-node), so skip the direct emit to avoid double delivery.
+    if (app) sock.emit('client:force-refresh', payload)
+  }
+  if (!app) {
+    if (wanted.size)
+      for (const u of userIds) io.to(`user:${u}`).emit('client:force-refresh', payload)
+    else io.emit('client:force-refresh', payload)
+  }
+  return { sockets, users: users.size }
+}
 
 export function getRealtimeStats(): {
   sockets: Array<SocketMeta & { id: string; rooms: string[] }>
@@ -494,7 +535,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     const broadcastViewers = (room: string) => {
       const viewers = [...(recordViewers.get(room)?.values() ?? [])]
       const m = /^record:(.+):([^:]+)$/.exec(room)
-      io.to(room).emit('record:viewers', { collection: m?.[1] ?? null, item: m?.[2] ?? null, viewers })
+      io.to(room).emit('record:viewers', {
+        collection: m?.[1] ?? null,
+        item: m?.[2] ?? null,
+        viewers
+      })
     }
     const leaveOneRoom = (room: string) => {
       joinedRecordRooms.delete(room)
@@ -526,13 +571,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       (payload: { collection?: string; item?: string; user_name?: string }) => {
         const { collection, item, user_name } = payload ?? {}
         if (!collection || !item) return
-        socket
-          .to(`record:${collection}:${String(item)}`)
-          .emit('record:comment-typing', {
-            collection,
-            item,
-            user_name: String(user_name ?? '').slice(0, 80)
-          })
+        socket.to(`record:${collection}:${String(item)}`).emit('record:comment-typing', {
+          collection,
+          item,
+          user_name: String(user_name ?? '').slice(0, 80)
+        })
       }
     )
     socket.on('record:join', async (payload: { collection?: string; item?: string }) => {

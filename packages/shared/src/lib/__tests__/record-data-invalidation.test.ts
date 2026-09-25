@@ -15,7 +15,9 @@ describe('invalidateRecordData', () => {
     expect(calls.map((c) => c.queryKey).filter(Boolean)).toEqual([
       ['item', 'inventory_requests', '32842'],
       ['child-summary', 'inventory_requests', '32842'],
-      ['last-touch', 'inventory_requests', '32842']
+      ['last-touch', 'inventory_requests', '32842'],
+      ['comments', 'inventory_requests', '32842'],
+      ['comments-related', 'inventory_requests', '32842']
     ])
 
     const predicate = calls.find((c) => c.predicate)?.predicate

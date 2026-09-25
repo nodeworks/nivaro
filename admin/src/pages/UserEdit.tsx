@@ -446,6 +446,7 @@ export function UserEditPage() {
             <DelegationCard user={user} mode='admin' />
             <UserScopesCard userId={user.id} />
             <UserSessionsCard userId={user.id} />
+            <UserForceReloadCard userId={user.id} />
             <UserOffboardingCard userId={user.id} />
             <UserMergeCard userId={user.id} />
 
@@ -459,6 +460,81 @@ export function UserEditPage() {
 }
 
 // ─── Active sessions (#431): this user's live sessions, revocable ────────────
+
+/**
+ * Push a reload to this person's open tabs (admin + efp-new alike) — the
+ * per-user form of the /realtime "Force client refresh" control. Their
+ * unsaved form drafts survive: the record form mirrors them to IndexedDB +
+ * /drafts within seconds of typing and offers a restore on the next open.
+ */
+function UserForceReloadCard({ userId }: { userId: string }) {
+  const [seconds, setSeconds] = useState('15')
+  const [message, setMessage] = useState('')
+  const push = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { sockets: number; users: number } }>('/realtime/force-refresh', {
+          user_ids: [userId],
+          seconds: Number(seconds) || 15,
+          message
+        })
+        .then((r) => r.data.data),
+    onSuccess: ({ sockets }) => {
+      toast.success(
+        sockets > 0
+          ? `Reload pushed to ${sockets} open tab${sockets === 1 ? '' : 's'}`
+          : 'Reload sent — they have no tab connected to this node right now'
+      )
+    },
+    onError: () => toast.error('Failed to push the reload')
+  })
+  return (
+    <div
+      className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
+      data-user-force-reload
+    >
+      <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+        Force a reload
+      </h3>
+      <p className='mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Every tab this person has open — admin or the portal — shows a countdown, then reloads onto
+        the current build.
+      </p>
+      <div className='mt-2 flex flex-wrap items-center gap-2'>
+        <label
+          htmlFor={`force-reload-seconds-${userId}`}
+          className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'
+        >
+          Countdown
+          <Input
+            id={`force-reload-seconds-${userId}`}
+            value={seconds}
+            onChange={(e) => setSeconds(e.target.value)}
+            inputMode='numeric'
+            className='h-7 w-16 text-right text-[12px]'
+          />
+          s
+        </label>
+        <Input
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder='Optional message in their banner'
+          className='h-7 min-w-[180px] flex-1 text-[12px]'
+        />
+        <Button
+          size='sm'
+          variant='outline'
+          disabled={push.isPending}
+          onClick={() => push.mutate()}
+          className='h-7 border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-500/40 dark:text-amber-300'
+        >
+          <RefreshCw className='mr-1 h-3.5 w-3.5' />
+          {push.isPending ? 'Sending…' : 'Reload their tabs'}
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 function UserSessionsCard({ userId }: { userId: string }) {
   const qc = useQueryClient()

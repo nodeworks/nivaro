@@ -9,6 +9,8 @@ import {
   LayoutGrid,
   LayoutList,
   Link2,
+  Pencil,
+  RefreshCw,
   Tag,
   Trash2,
   Upload,
@@ -26,7 +28,11 @@ import { formatNumber, formatRelative } from '@/lib/utils'
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** CMSFile plus the expiry column added by the storage migrations. */
-type FileRow = CMSFile & { expires_at: string | null; tags?: string[]; source?: 'form' | 'integration' | 'ui' }
+type FileRow = CMSFile & {
+  expires_at: string | null
+  tags?: string[]
+  source?: 'form' | 'integration' | 'ui'
+}
 
 function formatExpiry(value: string | null): { label: string; expired: boolean } | null {
   if (!value) return null
@@ -142,14 +148,18 @@ function FileCard({
             </div>
           </div>
         ) : (
-          <button
-            type='button'
-            className='absolute right-1.5 top-1.5 rounded-md bg-black/50 p-1.5 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500'
-            onClick={onRequestDelete}
-            aria-label='Delete file'
-          >
-            <Trash2 className='h-3 w-3' />
-          </button>
+          <div className='absolute right-1.5 top-1.5 flex items-center gap-1'>
+            <FileEditButton file={file} variant='card' />
+            <ReplaceFileButton file={file} variant='card' />
+            <button
+              type='button'
+              className='rounded-md bg-black/50 p-1.5 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-500'
+              onClick={onRequestDelete}
+              aria-label='Delete file'
+            >
+              <Trash2 className='h-3 w-3' />
+            </button>
+          </div>
         )}
       </div>
 
@@ -184,6 +194,170 @@ function FileCard({
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
+
+/** Rename: the download name (what a browser saves it as, what every chip
+ *  shows) plus the title/description metadata — same PATCH the tags use. */
+function FileEditButton({
+  file,
+  variant = 'row'
+}: {
+  file: Pick<CMSFile, 'id' | 'filename_download' | 'title' | 'description'>
+  variant?: 'row' | 'card'
+}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch(`/files/${file.id}`, {
+        filename_download: name.trim(),
+        title: title.trim() || null,
+        description: description.trim() || null
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+      toast.success('File updated')
+      setOpen(false)
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Could not save the file details')
+    }
+  })
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        if (o) {
+          setName(file.filename_download)
+          setTitle(file.title ?? '')
+          setDescription(file.description ?? '')
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className={
+            variant === 'card'
+              ? 'rounded-md bg-black/50 p-1.5 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/70'
+              : 'rounded p-1.5 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-slate-100 hover:text-nvr-navy dark:hover:bg-accent dark:hover:text-nvr-cyan'
+          }
+          aria-label='Edit file details'
+          title='Rename / edit details'
+          data-file-edit={file.id}
+        >
+          <Pencil className='h-3.5 w-3.5' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-72 p-3'>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (name.trim()) save.mutate()
+          }}
+          className='space-y-2'
+        >
+          <label className='block'>
+            <span className='mb-1 block text-[11px] font-semibold text-slate-500'>File name</span>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className='h-7 w-full rounded border border-slate-200 px-2 text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+            />
+          </label>
+          <label className='block'>
+            <span className='mb-1 block text-[11px] font-semibold text-slate-500'>Title</span>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className='h-7 w-full rounded border border-slate-200 px-2 text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+            />
+          </label>
+          <label className='block'>
+            <span className='mb-1 block text-[11px] font-semibold text-slate-500'>Description</span>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              className='w-full rounded border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+            />
+          </label>
+          <div className='flex justify-end'>
+            <button
+              type='submit'
+              disabled={save.isPending || !name.trim()}
+              className='h-7 rounded bg-nvr-cyan px-2.5 text-[11px] font-medium text-white hover:bg-[#00b8e0] disabled:opacity-50'
+            >
+              {save.isPending ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** Replace the bytes behind this id — every place that links the file keeps
+ *  working, the old object is dropped, a dead-link flag clears. */
+function ReplaceFileButton({
+  file,
+  variant = 'row'
+}: {
+  file: Pick<CMSFile, 'id' | 'filename_download'>
+  variant?: 'row' | 'card'
+}) {
+  const queryClient = useQueryClient()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const replace = useMutation({
+    mutationFn: async (f: globalThis.File) => {
+      const fd = new FormData()
+      fd.append('file', f)
+      await api.post(`/files/${file.id}/replace`, fd, { headers: { 'Content-Type': undefined } })
+    },
+    onSuccess: (_r, f) => {
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+      toast.success(`Replaced with ${f.name}`)
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Could not replace the file')
+    }
+  })
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type='file'
+        className='hidden'
+        data-file-replace-input={file.id}
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          e.target.value = ''
+          if (f) replace.mutate(f)
+        }}
+      />
+      <button
+        type='button'
+        disabled={replace.isPending}
+        onClick={() => inputRef.current?.click()}
+        className={
+          variant === 'card'
+            ? 'rounded-md bg-black/50 p-1.5 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/70 disabled:opacity-50'
+            : 'rounded p-1.5 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-slate-100 hover:text-nvr-navy disabled:opacity-50 dark:hover:bg-accent dark:hover:text-nvr-cyan'
+        }
+        aria-label='Replace file'
+        title={`Replace the file behind "${file.filename_download}" — links to it keep working`}
+        data-file-replace={file.id}
+      >
+        <RefreshCw className={`h-3.5 w-3.5 ${replace.isPending ? 'animate-spin' : ''}`} />
+      </button>
+    </>
+  )
+}
 
 function TagEditButton({ file }: { file: { id: string; tags?: string[] } }) {
   const queryClient = useQueryClient()
@@ -396,10 +570,15 @@ export function FilesPage() {
   const purgeOrphans = useMutation({
     mutationFn: () =>
       api
-        .delete<{ data: { deleted: number; failed: number; remaining: number } }>('/files/usage/orphans', { params: { limit: 200 } })
+        .delete<{ data: { deleted: number; failed: number; remaining: number } }>(
+          '/files/usage/orphans',
+          { params: { limit: 200 } }
+        )
         .then((r) => r.data.data),
     onSuccess: (r) => {
-      toast.success(`${r.deleted} unused file(s) deleted${r.failed ? `, ${r.failed} failed` : ''}${r.remaining ? ` — ${r.remaining} more remain` : ''}`)
+      toast.success(
+        `${r.deleted} unused file(s) deleted${r.failed ? `, ${r.failed} failed` : ''}${r.remaining ? ` — ${r.remaining} more remain` : ''}`
+      )
       setConfirmPurge(false)
       queryClient.invalidateQueries({ queryKey: ['files'] })
     },
@@ -472,8 +651,9 @@ export function FilesPage() {
                 </button>
               ))}
             </div>
-            {scope === 'unused' && (data?.total ?? 0) > 0 && (
-              confirmPurge ? (
+            {scope === 'unused' &&
+              (data?.total ?? 0) > 0 &&
+              (confirmPurge ? (
                 <span className='flex items-center gap-1' data-files-purge-confirm>
                   <button
                     type='button'
@@ -481,9 +661,15 @@ export function FilesPage() {
                     onClick={() => purgeOrphans.mutate()}
                     className='h-7 rounded-md bg-red-600 px-2.5 text-[11px] font-medium text-white hover:bg-red-700 disabled:opacity-50'
                   >
-                    {purgeOrphans.isPending ? 'Deleting…' : `Delete ${Math.min(200, data?.total ?? 0)} unused now`}
+                    {purgeOrphans.isPending
+                      ? 'Deleting…'
+                      : `Delete ${Math.min(200, data?.total ?? 0)} unused now`}
                   </button>
-                  <button type='button' onClick={() => setConfirmPurge(false)} className='h-7 rounded-md px-2 text-[11px] text-slate-500 hover:text-slate-800'>
+                  <button
+                    type='button'
+                    onClick={() => setConfirmPurge(false)}
+                    className='h-7 rounded-md px-2 text-[11px] text-slate-500 hover:text-slate-800'
+                  >
                     Keep
                   </button>
                 </span>
@@ -497,8 +683,7 @@ export function FilesPage() {
                 >
                   Delete all unused ({(data?.total ?? 0).toLocaleString()})
                 </button>
-              )
-            )}
+              ))}
             {/* View toggle */}
             <div className='flex items-center rounded-lg border border-slate-200 p-0.5'>
               <button
@@ -610,7 +795,9 @@ export function FilesPage() {
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Uploaded</th>
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Tags</th>
                   <th className='px-4 py-2.5 text-[11px] font-medium text-slate-500'>Source</th>
-                  <th className='px-4 py-2.5 text-right text-[11px] font-medium text-slate-500'>Used on</th>
+                  <th className='px-4 py-2.5 text-right text-[11px] font-medium text-slate-500'>
+                    Used on
+                  </th>
                   <th className='w-24 px-4 py-2.5' />
                 </tr>
               </thead>
@@ -721,6 +908,8 @@ export function FilesPage() {
                       </td>
                       <td className='px-4 py-2.5'>
                         <div className='flex items-center justify-end gap-0.5'>
+                          <FileEditButton file={file} />
+                          <ReplaceFileButton file={file} />
                           <TagEditButton file={file} />
                           <UsageCell fileId={file.id} />
                           {pendingDelete === file.id ? (

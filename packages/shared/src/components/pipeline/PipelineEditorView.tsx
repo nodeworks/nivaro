@@ -24,6 +24,7 @@ import {
   ChevronRight,
   Download,
   Filter,
+  GitFork,
   GripVertical,
   History,
   LayoutGrid,
@@ -38,36 +39,38 @@ import {
   Settings,
   Trash2,
   X,
-  Zap,
-  GitFork
+  Zap
 } from 'lucide-react'
 import type React from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { createContext, useContext, useEffect, useRef, useState, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { FieldPicker, type PickedField } from './FieldPicker'
-import { OwnerMatrix } from './OwnerMatrix'
-import { TeamsView } from './TeamsView'
-import { rankTeamForFilters, tierOrder, useScopeDimensions } from './teamScopes'
-import { PipelineSkipCriteria } from './PipelineSkipCriteria'
-import { PipelineStateOwners } from './PipelineStateOwners'
+import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Skeleton } from '../ui/skeleton'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
+import { FieldPicker, type PickedField } from './FieldPicker'
+import { OwnerMatrix } from './OwnerMatrix'
+import { PipelineSkipCriteria } from './PipelineSkipCriteria'
+import { PipelineStateOwners } from './PipelineStateOwners'
+import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from './relations'
+import { TeamsView } from './TeamsView'
+import { rankTeamForFilters, tierOrder, useScopeDimensions } from './teamScopes'
 import type {
   CMSField,
   CMSRelation,
   Collection,
   ConditionOp,
   ConditionRule,
+  DimensionCascadeRule,
   PipelineBinding,
   PipelineOwnerDimension,
   PipelineOwnerGroup,
@@ -79,9 +82,6 @@ import type {
   TransitionRequirement,
   User
 } from './types'
-import type { DimensionCascadeRule } from './types'
-import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from './relations'
-import { cn, formatRelative, titleCase } from '../../lib/utils'
 
 // ─── Simple combobox ──────────────────────────────────────────────────────────
 
@@ -863,9 +863,7 @@ function RelationValueCombobox({
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', relatedCollection],
     queryFn: () =>
-      client
-        .request<{ data: any }>(get(`/collections/${relatedCollection}`))
-        .then((r) => r.data),
+      client.request<{ data: any }>(get(`/collections/${relatedCollection}`)).then((r) => r.data),
     staleTime: 60_000,
     enabled: !!relatedCollection
   })
@@ -1845,15 +1843,17 @@ function TransitionForm({
           </Label>
           {form.to_previous && (
             <p className='text-[11px] text-slate-400'>
-              The real target is the record's previous state — this only applies when history
-              can't answer (the record started in this state, or the prior state was removed).
+              The real target is the record's previous state — this only applies when history can't
+              answer (the record started in this state, or the prior state was removed).
             </p>
           )}
           <MultiStateCombobox
             values={form.to_states}
             onChange={(v) => set('to_states', v)}
             options={states.map((s) => ({ value: s.id, label: s.label }))}
-            placeholder={form.to_previous ? 'Select a fallback state…' : 'Select one or more states…'}
+            placeholder={
+              form.to_previous ? 'Select a fallback state…' : 'Select one or more states…'
+            }
           />
           {form.to_states.length > 1 && (
             <div className='flex flex-wrap gap-1 pt-1'>
@@ -1955,9 +1955,9 @@ function TransitionForm({
         <div>
           <span className='text-[12px] font-medium text-slate-700'>Show in list Actions menu</span>
           <p className='text-[11px] text-slate-400'>
-            Offer this move from the per-row Actions menu in the collection browser and queues.
-            Off keeps it on the record form only — typical for approvals, so a list never
-            advances a record in one click while send-backs and cancels stay reachable.
+            Offer this move from the per-row Actions menu in the collection browser and queues. Off
+            keeps it on the record form only — typical for approvals, so a list never advances a
+            record in one click while send-backs and cancels stay reachable.
           </p>
         </div>
         <Switch
@@ -1968,7 +1968,10 @@ function TransitionForm({
       </label>
 
       <div className='rounded-lg border border-slate-200 bg-white px-3 py-2'>
-        <label className='block text-[12px] font-medium text-slate-700' htmlFor='transition-notify-text'>
+        <label
+          className='block text-[12px] font-medium text-slate-700'
+          htmlFor='transition-notify-text'
+        >
           How to describe this move to people
         </label>
         <p className='mb-1.5 text-[11px] text-slate-400'>
@@ -2239,7 +2242,10 @@ function DimensionCascadeEditor({
         <div className='mt-2 space-y-2'>
           {rules.map((r, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: positional editor rows
-            <div key={i} className='space-y-1.5 rounded-md border border-slate-200 p-2 dark:border-border'>
+            <div
+              key={i}
+              className='space-y-1.5 rounded-md border border-slate-200 p-2 dark:border-border'
+            >
               <div className='flex items-center gap-1.5'>
                 <span className='w-14 shrink-0 text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
                   Parent
@@ -2268,7 +2274,9 @@ function DimensionCascadeEditor({
                 <Input
                   value={r.filter}
                   onChange={(e) =>
-                    setRules(rules.map((x, xi) => (xi === i ? { ...x, filter: e.target.value } : x)))
+                    setRules(
+                      rules.map((x, xi) => (xi === i ? { ...x, filter: e.target.value } : x))
+                    )
                   }
                   placeholder='project_type or divisions.divisions_id'
                   className='h-7 flex-1 font-mono text-[11.5px]'
@@ -2294,7 +2302,12 @@ function DimensionCascadeEditor({
           </button>
         </div>
         <div className='mt-2 flex justify-end gap-1.5'>
-          <Button size='sm' variant='ghost' className='h-6 px-2 text-[11px]' onClick={() => setOpen(false)}>
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-6 px-2 text-[11px]'
+            onClick={() => setOpen(false)}
+          >
             Cancel
           </Button>
           <Button
@@ -2453,9 +2466,7 @@ function BindingDimensionsPanel({
   const { data: bindingColMeta } = useQuery({
     queryKey: ['collection-meta', binding.collection],
     queryFn: () =>
-      client
-        .request<{ data: any }>(get(`/collections/${binding.collection}`))
-        .then((r) => r.data),
+      client.request<{ data: any }>(get(`/collections/${binding.collection}`)).then((r) => r.data),
     enabled: !!binding.collection
   })
   const bindingFields: CMSField[] = bindingColMeta?.fields?.filter((f: CMSField) => !f.hidden) ?? []
@@ -2748,6 +2759,7 @@ export function PipelineEditorView({
   const [editingState, setEditingState] = useState<PipelineState | null>(null)
   const [addingTransition, setAddingTransition] = useState(false)
   const [addingRouteTo, setAddingRouteTo] = useState<string | null>(null) // label group
+  const [renamingGroup, setRenamingGroup] = useState<{ from: string; value: string } | null>(null)
   const [editingRoute, setEditingRoute] = useState<{ label: string; route: RouteEntry } | null>(
     null
   )
@@ -2865,8 +2877,8 @@ export function PipelineEditorView({
       toast.success('State deleted')
     },
     onError: (err) => {
-      const msg = ((err as { response?: { error?: string } })?.response?.error ??
-        (err as Error)?.message)
+      const msg =
+        (err as { response?: { error?: string } })?.response?.error ?? (err as Error)?.message
       toast.error(msg || 'Failed to delete state', { duration: 9000 })
     }
   })
@@ -2912,22 +2924,24 @@ export function PipelineEditorView({
       data: TransitionFormData
     }) => {
       for (const to_state of data.to_states) {
-        await client.request(post(`/pipelines/${templateId}/transitions`, {
-          from_state: data.from_state,
-          label: labelGroup.label,
-          color: labelGroup.color,
-          required_roles: data.required_roles,
-          condition_rules: data.condition_rules,
-          requirements: data.requirements,
-          auto_trigger: data.auto_trigger,
-          to_previous: data.to_previous,
-          in_row_menu: data.in_row_menu,
-          notify_text: data.notify_text,
-          group_label: null,
-          actions: data.actions,
-          sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
-          to_state
-        }))
+        await client.request(
+          post(`/pipelines/${templateId}/transitions`, {
+            from_state: data.from_state,
+            label: labelGroup.label,
+            color: labelGroup.color,
+            required_roles: data.required_roles,
+            condition_rules: data.condition_rules,
+            requirements: data.requirements,
+            auto_trigger: data.auto_trigger,
+            to_previous: data.to_previous,
+            in_row_menu: data.in_row_menu,
+            notify_text: data.notify_text,
+            group_label: null,
+            actions: data.actions,
+            sort: Math.max(labelGroup.minSort, ...labelGroup.routes.map((r) => r.minSort)),
+            to_state
+          })
+        )
       }
     },
     onSuccess: () => {
@@ -2967,12 +2981,14 @@ export function PipelineEditorView({
         if (txId) {
           await client.request(patch(`/pipelines/transitions/${txId}`, { ...shared, to_state }))
         } else {
-          await client.request(post(`/pipelines/${templateId}/transitions`, {
-            ...shared,
-            group_label: null,
-            sort: 0,
-            to_state
-          }))
+          await client.request(
+            post(`/pipelines/${templateId}/transitions`, {
+              ...shared,
+              group_label: null,
+              sort: 0,
+              to_state
+            })
+          )
         }
       }
       for (const [ts, txId] of existingByToState) {
@@ -3017,6 +3033,28 @@ export function PipelineEditorView({
     },
     onSuccess: () => invalidate(),
     onError: () => toast.error('Failed to update color')
+  })
+
+  // Rename a transition's button label. The label IS the group key — every
+  // route (transition id) under it carries the same string, so a rename
+  // PATCHes all of them; the server snapshots a template version per PATCH.
+  // Nothing else keys on the label: history rows FK the transition id, bulk
+  // actions match labels at RUN time (and are told below), MWF payloads use
+  // the STATE's external_label. Notification wording lives in notify_text.
+  const renameGroup = useMutation({
+    mutationFn: async ({ ids, label }: { ids: string[]; label: string }) => {
+      for (const txId of ids)
+        await client.request(patch(`/pipelines/transitions/${txId}`, { label }))
+    },
+    onSuccess: (_r, { label }) => {
+      invalidate()
+      setRenamingGroup(null)
+      toast.success(`Renamed to "${label}"`)
+    },
+    onError: (err: unknown) => {
+      const resp = (err as { response?: { error?: string } })?.response
+      toast.error(resp?.error ?? (err as Error)?.message ?? 'Failed to rename')
+    }
   })
 
   // ─── Binding mutations ──────────────────────────────────────────────────
@@ -3393,7 +3431,8 @@ export function PipelineEditorView({
                     <SortableContext items={localGroupOrder} strategy={verticalListSortingStrategy}>
                       {displayGroups.map((grp) => {
                         const routeMap = new Map(grp.routes.map((r) => [r.ids[0], r]))
-                        const routeIds = localRouteOrder[grp.label] ?? grp.routes.map((r) => r.ids[0])
+                        const routeIds =
+                          localRouteOrder[grp.label] ?? grp.routes.map((r) => r.ids[0])
                         const displayRoutes = routeIds
                           .map((rid) => routeMap.get(rid))
                           .filter((r): r is RouteEntry => !!r)
@@ -3413,7 +3452,11 @@ export function PipelineEditorView({
                                       style={{ backgroundColor: grp.color ?? '#e2e8f0' }}
                                     />
                                   </PopoverTrigger>
-                                  <PopoverContent align='start' className='w-auto p-3' sideOffset={6}>
+                                  <PopoverContent
+                                    align='start'
+                                    className='w-auto p-3'
+                                    sideOffset={6}
+                                  >
                                     <p className='mb-2 text-[11px] font-medium text-slate-500'>
                                       Group color
                                     </p>
@@ -3426,9 +3469,90 @@ export function PipelineEditorView({
                                     />
                                   </PopoverContent>
                                 </Popover>
-                                <span className='flex-1 text-[13px] font-semibold text-slate-800'>
-                                  {grp.label}
-                                </span>
+                                {renamingGroup?.from === grp.label ? (
+                                  (() => {
+                                    const value = renamingGroup.value
+                                    const trimmed = value.trim()
+                                    const clash =
+                                      trimmed !== grp.label &&
+                                      displayGroups.some((g) => g.label === trimmed)
+                                    const canSave =
+                                      trimmed.length > 0 && trimmed !== grp.label && !clash
+                                    const save = () => {
+                                      if (!canSave || renameGroup.isPending) return
+                                      renameGroup.mutate({
+                                        ids: grp.routes.flatMap((r) => r.ids),
+                                        label: trimmed
+                                      })
+                                    }
+                                    return (
+                                      <div
+                                        className='flex flex-1 items-center gap-1.5'
+                                        data-transition-rename={grp.label}
+                                      >
+                                        <Input
+                                          autoFocus
+                                          value={value}
+                                          onChange={(e) =>
+                                            setRenamingGroup({
+                                              from: grp.label,
+                                              value: e.target.value
+                                            })
+                                          }
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault()
+                                              save()
+                                            }
+                                            if (e.key === 'Escape') setRenamingGroup(null)
+                                          }}
+                                          aria-label='Button label'
+                                          className='h-7 max-w-[260px] text-[13px] font-semibold'
+                                        />
+                                        {clash && (
+                                          <span className='text-[11px] text-amber-700'>
+                                            already a button — pick another name
+                                          </span>
+                                        )}
+                                        <button
+                                          type='button'
+                                          onClick={save}
+                                          disabled={!canSave || renameGroup.isPending}
+                                          title='Save (Enter)'
+                                          className='rounded p-1 text-emerald-600 hover:bg-emerald-50 disabled:opacity-40'
+                                        >
+                                          <Check className='h-3.5 w-3.5' />
+                                        </button>
+                                        <button
+                                          type='button'
+                                          onClick={() => setRenamingGroup(null)}
+                                          title='Cancel (Esc)'
+                                          className='rounded p-1 text-slate-400 hover:bg-slate-100'
+                                        >
+                                          <X className='h-3.5 w-3.5' />
+                                        </button>
+                                      </div>
+                                    )
+                                  })()
+                                ) : (
+                                  <>
+                                    <span className='text-[13px] font-semibold text-slate-800'>
+                                      {grp.label}
+                                    </span>
+                                    <button
+                                      type='button'
+                                      onClick={() =>
+                                        setRenamingGroup({ from: grp.label, value: grp.label })
+                                      }
+                                      title='Rename this button'
+                                      aria-label={`Rename ${grp.label}`}
+                                      className='rounded p-1 text-slate-300 opacity-0 hover:text-slate-600 group-hover/hdr:opacity-100 transition-opacity'
+                                    >
+                                      <Pencil className='h-3 w-3' />
+                                    </button>
+                                    <span className='flex-1' />
+                                  </>
+                                )}
                                 <span className='text-[11px] text-slate-400 tabular-nums'>
                                   {grp.routes.length} route{grp.routes.length !== 1 ? 's' : ''}
                                 </span>
@@ -3525,7 +3649,9 @@ export function PipelineEditorView({
                                               const s = stateById.get(sid)
                                               return s ? (
                                                 <span key={sid} className='flex items-center gap-1'>
-                                                  {i > 0 && <span className='text-slate-300'>·</span>}
+                                                  {i > 0 && (
+                                                    <span className='text-slate-300'>·</span>
+                                                  )}
                                                   <StateBadge state={s} small />
                                                 </span>
                                               ) : null
@@ -3551,7 +3677,7 @@ export function PipelineEditorView({
                                             {route.to_previous && (
                                               <span
                                                 className='ml-1 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
-                                                title="Returns the record to its previous state (mined from history); the listed state is only the no-history fallback"
+                                                title='Returns the record to its previous state (mined from history); the listed state is only the no-history fallback'
                                               >
                                                 ↩ Previous
                                               </span>
@@ -3570,7 +3696,8 @@ export function PipelineEditorView({
                                                 className='ml-1 inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy'
                                                 title={(route.condition_rules ?? [])
                                                   .map(
-                                                    (r) => `${r.field} ${r.op} ${String(r.value ?? '')}`
+                                                    (r) =>
+                                                      `${r.field} ${r.op} ${String(r.value ?? '')}`
                                                   )
                                                   .join(' AND ')}
                                               >
@@ -3817,8 +3944,8 @@ export function PipelineEditorView({
                 </Button>
               </div>
               <p className='text-[11px] text-slate-400'>
-                <strong>state_field</strong> is optional — if set, Nivaro will write the current state
-                key to that column on the record on every transition.
+                <strong>state_field</strong> is optional — if set, Nivaro will write the current
+                state key to that column on the record on every transition.
               </p>
             </div>
           </div>
@@ -3882,7 +4009,9 @@ export function PipelineEditorView({
 
 export function AiReviewCard({ templateId }: { templateId: string }) {
   const client = useNivaroClient()
-  const [result, setResult] = useState<{ structural: string[]; critique: string | null } | null>(null)
+  const [result, setResult] = useState<{ structural: string[]; critique: string | null } | null>(
+    null
+  )
   const run = useMutation({
     mutationFn: () =>
       client
@@ -3908,7 +4037,14 @@ export function AiReviewCard({ templateId }: { templateId: string }) {
             plus an AI critique of the state graph.
           </p>
         </div>
-        <Button type='button' size='sm' variant='outline' className='h-7 text-[12px]' disabled={run.isPending} onClick={() => run.mutate()}>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          className='h-7 text-[12px]'
+          disabled={run.isPending}
+          onClick={() => run.mutate()}
+        >
           {run.isPending ? 'Reviewing…' : 'Run review'}
         </Button>
       </div>
@@ -3986,9 +4122,7 @@ function PipelineVersionsCard({ templateId }: { templateId: string }) {
       client.request<{
         data?: { transitions?: { deleted: number; kept_in_history: number } }
       }>(post(`/pipelines/${templateId}/versions/${versionId}/restore`)),
-    onSuccess: (res: {
-      data?: { transitions?: { deleted: number; kept_in_history: number } }
-    }) => {
+    onSuccess: (res: { data?: { transitions?: { deleted: number; kept_in_history: number } } }) => {
       setConfirmId(null)
       const kept = res?.data?.transitions?.kept_in_history ?? 0
       toast.success(
@@ -4091,13 +4225,12 @@ function PipelineVersionsCard({ templateId }: { templateId: string }) {
         </div>
       )}
       <p className='text-[10.5px] text-slate-400'>
-        Restore snapshots the current config first, then upserts states/transitions/bindings by id
-        — states are never deleted, and transitions with execution history are kept.
+        Restore snapshots the current config first, then upserts states/transitions/bindings by id —
+        states are never deleted, and transitions with execution history are kept.
       </p>
     </div>
   )
 }
-
 
 interface VersionEntityDiff {
   added: Array<Record<string, unknown>>
@@ -4149,9 +4282,14 @@ function VersionDiffView({
         <div>
           <p className='text-[11px] font-semibold text-slate-600 dark:text-foreground'>Template</p>
           {diff.template.map((f) => (
-            <p key={f.field} className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+            <p
+              key={f.field}
+              className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'
+            >
               <span className='font-mono'>{f.field}</span>:{' '}
-              <span className='text-red-600 line-through dark:text-red-400'>{fmtDiffVal(f.from)}</span>{' '}
+              <span className='text-red-600 line-through dark:text-red-400'>
+                {fmtDiffVal(f.from)}
+              </span>{' '}
               → <span className='text-emerald-700 dark:text-emerald-400'>{fmtDiffVal(f.to)}</span>
             </p>
           ))}
@@ -4163,7 +4301,10 @@ function VersionDiffView({
             <p className='text-[11px] font-semibold text-slate-600 dark:text-foreground'>{label}</p>
             {/* "added" = present in the DIFF TARGET (usually current) but not the version */}
             {d.added.map((r) => (
-              <p key={String(r.id)} className='mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400'>
+              <p
+                key={String(r.id)}
+                className='mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400'
+              >
                 + {String(r.label ?? r.key ?? r.collection ?? r.id)} (only in {to})
               </p>
             ))}
@@ -4174,15 +4315,22 @@ function VersionDiffView({
             ))}
             {d.changed.map((c) => (
               <div key={String(c.id)} className='mt-0.5'>
-                <p className='text-[11px] font-medium text-slate-600 dark:text-foreground'>{c.label}</p>
+                <p className='text-[11px] font-medium text-slate-600 dark:text-foreground'>
+                  {c.label}
+                </p>
                 {c.fields.map((f) => (
-                  <p key={f.field} className='pl-3 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  <p
+                    key={f.field}
+                    className='pl-3 text-[11px] text-slate-500 dark:text-muted-foreground'
+                  >
                     <span className='font-mono'>{f.field}</span>:{' '}
                     <span className='text-red-600 line-through dark:text-red-400'>
                       {fmtDiffVal(f.from)}
                     </span>{' '}
                     →{' '}
-                    <span className='text-emerald-700 dark:text-emerald-400'>{fmtDiffVal(f.to)}</span>
+                    <span className='text-emerald-700 dark:text-emerald-400'>
+                      {fmtDiffVal(f.to)}
+                    </span>
                   </p>
                 ))}
               </div>
@@ -4253,13 +4401,7 @@ function SplitStateChip({
  * than falling off every worklist. Commits on blur/Enter — a per-keystroke
  * PATCH would write a half-typed column name.
  */
-function OwnerFallbackInput({
-  value,
-  onCommit
-}: {
-  value: string
-  onCommit: (v: string) => void
-}) {
+function OwnerFallbackInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
   const [draft, setDraft] = useState(value)
   useEffect(() => setDraft(value), [value])
   const commit = () => {
@@ -4402,8 +4544,8 @@ function ParallelBranchesCard({
       toast.success('Split created')
     },
     onError: (err: unknown) => {
-      const msg = ((err as { response?: { error?: string } })?.response?.error ??
-        (err as Error)?.message)
+      const msg =
+        (err as { response?: { error?: string } })?.response?.error ?? (err as Error)?.message
       toast.error(msg ?? 'Failed to create split')
     }
   })
@@ -4823,10 +4965,8 @@ function CoveragePeoplePicker({
     staleTime: 60_000
   })
   const selectedIds = new Set(selected.map((u) => u.id))
-  const nameOf = (u: User) =>
-    [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
-  const secondaryOf = (u: User) =>
-    [u.title, u.department].filter(Boolean).join(' · ') || u.email
+  const nameOf = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  const secondaryOf = (u: User) => [u.title, u.department].filter(Boolean).join(' · ') || u.email
   const sorted = [...(users ?? [])].sort((a, b) =>
     nameOf(a).localeCompare(nameOf(b), undefined, { sensitivity: 'base' })
   )
@@ -5088,13 +5228,7 @@ function ClusterAssignPanel({
 
 /** One hygiene finding with its fix inline: merge duplicates, staff or delete
  *  empty groups, strip dead filters. */
-function HygieneRow({
-  templateId,
-  finding
-}: {
-  templateId: string
-  finding: HygieneFinding
-}) {
+function HygieneRow({ templateId, finding }: { templateId: string; finding: HygieneFinding }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [mode, setMode] = useState<'idle' | 'confirm-merge' | 'confirm-delete' | 'add-member'>(
@@ -5162,7 +5296,8 @@ function HygieneRow({
         <span
           className={cn(
             'mt-0.5 shrink-0 rounded-full px-1.5 py-px text-[9.5px] font-semibold uppercase',
-            finding.type === 'empty' && 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
+            finding.type === 'empty' &&
+              'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400',
             finding.type === 'duplicate' &&
               'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400',
             finding.type === 'unknown_field' &&
@@ -5382,8 +5517,7 @@ export function OwnerGapsCard({
     byState.set(k, [...(byState.get(k) ?? []), g])
   }
   const stateGroups = [...byState.entries()].sort(
-    (a, b) =>
-      b[1].reduce((s, g) => s + g.count, 0) - a[1].reduce((s, g) => s + g.count, 0)
+    (a, b) => b[1].reduce((s, g) => s + g.count, 0) - a[1].reduce((s, g) => s + g.count, 0)
   )
 
   const dimChip = (k: string, v: string) => (
@@ -5404,9 +5538,9 @@ export function OwnerGapsCard({
             Owner coverage
           </h3>
           <p className='mt-0.5 max-w-[68ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Who actually covers this pipeline — open records resolving nobody, seats held by
-            people who can no longer act, and hygiene problems in the matrix itself. Every finding
-            is fixable in place.
+            Who actually covers this pipeline — open records resolving nobody, seats held by people
+            who can no longer act, and hygiene problems in the matrix itself. Every finding is
+            fixable in place.
           </p>
         </div>
         <Button
@@ -5692,10 +5826,7 @@ function titleCaseLabel(v: string): string {
  *  'Project Type' — drop the trailing display column, name the entity. */
 function dimLabel(path: string): string {
   const segs = path.split('.')
-  while (
-    segs.length > 1 &&
-    /^((short_)?name|label|key|id|.*_id)$/i.test(segs[segs.length - 1])
-  ) {
+  while (segs.length > 1 && /^((short_)?name|label|key|id|.*_id)$/i.test(segs[segs.length - 1])) {
     segs.pop()
   }
   const leaf = segs[segs.length - 1].replace(/s$/i, '')
@@ -5718,19 +5849,18 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
   const { data } = useQuery({
     queryKey: ['instance-distribution', templateId],
     queryFn: () =>
-      client
-        .request<{
-          data: Array<{
-            state_id: string | null
-            collection: string
-            count: number
-            key: string | null
-            label: string | null
-            color: string | null
-            orphaned: boolean
-          }>
-          states: Array<{ id: string; key: string; label: string }>
-        }>(get(`/pipelines/${templateId}/instance-distribution`)),
+      client.request<{
+        data: Array<{
+          state_id: string | null
+          collection: string
+          count: number
+          key: string | null
+          label: string | null
+          color: string | null
+          orphaned: boolean
+        }>
+        states: Array<{ id: string; key: string; label: string }>
+      }>(get(`/pipelines/${templateId}/instance-distribution`)),
     staleTime: 30_000
   })
   const rows = data?.data ?? []
@@ -5742,9 +5872,10 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
 
   const { data: bindingsForStart } = useQuery<{ data: Array<{ collection: string }> }>({
     queryKey: ['pipeline-bindings-start', templateId],
-    queryFn: () => client.request<{ data: Array<{ collection: string }> }>(
-      get(`/pipelines/${templateId}/bindings`)
-    )
+    queryFn: () =>
+      client.request<{ data: Array<{ collection: string }> }>(
+        get(`/pipelines/${templateId}/bindings`)
+      )
   })
   const boundCollections = (bindingsForStart?.data ?? []).map((b) => b.collection)
   const startMissing = useMutation({
@@ -5893,7 +6024,9 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
  */
 function PipelineCanvasCard({ templateId }: { templateId: string }) {
   const client = useNivaroClient()
-  const [selected, setSelected] = useState<{ kind: 'state' | 'transition'; id: string } | null>(null)
+  const [selected, setSelected] = useState<{ kind: 'state' | 'transition'; id: string } | null>(
+    null
+  )
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>(() => {
     try {
       return JSON.parse(localStorage.getItem(`nvr_canvas_${templateId}`) ?? '{}')
@@ -5901,7 +6034,13 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
       return {}
     }
   })
-  const dragRef = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number } | null>(null)
+  const dragRef = useRef<{
+    id: string
+    startX: number
+    startY: number
+    origX: number
+    origY: number
+  } | null>(null)
 
   const { data } = useQuery({
     queryKey: ['pipeline-canvas', templateId],
@@ -5909,8 +6048,24 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
       client
         .request<{
           data: {
-            states: Array<{ id: string; key: string; label: string; color: string | null; is_initial: boolean; is_terminal: boolean; sort: number }>
-            transitions: Array<{ id: string; label: string; from_state: string | null; to_state: string; auto_trigger?: boolean; condition_rules?: unknown; group_label?: string | null }>
+            states: Array<{
+              id: string
+              key: string
+              label: string
+              color: string | null
+              is_initial: boolean
+              is_terminal: boolean
+              sort: number
+            }>
+            transitions: Array<{
+              id: string
+              label: string
+              from_state: string | null
+              to_state: string
+              auto_trigger?: boolean
+              condition_rules?: unknown
+              group_label?: string | null
+            }>
           }
         }>(get(`/pipelines/${templateId}`))
         .then((r) => r.data),
@@ -5982,11 +6137,13 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
   const qcCanvas = useQueryClient()
   const createTransition = useMutation({
     mutationFn: (v: { from: string; to: string }) =>
-      client.request(post(`/pipelines/${templateId}/transitions`, {
-        from_state: v.from,
-        to_state: v.to,
-        label: 'New transition'
-      })),
+      client.request(
+        post(`/pipelines/${templateId}/transitions`, {
+          from_state: v.from,
+          to_state: v.to,
+          label: 'New transition'
+        })
+      ),
     onSuccess: () => {
       toast.success('Transition created — configure it in the Transitions list')
       void qcCanvas.invalidateQueries({ queryKey: ['pipeline-canvas', templateId] })
@@ -6015,7 +6172,10 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
     if (!d) return
     setPositions((prev) => ({
       ...prev,
-      [d.id]: { x: Math.max(0, d.origX + e.clientX - d.startX), y: Math.max(0, d.origY + e.clientY - d.startY) }
+      [d.id]: {
+        x: Math.max(0, d.origX + e.clientX - d.startX),
+        y: Math.max(0, d.origY + e.clientY - d.startY)
+      }
     }))
   }
   const onPointerUp = () => {
@@ -6048,7 +6208,8 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
     }
   }
 
-  const selState = selected?.kind === 'state' ? states.find((st) => String(st.id) === selected.id) : null
+  const selState =
+    selected?.kind === 'state' ? states.find((st) => String(st.id) === selected.id) : null
   const selTransition =
     selected?.kind === 'transition' ? transitions.find((t) => String(t.id) === selected.id) : null
 
@@ -6077,7 +6238,14 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
           aria-label='Workflow state machine'
         >
           <defs>
-            <marker id='cv-arrow' markerWidth='7' markerHeight='7' refX='6' refY='3.5' orient='auto'>
+            <marker
+              id='cv-arrow'
+              markerWidth='7'
+              markerHeight='7'
+              refX='6'
+              refY='3.5'
+              orient='auto'
+            >
               <path d='M0,0 L7,3.5 L0,7 z' className='fill-slate-400' />
             </marker>
           </defs>
@@ -6100,7 +6268,11 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
               : !!t.condition_rules
             return (
               // biome-ignore lint/a11y/useKeyWithClickEvents: canvas edge, inspect-only
-              <g key={t.id} onClick={() => setSelected({ kind: 'transition', id: String(t.id) })} className='cursor-pointer'>
+              <g
+                key={t.id}
+                onClick={() => setSelected({ kind: 'transition', id: String(t.id) })}
+                className='cursor-pointer'
+              >
                 <path d={path} fill='none' strokeWidth={10} className='stroke-transparent' />
                 <path
                   d={path}
@@ -6166,16 +6338,30 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
                   }
                 />
                 <circle cx={14} cy={layout.NODE_H / 2} r={4} fill={st.color ?? '#94a3b8'} />
-                <text x={26} y={layout.NODE_H / 2 + 4} className='fill-slate-700 text-[12px] font-medium dark:fill-slate-200'>
+                <text
+                  x={26}
+                  y={layout.NODE_H / 2 + 4}
+                  className='fill-slate-700 text-[12px] font-medium dark:fill-slate-200'
+                >
                   {st.label.length > 20 ? `${st.label.slice(0, 19)}…` : st.label}
                 </text>
                 {st.is_initial && (
-                  <text x={layout.NODE_W - 8} y={13} textAnchor='end' className='fill-emerald-500 text-[9px] font-semibold'>
+                  <text
+                    x={layout.NODE_W - 8}
+                    y={13}
+                    textAnchor='end'
+                    className='fill-emerald-500 text-[9px] font-semibold'
+                  >
                     START
                   </text>
                 )}
                 {st.is_terminal && (
-                  <text x={layout.NODE_W - 8} y={13} textAnchor='end' className='fill-slate-400 text-[9px] font-semibold'>
+                  <text
+                    x={layout.NODE_W - 8}
+                    y={13}
+                    textAnchor='end'
+                    className='fill-slate-400 text-[9px] font-semibold'
+                  >
                     END
                   </text>
                 )}
@@ -6188,11 +6374,13 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
         <div className='mt-2 flex flex-wrap items-center gap-3 rounded-md border border-slate-100 px-3 py-2 text-[12.5px] dark:border-border'>
           {selState && (
             <>
-              <span className='font-medium text-slate-800 dark:text-foreground'>{selState.label}</span>
+              <span className='font-medium text-slate-800 dark:text-foreground'>
+                {selState.label}
+              </span>
               <span className='text-slate-400'>key: {selState.key}</span>
               <span className='text-slate-400'>
-                {transitions.filter((t) => String(t.from_state) === String(selState.id)).length} out ·{' '}
-                {transitions.filter((t) => String(t.to_state) === String(selState.id)).length} in
+                {transitions.filter((t) => String(t.from_state) === String(selState.id)).length} out
+                · {transitions.filter((t) => String(t.to_state) === String(selState.id)).length} in
               </span>
               <button
                 type='button'
@@ -6205,9 +6393,13 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
           )}
           {selTransition && (
             <>
-              <span className='font-medium text-slate-800 dark:text-foreground'>{selTransition.label}</span>
+              <span className='font-medium text-slate-800 dark:text-foreground'>
+                {selTransition.label}
+              </span>
               {selTransition.auto_trigger && <span className='text-amber-600'>⚡ automatic</span>}
-              {selTransition.group_label && <span className='text-slate-400'>group: {selTransition.group_label}</span>}
+              {selTransition.group_label && (
+                <span className='text-slate-400'>group: {selTransition.group_label}</span>
+              )}
               <button
                 type='button'
                 onClick={() => jumpTo(selTransition.label)}
@@ -6217,7 +6409,11 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
               </button>
             </>
           )}
-          <button type='button' onClick={() => setSelected(null)} className='ml-auto text-slate-300 hover:text-slate-500'>
+          <button
+            type='button'
+            onClick={() => setSelected(null)}
+            className='ml-auto text-slate-300 hover:text-slate-500'
+          >
             ✕
           </button>
         </div>
@@ -6598,7 +6794,6 @@ function PipelineReplayCard({ templateId }: { templateId: string }) {
     </div>
   )
 }
-
 
 /** Slide-over hosting the full Teams surface from the Owner Matrix header —
  *  create teams, edit rosters and scopes without leaving the pipeline. */

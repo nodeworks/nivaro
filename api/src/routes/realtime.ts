@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { getRealtimeStats, getRecordViewerSnapshot } from '../plugins/socketio.js'
+import { emitForceRefresh, getRealtimeStats, getRecordViewerSnapshot } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
 
@@ -106,17 +106,41 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
   })
 
   // Remote client refresh (#285): every connected client shows a countdown
-  // then reloads. For the deploy that must land NOW.
-  app.post<{ Body: { seconds?: number; message?: string } }>('/force-refresh', async (req) => {
+  // then reloads. For the deploy that must land NOW. Targeted form
+  // (2026-09-25): `user_ids` reaches only those people (every open tab, any
+  // app), `app` reaches only one client app's sockets on this node —
+  // e.g. everyone on the portal after a portal-only fix.
+  app.post<{
+    Body: { seconds?: number; message?: string; user_ids?: string[]; app?: string }
+  }>('/force-refresh', async (req) => {
     const seconds = Math.min(300, Math.max(5, Number(req.body?.seconds) || 30))
     const message = String(req.body?.message ?? '').slice(0, 300)
-    app.io.emit('client:force-refresh', { seconds, message })
+    const userIds = Array.isArray(req.body?.user_ids)
+      ? req.body.user_ids.map((u) => String(u)).filter((u) => /^[0-9a-f-]{36}$/i.test(u))
+      : []
+    if (Array.isArray(req.body?.user_ids) && userIds.length === 0)
+      throw Object.assign(new Error('user_ids must name at least one user'), { statusCode: 400 })
+    const appFilter = req.body?.app ? String(req.body.app).slice(0, 50) : null
+    const hit = emitForceRefresh({ userIds, app: appFilter }, { seconds, message })
+    const names = userIds.length
+      ? await db('nivaro_users')
+          .whereIn('id', userIds)
+          .select('first_name', 'last_name', 'email')
+          .then((rows) =>
+            rows.map((r) => `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.email)
+          )
+      : []
+    const scope = userIds.length
+      ? `to ${names.join(', ')}`
+      : appFilter
+        ? `to everyone on ${appFilter}`
+        : 'to everyone'
     await logActivity({
       action: 'client-force-refresh',
       user: req.user?.id,
-      comment: `${seconds}s${message ? ` — ${message}` : ''}`,
+      comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.sockets} tabs on this node)`,
       req
     })
-    return { data: { sent: true, seconds } }
+    return { data: { sent: true, seconds, targets: userIds.length, ...hit } }
   })
 }
