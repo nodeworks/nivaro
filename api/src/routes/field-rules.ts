@@ -7,6 +7,7 @@ import {
   evaluateRulesForTrigger,
   type RowRule,
   RowRuleLookupCache,
+  type RowRuleSourceTrace,
   type RowRuleTraceEntry,
   VALID_OPS,
   VALID_TARGET_TYPES,
@@ -15,6 +16,7 @@ import {
 import { recordRuleEvalSample, ruleEvalStats } from '../services/field-rules-stats.js'
 import { applyFieldRules, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { getLabels } from '../services/queues.js'
 import { planRowRuleChanges } from '../services/row-rules-apply.js'
 
 interface FieldRuleBody {
@@ -252,6 +254,9 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
        *  (`expected`), so the client can label auto vs overridden values and
        *  offer reset-to-auto. Never applied server-side. */
       probe?: boolean
+      /** The parent record's collection — lets `$parent.<field>` trigger
+       *  values be labelled through the parent's own relations. */
+      parent_collection?: string
       /** Run only the rules targeting these fields (reset-to-auto). Those
        *  targets are treated as empty so only_if_empty rules fire. */
       target_fields?: string[]
@@ -294,6 +299,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     >()
 
     let expected: Record<string, unknown> | undefined
+    let provenance: Record<string, RuleProvenance> | undefined
     if (Array.isArray(body.row_rules) && body.row_rules.length > 0) {
       // The full evaluator lives in services/field-rules.ts now — createOne
       // runs the same rules for direct API child-row creates, so the logic
@@ -343,19 +349,28 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
         )
         for (const t of targets)
           if (derivable.has(t) && !seedTargets.includes(t)) probeWorking[t] = null
+        const trace: RowRuleTraceEntry[] = []
         await evaluateRowRules(db, body.collection, probeWorking, parentContext, rules, undefined, {
-          cache
+          cache,
+          explain: trace
         })
         expected = {}
         for (const t of targets) if (!seedTargets.includes(t)) expected[t] = probeWorking[t] ?? null
         for (const t of seedTargets) {
           const one: Record<string, unknown> = { ...working, [t]: null }
+          const seedTrace: RowRuleTraceEntry[] = []
           await evaluateRowRules(db, body.collection, one, parentContext, rules, undefined, {
             cache,
-            targetFields: [t]
+            targetFields: [t],
+            explain: seedTrace
           })
           expected[t] = one[t] ?? null
+          trace.push(...seedTrace.filter((e) => e.target_field === t))
         }
+        provenance = await provenanceFromTrace(trace, expected, {
+          childCollection: body.collection,
+          parentCollection: body.parent_collection ?? null
+        })
       }
       recordRuleEvalSample(body.collection, {
         at: Date.now(),
@@ -378,7 +393,8 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       updates,
       locks: [...locks],
       lock_reasons: Object.fromEntries(lockReasons),
-      ...(expected ? { expected } : {})
+      ...(expected ? { expected } : {}),
+      ...(provenance ? { provenance } : {})
     })
   })
 
@@ -631,4 +647,197 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       }
     })
   })
+}
+
+/** Where a rule-derived value came from, for the grid's "auto" chip: the
+ *  rule that wrote it and, for a precedence chain, every source it tried
+ *  with the records each one walked — labelled, so the tip can say
+ *  "cifa_tasks: CIFA 160573 × project type HQ NFE Projects". */
+export interface RuleProvenance {
+  rule_index: number
+  target_type: string
+  trigger_field: string | null
+  trigger_value: unknown
+  trigger_op: string | null
+  trigger_expected: string | null
+  trigger_related_field: string | null
+  target_value: string | null
+  /** The compare value and the row's actual trigger value, as people read
+   *  them: a lookup id becomes that row's label ("1" → "Purchase Order
+   *  Request"); a comma list labels each member. */
+  trigger_expected_label?: string | null
+  trigger_value_label?: string | null
+  value: unknown
+  sources?: Array<
+    RowRuleSourceTrace & {
+      via_label?: string | null
+      matched_label?: string | null
+      filter_label?: string | null
+    }
+  >
+}
+
+/** The collection a trigger's value names, so it can be labelled: a
+ *  `$parent.<field>` trigger → the parent record's M2O target (the parent
+ *  collection comes from the request, else from the child's own FK); a row
+ *  field → its M2O target, walked through `trigger_related_field` hops
+ *  (`sub_category.__entity__` = the id of the sub_category FK on that record). */
+async function triggerTargetCollection(
+  childCollection: string,
+  parentCollection: string | null,
+  triggerField: string,
+  relatedField: string | null
+): Promise<string | null> {
+  const m2oTarget = async (collection: string, field: string): Promise<string | null> => {
+    const rel = await db('nivaro_relations')
+      .where({ many_collection: collection, many_field: field })
+      .whereNull('junction_field')
+      .first('one_collection')
+      .catch(() => null)
+    return rel?.one_collection ? String(rel.one_collection) : null
+  }
+  let collection: string
+  let field: string
+  if (triggerField.startsWith('$parent.')) {
+    field = triggerField.slice(8)
+    let parent = parentCollection
+    if (!parent) {
+      // The child's FK to its parent: the one O2M-side relation whose target
+      // carries a field of that name.
+      const rels = (await db('nivaro_relations')
+        .where({ many_collection: childCollection })
+        .whereNull('junction_field')
+        .select('one_collection')
+        .catch(() => [])) as Array<{ one_collection: string | null }>
+      for (const r of rels) {
+        if (r.one_collection && (await m2oTarget(r.one_collection, field))) {
+          parent = r.one_collection
+          break
+        }
+      }
+    }
+    if (!parent) return null
+    collection = parent
+    if (!relatedField) return m2oTarget(collection, field)
+  } else {
+    collection = childCollection
+    field = triggerField
+    if (!relatedField) return m2oTarget(collection, field)
+  }
+  // Walk the hops: each is an M2O on the current collection; the last
+  // segment is either a column (no label) or __entity__/__id__ = the FK id.
+  let current = await m2oTarget(collection, field)
+  const parts = relatedField.split('.')
+  for (let i = 0; i < parts.length - 1 && current; i++) current = await m2oTarget(current, parts[i])
+  const last = parts[parts.length - 1]
+  if (last === '__entity__' || last === '__id__') return current
+  return null
+}
+
+async function provenanceFromTrace(
+  trace: RowRuleTraceEntry[],
+  expected: Record<string, unknown>,
+  ctx: { childCollection: string; parentCollection: string | null }
+): Promise<Record<string, RuleProvenance>> {
+  const out: Record<string, RuleProvenance> = {}
+  // The LAST rule that wrote a target on the from-scratch pass is the one
+  // whose value the target holds — later rules read earlier writes.
+  for (const e of trace) {
+    if (e.outcome !== 'wrote' || e.target_type === 'lock') continue
+    if (!(e.target_field in expected)) continue
+    out[e.target_field] = {
+      rule_index: e.index,
+      target_type: e.target_type,
+      trigger_field: e.trigger_field,
+      trigger_value: e.trigger_value,
+      trigger_op: e.trigger_op ?? null,
+      trigger_expected: e.trigger_expected ?? null,
+      trigger_related_field: e.trigger_related_field ?? null,
+      target_value: e.target_value ?? null,
+      value: e.value ?? null,
+      ...(e.sources ? { sources: e.sources.map((x) => ({ ...x })) } : {})
+    }
+  }
+  // Labels for every record a source walked, one getLabels per collection.
+  const wanted = new Map<string, Set<string>>()
+  const want = (ref: { collection: string; id: string } | null | undefined) => {
+    if (!ref) return
+    if (!wanted.has(ref.collection)) wanted.set(ref.collection, new Set())
+    wanted.get(ref.collection)!.add(String(ref.id))
+  }
+  const filterRefs = new Map<string, { collection: string; id: string }>()
+  for (const p of Object.values(out)) {
+    for (const src of p.sources ?? []) {
+      want(src.via)
+      want(src.matched)
+      // A filter on a lookup table's FK column ("project_type = 35") names a
+      // record too — label it through that column's relation.
+      if (src.o2m_collection && src.filter_field && src.filter_value) {
+        const rel = await db('nivaro_relations')
+          .where({ many_collection: src.o2m_collection, many_field: src.filter_field })
+          .whereNull('junction_field')
+          .first('one_collection')
+          .catch(() => null)
+        if (rel?.one_collection) {
+          const ref = { collection: String(rel.one_collection), id: String(src.filter_value) }
+          filterRefs.set(`${src.o2m_collection}.${src.filter_field}=${src.filter_value}`, ref)
+          want(ref)
+        }
+      }
+    }
+  }
+  // Trigger values: the compare value from the rule and the row's actual.
+  const triggerTargets = new Map<string, string | null>()
+  for (const p of Object.values(out)) {
+    if (!p.trigger_field) continue
+    const key = `${p.trigger_field}|${p.trigger_related_field ?? ''}`
+    if (!triggerTargets.has(key)) {
+      triggerTargets.set(
+        key,
+        await triggerTargetCollection(
+          ctx.childCollection,
+          ctx.parentCollection,
+          p.trigger_field,
+          p.trigger_related_field
+        ).catch(() => null)
+      )
+    }
+    const target = triggerTargets.get(key)
+    if (!target) continue
+    for (const v of [p.trigger_expected, p.trigger_value]) {
+      if (v == null || v === '') continue
+      for (const one of String(v).split(','))
+        if (one.trim()) want({ collection: target, id: one.trim() })
+    }
+  }
+  if (wanted.size === 0) return out
+  const labels = await getLabels(wanted).catch(() => ({}) as Record<string, string>)
+  const labelOf = (ref: { collection: string; id: string } | null | undefined) =>
+    ref ? (labels[`${ref.collection}:${ref.id}`] ?? null) : null
+  for (const p of Object.values(out)) {
+    if (!p.trigger_field) continue
+    const target = triggerTargets.get(`${p.trigger_field}|${p.trigger_related_field ?? ''}`)
+    if (!target) continue
+    const lab = (v: unknown) =>
+      v == null || v === ''
+        ? null
+        : String(v)
+            .split(',')
+            .map((one) => labelOf({ collection: target, id: one.trim() }) ?? one.trim())
+            .join(', ')
+    p.trigger_expected_label = lab(p.trigger_expected)
+    p.trigger_value_label = lab(p.trigger_value)
+  }
+  for (const p of Object.values(out)) {
+    for (const src of p.sources ?? []) {
+      src.via_label = labelOf(src.via)
+      src.matched_label = labelOf(src.matched)
+      const fr =
+        src.o2m_collection && src.filter_field
+          ? filterRefs.get(`${src.o2m_collection}.${src.filter_field}=${src.filter_value}`)
+          : undefined
+      src.filter_label = labelOf(fr)
+    }
+  }
+  return out
 }

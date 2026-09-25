@@ -967,7 +967,13 @@ export async function runTransitionActions(opts: {
         method: (action.method as 'POST' | 'PUT') ?? 'POST',
         path: action.endpoint_path,
         body,
-        timeoutMs: 30_000,
+        // `timeout_ms` on the action config wins; the default is generous
+        // because a partner that validates each line (Fusion IIP) answers a
+        // 30-line push in minutes, and a timeout here reads as a failed push.
+        timeoutMs: Math.min(
+          10 * 60_000,
+          Math.max(5_000, Number((action as { timeout_ms?: unknown }).timeout_ms) || 120_000)
+        ),
         _log: { triggeredBy: 'transition-action', userId: opts.userId ?? undefined }
       })
       responseBody = res.body

@@ -137,6 +137,8 @@ import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
+import type { RuleProvenance } from '../../lib/rule-provenance'
+import { RuleProvenanceChip } from './RuleProvenancePopover'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
@@ -209,6 +211,7 @@ function StaleValueFlag({ children }: { children: React.ReactNode }) {
   const [tip, setTip] = useState<{ x: number; y: number } | null>(null)
   return (
     <span
+      data-stale-flag
       className='inline-flex max-w-full items-center gap-1 rounded border border-amber-300 bg-amber-50/70 px-1.5 py-0.5 dark:border-amber-500/50 dark:bg-amber-500/10'
       onMouseEnter={(e) => {
         const r = e.currentTarget.getBoundingClientRect()
@@ -1905,6 +1908,9 @@ export function InlineTableField({
      *  current draft (server `probe`). Drives the auto / overridden chips and
      *  reset-to-auto; refreshed with every evaluate response. */
     expected?: Record<string, unknown>
+    /** Per rule target: WHERE `expected` came from — the rule and, for a
+     *  precedence chain, every source it tried (server `probe`). */
+    provenance?: Record<string, RuleProvenance>
     /** Required columns the last save attempt found empty — highlighted until filled. */
     missing?: string[]
   }
@@ -4247,6 +4253,38 @@ export function InlineTableField({
   // row's value against the resolved cascade filter — ONE query per cascaded
   // column ({_and: [cascadeFilter, {id: {_in: distinct values}}]}) — so
   // out-of-range values highlight at a glance across the whole grid.
+  // The column's own option_filter narrows the picker too (a CIFA column
+  // that hides catalogue defaults, an active-only picker): the row editor's
+  // combobox judged a value against cascade ∧ option_filter, so the collapsed
+  // row must judge by the same filter or the flag appears only once a row is
+  // opened. `$parent.<field>` tokens resolve off the parent draft; a filter
+  // whose tokens are unresolved is dropped, exactly as the picker drops it.
+  const fieldOptionFilters = useMemo(() => {
+    const out: Record<string, Record<string, unknown>> = {}
+    for (const c of displayCols) {
+      const o =
+        c.options && typeof c.options === 'object'
+          ? (c.options as Record<string, unknown>)
+          : typeof c.options === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(c.options as string) as Record<string, unknown>
+                } catch {
+                  return null
+                }
+              })()
+            : null
+      const raw = o?.option_filter
+      if (!raw || typeof raw !== 'object') continue
+      const resolved = resolveOptionFilterTokens(
+        raw as Record<string, unknown>,
+        parentDraftCtx?.draft,
+        parentDraftCtx?.draft?.id != null ? String(parentDraftCtx.draft.id) : ''
+      )
+      if (resolved) out[c.field] = resolved
+    }
+    return out
+  }, [displayCols, parentDraftCtx?.draft])
   const staleSweepInput = useMemo(() => {
     const entries: Array<{
       field: string
@@ -4254,9 +4292,14 @@ export function InlineTableField({
       filter: Record<string, unknown>
       ids: string[]
     }> = []
-    for (const [field, filter] of Object.entries(fieldCascadeFilters)) {
+    const fields = new Set([...Object.keys(fieldCascadeFilters), ...Object.keys(fieldOptionFilters)])
+    for (const field of fields) {
       const rel = m2oRelMap.get(field)
       if (!rel?.one_collection) continue
+      const parts = [fieldCascadeFilters[field], fieldOptionFilters[field]].filter(
+        (f): f is Record<string, unknown> => !!f
+      )
+      const filter = parts.length === 1 ? parts[0] : { _and: parts }
       const ids = [
         ...new Set(
           [...rows, ...pendingRows]
@@ -4268,7 +4311,7 @@ export function InlineTableField({
       if (ids.length) entries.push({ field, target: rel.one_collection, filter, ids })
     }
     return entries
-  }, [fieldCascadeFilters, m2oRelMap, rows, pendingRows])
+  }, [fieldCascadeFilters, fieldOptionFilters, m2oRelMap, rows, pendingRows])
   const staleSweepResults = useQueries({
     queries: staleSweepInput.map((e) => ({
       queryKey: [
@@ -4296,11 +4339,22 @@ export function InlineTableField({
     staleSweepInput.forEach((e, i) => {
       const available = staleSweepResults[i]?.data
       if (!available) return // still loading / errored — no flags
-      const bad = e.ids.filter((id) => !available.has(id))
+      // A pinned default (the project's generic item) is offered outside the
+      // filter on purpose — the picker never flags it, so neither does the row.
+      const pinned = new Set<string>()
+      if (pinnedConfigByField.has(e.field)) {
+        for (const r of [...rows, ...pendingRows]) {
+          const pin = pinnedOptionFor(e.field, r)
+          if (pin?.id != null) pinned.add(String(pin.id))
+        }
+      }
+      const bad = e.ids.filter((id) => !available.has(id) && !pinned.has(id))
       if (bad.length) map.set(e.field, new Set(bad))
     })
     return map
-  }, [staleSweepInput, staleSweepResults])
+    // pinnedOptionFor is a stable closure over pinnedParentRows + parent draft
+    // biome-ignore lint/correctness/useExhaustiveDependencies: pinnedOptionFor reads pinnedParentRows + the parent draft, both listed
+  }, [staleSweepInput, staleSweepResults, pinnedConfigByField, pinnedParentRows, parentDraftCtx?.draft, rows, pendingRows])
 
   // ── Cascade swap ───────────────────────────────────────────────────────────
   // A parent field the USER changed this session (dirtyFields — a record that
@@ -4435,7 +4489,10 @@ export function InlineTableField({
             // the new value instead of keeping the old answer and reading as
             // "overridden" afterwards. A hand-picked value (≠ probe) stays.
             const probe = await client
-              .request<{ expected?: Record<string, unknown> }>(
+              .request<{
+                expected?: Record<string, unknown>
+                provenance?: Record<string, RuleProvenance>
+              }>(
                 post('/field-rules/evaluate', {
                   collection: relatedCollection,
                   data: base,
@@ -4710,6 +4767,7 @@ export function InlineTableField({
           fk_field: manyField,
           ...(isNew ? {} : { parent_id: parentId }),
           parent_context: buildParentCtx(),
+              parent_collection: parentCollection,
           row_rules: rowRules,
           mode: rerunMode,
           dry_run: dryRun || stageIt || pendingPayload.length > 0,
@@ -4769,6 +4827,7 @@ export function InlineTableField({
             fk_field: manyField,
             parent_id: parentId,
             parent_context: buildParentCtx(),
+              parent_collection: parentCollection,
             row_rules: rowRules,
             mode: rerunMode,
             dry_run: false,
@@ -4830,6 +4889,7 @@ export function InlineTableField({
         locks?: string[]
         lock_reasons?: Record<string, LockReason>
         expected?: Record<string, unknown>
+        provenance?: Record<string, RuleProvenance>
       }>(
         post('/field-rules/evaluate', {
           collection: relatedCollection,
@@ -4837,6 +4897,7 @@ export function InlineTableField({
           locks_only: true,
           probe: true,
           parent_context: buildParentCtx(),
+              parent_collection: parentCollection,
           row_rules: rowRules
         })
       )
@@ -4848,7 +4909,8 @@ export function InlineTableField({
                 locks: res.locks ?? [],
                 lockReasons: res.lock_reasons ?? s.lockReasons,
                 locksPending: false,
-                expected: res.expected ?? s.expected
+                expected: res.expected ?? s.expected,
+                provenance: res.provenance ?? s.provenance
               }
             : s
         )
@@ -4982,6 +5044,7 @@ export function InlineTableField({
         updates: Record<string, unknown>
         locks?: string[]
         expected?: Record<string, unknown>
+        provenance?: Record<string, RuleProvenance>
       }>(
         post('/field-rules/evaluate', {
           collection: relatedCollection,
@@ -4989,6 +5052,7 @@ export function InlineTableField({
           target_fields: [field],
           probe: true,
           parent_context: buildParentCtx(),
+              parent_collection: parentCollection,
           row_rules: rowRules
         })
       )
@@ -5038,6 +5102,7 @@ export function InlineTableField({
       locks?: string[]
       lock_reasons?: Record<string, LockReason>
       expected?: Record<string, unknown>
+      provenance?: Record<string, RuleProvenance>
     },
     autoFields: string[] = []
   ) {
@@ -5065,7 +5130,8 @@ export function InlineTableField({
         locks: res.locks ?? s.locks,
         lockReasons: res.lock_reasons ?? s.lockReasons,
         locksPending: false,
-        expected: res.expected ?? s.expected
+        expected: res.expected ?? s.expected,
+        provenance: res.provenance ?? s.provenance
       }
     })
   }
@@ -5162,6 +5228,7 @@ export function InlineTableField({
           locks?: string[]
           lock_reasons?: Record<string, LockReason>
           expected?: Record<string, unknown>
+          provenance?: Record<string, RuleProvenance>
         }>(
           post('/field-rules/evaluate', {
             collection: relatedCollection,
@@ -6216,6 +6283,7 @@ export function InlineTableField({
           const probe = await client.request<{
             locks?: string[]
             expected?: Record<string, unknown>
+            provenance?: Record<string, RuleProvenance>
           }>(
             post('/field-rules/evaluate', {
               collection: relatedCollection,
@@ -6223,6 +6291,7 @@ export function InlineTableField({
               locks_only: true,
               probe: true,
               parent_context: buildParentCtx(),
+              parent_collection: parentCollection,
               row_rules: rowRules
             })
           )
@@ -6241,6 +6310,7 @@ export function InlineTableField({
               updates?: Record<string, unknown>
               locks?: string[]
               expected?: Record<string, unknown>
+              provenance?: Record<string, RuleProvenance>
             }>(
               post('/field-rules/evaluate', {
                 collection: relatedCollection,
@@ -6248,6 +6318,7 @@ export function InlineTableField({
                 changed_field: k,
                 probe: true,
                 parent_context: buildParentCtx(),
+              parent_collection: parentCollection,
                 row_rules: rowRules
               })
             )
@@ -6716,32 +6787,25 @@ export function InlineTableField({
                   {(() => {
                     const prov = ruleProvenance(c.field)
                     if (!prov) return null
-                    return prov === 'auto' ? (
-                      <span
-                        className='rounded bg-sky-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-sky-700 dark:bg-sky-400/10 dark:text-sky-300'
-                        data-tip='Set automatically by a row rule'
-                      >
-                        auto
-                      </span>
-                    ) : (
-                      <span className='flex items-center gap-1'>
-                        <span
-                          className='rounded bg-amber-50 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'
-                          data-tip='Differs from what the row rules would set'
-                        >
-                          overridden
-                        </span>
-                        {!readOnly && !editState?.locks?.includes(c.field) && (
-                          <button
-                            type='button'
-                            onClick={() => resetToAuto(c.field)}
-                            className='rounded px-1 text-[10px] normal-case tracking-normal text-nvr-cyan hover:underline'
-                            data-tip='Reset to the rule-derived value'
-                          >
-                            ↺ reset
-                          </button>
-                        )}
-                      </span>
+                    const rel = m2oRelMap.get(c.field)
+                    const labelOf = (v: unknown) =>
+                      (rel?.one_collection
+                        ? m2oDisplays[rel.one_collection]?.[String(v)]
+                        : undefined) ?? String(v)
+                    const fieldLabel = (f: string) =>
+                      displayCols.find((x) => x.field === f)?.label ?? f.replace(/_/g, ' ')
+                    return (
+                      <RuleProvenanceChip
+                        kind={prov}
+                        provenance={editState?.provenance?.[c.field]}
+                        labelOf={labelOf}
+                        fieldLabel={fieldLabel}
+                        onReset={
+                          prov === 'overridden' && !readOnly && !editState?.locks?.includes(c.field)
+                            ? () => resetToAuto(c.field)
+                            : undefined
+                        }
+                      />
                     )
                   })()}
                 </span>
@@ -7824,7 +7888,7 @@ export function InlineTableField({
                         isDragging ? 'opacity-40' : '',
                         isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
                         isPendingDelete
-                          ? 'opacity-50 bg-red-50/40 cursor-default line-through'
+                          ? 'opacity-50 bg-red-50/40 cursor-default line-through dark:bg-red-900/10'
                           : '',
                         !isPendingDelete && isEditing
                           ? splitMode
@@ -7833,7 +7897,7 @@ export function InlineTableField({
                           : '',
                         !isPendingDelete && !isEditing
                           ? lineError
-                            ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15'
+                            ? 'bg-red-50/70 hover:bg-red-50 cursor-pointer dark:bg-red-900/15 dark:hover:bg-red-900/25'
                             : ri % 2 === 0
                               ? 'bg-white hover:bg-slate-50/80 dark:bg-card dark:hover:bg-muted cursor-pointer'
                               : 'bg-slate-50/50 hover:bg-slate-100/60 dark:bg-white/[0.03] dark:hover:bg-muted cursor-pointer'

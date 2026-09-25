@@ -800,7 +800,7 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
     }
     // Only value-holding rules are clearable; a required-empty finding has
     // nothing to clear.
-    if (b.rule && !['cascade', 'validation', 'display'].includes(b.rule)) {
+    if (b.rule && !['cascade', 'option-filter', 'validation', 'display'].includes(b.rule)) {
       return reply.code(400).send({ error: `Rule "${b.rule}" is not clearable` })
     }
     const findings = (await db('nivaro_conformance_findings')

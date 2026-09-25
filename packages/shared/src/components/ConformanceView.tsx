@@ -96,8 +96,8 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
 }
 
 /** Extension rules arrive as kebab ids ('forecast-missing') — read them as words. */
-const ruleFallback = (rule: string) => rule.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
-
+const ruleFallback = (rule: string) =>
+  rule.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
 
 /** #37 — route one finding to a person as a task on the record. */
 function AssignFinding({ findingId }: { findingId: number }) {
@@ -110,17 +110,29 @@ function AssignFinding({ findingId }: { findingId: number }) {
     queryKey: ['conformance-assign-users', q],
     queryFn: () =>
       client
-        .request<{ data: Array<{ id: string; first_name: string | null; last_name: string | null; email: string }> }>(
-          get(`/users?search=${encodeURIComponent(q)}&limit=8`)
-        )
+        .request<{
+          data: Array<{
+            id: string
+            first_name: string | null
+            last_name: string | null
+            email: string
+          }>
+        }>(get(`/users?search=${encodeURIComponent(q)}&limit=8`))
         .then((r) => r.data),
     enabled: open && q.trim().length >= 2,
     staleTime: 30_000
   })
-  const assign = async (u: { id: string; first_name: string | null; last_name: string | null; email: string }) => {
+  const assign = async (u: {
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string
+  }) => {
     setBusy(true)
     try {
-      await client.request(post(`/config-conformance/findings/${findingId}/assign`, { user_id: u.id }))
+      await client.request(
+        post(`/config-conformance/findings/${findingId}/assign`, { user_id: u.id })
+      )
       setDone([u.first_name, u.last_name].filter(Boolean).join(' ') || u.email)
       setOpen(false)
     } finally {
@@ -145,7 +157,10 @@ function AssignFinding({ findingId }: { findingId: number }) {
         Assign…
       </button>
       {open && (
-        <div className='absolute right-0 top-7 z-30 w-64 rounded-md border border-slate-200 bg-white p-2 text-left shadow-md dark:border-border dark:bg-card' data-finding-assign-panel>
+        <div
+          className='absolute right-0 top-7 z-30 w-64 rounded-md border border-slate-200 bg-white p-2 text-left shadow-md dark:border-border dark:bg-card'
+          data-finding-assign-panel
+        >
           <input
             autoFocus
             value={q}
@@ -664,9 +679,17 @@ function RunDetail({
 
       {rule &&
         field &&
-        ['cascade', 'validation', 'display', 'row-rule', 'required', 'row-input'].includes(
-          rule
-        ) && <RemediateBar run={run} rule={rule} field={field} total={data?.total ?? 0} />}
+        [
+          'cascade',
+          'option-filter',
+          'validation',
+          'display',
+          'row-rule',
+          'required',
+          'row-input'
+        ].includes(rule) && (
+          <RemediateBar run={run} rule={rule} field={field} total={data?.total ?? 0} />
+        )}
 
       <div className='min-h-0 flex-1 overflow-y-auto'>
         {/* Only a SETTLED empty answer earns the green all-clear — while the
@@ -828,7 +851,7 @@ function RemediateBar({
   const blunt: null | 'clear' | 'rederive' =
     rule === 'row-rule'
       ? 'rederive'
-      : ['cascade', 'validation', 'display'].includes(rule)
+      : ['cascade', 'option-filter', 'validation', 'display'].includes(rule)
         ? 'clear'
         : null
   const run_ = (action: 'clear' | 'rederive' | 'apply-high') => {

@@ -569,6 +569,27 @@ export interface RowRule {
   reason?: string | null
 }
 
+/** What one precedence source did: the records it walked (so a person can
+ *  see WHICH cifa/category/project row the value came from) and whether it
+ *  answered. `via` = the row field's record (relation_field / o2m_filtered)
+ *  or the parent's record (parent_m2o); `matched` = the lookup row an
+ *  o2m_filtered source found. */
+export interface RowRuleSourceTrace {
+  index: number
+  source_type: string
+  source_field: string
+  source_related_field: string
+  o2m_collection?: string
+  filter_field?: string
+  /** The resolved filter value (a `$parent.<field>` token already substituted). */
+  filter_value?: string | null
+  via?: { collection: string; id: string } | null
+  matched?: { collection: string; id: string } | null
+  /** Why this source yielded nothing: gate-closed | no-value | no-record | no-match | error */
+  miss?: string
+  value?: unknown
+}
+
 /** One line of an explain trace — what a rule did on one pass and why. */
 export interface RowRuleTraceEntry {
   index: number
@@ -582,6 +603,14 @@ export interface RowRuleTraceEntry {
   /** Value written to the target (when outcome = wrote). */
   value?: unknown
   ms: number
+  /** Precedence rules: every source in order — the first with a value won. */
+  sources?: RowRuleSourceTrace[]
+  /** Rule config that phrases the sentence: the target_value of a set/pick,
+   *  the copied field of a relation_field rule. */
+  target_value?: string | null
+  trigger_op?: string | null
+  trigger_expected?: string | null
+  trigger_related_field?: string | null
 }
 
 /**
@@ -757,6 +786,7 @@ export async function evaluateRowRules(
     const triggerField = rule.trigger_field ?? null
     const startedAt = Date.now()
     let traceVal: unknown
+    let sourceTraces: RowRuleSourceTrace[] | undefined
     const note = (outcome: string, value?: unknown) => {
       evalOpts?.explain?.push({
         index: ruleIndex,
@@ -766,7 +796,12 @@ export async function evaluateRowRules(
         trigger_value: traceVal,
         outcome,
         ...(value !== undefined ? { value } : {}),
-        ms: Date.now() - startedAt
+        ms: Date.now() - startedAt,
+        ...(sourceTraces ? { sources: sourceTraces } : {}),
+        target_value: rule.target_value ?? null,
+        trigger_op: rule.trigger_op ?? null,
+        trigger_expected: rule.trigger_value ?? null,
+        trigger_related_field: rule.trigger_related_field ?? null
       })
     }
     if (evalOpts?.locksOnly && !isLock) {
@@ -962,7 +997,9 @@ export async function evaluateRowRules(
                   parentContext,
                   subParent,
                   cache
-                ).catch(() => null)
+                )
+                  .then((r) => r.value)
+                  .catch(() => null)
               )
             )
           )
@@ -1033,13 +1070,24 @@ export async function evaluateRowRules(
       // same first-match semantics as the old sequential walk, minus the
       // serial round trips. A source that throws simply yields no candidate.
       const candidates = await Promise.all(
-        rule.sources.map((src) =>
-          resolvePrecedenceSource(src, collection, working, parentContext, subParent, cache).catch(
-            () => null
+        rule.sources.map((src, i) =>
+          resolvePrecedenceSource(src, collection, working, parentContext, subParent, cache).then(
+            (r) => ({ ...r, trace: { ...r.trace, index: i } }),
+            (): ResolvedSource => ({
+              value: null,
+              trace: {
+                index: i,
+                source_type: src.source_type,
+                source_field: src.source_field,
+                source_related_field: src.source_related_field,
+                miss: 'error'
+              }
+            })
           )
         )
       )
-      const picked = candidates.find((c) => c != null) ?? null
+      const picked = candidates.find((c) => c.value != null)?.value ?? null
+      sourceTraces = candidates.map((c) => c.trace)
       // A seed rule that derives nothing for the new state leaves the value
       // it seeded earlier (a line keeps its seeded item rather than losing it).
       if (rule.seed_only && picked == null && working[rule.target_field] != null) {
@@ -1111,6 +1159,14 @@ async function sourceGateOpen(
   return matchesTrigger(op, val, subParent(w.value ?? null))
 }
 
+interface ResolvedSource {
+  value: unknown
+  trace: RowRuleSourceTrace
+}
+
+/** One precedence source, resolved — with the trail of records it walked,
+ *  so the grid can tell a person "from cifa_tasks row 43 (CIFA 160573 for
+ *  project type HQ NFE)" rather than "set by a row rule". */
 async function resolvePrecedenceSource(
   src: RowRuleSource,
   collection: string,
@@ -1118,67 +1174,88 @@ async function resolvePrecedenceSource(
   parentContext: Record<string, unknown>,
   subParent: (s: string | null | undefined) => string | null,
   cache: RowRuleLookupCache
-): Promise<unknown> {
-  if (!src.source_field || !src.source_related_field) return null
+): Promise<ResolvedSource> {
+  const trace: RowRuleSourceTrace = {
+    index: 0,
+    source_type: src.source_type,
+    source_field: src.source_field,
+    source_related_field: src.source_related_field,
+    ...(src.o2m_collection ? { o2m_collection: src.o2m_collection } : {}),
+    ...(src.filter_field ? { filter_field: src.filter_field } : {})
+  }
+  const miss = (why: string): ResolvedSource => ({ value: null, trace: { ...trace, miss: why } })
+  const hit = (value: unknown): ResolvedSource =>
+    value == null ? miss('no-value') : { value, trace: { ...trace, value } }
+  if (!src.source_field || !src.source_related_field) return miss('misconfigured')
   if (!(await sourceGateOpen(src, collection, working, parentContext, subParent, cache)))
-    return null
+    return miss('gate-closed')
   if (src.source_type === 'relation_field') {
     const fkId = working[src.source_field]
-    if (fkId == null) return null
+    if (fkId == null) return miss('no-value')
     const rel = await cache.m2oRel(collection, src.source_field)
-    if (!rel?.one_collection) return null
+    if (!rel?.one_collection) return miss('no-record')
+    trace.via = { collection: rel.one_collection, id: String(fkId) }
     const relRec = await cache.record(rel.one_collection, fkId)
-    return relRec?.[src.source_related_field] ?? null
+    if (!relRec) return miss('no-record')
+    return hit(relRec[src.source_related_field] ?? null)
   }
   if (src.source_type === 'o2m_first') {
     const rowId = working.id
-    if (rowId == null) return null
+    if (rowId == null) return miss('no-value')
     const rel = await cache.o2mRel(collection, src.source_field)
-    if (!rel?.many_collection) return null
+    if (!rel?.many_collection) return miss('no-record')
     const firstRec = await cache.firstWhere(rel.many_collection, {
       [rel.many_field]: String(rowId)
     })
-    return firstRec?.[src.source_related_field] ?? null
+    if (!firstRec) return miss('no-match')
+    trace.matched = { collection: rel.many_collection, id: String(firstRec.id) }
+    return hit(firstRec[src.source_related_field] ?? null)
   }
   if (src.source_type === 'o2m_filtered') {
-    if (!src.o2m_collection || !src.filter_field) return null
+    if (!src.o2m_collection || !src.filter_field) return miss('misconfigured')
     const hop = src.source_hop ?? 'm2o'
     let intermediateId: string | null = null
     let intermediateCollection: string | null = null
     if (hop === 'm2o') {
       const fkId = working[src.source_field]
-      if (fkId == null) return null
+      if (fkId == null) return miss('no-value')
       intermediateId = String(fkId)
       const rel = await cache.m2oRel(collection, src.source_field)
       intermediateCollection = rel?.one_collection ?? null
     } else {
       const rowId = working.id
-      if (rowId == null) return null
+      if (rowId == null) return miss('no-value')
       const rel = await cache.o2mRel(collection, src.source_field)
-      if (!rel?.many_collection) return null
+      if (!rel?.many_collection) return miss('no-record')
       const firstRec = await cache.firstWhere(rel.many_collection, {
         [rel.many_field]: String(rowId)
       })
-      if (firstRec?.id == null) return null
+      if (firstRec?.id == null) return miss('no-match')
       intermediateId = String(firstRec.id)
       intermediateCollection = rel.many_collection
     }
-    if (!intermediateId || !intermediateCollection) return null
+    if (!intermediateId || !intermediateCollection) return miss('no-record')
+    trace.via = { collection: intermediateCollection, id: intermediateId }
     const fkRel = await cache.fkRel(src.o2m_collection, intermediateCollection)
-    if (!fkRel?.many_field) return null
+    if (!fkRel?.many_field) return miss('misconfigured')
     const resolvedFilter = subParent(src.filter_value ?? '') ?? ''
+    trace.filter_value = resolvedFilter
     const matchRec = await cache.firstWhere(src.o2m_collection, {
       [fkRel.many_field]: intermediateId,
       [src.filter_field]: resolvedFilter
     })
-    return matchRec?.[src.source_related_field] ?? null
+    if (!matchRec) return miss('no-match')
+    trace.matched = { collection: src.o2m_collection, id: String(matchRec.id) }
+    return hit(matchRec[src.source_related_field] ?? null)
   }
   if (src.source_type === 'parent_m2o') {
-    if (!src.source_one_collection) return null
+    if (!src.source_one_collection) return miss('misconfigured')
     const fkId = parentContext[src.source_field]
-    if (fkId == null) return null
+    if (fkId == null) return miss('no-value')
+    trace.via = { collection: src.source_one_collection, id: String(fkId) }
     const relRec = await cache.record(src.source_one_collection, fkId)
-    return relRec?.[src.source_related_field] ?? null
+    if (!relRec) return miss('no-record')
+    return hit(relRec[src.source_related_field] ?? null)
   }
-  return null
+  return miss('misconfigured')
 }

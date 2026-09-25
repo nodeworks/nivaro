@@ -85,12 +85,36 @@ interface DateOffsetCheck {
   baseline: string
 }
 
+/** An M2O column whose picker is narrowed by the field's own `option_filter`
+ *  (an active-only picker, a CIFA column that hides catalogue defaults): a
+ *  stored value the picker would no longer offer. Only STATIC filters are
+ *  swept — one with `$parent.<field>` tokens depends on the open record and
+ *  is judged by the grid at render time instead. */
+export interface OptionFilterCheck {
+  field: string
+  fieldLabel: string
+  target: string
+  filter: Record<string, unknown>
+  /** The picker's pinned defaults (`pinned_options`): the row's PARENT
+   *  record (reached through `childFk`) links a `parent_collection` record
+   *  via `parent_field`, and that record's `source_field` is offered at the
+   *  top of the picker outside the filter — so it is never stale for that
+   *  row, exactly as the picker never flags it. */
+  pinnedSources: Array<{
+    childFk: string
+    parentField: string
+    parentCollection: string
+    sourceField: string
+  }>
+}
+
 interface CompiledChecks {
   collection: string
   requiredFields: RequiredCheck[]
   validation: Array<{ field: string; label: string; rules: ValidationRule[] }>
   dateOffsets: DateOffsetCheck[]
   cascades: CascadeCheck[]
+  optionFilters: OptionFilterCheck[]
   /** Display-template parts — a record whose parts all resolve empty renders
    *  as its internal id everywhere labels are used. */
   displayTokens: DisplayToken[]
@@ -235,12 +259,20 @@ async function layoutPresence(
 export async function compileChecks(collection: string): Promise<CompiledChecks> {
   const fields = (await db('nivaro_fields')
     .where({ collection })
-    .select('field', 'label', 'required', 'validation_rules', 'dependency_config')) as Array<{
+    .select(
+      'field',
+      'label',
+      'required',
+      'validation_rules',
+      'dependency_config',
+      'options'
+    )) as Array<{
     field: string
     label: string | null
     required: unknown
     validation_rules: unknown
     dependency_config: unknown
+    options: unknown
   }>
 
   // Human labels, the way the FORM shows them: the active layout's
@@ -274,6 +306,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     requiredFields: [],
     validation: [],
     cascades: [],
+    optionFilters: [],
     displayTokens: [],
     dateOffsets: [],
     rowRules: [],
@@ -465,6 +498,91 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     }
   }
 
+  // ── option_filter availability ───────────────────────────────────────────
+  for (const f of fields) {
+    if (!IDENT.test(f.field)) continue
+    const opts = parseJson<{
+      option_filter?: unknown
+      pinned_options?: Array<{
+        parent_collection?: string
+        source_field?: string
+        parent_field?: string
+      }>
+    }>(f.options)
+    const filter = opts?.option_filter
+    if (!filter || typeof filter !== 'object' || Array.isArray(filter)) continue
+    if (JSON.stringify(filter).includes('$parent.')) {
+      out.skipped.push(`${f.field}: option_filter reads the parent record ($parent tokens)`)
+      continue
+    }
+    const m2o = (await db('nivaro_relations')
+      .where({ many_collection: collection, many_field: f.field })
+      .whereNull('junction_field')
+      .first('one_collection')) as { one_collection: string | null } | undefined
+    if (!m2o?.one_collection || !IDENT.test(m2o.one_collection)) continue
+    const pinnedSources: OptionFilterCheck['pinnedSources'] = []
+    for (const p of opts?.pinned_options ?? []) {
+      if (
+        typeof p?.parent_collection !== 'string' ||
+        typeof p?.source_field !== 'string' ||
+        typeof p?.parent_field !== 'string' ||
+        !IDENT.test(p.parent_collection) ||
+        !IDENT.test(p.source_field) ||
+        !IDENT.test(p.parent_field)
+      )
+        continue
+      // The row's FK to its parent: an M2O on this collection whose target
+      // carries `parent_field` pointing at `parent_collection`.
+      const fks = (await db('nivaro_relations')
+        .where({ many_collection: collection })
+        .whereNull('junction_field')
+        .select('many_field', 'one_collection')) as Array<{
+        many_field: string
+        one_collection: string | null
+      }>
+      let childFk: string | null = null
+      for (const r of fks) {
+        if (!r.one_collection || !IDENT.test(r.many_field)) continue
+        const hop = await db('nivaro_relations')
+          .where({
+            many_collection: r.one_collection,
+            many_field: p.parent_field,
+            one_collection: p.parent_collection
+          })
+          .whereNull('junction_field')
+          .first('id')
+        if (hop) {
+          childFk = r.many_field
+          break
+        }
+      }
+      if (!childFk) continue
+      if (
+        !pinnedSources.some(
+          (x) =>
+            x.childFk === childFk &&
+            x.parentField === p.parent_field &&
+            x.parentCollection === p.parent_collection &&
+            x.sourceField === p.source_field
+        )
+      ) {
+        pinnedSources.push({
+          childFk,
+          parentField: p.parent_field,
+          parentCollection: p.parent_collection,
+          sourceField: p.source_field
+        })
+      }
+    }
+    out.optionFilters.push({
+      field: f.field,
+      fieldLabel: labelFor(f.field),
+      target: m2o.one_collection,
+      filter: filter as Record<string, unknown>,
+      pinnedSources
+    })
+  }
+
   // ── inline-grid row rules ────────────────────────────────────────────────
   // The same rules the grid runs as a line is typed and the API runs on a
   // line create: a saved line whose stored target differs from what the
@@ -531,17 +649,20 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
           .where('required', true)
           .orWhereNotNull('validation_rules')
           .orWhereNotNull('dependency_config')
+          .orWhere('options', 'like', '%option_filter%')
       )
       .select(
         'collection',
         'field',
         'required',
         'validation_rules',
-        'dependency_config'
+        'dependency_config',
+        'options'
       ) as Promise<
       Array<{
         collection: string
         field: string
+        options: unknown
         required: unknown
         validation_rules: unknown
         dependency_config: unknown
@@ -620,6 +741,11 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
       if (c.filter_column.includes('.') || c.filter_via_many) e.skipped++
       else e.cascade++
     }
+    const optFilter = parseJson<{ option_filter?: unknown }>(f.options)?.option_filter
+    if (optFilter && typeof optFilter === 'object') {
+      if (JSON.stringify(optFilter).includes('$parent.')) e.skipped++
+      else e.cascade++
+    }
   }
   // Grids with row rules on ACTIVE grouped layouts — one query, LIKE-narrowed
   // to the handful of assignment rows that carry them.
@@ -694,6 +820,10 @@ async function columnsFor(
   for (const c of checks.cascades) {
     if (!c.childIsM2M) columns.add(c.field)
     if (!c.parentIsM2M) columns.add(c.parent_field)
+  }
+  for (const o of checks.optionFilters) {
+    columns.add(o.field)
+    for (const p of o.pinnedSources) columns.add(p.childFk)
   }
   for (const t of checks.displayTokens) {
     columns.add(t.hops.length > 0 ? t.hops[0].fk : t.leaf)
@@ -1041,14 +1171,110 @@ async function evaluateRows(
       )
     ).flat()
 
-  const [m2m, cas, disp, rr, ext] = await Promise.all([
+  // ── option_filter availability: the picker's own narrowing ──────────────
+  const optionFilters = async (): Promise<RecordFinding[]> => {
+    const out: RecordFinding[] = []
+    if (checks.optionFilters.length === 0) return out
+    const { applyFilterToQuery } = await import('./items.js')
+    for (const c of checks.optionFilters) {
+      if (!physical.has(c.field)) continue
+      const vals = [
+        ...new Set(
+          rows
+            .map((r) => r[c.field])
+            .filter((v) => v != null && v !== '')
+            .map(String)
+        )
+      ]
+      if (vals.length === 0) continue
+      let available: Set<string>
+      try {
+        const q = db(c.target)
+          .whereIn('id', vals as never[])
+          .select('id')
+        await applyFilterToQuery(q, c.filter, c.target)
+        available = new Set(((await q) as Array<{ id: unknown }>).map((x) => String(x.id)))
+      } catch {
+        continue // a filter the compiler cannot express is not a data fault
+      }
+      // Per-row pinned defaults: row → parent (childFk) → parent_field →
+      // the parent_collection record's source_field.
+      const pinnedByRow = new Map<string, Set<string>>()
+      for (const src of c.pinnedSources) {
+        if (!physical.has(src.childFk)) continue
+        const parentIds = [
+          ...new Set(
+            rows
+              .map((r) => r[src.childFk])
+              .filter((v) => v != null && v !== '')
+              .map(String)
+          )
+        ]
+        if (parentIds.length === 0) continue
+        // Which collection holds the parent rows? The child's FK target.
+        const childRel = (await db('nivaro_relations')
+          .where({ many_collection: collection, many_field: src.childFk })
+          .whereNull('junction_field')
+          .first('one_collection')
+          .catch(() => null)) as { one_collection: string | null } | null
+        if (!childRel?.one_collection || !IDENT.test(childRel.one_collection)) continue
+        const parents = (await selectInChunks(parentIds, 1500, (chunk) =>
+          db(childRel.one_collection as string)
+            .whereIn('id', chunk as never[])
+            .select('id', src.parentField)
+        ).catch(() => [])) as Array<Record<string, unknown>>
+        const linkIds = [
+          ...new Set(
+            parents
+              .map((p) => p[src.parentField])
+              .filter((v) => v != null)
+              .map(String)
+          )
+        ]
+        if (linkIds.length === 0) continue
+        const linked = (await selectInChunks(linkIds, 1500, (chunk) =>
+          db(src.parentCollection)
+            .whereIn('id', chunk as never[])
+            .select('id', src.sourceField)
+        ).catch(() => [])) as Array<Record<string, unknown>>
+        const defaultOf = new Map(linked.map((l) => [String(l.id), l[src.sourceField]]))
+        const parentLink = new Map(parents.map((p) => [String(p.id), p[src.parentField]]))
+        for (const row of rows) {
+          const pid = row[src.childFk]
+          if (pid == null) continue
+          const link = parentLink.get(String(pid))
+          const def = link == null ? null : defaultOf.get(String(link))
+          if (def == null || def === '') continue
+          const key = String(row.id)
+          if (!pinnedByRow.has(key)) pinnedByRow.set(key, new Set())
+          pinnedByRow.get(key)?.add(String(def))
+        }
+      }
+      for (const row of rows) {
+        const v = row[c.field]
+        if (v == null || v === '') continue
+        const sv = String(v)
+        if (available.has(sv) || pinnedByRow.get(String(row.id))?.has(sv)) continue
+        out.push({
+          item_id: String(row.id),
+          field: c.field,
+          rule: 'option-filter',
+          message: `${c.fieldLabel} holds a value the picker no longer offers`
+        })
+      }
+    }
+    return out
+  }
+
+  const [m2m, cas, opt, disp, rr, ext] = await Promise.all([
     m2mRequired(),
     cascades(),
+    optionFilters(),
     display(),
     rowRules(),
     external()
   ])
-  return [...scalar, ...m2m, ...cas, ...disp, ...rr, ...ext]
+  return [...scalar, ...m2m, ...cas, ...opt, ...disp, ...rr, ...ext]
 }
 
 // compileChecks walks field config + layouts + relations (~120 reads, 6s
@@ -1120,6 +1346,7 @@ export async function hasChecks(collection: string): Promise<boolean> {
     checks.requiredFields.length +
       checks.validation.length +
       checks.cascades.length +
+      checks.optionFilters.length +
       checks.displayTokens.length +
       checks.dateOffsets.length +
       checks.rowRules.length +

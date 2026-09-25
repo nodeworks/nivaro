@@ -203,6 +203,7 @@ import {
   WorkflowPanel
 } from './panels'
 import { RecordEventPathSheet } from './panels/IntegrationActivitySection'
+import { type HighlightKind, highlightGraphql, highlightJson } from '../lib/highlight'
 import type { PendingTask } from './panels/TaskPanel'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
@@ -928,6 +929,91 @@ export function partitionRuleResults(
  * write, transition, flow and partner push that request set off, which is
  * how the record's values got from that payload to what it holds now.
  */
+/** The recorded request body as people read it: a GraphQL envelope becomes
+ *  the query text itself (real line breaks, common indentation removed) with
+ *  its variables as their own JSON block; anything else is pretty JSON. */
+export function formatApiPayload(body: unknown): {
+  sections: Array<{ kind: 'query' | 'variables' | 'json' | 'text'; title: string; text: string }>
+} | null {
+  if (body == null || body === '') return null
+  if (typeof body === 'string') {
+    try {
+      return formatApiPayload(JSON.parse(body))
+    } catch {
+      return { sections: [{ kind: 'text', title: 'Body', text: body }] }
+    }
+  }
+  const obj = body as Record<string, unknown>
+  if (typeof obj.query === 'string') {
+    const sections: Array<{
+      kind: 'query' | 'variables' | 'json' | 'text'
+      title: string
+      text: string
+    }> = [
+      {
+        kind: 'query',
+        title: obj.operationName ? `Query · ${String(obj.operationName)}` : 'Query',
+        text: dedent(obj.query)
+      }
+    ]
+    if (obj.variables != null && Object.keys(obj.variables as object).length > 0) {
+      sections.push({
+        kind: 'variables',
+        title: 'Variables',
+        text: JSON.stringify(obj.variables, null, 2)
+      })
+    }
+    return { sections }
+  }
+  return { sections: [{ kind: 'json', title: 'Body', text: JSON.stringify(obj, null, 2) }] }
+}
+
+function dedent(text: string): string {
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
+  while (lines.length && lines[0].trim() === '') lines.shift()
+  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop()
+  const indents = lines.filter((l) => l.trim()).map((l) => l.match(/^\s*/)?.[0].length ?? 0)
+  const min = indents.length ? Math.min(...indents) : 0
+  return lines.map((l) => l.slice(Math.min(min, l.match(/^\s*/)?.[0].length ?? 0))).join('\n')
+}
+
+/** Colour classes per token kind — one set that reads on both the light
+ *  slate-50 block and the dark navy block (every pair ≥ 4.5:1). */
+const HL_CLASS: Record<HighlightKind, string> = {
+  keyword: 'font-semibold text-violet-700 dark:text-violet-300',
+  name: 'font-semibold text-slate-900 dark:text-slate-100',
+  field: 'text-sky-800 dark:text-sky-300',
+  arg: 'text-slate-600 dark:text-slate-400',
+  string: 'text-emerald-800 dark:text-emerald-300',
+  number: 'text-amber-800 dark:text-amber-300',
+  bool: 'text-rose-700 dark:text-rose-300',
+  punct: 'text-slate-400 dark:text-slate-500',
+  comment: 'italic text-slate-400 dark:text-slate-500',
+  text: ''
+}
+
+function HighlightedCode({ kind, text }: { kind: string; text: string }) {
+  const tokens = useMemo(
+    () => (kind === 'query' ? highlightGraphql(text) : kind === 'text' ? null : highlightJson(text)),
+    [kind, text]
+  )
+  if (!tokens) return <>{text}</>
+  return (
+    <>
+      {tokens.map((t, i) =>
+        t.kind === 'text' ? (
+          t.text
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static token stream
+          <span key={i} className={HL_CLASS[t.kind]}>
+            {t.text}
+          </span>
+        )
+      )}
+    </>
+  )
+}
+
 function ApiProvenanceChip({
   collection,
   itemId,
@@ -954,12 +1040,7 @@ function ApiProvenanceChip({
   }
 }) {
   const [pathOpen, setPathOpen] = useState(false)
-  const bodyText =
-    api.body == null
-      ? null
-      : typeof api.body === 'string'
-        ? api.body
-        : JSON.stringify(api.body, null, 2)
+  const payload = useMemo(() => formatApiPayload(api.body), [api.body])
   const caller = api.api_key_name
     ? `API key "${api.api_key_name}"`
     : userName
@@ -979,7 +1060,7 @@ function ApiProvenanceChip({
             {origin}
           </button>
         </PopoverTrigger>
-        <PopoverContent align='start' className='w-[420px] max-w-[92vw] p-3 text-[12px]'>
+        <PopoverContent align='start' className='w-[560px] max-w-[94vw] p-3 text-[12px]'>
           <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
             Created through the API
           </p>
@@ -998,13 +1079,35 @@ function ApiProvenanceChip({
           <p className='mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
             Original payload
           </p>
-          {bodyText ? (
-            <pre
-              data-provenance-payload
-              className='mt-1 max-h-56 overflow-auto rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[10.5px] leading-snug text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'
-            >
-              {bodyText}
-            </pre>
+          {payload ? (
+            <div className='mt-1 space-y-1.5'>
+              {payload.sections.map((sec) => (
+                <div key={sec.title}>
+                  {payload.sections.length > 1 && (
+                    <p className='mb-0.5 text-[10px] font-medium text-slate-400'>{sec.title}</p>
+                  )}
+                  <pre
+                    data-provenance-payload={sec.kind}
+                    className='max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[10.5px] leading-snug text-slate-700 dark:border-border dark:bg-[#0f172a] dark:text-slate-200'
+                  >
+                    <HighlightedCode kind={sec.kind} text={sec.text} />
+                  </pre>
+                </div>
+              ))}
+              <div className='flex justify-end'>
+                <button
+                  type='button'
+                  onClick={() => {
+                    void navigator.clipboard
+                      ?.writeText(payload.sections.map((x) => x.text).join('\n\n'))
+                      .then(() => toast.success('Payload copied'))
+                  }}
+                  className='text-[11px] text-slate-500 hover:underline'
+                >
+                  Copy payload
+                </button>
+              </div>
+            </div>
           ) : (
             <p className='mt-1 text-[11.5px] text-slate-400'>
               {api.body_withheld

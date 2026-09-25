@@ -1,13 +1,13 @@
-import { integrityCheckById } from './integrity-checks.js'
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { getAiClient, getAiModelSettings } from './ai-client.js'
-import { type CascadeCheck, compileChecks } from './config-conformance.js'
+import { type CascadeCheck, compileChecks, type OptionFilterCheck } from './config-conformance.js'
 import { RowRuleLookupCache } from './field-rules.js'
-import { createOne, deleteOne, updateOne } from './items.js'
+import { integrityCheckById } from './integrity-checks.js'
+import { applyFilterToQuery, createOne, deleteOne, updateOne } from './items.js'
 import { notifyUser } from './notification-channels.js'
 import { resolveStateOwners } from './pipeline-engine.js'
 import { getLabels } from './queues.js'
@@ -442,6 +442,76 @@ function notifyProposal(
 }
 
 // ─── per-rule generators ────────────────────────────────────────────────────
+
+/** option-filter findings: the field's own picker no longer offers the
+ *  stored value. Offer the options it DOES offer (pick; set when exactly
+ *  one), else clear — the same shape as a cascade finding, minus the parent. */
+async function optionFilterProposals(
+  collection: string,
+  row: Record<string, unknown>,
+  meta: Map<string, FieldMeta>,
+  finding: FindingRef
+): Promise<Proposal[]> {
+  const out: Proposal[] = []
+  const field = finding.field
+  const fieldLabel = meta.get(field)?.label ?? titleCase(field)
+  const itemId = String(row.id)
+  const checks = await compileChecks(collection)
+  const check: OptionFilterCheck | undefined = checks.optionFilters.find((c) => c.field === field)
+  if (check) {
+    const q = db(check.target).select('id').limit(51)
+    await applyFilterToQuery(q, check.filter, check.target).catch(() => {})
+    const ids = ((await q.catch(() => [])) as Array<{ id: unknown }>).map((r) => String(r.id))
+    const labels = ids.length
+      ? await getLabels(new Map([[check.target, new Set(ids)]])).catch(
+          () => ({}) as Record<string, string>
+        )
+      : {}
+    const options = ids.map((id) => ({ id, label: labels[`${check.target}:${id}`] ?? `#${id}` }))
+    if (options.length === 1 && String(options[0].id) !== String(row[field] ?? '')) {
+      const patch = { [field]: options[0].id }
+      const writes: ProposalWrite[] = [{ op: 'update', collection, item_id: itemId, data: patch }]
+      out.push({
+        id: proposalId('set', writes),
+        kind: 'set',
+        label: `Set ${fieldLabel} → ${options[0].label}`,
+        basis: 'The only option the picker offers.',
+        confidence: 'high',
+        writes,
+        preview: await previewFor(collection, itemId, meta, row, patch)
+      })
+    } else if (options.length > 1) {
+      out.push({
+        id: proposalId('pick', [], `${field}|${itemId}|opt`),
+        kind: 'pick',
+        label: `Choose a ${fieldLabel} the picker offers`,
+        basis:
+          options.length > 50
+            ? 'The first 50 options the picker offers.'
+            : `${options.length} options the picker offers.`,
+        confidence: 'medium',
+        writes: [],
+        preview: [],
+        choices: options.slice(0, 50),
+        pick: { collection, item_id: itemId, field }
+      })
+    }
+  }
+  if (!isEmpty(row[field])) {
+    const patch = { [field]: null }
+    const writes: ProposalWrite[] = [{ op: 'update', collection, item_id: itemId, data: patch }]
+    out.push({
+      id: proposalId('clear', writes),
+      kind: 'clear',
+      label: `Clear ${fieldLabel}`,
+      basis: 'The picker no longer offers this value; leave it empty for someone to pick again.',
+      confidence: 'low',
+      writes,
+      preview: await previewFor(collection, itemId, meta, row, patch)
+    })
+  }
+  return out
+}
 
 async function cascadeProposals(
   collection: string,
@@ -1160,6 +1230,9 @@ export async function proposeFixes(
       case 'cascade':
         out = await cascadeProposals(collection, row, meta, finding)
         break
+      case 'option-filter':
+        out = await optionFilterProposals(collection, row, meta, finding)
+        break
       case 'required':
         out = await requiredProposals(collection, row, meta, finding)
         break
@@ -1386,13 +1459,18 @@ export async function applyProposal(
   if (proposal.kind === 'external') {
     const chk = integrityCheckById(finding.rule)
     if (!chk?.fix) {
-      result.failed.push({ collection, item_id: String(itemId), error: 'That fix is no longer registered' })
+      result.failed.push({
+        collection,
+        item_id: String(itemId),
+        error: 'That fix is no longer registered'
+      })
       return result
     }
     try {
       const r = await chk.fix({ id: String(itemId), message: finding.message ?? null, user, req })
       if (r.fixed) result.applied = 1
-      else result.failed.push({ collection, item_id: String(itemId), error: r.detail ?? 'Not fixed' })
+      else
+        result.failed.push({ collection, item_id: String(itemId), error: r.detail ?? 'Not fixed' })
       await logActivity({
         action: 'integrity-fix',
         user: user.id,
@@ -1402,7 +1480,11 @@ export async function applyProposal(
         req
       })
     } catch (err) {
-      result.failed.push({ collection, item_id: String(itemId), error: (err as Error)?.message ?? String(err) })
+      result.failed.push({
+        collection,
+        item_id: String(itemId),
+        error: (err as Error)?.message ?? String(err)
+      })
     }
     return result
   }
