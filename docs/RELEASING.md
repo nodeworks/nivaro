@@ -82,3 +82,17 @@ from historical blobs, verifies the result with full-history leak greps, and
 (with `--push <git-url>`) force-pushes branches + tags to the public remote.
 Commit your work first (the mirror reflects committed history only), then
 rerun it for every publish.
+
+## Releasing from the admin (local development)
+
+On a development API running from this checkout with `release-chain.config.json`
+present, the Environments page shows a **Release** card. **Show plan** runs
+`node scripts/release-chain.mjs --events` (touches nothing) and lists what the
+release would cut. **Release** runs it with `--go` as a detached process whose
+log lives under `.release-runs/<id>.log`; the card shows the seven stages
+(preflight → release → publish → artifacts → frontends → deployments → verify),
+the live log, a Cancel while running and a **Resume from <stage>** after a
+failure (`--from <stage>`). One run at a time. The run survives the dev API
+restarting because its state is read from the process id and the log's last
+`### DONE` / `### FAILED` line, never from memory. Deployed instances never
+show the card — the release needs this machine's checkouts and credentials.
