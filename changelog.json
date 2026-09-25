@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-09-25T20:51:24.246Z",
+  "generated_at": "2026-09-25T21:33:22.926Z",
   "releases": [
+    {
+      "version": "0.1.345",
+      "tag": "v0.1.345",
+      "date": "2026-09-25T17:33:12-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "widget cache hits leaked pool connections; distinct+pluck nested arrays",
+              "hash": "58395e32"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "path chips tip their full label; pipeline track explains machine moves",
+              "hash": "661841b8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "event path: name junction rows by what they link; docs for file rename/replace",
+              "hash": "81e11ff9"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.1.344",
       "tag": "v0.1.344",
-      "date": "2026-09-25T16:51:13-04:00",
+      "date": "2026-09-25T16:51:24-04:00",
       "sections": [
         {
           "label": "Other",
