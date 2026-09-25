@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -9,6 +10,7 @@ import {
   listRuns,
   parseEvents,
   RunLockedError,
+  type RunSummary,
   readLogChunk,
   readRun,
   runPlan,
@@ -19,6 +21,29 @@ import {
 const UNAVAILABLE = { error: 'Release runs are not available here' }
 const NO_SUCH_RUN = { error: 'No such run' }
 const RUN_ID_RE = /^[a-f0-9-]{36}$/i
+
+type NamedRun = RunSummary & { started_by_name?: string }
+
+/** Who started each run, as a person's name: one read for every distinct user. */
+async function withStarterNames(runs: RunSummary[]): Promise<NamedRun[]> {
+  const ids = [...new Set(runs.map((r) => r.started_by).filter(Boolean))]
+  if (ids.length === 0) return runs
+  const rows: Array<{ id: string; first_name?: string; last_name?: string; email?: string }> =
+    await db('nivaro_users')
+      .whereIn('id', ids)
+      .select('id', 'first_name', 'last_name', 'email')
+      .catch(() => [])
+  const names = new Map(
+    rows.map((u) => [
+      String(u.id).toUpperCase(),
+      `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || String(u.id)
+    ])
+  )
+  return runs.map((r) => ({
+    ...r,
+    started_by_name: names.get(String(r.started_by).toUpperCase()) ?? r.started_by
+  }))
+}
 
 /**
  * /api/release — the admin's Release button. Local development only: it needs
@@ -35,7 +60,12 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
   app.get('/status', async () => {
     if (!available()) return { available: false, current: null, runs: [] }
     const [current, runs] = await Promise.all([currentRun(), listRuns(10)])
-    return { available: true, current, runs }
+    const named = await withStarterNames(current ? [current, ...runs] : runs)
+    return {
+      available: true,
+      current: current ? named[0] : null,
+      runs: current ? named.slice(1) : named
+    }
   })
 
   app.post('/plan', async (_req, reply) => {
@@ -81,7 +111,8 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
       const offset = Number.isFinite(after) && after >= 0 ? Math.floor(after) : 0
       const { chunk, next_offset } = readLogChunk(r.log, offset)
       const { events, plan } = parseEvents(r.log)
-      return { run: r.run, events, plan, log_chunk: chunk, next_offset }
+      const [run] = await withStarterNames([r.run])
+      return { run, events, plan, log_chunk: chunk, next_offset }
     }
   )
 

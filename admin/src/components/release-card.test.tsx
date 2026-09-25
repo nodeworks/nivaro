@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { outcomeSentence, stageStates } from './release-card'
+import { bumpOf, formatDuration, outcomeSentence, runDuration, stageStates } from './release-card'
 
 describe('stageStates', () => {
   it('walks start → progress → ok, and a fail keeps its detail', () => {
@@ -39,5 +39,36 @@ describe('outcomeSentence', () => {
     expect(outcomeSentence({ ...plan, react_changed: false }, 'minor')).toBe(
       'Cut nivaro 0.2.0, push the mirror, bump and push the frontends, deploy and verify staging.'
     )
+  })
+})
+
+describe('formatDuration', () => {
+  it('reads seconds, minutes and hours', () => {
+    expect(formatDuration(42_400)).toBe('42s')
+    expect(formatDuration(3 * 60_000 + 7_000)).toBe('3m 7s')
+    expect(formatDuration(2 * 3_600_000 + 5 * 60_000 + 30_000)).toBe('2h 5m')
+    expect(formatDuration(-5)).toBe('0s')
+  })
+})
+
+describe('runDuration and bumpOf', () => {
+  const base = {
+    id: 'r',
+    mode: 'go' as const,
+    args: ['--go', '--events', '--bump', 'minor'],
+    started_at: '2026-09-24T10:00:00.000Z',
+    started_by: 'u'
+  }
+  it('uses finished_at, elapsed while running, and a dash otherwise', () => {
+    const now = Date.parse('2026-09-24T10:05:00.000Z')
+    expect(
+      runDuration({ ...base, state: 'done', finished_at: '2026-09-24T10:01:30.000Z' }, now)
+    ).toBe('1m 30s')
+    expect(runDuration({ ...base, state: 'running' }, now)).toBe('5m 0s')
+    expect(runDuration({ ...base, state: 'lost' }, now)).toBe('—')
+  })
+  it('a resume repeats the failed run own bump', () => {
+    expect(bumpOf({ ...base, state: 'failed' })).toBe('minor')
+    expect(bumpOf({ ...base, args: ['--go'], state: 'failed' })).toBe('patch')
   })
 })

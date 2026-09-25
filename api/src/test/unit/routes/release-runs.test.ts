@@ -9,6 +9,13 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
 vi.mock('../../../config.js', () => ({ config: { NODE_ENV: 'development' } }))
 
+const users = vi.hoisted(() => ({ rows: [] as Array<Record<string, string>> }))
+vi.mock('../../../db/index.js', () => ({
+  db: () => ({
+    whereIn: () => ({ select: () => Promise.resolve(users.rows) })
+  })
+}))
+
 const RUN_ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 
 const svc = vi.hoisted(() => ({
@@ -49,6 +56,26 @@ describe('release routes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     svc.isAvailable.mockReturnValue(true)
+    users.rows = []
+  })
+
+  it('status names who started each run, falling back to email then id', async () => {
+    users.rows = [
+      { id: 'u-1', first_name: 'Ada', last_name: 'Byron', email: 'ada@example.com' },
+      { id: 'u-2', first_name: '', last_name: '', email: 'bo@example.com' }
+    ]
+    svc.listRuns.mockResolvedValueOnce([
+      { id: 'a', started_by: 'u-1' },
+      { id: 'b', started_by: 'u-2' },
+      { id: 'c', started_by: 'u-3' }
+    ] as never)
+    const app = await build()
+    const r = await app.inject({ url: '/release/status' })
+    expect(r.json().runs.map((x: { started_by_name: string }) => x.started_by_name)).toEqual([
+      'Ada Byron',
+      'bo@example.com',
+      'u-3'
+    ])
   })
 
   it('status reports unavailable outside development', async () => {
