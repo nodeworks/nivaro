@@ -1,10 +1,15 @@
 import { type ReactNode, useState } from 'react'
+import { type BulkCadenceMode, bulkCadenceBody } from '../../../lib/import-cadence'
 import { cn } from '../../../lib/utils'
 import {
+  errorText,
+  hoursText,
   ImportDefaultCadenceControl,
   type ImportHealthRow,
   ImportStalenessControl,
-  useImportHealth
+  parseHours,
+  useImportHealth,
+  useSetImportCadence
 } from '../../imports/ImportStalenessControl'
 import { InboundCallersView } from '../../monitoring/ApiRequestLog'
 import { agoText, exactTime, TONE_SOFT, TONE_TEXT, type Tone } from './tone'
@@ -31,12 +36,33 @@ function Chip({ tone, children }: { tone: Tone; children: ReactNode }) {
   )
 }
 
-function ImportRow({ row }: { row: ImportHealthRow }) {
+function ImportRow({
+  row,
+  checked,
+  onToggle
+}: {
+  row: ImportHealthRow
+  checked: boolean
+  onToggle: () => void
+}) {
   const status = row.last_status ? RUN_STATUS[row.last_status] : null
   const excluded = row.cadence_source === 'excluded'
   return (
-    <tr data-ic-import={row.key} className='border-t border-border align-middle'>
-      <td className='py-2.5 pl-4 pr-3'>
+    <tr
+      data-ic-import={row.key}
+      className={cn('border-t border-border align-middle', checked && 'bg-nvr-cyan/5')}
+    >
+      <td className='py-2.5 pl-4 pr-1'>
+        <input
+          type='checkbox'
+          className='accent-nvr-cyan'
+          checked={checked}
+          onChange={onToggle}
+          aria-label={`Select ${row.label || row.key}`}
+          data-ic-import-select={row.key}
+        />
+      </td>
+      <td className='py-2.5 pl-2 pr-3'>
         <p className='truncate text-[13px] font-medium text-foreground'>{row.label || row.key}</p>
         <p className='truncate font-mono text-[11px] text-muted-foreground'>{row.key}</p>
       </td>
@@ -102,9 +128,114 @@ const rank = (r: ImportHealthRow) =>
 const isProblem = (r: ImportHealthRow) =>
   r.last_status === 'error' || r.stale || r.cadence_source === 'dormant'
 
+/**
+ * Bulk staleness edit for the selected imports — the per-row control's three
+ * outcomes (a number of hours, back to the default, stop monitoring) applied
+ * to every selected key in ONE PATCH. Nothing is written until a button is
+ * pressed.
+ */
+function BulkCadenceBar({
+  keys,
+  defaultHours,
+  onDone,
+  onClear
+}: {
+  keys: string[]
+  defaultHours: number
+  onDone: () => void
+  onClear: () => void
+}) {
+  const set = useSetImportCadence()
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const apply = (mode: BulkCadenceMode) => {
+    let hours: number | null = null
+    if (mode === 'hours') {
+      hours = parseHours(draft)
+      if (hours == null) {
+        setError('Enter 1 to 2,160 hours')
+        return
+      }
+    }
+    setError(null)
+    set.mutate(bulkCadenceBody(keys, mode, hours), {
+      onSuccess: onDone,
+      onError: (err) => setError(errorText(err))
+    })
+  }
+  const n = keys.length
+  return (
+    <div
+      data-ic-bulk
+      className='flex flex-wrap items-center gap-2 rounded-lg border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-2 text-[12.5px]'
+    >
+      <span className='font-medium text-foreground'>
+        {n} import{n === 1 ? '' : 's'} selected
+      </span>
+      <span className='text-muted-foreground'>· stale after</span>
+      <input
+        type='text'
+        inputMode='numeric'
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') apply('hours')
+        }}
+        placeholder={String(defaultHours)}
+        aria-label='Hours between successful runs'
+        className='h-7 w-20 rounded border border-border bg-background px-2 text-[12.5px] text-foreground'
+        data-ic-bulk-hours
+      />
+      <span className='text-muted-foreground'>h</span>
+      <button
+        type='button'
+        disabled={set.isPending}
+        onClick={() => apply('hours')}
+        className='h-7 rounded bg-nvr-cyan px-2.5 font-medium text-white disabled:opacity-50'
+        data-ic-bulk-apply
+      >
+        Apply
+      </button>
+      <button
+        type='button'
+        disabled={set.isPending}
+        onClick={() => apply('default')}
+        className='h-7 rounded border border-border bg-background px-2.5 text-foreground disabled:opacity-50'
+        data-ic-bulk-default
+        title={`Back to the default, ${hoursText(defaultHours)}`}
+      >
+        Back to default
+      </button>
+      <button
+        type='button'
+        disabled={set.isPending}
+        onClick={() => apply('off')}
+        className='h-7 rounded border border-border bg-background px-2.5 text-foreground disabled:opacity-50'
+        data-ic-bulk-off
+      >
+        Stop monitoring
+      </button>
+      <button
+        type='button'
+        onClick={onClear}
+        className='h-7 px-2 text-muted-foreground hover:text-foreground'
+        data-ic-bulk-clear
+      >
+        Clear selection
+      </button>
+      {error && (
+        <span className='text-[12px] text-rose-700 dark:text-rose-300' data-ic-bulk-error>
+          {error}
+        </span>
+      )}
+    </div>
+  )
+}
+
 function ImportsSection() {
   const { data, isLoading, isError } = useImportHealth()
   const [showAll, setShowAll] = useState(false)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const allRows = (data?.rows ?? [])
     .filter((r) => r.is_active)
     .map((r, i) => ({ r, i }))
@@ -116,6 +247,21 @@ function ImportsSection() {
   const dormant = allRows.filter((r) => r.cadence_source === 'dormant').length
   const excluded = allRows.filter((r) => r.cadence_source === 'excluded').length
   const failing = allRows.filter((r) => r.last_status === 'error').length
+
+  // Only keys still on the page count — a row that vanished (deactivated,
+  // filtered out by the problems-only view) is never edited by accident.
+  const visibleKeys = rows.map((r) => r.key)
+  const selectedKeys = visibleKeys.filter((k) => selected.has(k))
+  const allSelected = visibleKeys.length > 0 && selectedKeys.length === visibleKeys.length
+  const toggleOne = (key: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(visibleKeys))
+  const clearSelection = () => setSelected(new Set())
 
   const summary: string[] = [`${allRows.length} active import${allRows.length === 1 ? '' : 's'}`]
   if (stale) summary.push(`${stale} stale`)
@@ -175,6 +321,14 @@ function ImportsSection() {
         </div>
       ) : (
         <>
+          {selectedKeys.length > 0 && (
+            <BulkCadenceBar
+              keys={selectedKeys}
+              defaultHours={data?.default_hours ?? 48}
+              onDone={clearSelection}
+              onClear={clearSelection}
+            />
+          )}
           <div className='overflow-x-auto rounded-lg border border-border bg-card'>
             <table className='w-full min-w-[720px] border-collapse text-left'>
               <caption className='caption-top px-4 pb-2 pt-3 text-left text-[12px] text-muted-foreground'>
@@ -183,7 +337,17 @@ function ImportsSection() {
               </caption>
               <thead>
                 <tr className='text-[11.5px] text-muted-foreground'>
-                  <th scope='col' className='py-2 pl-4 pr-3 font-medium'>
+                  <th scope='col' className='py-2 pl-4 pr-1'>
+                    <input
+                      type='checkbox'
+                      className='accent-nvr-cyan'
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      aria-label='Select every import shown'
+                      data-ic-import-select-all
+                    />
+                  </th>
+                  <th scope='col' className='py-2 pl-2 pr-3 font-medium'>
                     Import
                   </th>
                   <th scope='col' className='px-3 py-2 font-medium'>
@@ -202,7 +366,12 @@ function ImportsSection() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <ImportRow key={r.key} row={r} />
+                  <ImportRow
+                    key={r.key}
+                    row={r}
+                    checked={selected.has(r.key)}
+                    onToggle={() => toggleOne(r.key)}
+                  />
                 ))}
               </tbody>
             </table>

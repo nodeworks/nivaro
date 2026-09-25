@@ -73,12 +73,12 @@ export function hoursText(h: number): string {
   return `${h.toLocaleString('en-US')} h`
 }
 
-function errorText(err: unknown): string {
+export function errorText(err: unknown): string {
   const e = err as { response?: { error?: string }; message?: string }
   return e?.response?.error ?? e?.message ?? 'Could not save'
 }
 
-function parseHours(raw: string): number | null {
+export function parseHours(raw: string): number | null {
   if (!raw.trim()) return null
   const n = Number(raw)
   return Number.isFinite(n) ? n : null
