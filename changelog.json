@@ -1,10 +1,47 @@
 {
-  "generated_at": "2026-09-25T15:45:51.768Z",
+  "generated_at": "2026-09-25T20:51:24.246Z",
   "releases": [
+    {
+      "version": "0.1.344",
+      "tag": "v0.1.344",
+      "date": "2026-09-25T16:51:13-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "3a51b1cf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "row-rule provenance popover, option_filter staleness on rows and in Data Integrity, coloured API payload",
+              "hash": "c4948733"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "API provenance with the original payload and path, transitions in the revision history",
+              "hash": "50cbc5fa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "targeted force-reload, Notes refresh after writes, transition label rename, file rename + replace",
+              "hash": "fef24bee"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.1.343",
       "tag": "v0.1.343",
-      "date": "2026-09-25T11:45:38-04:00",
+      "date": "2026-09-25T11:45:51-04:00",
       "sections": [
         {
           "label": "Other",
