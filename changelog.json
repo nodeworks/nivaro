@@ -1,10 +1,152 @@
 {
-  "generated_at": "2026-09-24T21:22:08.735Z",
+  "generated_at": "2026-09-25T12:56:24.317Z",
   "releases": [
+    {
+      "version": "0.1.341",
+      "tag": "v0.1.341",
+      "date": "2026-09-25T08:56:12-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "dev",
+              "text": "faster, self-healing API restarts in development",
+              "hash": "1f1c20c3"
+            },
+            {
+              "section": "Added",
+              "scope": "dev",
+              "text": "warn when the API or admin runs code older than disk",
+              "hash": "d121b304"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "dev",
+              "text": "drop the extensions watch and add the shared watch after listen",
+              "hash": "d70d21a7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "dev",
+              "text": "shared code and extensions hot-reload in development",
+              "hash": "9794af72"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "the Release card",
+              "hash": "5568efaa"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record sub-header: dense cells centre their label on the value",
+              "hash": "bc7598aa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record sub-header: rollup formula lives on hover / click, not inline",
+              "hash": "815d5f0e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record sub-header: one 13px figure size in both formats",
+              "hash": "b81435df"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record sub-header: stat band with stacked / dense / folded formats, never more than two rows",
+              "hash": "59870224"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "cancelled runs say where they stopped, resume only the newest failure, plan-true confirm",
+              "hash": "de91ae3e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release card fixes — resume repeats the failed run's bump, history names who and how long",
+              "hash": "93751cea"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release card on Environments — plan, stage track, live log, resume, history (dev only)",
+              "hash": "47a5add1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "admin-only /api/release routes drive release-chain.mjs (dev only)",
+              "hash": "6e692e67"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release runs: refuse escaping ids, atomic start lock, lock follows liveness",
+              "hash": "ab557f6a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release runs: detached spawn, disk records, lock, cancel, plan run",
+              "hash": "020360c5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release runs: run records, state derivation, event parsing (pure)",
+              "hash": "7c2c5832"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release-chain: a frontend verify expects origin's head when this run pushed nothing",
+              "hash": "db977b9c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release-chain: --events prints stage events and the plan as JSON lines; verify can expect a frontend sha",
+              "hash": "398b2c09"
+            },
+            {
+              "section": "Other",
+              "scope": "dev",
+              "text": "extension scripts and tests don't restart the dev API",
+              "hash": "3620360b"
+            }
+          ]
+        }
+      ],
+      "count": 19
+    },
     {
       "version": "0.1.340",
       "tag": "v0.1.340",
-      "date": "2026-09-24T17:21:58-04:00",
+      "date": "2026-09-24T17:22:08-04:00",
       "sections": [
         {
           "label": "Other",
