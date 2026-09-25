@@ -305,3 +305,19 @@ describe('disk-backed runs', () => {
     )
   })
 })
+
+describe('childEnv', () => {
+  it('drops NODE_TLS_REJECT_UNAUTHORIZED and pins FORCE_COLOR', () => {
+    const before = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    try {
+      const env = rr.childEnv()
+      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined()
+      expect(env.FORCE_COLOR).toBe('0')
+      expect(env.PATH).toBe(process.env.PATH)
+    } finally {
+      if (before === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = before
+    }
+  })
+})

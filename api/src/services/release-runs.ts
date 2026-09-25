@@ -44,6 +44,18 @@ export interface StageEvent {
   at: string
 }
 
+/**
+ * The chain's environment: this process's, minus NODE_TLS_REJECT_UNAUTHORIZED.
+ * The dev API sets it from .env; a child node process that inherits it prints
+ * a TLS warning on stderr with every npm/pnpm call, and the chain's registry
+ * checks read that as "not published". A terminal run never had the variable.
+ */
+export function childEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0' }
+  delete env.NODE_TLS_REJECT_UNAUTHORIZED
+  return env
+}
+
 export interface RunSummary extends RunRecord {
   state: 'running' | Outcome
   version?: string
@@ -326,7 +338,7 @@ export async function startRun(opts: {
         cwd: repoRoot(),
         detached: true,
         stdio: ['ignore', fd, fd],
-        env: { ...process.env, FORCE_COLOR: '0' }
+        env: childEnv()
       })
     } finally {
       closeSync(fd)
@@ -362,7 +374,7 @@ export async function runPlan(timeoutMs = 60_000): Promise<{
     const child = spawn(process.execPath, [runtime.scriptPath(), '--events'], {
       cwd: repoRoot(),
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, FORCE_COLOR: '0' }
+      env: childEnv()
     })
     let out = ''
     child.stdout.on('data', (d) => {

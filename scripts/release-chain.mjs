@@ -81,7 +81,11 @@ function sh(cmd, args, { cwd = ROOT, quiet = false, allowFail = false } = {}) {
     if (quiet && out.trim()) process.stdout.write(out)
     throw new StageError(`\`${cmd} ${args.join(' ')}\` exited ${res.status}`)
   }
-  return { ok: res.status === 0, out: out.trim() }
+  // `out` folds stderr in for humans; compare machine answers against `stdout`
+  // only — a child that inherits NODE_TLS_REJECT_UNAUTHORIZED=0 (the dev API's
+  // env, when the admin card runs this) prints a TLS warning on stderr with
+  // every npm call, and `out === version` was false for a version npm had.
+  return { ok: res.status === 0, out: out.trim(), stdout: (res.stdout ?? '').trim() }
 }
 
 const git = (args, o) => sh('git', args, { quiet: true, ...o }).out
@@ -122,7 +126,7 @@ function detectChanges() {
     headTag: sh('git', ['describe', '--exact-match', '--tags', '--match', 'v*', 'HEAD'], {
       quiet: true,
       allowFail: true
-    }).out
+    }).stdout
   }
 }
 
@@ -176,7 +180,7 @@ async function waitForWorkflow(repo, workflow, accept) {
   throw new StageError(`${workflow} failed (run ${id})`)
 }
 
-const npmHas = (pkg, v) => sh('npm', ['view', `${pkg}@${v}`, 'version'], { quiet: true, allowFail: true }).out === v
+const npmHas = (pkg, v) => sh('npm', ['view', `${pkg}@${v}`, 'version'], { quiet: true, allowFail: true }).stdout === v
 
 async function imageExists(image, tag) {
   const [ns, name] = image.split('/')
