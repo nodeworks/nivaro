@@ -1,10 +1,53 @@
 {
-  "generated_at": "2026-09-25T13:18:49.258Z",
+  "generated_at": "2026-09-25T15:45:51.768Z",
   "releases": [
+    {
+      "version": "0.1.343",
+      "tag": "v0.1.343",
+      "date": "2026-09-25T11:45:38-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "summary view: trailing slots keep the board's 16px rhythm",
+              "hash": "60bc7f7a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a Restart button on the stale-code banner",
+              "hash": "34ceb09e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "an extension edit restarts the API through tsx watch, not by exiting",
+              "hash": "59adb8d9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "bulk staleness edit on the Inbound tab",
+              "hash": "c3518592"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release chain: parallel typechecks, frontends pin while the image builds, layer cache, package changes measured from their own tags",
+              "hash": "1ccf85c3"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.342",
       "tag": "v0.1.342",
-      "date": "2026-09-25T09:18:35-04:00",
+      "date": "2026-09-25T09:18:49-04:00",
       "sections": [
         {
           "label": "Other",
