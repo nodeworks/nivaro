@@ -12296,6 +12296,7 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze</code></pre>
 PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": 6 }
 PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": 0 }     // not monitored
 PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:orders": null }  // back to the default</code></pre>
+          <p class="doc-p">Bulk: tick imports in the Inbound tab's table (or the select-all box) and the bar above it sets every selected import together — a number of hours, **Back to default**, or **Stop monitoring** — in one request. Only imports still on the page are written; the selection clears after a successful save.</p>
           <h2 class="doc-h2" id="ic-alerts">Alerts — opt-in real-time and daily-summary</h2>
           <p class="doc-p">Nothing is ever sent unless a person explicitly turns it on for a signal — there is no default recipient. Two independent switches per problem: Real-time (one notification right after the evaluation cycle that found it) and Daily summary (one line per subscribed signal in the existing daily digest, e.g. "Failed pushes — 3 open · 1 new since yesterday"). Subscribing to <code class="doc-code">*critical</code> covers every signal whose CURRENTLY RESOLVED severity is critical, without naming them one by one — so it automatically follows a severity override made in the thresholds editor.</p>
           <pre class="doc-pre"><code>GET    /api/integration-signals/subscriptions              // own rows
