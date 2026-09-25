@@ -85,10 +85,17 @@ function applyCondition(q: ReturnType<typeof db>, cond: FormulaCondition): Retur
  *  nightly cron's body. Runs land in nivaro_dq_runs like manual ones
  *  (created_by null = scheduled), which is what the pass-rate trend reads. */
 export async function runAllDqRules(): Promise<{ collections: number; failed: number }> {
-  const collections = (await db('nivaro_dq_rules')
-    .where({ is_active: true })
-    .distinct('collection')
-    .pluck('collection')) as string[]
+  // `.distinct(col).pluck(col)` on mssql yields nested arrays (the chat-DM
+  // trap) — map the distinct rows explicitly.
+  const collections = [
+    ...new Set(
+      (
+        (await db('nivaro_dq_rules').where({ is_active: true }).distinct('collection')) as Array<{
+          collection: string
+        }>
+      ).map((r) => String(r.collection))
+    )
+  ]
   let failedTotal = 0
   for (const collection of collections) {
     try {

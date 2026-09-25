@@ -487,43 +487,52 @@ async function renderWidget(
     const Driver = knexClient._driver() as {
       Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
     }
-    const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
-    const rows: unknown[] =
-      cachedRows ??
-      (await new Promise<unknown[]>((resolve, reject) => {
-        let settled = false
-        const done = (fn: () => void) => {
-          if (!settled) {
-            settled = true
-            fn()
+    // Acquire the pool connection ONLY when the query actually runs: a cache
+    // hit used to acquire here and never release (the release rode the query
+    // promise's finally, which a hit never created) — one leaked connection
+    // per cached render drained staging's pool (2026-09-25).
+    const runQuery = async (): Promise<unknown[]> => {
+      const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
+      try {
+        return await new Promise<unknown[]>((resolve, reject) => {
+          let settled = false
+          const done = (fn: () => void) => {
+            if (!settled) {
+              settled = true
+              fn()
+            }
           }
-        }
-        const req = new Driver.Request(resolvedSql, (err: Error | null) => {
-          if (err) done(() => reject(err))
-        }) as {
-          on(
-            ev: 'row',
-            h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
-          ): unknown
-          on(ev: 'error', h: (e: Error) => void): unknown
-          once(ev: 'requestCompleted', h: () => void): unknown
-          setTimeout?: (ms: number) => void
-        }
-        // Heavy report procs outlive the connection-level 15s requestTimeout —
-        // same per-request escape hatch custom-query-exec.ts uses (a Budget
-        // Breakdown render was timing out at 15s and surfacing as a sticky
-        // "Render failed" on the record page).
-        req.setTimeout?.(120_000)
-        const collected: unknown[] = []
-        req.on('row', (cols) => {
-          const row: Record<string, unknown> = {}
-          for (const col of cols) row[col.metadata.colName] = col.value
-          collected.push(row)
+          const req = new Driver.Request(resolvedSql, (err: Error | null) => {
+            if (err) done(() => reject(err))
+          }) as {
+            on(
+              ev: 'row',
+              h: (cols: Array<{ metadata: { colName: string }; value: unknown }>) => void
+            ): unknown
+            on(ev: 'error', h: (e: Error) => void): unknown
+            once(ev: 'requestCompleted', h: () => void): unknown
+            setTimeout?: (ms: number) => void
+          }
+          // Heavy report procs outlive the connection-level 15s requestTimeout —
+          // same per-request escape hatch custom-query-exec.ts uses (a Budget
+          // Breakdown render was timing out at 15s and surfacing as a sticky
+          // "Render failed" on the record page).
+          req.setTimeout?.(120_000)
+          const collected: unknown[] = []
+          req.on('row', (cols) => {
+            const row: Record<string, unknown> = {}
+            for (const col of cols) row[col.metadata.colName] = col.value
+            collected.push(row)
+          })
+          req.once('requestCompleted', () => done(() => resolve(collected)))
+          req.on('error', (e) => done(() => reject(e)))
+          conn.execSqlBatch(req)
         })
-        req.once('requestCompleted', () => done(() => resolve(collected)))
-        req.on('error', (e) => done(() => reject(e)))
-        conn.execSqlBatch(req)
-      }).finally(() => knexClient.releaseConnection(conn)))
+      } finally {
+        await knexClient.releaseConnection(conn)
+      }
+    }
+    const rows: unknown[] = cachedRows ?? (await runQuery())
     if (!cachedRows) {
       const cachedAt = new Date().toISOString()
       recordCacheOutcome(cq.slug, cacheTtl > 0 ? (refresh ? 'bypass' : 'miss') : 'uncached', {

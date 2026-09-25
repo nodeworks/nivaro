@@ -1253,15 +1253,28 @@ export async function runAutoTransitions(collection: string, item: string): Prom
  */
 export async function sweepAutoTransitions(): Promise<void> {
   try {
-    const autoTemplates = (await db('nivaro_workflow_transitions')
-      .where({ auto_trigger: true })
-      .distinct('template')
-      .pluck('template')) as string[]
+    // `.distinct(col).pluck(col)` on mssql doubles the column and hands back
+    // NESTED arrays — the template bound as `[id, id]` failed 'Invalid string'
+    // on every sweep since it shipped. Map the distinct rows explicitly.
+    const autoTemplates = [
+      ...new Set(
+        (
+          (await db('nivaro_workflow_transitions')
+            .where({ auto_trigger: true })
+            .distinct('template')) as Array<{ template: string }>
+        ).map((r) => String(r.template))
+      )
+    ]
     for (const template of autoTemplates) {
-      const fromStates = (await db('nivaro_workflow_transitions')
-        .where({ template, auto_trigger: true })
-        .distinct('from_state')
-        .pluck('from_state')) as Array<string | null>
+      const fromStates = [
+        ...new Set(
+          (
+            (await db('nivaro_workflow_transitions')
+              .where({ template, auto_trigger: true })
+              .distinct('from_state')) as Array<{ from_state: string | null }>
+          ).map((r) => (r.from_state == null ? null : String(r.from_state)))
+        )
+      ]
       let q = db('nivaro_workflow_instances').where({ template }).whereNull('completed_at')
       if (!fromStates.includes(null)) {
         q = q.whereIn(
