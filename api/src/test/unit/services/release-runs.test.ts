@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as rr from '../../../services/release-runs.js'
 import {
   deriveState,
@@ -252,6 +252,56 @@ describe('disk-backed runs', () => {
     expect(cur?.state).toBe('cancelled')
     await expect(rr.startRun({ mode: 'go', args: ['--go'], user: 'u' })).rejects.toBeInstanceOf(
       rr.RunLockedError
+    )
+  })
+
+  it('a cancelled run whose process is still alive can be cancelled again', async () => {
+    writeFileSync(
+      join(dir, 'stubborn.json'),
+      JSON.stringify({
+        id: 'stubborn',
+        mode: 'go',
+        args: [],
+        pid: 424242,
+        started_at: new Date().toISOString(),
+        started_by: 'u',
+        outcome: 'cancelled',
+        finished_at: '2026-09-24T20:05:00.000Z'
+      })
+    )
+    rr.runtime.isOurProcess = () => true
+    // Never signal anything real: every kill is answered by the spy.
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      const s = await rr.cancelRun('stubborn')
+      expect(s?.state).toBe('cancelled')
+      expect(kill).toHaveBeenCalledWith(-424242, 'SIGTERM')
+      expect(JSON.parse(readFileSync(join(dir, 'stubborn.json'), 'utf8')).finished_at).toBe(
+        '2026-09-24T20:05:00.000Z'
+      )
+    } finally {
+      kill.mockRestore()
+    }
+  })
+
+  it('a derived outcome records the log mtime as finished_at', async () => {
+    writeFileSync(
+      join(dir, 'r11.json'),
+      JSON.stringify({
+        id: 'r11',
+        mode: 'go',
+        args: [],
+        pid: 999999,
+        started_at: '2026-09-24T20:00:00.000Z',
+        started_by: 'u'
+      })
+    )
+    writeFileSync(join(dir, 'r11.log'), '### DONE — nivaro 0.1.341\n')
+    const when = new Date('2026-09-24T20:07:00.000Z')
+    utimesSync(join(dir, 'r11.log'), when, when)
+    await rr.listRuns()
+    expect(JSON.parse(readFileSync(join(dir, 'r11.json'), 'utf8')).finished_at).toBe(
+      when.toISOString()
     )
   })
 })

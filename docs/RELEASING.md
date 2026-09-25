@@ -96,3 +96,11 @@ failure (`--from <stage>`). One run at a time. The run survives the dev API
 restarting because its state is read from the process id and the log's last
 `### DONE` / `### FAILED` line, never from memory. Deployed instances never
 show the card — the release needs this machine's checkouts and credentials.
+
+A Cancel past `publish` may already have pushed: the image, npm packages or
+frontend commits it sent cannot be undone from the card. A stuck
+`.release-runs/current.lock` can be deleted when nothing is running. A `lost`
+run's log is `.release-runs/<id>.log`; resume it from a terminal with
+`node scripts/release-chain.mjs --go --from <stage>`.
+A chain started from a terminal is invisible to the card's lock — do not click
+Release while one runs.

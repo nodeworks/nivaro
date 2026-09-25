@@ -9,7 +9,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, rmSync } from 'node:fs'
-import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -226,9 +226,22 @@ async function readLog(id: string): Promise<string> {
   }
 }
 
+/** When the chain stopped writing: the log's mtime, else now. */
+async function logFinishedAt(id: string): Promise<string> {
+  const path = logPath(id)
+  if (!path) return new Date().toISOString()
+  try {
+    return (await stat(path)).mtime.toISOString()
+  } catch {
+    return new Date().toISOString()
+  }
+}
+
 async function summarize(rec: RunRecord): Promise<{ run: RunSummary; log: string }> {
-  const log = await readLog(rec.id)
+  // Liveness BEFORE the log: a child that prints ### DONE and exits between the
+  // two reads must be read as alive (next poll sees DONE), never as lost.
   const alive = pidAlive(rec.pid) && runtime.isOurProcess(rec.pid, rec.started_at)
+  const log = await readLog(rec.id)
   const run = deriveState(rec, alive, log)
   // Write the derived outcome back once so history reads stay cheap.
   const path = recPath(rec.id)
@@ -236,7 +249,7 @@ async function summarize(rec: RunRecord): Promise<{ run: RunSummary; log: string
     const finished: RunRecord = {
       ...rec,
       outcome: run.outcome,
-      finished_at: new Date().toISOString(),
+      finished_at: await logFinishedAt(rec.id),
       ...(run.failed_stage ? { failed_stage: run.failed_stage } : {})
     }
     await writeFile(path, JSON.stringify(finished, null, 2)).catch(() => {})
@@ -339,9 +352,12 @@ export async function startRun(opts: {
   }
 }
 
-export async function runPlan(
-  timeoutMs = 60_000
-): Promise<{ plan: Record<string, unknown> | null; log: string; ok: boolean }> {
+export async function runPlan(timeoutMs = 60_000): Promise<{
+  plan: Record<string, unknown> | null
+  log: string
+  ok: boolean
+  timedOut?: boolean
+}> {
   return new Promise((resolvePlan) => {
     const child = spawn(process.execPath, [runtime.scriptPath(), '--events'], {
       cwd: repoRoot(),
@@ -355,14 +371,18 @@ export async function runPlan(
     child.stderr.on('data', (d) => {
       out += String(d)
     })
-    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGKILL')
+    }, timeoutMs)
     child.on('error', (err) => {
       clearTimeout(timer)
       resolvePlan({ plan: null, log: `${out}${err.message}\n`, ok: false })
     })
     child.on('close', (code) => {
       clearTimeout(timer)
-      resolvePlan({ plan: parseEvents(out).plan, log: out, ok: code === 0 })
+      resolvePlan({ plan: parseEvents(out).plan, log: out, ok: code === 0 && !timedOut, timedOut })
     })
   })
 }
@@ -373,13 +393,21 @@ export async function cancelRun(id: string): Promise<RunSummary | null> {
   const rec = await readRecord(id)
   if (!rec) return null
   const { run } = await summarize(rec)
-  if (run.state !== 'running') return run
+  // Liveness decides, not the derived state: a chain that ignored the first
+  // SIGTERM reads 'cancelled' but is still running and can be cancelled again.
+  const alive = pidAlive(rec.pid) && runtime.isOurProcess(rec.pid, rec.started_at)
+  if (!alive) return run
   try {
     process.kill(-rec.pid, 'SIGTERM') // the process group: the script's own children too
   } catch {
     /* already gone */
   }
-  const updated: RunRecord = { ...rec, outcome: 'cancelled', finished_at: new Date().toISOString() }
+  const updated: RunRecord = {
+    ...rec,
+    outcome: 'cancelled',
+    finished_at:
+      rec.outcome === 'cancelled' && rec.finished_at ? rec.finished_at : new Date().toISOString()
+  }
   await writeFile(path, JSON.stringify(updated, null, 2))
   return { ...updated, state: 'cancelled' }
 }

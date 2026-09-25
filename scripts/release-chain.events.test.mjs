@@ -26,4 +26,7 @@ test('plan mode with --events prints exactly one @@plan line with the plan shape
   assert.ok(Array.isArray(plan.lines))
   assert.ok(plan.lines.every((l) => typeof l.stage === 'string' && typeof l.text === 'string'))
   assert.equal(typeof plan.versions.app, 'string')
+  assert.ok(plan.head_tag === null || plan.head_tag.startsWith('v'))
+  assert.ok(Array.isArray(plan.frontends) && plan.frontends.every((n) => typeof n === 'string'))
+  assert.ok(Array.isArray(plan.deployments) && plan.deployments.every((n) => typeof n === 'string'))
 })

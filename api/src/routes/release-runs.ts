@@ -71,6 +71,10 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
   app.post('/plan', async (_req, reply) => {
     if (!available()) return reply.code(404).send(UNAVAILABLE)
     const r = await runPlan()
+    if (r.timedOut)
+      return reply
+        .code(502)
+        .send({ error: 'release-chain plan timed out after 60s', log_tail: tail(r.log) })
     if (!r.ok || !r.plan)
       return reply.code(502).send({ error: 'release-chain plan failed', log_tail: tail(r.log) })
     return { plan: r.plan, log_tail: tail(r.log) }
@@ -80,6 +84,13 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
     if (!available()) return reply.code(404).send(UNAVAILABLE)
     const v = validateStartBody(req.body)
     if (!v.ok) return reply.code(400).send({ error: v.error })
+    // A resume continues the newest run, and only when that run failed: resuming
+    // an older failure would re-run stages a later release already changed.
+    if (v.args.includes('--from')) {
+      const [newest] = await listRuns(1)
+      if (newest?.state !== 'failed')
+        return reply.code(409).send({ error: 'only the newest run can be resumed' })
+    }
     const user = req.user!.id
     try {
       const run = await startRun({ mode: 'go', args: v.args, user })

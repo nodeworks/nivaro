@@ -34,7 +34,16 @@ const svc = vi.hoisted(() => ({
   validateStartBody: (b: Record<string, unknown>) =>
     b?.bump === 'bad'
       ? { ok: false, error: 'bump must be patch, minor or major' }
-      : { ok: true, args: ['--go', '--events', '--bump', 'patch'] },
+      : {
+          ok: true,
+          args: [
+            '--go',
+            '--events',
+            '--bump',
+            'patch',
+            ...(b?.from ? ['--from', String(b.from)] : [])
+          ]
+        },
   RunLockedError: class extends Error {
     constructor(public current: unknown) {
       super('locked')
@@ -129,6 +138,36 @@ describe('release routes', () => {
     expect(logActivity).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'release-run-start', item: 'r1' })
     )
+  })
+
+  it('resume is refused unless the newest run failed', async () => {
+    svc.listRuns.mockResolvedValueOnce([{ id: 'n', state: 'done' }] as never)
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/release/runs',
+      payload: { bump: 'patch', from: 'verify' }
+    })
+    expect(r.statusCode).toBe(409)
+    expect(r.json()).toEqual({ error: 'only the newest run can be resumed' })
+    expect(svc.startRun).not.toHaveBeenCalled()
+
+    svc.listRuns.mockResolvedValueOnce([{ id: 'n', state: 'failed' }] as never)
+    svc.startRun.mockResolvedValueOnce({ id: 'r2', started_by: 'admin-1' })
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/release/runs',
+      payload: { bump: 'patch', from: 'verify' }
+    })
+    expect(ok.statusCode).toBe(201)
+  })
+
+  it('plan says when it timed out', async () => {
+    svc.runPlan.mockResolvedValueOnce({ plan: null, log: 'slow', ok: false, timedOut: true })
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/release/plan' })
+    expect(r.statusCode).toBe(502)
+    expect(r.json().error).toBe('release-chain plan timed out after 60s')
   })
 
   it('plan answers 502 with the log tail when the script fails', async () => {

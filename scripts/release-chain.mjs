@@ -229,6 +229,9 @@ async function main() {
           react: version('packages/react/package.json'),
           sdk: version('packages/sdk/package.json')
         },
+        head_tag: ch.headTag.startsWith('v') ? ch.headTag : null,
+        frontends: p.wantReact || p.wantSdk ? cfg.frontends.map((f) => f.name) : [],
+        deployments: cfg.deployments.map((d) => d.name),
         lines: p.lines
       })}`
     )

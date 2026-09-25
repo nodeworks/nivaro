@@ -43,16 +43,38 @@ interface Plan {
   migrations: string[]
   dirty: string[]
   versions: { app: string; react: string; sdk: string }
+  /** The v* tag already on HEAD — a release reuses it instead of cutting one. */
+  head_tag?: string | null
+  /** Configured frontends this release would pin (empty when nothing shared changed). */
+  frontends?: string[]
+  /** Configured deployment entries. */
+  deployments?: string[]
   lines: Array<{ stage: string; text: string }>
 }
 
-/** Pure: the stage track from the event list. */
+type StageStatus = 'pending' | 'running' | 'ok' | 'failed' | 'skipped' | 'cancelled'
+
+/** Pure: the stage the chain was in last — the newest one started and not finished. */
+export function lastRunningStage(events: StageEvent[]): Stage | null {
+  const s = stageStates(events)
+  for (let i = STAGES.length - 1; i >= 0; i--)
+    if (s[STAGES[i]].status === 'running') return STAGES[i]
+  return null
+}
+
+/**
+ * Pure: the stage track from the event list. A SIGTERM'd or vanished chain
+ * prints no fail event, so for a cancelled or lost run the stage it was in
+ * reads `cancelled` instead of `running` forever.
+ */
 export function stageStates(
-  events: StageEvent[]
-): Record<Stage, { status: 'pending' | 'running' | 'ok' | 'failed' | 'skipped'; detail?: string }> {
-  const out = Object.fromEntries(
-    STAGES.map((s) => [s, { status: 'pending' as const }])
-  ) as ReturnType<typeof stageStates>
+  events: StageEvent[],
+  runState?: RunSummary['state']
+): Record<Stage, { status: StageStatus; detail?: string }> {
+  const out = Object.fromEntries(STAGES.map((s) => [s, { status: 'pending' as const }])) as Record<
+    Stage,
+    { status: StageStatus; detail?: string }
+  >
   for (const e of events) {
     const cur = out[e.stage]
     if (e.status === 'start') out[e.stage] = { status: 'running' }
@@ -61,10 +83,27 @@ export function stageStates(
     else if (e.status === 'skip') out[e.stage] = { status: 'skipped', detail: e.detail }
     else if (e.status === 'progress') out[e.stage] = { ...cur, detail: e.detail }
   }
+  if (runState === 'cancelled' || runState === 'lost') {
+    const stage = lastRunningStage(events)
+    if (stage) out[stage] = { ...out[stage], status: 'cancelled' }
+  }
   return out
 }
 
-/** Pure: what the confirm dialog promises. */
+/** Pure: the line that says what an interrupted run was doing. */
+export function interruptionLine(state: RunSummary['state'], stage: Stage | null): string | null {
+  if (state === 'lost')
+    return stage
+      ? `Process ended without a result during ${stage}`
+      : 'Process ended without a result — check the log.'
+  if (state !== 'cancelled') return null
+  if (!stage) return 'Cancelled before any stage started'
+  return STAGES.indexOf(stage) >= STAGES.indexOf('publish')
+    ? `Cancelled during ${stage} — ${stage} may already have pushed`
+    : `Cancelled during ${stage}`
+}
+
+/** Pure: what the confirm dialog promises, read from the plan. */
 export function outcomeSentence(plan: Plan, bump: string): string {
   const next = (v: string) => {
     const [a, b, c] = v.split('.').map(Number)
@@ -74,10 +113,18 @@ export function outcomeSentence(plan: Plan, bump: string): string {
         ? `${a}.${b + 1}.0`
         : `${a}.${b}.${c + 1}`
   }
-  const parts = [`Cut nivaro ${next(plan.versions.app)}`]
-  if (plan.react_changed || plan.sdk_changed) parts.push(`react ${next(plan.versions.react)}`)
-  if (plan.sdk_changed) parts.push(`sdk ${next(plan.versions.sdk)}`)
-  return `${parts.join(' and ')}, push the mirror, bump and push the frontends, deploy and verify staging.`
+  let first: string
+  if (plan.head_tag) first = `Reuse ${plan.head_tag} (already tagged)`
+  else {
+    const cut = [`Cut nivaro ${next(plan.versions.app)}`]
+    if (plan.react_changed || plan.sdk_changed) cut.push(`react ${next(plan.versions.react)}`)
+    if (plan.sdk_changed) cut.push(`sdk ${next(plan.versions.sdk)}`)
+    first = cut.join(' and ')
+  }
+  const steps = [first, 'push the mirror']
+  if (plan.frontends?.length) steps.push(`bump and push ${plan.frontends.join(', ')}`)
+  if (plan.deployments?.length) steps.push(`deploy ${plan.deployments.join(', ')}`)
+  return `${steps.join(', ')}, then verify.`
 }
 
 /** Pure: a duration as `Ns`, `Nm Ss` or `Nh Nm`. */
@@ -105,7 +152,9 @@ export function bumpOf(r: RunSummary): string {
 }
 
 type Confirm = { kind: 'release' } | { kind: 'resume'; from: Stage; bump: string }
-type ApiError = { response?: { status?: number; data?: { error?: string; log_tail?: string } } }
+type ApiError = {
+  response?: { status?: number; data?: { error?: string; message?: string; log_tail?: string } }
+}
 
 export function ReleaseCard() {
   const qc = useQueryClient()
@@ -138,24 +187,42 @@ export function ReleaseCard() {
     mutationFn: (body: { bump: string; from?: Stage }) =>
       api.post<{ run: RunSummary }>('/release/runs', body).then((r) => r.data.run),
     onSuccess: (run) => {
-      setConfirm(null)
       // A plan describes the tree before this run; the next release needs a fresh one.
       setPlan(null)
-      setOpenId(run.id)
+      openRun(run.id)
       void qc.invalidateQueries({ queryKey: ['release-status'] })
     },
     onError: (e: ApiError) => {
       if (e.response?.status === 409) {
         toast.error('A release is already running')
         void qc.invalidateQueries({ queryKey: ['release-status'] })
-      } else toast.error(e.response?.data?.error ?? 'Could not start')
+      } else toast.error(e.response?.data?.message ?? e.response?.data?.error ?? 'Could not start')
     }
   })
 
   const current = status.data?.current ?? null
   const busy = !!current || start.isPending
+  const newestId = status.data?.runs[0]?.id ?? null
+  /** Opening another run drops a confirm that was about the previous one. */
+  function openRun(id: string) {
+    setOpenId(id)
+    setConfirm(null)
+  }
+  // When the live run changes (one started, or one ended) a pending confirm and
+  // the plan describe a tree that has moved on.
+  const currentId = current?.id ?? null
+  const lastCurrentId = useRef(currentId)
   useEffect(() => {
-    if (current && !openId) setOpenId(current.id)
+    if (lastCurrentId.current === currentId) return
+    lastCurrentId.current = currentId
+    setConfirm(null)
+    setPlan(null)
+  }, [currentId])
+  useEffect(() => {
+    if (current && !openId) {
+      setOpenId(current.id)
+      setConfirm(null)
+    }
   }, [current, openId])
 
   if (!status.data?.available) return null
@@ -280,6 +347,8 @@ export function ReleaseCard() {
           key={openId}
           id={openId}
           resumeDisabled={busy}
+          canResume={openId === newestId}
+          holdsLock={current?.id === openId}
           onResume={(r) => {
             if (r.failed_stage)
               setConfirm({ kind: 'resume', from: r.failed_stage, bump: bumpOf(r) })
@@ -298,7 +367,7 @@ export function ReleaseCard() {
                 <button
                   type='button'
                   className='underline-offset-2 hover:underline'
-                  onClick={() => setOpenId(r.id)}
+                  onClick={() => openRun(r.id)}
                 >
                   {r.state}
                   {r.version ? ` · ${r.version}` : ''}
@@ -317,17 +386,24 @@ export function ReleaseCard() {
 function RunView({
   id,
   onResume,
-  resumeDisabled
+  resumeDisabled,
+  canResume,
+  holdsLock
 }: {
   id: string
   onResume: (run: RunSummary) => void
   resumeDisabled: boolean
+  /** Only the newest run may be resumed — an older failure's stages have moved on. */
+  canResume: boolean
+  /** The lock says this run's process is alive, whatever its derived state. */
+  holdsLock: boolean
 }) {
   const qc = useQueryClient()
   const offset = useRef(0)
   const [log, setLog] = useState('')
   const [events, setEvents] = useState<StageEvent[]>([])
   const [run, setRun] = useState<RunSummary | null>(null)
+  const [cancelAsk, setCancelAsk] = useState(false)
   const q = useQuery({
     queryKey: ['release-run', id],
     // Each fetch returns only the log AFTER `offset`, so a cached response is a fragment:
@@ -353,18 +429,24 @@ function RunView({
   const cancel = useMutation({
     mutationFn: () => api.post(`/release/runs/${id}/cancel`),
     onSuccess: () => {
+      setCancelAsk(false)
       void qc.invalidateQueries({ queryKey: ['release-run', id] })
       void qc.invalidateQueries({ queryKey: ['release-status'] })
     },
     onError: (e: ApiError) => toast.error(e.response?.data?.error ?? 'Could not cancel')
   })
-  const stages = stageStates(events)
-  const tone: Record<string, string> = {
+  const stages = stageStates(events, run?.state)
+  const activeStage = lastRunningStage(events)
+  const activeDetail = activeStage ? stages[activeStage].detail : undefined
+  const interrupted = run ? interruptionLine(run.state, activeStage) : null
+  const showCancel = holdsLock || run?.state === 'running'
+  const tone: Record<StageStatus, string> = {
     pending: 'border-slate-200 text-slate-400 dark:border-border',
     running: 'border-nvr-cyan text-nvr-navy dark:text-nvr-cyan',
     ok: 'border-emerald-400 text-emerald-700 dark:text-emerald-300',
     failed: 'border-rose-400 text-rose-700 dark:text-rose-300',
-    skipped: 'border-dashed border-slate-300 text-slate-400 dark:border-border'
+    skipped: 'border-dashed border-slate-300 text-slate-400 dark:border-border',
+    cancelled: 'border-amber-400 text-amber-700 dark:text-amber-300'
   }
   const failedDetail = run?.failed_stage ? stages[run.failed_stage].detail : undefined
   if (q.error && !run) {
@@ -389,27 +471,57 @@ function RunView({
             {s}
           </span>
         ))}
-        {run?.state === 'running' && (
-          <Button
-            size='sm'
-            variant='outline'
-            onClick={() => cancel.mutate()}
-            disabled={cancel.isPending}
-            data-release-cancel
+        {run?.state === 'running' && activeDetail && (
+          <span
+            className='text-[11px] text-slate-500 dark:text-muted-foreground'
+            data-release-active-detail
           >
-            Cancel
-          </Button>
+            {activeDetail}
+          </span>
         )}
-        {run?.state === 'failed' && run.failed_stage && (
-          <>
+        {showCancel &&
+          (cancelAsk ? (
+            <span className='flex items-center gap-1.5 text-[11px]'>
+              Cancel during {activeStage ?? 'start-up'}?
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() => cancel.mutate()}
+                disabled={cancel.isPending}
+                data-release-cancel-confirm
+              >
+                Yes, cancel
+              </Button>
+              <Button size='sm' variant='outline' onClick={() => setCancelAsk(false)}>
+                Keep running
+              </Button>
+            </span>
+          ) : (
             <Button
               size='sm'
-              onClick={() => onResume(run)}
-              disabled={resumeDisabled}
-              data-release-resume
+              variant='outline'
+              onClick={() => setCancelAsk(true)}
+              data-release-cancel
             >
-              Resume from {run.failed_stage}
+              Cancel
             </Button>
+          ))}
+        {run?.state === 'failed' && run.failed_stage && (
+          <>
+            {canResume ? (
+              <Button
+                size='sm'
+                onClick={() => onResume(run)}
+                disabled={resumeDisabled}
+                data-release-resume
+              >
+                Resume from {run.failed_stage}
+              </Button>
+            ) : (
+              <span className='text-[11px] text-rose-700 dark:text-rose-300'>
+                Failed at {run.failed_stage}
+              </span>
+            )}
             {failedDetail && (
               <span
                 className='text-[11px] text-rose-700 dark:text-rose-300'
@@ -420,9 +532,9 @@ function RunView({
             )}
           </>
         )}
-        {run?.state === 'lost' && (
-          <span className='text-[11px] text-amber-700 dark:text-amber-300'>
-            Process ended without a result — check the log.
+        {interrupted && (
+          <span className='text-[11px] text-amber-700 dark:text-amber-300' data-release-interrupted>
+            {interrupted}
           </span>
         )}
       </div>

@@ -1482,14 +1482,14 @@ export const devexDevTooling: DocSection = {
       text: 'Admin and a headless frontend render the same `@nivaro/react` components but deploy on separate schedules, so a form that behaves differently in the two apps is usually two different shared-code versions. `GET /api/version` reports `react` — the `@nivaro/react` version the admin build carries — and a frontend built with the `nivaro_react` stamp in its `version.json` reports its installed pin. The Environments page compares every probed component of a tier and shows **Shared code aligned** or an amber **Shared code diverged** strip naming each version; the API card also carries a Shared code stat.'
     },
     {
-      type: 'note',
-      text: 'Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. See docs/RELEASING.md.'
-    },
-    {
       type: 'pre',
       code: `// vite.config.ts — stamp the pin into version.json
 this.emitFile({ type: 'asset', fileName: 'version.json',
   source: JSON.stringify({ version: APP_VERSION, nivaro_react: installedReactVersion() }) })`
+    },
+    {
+      type: 'note',
+      text: 'Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. See docs/RELEASING.md.'
     },
     {
       type: 'h2',

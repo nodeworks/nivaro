@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { bumpOf, formatDuration, outcomeSentence, runDuration, stageStates } from './release-card'
+import {
+  bumpOf,
+  formatDuration,
+  interruptionLine,
+  outcomeSentence,
+  runDuration,
+  stageStates
+} from './release-card'
 
 describe('stageStates', () => {
   it('walks start → progress → ok, and a fail keeps its detail', () => {
@@ -18,6 +25,28 @@ describe('stageStates', () => {
   })
 })
 
+describe('stageStates for an interrupted run', () => {
+  const events = [
+    { stage: 'preflight' as const, status: 'start' as const, at: 'a' },
+    { stage: 'preflight' as const, status: 'ok' as const, at: 'b' },
+    { stage: 'artifacts' as const, status: 'start' as const, at: 'c' }
+  ]
+  it('a cancelled run marks the stage it was in as cancelled, not running', () => {
+    const s = stageStates(events, 'cancelled')
+    expect(s.artifacts.status).toBe('cancelled')
+    expect(s.preflight.status).toBe('ok')
+    expect(stageStates(events, 'running').artifacts.status).toBe('running')
+  })
+  it('says a stage past publish may already have pushed', () => {
+    expect(interruptionLine('cancelled', 'artifacts')).toBe(
+      'Cancelled during artifacts — artifacts may already have pushed'
+    )
+    expect(interruptionLine('cancelled', 'release')).toBe('Cancelled during release')
+    expect(interruptionLine('lost', 'verify')).toBe('Process ended without a result during verify')
+    expect(interruptionLine('done', null)).toBeNull()
+  })
+})
+
 describe('outcomeSentence', () => {
   const plan = {
     commits: 1,
@@ -32,12 +61,22 @@ describe('outcomeSentence', () => {
   }
   it('names the next versions for a patch', () => {
     expect(outcomeSentence(plan, 'patch')).toBe(
-      'Cut nivaro 0.1.341 and react 0.1.292, push the mirror, bump and push the frontends, deploy and verify staging.'
+      'Cut nivaro 0.1.341 and react 0.1.292, push the mirror, then verify.'
     )
   })
   it('leaves react out when nothing shared changed', () => {
     expect(outcomeSentence({ ...plan, react_changed: false }, 'minor')).toBe(
-      'Cut nivaro 0.2.0, push the mirror, bump and push the frontends, deploy and verify staging.'
+      'Cut nivaro 0.2.0, push the mirror, then verify.'
+    )
+  })
+  it('names the frontends and deployments the plan carries, and reuses a HEAD tag', () => {
+    expect(
+      outcomeSentence(
+        { ...plan, head_tag: 'v0.1.341', frontends: ['web', 'portal'], deployments: ['stage'] },
+        'patch'
+      )
+    ).toBe(
+      'Reuse v0.1.341 (already tagged), push the mirror, bump and push web, portal, deploy stage, then verify.'
     )
   })
 })
