@@ -2487,7 +2487,8 @@ const { data: updated } = await nivaro.request(
               <tr><td>POST</td><td>/api/files</td><td>Upload file (multipart/form-data). Field: <code class="doc-code">file</code>.</td></tr>
               <tr><td>GET</td><td>/api/files/:id</td><td>File metadata (size, mime type, dates).</td></tr>
               <tr><td>GET</td><td>/api/files/:id/content</td><td>Serve file with correct Content-Type header.</td></tr>
-              <tr><td>PATCH</td><td>/api/files/:id</td><td>Update metadata (title, description, folder, expires_at).</td></tr>
+              <tr><td>PATCH</td><td>/api/files/:id</td><td>Update metadata (title, description, folder, expires_at, tags, filename_download — the download name; one path segment, no separators).</td></tr>
+              <tr><td>POST</td><td>/api/files/:id/replace</td><td>Re-upload: swap the bytes behind an existing id (multipart, field <code class="doc-code">file</code>). Same id, so every reference keeps working; new storage key, old object + cached transforms deleted, a dead-link flag cleared.</td></tr>
               <tr><td>DELETE</td><td>/api/files/:id</td><td>Delete file from storage backend + metadata.</td></tr>
               <tr><td>GET</td><td>/api/files/:id/transform</td><td>Resize/transcode image (w, h, fit, format, q params).</td></tr></tr></tbody>
           </table></div>

@@ -1,8 +1,8 @@
 import { replayLinks } from '../chain-roots.js'
 import { getEvent } from '../integration-event-sources.js'
-import { getLabels } from '../queues.js'
 import { loadChainSteps } from './exact.js'
 import { inferSteps } from './inferred.js'
+import { labelPathRecords } from './record-labels.js'
 import { buildTree, filterHiddenSubtrees, firstFailure, reparentCallsUnderPushes } from './tree.js'
 import type { EventPath, PathNode, PathStep } from './types.js'
 
@@ -154,7 +154,7 @@ async function finishPath(
     hidden = out.hidden
   }
 
-  await labelRecords([rootStep, ...steps])
+  await labelPathRecords([rootStep, ...steps])
   const { root, truncated, count } = buildTree(rootStep, steps)
   const links = opts.chainId
     ? await replayLinks(opts.chainId)
@@ -180,27 +180,6 @@ export function rootKeyOf(steps: PathStep[]): string | null {
   const keys = new Set(steps.map((s) => s.key))
   const dangling = steps.map((s) => s.parent).filter((p): p is string => !!p && !keys.has(p))
   return dangling.find((p) => ROOT_KEY.test(p)) ?? null
-}
-
-async function labelRecords(steps: PathStep[]): Promise<void> {
-  const by = new Map<string, Set<string>>()
-  for (const s of steps) {
-    if (!s.record?.collection || !s.record.item || s.record.label) continue
-    const set = by.get(s.record.collection) ?? new Set<string>()
-    set.add(s.record.item)
-    by.set(s.record.collection, set)
-  }
-  if (by.size === 0) return
-  try {
-    const labels = await getLabels(by)
-    for (const s of steps) {
-      if (s.record && !s.record.label) {
-        s.record.label = labels[`${s.record.collection}:${s.record.item}`] ?? null
-      }
-    }
-  } catch {
-    // unlabelled records fall back to their raw ids client-side
-  }
 }
 
 export { chainsTouchingRecord } from './record-ref.js'

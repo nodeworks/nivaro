@@ -7,7 +7,9 @@ vi.mock('../../../services/chain-roots.js', () => ({
   replayLinks: vi.fn(async () => ({ replay_of: 'aaaa', replayed_as: ['bbbb'] }))
 }))
 vi.mock('../../../services/integration-event-sources.js', () => ({ getEvent: vi.fn() }))
-vi.mock('../../../services/queues.js', () => ({ getLabels: vi.fn(async () => ({})) }))
+vi.mock('../../../services/event-path/record-labels.js', () => ({
+  labelPathRecords: vi.fn(async () => undefined)
+}))
 
 import { replayLinks } from '../../../services/chain-roots.js'
 import { loadChainSteps } from '../../../services/event-path/exact.js'

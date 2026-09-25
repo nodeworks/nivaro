@@ -19,7 +19,8 @@ export interface PathStep {
   kind: StepKind
   at: string // ISO
   who?: string | null // display name
-  record?: { collection: string; item: string; label?: string | null } | null
+  /** `link` marks a junction row — the label names what it links, the verb reads linked/unlinked. */
+  record?: { collection: string; item: string; label?: string | null; link?: boolean } | null
   summary: string
   failed?: boolean
   inferred?: boolean
