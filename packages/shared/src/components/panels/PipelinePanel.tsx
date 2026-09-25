@@ -401,6 +401,30 @@ function StateTrack({
     return [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email || 'System'
   }
 
+  // States a recorded forward hop jumped OVER. The engine skipped them at the
+  // moment of the move; today's live prediction may disagree (the record's
+  // dimensions changed since, owner groups were edited), so history wins —
+  // a state the record provably never entered on its way past is skipped.
+  const crossedBy = new Map<string, PipelineHistoryEntry>()
+  for (const h of [...history].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  )) {
+    if (!h.from_state) continue
+    const f = trackIndex.get(h.from_state)
+    const t = trackIndex.get(h.to_state)
+    if (f == null || t == null || t <= f + 1) continue
+    for (let k = f + 1; k < t; k++) {
+      const id = relevant[k].id
+      if (!visitedIds.has(id) && !crossedBy.has(id)) crossedBy.set(id, h)
+    }
+  }
+  function crossedReason(h: PipelineHistoryEntry) {
+    const from = labelOf.get(h.from_state ?? '') ?? 'the previous step'
+    const to = labelOf.get(h.to_state) ?? 'the next step'
+    const who = isMachineEntry(h) ? 'it moved automatically' : `${entryName(h)} moved it`
+    return `Passed over on ${new Date(h.timestamp).toLocaleString()} — ${who} straight from ${from} to ${to}`
+  }
+
   return (
     <TooltipProvider delayDuration={200}>
       <div className='flex w-full items-start'>
@@ -408,7 +432,12 @@ function StateTrack({
           const isCurrent = s.id === currentStateId
           const isVisited = visitedIds.has(s.id)
           const isDone = isVisited && !isCurrent
-          const skipReasons = !isVisited && !isCurrent ? skippedStates?.get(s.id) : undefined
+          const crossed = !isVisited && !isCurrent ? crossedBy.get(s.id) : undefined
+          const predicted = !isVisited && !isCurrent ? skippedStates?.get(s.id) : undefined
+          const skipReasons =
+            crossed || predicted
+              ? [...(crossed ? [crossedReason(crossed)] : []), ...(predicted ?? [])]
+              : undefined
           const isSkipped = skipReasons !== undefined
           const nodeColor = s.color ?? '#94a3b8'
           const isLast = i === relevant.length - 1

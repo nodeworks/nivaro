@@ -7,6 +7,7 @@ import {
   ChevronRight,
   GitBranch,
   Loader2,
+  Minus,
   Search,
   UserPlus,
   Users,
@@ -161,6 +162,29 @@ function StateTrack({
     return [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email || 'System'
   }
 
+  // States a recorded forward hop jumped OVER — skipped by history, whatever
+  // today's owner resolution would predict (mirrors the shared PipelinePanel).
+  const labelOf = new Map(states.map((st) => [st.id, st.label]))
+  const crossedBy = new Map<string, PipelineHistoryEntry>()
+  for (const h of [...history].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  )) {
+    if (!h.from_state) continue
+    const f = trackIndex.get(h.from_state)
+    const t = trackIndex.get(h.to_state)
+    if (f == null || t == null || t <= f + 1) continue
+    for (let k = f + 1; k < t; k++) {
+      const id = relevant[k].id
+      if (!visitedIds.has(id) && !crossedBy.has(id)) crossedBy.set(id, h)
+    }
+  }
+  function crossedReason(h: PipelineHistoryEntry) {
+    const from = labelOf.get(h.from_state ?? '') ?? 'the previous step'
+    const to = labelOf.get(h.to_state) ?? 'the next step'
+    const who = isMachineEntry(h) ? 'it moved automatically' : `${entryName(h)} moved it`
+    return `Passed over on ${new Date(h.timestamp).toLocaleString()} — ${who} straight from ${from} to ${to}`
+  }
+
   return (
     <TooltipProvider delayDuration={200}>
       <div className='flex w-full items-start'>
@@ -168,6 +192,7 @@ function StateTrack({
           const isCurrent = s.id === currentStateId
           const isVisited = visitedIds.has(s.id)
           const isDone = isVisited && !isCurrent
+          const crossed = !isVisited && !isCurrent ? crossedBy.get(s.id) : undefined
           const nodeColor = s.color ?? '#94a3b8'
           const isLast = i === relevant.length - 1
           const nextState = !isLast ? relevant[i + 1] : null
@@ -190,21 +215,47 @@ function StateTrack({
                     <Check className='h-3.5 w-3.5 text-white' strokeWidth={2.5} />
                   ) : isCurrent ? (
                     <div className='h-2.5 w-2.5 rounded-full bg-white/80' />
+                  ) : crossed ? (
+                    <Minus className='h-3 w-3 text-slate-400' strokeWidth={2.5} />
                   ) : (
                     <div className='h-2 w-2 rounded-full bg-slate-300' />
                   )}
                 </div>
-                <span
-                  className='w-full break-words text-center leading-snug'
-                  style={{
-                    fontSize: '11px',
-                    color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
-                    fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
-                    wordBreak: 'break-word'
-                  }}
-                >
-                  {s.label}
-                </span>
+                {crossed ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className='w-full cursor-help break-words text-center leading-snug'
+                        style={{
+                          fontSize: '11px',
+                          color: '#94a3b8',
+                          fontWeight: 400,
+                          wordBreak: 'break-word',
+                          textDecoration: 'line-through',
+                          textDecorationColor: '#cbd5e1'
+                        }}
+                      >
+                        {s.label}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent className='max-w-[260px]'>
+                      <p className='text-[11px] font-medium'>Skipped for this record</p>
+                      <p className='mt-1 text-[11px] opacity-90'>{crossedReason(crossed)}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <span
+                    className='w-full break-words text-center leading-snug'
+                    style={{
+                      fontSize: '11px',
+                      color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
+                      fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
+                      wordBreak: 'break-word'
+                    }}
+                  >
+                    {s.label}
+                  </span>
+                )}
               </div>
 
               {/* Connector: line + transition history chips */}
