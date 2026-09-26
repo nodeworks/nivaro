@@ -522,7 +522,7 @@ function buildSystemPrompt(spec: Spec, today: string): string {
     '- Dates as YYYY-MM-DD. Booleans true/false. Choice fields take the choice VALUE, not its text.',
     '- Confidence: 0.9+ when the document states it outright, 0.6–0.8 when inferred (a category from a description), below 0.6 when it is a guess — put guesses in asks instead.',
     '- A fee table, line items, materials or a schedule become child rows. One row per table line. Quantities and unit prices as numbers.',
-    '- Rich text or long text fields (objective, scope, notes) take a concise plain-text paragraph or bullet lines from the document, not the whole document. Short text fields (a description, name or title) take one line under 120 characters — a title, not a summary.',
+    '- Rich text or long text fields (objective, scope, notes) take a concise plain-text paragraph or bullet lines from the document, not the whole document. Short text fields (a description, name or title) take a COMPACT TITLE of at most eight words, what a person would type into a list column ("NNO Power Engineering SOW – Insight Global") — never dates, amounts, locations or a summary; those belong in their own fields.',
     '- Relation fields on child rows (a category, a line type, an item) need a lookup or a listed id too; leave one out rather than guess.',
     '- A number in the document that IS an id (a year, a code) matches a listed option by id directly.',
     '- Do not fill audit, status, state or approval fields. Do not fill a field the document says nothing about.',
@@ -766,15 +766,18 @@ function repairQuotes(src: string): string {
 /** A one-line field (a title, a name) must not receive a paragraph. */
 function clampShortText(f: SpecField, value: string): string {
   const oneLine = f.type === 'string' && !/textarea|rich|wysiwyg|editor/.test(f.interface ?? '')
-  if (!oneLine || value.length <= 160) return value
-  const head = value.slice(0, 160)
+  if (!oneLine || value.length <= 90) return value
+  // Cut at the last clause boundary before ~90 chars: a title, not a summary.
+  const head = value.slice(0, 90)
   const cut = Math.max(
     head.lastIndexOf(' – '),
     head.lastIndexOf(' — '),
+    head.lastIndexOf(' - '),
     head.lastIndexOf('. '),
-    head.lastIndexOf('; ')
+    head.lastIndexOf('; '),
+    head.lastIndexOf(', ')
   )
-  return (cut > 40 ? head.slice(0, cut) : head).trim()
+  return (cut > 24 ? head.slice(0, cut) : head).replace(/[\s,;:–—-]+$/, '').trim()
 }
 
 function clampConf(v: unknown): number {

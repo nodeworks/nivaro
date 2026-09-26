@@ -1179,7 +1179,10 @@ export function RelationCell({
     staleTime: 60_000
   })
   if (!idStr) return <span>—</span>
-  if (isLoading)
+  // The record read waits for the collection meta; while either is in flight
+  // the cell is a skeleton — never the raw id (that flashed "1099" for a
+  // vendor in the changes tray until the label arrived).
+  if (isLoading || (!!client && colMeta === undefined))
     return (
       <span className='animate-pulse h-3 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] inline-block' />
     )

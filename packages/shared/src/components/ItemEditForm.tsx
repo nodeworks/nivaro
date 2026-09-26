@@ -137,7 +137,7 @@ import {
   parseRollupParentFilter,
   parseRollupSources
 } from './item-edit/live-rollups'
-import { m2aWriteMeta } from './item-edit/M2MCombobox'
+import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import {
   LiveRowsContext,
@@ -7143,6 +7143,26 @@ export function ItemEditForm({
   // Rail diff dots (#17) + changes tray (#6) read the same breakdown.
   const labelOf = (k: string) =>
     (fieldConfig ?? []).find((f) => f.field === k)?.label || titleCase(k.replace(/_/g, ' '))
+  // The collection a staged link points at, so the tray can print the linked
+  // record's label instead of `#2026` — resolved through the junction's
+  // companion leg like every other M2M reader.
+  const m2mTargetOf = (k: string): string | null => {
+    const field = stagingKeyToFieldRef.current.get(k) ?? k
+    const rel = relations.find(
+      (r) =>
+        r.one_collection === collection &&
+        (r.one_field === field || r.many_collection === field) &&
+        r.junction_field != null
+    )
+    if (!rel) return null
+    const other = relations.find(
+      (r) =>
+        r.many_collection === rel.many_collection &&
+        r.many_field === rel.junction_field &&
+        r.one_collection !== collection
+    )
+    return resolveM2MRelatedCollection(other)
+  }
   const changedFieldMap: Record<string, { from: unknown; detail?: string }> = {}
   for (const k of unsavedSummary.fields) changedFieldMap[k] = { from: initialDataRef.current[k] }
   // M2M aliases never sit in the draft — their change is the staged link set.
@@ -7243,6 +7263,10 @@ export function ItemEditForm({
         kind: 'link',
         label: labelOf(key),
         detail: `+ #${String(id)}`,
+        linkTarget: (() => {
+          const c = m2mTargetOf(key)
+          return c ? { collection: c, id } : undefined
+        })(),
         onRevert: () => m2mStagingCtx.unstageLink(key, id)
       })
   for (const [key, ids] of m2mUnlinks)

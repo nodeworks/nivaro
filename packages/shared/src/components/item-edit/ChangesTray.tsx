@@ -40,6 +40,9 @@ export interface ChangeItem {
    */
   collection?: string
   field?: string
+  /** A staged M2M link: which collection the id belongs to, so the row can
+   *  read "+ 2026" / "+ NED" / "+ quote.pdf" instead of the raw id. */
+  linkTarget?: { collection: string; id: unknown }
 }
 
 const KIND_LABEL: Record<ChangeKind, string> = {
@@ -98,6 +101,30 @@ function fieldOptions(f: CMSField | undefined): Record<string, unknown> {
  * everything else the plain formatter. Without a collection (or a client) it
  * is exactly `fmt(value)`.
  */
+/** A linked record's label — a file's name for the files collection, the
+ *  display template for anything else. */
+function LinkValue({ target }: { target: { collection: string; id: unknown } }) {
+  const client = useOptionalNivaroClient()
+  const isFile = target.collection === 'nivaro_files' || target.collection === 'directus_files'
+  const { data: fileMeta } = useQuery({
+    queryKey: ['nvr-tray-file', String(target.id)],
+    queryFn: () =>
+      client!
+        .request<{ data: { title?: string | null; filename_download?: string | null } }>(
+          get(`/files/${target.id}/meta`)
+        )
+        .then((r) => r.data)
+        .catch(() => null),
+    enabled: !!client && isFile && target.id != null,
+    staleTime: 300_000,
+    retry: false
+  })
+  if (isFile) return <>{fileMeta?.title || fileMeta?.filename_download || `#${String(target.id)}`}</>
+  if (target.collection === 'nivaro_users' || target.collection === 'directus_users')
+    return <RelationCell relCollection='nivaro_users' id={target.id} className='' />
+  return <RelationCell relCollection={target.collection} id={target.id} className='' />
+}
+
 function ChangeValue({
   collection,
   field,
@@ -222,7 +249,13 @@ export function ChangesTray({
                   <span className='ml-1 text-slate-500 dark:text-slate-400'>· {it.location}</span>
                 )}
                 <span className='ml-2 block truncate text-slate-600 dark:text-slate-300'>
-                  {it.detail ?? (
+                  {it.linkTarget ? (
+                    <>
+                      + <LinkValue target={it.linkTarget} />
+                    </>
+                  ) : (
+                    it.detail
+                  ) ?? (
                     <>
                       <span className='line-through opacity-60'>
                         <ChangeValue collection={it.collection} field={it.field} value={it.from} />

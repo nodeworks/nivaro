@@ -93,8 +93,8 @@ export function TiptapToolbarButton({
         onClick()
       }}
       className={cn(
-        'flex h-6 w-6 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700',
-        active && 'bg-slate-200 text-slate-900'
+        'flex h-6 w-6 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-[#334155] dark:hover:text-white',
+        active && 'bg-slate-200 text-slate-900 dark:bg-[#334155] dark:text-white'
       )}
     >
       {children}
@@ -103,7 +103,7 @@ export function TiptapToolbarButton({
 }
 
 export function TiptapDivider() {
-  return <div className='mx-0.5 h-4 w-px bg-slate-200' />
+  return <div className='mx-0.5 h-4 w-px bg-slate-200 dark:bg-[#475569]' />
 }
 
 // ─── RichTextEditor ────────────────────────────────────────────────────────────
@@ -200,13 +200,13 @@ export function RichTextEditor({
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-md border border-slate-200 bg-background focus-within:ring-1 focus-within:ring-[#00ceff] focus-within:border-[#00ceff]',
+        'overflow-hidden rounded-md border border-slate-200 bg-background focus-within:ring-1 focus-within:ring-[#00ceff] focus-within:border-[#00ceff] dark:border-border',
         disabled && 'opacity-60'
       )}
     >
       {!disabled && (
         <>
-          <div className='flex flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5'>
+          <div className='flex flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-border dark:bg-muted'>
             <TiptapToolbarButton
               title='Bold'
               active={editor.isActive('bold')}
@@ -321,7 +321,7 @@ export function RichTextEditor({
             </TiptapToolbarButton>
           </div>
           {linkInputOpen && (
-            <div className='flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5'>
+            <div className='flex items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-border dark:bg-muted'>
               <input
                 ref={linkInputRef}
                 type='url'
@@ -339,7 +339,7 @@ export function RichTextEditor({
                 }}
                 placeholder='https://example.com'
                 aria-label='Link URL'
-                className='flex-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] text-slate-700 outline-none focus:border-[#00ceff]'
+                className='flex-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] text-slate-700 outline-none focus:border-[#00ceff] dark:border-border dark:bg-background dark:text-slate-100'
               />
               <button
                 type='button'
@@ -359,7 +359,7 @@ export function RichTextEditor({
                   e.preventDefault()
                   cancelLink()
                 }}
-                className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100'
+                className='flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 dark:hover:bg-[#334155]'
               >
                 <X className='h-3.5 w-3.5' />
               </button>
@@ -409,7 +409,7 @@ export function RichTextEditor({
           }
         }}
         editor={editor}
-        className='nivaro-rich-text min-h-[120px] px-3 py-2 text-[13px] [&_.tiptap]:outline-none [&_.tiptap]:min-h-[100px] [&_.tiptap_p]:my-1 [&_.tiptap_h1]:text-xl [&_.tiptap_h2]:text-lg [&_.tiptap_h3]:text-base [&_.tiptap_h1,&_.tiptap_h2,&_.tiptap_h3]:font-semibold [&_.tiptap_ul]:list-disc [&_.tiptap_ol]:list-decimal [&_.tiptap_ul,&_.tiptap_ol]:pl-5 [&_.tiptap_blockquote]:border-l-2 [&_.tiptap_blockquote]:border-slate-300 [&_.tiptap_blockquote]:pl-3 [&_.tiptap_blockquote]:text-slate-500 [&_.tiptap_code]:bg-slate-100 [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1 [&_.tiptap_pre]:bg-slate-100 [&_.tiptap_pre]:rounded [&_.tiptap_pre]:p-2 [&_.tiptap_pre]:font-mono [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-400 [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:h-0'
+        className='nivaro-rich-text min-h-[120px] px-3 py-2 text-[13px] [&_.tiptap]:outline-none [&_.tiptap]:min-h-[100px] [&_.tiptap_p]:my-1 [&_.tiptap_h1]:text-xl [&_.tiptap_h2]:text-lg [&_.tiptap_h3]:text-base [&_.tiptap_h1,&_.tiptap_h2,&_.tiptap_h3]:font-semibold [&_.tiptap_ul]:list-disc [&_.tiptap_ol]:list-decimal [&_.tiptap_ul]:!pl-6 [&_.tiptap_ol]:!pl-6 [&_.tiptap_ul]:list-outside [&_.tiptap_ol]:list-outside [&_.tiptap_li]:my-0.5 [&_.tiptap_blockquote]:border-l-2 [&_.tiptap_blockquote]:border-slate-300 [&_.tiptap_blockquote]:pl-3 [&_.tiptap_blockquote]:text-slate-500 dark:[&_.tiptap_blockquote]:border-slate-600 dark:[&_.tiptap_blockquote]:text-slate-400 [&_.tiptap_code]:bg-slate-100 dark:[&_.tiptap_code]:bg-[#1e293b] [&_.tiptap_code]:rounded [&_.tiptap_code]:px-1 [&_.tiptap_pre]:bg-slate-100 dark:[&_.tiptap_pre]:bg-[#1e293b] [&_.tiptap_pre]:rounded [&_.tiptap_pre]:p-2 [&_.tiptap_pre]:font-mono [&_.tiptap_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-400 dark:[&_.tiptap_p.is-editor-empty:first-child::before]:text-slate-500 [&_.tiptap_p.is-editor-empty:first-child::before]:pointer-events-none [&_.tiptap_p.is-editor-empty:first-child::before]:float-left [&_.tiptap_p.is-editor-empty:first-child::before]:h-0'
       />
     </div>
   )
@@ -502,13 +502,13 @@ function RecordLinkPanel({
   })
 
   return (
-    <div className='space-y-1.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5'>
+    <div className='space-y-1.5 border-b border-slate-200 bg-slate-50 px-2 py-1.5 dark:border-border dark:bg-muted'>
       <div className='flex items-center gap-1.5'>
         <SimpleSelect
           value={collection}
           onChange={setCollection}
           ariaLabel='Collection'
-          className='h-6 w-44 rounded border-slate-200 bg-white text-[12px]'
+          className='h-6 w-44 rounded border-slate-200 bg-white text-[12px] dark:border-border dark:bg-background'
           options={[
             { value: '', label: 'Collection…' },
             ...(collections ?? []).map((c) => ({
