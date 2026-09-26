@@ -42,7 +42,7 @@ export type DirectoryUser = {
   preferred_language: string | null
   account_enabled: boolean | null
   /** Present only on reads that expand it (`findDirectoryUsers`). */
-  manager?: { id: string; email: string | null; upn: string | null } | null
+  manager?: { id: string; name: string | null; email: string | null; upn: string | null } | null
 }
 
 export type DirectoryStatus = {
@@ -297,7 +297,12 @@ type GraphUser = {
   employeeId?: string | null
   preferredLanguage?: string | null
   accountEnabled?: boolean | null
-  manager?: { id?: string; mail?: string | null; userPrincipalName?: string | null } | null
+  manager?: {
+    id?: string
+    displayName?: string | null
+    mail?: string | null
+    userPrincipalName?: string | null
+  } | null
 }
 
 function tenantId(): string | null {
@@ -573,6 +578,7 @@ function mapUser(g: GraphUser): DirectoryUser {
       ? {
           manager: {
             id: g.manager.id,
+            name: g.manager.displayName ?? null,
             email: g.manager.mail ?? null,
             upn: g.manager.userPrincipalName ?? null
           }
@@ -648,7 +654,7 @@ const chunk = <T>(items: T[], size: number): T[][] => {
 
 // Graph caps an `in` filter at 15 values.
 const IN_FILTER_MAX = 15
-const MANAGER_EXPAND = '$expand=manager($select=id,mail,userPrincipalName)'
+const MANAGER_EXPAND = '$expand=manager($select=id,displayName,mail,userPrincipalName)'
 
 export interface DirectoryFindResult {
   byId: Map<string, DirectoryUser>

@@ -8,6 +8,7 @@ import {
   fetchDirectoryPhotos,
   findDirectoryUsers
 } from './graph-directory.js'
+import { splitDisplayName } from '../auth/oidc.js'
 import { isMachineAccount } from './machine-accounts.js'
 import { notifyUser } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
@@ -61,6 +62,7 @@ type UserRow = {
   directory_status: DirectoryVerdict | null
   directory_id: string | null
   manager_id: string | null
+  manager_directory: string | null
   title: string | null
   company: string | null
   department: string | null
@@ -162,6 +164,7 @@ export async function checkDirectory(
       'directory_status',
       'directory_id',
       'manager_id',
+      'manager_directory',
       'title',
       'company',
       'department',
@@ -261,6 +264,18 @@ export async function checkDirectory(
       if (managerId && managerId !== u.id && managerId !== u.manager_id) {
         prof.manager_id = managerId
       }
+      // The manager exists in the directory but not here: keep who they are
+      // (name + address) so the people page can still say who to ask, and
+      // clear it the moment a real account can be linked instead.
+      const ref =
+        !managerId && entry.manager && (entry.manager.email || entry.manager.upn)
+          ? JSON.stringify({
+              name: friendlyName(entry.manager.name),
+              email: entry.manager.email ?? entry.manager.upn ?? null,
+              upn: entry.manager.upn ?? null
+            })
+          : null
+      if ((ref ?? null) !== (u.manager_directory ?? null)) prof.manager_directory = ref
       const avatar = photos.get(entry.id.toLowerCase())
       if (avatar && avatar !== avatars.get(u.id)) {
         prof.avatar = avatar
@@ -378,4 +393,12 @@ export async function runDirectorySyncCron(app: FastifyInstance): Promise<string
   if (!status.granted) return `skipped — ${status.reason ?? 'directory access not granted'}`
   const s = await checkDirectory(app, { pullProfile: true, notifyAdmins: true })
   return `${s.checked} checked · ${s.profile_updated ?? 0} profiles refreshed · ${s.disabled} disabled · ${s.missing} missing · ${s.suspended} suspended`
+}
+
+/** Graph displayName arrives as "Last, First (Contractor)" — store it the way a person reads it. */
+function friendlyName(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const { given, family } = splitDisplayName(raw)
+  const joined = [given, family].filter(Boolean).join(' ')
+  return joined || raw
 }

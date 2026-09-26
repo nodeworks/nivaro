@@ -277,7 +277,11 @@ export function AvailabilityCard({ profile: p }: { profile: PersonProfile }) {
             ) : out ? (
               <span className='text-[12.5px] text-amber-700 dark:text-amber-300'>
                 Nobody — approvals wait for {first}
-                {p.manager ? '; try their manager' : ''}
+                {p.manager
+                  ? '; try their manager'
+                  : p.manager_external?.name
+                    ? `; try their manager, ${p.manager_external.name}`
+                    : ''}
               </span>
             ) : (
               <span className='text-[12.5px] text-slate-500 dark:text-slate-400'>
@@ -306,15 +310,38 @@ export function AvailabilityCard({ profile: p }: { profile: PersonProfile }) {
 export function PeopleCard({ profile: p }: { profile: PersonProfile }) {
   const nav = useNavigation()
   const teamsHref = nav.consoleUrl ? nav.consoleUrl('/user-groups') : '/user-groups'
-  if (p.direct_reports.length === 0 && p.teams.length === 0) {
+  const hasChain = p.org_chain.length > 0 || !!p.manager_external
+  if (p.direct_reports.length === 0 && p.teams.length === 0 && !hasChain && p.peers.length === 0) {
     return (
       <SectionCard icon={<Users className='h-4 w-4' />} title='People' testId='people'>
-        <EmptyLine>No direct reports and not on a team yet.</EmptyLine>
+        <EmptyLine>No manager on file, no direct reports and not on a team yet.</EmptyLine>
       </SectionCard>
     )
   }
   return (
     <SectionCard icon={<Users className='h-4 w-4' />} title='People' testId='people'>
+      {hasChain && (
+        <div className='mb-4'>
+          <p className='mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+            Reports up through
+          </p>
+          <OrgChain profile={p} />
+        </div>
+      )}
+      {p.peers.length > 0 && (
+        <div className='mb-4'>
+          <p className='mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+            Same manager · {p.peers.length}
+          </p>
+          <ul className='flex flex-wrap gap-x-4 gap-y-1.5' data-person-peers>
+            {p.peers.map((r) => (
+              <li key={r.id}>
+                <PersonChip person={r} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {p.teams.length > 0 && (
         <div>
           <p className='mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
@@ -364,6 +391,39 @@ export function PeopleCard({ profile: p }: { profile: PersonProfile }) {
         </div>
       )}
     </SectionCard>
+  )
+}
+
+/**
+ * The chain from this person upward — each link a chip, the person themself
+ * as the anchor, an external (directory-only) manager as the last, plain link.
+ */
+function OrgChain({ profile: p }: { profile: PersonProfile }) {
+  return (
+    <ol className='flex flex-wrap items-center gap-x-1 gap-y-1.5' data-person-org-chain>
+      <li className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff1a] px-2 py-0.5 text-[12px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+        {p.first_name ?? p.name}
+      </li>
+      {p.org_chain.map((m) => (
+        <li key={m.id} className='inline-flex items-center gap-1'>
+          <span className='text-slate-300 dark:text-slate-600' aria-hidden>
+            →
+          </span>
+          <PersonChip person={m} meta={m.title ?? undefined} />
+        </li>
+      ))}
+      {p.org_chain.length === 0 && p.manager_external && (
+        <li className='inline-flex items-center gap-1'>
+          <span className='text-slate-300 dark:text-slate-600' aria-hidden>
+            →
+          </span>
+          <span className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
+            {p.manager_external.name ?? p.manager_external.email}
+          </span>
+          <span className='text-[11px] text-slate-400'>(not a Nivaro user)</span>
+        </li>
+      )}
+    </ol>
   )
 }
 

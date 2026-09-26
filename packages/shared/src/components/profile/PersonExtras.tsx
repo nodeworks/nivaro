@@ -1,0 +1,364 @@
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Bell, ClipboardList, Loader2, ScanSearch, Send } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
+import { get, post } from '../../lib/commands'
+import { cn, humanHours } from '../../lib/utils'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { SimpleSelect } from '../ui/SimpleSelect'
+import { EmptyLine, Pill, SectionCard } from './primitives'
+import { errorText, type PersonProfile } from './types'
+
+// ─── Working on ──────────────────────────────────────────────────────────────
+
+interface WorkingOnItem {
+  collection: string
+  item_id: string
+  label: string
+  state: string | null
+  state_label: string | null
+  state_color: string | null
+  sla_status: 'ok' | 'warning' | 'breached' | null
+  aging_hours: number | null
+}
+
+const SLA_TONE: Record<string, string> = {
+  breached: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400',
+  warning: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
+}
+
+/** The open records this person is a resolved owner of — what waits on them. */
+export function WorkingOnCard({ profile: p }: { profile: PersonProfile }) {
+  const client = useNivaroClient()
+  const nav = useNavigation()
+  const { urlFor } = useItemNavigation()
+  const { data, isLoading } = useQuery<{ items: WorkingOnItem[]; total: number; hidden: number }>({
+    queryKey: ['nvr-person-working-on', p.id],
+    queryFn: () =>
+      client
+        .request<{ data: { items: WorkingOnItem[]; total: number; hidden: number } }>(
+          get(`/users/${p.id}/working-on`)
+        )
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
+  const first = p.first_name ?? p.name
+  const breached = data?.items.filter((i) => i.sla_status === 'breached').length ?? 0
+  return (
+    <SectionCard
+      icon={<ClipboardList className='h-4 w-4' />}
+      title='Working on'
+      hint={
+        data && data.total > 0
+          ? `${data.total} open record${data.total === 1 ? '' : 's'} waiting on ${first}${breached ? ` · ${breached} past SLA` : ''}`
+          : undefined
+      }
+      testId='working-on'
+    >
+      {isLoading ? (
+        <div className='space-y-2' aria-busy>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className='h-5 animate-pulse rounded bg-slate-100 dark:bg-muted' />
+          ))}
+        </div>
+      ) : !data || data.items.length === 0 ? (
+        <EmptyLine>
+          {data && data.hidden > 0
+            ? `Nothing you can see — ${data.hidden} record${data.hidden === 1 ? '' : 's'} sit in collections your role cannot read.`
+            : `Nothing waits on ${first} right now.`}
+        </EmptyLine>
+      ) : (
+        <ul className='divide-y divide-slate-100 dark:divide-border/60' data-person-working-on>
+          {data.items.map((it) => {
+            const href = urlFor({ collection: it.collection, itemId: it.item_id })
+            return (
+              <li key={`${it.collection}:${it.item_id}`} className='flex items-center gap-3 py-1.5'>
+                <a
+                  href={href}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey) return
+                    e.preventDefault()
+                    nav.navigate(href)
+                  }}
+                  className='min-w-0 flex-1 truncate text-[12.5px] font-medium text-slate-700 hover:text-nvr-navy hover:underline dark:text-slate-200 dark:hover:text-nvr-cyan'
+                >
+                  {it.label}
+                </a>
+                {it.state && (
+                  <span
+                    className='shrink-0 rounded-full px-2 py-px text-[10.5px] font-semibold'
+                    style={{
+                      backgroundColor: `${it.state_color ?? '#94a3b8'}22`,
+                      color: it.state_color ?? '#475569'
+                    }}
+                  >
+                    {it.state_label ?? it.state}
+                  </span>
+                )}
+                {it.sla_status && it.sla_status !== 'ok' && (
+                  <span
+                    className={cn(
+                      'shrink-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold',
+                      SLA_TONE[it.sla_status]
+                    )}
+                  >
+                    {it.sla_status === 'breached' ? 'past SLA' : 'SLA soon'}
+                  </span>
+                )}
+                {it.aging_hours != null && (
+                  <span className='shrink-0 text-[11px] tabular-nums text-slate-400'>
+                    {humanHours(it.aging_hours)}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+          {data.total > data.items.length && (
+            <li className='pt-2 text-[11.5px] text-slate-400'>
+              +{data.total - data.items.length} more
+            </li>
+          )}
+        </ul>
+      )}
+    </SectionCard>
+  )
+}
+
+// ─── Why do they see this? ───────────────────────────────────────────────────
+
+interface Explain {
+  access: boolean
+  reasons: Array<{
+    type: string
+    message: string
+    dimension_label?: string
+    allowed_values?: string[]
+    record_values?: string[]
+  }>
+  act?: { can_see: boolean; can_update: boolean; available: boolean; summary?: string } | null
+}
+
+/** Admin: pick a record and get this person's read / act verdict with the gate that decided it. */
+export function WhyCard({ profile: p }: { profile: PersonProfile }) {
+  const client = useNivaroClient()
+  const { data: collections = [] } = useQuery<Array<{ collection: string; name: string }>>({
+    queryKey: ['nvr-collections-brief'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ collection: string; display_name?: string | null }> }>(
+          get('/collections')
+        )
+        .then((r) =>
+          r.data
+            .filter((c) => !c.collection.startsWith('nivaro_'))
+            .map((c) => ({ collection: c.collection, name: c.display_name || c.collection }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        ),
+    staleTime: 5 * 60_000
+  })
+  const [collection, setCollection] = useState('')
+  const [id, setId] = useState('')
+  const [asked, setAsked] = useState<{ collection: string; id: string } | null>(null)
+  const { data, isFetching, error } = useQuery<Explain>({
+    queryKey: ['nvr-person-why', p.id, asked?.collection, asked?.id],
+    queryFn: () =>
+      client
+        .request<{ data: Explain }>(
+          get(`/access-explain/${asked!.collection}/${encodeURIComponent(asked!.id)}`, {
+            user_id: p.id,
+            act: '1'
+          })
+        )
+        .then((r) => r.data),
+    enabled: !!asked
+  })
+  const first = p.first_name ?? p.name
+  return (
+    <SectionCard
+      icon={<ScanSearch className='h-4 w-4' />}
+      title='Why do they see this?'
+      hint={`Ask any record as ${first} — the gate that decided it answers`}
+      testId='why'
+    >
+      <form
+        className='flex flex-wrap items-end gap-2'
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (collection && id.trim()) setAsked({ collection, id: id.trim() })
+        }}
+      >
+        <div className='min-w-[180px] flex-1'>
+          <span className='mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+            Collection
+          </span>
+          <SimpleSelect
+            ariaLabel='Collection'
+            value={collection}
+            onChange={setCollection}
+            options={[
+              { value: '', label: 'Pick a collection…' },
+              ...collections.map((c) => ({ value: c.collection, label: c.name }))
+            ]}
+            className='h-8 text-[12.5px]'
+          />
+        </div>
+        <label className='w-[160px]'>
+          <span className='mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+            Record id
+          </span>
+          <input
+            value={id}
+            onChange={(e) => setId(e.target.value)}
+            placeholder='371431'
+            className='h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] dark:border-border dark:bg-background'
+          />
+        </label>
+        <button
+          type='submit'
+          disabled={!collection || !id.trim() || isFetching}
+          data-person-why-ask
+          className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
+        >
+          {isFetching ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : null} Explain
+        </button>
+      </form>
+      {error && (
+        <p className='mt-3 text-[12px] text-red-600 dark:text-red-400'>
+          {errorText(error, 'Could not explain')}
+        </p>
+      )}
+      {data && asked && (
+        <div className='mt-3 space-y-2' data-person-why-result={data.access ? 'yes' : 'no'}>
+          <p
+            className={cn(
+              'rounded-md px-3 py-2 text-[12.5px] font-medium',
+              data.access
+                ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-300'
+                : 'bg-red-50 text-red-800 dark:bg-red-500/10 dark:text-red-300'
+            )}
+          >
+            {data.access
+              ? `${first} can see ${asked.collection.replace(/_/g, ' ')} ${asked.id}.`
+              : `${first} cannot see ${asked.collection.replace(/_/g, ' ')} ${asked.id}.`}
+            {data.act?.summary && (
+              <span className='ml-1 font-normal opacity-90'>{data.act.summary}</span>
+            )}
+          </p>
+          {data.reasons.length > 0 && (
+            <ul className='space-y-1.5'>
+              {data.reasons.map((r, i) => (
+                <li
+                  // biome-ignore lint/suspicious/noArrayIndexKey: reasons carry no id
+                  key={i}
+                  className='text-[12px] text-slate-600 dark:text-slate-300'
+                >
+                  <Pill tone='neutral'>{r.type.replace(/_/g, ' ')}</Pill> {r.message}
+                  {r.dimension_label && r.allowed_values && (
+                    <span className='block pl-1 text-[11.5px] text-slate-400'>
+                      {r.dimension_label}: allowed {r.allowed_values.join(', ')}
+                      {r.record_values?.length ? ` · record has ${r.record_values.join(', ')}` : ''}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </SectionCard>
+  )
+}
+
+// ─── Notify from the profile ─────────────────────────────────────────────────
+
+/** "Send a message" that lands in their inbox / email per their notification rules. */
+export function NotifyButton({ profile: p }: { profile: PersonProfile }) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const [subject, setSubject] = useState('')
+  const [message, setMessage] = useState('')
+  const send = useMutation({
+    mutationFn: () =>
+      client.request(
+        post('/notifications', {
+          recipient: p.id,
+          subject: subject.trim(),
+          message: message.trim() || undefined,
+          category: 'system'
+        })
+      ),
+    onSuccess: () => {
+      toast.success(`Sent to ${p.first_name ?? p.name}`)
+      setOpen(false)
+      setSubject('')
+      setMessage('')
+    },
+    onError: (e) => toast.error(errorText(e, 'Could not send'))
+  })
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-person-notify
+          className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+        >
+          <Bell className='h-3.5 w-3.5' /> Notify
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-[340px] p-3'>
+        <form
+          className='space-y-2'
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (subject.trim()) send.mutate()
+          }}
+        >
+          <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
+            Notify {p.first_name ?? p.name}
+          </p>
+          <p className='text-[11.5px] text-slate-500 dark:text-slate-400'>
+            Lands in their inbox, and in email or push the way their own rules say.
+          </p>
+          <input
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder='Subject'
+            aria-label='Subject'
+            className='h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] dark:border-border dark:bg-background'
+          />
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder='Message (optional)'
+            aria-label='Message'
+            rows={3}
+            className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12.5px] dark:border-border dark:bg-background'
+          />
+          <div className='flex justify-end gap-2'>
+            <button
+              type='button'
+              onClick={() => setOpen(false)}
+              className='h-7 rounded-md px-2 text-[11.5px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            >
+              Cancel
+            </button>
+            <button
+              type='submit'
+              disabled={!subject.trim() || send.isPending}
+              className='inline-flex h-7 items-center gap-1 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white disabled:opacity-50'
+            >
+              {send.isPending ? (
+                <Loader2 className='h-3 w-3 animate-spin' />
+              ) : (
+                <Send className='h-3 w-3' />
+              )}{' '}
+              Send
+            </button>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
+  )
+}

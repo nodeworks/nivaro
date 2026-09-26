@@ -2,6 +2,7 @@ import { Building2, Clock, Mail, MapPin, MessageSquare, Phone, Video } from 'luc
 import { cn, formatRelative } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { UserAvatar } from '../UserAvatar'
+import { NotifyButton } from './PersonExtras'
 import { PersonChip, Pill, personInitials } from './primitives'
 import type { PersonProfile } from './types'
 
@@ -108,11 +109,20 @@ export function PersonHeader({
           )}
 
           {(p.title || p.department || p.company) && (
-            <p className='mt-0.5 text-[13px] text-slate-500 dark:text-slate-400'>
-              {[p.title, p.department].filter(Boolean).join(' · ')}
+            <p className='mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[13px] text-slate-500 dark:text-slate-400'>
+              {[p.title, p.department, p.company ? null : null]
+                .filter((v): v is string => !!v)
+                .map((v, i) => (
+                  <span key={v} className='inline-flex items-center gap-1.5'>
+                    {i > 0 && <span aria-hidden>·</span>}
+                    {v}
+                  </span>
+                ))}
               {p.company && (
-                <span className='inline-flex items-center gap-1 before:mx-1.5 before:content-["·"]'>
-                  <Building2 className='h-3.5 w-3.5' /> {p.company}
+                <span className='inline-flex items-center gap-1.5'>
+                  {(p.title || p.department) && <span aria-hidden>·</span>}
+                  <Building2 className='h-3.5 w-3.5 shrink-0' aria-hidden />
+                  {p.company}
                 </span>
               )}
             </p>
@@ -150,16 +160,37 @@ export function PersonHeader({
             </span>
           </div>
 
-          {p.manager && (
+          {p.manager ? (
             <div className='mt-2 flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400'>
               <span>Reports to</span>
               <PersonChip person={p.manager} />
             </div>
-          )}
+          ) : p.manager_external ? (
+            <div
+              className='mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-slate-500 dark:text-slate-400'
+              data-person-manager-external
+            >
+              <span>Reports to</span>
+              {p.manager_external.email ? (
+                <a
+                  href={`mailto:${p.manager_external.email}`}
+                  className='font-medium text-slate-700 hover:underline dark:text-slate-200'
+                >
+                  {p.manager_external.name ?? p.manager_external.email}
+                </a>
+              ) : (
+                <span className='font-medium text-slate-700 dark:text-slate-200'>
+                  {p.manager_external.name}
+                </span>
+              )}
+              <span className='text-[11px] text-slate-400'>· not a Nivaro user</span>
+            </div>
+          ) : null}
         </div>
 
         {/* Reach out — the three doors, always in the same place. */}
         <div className='flex shrink-0 flex-wrap items-center gap-2 self-start' data-person-actions>
+          {isAdmin && <NotifyButton profile={p} />}
           <a
             href={`mailto:${p.email}`}
             className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'

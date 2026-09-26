@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { getCollection } from '../services/collections.js'
+import { labelPathRecords } from '../services/event-path/record-labels.js'
+import type { PathStep } from '../services/event-path/types.js'
 
 /**
  * Per-user activity feed (admin only).
@@ -50,7 +53,7 @@ export async function userActivityRoutes(app: FastifyInstance) {
     ])
 
     const total = Number((countRows[0] as { count: string | number }).count)
-    return reply.send({ data, total, page, limit })
+    return reply.send({ data: await withFriendlyLabels(data as ActivityRow[]), total, page, limit })
   })
 
   app.get('/:userId/summary', async (req, reply) => {
@@ -81,10 +84,67 @@ export async function userActivityRoutes(app: FastifyInstance) {
           action: r.action,
           count: Number(r.count)
         })),
-        collections: (collectionRows as Array<{ collection: string; count: string | number }>).map(
-          (r) => ({ collection: r.collection, count: Number(r.count) })
+        collections: await Promise.all(
+          (collectionRows as Array<{ collection: string; count: string | number }>).map(
+            async (r) => ({
+              collection: r.collection,
+              collection_label: await collectionLabel(r.collection),
+              count: Number(r.count)
+            })
+          )
         )
       }
     })
   })
+}
+
+interface ActivityRow {
+  id: number
+  action: string
+  collection: string | null
+  item: string | null
+  [k: string]: unknown
+}
+
+/** The registry's display name for a collection, else the table name as words. */
+async function collectionLabel(collection: string): Promise<string> {
+  try {
+    const c = (await getCollection(collection)) as { display_name?: string | null } | null
+    if (c?.display_name) return c.display_name
+  } catch {
+    // unregistered — fall through to the word form
+  }
+  return collection
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .join(' ')
+}
+
+/**
+ * Attach the friendly record label (display template, or "Zone: Zone 3 · on
+ * CR26-80332" for a junction row) and the collection's display name, the
+ * same labelling the event path uses, so the feed never shows `workflows_regions #582230`.
+ */
+async function withFriendlyLabels(rows: ActivityRow[]): Promise<ActivityRow[]> {
+  const steps: PathStep[] = rows.map(
+    (r) =>
+      ({
+        record: r.collection && r.item ? { collection: r.collection, item: String(r.item) } : null
+      }) as unknown as PathStep
+  )
+  try {
+    await labelPathRecords(steps)
+  } catch {
+    // labels are decoration — the feed still renders ids
+  }
+  const collections = [...new Set(rows.map((r) => r.collection).filter((c): c is string => !!c))]
+  const names = new Map<string, string>()
+  await Promise.all(collections.map(async (c) => names.set(c, await collectionLabel(c))))
+  return rows.map((r, i) => ({
+    ...r,
+    record_label: steps[i].record?.label ?? null,
+    link: steps[i].record?.link ?? false,
+    collection_label: r.collection ? (names.get(r.collection) ?? r.collection) : null
+  }))
 }

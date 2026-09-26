@@ -6,7 +6,12 @@ import { logActivity } from '../services/activity.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import { writeRevision } from '../services/revisions.js'
-import { buildUserProfile, computeUserStats } from '../services/user-profile.js'
+import {
+  buildUserProfile,
+  buildWorkingOn,
+  computeOooExposure,
+  computeUserStats
+} from '../services/user-profile.js'
 import { getUser, listUsers, updateUser } from '../services/users.js'
 
 export async function usersRoutes(app: FastifyInstance) {
@@ -296,6 +301,36 @@ export async function usersRoutes(app: FastifyInstance) {
       const self = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
       if (!self && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
       return reply.send({ data: await computeUserStats(id) })
+    }
+  )
+
+  // GET /users/:id/working-on — the open records they own, as the VIEWER may
+  // read them (a colleague sees only collections their role can read).
+  app.get<{ Params: { id: string } }>(
+    '/:id/working-on',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.id === 'me' ? req.user!.id : req.params.id
+      const data = await buildWorkingOn(id, {
+        id: req.user!.id,
+        isAdmin: !!req.isAdmin,
+        role: (req.user as { role?: string | null } | undefined)?.role ?? null,
+        ...(req.user as object)
+      } as never)
+      return reply.send({ data })
+    }
+  )
+
+  // GET /users/:id/ooo-exposure — self or admin: what goes uncovered if they
+  // are out with no delegate (the own-profile card asks /users/me/…).
+  app.get<{ Params: { id: string } }>(
+    '/:id/ooo-exposure',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const { id } = req.params
+      const self = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
+      if (!self && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
+      return reply.send({ data: await computeOooExposure(id) })
     }
   )
 

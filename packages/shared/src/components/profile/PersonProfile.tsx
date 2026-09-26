@@ -13,6 +13,7 @@ import {
 } from './PersonAccess'
 import { ActivityFeedCard, JourneyCard, SignInsCard, StatsCard } from './PersonActivity'
 import { ForceReloadCard, MergeCard, OffboardingCard } from './PersonAdminTools'
+import { WhyCard, WorkingOnCard } from './PersonExtras'
 import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
 import { useInvalidatePerson, usePersonProfile } from './types'
@@ -64,6 +65,7 @@ export function PersonProfile({
     <div className='grid gap-4 lg:grid-cols-2'>
       <div className='space-y-4'>
         <AboutCard profile={profile} isAdmin={isAdmin} />
+        <WorkingOnCard profile={profile} />
         <PeopleCard profile={profile} />
       </div>
       <div className='space-y-4'>
@@ -132,6 +134,7 @@ export function PersonProfile({
               <div className='space-y-4'>
                 <AccessCard profile={profile} />
                 <UserScopesCard userId={profile.id} />
+                <WhyCard profile={profile} />
               </div>
               <div className='space-y-4'>
                 <UserDirectoryCard profile={profile} />

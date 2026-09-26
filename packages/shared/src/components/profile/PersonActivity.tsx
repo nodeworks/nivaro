@@ -15,6 +15,8 @@ export function StatsCard({ userId, title = 'Rhythm' }: { userId: string; title?
   const { data } = useQuery<{
     weeks: Array<{ transitions: number; tasks_done: number; created: number }>
     streak_days: number
+    active_days?: string[]
+    typical_hours_utc?: { start: number; end: number; samples: number } | null
     totals: { transitions: number; tasks_done: number; created: number }
   } | null>({
     queryKey: ['nvr-user-stats', userId],
@@ -46,29 +48,10 @@ export function StatsCard({ userId, title = 'Rhythm' }: { userId: string; title?
         <EmptyLine>Nothing recorded in the last eight weeks.</EmptyLine>
       ) : (
         <>
-          <div className='flex h-16 items-end gap-1' aria-hidden data-person-stats-bars>
-            {data.weeks.map((w, i) => {
-              const total = w.transitions + w.tasks_done + w.created
-              const h = Math.max(2, Math.round((total / weekMax) * 60))
-              return (
-                <div
-                  // biome-ignore lint/suspicious/noArrayIndexKey: fixed 8-week series
-                  key={i}
-                  className='flex flex-1 flex-col justify-end'
-                  title={`${total} this week · ${w.transitions} approvals · ${w.tasks_done} tasks · ${w.created} created`}
-                >
-                  <div
-                    className={cn(
-                      'w-full rounded-sm',
-                      i === 7 ? 'bg-nvr-cyan' : 'bg-slate-200 dark:bg-slate-700'
-                    )}
-                    style={{ height: h }}
-                  />
-                </div>
-              )
-            })}
-          </div>
-          <dl className='mt-3 grid grid-cols-3 gap-2 text-center'>
+          <WeekBars weeks={data.weeks} max={weekMax} />
+          {data.active_days && <DaysActiveCalendar days={data.active_days} />}
+          {data.typical_hours_utc && <TypicalHours hours={data.typical_hours_utc} />}
+          <dl className='mt-4 grid grid-cols-3 gap-2 text-center'>
             {[
               ['Approvals', data.totals.transitions],
               ['Tasks done', data.totals.tasks_done],
@@ -90,6 +73,185 @@ export function StatsCard({ userId, title = 'Rhythm' }: { userId: string; title?
   )
 }
 
+const DAY = 864e5
+/** Monday 00:00 UTC of the week holding `d`. */
+function weekStart(d: Date): Date {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+  const dow = (x.getUTCDay() + 6) % 7 // Mon = 0
+  x.setUTCDate(x.getUTCDate() - dow)
+  return x
+}
+const shortDate = (d: Date) =>
+  d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+/** Actions per week, oldest → newest, each bar labelled by its Monday and its count. */
+function WeekBars({
+  weeks,
+  max
+}: {
+  weeks: Array<{ transitions: number; tasks_done: number; created: number }>
+  max: number
+}) {
+  const thisMonday = weekStart(new Date())
+  return (
+    <div data-person-week-bars>
+      <p className='text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
+        Actions per week
+      </p>
+      <div className='mt-1.5 flex items-end gap-1.5' data-person-stats-bars>
+        {weeks.map((w, i) => {
+          const total = w.transitions + w.tasks_done + w.created
+          const h = total === 0 ? 2 : Math.max(6, Math.round((total / max) * 56))
+          const monday = new Date(thisMonday.getTime() - (weeks.length - 1 - i) * 7 * DAY)
+          const current = i === weeks.length - 1
+          return (
+            <div
+              key={monday.toISOString()}
+              className='flex flex-1 flex-col items-center justify-end'
+              title={`Week of ${shortDate(monday)} · ${total} actions · ${w.transitions} approvals · ${w.tasks_done} tasks · ${w.created} created`}
+            >
+              <span
+                className={cn(
+                  'mb-0.5 text-[10.5px] tabular-nums',
+                  total === 0 ? 'text-transparent' : 'text-slate-500 dark:text-slate-400'
+                )}
+                aria-hidden={total === 0}
+              >
+                {total}
+              </span>
+              <div
+                className={cn(
+                  'w-full rounded-sm',
+                  current
+                    ? 'bg-nvr-cyan'
+                    : total === 0
+                      ? 'bg-slate-200 dark:bg-slate-700'
+                      : 'bg-slate-300 dark:bg-slate-600'
+                )}
+                style={{ height: h }}
+              />
+              <span
+                className={cn(
+                  'mt-1 text-[10px] tabular-nums',
+                  current ? 'font-semibold text-slate-700 dark:text-slate-200' : 'text-slate-400'
+                )}
+              >
+                {current ? 'This wk' : shortDate(monday)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+const WEEKDAY_LABELS = ['Mon', '', 'Wed', '', 'Fri', '', 'Sun']
+
+/** Eight weeks as a calendar — one column per week, one row per weekday. */
+function DaysActiveCalendar({ days }: { days: string[] }) {
+  const set = new Set(days)
+  const thisMonday = weekStart(new Date())
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const weeks = Array.from({ length: 8 }, (_, i) => {
+    const monday = new Date(thisMonday.getTime() - (7 - i) * 7 * DAY)
+    return {
+      monday,
+      cells: Array.from({ length: 7 }, (_, d) => {
+        const date = new Date(monday.getTime() + d * DAY)
+        const key = date.toISOString().slice(0, 10)
+        return { key, on: set.has(key), future: key > todayKey, today: key === todayKey, date }
+      })
+    }
+  })
+  const active = weeks
+    .flat()
+    .flatMap((w) => w.cells)
+    .filter((c) => c.on).length
+  const shown = weeks.flatMap((w) => w.cells).filter((c) => !c.future).length
+  return (
+    <div className='mt-4' data-person-presence-strip={active}>
+      <div className='flex items-baseline justify-between'>
+        <p className='text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>
+          Days with activity
+        </p>
+        <p className='text-[11.5px] tabular-nums text-slate-600 dark:text-slate-300'>
+          <span className='font-semibold'>{active}</span> of the last {shown} days
+        </p>
+      </div>
+      <div className='mt-1.5 flex gap-1.5'>
+        <div className='flex flex-col gap-[3px] pr-1' aria-hidden>
+          {WEEKDAY_LABELS.map((l, i) => (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: fixed weekday rows
+              key={i}
+              className='h-3 text-[9.5px] leading-3 text-slate-400'
+            >
+              {l}
+            </span>
+          ))}
+        </div>
+        {weeks.map((w) => (
+          <div key={w.monday.toISOString()} className='flex flex-1 flex-col gap-[3px]'>
+            {w.cells.map((c) => (
+              <span
+                key={c.key}
+                title={
+                  c.future
+                    ? undefined
+                    : `${c.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })}${c.on ? ' · active' : ' · no activity'}`
+                }
+                className={cn(
+                  'h-3 rounded-[2px]',
+                  c.future
+                    ? 'bg-transparent'
+                    : c.on
+                      ? 'bg-nvr-cyan'
+                      : 'bg-slate-200 dark:bg-slate-700',
+                  c.today && 'ring-1 ring-slate-400 dark:ring-slate-300'
+                )}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className='mt-1.5 flex items-center justify-between text-[10px] text-slate-400'>
+        <span className='flex items-center gap-1'>
+          <span className='inline-block h-2.5 w-2.5 rounded-[2px] bg-nvr-cyan' /> did something
+          <span className='ml-2 inline-block h-2.5 w-2.5 rounded-[2px] bg-slate-200 dark:bg-slate-700' />{' '}
+          quiet
+        </span>
+        <span>{shortDate(weeks[0].monday)} → today</span>
+      </div>
+    </div>
+  )
+}
+
+/** "Usually active 10 AM – 3:30 PM", from UTC hours into the viewer's own clock, to the half hour. */
+function TypicalHours({ hours }: { hours: { start: number; end: number; samples: number } }) {
+  const offsetH = -new Date().getTimezoneOffset() / 60
+  const local = (h: number) => (((h + offsetH) % 24) + 24) % 24
+  const fmt = (h: number) => {
+    const half = Math.round(h * 2) / 2
+    const whole = Math.floor(half) % 24
+    const mins = half % 1 ? 30 : 0
+    const d = new Date(2000, 0, 1, whole, mins)
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: mins ? '2-digit' : undefined })
+  }
+  return (
+    <p className='mt-3 text-[12px] text-slate-600 dark:text-slate-300' data-person-typical-hours>
+      Usually active{' '}
+      <span className='font-medium text-slate-800 dark:text-slate-100'>
+        {fmt(local(hours.start))} – {fmt(local(hours.end))}
+      </span>
+      <span className='text-slate-400'>
+        {' '}
+        · your time · based on {hours.samples.toLocaleString()} actions
+      </span>
+    </p>
+  )
+}
+
 // ─── Activity feed ───────────────────────────────────────────────────────────
 
 interface ActivityEntry {
@@ -100,11 +262,24 @@ interface ActivityEntry {
   item: string | null
   comment: string | null
   ip: string | null
+  /** Display-template label, or what a junction row links ("Zone: Zone 3 · on CR26-80332"). */
+  record_label?: string | null
+  /** True when the row is a junction link — the verb reads linked / unlinked. */
+  link?: boolean
+  collection_label?: string | null
 }
 interface ActivitySummary {
   total: number
   actions: Array<{ action: string; count: number }>
-  collections: Array<{ collection: string; count: number }>
+  collections: Array<{ collection: string; collection_label?: string | null; count: number }>
+}
+
+/** A junction write is a link, not a record — say so. */
+function verbFor(entry: ActivityEntry): string {
+  if (!entry.link) return entry.action
+  if (entry.action === 'create') return 'linked'
+  if (entry.action === 'delete') return 'unlinked'
+  return entry.action
 }
 
 const ACTION_META: Record<string, { cls: string; dot: string }> = {
@@ -226,7 +401,7 @@ export function ActivityFeedCard({ userId }: { userId: string }) {
                 { value: '', label: 'Every collection' },
                 ...summary.collections.map((c) => ({
                   value: c.collection,
-                  label: `${c.collection} · ${c.count}`
+                  label: `${c.collection_label ?? c.collection} · ${c.count}`
                 }))
               ]}
               className='ml-auto h-7 w-[200px] text-[11.5px]'
@@ -294,7 +469,7 @@ export function ActivityFeedCard({ userId }: { userId: string }) {
                             meta.cls
                           )}
                         >
-                          {entry.action}
+                          {verbFor(entry)}
                         </span>
                         {entry.collection &&
                           (href ? (
@@ -305,14 +480,21 @@ export function ActivityFeedCard({ userId }: { userId: string }) {
                                 e.preventDefault()
                                 nav.navigate(href)
                               }}
-                              className='truncate font-mono text-[12px] text-nvr-navy hover:underline dark:text-nvr-cyan'
+                              className='min-w-0 truncate text-[12.5px] text-slate-700 hover:underline dark:text-slate-200'
+                              title={`${entry.collection} #${entry.item}`}
                             >
-                              {entry.collection}
-                              <span className='text-slate-400'> #{entry.item}</span>
+                              {entry.link ? null : (
+                                <span className='text-slate-400'>
+                                  {entry.collection_label ?? entry.collection}{' '}
+                                </span>
+                              )}
+                              <span className='font-medium'>
+                                {entry.record_label ?? `#${entry.item}`}
+                              </span>
                             </a>
                           ) : (
-                            <span className='font-mono text-[12px] text-slate-600 dark:text-slate-300'>
-                              {entry.collection}
+                            <span className='text-[12.5px] text-slate-600 dark:text-slate-300'>
+                              {entry.collection_label ?? entry.collection}
                             </span>
                           ))}
                         <span

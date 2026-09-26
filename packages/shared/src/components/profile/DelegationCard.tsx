@@ -50,14 +50,14 @@ export function DelegationCard({
   // because owner resolution costs seconds, not milliseconds.
   const goingOooUncovered = (ooo || (!!oooStart && !!oooEnd)) && !delegate
   useEffect(() => {
-    if (!goingOooUncovered || forUser) {
+    if (!goingOooUncovered) {
       setExposure(null)
       return
     }
     let cancelled = false
     client
       .request<{ data: { owned_open_records: number; sla_escalations: number } }>(
-        get('/users/me/ooo-exposure')
+        get(forUser ? `/users/${forUser.id}/ooo-exposure` : '/users/me/ooo-exposure')
       )
       .then((r) => {
         if (!cancelled) setExposure(r.data)
@@ -137,6 +137,7 @@ export function DelegationCard({
 
   return (
     <SectionCard
+      testId='delegation'
       icon={<UserRound className='h-4 w-4' />}
       title='Out of office'
       hint={
@@ -189,11 +190,12 @@ export function DelegationCard({
         exposure &&
         exposure.owned_open_records + exposure.sla_escalations > 0 && (
           <div className='mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
-            <span className='font-semibold'>No delegate is set.</span> While you're out,{' '}
+            <span className='font-semibold'>No delegate is set.</span> While{' '}
+            {who ? `${who} is` : "you're"} out,{' '}
             {exposure.owned_open_records > 0 && (
               <>
                 <span className='font-semibold'>{exposure.owned_open_records}</span> open record
-                {exposure.owned_open_records === 1 ? '' : 's'} you own
+                {exposure.owned_open_records === 1 ? '' : 's'} {who ? 'they own' : 'you own'}
               </>
             )}
             {exposure.owned_open_records > 0 && exposure.sla_escalations > 0 && ' and '}
@@ -201,10 +203,11 @@ export function DelegationCard({
               <>
                 <span className='font-semibold'>{exposure.sla_escalations}</span> SLA escalation
                 rule
-                {exposure.sla_escalations === 1 ? '' : 's'} that page you
+                {exposure.sla_escalations === 1 ? '' : 's'} that page {who ? 'them' : 'you'}
               </>
             )}{' '}
-            will have nobody covering them. Pick a delegate below.
+            will have nobody covering them.{' '}
+            {who ? 'Assign a delegate below.' : 'Pick a delegate below.'}
           </div>
         )}
 

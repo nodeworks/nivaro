@@ -32,6 +32,12 @@ export interface PersonProfile {
   ooo_end: string | null
   delegate: (PersonRef & { expires_at: string | null }) | null
   manager: PersonRef | null
+  /** The directory's manager when they have no account here. */
+  manager_external: { name: string | null; email: string | null } | null
+  /** Upward chain from the direct manager: [manager, their manager, …]. */
+  org_chain: Array<PersonRef & { title?: string | null }>
+  /** People with the same manager. */
+  peers: PersonRef[]
   direct_reports: PersonRef[]
   covers_for: PersonRef[]
   custom_status: { text: string; emoji?: string | null; expires_at?: string | null } | null

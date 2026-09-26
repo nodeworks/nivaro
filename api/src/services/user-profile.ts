@@ -41,6 +41,12 @@ export interface PersonProfile {
   ooo_end: string | null
   delegate: (PersonRef & { expires_at: string | null }) | null
   manager: PersonRef | null
+  /** The directory's manager when they have no account here (nightly sync). */
+  manager_external: { name: string | null; email: string | null } | null
+  /** Upward chain from the direct manager: [manager, their manager, …]. */
+  org_chain: Array<PersonRef & { title?: string | null }>
+  /** People with the same manager. */
+  peers: PersonRef[]
   direct_reports: PersonRef[]
   /** People who currently route their work to this person. */
   covers_for: PersonRef[]
@@ -242,6 +248,40 @@ export async function buildUserProfile(
         .catch(() => undefined) as Promise<Record<string, unknown> | undefined>
     ])
 
+  // Org chain: walk manager_id upward (six hops, cycles cut) and the peers
+  // who share the direct manager — one read per hop, one for the peers.
+  const chain: Array<Record<string, unknown>> = []
+  {
+    const seen = new Set<string>([id.toUpperCase()])
+    let next = u.manager_id ? String(u.manager_id) : null
+    for (let hop = 0; hop < 6 && next && !seen.has(next.toUpperCase()); hop++) {
+      seen.add(next.toUpperCase())
+      const row = (await db('nivaro_users')
+        .where('id', next)
+        .first(...REF_COLS, 'manager_id')
+        .catch(() => undefined)) as Record<string, unknown> | undefined
+      if (!row) break
+      chain.push(row)
+      next = row.manager_id ? String(row.manager_id) : null
+    }
+  }
+  const peers = u.manager_id
+    ? ((await db('nivaro_users')
+        .where('manager_id', u.manager_id)
+        .whereNot('id', id)
+        .where((qb) => void qb.where('status', 'active').orWhereNull('status'))
+        .where((qb) => void qb.where('is_redacted', false).orWhereNull('is_redacted'))
+        .whereNull('account_kind')
+        .orderBy('first_name')
+        .limit(24)
+        .select(...REF_COLS)
+        .catch(() => [])) as Array<Record<string, unknown>>)
+    : []
+  const managerRef = parsePrefs(u.manager_directory) as {
+    name?: string | null
+    email?: string | null
+  }
+
   // Team member counts, one grouped query.
   const teamIds = (teamRows as Array<Record<string, unknown>>).map((t) => Number(t.id))
   const counts = new Map<number, number>()
@@ -400,6 +440,12 @@ export async function buildUserProfile(
       ? { ...toRef(delegate as Record<string, unknown>), expires_at: iso(u.delegate_expires_at) }
       : null,
     manager: manager ? toRef(manager as Record<string, unknown>) : null,
+    manager_external:
+      !manager && (managerRef.name || managerRef.email)
+        ? { name: managerRef.name ?? null, email: managerRef.email ?? null }
+        : null,
+    org_chain: chain.map(toRef),
+    peers: peers.map(toRef),
     direct_reports: (reports as Array<Record<string, unknown>>).map(toRef),
     covers_for: (covering as Array<Record<string, unknown>>).map(toRef),
     custom_status: customStatus,
@@ -476,13 +522,165 @@ export async function computeUserStats(userId: string) {
     streak++
     cursor.setUTCDate(cursor.getUTCDate() - 1)
   }
+  // Typical hours: the 10th–90th percentile of the UTC hour of every action,
+  // so a viewer can render "usually active 8 AM – 5 PM" in their own zone.
+  const hours = [...transitions, ...tasksDone, ...created]
+    .map((d) => d.getUTCHours() + d.getUTCMinutes() / 60)
+    .sort((a, b) => a - b)
+  const pct = (q: number) => hours[Math.min(hours.length - 1, Math.floor(q * hours.length))]
   return {
     weeks,
     streak_days: streak,
+    active_days: [...activeDays].sort(),
+    typical_hours_utc:
+      hours.length >= 12 ? { start: pct(0.1), end: pct(0.9), samples: hours.length } : null,
     totals: {
       transitions: transitions.length,
       tasks_done: tasksDone.length,
       created: created.length
     }
   }
+}
+
+/**
+ * What a person is on the hook for right now: the open records they are a
+ * resolved owner of (the queue engine's own answer), narrowed to what the
+ * VIEWER may read, SLA-breached first. Capped so the card stays a glance.
+ */
+// Owner resolution over every open instance costs seconds (the My Work
+// profile), so one answer per person is kept for two minutes and shared by
+// concurrent callers — a second tab or a refetch never pays twice.
+const workingOnCache = new Map<string, { at: number; value: Promise<WorkingOnRaw> }>()
+const WORKING_ON_TTL_MS = 120_000
+type WorkingOnRaw = Array<{
+  collection: string
+  item_id: string
+  label: string
+  state: string | null
+  state_label: string | null
+  state_color: string | null
+  sla_status: 'ok' | 'warning' | 'breached' | null
+  aging_hours: number | null
+}>
+
+export function bustWorkingOn(userId?: string): void {
+  if (userId) workingOnCache.delete(userId)
+  else workingOnCache.clear()
+}
+
+export async function buildWorkingOn(
+  userId: string,
+  viewer: { id: string; isAdmin: boolean; role?: string | null },
+  cap = 30
+): Promise<{
+  items: Array<{
+    collection: string
+    item_id: string
+    label: string
+    state: string | null
+    state_label: string | null
+    state_color: string | null
+    sla_status: 'ok' | 'warning' | 'breached' | null
+    aging_hours: number | null
+  }>
+  total: number
+  hidden: number
+}> {
+  const { can } = await import('./permissions.js')
+  const cached = workingOnCache.get(userId)
+  const fresh =
+    cached && Date.now() - cached.at < WORKING_ON_TTL_MS
+      ? cached.value
+      : (() => {
+          const value = resolveWorkingOn(userId)
+          workingOnCache.set(userId, { at: Date.now(), value })
+          value.catch(() => workingOnCache.delete(userId))
+          return value
+        })()
+  const all = await fresh
+  // Permission is judged per VIEWER, on top of the shared per-person answer.
+  const readable = new Map<string, boolean>()
+  const kept: WorkingOnRaw = []
+  for (const it of all) {
+    const c = it.collection
+    if (!readable.has(c)) {
+      readable.set(c, viewer.isAdmin || (await can(viewer as never, 'read', c).catch(() => false)))
+    }
+    if (readable.get(c)) kept.push(it)
+  }
+  return { items: kept.slice(0, cap), total: kept.length, hidden: all.length - kept.length }
+}
+
+async function resolveWorkingOn(userId: string): Promise<WorkingOnRaw> {
+  const { resolveOwnedByMeSource } = await import('./queues.js')
+  const { computeStatusBatch } = await import('../routes/sla.js')
+  const { selectInChunks } = await import('./db-batch.js')
+  const owned = await resolveOwnedByMeSource(userId).catch(() => ({ items: [] }))
+  const kept = (owned as { items: Array<Record<string, unknown>> }).items
+  // The owned-by-me resolver carries no SLA or aging (it is a membership
+  // answer); both come from the SLA batch per collection, which also gives the
+  // hours since the record entered its state. State labels ride one instance
+  // read per collection.
+  const byCollection = new Map<string, string[]>()
+  for (const it of kept) {
+    const c = String(it.collection)
+    if (!byCollection.has(c)) byCollection.set(c, [])
+    byCollection.get(c)!.push(String(it.item_id))
+  }
+  const sla = new Map<string, { status: string | null; elapsed_hours: number }>()
+  const labels = new Map<string, string>()
+  for (const [c, ids] of byCollection) {
+    const batch = await computeStatusBatch(c, ids).catch(
+      () => ({}) as Record<string, { status: string | null; elapsed_hours: number }>
+    )
+    for (const [id, e] of Object.entries(batch)) sla.set(`${c}:${id}`, e)
+    const rows = await selectInChunks(ids, 1500, (chunk) =>
+      db('nivaro_workflow_instances as wi')
+        .join('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+        .where('wi.collection', c)
+        .whereNull('wi.completed_at')
+        .whereIn('wi.item', chunk)
+        .select('wi.item', 's.label')
+    ).catch(() => [] as Array<{ item: string; label: string }>)
+    for (const r of rows as Array<{ item: string; label: string }>) {
+      labels.set(`${c}:${r.item}`, r.label)
+    }
+  }
+  const enriched = kept.map((it) => {
+    const key = `${it.collection}:${it.item_id}`
+    const e = sla.get(key)
+    return {
+      collection: String(it.collection),
+      item_id: String(it.item_id),
+      label: String(it.label ?? it.item_id),
+      state: (it.state as string | null) ?? null,
+      state_label: labels.get(key) ?? null,
+      state_color: (it.state_color as string | null) ?? null,
+      sla_status: (e?.status as 'ok' | 'warning' | 'breached' | null) ?? null,
+      aging_hours: e?.elapsed_hours == null ? null : Math.round(e.elapsed_hours * 10) / 10
+    }
+  })
+  const rank = (v: string | null) => (v === 'breached' ? 0 : v === 'warning' ? 1 : 2)
+  enriched.sort(
+    (a, b) =>
+      rank(a.sla_status) - rank(b.sla_status) || (b.aging_hours ?? 0) - (a.aging_hours ?? 0)
+  )
+  return enriched
+}
+
+/** Open records + SLA escalation rules that would go uncovered if this person is out with no delegate. */
+export async function computeOooExposure(userId: string) {
+  const { resolveOwnedByMeSource } = await import('./queues.js')
+  const [owned, slaRules] = await Promise.all([
+    resolveOwnedByMeSource(userId)
+      .then((r) => (Array.isArray(r.items) ? r.items.length : 0))
+      .catch(() => 0),
+    db('nivaro_sla_rules')
+      .where({ escalation_user: userId, is_active: 1 })
+      .count({ c: '*' })
+      .first()
+      .then((r) => Number((r as { c?: unknown } | undefined)?.c ?? 0))
+      .catch(() => 0)
+  ])
+  return { owned_open_records: owned, sla_escalations: slaRules }
 }
