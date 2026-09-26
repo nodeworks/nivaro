@@ -7,7 +7,6 @@ import {
   readUser,
   readUserCard,
   saveMyScopeDefaults,
-  setMyDelegate,
   type UserScopesInfo,
   updateNotificationSubscription,
   updateUser
@@ -20,7 +19,6 @@ import {
   Check,
   Clock,
   Filter as FilterIcon,
-  KeyRound,
   Loader2,
   LogOut,
   Mail,
@@ -30,15 +28,20 @@ import {
   Undo2,
   UserRound
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
 import { playNotificationSound } from '../lib/notification-sound'
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
-import { RelationCombobox } from './item-edit/RelationCombobox'
+import { DelegationCard } from './profile/DelegationCard'
+
+export { DelegationCard }
+
 import { NotificationSourcesCard } from './NotificationSourcesCard'
+import { PersonProfile } from './profile/PersonProfile'
+import { ConfirmButton, Field, SectionCard, Toggle } from './profile/primitives'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 
 /**
@@ -89,165 +92,6 @@ const initials = (u: { first_name?: string | null; last_name?: string | null; em
   (
     `${u.first_name?.[0] ?? ''}${u.last_name?.[0] ?? ''}` || (u.email ?? '?').slice(0, 2)
   ).toUpperCase()
-
-function SectionCard({
-  icon,
-  title,
-  hint,
-  children,
-  actions
-}: {
-  icon: React.ReactNode
-  title: string
-  hint?: string
-  children: React.ReactNode
-  actions?: React.ReactNode
-}) {
-  return (
-    <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-      <header className='flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
-        <span className='text-nvr-navy dark:text-nvr-cyan'>{icon}</span>
-        <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>{title}</h3>
-        {hint && (
-          <p className='hidden text-[11px] text-slate-500 dark:text-slate-400 sm:block'>{hint}</p>
-        )}
-        <span className='ml-auto'>{actions}</span>
-      </header>
-      <div className='p-4'>{children}</div>
-    </section>
-  )
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = 'text',
-  disabled,
-  hint,
-  inputClassName
-}: {
-  label: string
-  value: string
-  onChange?: (v: string) => void
-  placeholder?: string
-  type?: string
-  disabled?: boolean
-  hint?: string
-  inputClassName?: string
-}) {
-  return (
-    <label className='block'>
-      <span className='mb-1 flex items-baseline justify-between text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
-        {label}
-        {hint && (
-          <span className='normal-case tracking-normal text-slate-400 dark:text-slate-500'>
-            {hint}
-          </span>
-        )}
-      </span>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange?.(e.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-        className={cn(
-          'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-700 outline-none transition-colors focus:border-nvr-cyan focus-visible:ring-2 focus-visible:ring-nvr-cyan/25 dark:border-border dark:bg-background dark:text-slate-200',
-          disabled &&
-            'cursor-not-allowed bg-slate-50 text-slate-400 dark:bg-muted/40 dark:text-slate-500',
-          inputClassName
-        )}
-      />
-    </label>
-  )
-}
-
-/** One switch vocabulary for the whole page. */
-function Toggle({
-  on,
-  onChange,
-  label,
-  tone = 'cyan'
-}: {
-  on: boolean
-  onChange: () => void
-  label: string
-  tone?: 'cyan' | 'amber'
-}) {
-  return (
-    <button
-      type='button'
-      role='switch'
-      aria-checked={on}
-      aria-label={label}
-      onClick={onChange}
-      className={cn(
-        'relative h-[18px] w-8 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40',
-        on ? (tone === 'amber' ? 'bg-amber-400' : 'bg-nvr-cyan') : 'bg-slate-200 dark:bg-muted'
-      )}
-    >
-      <span
-        className={cn(
-          'absolute top-0.5 h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-[left] duration-150',
-          on ? 'left-[15px]' : 'left-0.5'
-        )}
-      />
-    </button>
-  )
-}
-
-/** Two-step destructive button: first click arms, second confirms; disarms after 3s. */
-function ConfirmButton({
-  onConfirm,
-  children,
-  confirmLabel = 'Confirm?',
-  className,
-  armedClassName,
-  title
-}: {
-  onConfirm: () => void
-  children: React.ReactNode
-  confirmLabel?: React.ReactNode
-  className?: string
-  armedClassName?: string
-  title?: string
-}) {
-  const [armed, setArmed] = useState(false)
-  useEffect(() => {
-    if (!armed) return
-    const t = window.setTimeout(() => setArmed(false), 3000)
-    return () => window.clearTimeout(t)
-  }, [armed])
-  return (
-    <button
-      type='button'
-      title={title}
-      aria-label={title}
-      onClick={() => {
-        if (armed) {
-          setArmed(false)
-          onConfirm()
-        } else {
-          setArmed(true)
-        }
-      }}
-      className={cn(className, armed && armedClassName)}
-    >
-      {armed ? confirmLabel : children}
-    </button>
-  )
-}
-
-function Meta({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className='bg-white px-3 py-2 dark:bg-card'>
-      <p className='text-[10.5px] font-medium uppercase tracking-wide text-slate-400'>{label}</p>
-      <div className='mt-0.5 text-[12.5px] text-slate-700 dark:text-slate-200'>{children}</div>
-    </div>
-  )
-}
 
 // ── Notification rules (quiet hours + per-category channel matrix) ──────────
 
@@ -1490,7 +1334,7 @@ function SecurityCard() {
 
 // ── Notification subscriptions ───────────────────────────────────────────────
 
-function SubscriptionsCard() {
+function _SubscriptionsCard() {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { data: subs = [] } = useQuery({
@@ -1566,259 +1410,38 @@ function SubscriptionsCard() {
   )
 }
 
-// ── Out of office / delegation ───────────────────────────────────────────────
-
-export function DelegationCard({ user, onSaved }: { user: ManagedUser; onSaved: () => void }) {
-  const client = useNivaroClient()
-  const [ooo, setOoo] = useState(!!user.is_out_of_office)
-  const [exposure, setExposure] = useState<{
-    owned_open_records: number
-    sla_escalations: number
-  } | null>(null)
-  const [delegate, setDelegate] = useState<string | null>(user.delegate_id ?? null)
-  const [expires, setExpires] = useState(
-    user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : ''
-  )
-  const u = user as ManagedUser & { ooo_start?: string | null; ooo_end?: string | null }
-  const [oooStart, setOooStart] = useState(u.ooo_start ? String(u.ooo_start).slice(0, 10) : '')
-  const [oooEnd, setOooEnd] = useState(u.ooo_end ? String(u.ooo_end).slice(0, 10) : '')
-  const dirty =
-    ooo !== !!user.is_out_of_office ||
-    (delegate ?? null) !== (user.delegate_id ?? null) ||
-    expires !== (user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : '') ||
-    oooStart !== (u.ooo_start ? String(u.ooo_start).slice(0, 10) : '') ||
-    oooEnd !== (u.ooo_end ? String(u.ooo_end).slice(0, 10) : '')
-
-  // Pre-OOO exposure: what nothing will cover while you're out. Fetched
-  // lazily — only when OOO is being enabled (or scheduled) with no delegate,
-  // because owner resolution costs seconds, not milliseconds.
-  const goingOooUncovered = (ooo || (!!oooStart && !!oooEnd)) && !delegate
-  useEffect(() => {
-    if (!goingOooUncovered) {
-      setExposure(null)
-      return
-    }
-    let cancelled = false
-    client
-      .request<{ data: { owned_open_records: number; sla_escalations: number } }>(
-        get('/users/me/ooo-exposure')
-      )
-      .then((r) => {
-        if (!cancelled) setExposure(r.data)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [goingOooUncovered, client])
-
-  // Delegation preview (#414): what the delegate would inherit, fetched when
-  // a delegate is picked while going OOO.
-  const { data: delegatePreview } = useQuery<{
-    approx_open_approvals: number
-    coverage_warnings: string[]
-  }>({
-    queryKey: ['delegate-preview'],
-    queryFn: () =>
-      client
-        .request<{ data: { approx_open_approvals: number; coverage_warnings: string[] } }>(
-          get('/users/me/delegate-preview')
-        )
-        .then((r) => r.data),
-    enabled: !!delegate && (ooo || (!!oooStart && !!oooEnd)),
-    staleTime: 60_000
-  })
-  const [saveWarnings, setSaveWarnings] = useState<string[]>([])
-
-  const save = useMutation({
-    mutationFn: () =>
-      client.request(
-        setMyDelegate({
-          is_out_of_office: ooo,
-          delegate_id: delegate,
-          delegate_expires_at: expires ? new Date(`${expires}T23:59:59`).toISOString() : null,
-          // Scheduled window — the ooo-schedule cron flips the toggle on
-          // entry and clears it (and the window) when it passes.
-          ooo_start: oooStart ? new Date(`${oooStart}T00:00:00`).toISOString() : null,
-          ooo_end: oooEnd ? new Date(`${oooEnd}T23:59:59`).toISOString() : null
-        })
-      ),
-    onSuccess: (res) => {
-      // OOO conflict warnings (#338): the save reports teams this window guts.
-      const warnings = (res as { warnings?: string[] })?.warnings ?? []
-      setSaveWarnings(warnings)
-      onSaved()
-    }
-  })
-
-  const reset = () => {
-    setOoo(!!user.is_out_of_office)
-    setDelegate(user.delegate_id ?? null)
-    setExpires(user.delegate_expires_at ? String(user.delegate_expires_at).slice(0, 10) : '')
-    setOooStart(u.ooo_start ? String(u.ooo_start).slice(0, 10) : '')
-    setOooEnd(u.ooo_end ? String(u.ooo_end).slice(0, 10) : '')
-  }
-
-  const untilLabel = expires
-    ? new Date(`${expires}T12:00:00`).toLocaleDateString(undefined, {
-        month: 'long',
-        day: 'numeric'
-      })
-    : null
-
-  return (
-    <SectionCard
-      icon={<UserRound className='h-4 w-4' />}
-      title='Out of office'
-      hint='Route your approvals to a delegate while you are away'
-      actions={
-        dirty && (
-          <span className='flex items-center gap-1.5'>
-            <button
-              type='button'
-              title='Discard changes'
-              onClick={reset}
-              className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-200'
-            >
-              <Undo2 className='h-3 w-3' /> Reset
-            </button>
-            <button
-              type='button'
-              disabled={save.isPending}
-              onClick={() => save.mutate()}
-              className='inline-flex h-7 items-center gap-1 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white transition-opacity disabled:opacity-50'
-            >
-              {save.isPending ? (
-                <Loader2 className='h-3 w-3 animate-spin' />
-              ) : (
-                <Check className='h-3 w-3' />
-              )}{' '}
-              Save
-            </button>
-          </span>
-        )
-      }
-    >
-      {/* State first: one clear switch line, config below it. */}
-      <label className='flex cursor-pointer items-center justify-between gap-3'>
-        <span className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
-          I'm out of office
-        </span>
-        <Toggle
-          on={ooo}
-          onChange={() => setOoo((v) => !v)}
-          label="I'm out of office"
-          tone='amber'
-        />
-      </label>
-
-      {goingOooUncovered &&
-        exposure &&
-        exposure.owned_open_records + exposure.sla_escalations > 0 && (
-          <div className='mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
-            <span className='font-semibold'>No delegate is set.</span> While you're out,{' '}
-            {exposure.owned_open_records > 0 && (
-              <>
-                <span className='font-semibold'>{exposure.owned_open_records}</span> open record
-                {exposure.owned_open_records === 1 ? '' : 's'} you own
-              </>
-            )}
-            {exposure.owned_open_records > 0 && exposure.sla_escalations > 0 && ' and '}
-            {exposure.sla_escalations > 0 && (
-              <>
-                <span className='font-semibold'>{exposure.sla_escalations}</span> SLA escalation
-                rule
-                {exposure.sla_escalations === 1 ? '' : 's'} that page you
-              </>
-            )}{' '}
-            will have nobody covering them. Pick a delegate below.
-          </div>
-        )}
-
-      {/* Delegation preview (#414) */}
-      {delegate && delegatePreview && (
-        <div className='mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'>
-          Your delegate would inherit roughly{' '}
-          <b className='tabular-nums'>{delegatePreview.approx_open_approvals}</b> open approval
-          {delegatePreview.approx_open_approvals === 1 ? '' : 's'} while you're out.
-        </div>
-      )}
-      {/* OOO conflict warnings (#338) — reported by the save */}
-      {saveWarnings.length > 0 && (
-        <div className='mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300'>
-          <p className='font-semibold'>Coverage warning{saveWarnings.length === 1 ? '' : 's'}:</p>
-          <ul className='mt-0.5 list-disc pl-4'>
-            {saveWarnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <div className='mt-3 grid gap-3 border-t border-slate-100 pt-3 dark:border-border/60 sm:grid-cols-2'>
-        <div>
-          <span className='mb-1 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
-            Delegate
-          </span>
-          <RelationCombobox
-            collection='nivaro_users'
-            value={delegate}
-            onChange={(v) => setDelegate(v == null ? null : String(v))}
-            placeholder='Pick a delegate…'
-          />
-        </div>
-        {/* Plan it ahead: the toggle flips on/off automatically inside this
-            window, so nobody has to remember on the morning they leave. */}
-        <Field
-          label='Out from'
-          hint='schedule ahead'
-          type='date'
-          value={oooStart}
-          onChange={setOooStart}
-        />
-        <Field
-          label='Out until'
-          hint='auto-clears after'
-          type='date'
-          value={oooEnd}
-          onChange={setOooEnd}
-        />
-        {/* h-9 matches the RelationCombobox trigger beside it */}
-        <Field
-          label='Until'
-          hint='optional'
-          type='date'
-          value={expires}
-          onChange={setExpires}
-          inputClassName='h-9'
-        />
-      </div>
-
-      <p
-        className={cn(
-          'mt-3 text-[11.5px] leading-relaxed',
-          ooo && !delegate
-            ? 'rounded-md bg-amber-50 px-2.5 py-1.5 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
-            : 'text-slate-400 dark:text-slate-500'
-        )}
-      >
-        {ooo && !delegate
-          ? 'No delegate picked — approvals will wait for you until you return.'
-          : ooo
-            ? `Workflow ownership and approvals route to your delegate${untilLabel ? ` through ${untilLabel}` : ' until you turn this off'}.`
-            : 'When enabled, workflow ownership and approvals resolve to your delegate.'}
-      </p>
-    </SectionCard>
-  )
-}
-
 // ── The page ─────────────────────────────────────────────────────────────────
 
-export function ProfileView({ userId, className }: { userId?: string | null; className?: string }) {
-  const client = useNivaroClient()
-  const qc = useQueryClient()
+/**
+ * The people page. Your own profile is the settings surface (identity,
+ * notifications, security, preferences); anyone else's is PersonProfile —
+ * slim for a colleague, full-featured for an admin.
+ */
+export function ProfileView({
+  userId,
+  className,
+  initialTab,
+  extra
+}: {
+  userId?: string | null
+  className?: string
+  /** Which tab an admin lands on for someone else's page. */
+  initialTab?: 'overview' | 'access' | 'activity' | 'tools'
+  /** Host-only cards for the OWN profile (a browser-push card, say), rendered in the right column. */
+  extra?: React.ReactNode
+}) {
   const auth = useItemEditAuth()
   const isOwn = !userId || (auth?.userId != null && String(auth.userId) === String(userId))
-  const targetId = isOwn ? 'me' : (userId as string)
+  if (!isOwn)
+    return <PersonProfile userId={userId as string} className={className} initialTab={initialTab} />
+  return <OwnProfile className={className} extra={extra} />
+}
+
+function OwnProfile({ className, extra }: { className?: string; extra?: React.ReactNode }) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const isOwn = true
+  const targetId = 'me'
 
   const { data: me } = useQuery({
     queryKey: ['nvr-profile-user', targetId],
@@ -1826,7 +1449,7 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
       client.request(readUser(targetId as never)).then((r) => (r as { data: ManagedUser }).data),
     enabled: isOwn
   })
-  const cardId = isOwn ? (me?.id ?? null) : (userId as string)
+  const cardId = me?.id ?? null
   const { data: card } = useQuery({
     queryKey: ['nvr-profile-card', cardId],
     queryFn: () =>
@@ -2136,48 +1759,10 @@ export function ProfileView({ userId, className }: { userId?: string | null; cla
                 superseding the old subscriptions-only card. */}
             <NotificationSourcesCard />
             <SecurityCard />
+            {extra}
           </div>
         </div>
-      ) : (
-        <div className='grid gap-4 lg:grid-cols-2'>
-          <SectionCard icon={<UserRound className='h-4 w-4' />} title='Details'>
-            <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-3'>
-              <Meta label='Department'>{view.department ?? '—'}</Meta>
-              <Meta label='Title'>{view.title ?? '—'}</Meta>
-              <Meta label='Role'>{view.role_name ?? '—'}</Meta>
-              <Meta label='Manager'>{view.manager_name ?? '—'}</Meta>
-              <Meta label='Status'>{view.status}</Meta>
-              <Meta label='Last active'>
-                {view.last_access ? new Date(view.last_access).toLocaleString() : 'Never'}
-              </Meta>
-            </div>
-          </SectionCard>
-          <SectionCard icon={<KeyRound className='h-4 w-4' />} title='Reach out'>
-            <div className='flex flex-wrap gap-2'>
-              <a
-                href={`mailto:${view.email}`}
-                className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white'
-              >
-                <Mail className='h-3.5 w-3.5' /> Email {view.first_name ?? ''}
-              </a>
-              {view.phone && (
-                <a
-                  href={`tel:${view.phone}`}
-                  className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 dark:border-border dark:text-slate-300'
-                >
-                  <Phone className='h-3.5 w-3.5' /> Call
-                </a>
-              )}
-            </div>
-            {view.is_out_of_office && (
-              <p className='mt-3 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
-                {view.first_name ?? 'This user'} is currently out of office
-                {view.manager_name ? ` — try ${view.manager_name}` : ''}.
-              </p>
-            )}
-          </SectionCard>
-        </div>
-      )}
+      ) : null}
     </div>
   )
 }

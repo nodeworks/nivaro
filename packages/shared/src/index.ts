@@ -226,6 +226,10 @@ export {
   ProfileView,
   TimezoneCard
 } from './components/ProfileView'
+export { PersonHeader } from './components/profile/PersonHeader'
+export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
+export { SectionCard as ProfileSectionCard } from './components/profile/primitives'
+export { type PersonProfile as PersonProfileData, usePersonProfile } from './components/profile/types'
 export * from './components/panels'
 export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
 export type { PipelineEditorSection } from './components/pipeline/PipelineEditorView'

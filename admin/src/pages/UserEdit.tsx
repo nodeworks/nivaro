@@ -1,590 +1,83 @@
-import { UserAvatar } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Copy, Eye, EyeOff, RefreshCw, Trash2 } from 'lucide-react'
-import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
-import { toast } from 'sonner'
-import { DelegationCard } from '@/components/delegation-card'
-import { JourneyTrail } from '@/components/journey-trail'
-import { RevisionsPanel } from '@/components/revisions-panel'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { createNivaro } from '@nivaro/sdk'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
+  defaultItemUrl,
+  ItemEditAuthContext,
+  NavigationContext,
+  NivaroProvider,
+  ProfileView,
+  usePersonProfile
+} from '@nivaro/shared'
+import { ArrowLeft } from 'lucide-react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { RevisionsPanel } from '@/components/revisions-panel'
 import { Skeleton } from '@/components/ui/skeleton'
-import { UserActivityPanel } from '@/components/user-activity-panel'
-import { UserDirectoryCard } from '@/components/user-directory-card'
-import { UserMergeCard, UserOffboardingCard } from '@/components/user-offboarding-card'
-import { UserScopesCard } from '@/components/user-scopes-card'
-import { api, type Role, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
-import { formatDate, formatRelative } from '@/lib/utils'
 
-const STATUS_VARIANTS: Record<string, 'success' | 'destructive' | 'secondary'> = {
-  active: 'success',
-  suspended: 'destructive',
-  inactive: 'secondary'
-}
+// /users/:id runs on the SAME shared people page every headless host renders
+// (ProfileView → PersonProfile): the admin sees the Access / Activity /
+// Admin tools tabs, a non-admin the slim colleague view. The page itself only
+// adds the admin chrome — breadcrumb, back, revision history.
+const client = createNivaro(window.location.origin)
 
-function initials(user: User): string {
-  if (user.first_name && user.last_name)
-    return `${user.first_name[0]}${user.last_name[0]}`.toUpperCase()
-  if (user.first_name) return user.first_name.slice(0, 2).toUpperCase()
-  return user.email.slice(0, 2).toUpperCase()
-}
+const TABS = new Set(['overview', 'access', 'activity', 'tools'])
 
-interface SuspensionReason {
-  source: string
-  text: string
-  at: string | null
-  by: { id: string; name: string } | null
-}
-
-/** Why this account cannot sign in — the answer the admin gets asked for (#512). */
-function SuspensionBanner({ userId, suspended }: { userId: string; suspended: boolean }) {
-  const { data } = useQuery<SuspensionReason | null>({
-    queryKey: ['user-suspension', userId],
-    queryFn: () => api.get(`/users/${userId}/suspension`).then((r) => r.data.data),
-    enabled: suspended
-  })
-  if (!suspended || !data) return null
-  const SOURCE_LABEL: Record<string, string> = {
-    directory: 'Directory sync',
-    retention: 'Retention policy',
-    offboarding: 'Offboarding',
-    merge: 'Account merge',
-    admin: 'Administrator',
-    'legacy-redaction': 'Legacy redaction job',
-    unknown: 'Unknown'
-  }
+function Crumb({ id }: { id: string }) {
+  const { data } = usePersonProfile(id)
+  if (!data) return <Skeleton className='h-4 w-32' />
   return (
-    <div
-      className='mb-5 rounded-lg border border-[#e9c46a] bg-[#fbefd9] px-4 py-3 text-[12.5px] text-[#6b4300] dark:border-[#7a5a14] dark:bg-[#3a2a0d] dark:text-[#f1b95c]'
-      data-suspension-reason={data.source}
-    >
-      <p className='font-medium'>
-        Cannot sign in — {SOURCE_LABEL[data.source] ?? data.source}
-        {data.at ? ` · ${new Date(data.at).toLocaleString()}` : ''}
-        {data.by ? ` · by ${data.by.name}` : ''}
-      </p>
-      <p className='mt-0.5'>{data.text}</p>
-      <p className='mt-1 text-[11.5px] opacity-80'>
-        Set Status back to Active below to restore access; a redacted account also needs its details
-        re-entered.
-      </p>
-    </div>
+    <span className='font-medium text-slate-800 dark:text-slate-100' data-user-crumb>
+      {data.name}
+    </span>
   )
 }
 
 export function UserEditPage() {
-  const { id } = useParams<{ id: string }>()
+  const { id = '' } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const goBack = useGoBack('/users')
-  const queryClient = useQueryClient()
-  const { user: currentUser } = useAuth()
-  const [showToken, setShowToken] = useState(false)
-
-  const { data: user, isLoading } = useQuery<User>({
-    queryKey: ['user', id],
-    queryFn: () => api.get<{ data: User }>(`/users/${id}`).then((r) => r.data.data),
-    enabled: !!id
-  })
-
-  const { data: roles } = useQuery<Role[]>({
-    queryKey: ['roles'],
-    queryFn: () => api.get<{ data: Role[] }>('/roles').then((r) => r.data.data)
-  })
-
-  const updateUser = useMutation({
-    mutationFn: (body: Partial<User>) => api.patch(`/users/${id}`, body).then((r) => r.data.data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['user', id] })
-      queryClient.invalidateQueries({ queryKey: ['users'] })
-      toast.success('User saved')
-      navigate('/users')
-    },
-    onError: () => toast.error('Failed to save user')
-  })
-
-  const generateToken = useMutation({
-    mutationFn: () =>
-      api.post<{ data: { token: string } }>(`/users/${id}/token`).then((r) => r.data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['user', id] })
-      setShowToken(true)
-      toast.success('Token generated')
-    },
-    onError: () => toast.error('Failed to generate token')
-  })
-
-  const revokeToken = useMutation({
-    mutationFn: () => api.delete(`/users/${id}/token`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['user', id] })
-      setShowToken(false)
-      toast.success('Token revoked')
-    },
-    onError: () => toast.error('Failed to revoke token')
-  })
-
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const fd = new FormData(e.currentTarget)
-    const role = fd.get('role') as string
-    updateUser.mutate({
-      first_name: (fd.get('first_name') as string) || null,
-      last_name: (fd.get('last_name') as string) || null,
-      role: role === '__none__' ? null : role || null,
-      status: fd.get('status') as User['status'],
-      account_kind:
-        (fd.get('account_kind') as string) === '__person__'
-          ? null
-          : (fd.get('account_kind') as User['account_kind'])
-    })
-  }
-
-  const displayName = user
-    ? [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
-    : '…'
-  const roleName = roles?.find((r) => r.id === user?.role)?.name
+  const { user } = useAuth()
+  const tabParam = searchParams.get('tab') ?? ''
+  const initialTab = TABS.has(tabParam) ? (tabParam as 'overview') : undefined
 
   return (
-    <>
-      {/* Sticky header */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div className='flex items-center gap-2 text-[13px]'>
-            <Link
-              to='/users'
-              onClick={(e) => {
-                e.preventDefault()
-                goBack()
-              }}
-              className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700'
-            >
-              <ArrowLeft className='h-3.5 w-3.5' />
-              Users
-            </Link>
-            <span className='text-slate-300'>/</span>
-            {isLoading ? (
-              <Skeleton className='h-4 w-32' />
-            ) : (
-              <span className='font-medium text-slate-800'>{displayName}</span>
-            )}
-          </div>
-          <div className='flex items-center gap-2'>
-            {id && <RevisionsPanel collection='cms_users' item={id} />}
-            {currentUser?.is_admin && id && <UserActivityPanel userId={id} />}
-            <Button variant='outline' size='sm' asChild>
-              <Link to='/users'>Cancel</Link>
-            </Button>
-            <Button
-              size='sm'
-              type='submit'
-              form='user-edit-form'
-              disabled={isLoading || updateUser.isPending}
-            >
-              {updateUser.isPending ? 'Saving…' : 'Save Changes'}
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className='p-8'>
-        {isLoading || !user ? (
-          <div className='space-y-6'>
-            <Skeleton className='h-48 w-full rounded-xl' />
-            <Skeleton className='h-40 w-full rounded-xl' />
-          </div>
-        ) : (
-          <div className='space-y-6'>
-            <form id='user-edit-form' key={user.id} onSubmit={handleSubmit} className='space-y-6'>
-              {/* Identity */}
-              <div className='rounded-xl border border-slate-200 bg-white p-6'>
-                <h2 className='mb-5 text-[11px] font-medium text-slate-500'>Profile</h2>
-
-                <div className='mb-6 flex items-center gap-4'>
-                  <UserAvatar
-                    userId={user.id}
-                    className='h-12 w-12'
-                    fallback={
-                      <Avatar className='h-12 w-12'>
-                        <AvatarFallback className='bg-nvr-navy text-[14px] font-bold text-nvr-cyan'>
-                          {initials(user)}
-                        </AvatarFallback>
-                      </Avatar>
-                    }
-                  />
-                  <div>
-                    <p className='text-[15px] font-semibold text-slate-900'>{displayName}</p>
-                    <div className='mt-0.5 flex items-center gap-2'>
-                      <Badge
-                        variant={STATUS_VARIANTS[user.status] ?? 'secondary'}
-                        className='h-4 px-1.5 text-[10px]'
-                      >
-                        {user.status}
-                      </Badge>
-                      {roleName && <span className='text-[12px] text-slate-400'>{roleName}</span>}
-                    </div>
-                  </div>
-                </div>
-
-                <SuspensionBanner
-                  userId={String(id)}
-                  suspended={
-                    user.status === 'suspended' || !!(user as { is_redacted?: boolean }).is_redacted
-                  }
-                />
-
-                <div className='grid gap-4 sm:grid-cols-2'>
-                  <div className='space-y-1.5'>
-                    <Label htmlFor='first_name'>First Name</Label>
-                    <Input
-                      id='first_name'
-                      name='first_name'
-                      defaultValue={user.first_name ?? ''}
-                      placeholder='First name'
-                    />
-                  </div>
-                  <div className='space-y-1.5'>
-                    <Label htmlFor='last_name'>Last Name</Label>
-                    <Input
-                      id='last_name'
-                      name='last_name'
-                      defaultValue={user.last_name ?? ''}
-                      placeholder='Last name'
-                    />
-                  </div>
-                </div>
-
-                <div className='mt-4 space-y-1.5'>
-                  <Label>Email</Label>
-                  <div className='flex h-9 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-500'>
-                    {user.email}
-                  </div>
-                  <p className='text-[11px] text-slate-400'>
-                    Email is set via Microsoft OIDC and cannot be changed here.
-                  </p>
-                </div>
-              </div>
-
-              {/* Access */}
-              <div className='rounded-xl border border-slate-200 bg-white p-6'>
-                <h2 className='mb-5 text-[11px] font-medium text-slate-500'>Access</h2>
-
-                <div className='grid gap-4 sm:grid-cols-2'>
-                  <div className='space-y-1.5'>
-                    <Label htmlFor='edit-role'>Role</Label>
-                    <Select name='role' defaultValue={user.role ?? '__none__'}>
-                      <SelectTrigger id='edit-role'>
-                        <SelectValue placeholder='No role' />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value='__none__'>No role</SelectItem>
-                        {roles?.map((r) => (
-                          <SelectItem key={r.id} value={r.id}>
-                            {r.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className='space-y-1.5'>
-                    <Label htmlFor='edit-status'>Status</Label>
-                    <Select name='status' defaultValue={user.status}>
-                      <SelectTrigger id='edit-status'>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value='active'>Active</SelectItem>
-                        <SelectItem value='inactive'>Inactive</SelectItem>
-                        <SelectItem value='suspended'>Suspended</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className='space-y-1.5 sm:col-span-2'>
-                    <Label htmlFor='edit-account-kind'>Account type</Label>
-                    <Select name='account_kind' defaultValue={user.account_kind ?? '__person__'}>
-                      <SelectTrigger id='edit-account-kind' data-account-kind-select>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value='__person__'>Person</SelectItem>
-                        <SelectItem value='integration'>
-                          Integration — an external system writes as it
-                        </SelectItem>
-                        <SelectItem value='service'>Service login</SelectItem>
-                        <SelectItem value='bot'>Bot</SelectItem>
-                        <SelectItem value='placeholder'>
-                          Placeholder — kept so old references resolve
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                      Anything but Person is left out of people pickers, is never checked against
-                      the company directory or retention policies, and its edits read as
-                      "integration" in field history.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Metadata */}
-              <div className='rounded-xl border border-slate-200 bg-white p-6'>
-                <h2 className='mb-5 text-[11px] font-medium text-slate-500'>Details</h2>
-                <dl className='space-y-3'>
-                  <div className='flex items-center justify-between'>
-                    <dt className='text-[12px] text-slate-500'>User ID</dt>
-                    <dd className='font-mono text-[11px] text-slate-400'>{user.id}</dd>
-                  </div>
-                  <div className='flex items-center justify-between border-t border-slate-100 pt-3'>
-                    <dt className='text-[12px] text-slate-500'>Created</dt>
-                    <dd className='text-[12px] text-slate-600'>{formatDate(user.created_at)}</dd>
-                  </div>
-                  <div className='flex items-center justify-between border-t border-slate-100 pt-3'>
-                    <dt className='text-[12px] text-slate-500'>Last Access</dt>
-                    <dd className='text-[12px] text-slate-600'>
-                      {user.last_access ? formatRelative(user.last_access) : 'Never'}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-
-              {/* Static API token */}
-              <div className='rounded-xl border border-slate-200 bg-white p-6'>
-                <h2 className='mb-1 text-[11px] font-medium text-slate-500'>API Token</h2>
-                <p className='mb-4 text-[12px] text-slate-400'>
-                  Static token for use with{' '}
-                  <code className='rounded bg-slate-100 px-1 font-mono text-[11px]'>
-                    Authorization: Bearer &lt;token&gt;
-                  </code>{' '}
-                  or the Nivaro SDK.
-                </p>
-
-                {user.static_token ? (
-                  <div className='space-y-3'>
-                    <div className='flex items-center gap-2'>
-                      <div className='flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[12px] text-slate-700 break-all'>
-                        {showToken ? user.static_token : '•'.repeat(20)}
-                      </div>
-                      <button
-                        type='button'
-                        onClick={() => setShowToken((v) => !v)}
-                        className='shrink-0 rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-                        aria-label={showToken ? 'Hide token' : 'Reveal token'}
-                      >
-                        {showToken ? <EyeOff className='h-4 w-4' /> : <Eye className='h-4 w-4' />}
-                      </button>
-                      {showToken && (
-                        <button
-                          type='button'
-                          onClick={() => {
-                            navigator.clipboard.writeText(user.static_token!)
-                            toast.success('Copied to clipboard')
-                          }}
-                          className='shrink-0 rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-                          aria-label='Copy token'
-                        >
-                          <Copy className='h-4 w-4' />
-                        </button>
-                      )}
-                    </div>
-                    <div className='flex gap-2'>
-                      <Button
-                        type='button'
-                        variant='outline'
-                        size='sm'
-                        onClick={() => generateToken.mutate()}
-                        disabled={generateToken.isPending}
-                        className='gap-1.5 text-[12px]'
-                      >
-                        <RefreshCw className='h-3.5 w-3.5' />
-                        Regenerate
-                      </Button>
-                      <Button
-                        type='button'
-                        variant='outline'
-                        size='sm'
-                        onClick={() => revokeToken.mutate()}
-                        disabled={revokeToken.isPending}
-                        className='gap-1.5 text-[12px] text-red-500 hover:border-red-200 hover:bg-red-50 hover:text-red-600'
-                      >
-                        <Trash2 className='h-3.5 w-3.5' />
-                        Revoke
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={() => generateToken.mutate()}
-                    disabled={generateToken.isPending}
-                    className='gap-1.5 text-[12px]'
-                  >
-                    <RefreshCw className='h-3.5 w-3.5' />
-                    {generateToken.isPending ? 'Generating…' : 'Generate Token'}
-                  </Button>
-                )}
-              </div>
-            </form>
-
-            {/* Directory (Microsoft Graph) — pull the profile without waiting for a login */}
-            <UserDirectoryCard user={user} />
-
-            {/* Delegation (own save, outside the profile form) */}
-            <DelegationCard user={user} mode='admin' />
-            <UserScopesCard userId={user.id} />
-            <UserSessionsCard userId={user.id} />
-            <UserForceReloadCard userId={user.id} />
-            <UserOffboardingCard userId={user.id} />
-            <UserMergeCard userId={user.id} />
-
-            {/* Journey trail (admin-only API) */}
-            {currentUser?.is_admin && id && <JourneyTrail userId={id} />}
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
-// ─── Active sessions (#431): this user's live sessions, revocable ────────────
-
-/**
- * Push a reload to this person's open tabs (admin + efp-new alike) — the
- * per-user form of the /realtime "Force client refresh" control. Their
- * unsaved form drafts survive: the record form mirrors them to IndexedDB +
- * /drafts within seconds of typing and offers a restore on the next open.
- */
-function UserForceReloadCard({ userId }: { userId: string }) {
-  const [seconds, setSeconds] = useState('15')
-  const [message, setMessage] = useState('')
-  const push = useMutation({
-    mutationFn: () =>
-      api
-        .post<{ data: { sockets: number; users: number } }>('/realtime/force-refresh', {
-          user_ids: [userId],
-          seconds: Number(seconds) || 15,
-          message
-        })
-        .then((r) => r.data.data),
-    onSuccess: ({ sockets }) => {
-      toast.success(
-        sockets > 0
-          ? `Reload pushed to ${sockets} open tab${sockets === 1 ? '' : 's'}`
-          : 'Reload sent — they have no tab connected to this node right now'
-      )
-    },
-    onError: () => toast.error('Failed to push the reload')
-  })
-  return (
-    <div
-      className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
-      data-user-force-reload
-    >
-      <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
-        Force a reload
-      </h3>
-      <p className='mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
-        Every tab this person has open — admin or the portal — shows a countdown, then reloads onto
-        the current build.
-      </p>
-      <div className='mt-2 flex flex-wrap items-center gap-2'>
-        <label
-          htmlFor={`force-reload-seconds-${userId}`}
-          className='flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300'
+    <NivaroProvider client={client}>
+      <NavigationContext.Provider
+        value={{
+          navigate: (path) => navigate(path),
+          itemUrl: defaultItemUrl,
+          userUrl: (uid) => `/users/${uid}`
+        }}
+      >
+        <ItemEditAuthContext.Provider
+          value={{ isAdmin: !!user?.is_admin, userId: String(user?.id ?? '') }}
         >
-          Countdown
-          <Input
-            id={`force-reload-seconds-${userId}`}
-            value={seconds}
-            onChange={(e) => setSeconds(e.target.value)}
-            inputMode='numeric'
-            className='h-7 w-16 text-right text-[12px]'
-          />
-          s
-        </label>
-        <Input
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder='Optional message in their banner'
-          className='h-7 min-w-[180px] flex-1 text-[12px]'
-        />
-        <Button
-          size='sm'
-          variant='outline'
-          disabled={push.isPending}
-          onClick={() => push.mutate()}
-          className='h-7 border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-500/40 dark:text-amber-300'
-        >
-          <RefreshCw className='mr-1 h-3.5 w-3.5' />
-          {push.isPending ? 'Sending…' : 'Reload their tabs'}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function UserSessionsCard({ userId }: { userId: string }) {
-  const qc = useQueryClient()
-  const { data: sessions = [] } = useQuery<
-    Array<{ sid_prefix: string; user_id: string; ttl_seconds: number }>
-  >({
-    queryKey: ['user-sessions', userId],
-    queryFn: () =>
-      api
-        .get<{ data: Array<{ sid_prefix: string; user_id: string; ttl_seconds: number }> }>(
-          '/security/sessions',
-          { params: { user_id: userId } }
-        )
-        .then((r) => r.data.data)
-        .catch(() => []),
-    staleTime: 30_000
-  })
-  const revoke = useMutation({
-    mutationFn: (prefix: string) => api.delete(`/security/sessions/${prefix}`),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['user-sessions', userId] })
-  })
-  return (
-    <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
-      <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
-        Active sessions ({sessions.length})
-      </h3>
-      {sessions.length === 0 ? (
-        <p className='mt-1 text-[12px] text-slate-400'>No live sessions.</p>
-      ) : (
-        <div className='mt-2 space-y-1.5'>
-          {sessions.map((sn) => (
-            <p
-              key={sn.sid_prefix}
-              className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'
-            >
-              <span className='font-mono text-slate-400'>{sn.sid_prefix}…</span>
-              <span className='text-[11px] text-slate-400'>
-                expires in {Math.round(sn.ttl_seconds / 3600)}h
-              </span>
-              <button
-                type='button'
-                onClick={() => revoke.mutate(sn.sid_prefix)}
-                className='ml-auto text-[11px] text-red-500 underline decoration-dotted hover:text-red-600'
-              >
-                Revoke
-              </button>
-            </p>
-          ))}
-        </div>
-      )}
-    </div>
+          <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-card'>
+            <div className='flex items-center justify-between gap-4'>
+              <div className='flex min-w-0 items-center gap-2 text-[13px]'>
+                <Link
+                  to='/users'
+                  onClick={(e) => {
+                    e.preventDefault()
+                    goBack()
+                  }}
+                  className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700 dark:hover:text-slate-200'
+                >
+                  <ArrowLeft className='h-3.5 w-3.5' />
+                  Users
+                </Link>
+                <span className='text-slate-300'>/</span>
+                <Crumb id={id} />
+              </div>
+              <RevisionsPanel collection='cms_users' item={id} />
+            </div>
+          </div>
+          <div className='p-8'>
+            <ProfileView key={id} userId={id} initialTab={initialTab} />
+          </div>
+        </ItemEditAuthContext.Provider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
   )
 }

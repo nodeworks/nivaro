@@ -6,6 +6,7 @@ import { logActivity } from '../services/activity.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import { writeRevision } from '../services/revisions.js'
+import { buildUserProfile, computeUserStats } from '../services/user-profile.js'
 import { getUser, listUsers, updateUser } from '../services/users.js'
 
 export async function usersRoutes(app: FastifyInstance) {
@@ -145,6 +146,8 @@ export async function usersRoutes(app: FastifyInstance) {
           'delegate_id',
           'delegate_expires_at',
           'is_out_of_office',
+          'ooo_start',
+          'ooo_end',
           'account_kind'
         ]
       : [
@@ -281,68 +284,34 @@ export async function usersRoutes(app: FastifyInstance) {
   // transitions I made, tasks I completed, records I created, over the last 8
   // weeks, plus a consecutive-active-day streak. Own data only — no admin gate.
   app.get('/me/stats', { preHandler: authenticate }, async (req, reply) => {
-    const me = req.user!.id
-    const since = new Date(Date.now() - 56 * 24 * 3600 * 1000)
-    const [transitions, tasksDone, created] = await Promise.all([
-      db('nivaro_workflow_history')
-        .where('user', me)
-        .where('timestamp', '>', since)
-        .select('timestamp')
-        .then((rows) => rows.map((r) => new Date(r.timestamp as Date)))
-        .catch(() => [] as Date[]),
-      db('nivaro_tasks')
-        .where('completed_by', me)
-        .where('completed_at', '>', since)
-        .select('completed_at')
-        .then((rows) => rows.map((r) => new Date(r.completed_at as Date)))
-        .catch(() => [] as Date[]),
-      db('nivaro_activity')
-        .where('user', me)
-        .where('action', 'create')
-        .where('timestamp', '>', since)
-        .whereNot('collection', 'like', 'nivaro\\_%')
-        .select('timestamp')
-        .then((rows) => rows.map((r) => new Date(r.timestamp as Date)))
-        .catch(() => [] as Date[])
-    ])
-    const dayKey = (d: Date) => d.toISOString().slice(0, 10)
-    const weekIndex = (d: Date) =>
-      Math.min(7, Math.max(0, 7 - Math.floor((Date.now() - d.getTime()) / (7 * 24 * 3600 * 1000))))
-    const weeks = Array.from({ length: 8 }, () => ({ transitions: 0, tasks_done: 0, created: 0 }))
-    const activeDays = new Set<string>()
-    for (const d of transitions) {
-      weeks[weekIndex(d)].transitions++
-      activeDays.add(dayKey(d))
-    }
-    for (const d of tasksDone) {
-      weeks[weekIndex(d)].tasks_done++
-      activeDays.add(dayKey(d))
-    }
-    for (const d of created) {
-      weeks[weekIndex(d)].created++
-      activeDays.add(dayKey(d))
-    }
-    // Streak: consecutive days with ANY activity ending today or yesterday
-    // (an in-progress day shouldn't break yesterday's streak at 9am).
-    let streak = 0
-    const cursor = new Date()
-    if (!activeDays.has(dayKey(cursor))) cursor.setUTCDate(cursor.getUTCDate() - 1)
-    while (activeDays.has(dayKey(cursor))) {
-      streak++
-      cursor.setUTCDate(cursor.getUTCDate() - 1)
-    }
-    return reply.send({
-      data: {
-        weeks,
-        streak_days: streak,
-        totals: {
-          transitions: transitions.length,
-          tasks_done: tasksDone.length,
-          created: created.length
-        }
-      }
-    })
+    return reply.send({ data: await computeUserStats(req.user!.id) })
   })
+
+  // The same rhythm for someone else — an admin reading a colleague's page.
+  app.get<{ Params: { id: string } }>(
+    '/:id/stats',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const { id } = req.params
+      const self = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
+      if (!self && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
+      return reply.send({ data: await computeUserStats(id) })
+    }
+  )
+
+  // GET /users/:id/profile — the people page. One payload for every host:
+  // what any colleague may know rides the top level, `admin` carries what
+  // only an admin may see (null for everyone else). 'me' works too.
+  app.get<{ Params: { id: string } }>(
+    '/:id/profile',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.id === 'me' ? req.user!.id : req.params.id
+      const profile = await buildUserProfile(id, { id: req.user!.id, isAdmin: !!req.isAdmin }, app)
+      if (!profile) return reply.code(404).send({ error: 'Not found' })
+      return reply.send({ data: profile })
+    }
+  )
 
   // POST /users/me/access-request — a provisional account (the role
   // nivaro_settings.new_user_role hands to a first sign-in) submits why it
