@@ -1069,6 +1069,61 @@ ANTHROPIC_API_KEY=sk-ant-...`
   ]
 }
 
+export const aiDocumentAutofill: DocSection = {
+  id: 'ai-document-autofill',
+  label: 'Fill from document',
+  content: [
+    { type: 'h1', id: 'ai-document-autofill', text: 'Fill a record from a document' },
+    {
+      type: 'p',
+      text: 'A new-record form can read a statement of work, a quote, a purchase order PDF, a spreadsheet or an email and propose the whole record — header fields, related records, line items, a schedule — for a person to review before anything is saved. Off by default; turned on per collection.'
+    },
+    { type: 'h2', id: 'ai-document-autofill-setup', text: 'Turning it on' },
+    {
+      type: 'ul',
+      items: [
+        'Data Model → the collection → Settings → AI Features → **Fill from document**. The new-record form of that collection gains a "Fill from document" button beside "Import from file".',
+        'Settings → AI Features → **Model id for document autofill** (gateway provider only). Blank uses the Ask AI model. This is a multi-step tool loop — the model looks vendors, people and categories up, then hands back a structured proposal — so it wants the strong model, not the one-shot one.',
+        'AI governance: the feature key is `extract-record`; disabling it in `ai_disabled_features` hides the button everywhere.'
+      ]
+    },
+    { type: 'h2', id: 'ai-document-autofill-flow', text: 'What happens' },
+    {
+      type: 'ul',
+      items: [
+        'The file is read to plain text (PDF via poppler when installed, else in process; DOCX; XLSX/CSV sheets; text, HTML, .eml). Scanned PDFs with no text layer are refused with a clear message — nothing is invented from an image.',
+        'The model sees the collection\'s fillable fields from its active layout (types, choices, notes), its child collections (lines, materials, schedules) and its multi-select relations. Small lookup tables (types, regions, years — up to 200 rows) are listed whole; big ones (vendors, people, locations, items) are searched through `search_records`, which runs the same permission-checked read the person could do by hand.',
+        'The proposal comes back as one structured call: value, confidence and the sentence it came from, per field and per line, plus "asks" for anything the document does not say.',
+        'The review dialog lists fields, lines, links and asks with checkboxes and confidence pills. Apply STAGES the selection exactly like an import prefill — lines run the grid\'s row rules, the document attaches to the record\'s file field — and the record still needs Create.'
+      ]
+    },
+    { type: 'h2', id: 'ai-document-autofill-guards', text: 'What keeps it honest' },
+    {
+      type: 'ul',
+      items: [
+        'A relation id is accepted only when it came back from a lookup in that same request, or is one of the listed options. Anything else becomes an ask, never a silent guess.',
+        'Choices must match a configured choice; dates are normalised to ISO; numbers must parse; a one-line text field never receives a paragraph.',
+        'Line amounts are summed and compared with any total the model set on the parent; a mismatch is shown as a warning.',
+        'Required fields the document never covered are listed under "Still needs you".',
+        'Every run is activity-logged (`ai-extract`) and every model call lands in AI Analytics under feature `extract-record`.'
+      ]
+    },
+    { type: 'h2', id: 'ai-document-autofill-api', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET  /api/ai/extract-record/config/:collection      → { data: { enabled, accept: [".pdf", …] } }
+POST /api/ai/extract-record   multipart: collection=<name>, file=<upload>
+→ 200 { data: { summary, fields[], children[], m2m[], asks[], warnings[], prefill: { values, lines_by_alias, m2m, file_id, attach_alias }, document, model, rounds } }
+→ 403 feature off / collection not enabled / no create permission
+→ 413 over 25 MB · 422 no readable text · 502 the model returned no proposal`
+    },
+    {
+      type: 'note',
+      text: 'Cost: a 5-page SOW on Sonnet is roughly 4–6 model rounds, 50–70 seconds, a few tens of cents. The system prompt (field spec + option lists) is prompt-cached across the rounds.'
+    }
+  ]
+}
+
 export const aiReviewBrief: DocSection = {
   id: 'ai-review-brief',
   label: 'Review & Brief',

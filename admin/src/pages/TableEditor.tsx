@@ -7792,6 +7792,7 @@ interface AiCollectionSettings {
   validation_rules: ValidationRuleEntry[]
   review_enabled?: boolean
   duplicate_detection_enabled: boolean
+  document_autofill?: boolean
   duplicate_threshold: number
 }
 
@@ -7963,6 +7964,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
   const [reviewEnabled, setReviewEnabled] = useState(false)
   const [dupEnabled, setDupEnabled] = useState(false)
   const [dupThreshold, setDupThreshold] = useState(0.85)
+  const [docAutofill, setDocAutofill] = useState(false)
   const [seeded, setSeeded] = useState(false)
 
   useEffect(() => {
@@ -7973,6 +7975,7 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
       setRules(settings.validation_rules)
       setDupEnabled(settings.duplicate_detection_enabled)
       setDupThreshold(settings.duplicate_threshold)
+      setDocAutofill(!!settings.document_autofill)
       setSeeded(true)
     }
   }, [settings, seeded])
@@ -7987,7 +7990,8 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
           .filter((r) => (typeof r === 'string' ? r.length > 0 : true)),
         review_enabled: reviewEnabled,
         duplicate_detection_enabled: dupEnabled,
-        duplicate_threshold: Number(dupThreshold)
+        duplicate_threshold: Number(dupThreshold),
+        document_autofill: docAutofill
       }),
     onSuccess: () => {
       toast.success('AI feature settings saved')
@@ -8013,6 +8017,20 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
         <div className='space-y-3'>
           {/* Separate from the save-time check below: rules can back a review
               people ASK for without one running on every save. */}
+          <div className='flex items-center gap-3'>
+            <Switch
+              id='ai-document-autofill'
+              checked={docAutofill}
+              onCheckedChange={setDocAutofill}
+              data-ai-document-autofill
+            />
+            <Label htmlFor='ai-document-autofill' className='cursor-pointer text-[12px]'>
+              Fill from document
+            </Label>
+            <span className='text-[11px] text-slate-400'>
+              New-record form offers an upload (SOW, quote, spreadsheet) and proposes fields + lines to review
+            </span>
+          </div>
           <div className='flex items-center gap-3'>
             <Switch
               id='ai-review-enabled'

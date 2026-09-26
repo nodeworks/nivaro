@@ -84,6 +84,7 @@ import { applyValidationRule } from '../lib/validation-rules'
 import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
 import { ImportColumnChips } from './import/ImportColumnChips'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
+import { type DocumentApplySelection, DocumentAutofillButton } from './import/DocumentAutofillButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
 import {
@@ -2002,6 +2003,56 @@ export function ItemEditForm({
       setImportIssues(issues)
     },
     [collection, relations, o2mStagingCtx, m2mStagingCtx, fieldConfig, client]
+  )
+
+  // ── Fill from a document (AI proposal → the same staging as an import) ─────
+  // Rich-text targets get the model's plain lines wrapped as paragraphs; every
+  // child alias stages through applyImportResult so row rules, provenance and
+  // the save flush treat these lines exactly like an import prefill.
+  const applyDocumentProposal = useCallback(
+    async (sel: DocumentApplySelection) => {
+      const values: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(sel.values)) {
+        const cfg = (fieldConfig ?? []).find((f) => f.field === k)
+        const iface = (cfg?.interface ?? '').toLowerCase()
+        if (typeof v === 'string' && /rich|wysiwyg|editor/.test(iface) && !/^\s*</.test(v)) {
+          const lines = v.split(/\n+/).map((l) => l.trim()).filter(Boolean)
+          const esc = (t: string) =>
+            t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          const bullets = lines.filter((l) => /^[•\-*]\s+/.test(l))
+          values[k] =
+            bullets.length === lines.length && lines.length > 1
+              ? `<ul>${lines.map((l) => `<li>${esc(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`
+              : lines.map((l) => `<p>${esc(l)}</p>`).join('')
+        } else values[k] = v
+      }
+      const stamp = `import:document:${sel.file_id ?? sel.document_name}`
+      await applyImportResult({
+        values,
+        lines: [],
+        issues: [],
+        file_id: sel.file_id,
+        line_target_field: null,
+        nested_relation: null,
+        m2m: sel.m2m,
+        template_name: sel.document_name
+      })
+      for (const [alias, lines] of Object.entries(sel.lines_by_alias)) {
+        if (!lines.length) continue
+        await applyImportResult({
+          values: {},
+          lines: lines.map((l) => ({ values: { ...l.values, _change_reason: stamp } })),
+          issues: [],
+          file_id: sel.file_id,
+          line_target_field: alias,
+          nested_relation: null,
+          m2m: {},
+          template_name: sel.document_name
+        })
+      }
+      for (const k of Object.keys(values)) userTouchedRef.current.add(k)
+    },
+    [applyImportResult, fieldConfig]
   )
 
   // ── Re-import (existing records) ────────────────────────────────────────────
@@ -8939,6 +8990,12 @@ export function ItemEditForm({
                                           <ImportFromFileButton
                                             collection={collection}
                                             onParsed={applyImportResult}
+                                          />
+                                        )}
+                                        {isNew && !isReadOnly && (
+                                          <DocumentAutofillButton
+                                            collection={collection}
+                                            onApply={applyDocumentProposal}
                                           />
                                         )}
                                         {isNew && quickPickerSteps.length > 0 && !isReadOnly && (

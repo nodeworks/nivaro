@@ -29,6 +29,7 @@ import { overlaySettings } from './settings-overrides.js'
 export interface AiSettingsRow {
   ai_chat_guide?: string | null
   ai_gateway_chat_model?: string | null
+  ai_gateway_extract_model?: string | null
   anthropic_api_key?: string | null
   ai_provider?: string | null
   ai_gateway_base_url?: string | null
@@ -516,6 +517,11 @@ export async function getAiModelSettings() {
     model,
     /** Ask AI / chat bot: the multi-step tool loop, worth a stronger model than one-shot calls. */
     chatModel: (gateway && row.ai_gateway_chat_model?.trim()) || model,
+    /** Document autofill: extraction + lookup tool loop. Blank = the chat model. */
+    extractModel:
+      (gateway && row.ai_gateway_extract_model?.trim()) ||
+      (gateway && row.ai_gateway_chat_model?.trim()) ||
+      model,
     maxTokensGenerate: row.ai_max_tokens_generate ?? 500,
     maxTokensSummarize: row.ai_max_tokens_summarize ?? 200
   }

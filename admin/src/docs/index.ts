@@ -166,6 +166,7 @@ import {
   aiGenerate,
   aiOverview,
   aiReviewBrief,
+  aiDocumentAutofill,
   aiSummarize,
   analyticsGuide,
   columnPresets,
@@ -579,6 +580,7 @@ export const navSections: NavGroup[] = [
       aiGenerate,
       aiSummarize,
       aiReviewBrief,
+  aiDocumentAutofill,
       aiContentValidation,
       aiDuplicateDetection
     ]

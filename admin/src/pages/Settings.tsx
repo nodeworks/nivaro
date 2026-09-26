@@ -1551,6 +1551,7 @@ export function SettingsPage() {
   const [aiGatewayFormat, setAiGatewayFormat] = useState<'openai' | 'anthropic'>('openai')
   const [aiGatewayModel, setAiGatewayModel] = useState('')
   const [aiGatewayChatModel, setAiGatewayChatModel] = useState('')
+  const [aiGatewayExtractModel, setAiGatewayExtractModel] = useState('')
   const [aiPromptCaching, setAiPromptCaching] = useState(true)
   const [aiChatGuide, setAiChatGuide] = useState('')
   const [aiTest, setAiTest] = useState<{
@@ -1677,6 +1678,7 @@ export function SettingsPage() {
     setAiGatewayFormat(settings.ai_gateway_format === 'anthropic' ? 'anthropic' : 'openai')
     setAiGatewayModel(settings.ai_gateway_model ?? '')
     setAiGatewayChatModel(settings.ai_gateway_chat_model ?? '')
+    setAiGatewayExtractModel(settings.ai_gateway_extract_model ?? '')
     setAiPromptCaching(settings.ai_prompt_caching !== false)
     setAiChatGuide(settings.ai_chat_guide ?? '')
     setAiMaxGenerate(settings.ai_max_tokens_generate ?? 500)
@@ -1909,6 +1911,7 @@ export function SettingsPage() {
       ai_gateway_format: aiGatewayFormat,
       ai_gateway_model: aiGatewayModel.trim() || null,
       ai_gateway_chat_model: aiGatewayChatModel.trim() || null,
+      ai_gateway_extract_model: aiGatewayExtractModel.trim() || null,
       ai_prompt_caching: aiPromptCaching,
       ai_chat_guide: aiChatGuide.trim() || null,
       ai_max_tokens_generate: aiMaxGenerate,
@@ -2737,6 +2740,18 @@ export function SettingsPage() {
                           placeholder='claude-4-6-sonnet'
                           className='h-8 font-mono text-[13px]'
                           data-ai-gateway-chat-model
+                        />
+                      </Field>
+                      <Field
+                        label='Model id for document autofill'
+                        hint='"Fill from document" reads a SOW or quote, looks vendors and people up, and proposes a whole record with lines — a tool loop like Ask AI. Blank = the Ask AI model. Turn the feature on per collection under Data Model → Settings → AI Features.'
+                      >
+                        <Input
+                          value={aiGatewayExtractModel}
+                          onChange={(e) => setAiGatewayExtractModel(e.target.value)}
+                          placeholder='claude-4-6-sonnet'
+                          className='h-8 font-mono text-[13px]'
+                          data-ai-gateway-extract-model
                         />
                       </Field>
                     </>

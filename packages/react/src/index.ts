@@ -199,6 +199,7 @@ export {
   ImportDefaultCadenceControl,
   type ImportDefinition,
   ImportFromFileButton,
+  DocumentAutofillButton,
   type ImportHealthRow,
   ImportIssuesPanel,
   type ImportJob,

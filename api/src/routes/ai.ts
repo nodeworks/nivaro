@@ -14,6 +14,9 @@ import {
   retrievePlaybooks
 } from '../services/ai-playbooks.js'
 import { can } from '../services/permissions.js'
+import { ACCEPTED_EXTENSIONS, extractDocumentText } from '../services/document-extract.js'
+import { proposeFromDocument } from '../services/document-autofill.js'
+import { uploadFileBuffer } from '../services/files.js'
 import { currentTraceMeta } from '../services/request-trace.js'
 
 /** AI governance (#407): per-feature toggles — settings.ai_disabled_features
@@ -1559,6 +1562,118 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
   })
 
   // ─── POST /feedback — thumbs on one chat answer (by request_id) ───────────
+  // ── Fill a new record from a document ─────────────────────────────────────
+  // Per-collection opt-in (nivaro_ai_collection_settings.document_autofill,
+  // migration 354). The form asks this before it offers the button, so a
+  // collection nobody enabled never shows it.
+  const EXTRACT_MAX_BYTES = 25 * 1024 * 1024
+  app.get<{ Params: { collection: string } }>(
+    '/extract-record/config/:collection',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const { collection } = req.params
+      if (/^nivaro_/i.test(collection) || !/^[A-Za-z0-9_]+$/.test(collection)) {
+        return reply.send({ data: { enabled: false, accept: ACCEPTED_EXTENSIONS } })
+      }
+      const settings = await getAiCollectionSettings(collection)
+      const enabled =
+        settings.document_autofill &&
+        (await aiFeatureEnabled('extract-record')) &&
+        (req.isAdmin || (await can(req.user!, 'create', collection))) &&
+        (await getAiClient()) != null
+      return reply.send({ data: { enabled, accept: ACCEPTED_EXTENSIONS } })
+    }
+  )
+
+  app.post('/extract-record', { preHandler: authenticate }, async (req, reply) => {
+    if (!(await aiFeatureEnabled('extract-record'))) {
+      return reply.code(403).send({ error: 'Document autofill is turned off for this instance' })
+    }
+    let multipart: Awaited<ReturnType<typeof req.file>>
+    try {
+      multipart = await req.file()
+    } catch {
+      return reply.code(400).send({ error: 'No file provided' })
+    }
+    if (!multipart) return reply.code(400).send({ error: 'No file provided' })
+    const colField = multipart.fields.collection
+    const colPart = Array.isArray(colField) ? colField[0] : colField
+    const collection = colPart?.type === 'field' ? String(colPart.value).trim() : ''
+    if (!collection || /^nivaro_/i.test(collection) || !/^[A-Za-z0-9_]+$/.test(collection)) {
+      return reply.code(400).send({ error: 'collection is required' })
+    }
+    if (!req.isAdmin && !(await can(req.user!, 'create', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const settings = await getAiCollectionSettings(collection)
+    if (!settings.document_autofill) {
+      return reply.code(403).send({ error: 'Document autofill is not enabled for this collection' })
+    }
+    const buffer = await multipart.toBuffer()
+    if (buffer.length > EXTRACT_MAX_BYTES) {
+      return reply.code(413).send({ error: 'File exceeds 25MB limit' })
+    }
+    const filename = multipart.filename || 'document'
+    const lower = filename.toLowerCase()
+    if (!ACCEPTED_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
+      return reply
+        .code(400)
+        .send({ error: `Unsupported file type. Accepted: ${ACCEPTED_EXTENSIONS.join(', ')}` })
+    }
+
+    let extracted: Awaited<ReturnType<typeof extractDocumentText>>
+    try {
+      extracted = await extractDocumentText(buffer, filename, multipart.mimetype)
+    } catch (err) {
+      return reply
+        .code(422)
+        .send({ error: `Could not read the document: ${(err as Error).message}` })
+    }
+    if (extracted.text.trim().length < 40) {
+      return reply.code(422).send({
+        error:
+          'No readable text in this document. A scanned PDF has no text layer — export it as text or a searchable PDF first.'
+      })
+    }
+
+    // Keep the document: the proposal attaches it to the record's file field
+    // when the collection has one, so the source rides with the record.
+    let fileId: string | null = null
+    try {
+      const stored = await uploadFileBuffer(
+        req.user!,
+        buffer,
+        filename,
+        multipart.mimetype || 'application/octet-stream'
+      )
+      fileId = stored.id
+    } catch {
+      fileId = null
+    }
+
+    try {
+      const proposal = await proposeFromDocument(
+        req.user!,
+        collection,
+        { name: filename, ...extracted },
+        fileId
+      )
+      await logActivity({
+        action: 'ai-extract',
+        user: req.user?.id,
+        collection,
+        comment: `${filename} → ${proposal.fields.length} field(s), ${proposal.children.reduce((n, c) => n + c.lines.length, 0)} line(s), ${proposal.asks.length} ask(s) · ${proposal.model} · ${proposal.rounds} round(s)`,
+        req
+      })
+      return reply.send({ data: proposal })
+    } catch (err) {
+      const e = err as Error & { statusCode?: number }
+      const code = e.statusCode && e.statusCode >= 400 && e.statusCode < 600 ? e.statusCode : 502
+      req.log.warn({ err }, 'document autofill failed')
+      return reply.code(code).send({ error: e.message || 'Document autofill failed' })
+    }
+  })
+
   app.post('/feedback', { preHandler: authenticate }, async (req, reply) => {
     const body = (req.body ?? {}) as { request_id?: unknown; rating?: unknown; comment?: unknown }
     const requestId = typeof body.request_id === 'string' ? body.request_id.trim() : ''

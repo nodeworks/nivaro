@@ -92,6 +92,11 @@ export type {
 } from './components/ItemEditForm'
 export { ItemEditForm } from './components/ItemEditForm'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
+export {
+  DocumentAutofillButton,
+  type DocumentApplySelection,
+  type DocumentProposal
+} from './components/import/DocumentAutofillButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'
 export { DefinitionsPanel } from './components/imports/DefinitionsPanel'

@@ -50,7 +50,8 @@ function formatRow(collection: string, row: Record<string, unknown> | undefined 
     validation_rules: parseRules(row.validation_rules),
     duplicate_detection_enabled:
       row.duplicate_detection_enabled === true || row.duplicate_detection_enabled === 1,
-    duplicate_threshold: Number(row.duplicate_threshold) || 0.85
+    duplicate_threshold: Number(row.duplicate_threshold) || 0.85,
+    document_autofill: row.document_autofill === true || row.document_autofill === 1
   } satisfies AiCollectionSettings
 }
 
@@ -81,6 +82,7 @@ export async function aiSettingsRoutes(app: FastifyInstance) {
         validation_rules: unknown
         duplicate_detection_enabled: boolean
         duplicate_threshold: number
+        document_autofill: boolean
       }>
 
       const patch: Record<string, unknown> = { updated_at: new Date() }
@@ -115,6 +117,9 @@ export async function aiSettingsRoutes(app: FastifyInstance) {
       }
       if (body.duplicate_detection_enabled != null) {
         patch.duplicate_detection_enabled = body.duplicate_detection_enabled ? 1 : 0
+      }
+      if (body.document_autofill != null) {
+        patch.document_autofill = body.document_autofill ? 1 : 0
       }
       if (body.duplicate_threshold != null) {
         const t = Number(body.duplicate_threshold)

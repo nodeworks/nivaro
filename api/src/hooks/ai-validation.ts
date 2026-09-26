@@ -52,6 +52,8 @@ export interface AiCollectionSettings {
   validation_rules: unknown[]
   duplicate_detection_enabled: boolean
   duplicate_threshold: number
+  /** Offer "Fill from a document" on the new-record form (migration 354). */
+  document_autofill: boolean
 }
 
 const CACHE_TTL_MS = 60_000
@@ -63,7 +65,8 @@ export const AI_SETTINGS_DEFAULTS: Omit<AiCollectionSettings, 'collection'> = {
   validation_mode: 'soft',
   validation_rules: [],
   duplicate_detection_enabled: false,
-  duplicate_threshold: 0.85
+  duplicate_threshold: 0.85,
+  document_autofill: false
 }
 
 function parseRules(raw: unknown): unknown[] {
@@ -100,7 +103,8 @@ export async function getAiCollectionSettings(collection: string): Promise<AiCol
         validation_rules: parseRules(row.validation_rules),
         duplicate_detection_enabled:
           row.duplicate_detection_enabled === true || row.duplicate_detection_enabled === 1,
-        duplicate_threshold: Number(row.duplicate_threshold) || 0.85
+        duplicate_threshold: Number(row.duplicate_threshold) || 0.85,
+        document_autofill: row.document_autofill === true || row.document_autofill === 1
       }
     : { collection, ...AI_SETTINGS_DEFAULTS }
 

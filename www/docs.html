@@ -283,6 +283,7 @@
           <a class="docs-nav-item" data-section="ai-generate" href="#ai-generate">Generate with AI</a>
           <a class="docs-nav-item" data-section="ai-summarize" href="#ai-summarize">Summarize</a>
           <a class="docs-nav-item" data-section="ai-review-brief" href="#ai-review-brief">Review &amp; Brief</a>
+          <a class="docs-nav-item" data-section="ai-document-autofill" href="#ai-document-autofill">Fill from document</a>
           <a class="docs-nav-item" data-section="ai-content-validation" href="#ai-content-validation">AI Content Validation</a>
           <a class="docs-nav-item" data-section="ai-duplicate-detection" href="#ai-duplicate-detection">AI Duplicate Detection</a>
         </div>
@@ -6942,6 +6943,13 @@ Content-Type: application/json
 → 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }</code></pre>
           <div class="doc-note">Context is capped at 16,000 characters and the response at 512 tokens. Responses are not cached server-side — callers that want a once-per-day briefing should cache client-side.</div>
           <!-- /SYNC:ai-review-brief -->
+        </div>
+
+        <div class="doc-section" id="s-ai-document-autofill" data-toc='[{"id":"ai-document-autofill","label":"Fill a record from a document"}]'>
+          <!-- SYNC:ai-document-autofill -->
+          <h1 class="doc-h1" id="ai-document-autofill">Fill a record from a document</h1>
+          <p class="doc-p">A new-record form can read a statement of work, a quote, a purchase order PDF, a spreadsheet or an email and propose the whole record for review. Off by default; turned on per collection. Run <code class="doc-code">pnpm sync-docs</code> to render the full section here.</p>
+          <!-- /SYNC:ai-document-autofill -->
         </div>
 
         <div class="doc-section" id="s-ai-content-validation" data-toc='[{"id":"ai-content-validation","label":"AI Content Validation"},{"id":"aggregate-cap-rules","label":"Aggregate cap rules (sum_cap)"}]'>

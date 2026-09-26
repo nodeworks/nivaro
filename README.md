@@ -19,7 +19,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Flow Extension API** — extensions register custom operation types and trigger types; appear in the flow editor with schema-driven config UI
 - **External API Flow Operation** — call any configured External API or custom URL from a flow, with SSRF protection
 - **Inngest Jobs** — durable background functions (cron + event-triggered)
-- **AI Features** — field generation and record summarization via Claude
+- **AI Features** — field generation and record summarization via Claude, fill a new record from a document (SOW, quote, spreadsheet → fields, lines, schedule, reviewed before save)
 - **Dashboards & KPI Builder** — drag-and-drop widget grid
 - **Audit Log & Revisions** — full snapshot + delta per mutation
 - **Bulk Actions** — delete, field update, workflow transition across selections
