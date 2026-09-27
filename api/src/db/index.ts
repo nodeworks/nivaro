@@ -4,6 +4,7 @@ import knex from 'knex'
 import { config } from '../config.js'
 import { isMigrationLockedError } from './migration-lock.js'
 import { recordEffects } from './migration-effects.js'
+import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { getTenantDb } from './tenant-context.js'
 
 const cloudMode = !!process.env.CLOUD_META_DB_URL
@@ -114,6 +115,10 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
         disableMigrationsListValidation: true
       }
     })
+
+// Configuration reads (relations, fields, rules, layouts, column lists) are
+// answered from a short-lived cache at the driver seam — see the module.
+attachMetadataQueryCache(_staticDb)
 
 // In cloud mode, background tasks (crons, timers) run outside request context
 // and getTenantDb() returns undefined. Rather than crashing with a pool error,

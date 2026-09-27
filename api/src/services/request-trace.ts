@@ -364,7 +364,7 @@ export function finishTrace(meta: {
     ts: new Date().toISOString(),
     queries: ctx.queries,
     sql_ms: Math.round(ctx.statements.reduce((n, r) => n + r.ms, 0)),
-    top_sql: topStatements(ctx.statements, 8),
+    top_sql: topStatements(ctx.statements, Math.max(1, Number(process.env.TRACE_TOP_SQL) || 8)),
     wide: wideByTable(ctx.statements)
   })
   while (buffer.length > CAPACITY) buffer.shift()

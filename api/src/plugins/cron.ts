@@ -314,6 +314,11 @@ export class CronManager {
         // Paused (#198): the schedule stays registered (so resume needs no
         // deploy) but ticks return without running or recording anything.
         if (this.pausedIds.has(id)) return
+        // CRON_TICKS=off: a second process on the same database (a throwaway
+        // boot used to verify a change) keeps its schedules registered and
+        // its run-now routes working, but never fires on the clock — the
+        // primary process already does, and every tick would run twice.
+        if (process.env.CRON_TICKS === 'off') return
         // Chained (#54): this job runs after another one completes, not on
         // its own clock — the tick is a no-op while the chain stands.
         if (this.chains.has(id)) return

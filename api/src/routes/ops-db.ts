@@ -427,6 +427,13 @@ export async function opsDbRoutes(app: FastifyInstance) {
     })
   })
 
+  // Configuration-read cache at the driver seam: hits, misses, reads that
+  // shared an in-flight statement, and how often a write cleared it.
+  app.get('/metadata-cache', async (_req, reply) => {
+    const { metadataQueryCacheStats } = await import('../db/metadata-query-cache.js')
+    return reply.send({ data: metadataQueryCacheStats() })
+  })
+
   // #213 — data velocity: rows created/changed per day per collection.
   app.get<{ Querystring: { days?: string } }>('/velocity', async (req, reply) => {
     const days = Math.min(90, Number(req.query.days) || 14)

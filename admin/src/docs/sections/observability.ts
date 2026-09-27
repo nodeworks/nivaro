@@ -35,6 +35,25 @@ export const obsApiAnalytics: DocSection = {
       type: 'note',
       text: 'The first run of this on a plain workflows list read found 67 round trips in one request, a 25× repeated nivaro_fields lookup inside the decrypt phase (a cache that filled after the concurrent misses — fixed the same day) and the user row loaded with its avatar blob on every authenticated call.'
     },
+    { type: 'h2', id: 'config-read-cache', text: 'Configuration read cache' },
+    {
+      type: 'p',
+      text: 'Saving one record reads the same configuration many times: relations, field lists, rules, layouts, column lists. Those reads are answered from a short-lived cache underneath the query layer, so every caller benefits without knowing about it. Only single plain SELECTs whose tables are all configuration tables are cached, never inside a transaction, never for records, users, policies or settings.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A configuration change made through this instance clears the cache as it is written; the next read sees it.',
+        'A change made by another instance or a script is seen within the cache lifetime (30 seconds by default). Together with the collection metadata cache, allow up to a minute.',
+        'Any schema change (ALTER, CREATE, DROP) clears it too, since column lists move.',
+        '`GET /api/ops-db/metadata-cache` reports entries, hits, misses, reads that shared an in-flight statement, and how often a write cleared it.',
+        '`METADATA_QUERY_CACHE=off` turns it off; `METADATA_QUERY_CACHE_TTL_MS` sets the lifetime. SQL Server only.'
+      ]
+    },
+    {
+      type: 'note',
+      text: '`TRACE_TOP_SQL` sets how many statement shapes a slow-request trace keeps (default 8). `CRON_TICKS=off` keeps scheduled jobs registered but never fires them on the clock, for a second process started against the same database; run-now still works.'
+    },
     { type: 'h2', id: 'api-analytics-index-advisor', text: 'Index advisor' },
     {
       type: 'p',
