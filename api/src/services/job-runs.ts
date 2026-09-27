@@ -17,6 +17,7 @@ export type JobRunKind =
   | 'chaos'
   | 'export'
   | 'directory'
+  | 'bulk'
 
 export interface JobRunHandle {
   /** DB row id, null when the insert failed (bookkeeping degraded). */

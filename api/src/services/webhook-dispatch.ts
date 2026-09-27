@@ -1,6 +1,11 @@
 import { createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
+import {
+  type ConditionRule,
+  evalConditionRule,
+  fetchRecordForConditions
+} from './workflow-conditions.js'
 
 /**
  * Centralized webhook dispatch with delivery logging, HMAC signing and retry support.
@@ -38,6 +43,71 @@ export interface DispatchableWebhook {
   collections?: string | null
   events?: string | null
   enabled?: boolean
+  /** JSON `[{field, op, value}]`, AND. Empty = every record. */
+  conditions?: string | null
+}
+
+export const WEBHOOK_CONDITION_OPS = [
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'in',
+  'null',
+  'nnull'
+] as const
+
+export function parseWebhookConditions(raw: unknown): ConditionRule[] {
+  const parsed = typeof raw === 'string' ? parseJson<unknown>(raw) : raw
+  if (!Array.isArray(parsed)) return []
+  return parsed.filter(
+    (r): r is ConditionRule =>
+      !!r &&
+      typeof r === 'object' &&
+      typeof (r as ConditionRule).field === 'string' &&
+      (r as ConditionRule).field !== '' &&
+      (WEBHOOK_CONDITION_OPS as readonly string[]).includes(String((r as ConditionRule).op))
+  )
+}
+
+export interface WebhookMatch {
+  matches: boolean
+  rules: Array<{ field: string; op: string; value: unknown; actual: unknown; pass: boolean }>
+}
+
+/**
+ * Judge a record against a webhook's conditions. Dotted fields walk M2O
+ * relations (the transition-condition resolver); a deleted record is judged
+ * on its last snapshot, where only its own columns are known.
+ */
+export async function matchWebhookConditions(
+  conditions: ConditionRule[],
+  collection: string,
+  data: unknown,
+  event: string
+): Promise<WebhookMatch> {
+  if (conditions.length === 0) return { matches: true, rules: [] }
+  const snapshot = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
+  let record = snapshot
+  const needsResolve = conditions.some((c) => c.field.includes('.'))
+  if (needsResolve && event !== 'delete' && snapshot.id != null) {
+    const resolved = await fetchRecordForConditions(collection, String(snapshot.id), [
+      JSON.stringify(conditions)
+    ])
+    record = { ...resolved, ...snapshot }
+    for (const c of conditions) if (c.field.includes('.')) record[c.field] = resolved[c.field]
+  }
+  const rules = conditions.map((c) => ({
+    field: c.field,
+    op: c.op,
+    value: c.value,
+    actual: record[c.field] ?? null,
+    pass: evalConditionRule(c, record)
+  }))
+  return { matches: rules.every((r) => r.pass), rules }
 }
 
 export interface DispatchResult {
@@ -263,6 +333,23 @@ export async function fireWebhooks(
 
       const collections = parseJson<string[]>(wh.collections ?? null) ?? []
       if (collections.length > 0 && !collections.includes(collection)) continue
+
+      // Conditions narrow a webhook to the records its receiver asked for.
+      // A condition set that cannot be judged does NOT fire: sending a
+      // partner a record outside its filter is the worse mistake.
+      const conditions = parseWebhookConditions(wh.conditions)
+      if (conditions.length > 0) {
+        try {
+          const verdict = await matchWebhookConditions(conditions, collection, data, event)
+          if (!verdict.matches) continue
+        } catch (err) {
+          console.warn(
+            `[webhook] ${wh.id}: conditions could not be judged, not fired —`,
+            err instanceof Error ? err.message : String(err)
+          )
+          continue
+        }
+      }
 
       // Fire-and-forget — never block the mutation.
       dispatchWebhook(wh, event, payload).catch((err: unknown) => {

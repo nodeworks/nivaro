@@ -346,6 +346,13 @@ export const ItemMutatedEventType: GraphQLObjectType = new GraphQLObjectType({
     collection: { type: new GraphQLNonNull(GraphQLString) },
     item: { type: new GraphQLNonNull(GraphQLID) },
     action: { type: new GraphQLNonNull(GraphQLString) },
+    /** Names of the fields the write changed. Names only — read the record
+     *  for values, where your permissions apply. Empty on create and delete. */
+    changed_fields: {
+      type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLString)))
+    },
+    at: { type: GraphQLString },
+    /** Always null. Kept so existing selections keep validating. */
     data: { type: GraphQLJSON }
   }
 })

@@ -4,6 +4,7 @@ import { logActivity } from './activity.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { parseJson } from './pipeline-engine.js'
+import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -224,6 +225,20 @@ export async function executeWorkflowTransition(opts: {
     }
   }
 
+  let claim: Awaited<ReturnType<typeof claimTransition>>
+  try {
+    claim = await claimTransition({
+      instanceId: String(instance.id),
+      transitionId: String(transition.id),
+      label: transition.label
+    })
+  } catch (err) {
+    if (err instanceof TransitionDuplicateError) {
+      throw new WorkflowMutationError(409, err.message, { code: err.code, first: err.first })
+    }
+    throw err
+  }
+
   let applied: Awaited<ReturnType<typeof applyTransition>>
   try {
     applied = await applyTransition({
@@ -234,6 +249,7 @@ export async function executeWorkflowTransition(opts: {
       source: 'manual'
     })
   } catch (err) {
+    await claim.release()
     if (err instanceof TransitionBlockedError) {
       throw new WorkflowMutationError(422, err.message)
     }

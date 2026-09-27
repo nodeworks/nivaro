@@ -1791,6 +1791,7 @@ x-workspace: ws-uuid-here</code></pre>
             <li>requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs, m2o pickers for FK columns, m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.</li>
             <li>optional_when (child_fields): waive a required field per row when a controlling field (a column or an m2m alias) holds one of a list of values — {"&lt;field&gt;": {"field": "&lt;controlling&gt;", "in": [..], "placeholder": "Auto-assigned"}}. Instead of typing ids, "in_query": {"collection", "filter": {col: value | [values] | null}, "value_field"} reads the list from a business collection at evaluation time (500 rows max) and can be combined with a static "in". A query that is malformed, fails, or matches nothing drops the rule — the field stays required, never accidentally waived.</li>
             <li>review_when (child_fields): {"field": "&lt;record field or one M2O hop, e.g. warehouse.ordering_system&gt;", "in": [..]} (or a list — any match) on the transitioning record brings the dialog back with EVERY row, filled or not, when e.g. the last partner push failed ("push_status": ["error"]) — so a line can be corrected before trying again; "review_message" sets the banner text. The dialog's own re-submit sends reviewed: true, which skips review_when (incomplete rows still block), so it asks once per attempt.</li>
+            <li>Repeat guard: the same manual transition on the same record is refused with 409 <code class="doc-code">TRANSITION_DUPLICATE</code> when it is made again within 10 seconds, so a double click or a retried request never runs the side effects twice. The answer cites the first history row. Settings → Content changes the window; 0 turns the guard off. <code class="doc-code">TRANSITION_GUARD_SECONDS</code> sets the default per instance.</li>
             <li>auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).</li>
             <li>Related-row conditions: field "&lt;childCollection&gt;:&lt;fkField&gt;" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.&lt;field&gt;" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the request total: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.total_amount"}}. An unresolved $record token or unknown hop fails the filter closed.</li>
           </ul>
@@ -2204,6 +2205,58 @@ Authorization: Bearer &lt;token&gt;
             <li>At most 500 rows per relation per request.</li>
           </ul>
           <div class="doc-note">Every row costs the same as a separate create, so a large set makes one long request. Raise client and proxy timeouts accordingly, or split very large sets.</div>
+          <h3 class="doc-h3">Many rows in one request</h3>
+          <p class="doc-p"><code class="doc-code">POST /api/items/&lt;collection&gt;/bulk</code> writes up to 500 rows and answers <code class="doc-code">207</code> with one result per row, in request order. A row that carries an <code class="doc-code">id</code> is an update; a row without one is a create. Every row goes through the same path as a single write, as the same caller, so permissions, validation, hooks and rules apply per row.</p>
+          <pre class="doc-pre"><code>POST /api/items/orders/bulk
+Content-Type: application/json
+Authorization: Bearer &lt;token&gt;
+
+{
+  "rows": [
+    { "customer": 42, "total": 159 },
+    { "id": 1001, "status": "shipped" },
+    { "customer": 99999, "total": 10 }
+  ]
+}
+
+// 207
+{
+  "data": {
+    "ok": 2,
+    "failed": 1,
+    "results": [
+      { "index": 0, "op": "create", "status": 201, "id": 1044, "data": { … } },
+      { "index": 1, "op": "update", "status": 200, "id": 1001, "data": { … } },
+      { "index": 2, "op": "create", "status": 422,
+        "code": "LINKED_RECORD_MISSING",
+        "error": "A linked record does not exist (fk_orders_customers)" }
+    ]
+  }
+}</code></pre>
+          <ul class="doc-ul">
+            <li>The body may be <code class="doc-code">{ "rows": [...] }</code> or a bare array of rows.</li>
+            <li><code class="doc-code">"atomic": true</code> makes the call all or nothing. It takes creates only. The first refused row stops the run, the rows created before it are removed, and the answer is <code class="doc-code">422</code> naming the row.</li>
+            <li><code class="doc-code">?return=ids</code> leaves the records out of the results and returns status and id per row.</li>
+            <li><code class="doc-code">?async=1</code> queues the run and answers <code class="doc-code">202</code> with a <code class="doc-code">run_id</code>. Read the results from <code class="doc-code">GET /api/items/&lt;collection&gt;/bulk/&lt;run_id&gt;</code>; they are kept for 24 hours. The run also appears under Background Jobs.</li>
+            <li>A refused row never stops the others unless <code class="doc-code">atomic</code> is set.</li>
+          </ul>
+          <h3 class="doc-h3">Safe retries with Idempotency-Key</h3>
+          <p class="doc-p">Send an <code class="doc-code">Idempotency-Key</code> header with any <code class="doc-code">POST</code> under <code class="doc-code">/api/items</code> or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header <code class="doc-code">Idempotent-Replay: true</code>. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.</p>
+          <pre class="doc-pre"><code>POST /api/items/orders
+Authorization: Bearer &lt;token&gt;
+Idempotency-Key: 5f0c1d5e-7d0a-4c59-9a40-1d6c1c0f2a11
+Content-Type: application/json
+
+{ "customer": 42, "total": 159 }</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Situation</th><th>Answer</th></tr></thead>
+            <tbody><tr><tr><td>Same key, same request, first one finished</td><td>The first answer again, <code class="doc-code">Idempotent-Replay: true</code>.</td></tr>
+              <tr><td>Same key, same request, first one still running</td><td><code class="doc-code">409</code> <code class="doc-code">IDEMPOTENCY_IN_PROGRESS</code> with <code class="doc-code">Retry-After</code>.</td></tr>
+              <tr><td>Same key, different path or body</td><td><code class="doc-code">422</code> <code class="doc-code">IDEMPOTENCY_KEY_REUSED</code>.</td></tr>
+              <tr><td>The first request failed</td><td>The key is released. The retry runs as a new request.</td></tr>
+              <tr><td>Key longer than 200 characters or containing spaces</td><td><code class="doc-code">400</code> <code class="doc-code">IDEMPOTENCY_KEY_INVALID</code>.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Keys belong to the caller that sent them. Two API keys, or two users, may use the same value without meeting each other. <code class="doc-code">IDEMPOTENCY_TTL_SECONDS</code> changes how long answers are kept.</div>
           <h3 class="doc-h3">Update example</h3>
           <pre class="doc-pre"><code>PATCH /api/items/articles/uuid-1
 Content-Type: application/json
@@ -3527,6 +3580,8 @@ Authorization: Bearer &lt;admin-token&gt;
 }</code></pre>
           <div class="doc-note">Rows are created in payload order through the normal create path, as the caller. A refused row undoes the whole create and the error names it (<code class="doc-code">lines[2]: …</code>). On update the write is additive: rows without an id are added, nothing is changed or removed. See Items API → Create with related rows for the full rules.</div>
           <div class="doc-note">The <code class="doc-code">data</code> argument accepts the <code class="doc-code">JSON</code> scalar — pass a plain object with the fields you want to set. Unknown fields are ignored; field-level permission checks apply.</div>
+          <h3 class="doc-h3">Safe retries</h3>
+          <p class="doc-p">Send an <code class="doc-code">Idempotency-Key</code> header with a mutation request. A repeat of the same request under the same key returns the first answer and writes nothing. A mutation that answered with <code class="doc-code">errors</code> releases its key, so the retry runs again. Queries are never deduplicated. See Items API → Safe retries with Idempotency-Key for the full rules.</p>
           <!-- /SYNC:graphql-mutations -->
         </div>
 
@@ -3544,8 +3599,27 @@ ws://your-host/api/graphql-ws
             <thead><tr><th>Subscription</th><th>Arguments</th><th>Fires when</th></tr></thead>
             <tbody><tr><tr><td>workflowStateChanged</td><td>collection, item</td><td>A workflow instance transitions to a new state.</td></tr>
               <tr><td>pipelineStateChanged</td><td>collection, item</td><td>A pipeline instance transitions to a new state.</td></tr>
-              <tr><td>itemMutated</td><td>collection, item</td><td>An item is created, updated, or deleted.</td></tr></tr></tbody>
+              <tr><td>itemMutated</td><td>collection, item, fields, actions</td><td>A record is created, updated or deleted. <code class="doc-code">fields</code> narrows to updates that changed one of the named fields; <code class="doc-code">actions</code> narrows to create, update or delete.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Example — subscribe to field changes</h3>
+          <pre class="doc-pre"><code>subscription {
+  itemMutated(collection: "orders", fields: ["status", "total"]) {
+    collection
+    item
+    action
+    changed_fields
+    at
+  }
+}
+
+// { "itemMutated": { "collection": "orders", "item": "1001",
+//   "action": "update", "changed_fields": ["status"], "at": "…" } }</code></pre>
+          <ul class="doc-ul">
+            <li>Leave <code class="doc-code">item</code> out to hear the whole collection, or pass an id to hear one record.</li>
+            <li>The event names what changed and never carries values. Read the record to get them, so your permissions apply.</li>
+            <li>Subscribing needs read permission on the collection.</li>
+            <li>Writes made through the REST API, GraphQL, imports that use the items service and automation all produce events. Writes made by raw SQL do not.</li>
+          </ul>
           <h3 class="doc-h3">Example — subscribe to workflow changes</h3>
           <pre class="doc-pre"><code>subscription {
   workflowStateChanged(collection: "projects", item: "123") {

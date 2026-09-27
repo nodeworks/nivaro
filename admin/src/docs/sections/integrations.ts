@@ -238,6 +238,37 @@ GET  /api/comments/related?collection=&item=               // entries carry prov
       type: 'p',
       text: "`POST /api/webhooks/:id/test` accepts `{ delivery_id }` (resend a stored delivery's body) or `{ payload }` (any JSON); the response says `payload_source`: sample, delivery N or edited. `POST /api/webhooks/deliveries/:id/retry` accepts `{ payload }` too. The webhook editor lists recent deliveries with a Use-as-test-payload action that fills an editable payload box above the Test button."
     },
+    { type: 'h2', id: 'integration-events-webhook-conditions', text: 'Webhook conditions' },
+    {
+      type: 'p',
+      text: 'A webhook may carry `conditions`: a list of `{ "field", "op", "value" }` that a record must meet, all of them, before the webhook fires for it. An empty list sends every record of the chosen collections, as before. Operators: eq, neq, in (comma list), contains, gt, gte, lt, lte, null, nnull. A field is a column or a path through a relation of up to three parts, such as `vendor.name`.'
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/webhooks/12
+{
+  "conditions": [
+    { "field": "status", "op": "eq", "value": "approved" },
+    { "field": "total", "op": "gte", "value": 10000 }
+  ]
+}
+
+// Would record 1001 fire it? Nothing is sent.
+POST /api/webhooks/12/match
+{ "collection": "orders", "item": 1001 }
+
+// { "data": { "would_fire": false, "conditions_match": false,
+//   "rules": [ { "field": "status", "op": "eq", "value": "approved",
+//                "actual": "draft", "pass": false }, … ] } }`
+    },
+    {
+      type: 'ul',
+      items: [
+        'The webhook editor has an "Only for records where" card with the same check: enter a record id and see which condition holds it back. Unsaved conditions are judged too.',
+        'A deleted record is judged on its last values; relation paths are not available for it.',
+        'When conditions cannot be judged, the webhook does not fire for that write.'
+      ]
+    },
     { type: 'h2', id: 'integration-events-mock', text: 'Mock mode per instance' },
     {
       type: 'p',

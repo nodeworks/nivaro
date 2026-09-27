@@ -3,6 +3,7 @@ import { makeServer as makeWsServer } from 'graphql-ws'
 import { WebSocket, WebSocketServer } from 'ws'
 import { config } from '../config.js'
 import { authenticate } from '../middleware/authenticate.js'
+import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { buildGraphQLSchema } from '../services/schema-builder.js'
 
 const GRAPHIQL_HTML = /* html */ `<!DOCTYPE html>
@@ -220,6 +221,13 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       operationName?: string
       id?: number | string
       extensions?: { persistedQuery?: { sha256Hash?: string } }
+    }
+
+    // Idempotency-Key on a mutation: a repeat of the same request returns the
+    // first answer instead of writing twice. Reads are never deduplicated.
+    if (req.headers['idempotency-key'] && isGraphQLMutation(body?.query)) {
+      const answered = await beginIdempotency(req, reply, 'graphql')
+      if (answered) return answered
     }
 
     // Persisted query substitution — { id } or APQ { extensions.persistedQuery.sha256Hash }

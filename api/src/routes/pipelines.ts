@@ -20,6 +20,7 @@ import {
 } from '../services/pipeline-engine.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import {
   evaluateTransitionRequirements,
   IDENTIFIER_RE
@@ -2247,6 +2248,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       // A blocking action failure (e.g. an ERP submission) aborts BEFORE any
       // mutation — the record stays in its current state and the client gets
       // the error to display.
+      // Double-fire guard: the twin of a request already running (or just
+      // finished) is refused here, after every gate and before any mutation.
+      let claim: Awaited<ReturnType<typeof claimTransition>>
+      try {
+        claim = await claimTransition({
+          instanceId: String(instance.id),
+          transitionId: String(transition.id),
+          label: transition.label
+        })
+      } catch (err) {
+        if (err instanceof TransitionDuplicateError) {
+          return reply.code(409).send({ error: err.message, code: err.code, first: err.first })
+        }
+        throw err
+      }
+
       let applied: Awaited<ReturnType<typeof applyTransition>>
       try {
         applied = await applyTransition({
@@ -2257,6 +2274,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           source: 'manual'
         })
       } catch (err) {
+        // The move did not happen — an immediate retry must be allowed.
+        await claim.release()
         if (err instanceof TransitionBlockedError) {
           return reply.code(422).send({ error: err.message })
         }

@@ -25,6 +25,30 @@ import { cn } from '@/lib/utils'
 
 type HeaderPair = { key: string; value: string }
 
+type ConditionRow = { field: string; op: string; value: string }
+
+const CONDITION_OPS: Array<{ value: string; label: string; needsValue: boolean }> = [
+  { value: 'eq', label: 'is', needsValue: true },
+  { value: 'neq', label: 'is not', needsValue: true },
+  { value: 'in', label: 'is one of', needsValue: true },
+  { value: 'contains', label: 'contains', needsValue: true },
+  { value: 'gt', label: 'is greater than', needsValue: true },
+  { value: 'gte', label: 'is at least', needsValue: true },
+  { value: 'lt', label: 'is less than', needsValue: true },
+  { value: 'lte', label: 'is at most', needsValue: true },
+  { value: 'nnull', label: 'has a value', needsValue: false },
+  { value: 'null', label: 'is empty', needsValue: false }
+]
+
+type MatchVerdict = {
+  would_fire: boolean
+  enabled: boolean
+  collection_matches: boolean
+  event_matches: boolean
+  conditions_match: boolean
+  rules: Array<{ field: string; op: string; value: unknown; actual: unknown; pass: boolean }>
+}
+
 type WebhookForm = {
   name: string
   collections: string[]
@@ -34,6 +58,7 @@ type WebhookForm = {
   headers: HeaderPair[]
   secret: string
   enabled: boolean
+  conditions: ConditionRow[]
 }
 
 type WebhookDelivery = {
@@ -58,6 +83,7 @@ type Webhook = {
   headers: Record<string, string> | null
   secret: string | null
   enabled: boolean
+  conditions?: Array<{ field: string; op: string; value?: unknown }>
 }
 
 const ALL_EVENTS = ['create', 'update', 'delete'] as const
@@ -92,8 +118,12 @@ export function WebhookEditPage() {
     method: 'POST',
     headers: [],
     secret: '',
-    enabled: true
+    enabled: true,
+    conditions: []
   })
+  const [matchCollection, setMatchCollection] = useState('')
+  const [matchItem, setMatchItem] = useState('')
+  const [matchVerdict, setMatchVerdict] = useState<MatchVerdict | null>(null)
   const [testResult, setTestResult] = useState<string | null>(null)
   const [collectionSearch, setCollectionSearch] = useState('')
   const [collectionOpen, setCollectionOpen] = useState(false)
@@ -120,7 +150,12 @@ export function WebhookEditPage() {
         method: data.method ?? 'POST',
         headers: headersToPairs(data.headers),
         secret: data.secret ?? '',
-        enabled: data.enabled ?? true
+        enabled: data.enabled ?? true,
+        conditions: (data.conditions ?? []).map((c) => ({
+          field: c.field,
+          op: c.op,
+          value: c.value == null ? '' : String(c.value)
+        }))
       })
     }
   }, [data])
@@ -221,9 +256,37 @@ export function WebhookEditPage() {
       method: form.method,
       headers: pairsToHeaders(form.headers),
       secret: form.secret || null,
-      enabled: form.enabled
+      enabled: form.enabled,
+      conditions: cleanConditions(form.conditions)
     })
   }
+
+  function cleanConditions(rows: ConditionRow[]) {
+    return rows
+      .filter((r) => r.field.trim())
+      .map((r) => {
+        const needsValue = CONDITION_OPS.find((o) => o.value === r.op)?.needsValue ?? true
+        return { field: r.field.trim(), op: r.op, value: needsValue ? r.value : null }
+      })
+  }
+
+  const matchRecord = useMutation({
+    mutationFn: () =>
+      api
+        .post(`/webhooks/${id}/match`, {
+          collection: matchCollection || form.collections[0],
+          item: matchItem.trim(),
+          conditions: cleanConditions(form.conditions),
+          event: form.events[0] ?? 'update'
+        })
+        .then((r) => r.data.data as MatchVerdict),
+    onSuccess: (v) => setMatchVerdict(v),
+    onError: (err: unknown) => {
+      setMatchVerdict(null)
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'The record could not be checked')
+    }
+  })
 
   return (
     <>
@@ -400,10 +463,14 @@ export function WebhookEditPage() {
                   </div>
                 </div>
 
-                <div className='flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-4 py-3'>
+                <div className='flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/70 px-4 py-3 dark:border-border dark:bg-[#1c2230]'>
                   <div>
-                    <p className='text-[13px] font-medium text-slate-800'>Enabled</p>
-                    <p className='text-[11px] text-slate-400'>Webhook fires only when enabled.</p>
+                    <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                      Enabled
+                    </p>
+                    <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                      Webhook fires only when enabled.
+                    </p>
                   </div>
                   <Switch
                     checked={form.enabled}
@@ -411,6 +478,210 @@ export function WebhookEditPage() {
                   />
                 </div>
               </div>
+            </div>
+
+            {/* Conditions: fire only for records that match */}
+            <div
+              data-webhook-conditions
+              className='rounded-xl border border-slate-200 bg-white p-6 dark:border-border dark:bg-card'
+            >
+              <h2 className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+                Only for records where
+              </h2>
+              <p className='mb-4 mt-1 max-w-[68ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+                Leave this empty to send every record. With conditions, the webhook fires only when
+                the record meets all of them. A field can be a column or a path through a relation,
+                such as <span className='font-mono'>vendor.name</span>.
+              </p>
+              <div className='space-y-2'>
+                {form.conditions.map((c, i) => {
+                  const needsValue = CONDITION_OPS.find((o) => o.value === c.op)?.needsValue ?? true
+                  return (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: condition rows have no stable id
+                    <div key={i} data-webhook-condition={i} className='flex items-center gap-2'>
+                      <Input
+                        aria-label={`Condition ${i + 1} field`}
+                        placeholder='field'
+                        value={c.field}
+                        onChange={(e) =>
+                          setForm((p) => ({
+                            ...p,
+                            conditions: p.conditions.map((r, j) =>
+                              j === i ? { ...r, field: e.target.value } : r
+                            )
+                          }))
+                        }
+                        className='w-56 font-mono text-[12px]'
+                      />
+                      <Select
+                        value={c.op}
+                        onValueChange={(v) =>
+                          setForm((p) => ({
+                            ...p,
+                            conditions: p.conditions.map((r, j) => (j === i ? { ...r, op: v } : r))
+                          }))
+                        }
+                      >
+                        <SelectTrigger
+                          aria-label={`Condition ${i + 1} operator`}
+                          className='w-44 text-[12px]'
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CONDITION_OPS.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {needsValue ? (
+                        <Input
+                          aria-label={`Condition ${i + 1} value`}
+                          placeholder={c.op === 'in' ? 'a, b, c' : 'value'}
+                          value={c.value}
+                          onChange={(e) =>
+                            setForm((p) => ({
+                              ...p,
+                              conditions: p.conditions.map((r, j) =>
+                                j === i ? { ...r, value: e.target.value } : r
+                              )
+                            }))
+                          }
+                          className='flex-1 text-[12px]'
+                        />
+                      ) : (
+                        <div className='flex-1' />
+                      )}
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='sm'
+                        aria-label={`Remove condition ${i + 1}`}
+                        onClick={() =>
+                          setForm((p) => ({
+                            ...p,
+                            conditions: p.conditions.filter((_, j) => j !== i)
+                          }))
+                        }
+                      >
+                        <Trash2 size={14} />
+                      </Button>
+                    </div>
+                  )
+                })}
+              </div>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                className='mt-3'
+                data-webhook-condition-add
+                onClick={() =>
+                  setForm((p) => ({
+                    ...p,
+                    conditions: [...p.conditions, { field: '', op: 'eq', value: '' }]
+                  }))
+                }
+              >
+                <Plus size={13} className='mr-1' />
+                Add condition
+              </Button>
+
+              {!isNew && (
+                <div className='mt-5 border-t border-slate-100 pt-4 dark:border-border'>
+                  <p className='text-[12px] font-medium text-slate-800 dark:text-foreground'>
+                    Would a record fire this webhook?
+                  </p>
+                  <p className='mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    Checks a real record against the conditions above, saved or not. Nothing is
+                    sent.
+                  </p>
+                  <div className='mt-2 flex flex-wrap items-center gap-2'>
+                    {form.collections.length > 1 && (
+                      <Select
+                        value={matchCollection || form.collections[0]}
+                        onValueChange={setMatchCollection}
+                      >
+                        <SelectTrigger aria-label='Collection' className='w-52 text-[12px]'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {form.collections.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    <Input
+                      aria-label='Record id'
+                      placeholder='record id'
+                      value={matchItem}
+                      onChange={(e) => setMatchItem(e.target.value)}
+                      className='w-40 font-mono text-[12px]'
+                      data-webhook-match-item
+                    />
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      data-webhook-match
+                      disabled={
+                        !matchItem.trim() || form.collections.length === 0 || matchRecord.isPending
+                      }
+                      onClick={() => matchRecord.mutate()}
+                    >
+                      {matchRecord.isPending ? 'Checking…' : 'Check record'}
+                    </Button>
+                    {form.collections.length === 0 && (
+                      <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+                        Pick a collection above first.
+                      </span>
+                    )}
+                  </div>
+                  {matchVerdict && (
+                    <div
+                      data-webhook-match-result={matchVerdict.would_fire ? 'fires' : 'held'}
+                      className={cn(
+                        'mt-3 rounded-lg border px-3 py-2 text-[12px]',
+                        matchVerdict.would_fire
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-[#12261c] dark:text-emerald-200'
+                          : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-[#2a2113] dark:text-amber-200'
+                      )}
+                    >
+                      <p className='font-medium'>
+                        {matchVerdict.would_fire
+                          ? 'This record would fire the webhook.'
+                          : 'This record would not fire the webhook.'}
+                      </p>
+                      <ul className='mt-1 space-y-0.5'>
+                        {!matchVerdict.enabled && <li>The webhook is switched off.</li>}
+                        {!matchVerdict.collection_matches && (
+                          <li>The webhook does not listen to this collection.</li>
+                        )}
+                        {!matchVerdict.event_matches && (
+                          <li>The webhook does not listen to this event.</li>
+                        )}
+                        {matchVerdict.rules.map((r) => (
+                          <li key={`${r.field}-${r.op}`} className='font-mono'>
+                            {r.pass ? '✓' : '✕'} {r.field}{' '}
+                            {CONDITION_OPS.find((o) => o.value === r.op)?.label ?? r.op}
+                            {r.value != null && r.value !== '' ? ` ${String(r.value)}` : ''}
+                            <span className='opacity-70'>
+                              {' '}
+                              · record has{' '}
+                              {r.actual == null || r.actual === '' ? 'nothing' : String(r.actual)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Headers */}

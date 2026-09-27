@@ -1,5 +1,6 @@
 import type { Server as SocketIOServer } from 'socket.io'
 import { journaledEmit } from './event-journal.js'
+import { publishItemEvent } from './item-events.js'
 import { publishSseEvent } from './sse-hub.js'
 
 /**
@@ -27,6 +28,15 @@ export function broadcastCollectionUpdate(
     action: extra?.action,
     changed_fields: extra?.changed_fields?.slice(0, 50)
   })
+  // GraphQL subscriptions hear the same minimal event.
+  if (extra?.action) {
+    publishItemEvent({
+      collection,
+      item: String(item),
+      action: extra.action,
+      changed_fields: extra.changed_fields?.slice(0, 50) ?? []
+    })
+  }
   void journaledEmit(`collection:${collection}`, 'collection:update', {
     collection,
     item,

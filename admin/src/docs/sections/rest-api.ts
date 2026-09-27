@@ -258,6 +258,85 @@ Authorization: Bearer <token>
       type: 'note',
       text: 'Every row costs the same as a separate create, so a large set makes one long request. Raise client and proxy timeouts accordingly, or split very large sets.'
     },
+    { type: 'h3', text: 'Many rows in one request' },
+    {
+      type: 'p',
+      text: '`POST /api/items/<collection>/bulk` writes up to 500 rows and answers `207` with one result per row, in request order. A row that carries an `id` is an update; a row without one is a create. Every row goes through the same path as a single write, as the same caller, so permissions, validation, hooks and rules apply per row.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/items/orders/bulk
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "rows": [
+    { "customer": 42, "total": 159 },
+    { "id": 1001, "status": "shipped" },
+    { "customer": 99999, "total": 10 }
+  ]
+}
+
+// 207
+{
+  "data": {
+    "ok": 2,
+    "failed": 1,
+    "results": [
+      { "index": 0, "op": "create", "status": 201, "id": 1044, "data": { … } },
+      { "index": 1, "op": "update", "status": 200, "id": 1001, "data": { … } },
+      { "index": 2, "op": "create", "status": 422,
+        "code": "LINKED_RECORD_MISSING",
+        "error": "A linked record does not exist (fk_orders_customers)" }
+    ]
+  }
+}`
+    },
+    {
+      type: 'ul',
+      items: [
+        'The body may be `{ "rows": [...] }` or a bare array of rows.',
+        '`"atomic": true` makes the call all or nothing. It takes creates only. The first refused row stops the run, the rows created before it are removed, and the answer is `422` naming the row.',
+        '`?return=ids` leaves the records out of the results and returns status and id per row.',
+        '`?async=1` queues the run and answers `202` with a `run_id`. Read the results from `GET /api/items/<collection>/bulk/<run_id>`; they are kept for 24 hours. The run also appears under Background Jobs.',
+        'A refused row never stops the others unless `atomic` is set.'
+      ]
+    },
+    { type: 'h3', text: 'Safe retries with Idempotency-Key' },
+    {
+      type: 'p',
+      text: 'Send an `Idempotency-Key` header with any `POST` under `/api/items` or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header `Idempotent-Replay: true`. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/items/orders
+Authorization: Bearer <token>
+Idempotency-Key: 5f0c1d5e-7d0a-4c59-9a40-1d6c1c0f2a11
+Content-Type: application/json
+
+{ "customer": 42, "total": 159 }`
+    },
+    {
+      type: 'table',
+      head: ['Situation', 'Answer'],
+      rows: [
+        [
+          'Same key, same request, first one finished',
+          'The first answer again, `Idempotent-Replay: true`.'
+        ],
+        [
+          'Same key, same request, first one still running',
+          '`409` `IDEMPOTENCY_IN_PROGRESS` with `Retry-After`.'
+        ],
+        ['Same key, different path or body', '`422` `IDEMPOTENCY_KEY_REUSED`.'],
+        ['The first request failed', 'The key is released. The retry runs as a new request.'],
+        ['Key longer than 200 characters or containing spaces', '`400` `IDEMPOTENCY_KEY_INVALID`.']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Keys belong to the caller that sent them. Two API keys, or two users, may use the same value without meeting each other. `IDEMPOTENCY_TTL_SECONDS` changes how long answers are kept.'
+    },
     { type: 'h3', text: 'Update example' },
     {
       type: 'pre',

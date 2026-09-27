@@ -460,6 +460,11 @@ export const graphqlMutations: DocSection = {
     {
       type: 'note',
       text: 'The `data` argument accepts the `JSON` scalar — pass a plain object with the fields you want to set. Unknown fields are ignored; field-level permission checks apply.'
+    },
+    { type: 'h3', text: 'Safe retries' },
+    {
+      type: 'p',
+      text: 'Send an `Idempotency-Key` header with a mutation request. A repeat of the same request under the same key returns the first answer and writes nothing. A mutation that answered with `errors` releases its key, so the retry runs again. Queries are never deduplicated. See Items API → Safe retries with Idempotency-Key for the full rules.'
     }
   ]
 }
@@ -496,7 +501,36 @@ ws://your-host/api/graphql-ws
           'collection, item',
           'A pipeline instance transitions to a new state.'
         ],
-        ['itemMutated', 'collection, item', 'An item is created, updated, or deleted.']
+        [
+          'itemMutated',
+          'collection, item, fields, actions',
+          'A record is created, updated or deleted. `fields` narrows to updates that changed one of the named fields; `actions` narrows to create, update or delete.'
+        ]
+      ]
+    },
+    { type: 'h3', text: 'Example — subscribe to field changes' },
+    {
+      type: 'pre',
+      code: `subscription {
+  itemMutated(collection: "orders", fields: ["status", "total"]) {
+    collection
+    item
+    action
+    changed_fields
+    at
+  }
+}
+
+// { "itemMutated": { "collection": "orders", "item": "1001",
+//   "action": "update", "changed_fields": ["status"], "at": "…" } }`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Leave `item` out to hear the whole collection, or pass an id to hear one record.',
+        'The event names what changed and never carries values. Read the record to get them, so your permissions apply.',
+        'Subscribing needs read permission on the collection.',
+        'Writes made through the REST API, GraphQL, imports that use the items service and automation all produce events. Writes made by raw SQL do not.'
       ]
     },
     { type: 'h3', text: 'Example — subscribe to workflow changes' },

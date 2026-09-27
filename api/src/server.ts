@@ -179,6 +179,16 @@ export async function buildServer() {
     setAppRef(app)
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
+    const { initItemEvents, closeItemEvents } = await import('./services/item-events.js')
+    await initItemEvents(app.redis)
+    app.addHook('onClose', async () => {
+      await closeItemEvents()
+    })
+    const { setTransitionGuardRedis } = await import('./services/transition-guard.js')
+    setTransitionGuardRedis(app.redis)
+    // Idempotency keys: one store hook for the whole app (no-op without a claim).
+    const { registerIdempotencyStore } = await import('./services/idempotency.js')
+    registerIdempotencyStore(app)
   }
 
   // ── Ops observability wiring (batch A) ───────────────────────────────────

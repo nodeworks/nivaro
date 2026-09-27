@@ -3,11 +3,18 @@ import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { dispatchWebhook, fireWebhooks } from '../services/webhook-dispatch.js'
+import {
+  dispatchWebhook,
+  fireWebhooks,
+  matchWebhookConditions,
+  parseWebhookConditions,
+  WEBHOOK_CONDITION_OPS
+} from '../services/webhook-dispatch.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface WebhookRow {
+  conditions?: string | null
   id: number
   name: string
   collections: string | null
@@ -67,9 +74,45 @@ function maskWebhook(w: WebhookRow) {
     secret: w.secret ? MASK : null,
     signing_secret: w.signing_secret ? MASK : null,
     enabled: !!w.enabled,
+    conditions: parseWebhookConditions(w.conditions),
     created_at: w.created_at,
     updated_at: w.updated_at
   }
+}
+
+// ─── Conditions ─────────────────────────────────────────────────────────────
+
+function validateConditions(raw: unknown): string | null {
+  if (raw == null) return null
+  if (!Array.isArray(raw)) return 'conditions must be a list of {field, op, value}'
+  if (raw.length > 20) return 'At most 20 conditions per webhook'
+  for (const [i, r] of raw.entries()) {
+    const rule = r as { field?: unknown; op?: unknown }
+    if (!rule || typeof rule !== 'object') return `Condition ${i + 1} is not an object`
+    if (
+      typeof rule.field !== 'string' ||
+      !/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,2}$/.test(rule.field)
+    )
+      return `Condition ${i + 1}: field must be a column name or a dotted path of up to three parts`
+    if (!(WEBHOOK_CONDITION_OPS as readonly string[]).includes(String(rule.op)))
+      return `Condition ${i + 1}: operator must be one of ${WEBHOOK_CONDITION_OPS.join(', ')}`
+  }
+  return null
+}
+
+let conditionsColumnExists: boolean | null = null
+/** The column arrives with migration 355; a database that has not run it yet
+ *  keeps saving webhooks, without conditions. */
+async function conditionsColumn(raw: unknown): Promise<{ conditions?: string | null }> {
+  if (raw === undefined) return {}
+  if (conditionsColumnExists !== true) {
+    conditionsColumnExists = await db.schema
+      .hasColumn('nivaro_webhooks', 'conditions')
+      .catch(() => false)
+  }
+  if (!conditionsColumnExists) return {}
+  const rules = parseWebhookConditions(raw)
+  return { conditions: rules.length ? JSON.stringify(rules) : null }
 }
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
@@ -104,12 +147,15 @@ export async function webhooksRoutes(app: FastifyInstance) {
       secret?: string | null
       signing_secret?: string | null
       enabled?: boolean
+      conditions?: unknown
     }
   }>('/', async (req, reply) => {
     const body = req.body
     if (!body?.name || !body?.url) {
       return reply.code(400).send({ error: 'name and url are required' })
     }
+    const conditionError = validateConditions(body.conditions)
+    if (conditionError) return reply.code(400).send({ error: conditionError })
     const now = new Date()
     const [inserted] = await db('nivaro_webhooks')
       .insert({
@@ -122,6 +168,7 @@ export async function webhooksRoutes(app: FastifyInstance) {
         secret: body.secret ?? null,
         signing_secret: body.signing_secret ?? null,
         enabled: body.enabled ?? true,
+        ...(await conditionsColumn(body.conditions)),
         created_at: now,
         updated_at: now
       })
@@ -157,6 +204,7 @@ export async function webhooksRoutes(app: FastifyInstance) {
       secret: string | null
       signing_secret: string | null
       enabled: boolean
+      conditions: unknown
     }>
   }>('/:id', async (req, reply) => {
     const id = Number(req.params.id)
@@ -173,6 +221,11 @@ export async function webhooksRoutes(app: FastifyInstance) {
     if (body.method !== undefined) patch.method = body.method.toUpperCase()
     if (body.headers !== undefined) patch.headers = toJsonStr(body.headers)
     if (body.enabled !== undefined) patch.enabled = body.enabled
+    if (body.conditions !== undefined) {
+      const conditionError = validateConditions(body.conditions)
+      if (conditionError) return reply.code(400).send({ error: conditionError })
+      Object.assign(patch, await conditionsColumn(body.conditions))
+    }
 
     // Preserve existing secrets if the masked value is re-submitted.
     if (body.secret !== undefined && body.secret !== MASK) {
@@ -213,6 +266,53 @@ export async function webhooksRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(204).send()
+  })
+
+  // Would this record fire? Judges a real record against the conditions —
+  // the saved ones, or the unsaved ones the editor sends — and says which
+  // condition held it back. Sends nothing.
+  app.post<{
+    Params: { id: string }
+    Body: { collection?: string; item?: string | number; conditions?: unknown; event?: string }
+  }>('/:id/match', async (req, reply) => {
+    const row = (await db('nivaro_webhooks')
+      .where({ id: Number(req.params.id) })
+      .first()) as WebhookRow | undefined
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    const body = req.body ?? {}
+    const collection = String(body.collection ?? '')
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || /^nivaro_/i.test(collection))
+      return reply.code(400).send({ error: 'collection must be a business collection' })
+    if (body.item == null || body.item === '')
+      return reply.code(400).send({ error: 'item is required' })
+    if (body.conditions !== undefined) {
+      const conditionError = validateConditions(body.conditions)
+      if (conditionError) return reply.code(400).send({ error: conditionError })
+    }
+    const conditions = parseWebhookConditions(
+      body.conditions !== undefined ? body.conditions : row.conditions
+    )
+    const record = (await db(collection)
+      .where({ id: body.item })
+      .first()
+      .catch(() => undefined)) as Record<string, unknown> | undefined
+    if (!record) return reply.code(404).send({ error: 'No such record' })
+    const event = String(body.event ?? 'update')
+    const collections = parseJson<string[]>(row.collections) ?? []
+    const events = parseJson<string[]>(row.events) ?? []
+    const verdict = await matchWebhookConditions(conditions, collection, record, event)
+    const listens = collections.length === 0 || collections.includes(collection)
+    const hears = events.includes(event)
+    return {
+      data: {
+        would_fire: !!row.enabled && listens && hears && verdict.matches,
+        enabled: !!row.enabled,
+        collection_matches: listens,
+        event_matches: hears,
+        conditions_match: verdict.matches,
+        rules: verdict.rules
+      }
+    }
   })
 
   // Test fire

@@ -13,7 +13,9 @@ import {
   resolveAutoIdTokensDetailed,
   validateAutoIdPattern
 } from '../services/auto-ids.js'
+import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { chainFields } from '../services/chain-columns.js'
+import { idempotencyPreHandler } from '../services/idempotency.js'
 import {
   CollectionNotFoundError,
   createOne,
@@ -23,6 +25,7 @@ import {
   readOne,
   updateOne
 } from '../services/items.js'
+import { startJobRun } from '../services/job-runs.js'
 import { can } from '../services/permissions.js'
 import {
   coerceBool,
@@ -30,7 +33,6 @@ import {
   resolveTransitionTarget,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
-import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { ItemsQuery, User } from '../types.js'
 
@@ -72,6 +74,9 @@ function parseCsv(text: string): Record<string, string>[] {
 export async function itemsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', resolveWorkspace)
+  // Idempotency-Key on any write here: a repeat of the same request returns
+  // the first answer instead of writing twice. Runs after authentication.
+  app.addHook('preHandler', idempotencyPreHandler('items'))
 
   app.get('/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
@@ -846,6 +851,340 @@ export async function itemsRoutes(app: FastifyInstance) {
     const failed = results.filter((r) => !r.ok).length
     return reply.code(failed === results.length ? 422 : 200).send({
       data: { results, ok: results.length - failed, failed }
+    })
+  })
+
+  // ── Bulk write with per-row results ───────────────────────────────────────
+  // POST /items/:collection/bulk   { rows: [...], atomic?: boolean }
+  //   (a bare array body is read as rows)
+  // A row WITH an `id` is an update, a row without is a create. Every row
+  // goes through the full items service as the caller — permissions,
+  // validation, hooks, rules, revisions — so this saves round trips and
+  // nothing else. Answers 207 with one entry per row, in request order:
+  //   { index, op, status, id?, data?, error?, code? }
+  // `atomic: true` = all or nothing, creates only: the first refused row
+  // stops the run and every row created before it is removed again; the
+  // answer is 422 naming the row. `?async=1` queues the run and answers 202
+  // with a job run id; results are read from GET …/bulk/:runId.
+  const BULK_CAP = 500
+  const BULK_RESULT_TTL_S = 86_400
+
+  type BulkRowResult = {
+    index: number
+    op: 'create' | 'update'
+    status: number
+    id?: unknown
+    data?: unknown
+    error?: string
+    code?: string
+  }
+
+  function rowError(err: unknown): { status: number; error: string; code?: string } {
+    const e = err as { statusCode?: number; message?: string; code?: string }
+    if (err instanceof ForbiddenError) return { status: 403, error: 'Forbidden' }
+    if (err instanceof CollectionNotFoundError) return { status: 404, error: e.message ?? '' }
+    const status =
+      typeof e?.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 600
+        ? e.statusCode
+        : 500
+    // A driver error carries the statement in its message; callers get the
+    // reason only.
+    let message = String(e?.message ?? 'failed')
+    const cut = message.lastIndexOf(' - ')
+    if (status === 500 && /^(insert|update|delete|select|merge|exec)\b/i.test(message) && cut > 0)
+      message = message.slice(cut + 3)
+    // Constraint refusals are the caller's data, not a server fault: say
+    // which rule refused the row, without the database's own names.
+    const fk = /FOREIGN KEY constraint "([^"]+)"/i.exec(message)
+    if (fk) {
+      return {
+        status: 422,
+        error: `A linked record does not exist (${fk[1]})`,
+        code: 'LINKED_RECORD_MISSING'
+      }
+    }
+    const unique = /(UNIQUE KEY constraint|unique index) ['"]([^'"]+)['"]/i.exec(message)
+    if (unique || /Cannot insert duplicate key/i.test(message)) {
+      return {
+        status: 409,
+        error: `A record with these values already exists${unique ? ` (${unique[2]})` : ''}`,
+        code: 'DUPLICATE_RECORD'
+      }
+    }
+    return {
+      status,
+      error: message.slice(0, 1000),
+      ...(typeof e?.code === 'string' ? { code: e.code } : {})
+    }
+  }
+
+  async function runBulk(
+    user: User,
+    collection: string,
+    rows: Array<Record<string, unknown>>,
+    opts: {
+      atomic: boolean
+      req?: import('fastify').FastifyRequest
+      workspaceId?: string
+      slim: boolean
+      onProgress?: (done: number, failed: number) => void
+      cancelled?: () => boolean
+    }
+  ): Promise<{
+    results: BulkRowResult[]
+    ok: number
+    failed: number
+    rolled_back: boolean
+    stopped_at: number | null
+    leftover: unknown[]
+  }> {
+    const results: BulkRowResult[] = []
+    const created: unknown[] = []
+    let failed = 0
+    let stoppedAt: number | null = null
+    for (const [index, row] of rows.entries()) {
+      if (opts.cancelled?.()) {
+        stoppedAt = index
+        break
+      }
+      const isUpdate = row != null && typeof row === 'object' && row.id != null && row.id !== ''
+      const op = isUpdate ? 'update' : 'create'
+      try {
+        if (row == null || typeof row !== 'object' || Array.isArray(row)) {
+          throw Object.assign(new Error('Each row must be an object'), { statusCode: 400 })
+        }
+        if (isUpdate) {
+          const { id, ...patch } = row
+          const item = (await updateOne(
+            user,
+            collection,
+            String(id),
+            patch,
+            opts.req,
+            opts.workspaceId
+          )) as Record<string, unknown>
+          results.push({ index, op, status: 200, id, ...(opts.slim ? {} : { data: item }) })
+        } else {
+          const item = (await createOne(
+            user,
+            collection,
+            { ...row },
+            opts.req,
+            opts.workspaceId
+          )) as Record<string, unknown>
+          created.push(item.id)
+          results.push({
+            index,
+            op,
+            status: 201,
+            id: item.id,
+            ...(opts.slim ? {} : { data: item })
+          })
+        }
+      } catch (err) {
+        failed++
+        results.push({ index, op, ...rowError(err) })
+        if (opts.atomic) {
+          stoppedAt = index
+          break
+        }
+      }
+      if ((index + 1) % 10 === 0) opts.onProgress?.(index + 1 - failed, failed)
+    }
+    let rolledBack = false
+    const leftover: unknown[] = []
+    if (opts.atomic && failed > 0) {
+      rolledBack = true
+      for (const id of [...created].reverse()) {
+        try {
+          await deleteOne(user, collection, String(id), opts.req, opts.workspaceId)
+        } catch {
+          try {
+            await db(collection).where({ id }).del()
+          } catch {
+            leftover.push(id)
+          }
+        }
+      }
+      for (const r of results) {
+        if (r.status === 201) {
+          r.status = 424
+          r.error = 'Removed again — a later row was refused'
+          r.code = 'ROLLED_BACK'
+          delete r.data
+        }
+      }
+    }
+    return {
+      results,
+      ok: rolledBack ? 0 : results.length - failed,
+      failed,
+      rolled_back: rolledBack,
+      stopped_at: stoppedAt,
+      leftover
+    }
+  }
+
+  app.post('/:collection/bulk', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const q = req.query as Record<string, string>
+    if (req.user?.api_key_sandbox) {
+      return reply.code(403).send({ error: 'Sandbox keys cannot bulk-write' })
+    }
+    const body = req.body as
+      | { rows?: unknown; atomic?: unknown }
+      | Array<Record<string, unknown>>
+      | null
+    const rows = (Array.isArray(body) ? body : body?.rows) as
+      | Array<Record<string, unknown>>
+      | undefined
+    const atomic = !Array.isArray(body) && body?.atomic === true
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return reply.code(400).send({ error: 'Send rows: a non-empty array of records' })
+    }
+    if (rows.length > BULK_CAP) {
+      return reply
+        .code(422)
+        .send({ error: `At most ${BULK_CAP} rows per call`, code: 'BULK_ROWS_LIMIT' })
+    }
+    if (atomic && rows.some((r) => r && typeof r === 'object' && r.id != null && r.id !== '')) {
+      return reply.code(400).send({
+        error:
+          'atomic takes creates only — a row with an id is an update, and an update cannot be taken back',
+        code: 'BULK_ATOMIC_CREATES_ONLY'
+      })
+    }
+    // Refuse early what every row would be refused for.
+    try {
+      const needsCreate = rows.some((r) => r?.id == null || r.id === '')
+      const needsUpdate = rows.some((r) => r?.id != null && r.id !== '')
+      if (needsCreate && !(await can(req.user!, 'create', collection)))
+        return reply.code(403).send({ error: 'Forbidden' })
+      if (needsUpdate && !(await can(req.user!, 'update', collection)))
+        return reply.code(403).send({ error: 'Forbidden' })
+    } catch (err) {
+      return handleError(err, reply)
+    }
+    const slim = q.return === 'ids'
+    const user = req.user!
+    const workspaceId = req.workspaceId ?? undefined
+
+    if (q.async === '1' || q.async === 'true') {
+      const run = await startJobRun('bulk', `bulk:${collection}`, {
+        label: `${rows.length} row${rows.length === 1 ? '' : 's'} into ${collection}${atomic ? ' (all or nothing)' : ''}`,
+        triggeredBy: user.id
+      })
+      if (run.id == null) {
+        return reply
+          .code(503)
+          .send({ error: 'The job could not be recorded — send the request without async' })
+      }
+      const redis = app.redis
+      const resultKey = `nvr:bulk:${run.id}`
+      const owner = String(user.id).toUpperCase()
+      const store = async (state: Record<string, unknown>) => {
+        await redis
+          .set(resultKey, JSON.stringify({ owner, collection, ...state }), 'EX', BULK_RESULT_TTL_S)
+          .catch(() => {})
+      }
+      await store({ status: 'running', total: rows.length, results: [] })
+      void (async () => {
+        const { isCancelled, clearCancel } = await import('../services/job-cancel.js')
+        try {
+          const out = await runBulk(user, collection, rows, {
+            atomic,
+            workspaceId,
+            slim,
+            onProgress: (done, failed) => run.progress({ done, failed, total: rows.length }),
+            cancelled: () => isCancelled(run.id as number)
+          })
+          if (isCancelled(run.id as number)) clearCancel(run.id as number)
+          await store({ status: 'completed', total: rows.length, ...out })
+          const summary = out.rolled_back
+            ? `nothing kept — row ${Number(out.stopped_at) + 1} was refused`
+            : `${out.ok}/${rows.length} written${out.failed ? `, ${out.failed} refused` : ''}${
+                out.stopped_at != null && !out.rolled_back
+                  ? ` (stopped at row ${out.stopped_at + 1})`
+                  : ''
+              }`
+          if (out.ok === 0 && out.failed > 0) await run.fail(summary)
+          else await run.complete(summary)
+        } catch (err) {
+          await store({
+            status: 'error',
+            total: rows.length,
+            results: [],
+            error: err instanceof Error ? err.message.slice(0, 500) : 'failed'
+          })
+          await run.fail(err)
+        }
+      })()
+      await logActivity({
+        action: 'bulk-write',
+        user: user.id,
+        collection,
+        comment: `${rows.length} row(s) queued as job run ${run.id}${atomic ? ', all or nothing' : ''}`,
+        req
+      })
+      return reply.code(202).send({
+        data: {
+          run_id: run.id,
+          total: rows.length,
+          status: 'running',
+          results_url: `/api/items/${collection}/bulk/${run.id}`
+        }
+      })
+    }
+
+    const out = await runBulk(user, collection, rows, { atomic, req, workspaceId, slim })
+    await logActivity({
+      action: 'bulk-write',
+      user: user.id,
+      collection,
+      comment: out.rolled_back
+        ? `${rows.length} row(s), all or nothing — row ${Number(out.stopped_at) + 1} refused, nothing kept`
+        : `${out.ok}/${rows.length} row(s) written${out.failed ? `, ${out.failed} refused` : ''}`,
+      req
+    })
+    if (out.rolled_back) {
+      const bad = out.results.find((r) => r.status !== 424 && r.status >= 400)
+      return reply.code(422).send({
+        error: `Row ${Number(out.stopped_at) + 1} was refused: ${bad?.error ?? 'failed'} — nothing was created`,
+        code: 'BULK_ATOMIC_REFUSED',
+        data: out
+      })
+    }
+    return reply.code(207).send({ data: out })
+  })
+
+  // Results of an async bulk run. The caller who queued it, or an admin.
+  app.get('/:collection/bulk/:runId', async (req, reply) => {
+    const { collection, runId } = req.params as { collection: string; runId: string }
+    if (!/^\d+$/.test(runId)) return reply.code(400).send({ error: 'Invalid run id' })
+    const raw = await app.redis.get(`nvr:bulk:${runId}`).catch(() => null)
+    if (!raw) {
+      return reply.code(404).send({
+        error: 'No results for this run — they are kept for 24 hours after it was queued'
+      })
+    }
+    const stored = JSON.parse(raw) as { owner: string; collection: string } & Record<
+      string,
+      unknown
+    >
+    if (stored.collection !== collection) return reply.code(404).send({ error: 'Not found' })
+    if (!req.isAdmin && stored.owner !== String(req.user!.id).toUpperCase())
+      return reply.code(404).send({ error: 'Not found' })
+    const { owner: _owner, ...rest } = stored
+    const job = (await db('nivaro_job_runs')
+      .where({ id: Number(runId) })
+      .first('status', 'progress', 'outcome', 'started_at', 'finished_at', 'duration_ms')
+      .catch(() => null)) as Record<string, unknown> | null
+    return reply.send({
+      data: {
+        run_id: Number(runId),
+        ...rest,
+        job: job ? { ...job, progress: parseJson(job.progress as string | null) } : null
+      }
     })
   })
 

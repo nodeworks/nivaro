@@ -1605,6 +1605,7 @@ export function SettingsPage() {
   const [revisionRetentionCount, setRevisionRetentionCount] = useState<number | ''>('')
   const [fieldWatchEnabled, setFieldWatchEnabled] = useState(false)
   const [lockIdleMinutes, setLockIdleMinutes] = useState<number | ''>('')
+  const [transitionGuardSeconds, setTransitionGuardSeconds] = useState<number | ''>('')
   const [integrationNotificationsEnabled, setIntegrationNotificationsEnabled] = useState(false)
   const [integrationRemediationEnabled, setIntegrationRemediationEnabled] = useState(false)
   // datetime-local value (browser-local wall clock, no timezone of its own —
@@ -1716,6 +1717,9 @@ export function SettingsPage() {
     setLockIdleMinutes(
       (settings as { lock_idle_release_minutes?: number | null }).lock_idle_release_minutes ?? ''
     )
+    setTransitionGuardSeconds(
+      (settings as { transition_guard_seconds?: number | null }).transition_guard_seconds ?? ''
+    )
     setIntegrationNotificationsEnabled(
       !!(settings as { integration_notifications_enabled?: boolean })
         .integration_notifications_enabled
@@ -1725,7 +1729,8 @@ export function SettingsPage() {
     )
     setIntegrationObligationsEpoch(
       isoToDatetimeLocal(
-        (settings as { integration_obligations_epoch?: string | null }).integration_obligations_epoch
+        (settings as { integration_obligations_epoch?: string | null })
+          .integration_obligations_epoch
       )
     )
     setRevisionRetentionCount(settings.revision_retention_count ?? '')
@@ -1952,7 +1957,8 @@ export function SettingsPage() {
       activity_retention_days: activityRetentionDays === '' ? null : activityRetentionDays,
       revision_retention_count: revisionRetentionCount === '' ? null : revisionRetentionCount,
       field_watch_enabled: fieldWatchEnabled,
-      lock_idle_release_minutes: lockIdleMinutes === '' ? null : lockIdleMinutes
+      lock_idle_release_minutes: lockIdleMinutes === '' ? null : lockIdleMinutes,
+      transition_guard_seconds: transitionGuardSeconds === '' ? null : transitionGuardSeconds
     })
   }
 
@@ -3176,6 +3182,25 @@ export function SettingsPage() {
                       className='h-8 w-40 text-[13px]'
                     />
                   </Field>
+                  <Field
+                    label='Repeat transition guard (seconds)'
+                    hint='Refuse the same transition on the same record when it is made again within this many seconds — a double click or a retried request. Blank = 10 seconds. 0 = no guard.'
+                  >
+                    <Input
+                      type='number'
+                      min={0}
+                      max={300}
+                      value={transitionGuardSeconds}
+                      data-settings-transition-guard
+                      onChange={(e) =>
+                        setTransitionGuardSeconds(
+                          e.target.value === '' ? '' : Number(e.target.value)
+                        )
+                      }
+                      placeholder='10'
+                      className='h-8 w-40 text-[13px]'
+                    />
+                  </Field>
                 </SectionWrap>
               )}
 
@@ -3254,7 +3279,9 @@ export function SettingsPage() {
                         variant='outline'
                         size='sm'
                         onClick={() =>
-                          setIntegrationObligationsEpoch(isoToDatetimeLocal(new Date().toISOString()))
+                          setIntegrationObligationsEpoch(
+                            isoToDatetimeLocal(new Date().toISOString())
+                          )
                         }
                       >
                         Set to now
@@ -3267,7 +3294,9 @@ export function SettingsPage() {
                   >
                     Sweep every 15 min · epoch{' '}
                     {integrationObligationsEpoch
-                      ? new Date(datetimeLocalToIso(integrationObligationsEpoch) ?? '').toLocaleString()
+                      ? new Date(
+                          datetimeLocalToIso(integrationObligationsEpoch) ?? ''
+                        ).toLocaleString()
                       : 'now, on next save'}{' '}
                     · notifications {integrationNotificationsEnabled ? 'on' : 'off'} · remediation{' '}
                     {integrationRemediationEnabled ? 'on' : 'off'} ·{' '}

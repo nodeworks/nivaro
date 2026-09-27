@@ -59,6 +59,9 @@ export async function legacyCompatRoutes(app: FastifyInstance) {
     if (auth) headers.authorization = auth
     if (req.headers.cookie) headers.cookie = req.headers.cookie
     headers['content-type'] = 'application/json'
+    // A partner's Idempotency-Key must reach the handler that honours it.
+    const idem = req.headers['idempotency-key']
+    if (idem) headers['idempotency-key'] = Array.isArray(idem) ? idem[0] : idem
     const dispatchToken = randomUUID()
     headers[INTERNAL_DISPATCH_HEADER] = dispatchToken
     internalDispatchTokens.add(dispatchToken)

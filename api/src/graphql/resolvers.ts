@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import {
+  GraphQLError,
   type GraphQLFieldConfigMap,
   GraphQLID,
   GraphQLInt,
@@ -9,6 +10,7 @@ import {
 } from 'graphql'
 import { db } from '../db/index.js'
 import { chainFields } from '../services/chain-columns.js'
+import { can } from '../services/permissions.js'
 import {
   buildInstancePayload,
   coerceBool,
@@ -1055,14 +1057,64 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
     type: ItemMutatedEventType,
     args: {
       collection: { type: new GraphQLNonNull(GraphQLString) },
-      item: { type: GraphQLID }
+      item: { type: GraphQLID },
+      /** Only updates that changed one of these fields. */
+      fields: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
+      /** Only these actions: create, update, delete. */
+      actions: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) }
     },
-    subscribe: (_src, args, ctx) => {
-      requireUser(ctx)
+    subscribe: async (_src, args, ctx) => {
+      const user = requireUser(ctx)
+      const collection = String(args.collection)
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection)) {
+        throw new GraphQLError('Unknown collection', { extensions: { code: 'BAD_USER_INPUT' } })
+      }
+      // The same gate as reading the collection. System tables stay with admins.
+      const system = /^(nivaro_|directus_)/i.test(collection)
+      const allowed = ctx.isAdmin || (!system && (await can(user, 'read', collection)))
+      if (!allowed) {
+        throw new GraphQLError('You do not have permission to read this collection', {
+          extensions: { code: 'FORBIDDEN' }
+        })
+      }
       const topic = args.item
-        ? topics.itemMutated(args.collection, args.item)
-        : topics.itemMutated(args.collection, '*')
-      return pubsub.asyncIterator(topic)
+        ? topics.itemMutated(collection, String(args.item))
+        : topics.itemMutated(collection, '*')
+      const source = pubsub.asyncIterator<{
+        itemMutated: { action: string; changed_fields: string[] }
+      }>(topic)
+      const fields = Array.isArray(args.fields)
+        ? new Set((args.fields as unknown[]).map(String))
+        : null
+      const actions = Array.isArray(args.actions)
+        ? new Set((args.actions as unknown[]).map(String))
+        : null
+      if ((!fields || fields.size === 0) && (!actions || actions.size === 0)) return source
+      // Narrowed: an event passes when its action is asked for and, for
+      // updates, when it touched one of the named fields.
+      const passes = (ev: { action: string; changed_fields: string[] }): boolean => {
+        if (actions && actions.size > 0 && !actions.has(ev.action)) return false
+        if (fields && fields.size > 0) {
+          if (ev.action !== 'update') return false
+          return ev.changed_fields.some((f) => fields.has(f))
+        }
+        return true
+      }
+      const filtered: AsyncIterableIterator<unknown> = {
+        async next() {
+          for (;;) {
+            const r = await source.next()
+            if (r.done) return r
+            if (passes(r.value.itemMutated)) return r
+          }
+        },
+        return: () => source.return!(),
+        throw: (e: unknown) => source.throw!(e),
+        [Symbol.asyncIterator]() {
+          return this
+        }
+      }
+      return filtered
     },
     resolve: (payload: unknown) => (payload as Record<string, unknown>).itemMutated
   }

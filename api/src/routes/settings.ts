@@ -116,6 +116,7 @@ const allowedSettingsKeys = [
   'brand_login_message',
   // Where email links land for non-admins (services/app-links.ts)
   'portal_url',
+  'transition_guard_seconds',
   'portal_routes',
   'welcome_message',
   // Provisional-account roles (migration 330): first sign-in role + the role an
@@ -199,6 +200,24 @@ export async function settingsRoutes(app: FastifyInstance) {
           : typeof patch.theme_accents === 'string'
             ? patch.theme_accents
             : JSON.stringify(patch.theme_accents)
+    }
+
+    // Transition double-fire guard: whole seconds, 0 = off, blank = default.
+    if ('transition_guard_seconds' in patch) {
+      const raw = patch.transition_guard_seconds
+      if (raw == null || raw === '') {
+        patch.transition_guard_seconds = null
+      } else {
+        const n = Number(raw)
+        if (!Number.isInteger(n) || n < 0 || n > 300) {
+          return reply
+            .code(400)
+            .send({ error: 'transition_guard_seconds must be a whole number from 0 to 300' })
+        }
+        patch.transition_guard_seconds = n
+      }
+      const { bustTransitionGuardCache } = await import('../services/transition-guard.js')
+      reply.raw.once('finish', () => bustTransitionGuardCache())
     }
 
     // Integration obligations epoch: coerce to a real Date (the client sends
