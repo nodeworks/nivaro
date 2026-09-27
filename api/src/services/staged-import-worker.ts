@@ -36,6 +36,8 @@ function afterImportCompleted(
     row_count: number
     duration_seconds: number
     created_by: string | null
+    /** Processor runs only: the records the run changed, per collection. */
+    affected?: Record<string, Array<string | number>>
   }
 ): void {
   void (async () => {
@@ -197,7 +199,7 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
     const fileBuffer = buffer
     const chainId = newChainId()
     const chainRoot = `import_run:${next.id}`
-    const { rowCount, durationSeconds, summary } = await startChain(
+    const { rowCount, durationSeconds, summary, affected } = await startChain(
       chainRoot,
       () =>
         runStagedImport({
@@ -246,7 +248,8 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
           procedure: definition.procedure ?? null,
           row_count: rowCount,
           duration_seconds: durationSeconds,
-          created_by: next.created_by ? String(next.created_by) : null
+          created_by: next.created_by ? String(next.created_by) : null,
+          ...(affected ? { affected } : {})
         }),
       chainId
     )

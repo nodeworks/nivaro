@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
+import { getImportProcessor, runImportProcessor } from './import-processors.js'
 import { runLongSql as runLong } from './run-long.js'
 import { parseServiceConfig, runServiceImport } from './staged-import-service.js'
 import { parseStagingColumns, resolveHeaderMap } from './staged-import-validation.js'
@@ -43,7 +44,9 @@ export interface ImportDefinition {
   validation?: string | null
   /** null/'proc' = staging table + stored procedure; 'service' = rows go
    *  through the items service (staged-import-service.ts) — revisions,
-   *  activity, rules and computed fields apply, and only changed rows write. */
+   *  activity, rules and computed fields apply, and only changed rows write;
+   *  '<extension>:<name>' = a registered import processor
+   *  (import-processors.ts) for files that span several collections. */
   processor?: string | null
   service_config?: string | null
   /** JSON array of nivaro_flows ids run in order after a successful run
@@ -499,7 +502,13 @@ export async function runStagedImport({
   createdBy,
   onProgress,
   runId = null
-}: RunImportOptions): Promise<{ rowCount: number; durationSeconds: number; summary?: string }> {
+}: RunImportOptions): Promise<{
+  rowCount: number
+  durationSeconds: number
+  summary?: string
+  /** Records a processor run changed, per collection — for the post-run flows. */
+  affected?: Record<string, Array<string | number>>
+}> {
   const began = Date.now()
 
   const table = definition.staging_table || `staging_${definition.key}`
@@ -562,6 +571,19 @@ export async function runStagedImport({
     return { rowCount: rows.length, durationSeconds, summary: summary.log }
   }
 
+  // A registered processor: the rows are classified against live data and
+  // only real changes are written, through the items service. The staging
+  // table is still loaded first — it stays the record of the last file, and
+  // the post-run flows read it.
+  const wantsProcessor =
+    !!definition.processor && definition.processor !== 'service' && definition.processor !== 'proc'
+  const processor = wantsProcessor ? getImportProcessor(definition.processor) : null
+  if (wantsProcessor && !processor && !definition.procedure) {
+    throw new Error(
+      `Import "${definition.key}" names the processor "${definition.processor}", which is not registered on this instance, and has no procedure to fall back to`
+    )
+  }
+
   await onProgress?.('preparing')
   await ensureStagingTable(table, columns, declaredNames)
 
@@ -570,6 +592,29 @@ export async function runStagedImport({
   if (loader === 'insert') await loadChunked(table, rows, columns)
   else await loadViaShare(table, rows, columns)
 
+  if (processor) {
+    await onProgress?.('importing')
+    const result = await runImportProcessor({
+      processor,
+      definition,
+      rows,
+      createdBy: createdBy ?? null,
+      onProgress: (written, total) => onProgress?.('importing', { written, total }),
+      stamp: runId != null ? `import:${definition.label || definition.key}:run-${runId}` : null
+    })
+    if (result.failed > 0 && result.created + result.updated === 0) {
+      throw new Error(`Import wrote nothing:\n${result.log}`)
+    }
+    const durationSeconds = Math.round((Date.now() - began) / 1000)
+    await onProgress?.('completed', { row_count: rows.length, duration: durationSeconds })
+    return {
+      rowCount: rows.length,
+      durationSeconds,
+      summary: result.log,
+      affected: result.affected
+    }
+  }
+
   if (definition.procedure) {
     await onProgress?.('importing')
     await runLongSql(`EXEC ${definition.procedure}`)
@@ -577,5 +622,15 @@ export async function runStagedImport({
 
   const durationSeconds = Math.round((Date.now() - began) / 1000)
   await onProgress?.('completed', { row_count: rows.length, duration: durationSeconds })
-  return { rowCount: rows.length, durationSeconds }
+  return {
+    rowCount: rows.length,
+    durationSeconds,
+    // The extension that owns the processor did not load here: the procedure
+    // ran instead, and the run says so.
+    ...(wantsProcessor
+      ? {
+          summary: `Ran the procedure ${definition.procedure}: the processor "${definition.processor}" is not registered on this instance.`
+        }
+      : {})
+  }
 }

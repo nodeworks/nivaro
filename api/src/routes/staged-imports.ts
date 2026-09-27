@@ -7,6 +7,12 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFileBuffer } from '../services/files.js'
 import {
+  getImportProcessor,
+  isProcessorKey,
+  listImportProcessors,
+  runImportProcessor
+} from '../services/import-processors.js'
+import {
   parseStagingColumns,
   parseValidationConfig,
   validateStagedRows
@@ -340,6 +346,11 @@ export async function stagedImportRoutes(app: FastifyInstance) {
 
   // ─── Definitions ──────────────────────────────────────────────────────────
 
+  /** Processors registered by extensions on this instance. */
+  app.get('/processors', { preHandler: requireAdmin }, async () => ({
+    data: listImportProcessors()
+  }))
+
   app.get('/definitions', async (req) => {
     const all = (req.query as { all?: string })?.all === 'true'
     return { data: await listImportDefinitions(!all) }
@@ -448,7 +459,14 @@ export async function stagedImportRoutes(app: FastifyInstance) {
             ? null
             : String(b.processor)
         if (v !== null && v !== 'service') {
-          return reply.code(400).send({ error: `Unknown processor "${v}"` })
+          // '<extension>:<name>' must be registered on THIS instance — a typo
+          // would otherwise fall back to the procedure on every run.
+          if (!isProcessorKey(v) || !getImportProcessor(v)) {
+            const known = listImportProcessors().map((p) => p.key)
+            return reply.code(400).send({
+              error: `Unknown processor "${v}"${known.length ? ` — registered: ${known.join(', ')}` : ''}`
+            })
+          }
         }
         patch.processor = v
       }
@@ -744,6 +762,32 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         } catch (err) {
           dryRun = { created: 0, updated: 0, unchanged: 0, skipped: {}, failed: 1, log: `Dry run failed: ${(err as Error).message}` }
         }
+      }
+    }
+
+    // A registered processor answers the same question for files that span
+    // several collections.
+    const processor = getImportProcessor(definition?.processor)
+    if (definition && processor) {
+      try {
+        const r = await runImportProcessor({
+          processor,
+          definition,
+          rows: mapRowsToDeclared(definition, rows),
+          createdBy: req.user?.id ?? null,
+          dryRun: true
+        })
+        dryRun = {
+          created: r.created,
+          updated: r.updated,
+          unchanged: r.unchanged,
+          skipped: r.skipped,
+          failed: r.failed,
+          log: r.log,
+          samples: r.samples
+        }
+      } catch (err) {
+        dryRun = { created: 0, updated: 0, unchanged: 0, skipped: {}, failed: 1, log: `Dry run failed: ${(err as Error).message}` }
       }
     }
 

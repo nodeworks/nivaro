@@ -40,6 +40,7 @@ import { type CollectionViewDef, collectionViewRegistry } from './collection-vie
 import { type DashboardWidgetDef, dashboardWidgetRegistry } from './dashboard-widgets.js'
 import { type FieldTypeDef, fieldTypeRegistry } from './field-types.js'
 import { type ImportParserDef, importParserRegistry } from './import-parsers.js'
+import { type ImportProcessorDef, registerImportProcessor } from '../services/import-processors.js'
 import { type ItemActionDef, itemActionRegistry } from './item-actions.js'
 import {
   type NotificationChannelDef,
@@ -230,6 +231,14 @@ export interface ExtensionContext {
   /** Register file import parsers for additional formats (Excel, XML, JSON, etc.). */
   importParsers: {
     register(def: ImportParserDef): void
+  }
+  /** Register a processor for staged imports whose file spans several
+   *  collections (a header and its lines). `key` is `<extension>:<name>` and is
+   *  what an import definition's Processor names. The processor writes only
+   *  through the tools it is handed — the items service, as the person who
+   *  queued the file. */
+  importProcessors: {
+    register(def: ImportProcessorDef): void
   }
   /** Register custom field validators (new operators for validation_rules). */
   validators: {
@@ -698,6 +707,7 @@ async function loadExtension(
     | 'fieldTypes'
     | 'collectionViews'
     | 'importParsers'
+    | 'importProcessors'
     | 'validators'
   >,
   config: Record<string, boolean>
@@ -940,6 +950,13 @@ async function loadExtension(
             )
           )
           collectionViewRegistry.register(def)
+        }
+      },
+      importProcessors: {
+        register: (def) => {
+          note('import-processors')
+          own('import_processors', `${def.key} · ${def.label}`)
+          registerImportProcessor(def)
         }
       },
       importParsers: {
@@ -1193,6 +1210,7 @@ export async function loadExtensions(
     | 'fieldTypes'
     | 'collectionViews'
     | 'importParsers'
+    | 'importProcessors'
     | 'validators'
   >
 ) {
@@ -1321,6 +1339,7 @@ export async function loadCloudExtensions(
     | 'fieldTypes'
     | 'collectionViews'
     | 'importParsers'
+    | 'importProcessors'
     | 'validators'
     | 'digest'
     | 'approvalBrief'
@@ -1478,6 +1497,7 @@ export async function loadCloudExtensions(
         fieldTypes: { register: (def) => fieldTypeRegistry.register(def) },
         collectionViews: { register: (def) => collectionViewRegistry.register(def) },
         importParsers: { register: (def) => importParserRegistry.register(def) },
+        importProcessors: { register: (def) => registerImportProcessor(def) },
         validators: { register: (def) => validatorRegistry.register(def) },
         flows: {
           registerOperation: (op) => registerOp(op),
@@ -1608,6 +1628,7 @@ export async function scanNewExtensions(
     | 'fieldTypes'
     | 'collectionViews'
     | 'importParsers'
+    | 'importProcessors'
     | 'validators'
     | 'digest'
     | 'approvalBrief'

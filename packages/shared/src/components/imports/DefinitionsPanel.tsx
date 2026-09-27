@@ -33,7 +33,8 @@ type Draft = {
   staging_columns: string
   validation: string
   procedure_body: string
-  processor: '' | 'service'
+  /** '' = stored procedure, 'service', or a registered processor key. */
+  processor: string
   service_config: string
   post_run_flows: string[]
   receipt_enabled: boolean
@@ -71,7 +72,7 @@ function toDraft(d: ImportDefinition | null): Draft {
     staging_columns: prettyJson(d?.staging_columns),
     validation: prettyJson(d?.validation),
     procedure_body: d?.procedure_body ?? '',
-    processor: d?.processor === 'service' ? 'service' : '',
+    processor: d?.processor && d.processor !== 'proc' ? String(d.processor) : '',
     service_config: prettyJson(d?.service_config),
     post_run_flows: parseIdList(d?.post_run_flows),
     receipt_enabled: (() => {
@@ -229,6 +230,30 @@ export function DefinitionsPanel({
   const [search, setSearch] = useState('')
   const [draft, setDraft] = useState<Draft>(toDraft(null))
   const [error, setError] = useState<string | null>(null)
+
+  // Processors an extension registered on this instance (files that span
+  // several collections). A definition naming one that is NOT registered here
+  // keeps its value — saving must never reset it to the procedure.
+  const processorsQ = useQuery({
+    queryKey: ['staged-import-processors'],
+    queryFn: () =>
+      client.request<{ data: Array<{ key: string; label: string; description?: string }> }>(
+        get('/staged-imports/processors')
+      ),
+    staleTime: 60_000
+  })
+  const registeredProcessors = processorsQ.data?.data ?? []
+  const processorOptions = [
+    { value: '', label: 'Stored procedure' },
+    { value: 'service', label: 'Items service (revisioned)' },
+    ...registeredProcessors.map((p) => ({ value: p.key, label: `${p.label} (revisioned)` })),
+    ...(draft.processor &&
+    draft.processor !== 'service' &&
+    !registeredProcessors.some((p) => p.key === draft.processor)
+      ? [{ value: draft.processor, label: `${draft.processor} (not registered here)` }]
+      : [])
+  ]
+  const processorNote = registeredProcessors.find((p) => p.key === draft.processor)?.description
 
   const selected =
     selectedId === NEW || selectedId == null
@@ -522,15 +547,15 @@ export function DefinitionsPanel({
 
               <Field
                 label='Processor'
-                hint='Stored procedure MERGEs staging rows (no revisions). Items service diffs and writes only real changes — revisions, activity, rules and computed fields apply.'
+                hint={
+                  processorNote ??
+                  'Stored procedure MERGEs staging rows (no revisions). Items service diffs and writes only real changes — revisions, activity, rules and computed fields apply.'
+                }
               >
                 <SimpleSelect
                   value={draft.processor}
-                  onChange={(v) => setDraft((d) => ({ ...d, processor: v as Draft['processor'] }))}
-                  options={[
-                    { value: '', label: 'Stored procedure' },
-                    { value: 'service', label: 'Items service (revisioned)' }
-                  ]}
+                  onChange={(v) => setDraft((d) => ({ ...d, processor: v }))}
+                  options={processorOptions}
                   className='h-8 text-[12.5px]'
                 />
               </Field>

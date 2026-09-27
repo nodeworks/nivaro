@@ -160,6 +160,51 @@ export const dataImportGuide: DocSection = {
       type: 'note',
       text: 'The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.'
     },
+    { type: 'h3', id: 'imports-processors', text: 'Import processors' },
+    {
+      type: 'p',
+      text: 'Service mode writes one collection per file. A file that spans several — a header and its lines, the links between them, totals that follow from the lines — is handled by an import processor: code an extension registers and a definition names in its Processor field. The file is compared with live data first and only real differences are written, through the items service, as the person who queued the file, so every change has a revision and an author. The upload preview shows the same dry run as service mode.'
+    },
+    {
+      type: 'pre',
+      code: `// api/extensions/<name>/index.ts
+ctx.importProcessors.register({
+  key: 'my-extension:orders',          // what the definition's Processor holds
+  label: 'Orders (headers and lines)',
+  async run({ rows, dryRun, tools, progress }) {
+    const vendors = await tools.lookup('vendors', 'name', rows.map((r) => r.Vendor))
+    // ...compare rows with live data, build the list of real changes...
+    if (dryRun) return { created, updated, unchanged, skipped: {}, failed: 0, log, samples }
+
+    const out = await tools.runWrites(
+      changes.map((c) => ({
+        label: c.label,
+        run: () => tools.update('orders', c.id, c.patch)
+      }))
+    )
+    await tools.recalcStoredRollups('projects', touchedProjectIds)
+    await tools.runProcedure('orders_after_import')
+    return { created, updated, unchanged, skipped: {}, failed: out.failed, log,
+      affected: { orders: changedIds } }
+  }
+})`
+    },
+    {
+      type: 'table',
+      head: ['Tool', 'What it does'],
+      rows: [
+        ['lookup(table, column, values)', 'One batched read: value → id, case-insensitive, lowest id wins.'],
+        ['create / update / remove', 'Items-service writes as the queuing user, stamped with the run.'],
+        ['runWrites(jobs)', 'Runs write jobs eight at a time. A failed job never stops the others.'],
+        ['recalcStoredRollups(collection, ids)', 'Every stored rollup on those records, once each.'],
+        ['runProcedure(name)', 'EXEC on its own long-running request; returns the time taken.'],
+        ['db', 'Read access for batched comparisons.']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The staging table is still loaded before a processor runs, so it stays the record of the last file and post-run flows that read it keep working. The records a run changed are handed to those flows as `affected` in the payload. If the extension that owns the processor is not loaded on an instance, the definition falls back to its procedure and the run says so.'
+    },
     { type: 'h2', id: 'imports-collection', text: 'Collection imports' },
     {
       type: 'p',
@@ -196,7 +241,7 @@ export const dataImportGuide: DocSection = {
     { type: 'h2', id: 'imports-definitions', text: 'Definitions' },
     {
       type: 'p',
-      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition\'s post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).'
+      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition\'s post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).'
     },
     {
       type: 'warn',

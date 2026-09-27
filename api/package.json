@@ -32,6 +32,7 @@
     "forecast:insights": "tsx extensions/efp-ops/scripts/forecast-insights.ts",
     "po:payment-terms": "tsx extensions/efp-ops/scripts/po-payment-terms.ts",
     "ai:chat-guide": "tsx extensions/efp-ops/scripts/ai-chat-guide.ts",
+    "po:service-import": "tsx extensions/efp-ops/scripts/po-service-import.ts",
     "retire:workflow-task": "tsx extensions/efp-ops/scripts/retire-workflow-task.ts",
     "pipeline:row-menu": "tsx extensions/efp-ops/scripts/row-menu-transitions.ts",
     "mdsi:fulfilment": "tsx extensions/efp-ops/scripts/mdsi-fulfilment.ts",
