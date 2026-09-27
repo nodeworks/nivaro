@@ -410,6 +410,33 @@ export const graphqlMutations: DocSection = {
       type: 'note',
       text: 'Create/update payloads accept Directus-era relation shapes: an M2O may be `{ id: … }`, and an M2M alias may be a single object, an array of `{ junction_field: { id } }` entries, or `{ create: [...] }` — alias writes are additive (junction rows are created, never detached).'
     },
+    { type: 'h3', text: 'Create a record with its related rows' },
+    {
+      type: 'p',
+      text: 'One-to-many rows ride inside `data` under the relation\'s field name, and the selection set can read them straight back. One mutation replaces the create-parent, read-id, create-children sequence.'
+    },
+    {
+      type: 'pre',
+      code: `mutation {
+  create_orders_item(data: {
+    customer: { id: 42 }
+    lines: [
+      { product: { id: 7 }, quantity: 2, price: 19.5 }
+      { product: { id: 9 }, quantity: 1, price: 120 }
+    ]
+    payments: [{ amount: 159, method: "card" }]
+  }) {
+    id
+    total
+    lines { id quantity price }
+    payments { id amount }
+  }
+}`
+    },
+    {
+      type: 'note',
+      text: 'Rows are created in payload order through the normal create path, as the caller. A refused row undoes the whole create and the error names it (`lines[2]: …`). On update the write is additive: rows without an id are added, nothing is changed or removed. See Items API → Create with related rows for the full rules.'
+    },
     {
       type: 'note',
       text: 'The `data` argument accepts the `JSON` scalar — pass a plain object with the fields you want to set. Unknown fields are ignored; field-level permission checks apply.'

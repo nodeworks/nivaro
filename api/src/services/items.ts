@@ -2710,6 +2710,203 @@ async function applyAliasM2MWrites(
   }
 }
 
+interface AliasO2MWrite {
+  field: string
+  collection: string
+  fk: string
+  rows: Array<Record<string, unknown>>
+}
+
+const NESTED_O2M_ROW_CAP = 500
+
+/**
+ * Nested ONE-TO-MANY writes — the other half of the Directus payload shape:
+ * `workflow_lines: [{…}, {…}]`, `forecasts: {create: [{…}]}` on the parent's
+ * create or update. An integration that had to create the record, read its id
+ * back and then post each child set in its own call sends ONE payload.
+ *
+ * Only rows WITHOUT an `id` are taken (each becomes a create with the parent
+ * FK set by the server — whatever the caller put in that column is replaced).
+ * Rows that carry an id, and bare ids, are ignored: a client echoing the
+ * children it just read must never turn into a wave of child updates. Additive
+ * like the M2M half — nothing is ever detached or deleted here.
+ *
+ * The alias key is REMOVED from the payload (it is not a column, and rules or
+ * validation must not judge an array as a field value).
+ */
+async function extractAliasO2MWrites(
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<AliasO2MWrite[]> {
+  let rels: CMSRelation[]
+  try {
+    rels = await getRelsForCollection(collection)
+  } catch {
+    return []
+  }
+  // Sets are written in the order the caller listed them: a later set may
+  // depend on an earlier one (a cap on one set reads a rollup over another).
+  const order = Object.keys(payload)
+  const writes: AliasO2MWrite[] = []
+  for (const r of rels) {
+    if (r.one_collection !== collection || !r.one_field || r.junction_field != null) continue
+    const key = r.one_field
+    if (key === 'id' || !(key in payload)) continue
+    if (!r.many_collection || !r.many_field) continue
+    if (/^nivaro_|^directus_/i.test(r.many_collection)) continue
+    if (!/^[A-Za-z0-9_]+$/.test(r.many_collection) || !/^[A-Za-z0-9_]+$/.test(r.many_field)) continue
+    const raw = payload[key]
+    let entries: unknown[] = []
+    if (Array.isArray(raw)) entries = raw
+    else if (raw && typeof raw === 'object') {
+      const create = (raw as { create?: unknown }).create
+      if (Array.isArray(create)) entries = create
+      else if (!('id' in (raw as object)) && !('update' in (raw as object)) && !('delete' in (raw as object)))
+        entries = [raw]
+    }
+    const rows = entries.filter(
+      (e): e is Record<string, unknown> =>
+        !!e && typeof e === 'object' && !Array.isArray(e) && (e as Record<string, unknown>).id == null
+    )
+    delete payload[key]
+    if (rows.length === 0) continue
+    if (rows.length > NESTED_O2M_ROW_CAP) {
+      throw Object.assign(
+        new Error(`"${key}" carries ${rows.length} rows — at most ${NESTED_O2M_ROW_CAP} per write`),
+        { statusCode: 400, code: 'NESTED_ROWS_LIMIT' }
+      )
+    }
+    writes.push({ field: key, collection: r.many_collection, fk: r.many_field, rows })
+  }
+  return writes.sort((a, b) => order.indexOf(a.field) - order.indexOf(b.field))
+}
+
+function mergeO2MWrites(a: AliasO2MWrite[], b: AliasO2MWrite[]): AliasO2MWrite[] {
+  if (b.length === 0) return a
+  const out = [...a]
+  for (const w of b) {
+    const hit = out.find((x) => x.field === w.field)
+    if (hit) hit.rows.push(...w.rows)
+    else out.push(w)
+  }
+  return out
+}
+
+type NestedCreated = Array<{ collection: string; id: string | number }>
+
+/**
+ * Create the child rows a nested write asked for, each through createOne as
+ * the SAME caller — permissions, before/after hooks, row rules, validation,
+ * natural-key upsert and activity all apply per row, exactly as if the caller
+ * had posted it. Sequential (line rows read earlier rows) with the per-row
+ * rollup recalc skipped; ONE recalc per child set afterwards.
+ *
+ * All or nothing: the first failing row stops the write, every child created
+ * so far is removed, and the error names the set and the row. `preExisting`
+ * guards the update path — a child create that the natural key routed onto a
+ * row that was already there is never deleted by the compensation.
+ */
+async function applyAliasO2MWrites(
+  user: User,
+  parentId: string | number,
+  writes: AliasO2MWrite[],
+  req: FastifyRequest | undefined,
+  workspaceId: string | undefined,
+  isNewParent: boolean
+): Promise<NestedCreated> {
+  const created: NestedCreated = []
+  for (const w of writes) {
+    const preExisting = new Set<string>()
+    if (!isNewParent) {
+      const rows = (await db(w.collection).where({ [w.fk]: parentId }).select('id')) as Array<{
+        id: string | number
+      }>
+      for (const r of rows) preExisting.add(String(r.id))
+    }
+    let last: Record<string, unknown> | null = null
+    for (let i = 0; i < w.rows.length; i++) {
+      try {
+        const row = (await createOne(
+          user,
+          w.collection,
+          { ...w.rows[i], [w.fk]: parentId },
+          req,
+          workspaceId,
+          { skipRollupRecalc: true }
+        )) as Record<string, unknown> | null
+        const rid = row?.id as string | number | undefined
+        if (rid != null && !preExisting.has(String(rid))) created.push({ collection: w.collection, id: rid })
+        if (row) last = row
+      } catch (err) {
+        const stuck = await undoNestedCreates(user, created, req)
+        const e = err as Error & { nested?: unknown }
+        const where = `${w.field}[${i}]`
+        e.message = `${where}: ${nestedReason(e)} — nothing was created${
+          stuck.length ? ` (could not remove: ${stuck.map((x) => `${x.collection} ${x.id}`).join(', ')})` : ''
+        }`
+        e.nested = { field: w.field, index: i, collection: w.collection }
+        throw e
+      }
+    }
+    // One recalc for the whole set: every row shares the parent.
+    if (last) await recalcAffectedRollups(w.collection, last)
+  }
+  return created
+}
+
+/** What went wrong, without the statement: a driver error reads
+ *  "<sql> - <reason>" and the caller of a nested write needs only the reason. */
+function nestedReason(err: Error): string {
+  const inner = (err as { errors?: unknown }).errors
+  const first = Array.isArray(inner) ? inner.find((x) => x instanceof Error && x.message) : null
+  if (first instanceof Error) return first.message.trim()
+  const m = /^\s*(?:insert|update|delete|select|merge|exec)\b[\s\S]*? - ([\s\S]+)$/i.exec(err.message)
+  return (m ? m[1] : err.message).trim()
+}
+
+/** Remove rows a failed nested write created, newest first. deleteOne so
+ *  rollups and history follow; a caller allowed to create but not delete
+ *  still gets a clean result through the raw fallback. */
+async function undoNestedCreates(
+  user: User,
+  created: NestedCreated,
+  req?: FastifyRequest
+): Promise<NestedCreated> {
+  const stuck: NestedCreated = []
+  for (const c of [...created].reverse()) {
+    try {
+      await deleteOne(user, c.collection, c.id, req)
+    } catch {
+      try {
+        await db(c.collection).where({ id: c.id }).del()
+      } catch {
+        stuck.push(c)
+      }
+    }
+  }
+  return stuck
+}
+
+/** A parent whose nested children failed never existed as far as the caller
+ *  is concerned: its after-hooks have not fired yet, so the row and the
+ *  junction links made for it are removed directly. */
+async function undoNewParent(
+  collection: string,
+  id: string | number,
+  aliasWrites: AliasM2MWrite[]
+): Promise<void> {
+  for (const w of aliasWrites) {
+    await db(w.junction)
+      .where({ [w.parentFk]: id })
+      .del()
+      .catch(() => {})
+  }
+  await db(collection)
+    .where({ id })
+    .del()
+    .catch((err) => console.warn(`nested write: could not remove ${collection} ${id}:`, err))
+}
+
 /**
  * Resolve a collection's `upsert_keys` (JSON array of column names) against a
  * create payload: returns the id of the row that already holds this natural
@@ -2779,6 +2976,8 @@ export async function createOne(
   // Contract check on the RAW caller payload, before rules/computed passes
   // reshape it — the contract judges what the integration actually sent.
   await enforceContracts(collection, user?.id, data, 'create')
+  // Nested child sets leave the payload BEFORE anything reads it as columns.
+  let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)
   let aliasWrites = await extractAliasM2MWrites(collection, data)
   // The fields the CALLER explicitly sent, captured before any rule, autofill
@@ -2852,6 +3051,10 @@ export async function createOne(
   // payload; the first pass already normalised the caller's own to id arrays,
   // so this is idempotent for everything the caller sent.
   aliasWrites = await extractAliasM2MWrites(collection, ctx.payload as Record<string, unknown>)
+  nestedWrites = mergeO2MWrites(
+    nestedWrites,
+    await extractAliasO2MWrites(collection, ctx.payload as Record<string, unknown>)
+  )
 
   if (typeof (ctx.payload as Record<string, unknown>)._change_reason === 'string') {
     if (!createReason)
@@ -2926,6 +3129,25 @@ export async function createOne(
   // rendered name/prefix the caller asked for.
   await applyAliasM2MWrites(user, returnedId as string | number, aliasWrites, req)
 
+  // Nested child sets (lines, forecasts…) — before the read-back so stored
+  // rollups over them are already in the response, and before the after-hooks
+  // so a failed child set leaves no trace of the parent either.
+  if (nestedWrites.length > 0) {
+    try {
+      await applyAliasO2MWrites(
+        user,
+        returnedId as string | number,
+        nestedWrites,
+        req,
+        workspaceId,
+        true
+      )
+    } catch (err) {
+      await undoNewParent(collection, returnedId as string | number, aliasWrites)
+      throw err
+    }
+  }
+
   const result = await readOne(user, collection, returnedId as string | number)
 
   // Recalc any stored rollups this new row contributes to (never throws). Callers
@@ -2978,6 +3200,7 @@ export async function updateOne(
 ) {
   assertNotRouteOnly(collection)
   await enforceContracts(collection, user?.id, data, 'update')
+  let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)
   let aliasWrites = await extractAliasM2MWrites(collection, data)
   const col = await getCollection(collection)
@@ -3079,6 +3302,10 @@ export async function updateOne(
   await span('hooks:before-update', () => hooks.trigger('before', ctx))
   // Same as createOne: a before-hook may add alias M2M links.
   aliasWrites = await extractAliasM2MWrites(collection, ctx.payload as Record<string, unknown>)
+  nestedWrites = mergeO2MWrites(
+    nestedWrites,
+    await extractAliasO2MWrites(collection, ctx.payload as Record<string, unknown>)
+  )
   if (typeof (ctx.payload as Record<string, unknown>)._change_reason === 'string') {
     changeReason = String((ctx.payload as Record<string, unknown>)._change_reason).trim()
   }
@@ -3203,6 +3430,9 @@ export async function updateOne(
   }
   // Alias M2M links (additive) before the read-back — see extractAliasM2MWrites
   await applyAliasM2MWrites(user, id, aliasWrites, req)
+  // Nested child sets are ADDED to the record (rows without an id only).
+  if (nestedWrites.length > 0)
+    await applyAliasO2MWrites(user, id, nestedWrites, req, workspaceId, false)
 
   const result = await span('read-back', () => readOne(user, collection, id, workspaceId))
 

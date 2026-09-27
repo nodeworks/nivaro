@@ -2181,6 +2181,29 @@ Authorization: Bearer &lt;token&gt;
     "updated_at": "2026-06-15T12:00:00Z"
   }
 }</code></pre>
+          <h3 class="doc-h3">Create with related rows</h3>
+          <p class="doc-p">A create or update may carry the rows of a one-to-many relation under the relation's field name. The record and its rows are written in one request, so a caller never has to read the new id back before posting the children.</p>
+          <pre class="doc-pre"><code>POST /api/items/orders
+Content-Type: application/json
+Authorization: Bearer &lt;token&gt;
+
+{
+  "customer": 42,
+  "lines": [
+    { "product": 7, "quantity": 2, "price": 19.5 },
+    { "product": 9, "quantity": 1, "price": 120 }
+  ],
+  "payments": { "create": [{ "amount": 159, "method": "card" }] }
+}</code></pre>
+          <ul class="doc-ul">
+            <li>Accepted shapes per relation: an array of rows, <code class="doc-code">{ "create": [...] }</code>, or a single row object.</li>
+            <li>Each row is created through the same path as <code class="doc-code">POST /items/&lt;child&gt;</code>, as the same caller: permissions, validation, hooks, field rules and computed fields apply per row. The foreign key to the parent is set for you.</li>
+            <li>Sets are written in the order they appear in the payload, rows in array order. List a set first when a later one depends on it (a cap on payments that reads the sum of lines).</li>
+            <li>All or nothing on create: if any row is refused, the rows already written and the new record are removed and the error names the row, e.g. <code class="doc-code">lines[2]: … — nothing was created</code>.</li>
+            <li>On update the write is additive. Rows without an <code class="doc-code">id</code> are created; rows that carry an <code class="doc-code">id</code> are left untouched, and no existing row is removed. Update or delete child rows through their own collection.</li>
+            <li>At most 500 rows per relation per request.</li>
+          </ul>
+          <div class="doc-note">Every row costs the same as a separate create, so a large set makes one long request. Raise client and proxy timeouts accordingly, or split very large sets.</div>
           <h3 class="doc-h3">Update example</h3>
           <pre class="doc-pre"><code>PATCH /api/items/articles/uuid-1
 Content-Type: application/json
@@ -3485,6 +3508,24 @@ Authorization: Bearer &lt;admin-token&gt;
               <tr><td>delete_collectionName_items</td><td>ids: [ID!]! — batch, returns { ids }</td><td>User with delete permission</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Create/update payloads accept Directus-era relation shapes: an M2O may be <code class="doc-code">{ id: … }</code>, and an M2M alias may be a single object, an array of <code class="doc-code">{ junction_field: { id } }</code> entries, or <code class="doc-code">{ create: [...] }</code> — alias writes are additive (junction rows are created, never detached).</div>
+          <h3 class="doc-h3">Create a record with its related rows</h3>
+          <p class="doc-p">One-to-many rows ride inside <code class="doc-code">data</code> under the relation's field name, and the selection set can read them straight back. One mutation replaces the create-parent, read-id, create-children sequence.</p>
+          <pre class="doc-pre"><code>mutation {
+  create_orders_item(data: {
+    customer: { id: 42 }
+    lines: [
+      { product: { id: 7 }, quantity: 2, price: 19.5 }
+      { product: { id: 9 }, quantity: 1, price: 120 }
+    ]
+    payments: [{ amount: 159, method: "card" }]
+  }) {
+    id
+    total
+    lines { id quantity price }
+    payments { id amount }
+  }
+}</code></pre>
+          <div class="doc-note">Rows are created in payload order through the normal create path, as the caller. A refused row undoes the whole create and the error names it (<code class="doc-code">lines[2]: …</code>). On update the write is additive: rows without an id are added, nothing is changed or removed. See Items API → Create with related rows for the full rules.</div>
           <div class="doc-note">The <code class="doc-code">data</code> argument accepts the <code class="doc-code">JSON</code> scalar — pass a plain object with the fields you want to set. Unknown fields are ignored; field-level permission checks apply.</div>
           <!-- /SYNC:graphql-mutations -->
         </div>
@@ -6945,10 +6986,38 @@ Content-Type: application/json
           <!-- /SYNC:ai-review-brief -->
         </div>
 
-        <div class="doc-section" id="s-ai-document-autofill" data-toc='[{"id":"ai-document-autofill","label":"Fill a record from a document"}]'>
+        <div class="doc-section" id="s-ai-document-autofill" data-toc='[{"id":"ai-document-autofill","label":"Fill a record from a document"},{"id":"ai-document-autofill-setup","label":"Turning it on"},{"id":"ai-document-autofill-flow","label":"What happens"},{"id":"ai-document-autofill-guards","label":"What keeps it honest"},{"id":"ai-document-autofill-api","label":"API"}]'>
           <!-- SYNC:ai-document-autofill -->
           <h1 class="doc-h1" id="ai-document-autofill">Fill a record from a document</h1>
-          <p class="doc-p">A new-record form can read a statement of work, a quote, a purchase order PDF, a spreadsheet or an email and propose the whole record for review. Off by default; turned on per collection. Run <code class="doc-code">pnpm sync-docs</code> to render the full section here.</p>
+          <p class="doc-p">A new-record form can read a statement of work, a quote, a purchase order PDF, a spreadsheet or an email and propose the whole record — header fields, related records, line items, a schedule — for a person to review before anything is saved. Off by default; turned on per collection.</p>
+          <h2 class="doc-h2" id="ai-document-autofill-setup">Turning it on</h2>
+          <ul class="doc-ul">
+            <li>Data Model → the collection → Settings → AI Features → **Fill from document**. The new-record form of that collection gains a "Fill from document" button beside "Import from file".</li>
+            <li>Settings → AI Features → **Model id for document autofill** (gateway provider only). Blank uses the Ask AI model. This is a multi-step tool loop — the model looks vendors, people and categories up, then hands back a structured proposal — so it wants the strong model, not the one-shot one.</li>
+            <li>AI governance: the feature key is <code class="doc-code">extract-record</code>; disabling it in <code class="doc-code">ai_disabled_features</code> hides the button everywhere.</li>
+          </ul>
+          <h2 class="doc-h2" id="ai-document-autofill-flow">What happens</h2>
+          <ul class="doc-ul">
+            <li>The file is read to plain text (PDF via poppler when installed, else in process; DOCX; XLSX/CSV sheets; text, HTML, .eml). Scanned PDFs with no text layer are refused with a clear message — nothing is invented from an image.</li>
+            <li>The model sees the collection's fillable fields from its active layout (types, choices, notes), its child collections (lines, materials, schedules) and its multi-select relations. Small lookup tables (types, regions, years — up to 200 rows) are listed whole; big ones (vendors, people, locations, items) are searched through <code class="doc-code">search_records</code>, which runs the same permission-checked read the person could do by hand.</li>
+            <li>The proposal comes back as one structured call: value, confidence and the sentence it came from, per field and per line, plus "asks" for anything the document does not say.</li>
+            <li>The review dialog lists fields, lines, links and asks with checkboxes and confidence pills. Apply STAGES the selection exactly like an import prefill — lines run the grid's row rules, the document attaches to the record's file field — and the record still needs Create.</li>
+          </ul>
+          <h2 class="doc-h2" id="ai-document-autofill-guards">What keeps it honest</h2>
+          <ul class="doc-ul">
+            <li>A relation id is accepted only when it came back from a lookup in that same request, or is one of the listed options. Anything else becomes an ask, never a silent guess.</li>
+            <li>Choices must match a configured choice; dates are normalised to ISO; numbers must parse; a one-line text field never receives a paragraph.</li>
+            <li>Line amounts are summed and compared with any total the model set on the parent; a mismatch is shown as a warning.</li>
+            <li>Required fields the document never covered are listed under "Still needs you".</li>
+            <li>Every run is activity-logged (<code class="doc-code">ai-extract</code>) and every model call lands in AI Analytics under feature <code class="doc-code">extract-record</code>.</li>
+          </ul>
+          <h2 class="doc-h2" id="ai-document-autofill-api">API</h2>
+          <pre class="doc-pre"><code>GET  /api/ai/extract-record/config/:collection      → { data: { enabled, accept: [".pdf", …] } }
+POST /api/ai/extract-record   multipart: collection=&lt;name&gt;, file=&lt;upload&gt;
+→ 200 { data: { summary, fields[], children[], m2m[], asks[], warnings[], prefill: { values, lines_by_alias, m2m, file_id, attach_alias }, document, model, rounds } }
+→ 403 feature off / collection not enabled / no create permission
+→ 413 over 25 MB · 422 no readable text · 502 the model returned no proposal</code></pre>
+          <div class="doc-note">Cost: a 5-page SOW on Sonnet is roughly 4–6 model rounds, 50–70 seconds, a few tens of cents. The system prompt (field spec + option lists) is prompt-cached across the rounds.</div>
           <!-- /SYNC:ai-document-autofill -->
         </div>
 

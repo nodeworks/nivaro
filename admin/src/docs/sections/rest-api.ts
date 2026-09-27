@@ -223,6 +223,41 @@ Authorization: Bearer <token>
   }
 }`
     },
+    { type: 'h3', text: 'Create with related rows' },
+    {
+      type: 'p',
+      text: 'A create or update may carry the rows of a one-to-many relation under the relation\'s field name. The record and its rows are written in one request, so a caller never has to read the new id back before posting the children.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/items/orders
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "customer": 42,
+  "lines": [
+    { "product": 7, "quantity": 2, "price": 19.5 },
+    { "product": 9, "quantity": 1, "price": 120 }
+  ],
+  "payments": { "create": [{ "amount": 159, "method": "card" }] }
+}`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Accepted shapes per relation: an array of rows, `{ "create": [...] }`, or a single row object.',
+        'Each row is created through the same path as `POST /items/<child>`, as the same caller: permissions, validation, hooks, field rules and computed fields apply per row. The foreign key to the parent is set for you.',
+        'Sets are written in the order they appear in the payload, rows in array order. List a set first when a later one depends on it (a cap on payments that reads the sum of lines).',
+        'All or nothing on create: if any row is refused, the rows already written and the new record are removed and the error names the row, e.g. `lines[2]: … — nothing was created`.',
+        'On update the write is additive. Rows without an `id` are created; rows that carry an `id` are left untouched, and no existing row is removed. Update or delete child rows through their own collection.',
+        'At most 500 rows per relation per request.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Every row costs the same as a separate create, so a large set makes one long request. Raise client and proxy timeouts accordingly, or split very large sets.'
+    },
     { type: 'h3', text: 'Update example' },
     {
       type: 'pre',
