@@ -2754,19 +2754,27 @@ async function extractAliasO2MWrites(
     if (key === 'id' || !(key in payload)) continue
     if (!r.many_collection || !r.many_field) continue
     if (/^nivaro_|^directus_/i.test(r.many_collection)) continue
-    if (!/^[A-Za-z0-9_]+$/.test(r.many_collection) || !/^[A-Za-z0-9_]+$/.test(r.many_field)) continue
+    if (!/^[A-Za-z0-9_]+$/.test(r.many_collection) || !/^[A-Za-z0-9_]+$/.test(r.many_field))
+      continue
     const raw = payload[key]
     let entries: unknown[] = []
     if (Array.isArray(raw)) entries = raw
     else if (raw && typeof raw === 'object') {
       const create = (raw as { create?: unknown }).create
       if (Array.isArray(create)) entries = create
-      else if (!('id' in (raw as object)) && !('update' in (raw as object)) && !('delete' in (raw as object)))
+      else if (
+        !('id' in (raw as object)) &&
+        !('update' in (raw as object)) &&
+        !('delete' in (raw as object))
+      )
         entries = [raw]
     }
     const rows = entries.filter(
       (e): e is Record<string, unknown> =>
-        !!e && typeof e === 'object' && !Array.isArray(e) && (e as Record<string, unknown>).id == null
+        !!e &&
+        typeof e === 'object' &&
+        !Array.isArray(e) &&
+        (e as Record<string, unknown>).id == null
     )
     delete payload[key]
     if (rows.length === 0) continue
@@ -2818,7 +2826,9 @@ async function applyAliasO2MWrites(
   for (const w of writes) {
     const preExisting = new Set<string>()
     if (!isNewParent) {
-      const rows = (await db(w.collection).where({ [w.fk]: parentId }).select('id')) as Array<{
+      const rows = (await db(w.collection)
+        .where({ [w.fk]: parentId })
+        .select('id')) as Array<{
         id: string | number
       }>
       for (const r of rows) preExisting.add(String(r.id))
@@ -2835,14 +2845,17 @@ async function applyAliasO2MWrites(
           { skipRollupRecalc: true }
         )) as Record<string, unknown> | null
         const rid = row?.id as string | number | undefined
-        if (rid != null && !preExisting.has(String(rid))) created.push({ collection: w.collection, id: rid })
+        if (rid != null && !preExisting.has(String(rid)))
+          created.push({ collection: w.collection, id: rid })
         if (row) last = row
       } catch (err) {
         const stuck = await undoNestedCreates(user, created, req)
         const e = err as Error & { nested?: unknown }
         const where = `${w.field}[${i}]`
         e.message = `${where}: ${nestedReason(e)} — nothing was created${
-          stuck.length ? ` (could not remove: ${stuck.map((x) => `${x.collection} ${x.id}`).join(', ')})` : ''
+          stuck.length
+            ? ` (could not remove: ${stuck.map((x) => `${x.collection} ${x.id}`).join(', ')})`
+            : ''
         }`
         e.nested = { field: w.field, index: i, collection: w.collection }
         throw e
@@ -2860,7 +2873,9 @@ function nestedReason(err: Error): string {
   const inner = (err as { errors?: unknown }).errors
   const first = Array.isArray(inner) ? inner.find((x) => x instanceof Error && x.message) : null
   if (first instanceof Error) return first.message.trim()
-  const m = /^\s*(?:insert|update|delete|select|merge|exec)\b[\s\S]*? - ([\s\S]+)$/i.exec(err.message)
+  const m = /^\s*(?:insert|update|delete|select|merge|exec)\b[\s\S]*? - ([\s\S]+)$/i.exec(
+    err.message
+  )
   return (m ? m[1] : err.message).trim()
 }
 

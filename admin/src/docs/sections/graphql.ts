@@ -398,12 +398,32 @@ export const graphqlMutations: DocSection = {
       type: 'table',
       head: ['Mutation', 'Arguments', 'Auth'],
       rows: [
-        ['create_collectionName', 'data: JSON (all fields optional)', 'User with create permission'],
-        ['create_collectionName_item', 'data: JSON — Directus-compatible alias', 'User with create permission'],
-        ['create_collectionName_items', 'data: [JSON] — batch, one row per entry', 'User with create permission'],
-        ['update_collectionName_item', 'id: ID!, data: JSON (partial)', 'User with update permission'],
+        [
+          'create_collectionName',
+          'data: JSON (all fields optional)',
+          'User with create permission'
+        ],
+        [
+          'create_collectionName_item',
+          'data: JSON — Directus-compatible alias',
+          'User with create permission'
+        ],
+        [
+          'create_collectionName_items',
+          'data: [JSON] — batch, one row per entry',
+          'User with create permission'
+        ],
+        [
+          'update_collectionName_item',
+          'id: ID!, data: JSON (partial)',
+          'User with update permission'
+        ],
         ['delete_collectionName_item', 'id: ID!', 'User with delete permission'],
-        ['delete_collectionName_items', 'ids: [ID!]! — batch, returns { ids }', 'User with delete permission']
+        [
+          'delete_collectionName_items',
+          'ids: [ID!]! — batch, returns { ids }',
+          'User with delete permission'
+        ]
       ]
     },
     {
@@ -413,7 +433,7 @@ export const graphqlMutations: DocSection = {
     { type: 'h3', text: 'Create a record with its related rows' },
     {
       type: 'p',
-      text: 'One-to-many rows ride inside `data` under the relation\'s field name, and the selection set can read them straight back. One mutation replaces the create-parent, read-id, create-children sequence.'
+      text: "One-to-many rows ride inside `data` under the relation's field name, and the selection set can read them straight back. One mutation replaces the create-parent, read-id, create-children sequence."
     },
     {
       type: 'pre',
@@ -525,7 +545,9 @@ const unsub = client.subscribe(
 unsub()`
     },
     {
-      type: 'h3', text: 'Authentication' },
+      type: 'h3',
+      text: 'Authentication'
+    },
     {
       type: 'p',
       text: 'Pass a static token via `connectionParams.authorization`. The server validates it before allowing subscriptions. Session cookies are not supported on WebSocket — use static tokens.'
@@ -605,7 +627,9 @@ Authorization: Bearer <admin-token>
 → 200 { "ok": true, "types": 42 }`
     },
     {
-      type: 'h3', text: 'When to rebuild' },
+      type: 'h3',
+      text: 'When to rebuild'
+    },
     {
       type: 'ul',
       items: [

@@ -226,7 +226,7 @@ Authorization: Bearer <token>
     { type: 'h3', text: 'Create with related rows' },
     {
       type: 'p',
-      text: 'A create or update may carry the rows of a one-to-many relation under the relation\'s field name. The record and its rows are written in one request, so a caller never has to read the new id back before posting the children.'
+      text: "A create or update may carry the rows of a one-to-many relation under the relation's field name. The record and its rows are written in one request, so a caller never has to read the new id back before posting the children."
     },
     {
       type: 'pre',
@@ -434,8 +434,16 @@ export const apiCollections: DocSection = {
         ],
         ['GET', '/api/collections/:name/fields', 'List all fields for a collection.'],
         ['POST', '/api/collections/:name/fields', 'Register a field from existing column.'],
-        ['PATCH', '/api/collections/:name/fields/:field', 'Update field metadata (label, interface, etc).'],
-        ['DELETE', '/api/collections/:name/fields/:field', 'Unregister a field (column is not dropped).']
+        [
+          'PATCH',
+          '/api/collections/:name/fields/:field',
+          'Update field metadata (label, interface, etc).'
+        ],
+        [
+          'DELETE',
+          '/api/collections/:name/fields/:field',
+          'Unregister a field (column is not dropped).'
+        ]
       ]
     },
     { type: 'h3', text: 'Register collection example' },
@@ -593,11 +601,7 @@ Content-Type: application/json
       head: ['Field', 'Type', 'Notes'],
       rows: [
         ['manager_id', 'uuid | null', 'Direct manager (admin-only).'],
-        [
-          'delegate_id',
-          'uuid | null',
-          'User who receives delegation while out of office.'
-        ],
+        ['delegate_id', 'uuid | null', 'User who receives delegation while out of office.'],
         ['delegate_expires_at', 'datetime | null', 'When delegation expires; null = indefinite.'],
         ['is_out_of_office', 'boolean', 'Master switch — delegation active only when true.']
       ]
@@ -853,8 +857,16 @@ export const apiFiles: DocSection = {
         ['POST', '/api/files', 'Upload file (multipart/form-data). Field: `file`.'],
         ['GET', '/api/files/:id', 'File metadata (size, mime type, dates).'],
         ['GET', '/api/files/:id/content', 'Serve file with correct Content-Type header.'],
-        ['PATCH', '/api/files/:id', 'Update metadata (title, description, folder, expires_at, tags, filename_download — the download name; one path segment, no separators).'],
-        ['POST', '/api/files/:id/replace', 'Re-upload: swap the bytes behind an existing id (multipart, field `file`). Same id, so every reference keeps working; new storage key, old object + cached transforms deleted, a dead-link flag cleared.'],
+        [
+          'PATCH',
+          '/api/files/:id',
+          'Update metadata (title, description, folder, expires_at, tags, filename_download — the download name; one path segment, no separators).'
+        ],
+        [
+          'POST',
+          '/api/files/:id/replace',
+          'Re-upload: swap the bytes behind an existing id (multipart, field `file`). Same id, so every reference keeps working; new storage key, old object + cached transforms deleted, a dead-link flag cleared.'
+        ],
         ['DELETE', '/api/files/:id', 'Delete file from storage backend + metadata.'],
         ['GET', '/api/files/:id/transform', 'Resize/transcode image (w, h, fit, format, q params).']
       ]
