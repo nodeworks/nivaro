@@ -27,6 +27,9 @@ import { UserAvatar } from '../UserAvatar'
  * Needs `<NivaroProvider>`.
  */
 
+/** What the server writes in place of a credential (services/secret-mask.ts). */
+const MASKED = '••••••'
+
 export interface ApiLogRow {
   id: number
   method: string
@@ -45,6 +48,8 @@ export interface ApiLogRow {
   error: string | null
   /** #67 — stored JSON body of an inbound integration write (token / API-key caller). */
   request_body?: string | null
+  /** The query string as sent, values under credential-looking names masked. */
+  query?: string | null
   created_at: string
 }
 
@@ -461,6 +466,7 @@ export function ApiRequestLog({
                             <Detail label='Caller' value={r.user_email ?? r.api_key_name ?? '—'} />
                             <Detail label='Collection' value={r.collection ?? '—'} mono />
                             <Detail label='User agent' value={r.user_agent ?? '—'} mono wide />
+                            {r.query && <Detail label='Query' value={`?${r.query}`} mono wide />}
                           </dl>
                           {r.error && (
                             <pre className='mt-2 max-h-56 overflow-auto rounded-md border border-red-200 bg-white p-2 text-[11px] leading-snug text-red-800 dark:border-red-500/30 dark:bg-[#1a1416] dark:text-red-200'>
@@ -612,6 +618,9 @@ function ReplayBlock({ row }: { row: ApiLogRow }) {
     duration_ms: number
     body: unknown
   }>(null)
+  const stored = row.query ?? ''
+  const [query, setQuery] = useState(stored)
+  const queryEdited = query !== stored
   const parsed = (() => {
     try {
       return { ok: true as const, value: JSON.parse(text) as unknown }
@@ -622,7 +631,10 @@ function ReplayBlock({ row }: { row: ApiLogRow }) {
   const replay = useMutation({
     mutationFn: () =>
       client.request<{ data: { status: number; ok: boolean; duration_ms: number; body: unknown } }>(
-        post(`/api-analytics/requests/${row.id}/replay`, editing ? { body: parsed.value } : {})
+        post(`/api-analytics/requests/${row.id}/replay`, {
+          ...(editing ? { body: parsed.value } : {}),
+          ...(queryEdited ? { query } : {})
+        })
       ),
     onSuccess: (res) => {
       setArmed(false)
@@ -640,6 +652,7 @@ function ReplayBlock({ row }: { row: ApiLogRow }) {
     }
   })
   const truncated = (row.request_body ?? '').endsWith('…')
+  const queryBlocked = query.includes(MASKED) || query.endsWith('…')
   return (
     <div className='mt-2' data-request-replay={row.id}>
       <div className='flex items-center gap-2'>
@@ -659,7 +672,7 @@ function ReplayBlock({ row }: { row: ApiLogRow }) {
         <button
           type='button'
           data-request-replay-btn
-          disabled={replay.isPending || (editing ? !parsed.ok : truncated)}
+          disabled={replay.isPending || queryBlocked || (editing ? !parsed.ok : truncated)}
           onClick={() => (armed ? replay.mutate() : setArmed(true))}
           onBlur={() => setArmed(false)}
           className={cn(
@@ -672,12 +685,38 @@ function ReplayBlock({ row }: { row: ApiLogRow }) {
           {replay.isPending
             ? 'Replaying…'
             : armed
-              ? `Send ${row.method} ${row.path}?`
+              ? `Send ${row.method} ${row.path}${query ? '?…' : ''}?`
               : editing
                 ? 'Replay edited'
                 : 'Replay'}
         </button>
       </div>
+      {(stored || query) && (
+        <label className='mt-1 flex items-center gap-2 text-[10.5px] text-slate-500 dark:text-slate-400'>
+          <span className='shrink-0 font-semibold uppercase tracking-wide'>Query</span>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value.replace(/^\?/, ''))}
+            spellCheck={false}
+            data-request-replay-query
+            aria-label='Query string to replay with'
+            className={cn(
+              'h-7 min-w-0 flex-1 rounded-md border bg-white px-2 font-mono text-[11px] text-slate-700 dark:bg-background dark:text-foreground',
+              queryBlocked ? 'border-amber-400' : 'border-slate-200 dark:border-border'
+            )}
+          />
+        </label>
+      )}
+      {queryBlocked && (
+        <p
+          className='mt-1 text-[10.5px] text-amber-700 dark:text-amber-300'
+          data-request-replay-query-blocked
+        >
+          {query.endsWith('…')
+            ? 'The stored query was cut short. Complete it to replay.'
+            : 'A value in the query was masked when it was stored. Type the real value to replay.'}
+        </p>
+      )}
       {editing ? (
         <textarea
           value={text}

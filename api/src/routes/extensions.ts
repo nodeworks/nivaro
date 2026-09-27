@@ -450,7 +450,21 @@ export async function extensionsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     if (!extensionRegistry.has(id)) return reply.code(404).send({ error: 'Extension not found' })
     const { describeExtensionRegistry } = await import('../extensions/loader.js')
-    return reply.send({ data: await describeExtensionRegistry(id, app.cron) })
+    const { hooks } = await import('../hooks/registry.js')
+    // Timings ride beside the registry, never inside it: the registry is
+    // fingerprinted per boot and a run count would change it every time.
+    return reply.send({
+      data: { ...(await describeExtensionRegistry(id, app.cron)), hook_timings: hooks.timings(id) }
+    })
+  })
+
+  // Every hook in the process — core ones included — with how long each takes.
+  app.get('/hooks/timings', { preHandler: requireAdmin }, async (_req, reply) => {
+    const { hooks } = await import('../hooks/registry.js')
+    const rows = hooks
+      .timings()
+      .sort((a, b) => (b.p95_ms ?? -1) - (a.p95_ms ?? -1) || b.runs - a.runs)
+    return reply.send({ data: rows })
   })
 
   // #530 — every registry version this database has seen for the extension,

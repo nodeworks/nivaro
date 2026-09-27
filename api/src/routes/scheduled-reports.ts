@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { resyncAfterWrites } from '../services/row-schedules.js'
 import { runScheduledReport, type ScheduledReport } from '../services/scheduled-reports.js'
 
 function toJson(v: unknown): string | null {
@@ -31,6 +32,8 @@ function format(row: ScheduledReport) {
 const CRON_RE = /^(\S+\s+){4}\S+$/
 
 export async function scheduledReportsRoutes(app: FastifyInstance) {
+  // A saved, edited or removed schedule takes effect at once, on every process.
+  resyncAfterWrites(app, 'scheduled-reports')
   app.addHook('preHandler', requireAdmin)
 
   app.get('/', async (_req, reply) => {

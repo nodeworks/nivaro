@@ -2,8 +2,10 @@
  * Cache console (#236): one registry of the process's in-memory caches with a
  * bust button each. Caches self-register at module load with their existing
  * bust function — the registry never owns cache logic, it only names it.
- * Per-replica by nature (these are in-process maps), which the UI says.
+ * The maps are per process; a bust asked for here also moves the database's
+ * configuration epoch, so every other process follows within its poll.
  */
+import { bumpConfigEpoch } from '../db/config-epoch.js'
 
 export interface RegisteredCache {
   name: string
@@ -41,4 +43,13 @@ export function bustAllCaches(): string[] {
     }
   }
   return names
+}
+
+/** Clear here, then tell every other process on this database. */
+export async function bustEverywhere(
+  name: string
+): Promise<{ busted: string[]; epoch: number | null }> {
+  const busted = name === '__all__' ? bustAllCaches() : bustCache(name) ? [name] : []
+  const epoch = busted.length ? await bumpConfigEpoch() : null
+  return { busted, epoch }
 }

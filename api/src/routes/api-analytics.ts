@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { recordReplayRoot } from '../services/chain-roots.js'
+import { queryIsReplayable } from '../services/secret-mask.js'
 
 const LATENCY_SAMPLE_CAP = 50000
 
@@ -239,6 +241,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     if (q.errors === '1') void base.where('l.status', '>=', 400)
 
     const totalRow = (await base.clone().count('* as c').first()) as { c: number } | undefined
+    const withQuery = await hasColumn('nivaro_api_logs', 'query')
     const rows = (await base
       .clone()
       .leftJoin('nivaro_users as u', 'u.id', 'l.user')
@@ -257,6 +260,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         'l.user_agent',
         'l.error',
         'l.request_body',
+        ...(withQuery ? ['l.query'] : []),
         'l.created_at',
         'u.first_name',
         'u.last_name',
@@ -286,6 +290,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         user_agent: r.user_agent,
         error: r.error,
         request_body: r.request_body ?? null,
+        query: (r.query as string | null | undefined) ?? null,
         created_at: r.created_at
       })),
       total: Number(totalRow?.c ?? 0),
@@ -298,14 +303,20 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
   // stored body (or an edited one), dispatched in-process AS THE ADMIN who
   // clicked (the caller's credential is never stored). The new request logs
   // normally and carries x-nivaro-replay-of so the two rows can be paired.
-  app.post<{ Params: { id: string }; Body: { body?: unknown } }>(
+  app.post<{ Params: { id: string }; Body: { body?: unknown; query?: string } }>(
     '/requests/:id/replay',
     { preHandler: requireAdmin },
     async (req, reply) => {
       const row = (await db('nivaro_api_logs')
         .where({ id: Number(req.params.id) })
         .first()) as
-        | { id: number; method: string; path: string; request_body: string | null }
+        | {
+            id: number
+            method: string
+            path: string
+            request_body: string | null
+            query?: string | null
+          }
         | undefined
       if (!row) return reply.code(404).send({ error: 'Request not found' })
       if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(row.method))
@@ -326,6 +337,17 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
           return reply.code(400).send({ error: 'Stored body is not valid JSON' })
         }
       } else return reply.code(400).send({ error: 'No request body was stored for this request' })
+      // The query string goes along. One that was cut short, or that held a
+      // masked value, cannot be sent as stored — the caller supplies it.
+      const given = req.body && typeof req.body.query === 'string' ? req.body.query : null
+      if (given === null && !queryIsReplayable(row.query))
+        return reply.code(400).send({
+          error:
+            'The stored query string was cut short or holds a masked value — supply the query to replay',
+          code: 'REPLAY_QUERY_NEEDED',
+          query: row.query
+        })
+      const query = (given ?? row.query ?? '').replace(/^\?/, '')
       const headers: Record<string, string> = {
         'content-type': 'application/json',
         'x-nivaro-replay-of': String(row.id)
@@ -345,7 +367,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       const t0 = Date.now()
       const res = await app.inject({
         method: row.method as 'POST',
-        url: row.path,
+        url: query ? `${row.path}?${query}` : row.path,
         headers,
         payload: JSON.stringify(payload)
       })
@@ -359,7 +381,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         action: 'api-request-replay',
         user: req.user?.id,
         req,
-        comment: `${row.method} ${row.path} (log #${row.id}) → ${res.statusCode}${hasEdited ? ' · edited body' : ''}`
+        comment: `${row.method} ${row.path}${query ? '?…' : ''} (log #${row.id}) → ${res.statusCode}${hasEdited ? ' · edited body' : ''}${given !== null ? ' · edited query' : ''}`
       })
       return reply.send({
         data: {

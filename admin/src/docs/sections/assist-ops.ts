@@ -95,7 +95,7 @@ export const scheduledReportsDocs: DocSection = {
         'Recipients get the PDF as an attachment; subject carries the date.',
         'Send now runs the same path as the cron for instant verification.',
         'Reports run as their creator — configure recipients knowing what the report exposes.',
-        'New schedules activate on the next server restart (crons register at boot); Send now works immediately.'
+        'A schedule takes effect when it is saved: created, edited, switched off or deleted, on every process within about 5 seconds. The same holds for retention policies, sync jobs and scheduled flows.'
       ]
     }
   ]

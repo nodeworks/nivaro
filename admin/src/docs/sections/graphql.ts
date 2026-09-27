@@ -240,6 +240,39 @@ query {
   }
 }`
     },
+    { type: 'h3', text: 'Filters that are not fields' },
+    {
+      type: 'p',
+      text: 'Every collection filter also takes `_state`, `_origin`, `_addendums`, `_at_risk` and `_integrations`. They are the REST keys `$state`, `$origin` and so on, spelled with an underscore because a GraphQL name cannot start with `$`. They work at every depth, inside `_and` / `_or` and inside relation filters.'
+    },
+    {
+      type: 'pre',
+      code: `query {
+  # started, and touched by an integration in the last 7 days
+  orders(filter: {
+    _state: { _in: ["started"] }
+    _origin: { _in: [integration], days: 7 }
+  }) { id }
+
+  # never edited by a person, or with an addendum in flight
+  orders_metadata(filter: {
+    _or: [{ _origin: { _nin: [person] } }, { _addendums: active }]
+  }) { total }
+}`
+    },
+    { type: 'h3', text: 'Filtering on the link itself' },
+    {
+      type: 'p',
+      text: 'A many-to-many filter takes `_link`, which filters the junction row of the link: a membership that only applies in one region, a role on the link. Inside `_some` or `_none` it must hold on the same link as the other keys. On its own it means "some link like this".'
+    },
+    {
+      type: 'pre',
+      code: `query {
+  articles(filter: {
+    tags: { _some: { name: { _eq: "featured" }, _link: { region_id: { _eq: 3 } } } }
+  }) { id }
+}`
+    },
     { type: 'h3', text: 'O2M / M2M filters' },
     {
       type: 'p',

@@ -7,14 +7,15 @@ import fastifyStatic from '@fastify/static'
 import fastify from 'fastify'
 import { registerSession } from './auth/session.js'
 import { config } from './config.js'
-import { describeDbRefusal } from './lib/db-refusal.js'
 import { db } from './db/index.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
+import { describeDbRefusal, errorText } from './lib/db-refusal.js'
+import { scopeRefusalBody } from './middleware/authenticate.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
-import { scopeRefusalBody } from './middleware/authenticate.js'
+import { bootPhase } from './services/boot-phases.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { chainPlugin } from './plugins/chain.js'
 import { cronPlugin } from './plugins/cron.js'
@@ -206,6 +207,25 @@ export async function buildServer() {
     startRuntimeMonitor()
     const { registerKnownCaches } = await import('./services/cache-registrations.js')
     registerKnownCaches()
+    // Another process wrote configuration: clear what this one holds.
+    const { CONFIG_EPOCH, SCHEDULES_EPOCH, onEpoch, startEpochWatch, stopEpochWatch } =
+      await import('./db/config-epoch.js')
+    const { bustAllCaches } = await import('./services/cache-registry.js')
+    onEpoch(CONFIG_EPOCH, (epoch) => {
+      const names = bustAllCaches()
+      app.log.info(
+        { epoch, caches: names.length },
+        'Configuration changed elsewhere — caches cleared'
+      )
+    })
+    // A schedule was created, edited or removed by another process.
+    onEpoch(SCHEDULES_EPOCH, async () => {
+      if (process.env.CLOUD_META_DB_URL || !app.cron) return
+      const { resyncAllSchedules } = await import('./services/row-schedules.js')
+      await resyncAllSchedules(app)
+    })
+    startEpochWatch(Number(process.env.CACHE_EPOCH_POLL_MS ?? 5000))
+    app.addHook('onClose', async () => stopEpochWatch())
     const { startInstanceRoster } = await import('./services/instance-roster.js')
     startInstanceRoster(app.redis)
     const { startPoolAttribution } = await import('./services/pool-attribution.js')
@@ -390,7 +410,7 @@ export async function buildServer() {
         trackError({
           source: 'server',
           route: routeKey,
-          message: err.message,
+          message: errorText(err, 400),
           stack: err.stack,
           userId: req.user?.id ?? null,
           requestContext
@@ -418,7 +438,9 @@ export async function buildServer() {
 
   // ─── Routes ───────────────────────────────────────────────────────────────
   await app.register(presencePublicRoutes, { prefix: '/api/presence' })
-  await app.register(registerRoutes, { prefix: '/api' })
+  await bootPhase('Routes', async () => {
+    await app.register(registerRoutes, { prefix: '/api' })
+  })
   await app.register(graphqlPlugin, { prefix: '/api' })
   await app.register(legacyCompatRoutes)
   await app.register(formRendererRoutes)
@@ -456,14 +478,16 @@ export async function buildServer() {
       )
       registerCoreIntegrationSignals()
     }
-    await loadExtensions({
-      app,
-      database: db,
-      inngest: app.inngest,
-      logger: app.log,
-      callExternalApi
-    })
-    await loadScheduledFlows(app)
+    await bootPhase('Extensions', () =>
+      loadExtensions({
+        app,
+        database: db,
+        inngest: app.inngest,
+        logger: app.log,
+        callExternalApi
+      })
+    )
+    await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.
     void (async () => {
@@ -626,52 +650,13 @@ export async function buildServer() {
       }
       runRetentionPurge()
 
-      // ── User retention policies — schedule active crons ──────────────────────
-      async function scheduleRetentionPolicies() {
-        try {
-          const policies = await db('nivaro_retention_policies')
-            .where({ is_active: true })
-            .whereNotNull('cron_schedule')
-          for (const p of policies) {
-            const cronId = `retention-policy-${p.id}`
-            app.cron.schedule(cronId, p.cron_schedule, async () => {
-              try {
-                const fresh = await db('nivaro_retention_policies').where({ id: p.id }).first()
-                if (!fresh?.is_active) return
-                const { executeRetentionPolicy } = await import('./services/retention.js')
-                await executeRetentionPolicy(fresh, undefined, false)
-              } catch (err) {
-                app.log.error({ err }, `[retention] policy ${p.id} cron failed`)
-              }
-            })
-          }
-        } catch (err) {
-          app.log.warn({ err }, '[retention] failed to schedule cron policies')
-        }
-      }
-      scheduleRetentionPolicies()
-
-      // ── Scheduled reports — email PDF snapshots on their cron ────────────────
-      async function scheduleReports() {
-        try {
-          const reports = await db('nivaro_scheduled_reports').where({ is_active: true })
-          for (const r of reports) {
-            app.cron.schedule(`scheduled-report-${r.id}`, r.cron_schedule, async () => {
-              try {
-                const fresh = await db('nivaro_scheduled_reports').where({ id: r.id }).first()
-                if (!fresh?.is_active) return
-                const { runScheduledReport } = await import('./services/scheduled-reports.js')
-                await runScheduledReport(fresh)
-              } catch (err) {
-                app.log.error({ err }, `[scheduled-reports] report ${r.id} cron failed`)
-              }
-            })
-          }
-        } catch (err) {
-          app.log.warn({ err }, '[scheduled-reports] failed to schedule crons')
-        }
-      }
-      scheduleReports()
+      // ── Schedules that live in rows: retention policies, scheduled reports ──
+      // Registered here at boot and again whenever a row changes (the routes
+      // and the schedules epoch call the same reconcile).
+      void import('./services/row-schedules.js').then(async (m) => {
+        await m.resyncSchedules(app, 'retention')
+        await m.resyncSchedules(app, 'scheduled-reports')
+      })
 
       // ── Report Studio — hourly alert checks + daily/weekly subscription mail ──
       // Auto-transition sweep: date-based transition conditions (within_days etc.)
@@ -1348,14 +1333,24 @@ export async function buildServer() {
       // instead of paying the ~6s compile. Best-effort, never awaited.
       // Owner groups for every bound template (#481): the first queue read
       // after a deploy used to fetch ~1.9MB of group filters cold (~3s).
-      void import('./services/pipeline-engine.js')
-        .then((m) => m.warmOwnerGroupCache())
-        .then((n) => app.log.info(`owners: warmed owner groups for ${n} state(s)`))
-        .catch(() => {})
-      void import('./services/config-conformance.js')
-        .then((m) => m.warmCompiledChecks())
-        .then((n) => app.log.info(`integrity: warmed checks for ${n} collection(s)`))
-        .catch(() => {})
+      void bootPhase(
+        'Warm owner groups',
+        async () => {
+          const m = await import('./services/pipeline-engine.js')
+          const n = await m.warmOwnerGroupCache()
+          app.log.info(`owners: warmed owner groups for ${n} state(s)`)
+        },
+        { background: true }
+      ).catch(() => {})
+      void bootPhase(
+        'Warm integrity checks',
+        async () => {
+          const m = await import('./services/config-conformance.js')
+          const n = await m.warmCompiledChecks()
+          app.log.info(`integrity: warmed checks for ${n} collection(s)`)
+        },
+        { background: true }
+      ).catch(() => {})
 
       // Nightly config-conformance runs for scheduled collections, with a
       // regression note when a collection's issue count grew since last run.

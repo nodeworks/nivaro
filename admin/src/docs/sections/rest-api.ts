@@ -532,6 +532,45 @@ export const apiFilter: DocSection = {
       type: 'p',
       text: "State keys are the pipeline's own keys. `__none__` stands for a record with no pipeline instance: name it in `_in` to include such records, or in `_nin` to leave them out."
     },
+    { type: 'h3', text: 'Who wrote to it (`$origin`)' },
+    {
+      type: 'p',
+      text: 'Every write is recorded with its origin: person, machine, import or integration. `$origin` filters records by the writes they have received. `_in` keeps records that have a write of those origins; `_nin` keeps records that have none. `days`, `since`, `until`, `by` (an account id) and `action` (create, update, delete) narrow which writes count.'
+    },
+    {
+      type: 'pre',
+      code: '// Touched by an integration or an import in the last 7 days\n?filter={"$origin":{"_in":["integration","import"],"days":7}}\n\n// Never edited by a person\n?filter={"$origin":{"_nin":["person"]}}\n\n// Updated by one account since a date\n?filter={"$origin":{"_in":["person"],"by":"<user id>","action":["update"],"since":"2026-09-21"}}'
+    },
+    {
+      type: 'note',
+      text: 'Writes made before origins were stored carry none and match no origin. An origin name that does not exist matches nothing.'
+    },
+    { type: 'h3', text: 'Addendums, highlight rules, integrations' },
+    {
+      type: 'table',
+      head: ['Key', 'Values', 'Keeps'],
+      rows: [
+        [
+          '`$addendums`',
+          'active, none, any',
+          'Records with an addendum in flight, with none in flight, or that ever had one.'
+        ],
+        [
+          '`$at_risk`',
+          'a rule id, a list of ids, or "any"',
+          'Records that match one of the named highlight rules.'
+        ],
+        [
+          '`$integrations`',
+          'danger, warning, positive, none',
+          'Records by how they stand with their integration partners.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'These keys work in `filter`, inside `_and` and `_or`, and as paths in `conditions`. GraphQL spells them `_state`, `_origin`, `_addendums`, `_at_risk` and `_integrations`.'
+    },
     { type: 'h3', text: 'Calculated fields' },
     {
       type: 'p',
@@ -603,7 +642,10 @@ export const apiFilter: DocSection = {
     {
       type: 'pre',
       code: `// articles tagged "featured" through a link that is global or scoped to region 3
-?filter={"tags":{"_some":{"name":{"_eq":"featured"},"_link":{"_or":[{"region_id":{"_null":true}},{"region_id":{"_eq":3}}]}}}}`
+?filter={"tags":{"_some":{"name":{"_eq":"featured"},"_link":{"_or":[{"region_id":{"_null":true}},{"region_id":{"_eq":3}}]}}}}
+
+// the same without _some: a _link on its own means "some link like this"
+?filter={"tags":{"_link":{"region_id":{"_eq":3}}}}`
     }
   ]
 }

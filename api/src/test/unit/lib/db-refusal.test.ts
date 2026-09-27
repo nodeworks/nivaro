@@ -82,3 +82,22 @@ describe('database refusals', () => {
     expect(reasonWithoutSql('Budget - over the cap')).toBe('Budget - over the cap')
   })
 })
+
+describe('errorText', () => {
+  it('puts the reason before the statement', async () => {
+    const { errorText } = await import('../../../lib/db-refusal.js')
+    const err = Object.assign(new Error('insert into [orders] ([a]) values (@p0) - '), {
+      errors: [new Error("Invalid column name 'a'."), new Error("Invalid column name 'a'.")]
+    })
+    expect(errorText(err)).toBe(
+      "Invalid column name 'a'. — while running: insert into [orders] ([a]) values (@p0)"
+    )
+  })
+
+  it('keeps a plain error as it is and cuts to the limit', async () => {
+    const { errorText } = await import('../../../lib/db-refusal.js')
+    expect(errorText(new Error('boom'))).toBe('boom')
+    expect(errorText('text')).toBe('text')
+    expect(errorText(new Error('x'.repeat(50)), 10)).toHaveLength(10)
+  })
+})

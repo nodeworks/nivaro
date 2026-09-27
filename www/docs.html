@@ -825,7 +825,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <h2 class="doc-h2" id="flow-silence">Flows that go quiet</h2>
           <p class="doc-p">A condition that rejects still ends its run as a success, so a flow that has stopped **matching** looked exactly like one with nothing to do. Every run now records how many operations executed, whether anything beyond a condition ran, and which operation's reject branch ended it. <code class="doc-code">GET /flows/health</code> judges each active flow against its own history — the median gap between the days it matched over the last 90 — and reports **quiet** (still fires, nothing has matched for three times its usual gap, floor seven days), **stopped** (no run at all for that long: the trigger itself went silent), **young** (matched on fewer than three days — no cadence yet) or **ok**. The Flows list carries an amber <code class="doc-code">quiet Nd</code> / <code class="doc-code">stopped Nd</code> badge and the readiness check <code class="doc-code">flows-silent</code> runs the same verdicts.</p>
           <h2 class="doc-h2" id="flow-status">Status</h2>
-          <p class="doc-p">Only <code class="doc-code">active</code> flows execute. Toggling a flow to <code class="doc-code">inactive</code> immediately unregisters its cron job. Scheduled flows are re-registered automatically when the API restarts.</p>
+          <p class="doc-p">Only <code class="doc-code">active</code> flows execute. Toggling a flow to <code class="doc-code">inactive</code> unregisters its cron job at once, on every process within about 5 seconds. Scheduled flows are registered again when the API restarts.</p>
           <h2 class="doc-h2" id="flow-ai-build">Build with AI</h2>
           <p class="doc-p">Admins can draft a flow from plain prose: the "Build with AI" button on the Flows page opens a prompt bar — describe what you want ("when an order is created over $500, email the sales team and log it") and the AI drafts a flow with a trigger and wired-up operations, then opens it in the editor.</p>
           <ul class="doc-ul">
@@ -2393,6 +2393,25 @@ Authorization: Bearer &lt;token&gt;
 // Runs a pipeline and is not canceled
 ?filter={"$state":{"_nin":["__none__","canceled"]}}</code></pre>
           <p class="doc-p">State keys are the pipeline's own keys. <code class="doc-code">__none__</code> stands for a record with no pipeline instance: name it in <code class="doc-code">_in</code> to include such records, or in <code class="doc-code">_nin</code> to leave them out.</p>
+          <h3 class="doc-h3">Who wrote to it (<code class="doc-code">$origin</code>)</h3>
+          <p class="doc-p">Every write is recorded with its origin: person, machine, import or integration. <code class="doc-code">$origin</code> filters records by the writes they have received. <code class="doc-code">_in</code> keeps records that have a write of those origins; <code class="doc-code">_nin</code> keeps records that have none. <code class="doc-code">days</code>, <code class="doc-code">since</code>, <code class="doc-code">until</code>, <code class="doc-code">by</code> (an account id) and <code class="doc-code">action</code> (create, update, delete) narrow which writes count.</p>
+          <pre class="doc-pre"><code>// Touched by an integration or an import in the last 7 days
+?filter={"$origin":{"_in":["integration","import"],"days":7}}
+
+// Never edited by a person
+?filter={"$origin":{"_nin":["person"]}}
+
+// Updated by one account since a date
+?filter={"$origin":{"_in":["person"],"by":"&lt;user id&gt;","action":["update"],"since":"2026-09-21"}}</code></pre>
+          <div class="doc-note">Writes made before origins were stored carry none and match no origin. An origin name that does not exist matches nothing.</div>
+          <h3 class="doc-h3">Addendums, highlight rules, integrations</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Key</th><th>Values</th><th>Keeps</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">$addendums</code></td><td>active, none, any</td><td>Records with an addendum in flight, with none in flight, or that ever had one.</td></tr>
+              <tr><td><code class="doc-code">$at_risk</code></td><td>a rule id, a list of ids, or "any"</td><td>Records that match one of the named highlight rules.</td></tr>
+              <tr><td><code class="doc-code">$integrations</code></td><td>danger, warning, positive, none</td><td>Records by how they stand with their integration partners.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">These keys work in <code class="doc-code">filter</code>, inside <code class="doc-code">_and</code> and <code class="doc-code">_or</code>, and as paths in <code class="doc-code">conditions</code>. GraphQL spells them <code class="doc-code">_state</code>, <code class="doc-code">_origin</code>, <code class="doc-code">_addendums</code>, <code class="doc-code">_at_risk</code> and <code class="doc-code">_integrations</code>.</p>
           <h3 class="doc-h3">Calculated fields</h3>
           <p class="doc-p">A calculated field made of arithmetic or <code class="doc-code">coalesce</code> over the record's own columns can be filtered and sorted like a column; the comparison runs in the database. <code class="doc-code">GET /api/collections/&lt;collection&gt;</code> marks such fields with <code class="doc-code">sql_filterable: true</code>. Any other calculated field, and every rollup that is not stored, exists only after the rows are read: naming one in a filter or sort is refused with <code class="doc-code">400</code> <code class="doc-code">FIELD_NOT_FILTERABLE</code>.</p>
           <pre class="doc-pre"><code>// remaining = budget - spent  (a calculated field)
@@ -2439,7 +2458,10 @@ Authorization: Bearer &lt;token&gt;
           <h3 class="doc-h3">Filtering on the link itself (<code class="doc-code">_link</code>)</h3>
           <p class="doc-p">When an M2M junction row carries columns of its own — a membership that only applies in one region, a role on the link — put a <code class="doc-code">_link</code> filter inside <code class="doc-code">_some</code> / <code class="doc-code">_none</code>. Every other key filters the related record; <code class="doc-code">_link</code> filters the junction row, and both must hold on the SAME link.</p>
           <pre class="doc-pre"><code>// articles tagged "featured" through a link that is global or scoped to region 3
-?filter={"tags":{"_some":{"name":{"_eq":"featured"},"_link":{"_or":[{"region_id":{"_null":true}},{"region_id":{"_eq":3}}]}}}}</code></pre>
+?filter={"tags":{"_some":{"name":{"_eq":"featured"},"_link":{"_or":[{"region_id":{"_null":true}},{"region_id":{"_eq":3}}]}}}}
+
+// the same without _some: a _link on its own means "some link like this"
+?filter={"tags":{"_link":{"region_id":{"_eq":3}}}}</code></pre>
           <!-- /SYNC:filter-dsl -->
         </div>
 
@@ -3861,6 +3883,27 @@ query {
   }) {
     id title
   }
+}</code></pre>
+          <h3 class="doc-h3">Filters that are not fields</h3>
+          <p class="doc-p">Every collection filter also takes <code class="doc-code">_state</code>, <code class="doc-code">_origin</code>, <code class="doc-code">_addendums</code>, <code class="doc-code">_at_risk</code> and <code class="doc-code">_integrations</code>. They are the REST keys <code class="doc-code">$state</code>, <code class="doc-code">$origin</code> and so on, spelled with an underscore because a GraphQL name cannot start with <code class="doc-code">$</code>. They work at every depth, inside <code class="doc-code">_and</code> / <code class="doc-code">_or</code> and inside relation filters.</p>
+          <pre class="doc-pre"><code>query {
+  # started, and touched by an integration in the last 7 days
+  orders(filter: {
+    _state: { _in: ["started"] }
+    _origin: { _in: [integration], days: 7 }
+  }) { id }
+
+  # never edited by a person, or with an addendum in flight
+  orders_metadata(filter: {
+    _or: [{ _origin: { _nin: [person] } }, { _addendums: active }]
+  }) { total }
+}</code></pre>
+          <h3 class="doc-h3">Filtering on the link itself</h3>
+          <p class="doc-p">A many-to-many filter takes <code class="doc-code">_link</code>, which filters the junction row of the link: a membership that only applies in one region, a role on the link. Inside <code class="doc-code">_some</code> or <code class="doc-code">_none</code> it must hold on the same link as the other keys. On its own it means "some link like this".</p>
+          <pre class="doc-pre"><code>query {
+  articles(filter: {
+    tags: { _some: { name: { _eq: "featured" }, _link: { region_id: { _eq: 3 } } } }
+  }) { id }
 }</code></pre>
           <h3 class="doc-h3">O2M / M2M filters</h3>
           <p class="doc-p">Use <code class="doc-code">_some</code> (at least one match) or <code class="doc-code">_none</code> (no matches) for one-to-many and many-to-many relations.</p>
@@ -13723,7 +13766,7 @@ POST /api/search/semantic/reindex
         <!-- ════ OBSERVABILITY ════ -->
 
         <!-- API ANALYTICS -->
-        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"}]'>
+        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"}]'>
           <!-- SYNC:api-analytics -->
           <h1 class="doc-h1" id="api-analytics">API Analytics</h1>
           <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /api-analytics page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
@@ -13741,11 +13784,24 @@ POST /api/search/semantic/reindex
           <p class="doc-p">Saving one record reads the same configuration many times: relations, field lists, rules, layouts, column lists. Those reads are answered from a short-lived cache underneath the query layer, so every caller benefits without knowing about it. Only single plain SELECTs whose tables are all configuration tables are cached, never inside a transaction, never for records, users, policies or settings.</p>
           <ul class="doc-ul">
             <li>A configuration change made through this instance clears the cache as it is written; the next read sees it.</li>
-            <li>A change made by another instance or a script is seen within the cache lifetime (30 seconds by default). Together with the collection metadata cache, allow up to a minute.</li>
+            <li>A change made by another process, another instance on the same database or a script is seen within about 5 seconds. Every configuration write moves one number in <code class="doc-code">nivaro_cache_epochs</code>; each process polls it and clears its in-process caches when it moved.</li>
             <li>Any schema change (ALTER, CREATE, DROP) clears it too, since column lists move.</li>
             <li><code class="doc-code">GET /api/ops-db/metadata-cache</code> reports entries, hits, misses, reads that shared an in-flight statement, and how often a write cleared it.</li>
             <li><code class="doc-code">METADATA_QUERY_CACHE=off</code> turns it off; <code class="doc-code">METADATA_QUERY_CACHE_TTL_MS</code> sets the lifetime. SQL Server only.</li>
           </ul>
+          <h2 class="doc-h2" id="cache-epoch">Caches across processes</h2>
+          <ul class="doc-ul">
+            <li>The write side needs no call: any statement that changes a configuration table counts, whoever runs it. A script that writes field or layout rows and exits is included; the number moves before its connection closes.</li>
+            <li>Record writes never move the number.</li>
+            <li>Ops Console, Caches lists every in-process cache. Clearing one there clears it in this process at once and in every other process within the poll.</li>
+            <li><code class="doc-code">GET /api/ops-runtime/caches</code> reports the number this process last saw, how many configuration writes it made, and the newest statement that counted, without its values.</li>
+            <li>Caches derived from owner resolution (a person's working-on list, the inactive-people scan) clear in the process that wrote whenever a record changes state, a manual owner is added or removed, a delegate or out-of-office flag changes, or an owner group changes.</li>
+            <li><code class="doc-code">CACHE_EPOCH=off</code> turns the mechanism off; <code class="doc-code">CACHE_EPOCH_POLL_MS</code> sets the poll (default 5000). Self-hosted only.</li>
+          </ul>
+          <h2 class="doc-h2" id="api-analytics-hooks">Hook timings</h2>
+          <p class="doc-p">Every hook runs inside a named span, <code class="doc-code">hook:&lt;owner&gt;:&lt;collection&gt;:&lt;action&gt;:&lt;before|after&gt;</code>, so a slow request's trace names the hook that cost the time. The owner is the extension id, or for core hooks the file that registered them. <code class="doc-code">GET /api/extensions/hooks/timings</code> lists every hook with runs, failures and its typical, slow and slowest time since the process started. The registry sheet of an extension shows the same per hook.</p>
+          <h2 class="doc-h2" id="api-analytics-replay">Replaying a logged request</h2>
+          <p class="doc-p">The request log keeps the query string of every call, up to 500 characters, with values under credential-looking names replaced by <code class="doc-code">••••••</code>. A replay sends the stored query with the stored body. A query that was cut short or that holds a masked value has to be completed first: the replay block shows it in an editable field, and <code class="doc-code">POST /api/api-analytics/requests/:id/replay</code> takes <code class="doc-code">query</code> beside <code class="doc-code">body</code>.</p>
           <div class="doc-note"><code class="doc-code">TRACE_TOP_SQL</code> sets how many statement shapes a slow-request trace keeps (default 8). <code class="doc-code">CRON_TICKS=off</code> keeps scheduled jobs registered but never fires them on the clock, for a second process started against the same database; run-now still works.</div>
           <h2 class="doc-h2" id="api-analytics-index-advisor">Index advisor</h2>
           <p class="doc-p">The advisor crosses the columns configuration already declares hot — M2O foreign keys, queue source filters, row-level security filters, workflow state mirrors — against the leading column of every index on tables past 50,000 rows, and ships each gap as a one-click CREATE INDEX. It also sweeps every table carrying both a <code class="doc-code">collection</code> and an <code class="doc-code">item</code> / <code class="doc-code">item_id</code> column for an index that LEADS on that pair (either order): that correlated "which instance / revision / state does this record have" lookup scanned 115k rows per check on nivaro_workflow_instances until migration 331 added the pair, and the same shape on nivaro_revisions and nivaro_activity was migration 321.</p>
@@ -13755,7 +13811,7 @@ POST /api/search/semantic/reindex
         </div>
 
         <!-- HEALTH DASHBOARD -->
-        <div class="doc-section" id="s-health-dashboard" data-toc='[{"id":"health-dashboard","label":"Health Dashboard"}]'>
+        <div class="doc-section" id="s-health-dashboard" data-toc='[{"id":"health-dashboard","label":"Health Dashboard"},{"id":"health-startup","label":"Startup"}]'>
           <!-- SYNC:health-dashboard -->
           <h1 class="doc-h1" id="health-dashboard">Health Dashboard</h1>
           <p class="doc-p">The /health admin page gives a live view of every subsystem, backed by a detailed health endpoint that goes beyond the public liveness probe.</p>
@@ -13766,6 +13822,20 @@ POST /api/search/semantic/reindex
   "inngest":   { "ok": true },
   "migrations":{ "ok": true, "pending": 0 },
   "sockets":   { "connected": 12 }
+}</code></pre>
+          <h2 class="doc-h2" id="health-startup">Startup</h2>
+          <p class="doc-p">The page ends with how long this process took to start, phase by phase: migrations, building the server, routes, extensions, scheduled flows, event flows, listening, and the warms that run beside the boot. Each bar sits where the phase began and is as wide as it took. The newest 20 starts are kept per instance; a phase that took at least twice its usual time and a second longer is marked, and so is the whole start.</p>
+          <pre class="doc-pre"><code>GET /api/ops-runtime/boot
+{
+  "instance": "production",
+  "total_ms": 5120,
+  "usual_total_ms": 4800,
+  "slow": false,
+  "slow_phases": [],
+  "phases": [
+    { "name": "Migrations", "ms": 1400, "at": 900, "background": false,
+      "usual_ms": 1350, "slow": false }
+  ]
 }</code></pre>
           <div class="doc-note">GET /api/health remains the lightweight unauthenticated liveness check for load balancers; the detailed endpoint requires authentication.</div>
           <!-- /SYNC:health-dashboard -->

@@ -26,6 +26,28 @@ interface DetailedHealth {
   memory_mb: number
 }
 
+interface BootPhaseRow {
+  name: string
+  ms: number
+  at: number
+  background: boolean
+  failed?: boolean
+  usual_ms: number | null
+  slow: boolean
+}
+
+interface BootInfo {
+  instance: string
+  started_at: string
+  ready_at: string | null
+  total_ms: number | null
+  usual_total_ms: number | null
+  slow: boolean
+  slow_phases: string[]
+  phases: BootPhaseRow[]
+  earlier: Array<{ started_at: string; total_ms: number | null }>
+}
+
 type Severity = 'ok' | 'warn' | 'fail'
 
 interface PreflightCheck {
@@ -130,6 +152,105 @@ function PreflightPanel({ data }: { data: Preflight }) {
         ))}
       </div>
     </div>
+  )
+}
+
+function formatMs(ms: number | null): string {
+  if (ms == null) return '—'
+  return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`
+}
+
+/** Startup as a waterfall: each phase sits where it began and is as wide as it took. */
+function BootPanel({ data }: { data: BootInfo }) {
+  const span = Math.max(1, ...data.phases.map((p) => p.at + p.ms))
+  return (
+    <section
+      className='mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
+      data-boot-panel={data.slow ? 'slow' : 'ok'}
+    >
+      <div className='flex flex-wrap items-baseline gap-x-3 gap-y-1'>
+        <h2 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Startup</h2>
+        <p className='text-[12px] text-slate-600 dark:text-slate-300'>
+          Ready in <span className='font-semibold tabular-nums'>{formatMs(data.total_ms)}</span>
+          {data.usual_total_ms != null && (
+            <span className='text-slate-500 dark:text-slate-400'>
+              {' '}
+              · usually {formatMs(data.usual_total_ms)}
+            </span>
+          )}
+        </p>
+        {data.slow && (
+          <span className='inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10.5px] font-medium text-amber-900 dark:bg-amber-400/15 dark:text-amber-200'>
+            <AlertTriangle className='h-3 w-3' /> slower than usual
+          </span>
+        )}
+        <span className='ml-auto text-[11px] text-slate-500 dark:text-slate-400'>
+          {data.instance} · started {new Date(data.started_at).toLocaleString()}
+        </span>
+      </div>
+      <ul className='mt-3 space-y-1.5'>
+        {data.phases.map((p) => (
+          <li
+            key={`${p.name}-${p.at}`}
+            className='grid grid-cols-[minmax(0,15rem)_minmax(0,1fr)_5.5rem] items-center gap-3 text-[11.5px]'
+            data-boot-phase={p.name}
+            data-boot-phase-slow={p.slow ? 'true' : undefined}
+          >
+            <span className='truncate text-slate-700 dark:text-slate-200' data-tip={p.name}>
+              {p.name}
+              {p.background && (
+                <span className='ml-1.5 text-[10.5px] text-slate-500 dark:text-slate-400'>
+                  beside the boot
+                </span>
+              )}
+            </span>
+            <span className='relative h-2 rounded bg-slate-100 dark:bg-muted'>
+              <span
+                className={cn(
+                  'absolute top-0 h-2 rounded',
+                  p.failed
+                    ? 'bg-red-500'
+                    : p.slow
+                      ? 'bg-amber-500'
+                      : p.background
+                        ? 'bg-slate-400 dark:bg-slate-500'
+                        : 'bg-nvr-cyan'
+                )}
+                style={{
+                  left: `${(p.at / span) * 100}%`,
+                  width: `${Math.max(0.6, (p.ms / span) * 100)}%`
+                }}
+              />
+            </span>
+            <span
+              className={cn(
+                'text-right tabular-nums',
+                p.slow
+                  ? 'font-semibold text-amber-800 dark:text-amber-300'
+                  : 'text-slate-600 dark:text-slate-300'
+              )}
+              data-tip={
+                p.usual_ms != null
+                  ? `Usually ${formatMs(p.usual_ms)}`
+                  : 'Too few earlier starts to say what is usual'
+              }
+            >
+              {formatMs(p.ms)}
+              {p.failed && ' · failed'}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {data.earlier.length > 0 && (
+        <p className='mt-3 text-[11px] text-slate-500 dark:text-slate-400'>
+          Earlier starts of this instance:{' '}
+          {data.earlier
+            .slice(0, 6)
+            .map((b) => formatMs(b.total_ms))
+            .join(' · ')}
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -240,6 +361,16 @@ export function HealthDashboardPage() {
     refetchInterval: 60_000
   })
 
+  const { data: boot } = useQuery<BootInfo | null>({
+    queryKey: ['ops-boot'],
+    queryFn: () =>
+      api
+        .get<{ data: BootInfo }>('/ops-runtime/boot')
+        .then((r) => r.data.data)
+        .catch(() => null),
+    refetchInterval: 120_000
+  })
+
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
@@ -300,6 +431,7 @@ export function HealthDashboardPage() {
             <InfoCard icon={Activity} title='Nivaro version' value={data.version ?? '—'} />
           </div>
         )}
+        {boot && boot.phases.length > 0 && <BootPanel data={boot} />}
       </div>
     </div>
   )

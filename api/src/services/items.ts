@@ -52,6 +52,17 @@ import { filterRowsByTreePermissions, getTreePermission } from './tree-permissio
 import { applyUserScopesToQuery } from './user-scopes.js'
 import { enforceValidationRules } from './validation-rules.js'
 import {
+  ADDENDUMS_FIELD,
+  AT_RISK_FIELD,
+  applyAddendumsFilter,
+  applyOriginFilter,
+  applyRiskFilter,
+  ORIGIN_FIELD,
+  parseOriginFilter,
+  primeOriginColumn,
+  primeVirtualFilters
+} from './virtual-filters.js'
+import {
   cachedVirtualSql,
   compileFormulaToSql,
   peekVirtualSql,
@@ -1315,7 +1326,9 @@ function implicitSome(nested: Record<string, unknown>): Record<string, unknown> 
   const keys = Object.keys(nested)
   if (keys.length === 0) return nested
   if ('_some' in nested || '_none' in nested) return nested
-  if (keys.every((k) => k.startsWith('_') && k !== '_and' && k !== '_or')) return nested
+  // `_link` filters the junction row of a link, so it names a link too.
+  if (keys.every((k) => k.startsWith('_') && k !== '_and' && k !== '_or' && k !== '_link'))
+    return nested
   return { _some: nested }
 }
 
@@ -1350,6 +1363,7 @@ export async function applyFilterToQuery(
   const rels = await getRelsForCollection(collection)
   await primeRelCacheForFilter(filter, collection, rels)
   await primeVirtualSql(collection)
+  await primeVirtualFilters(filter)
   applyFilters(q, filter, collection, rels)
 }
 
@@ -1377,6 +1391,22 @@ function applyFilters(
     // used. See applyIntegrationsFilter.
     if (key === INTEGRATIONS_FIELD) {
       applyIntegrationsFilter(q, collection, value)
+      continue
+    }
+
+    // ── Who wrote to it, addendums in flight, highlight rules ────────────────
+    // filter={"$origin":{"_in":["integration"],"days":7}} and friends — the
+    // same compilers the conditions path uses (services/virtual-filters.ts).
+    if (key === ORIGIN_FIELD) {
+      applyOriginFilter(q, collection, parseOriginFilter(value))
+      continue
+    }
+    if (key === ADDENDUMS_FIELD) {
+      applyAddendumsFilter(q, collection, value)
+      continue
+    }
+    if (key === AT_RISK_FIELD) {
+      applyRiskFilter(q, collection, value)
       continue
     }
 
@@ -2028,18 +2058,15 @@ export async function applyConditions(
     }
     // Virtual path: addendum presence — 'active' = an addendum still in flight
     // (draft/submitted/review), 'none' = no active addendum, 'any' = ever had one.
-    if (cond.path[0] === '$addendums' && cond.path.length === 1) {
-      const want = String(Array.isArray(cond.value) ? cond.value[0] : (cond.value ?? 'active'))
-      const activeOnly = want !== 'any'
-      const cb = function (this: QB) {
-        this.select(db.raw('1'))
-          .from('nivaro_addendums as adm')
-          .where('adm.parent_collection', collection)
-          .whereRaw('adm.parent_id = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
-        if (activeOnly) this.whereNotIn('adm.status', ['approved', 'rejected'])
-      }
-      if (want === 'none') q.whereNotExists(cb)
-      else q.whereExists(cb)
+    if (cond.path[0] === ADDENDUMS_FIELD && cond.path.length === 1) {
+      applyAddendumsFilter(q, collection, cond.value)
+      continue
+    }
+    // Virtual path: who wrote to the record — "touched by an integration
+    // since Monday", "never edited by a person". See parseOriginFilter.
+    if (cond.path[0] === ORIGIN_FIELD && cond.path.length === 1) {
+      await primeOriginColumn()
+      applyOriginFilter(q, collection, parseOriginFilter(cond.value, cond.op))
       continue
     }
     // Virtual path: integration obligations — see applyIntegrationsFilter.
@@ -2279,6 +2306,7 @@ export async function readItems(
   // relations into the cache so the synchronous applyFilters can access them.
   await primeRelCacheForFilter(filter, collection, rels)
   await primeVirtualSql(collection)
+  await primeVirtualFilters(filter)
   await assertFilterableFields(collection, filter, sort, conditions)
 
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL

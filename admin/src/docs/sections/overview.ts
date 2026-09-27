@@ -270,7 +270,7 @@ export const userFlows: DocSection = {
     { type: 'h2', id: 'flow-status', text: 'Status' },
     {
       type: 'p',
-      text: 'Only `active` flows execute. Toggling a flow to `inactive` immediately unregisters its cron job. Scheduled flows are re-registered automatically when the API restarts.'
+      text: 'Only `active` flows execute. Toggling a flow to `inactive` unregisters its cron job at once, on every process within about 5 seconds. Scheduled flows are registered again when the API restarts.'
     },
     { type: 'h2', id: 'flow-ai-build', text: 'Build with AI' },
     {

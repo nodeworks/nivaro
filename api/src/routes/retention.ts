@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { DEFAULT_REDACT_FIELDS, executeRetentionPolicy } from '../services/retention.js'
+import { resyncAfterWrites } from '../services/row-schedules.js'
 
 function parseJson<T>(val: unknown): T {
   if (!val) return [] as unknown as T
@@ -32,6 +33,8 @@ function format(row: Record<string, unknown>) {
 }
 
 export async function retentionRoutes(app: FastifyInstance) {
+  // A saved, edited or removed schedule takes effect at once, on every process.
+  resyncAfterWrites(app, 'retention')
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', requireAdmin)
 

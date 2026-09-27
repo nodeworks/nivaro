@@ -22,6 +22,9 @@
  * that shape is dialect-specific. Other dialects run untouched.
  */
 
+import { isConfigWrite, noteConfigWrite } from './config-epoch.js'
+import { isOwnerWrite, ownersChanged } from './owner-signal.js'
+
 const TABLES = new Set([
   'nivaro_relations',
   'nivaro_fields',
@@ -177,12 +180,23 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     const sql = typeof query?.sql === 'string' ? query.sql : ''
     if (!sql) return original.call(this, connection, query)
 
+    // Other processes on this database learn of a configuration write through
+    // the epoch (db/config-epoch.ts).
+    if (isConfigWrite(sql)) noteConfigWrite(sql)
+
+    // Caches derived from owner resolution clear once the write has landed.
+    const ownerWrite = isOwnerWrite(sql)
+
     if (isInvalidatingWrite(sql)) {
       // Clear before AND after: before, so nothing reads the old rows while
       // the write is in flight; after, so a read that raced it is dropped.
       clearMetadataQueryCache()
-      return original.call(this, connection, query).finally(() => clearMetadataQueryCache())
+      return original.call(this, connection, query).finally(() => {
+        clearMetadataQueryCache()
+        if (ownerWrite) ownersChanged()
+      })
     }
+    if (ownerWrite) return original.call(this, connection, query).finally(() => ownersChanged())
 
     const inTransaction = !!(connection as { __knexTxId?: unknown } | null)?.__knexTxId
     if (!ENABLED || inTransaction || query.output || !isCacheableRead(sql)) {

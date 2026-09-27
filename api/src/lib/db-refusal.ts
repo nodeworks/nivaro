@@ -23,9 +23,10 @@ export function describeDbRefusal(err: unknown): DbRefusal | null {
     .filter((m): m is string => typeof m === 'string')
     .join(' · ')
   if (!text) return null
-  const fk = /(INSERT|UPDATE|MERGE|DELETE) statement conflicted with the (FOREIGN KEY|REFERENCE)[A-Z ]* constraint "([^"]+)"/i.exec(
-    text
-  )
+  const fk =
+    /(INSERT|UPDATE|MERGE|DELETE) statement conflicted with the (FOREIGN KEY|REFERENCE)[A-Z ]* constraint "([^"]+)"/i.exec(
+      text
+    )
   if (fk) {
     const removing = /^delete$/i.test(fk[1]) || /^reference$/i.test(fk[2])
     return removing
@@ -67,4 +68,32 @@ export function reasonWithoutSql(message: string): string {
   return /^(insert|update|delete|select|merge|exec|with)\b/i.test(message) && cut > 0
     ? message.slice(cut + 3)
     : message
+}
+
+/**
+ * An error as text worth keeping. knex/mssql rejects with an AggregateError
+ * whose own message is only the statement; the reason sits in `.errors`. The
+ * reason comes first, the statement after it, shortened.
+ */
+export function errorText(err: unknown, max = 2000): string {
+  if (!(err instanceof Error)) return String(err).slice(0, max)
+  const inner = (err as { errors?: unknown }).errors
+  const reasons = Array.isArray(inner)
+    ? [
+        ...new Set(
+          inner
+            .map((e) => (e instanceof Error ? e.message : String(e)))
+            .map((m) => m.trim())
+            .filter(Boolean)
+        )
+      ]
+    : []
+  const head = (err.message ?? '').replace(/\s+-\s*$/, '').trim()
+  if (reasons.length === 0) return (head || err.name || 'Error').slice(0, max)
+  const shown = reasons.slice(0, 5)
+  const more = reasons.length > shown.length ? ` (+${reasons.length - shown.length} more)` : ''
+  const statement = head
+    ? ` — while running: ${head.slice(0, 300)}${head.length > 300 ? '…' : ''}`
+    : ''
+  return `${shown.join(' · ')}${more}${statement}`.slice(0, max)
 }

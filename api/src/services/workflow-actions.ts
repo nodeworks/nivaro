@@ -147,12 +147,34 @@ async function blackoutDates(): Promise<Set<string>> {
  * exported so a test can register them on a fresh `Liquid` and render
  * without touching the database.
  */
+/**
+ * The calendar day a value names, as yyyy-MM-dd. A date-only string is that
+ * day; a timestamp is the day it falls on here; nothing at all is today.
+ * Days are counted on the calendar, never by adding hours: the old filter
+ * moved a local clock and printed it in UTC, which was a day off in the
+ * evening and across a daylight-saving change.
+ */
+export function calendarDay(v: unknown, now: Date = new Date()): string | null {
+  const local = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  if (v == null || v === '') return local(now)
+  const raw = v instanceof Date ? v : String(v).trim()
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  const d = raw instanceof Date ? raw : new Date(raw)
+  return Number.isNaN(d.getTime()) ? null : local(d)
+}
+
+export function addCalendarDays(day: string, n: number): string {
+  const [y, m, d] = day.split('-').map(Number)
+  const t = new Date(Date.UTC(y, m - 1, d + (Number.isFinite(n) ? Math.trunc(n) : 0)))
+  return t.toISOString().slice(0, 10)
+}
+
 export function registerPayloadFilters(engine: Liquid): void {
   engine.registerFilter('add_days', (v: unknown, n: unknown) => {
-    const d = new Date(String(v ?? new Date().toISOString()))
-    if (Number.isNaN(d.getTime())) return v
-    d.setDate(d.getDate() + Number(n ?? 0))
-    return d.toISOString().slice(0, 10)
+    const day = calendarDay(v)
+    if (!day) return v
+    return addCalendarDays(day, Number(n ?? 0))
   })
   // JSON.stringify anything — undefined/missing renders as null, keeping
   // generated JSON payloads valid without per-field if-guards.
@@ -191,24 +213,22 @@ export function registerPayloadFilters(engine: Liquid): void {
     return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
   })
   engine.registerFilter('at_least_days_out', (v: unknown, n: unknown) => {
-    const min = new Date()
-    min.setDate(min.getDate() + Number(n ?? 0))
-    const d = new Date(String(v ?? ''))
-    const pick = Number.isNaN(d.getTime()) || d < min ? min : d
-    return pick.toISOString().slice(0, 10)
+    const min = addCalendarDays(calendarDay(undefined) as string, Number(n ?? 0))
+    const day = v == null || v === '' ? null : calendarDay(v)
+    // yyyy-MM-dd compares as text.
+    return day && day >= min ? day : min
   })
 
   engine.registerFilter('next_open_day', async (v: unknown) => {
     const blocked = await blackoutDates()
-    const d = new Date(String(v ?? ''))
-    if (Number.isNaN(d.getTime())) return v
+    let iso = v == null || v === '' ? null : calendarDay(v)
+    if (!iso) return v
     for (let i = 0; i < 60; i++) {
-      const iso = d.toISOString().slice(0, 10)
-      const day = d.getUTCDay()
-      if (day !== 0 && day !== 6 && !blocked.has(iso)) return iso
-      d.setDate(d.getDate() + 1)
+      const weekday = new Date(`${iso}T00:00:00Z`).getUTCDay()
+      if (weekday !== 0 && weekday !== 6 && !blocked.has(iso)) return iso
+      iso = addCalendarDays(iso, 1)
     }
-    return d.toISOString().slice(0, 10)
+    return iso
   })
   // Left-pad to a fixed width: `{{ sku | pad_start: 9, '0' }}` → "000106416".
   // Longer input is returned unchanged; a missing value renders as "" so a

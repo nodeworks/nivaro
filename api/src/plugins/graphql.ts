@@ -1,3 +1,4 @@
+import { markBootPhase } from '../services/boot-phases.js'
 import { execute, type GraphQLSchema, parse, validate } from 'graphql'
 import { makeServer as makeWsServer } from 'graphql-ws'
 import { WebSocket, WebSocketServer } from 'ws'
@@ -57,12 +58,18 @@ let _schema: GraphQLSchema | null = null
 // One build at a time: a request arriving mid-build awaits the same promise
 // instead of starting a second scan of every collection.
 let _building: Promise<GraphQLSchema> | null = null
+let _everBuilt = false
 
 async function getSchema(): Promise<GraphQLSchema> {
   if (_schema) return _schema
   if (!_building) {
+    const began = Date.now()
     _building = buildGraphQLSchema()
       .then(async (schema) => {
+        if (!_everBuilt) {
+          _everBuilt = true
+          markBootPhase('GraphQL schema', Date.now() - began, { background: true })
+        }
         _schema = schema
         const { recordGraphQLSchema } = await import('../services/api-changelog.js')
         void recordGraphQLSchema(schema)

@@ -1,3 +1,4 @@
+import { errorText } from '../lib/db-refusal.js'
 import { db } from '../db/index.js'
 import { getIo } from './io-holder.js'
 
@@ -94,14 +95,18 @@ export async function startJobRun(
     fail: async (err) => {
       await finish({
         status: 'error',
-        error: String(err instanceof Error ? (err.stack ?? err.message) : err).slice(0, 4000)
+        error:
+          `${errorText(err, 1500)}${err instanceof Error && err.stack ? `\n${err.stack}` : ''}`.slice(
+            0,
+            4000
+          )
       })
       emitJobEvent({
         id,
         kind,
         job_id: jobId,
         status: 'error',
-        error: String(err instanceof Error ? err.message : err).slice(0, 300)
+        error: errorText(err, 300)
       })
     }
   }

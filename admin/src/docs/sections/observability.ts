@@ -44,11 +44,33 @@ export const obsApiAnalytics: DocSection = {
       type: 'ul',
       items: [
         'A configuration change made through this instance clears the cache as it is written; the next read sees it.',
-        'A change made by another instance or a script is seen within the cache lifetime (30 seconds by default). Together with the collection metadata cache, allow up to a minute.',
+        'A change made by another process, another instance on the same database or a script is seen within about 5 seconds. Every configuration write moves one number in `nivaro_cache_epochs`; each process polls it and clears its in-process caches when it moved.',
         'Any schema change (ALTER, CREATE, DROP) clears it too, since column lists move.',
         '`GET /api/ops-db/metadata-cache` reports entries, hits, misses, reads that shared an in-flight statement, and how often a write cleared it.',
         '`METADATA_QUERY_CACHE=off` turns it off; `METADATA_QUERY_CACHE_TTL_MS` sets the lifetime. SQL Server only.'
       ]
+    },
+    { type: 'h2', id: 'cache-epoch', text: 'Caches across processes' },
+    {
+      type: 'ul',
+      items: [
+        'The write side needs no call: any statement that changes a configuration table counts, whoever runs it. A script that writes field or layout rows and exits is included; the number moves before its connection closes.',
+        'Record writes never move the number.',
+        'Ops Console, Caches lists every in-process cache. Clearing one there clears it in this process at once and in every other process within the poll.',
+        '`GET /api/ops-runtime/caches` reports the number this process last saw, how many configuration writes it made, and the newest statement that counted, without its values.',
+        "Caches derived from owner resolution (a person's working-on list, the inactive-people scan) clear in the process that wrote whenever a record changes state, a manual owner is added or removed, a delegate or out-of-office flag changes, or an owner group changes.",
+        '`CACHE_EPOCH=off` turns the mechanism off; `CACHE_EPOCH_POLL_MS` sets the poll (default 5000). Self-hosted only.'
+      ]
+    },
+    { type: 'h2', id: 'api-analytics-hooks', text: 'Hook timings' },
+    {
+      type: 'p',
+      text: "Every hook runs inside a named span, `hook:<owner>:<collection>:<action>:<before|after>`, so a slow request's trace names the hook that cost the time. The owner is the extension id, or for core hooks the file that registered them. `GET /api/extensions/hooks/timings` lists every hook with runs, failures and its typical, slow and slowest time since the process started. The registry sheet of an extension shows the same per hook."
+    },
+    { type: 'h2', id: 'api-analytics-replay', text: 'Replaying a logged request' },
+    {
+      type: 'p',
+      text: 'The request log keeps the query string of every call, up to 500 characters, with values under credential-looking names replaced by `••••••`. A replay sends the stored query with the stored body. A query that was cut short or that holds a masked value has to be completed first: the replay block shows it in an editable field, and `POST /api/api-analytics/requests/:id/replay` takes `query` beside `body`.'
     },
     {
       type: 'note',
@@ -85,6 +107,26 @@ export const obsHealthDashboard: DocSection = {
   "inngest":   { "ok": true },
   "migrations":{ "ok": true, "pending": 0 },
   "sockets":   { "connected": 12 }
+}`
+    },
+    { type: 'h2', id: 'health-startup', text: 'Startup' },
+    {
+      type: 'p',
+      text: 'The page ends with how long this process took to start, phase by phase: migrations, building the server, routes, extensions, scheduled flows, event flows, listening, and the warms that run beside the boot. Each bar sits where the phase began and is as wide as it took. The newest 20 starts are kept per instance; a phase that took at least twice its usual time and a second longer is marked, and so is the whole start.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/ops-runtime/boot
+{
+  "instance": "production",
+  "total_ms": 5120,
+  "usual_total_ms": 4800,
+  "slow": false,
+  "slow_phases": [],
+  "phases": [
+    { "name": "Migrations", "ms": 1400, "at": 900, "background": false,
+      "usual_ms": 1350, "slow": false }
+  ]
 }`
     },
     {

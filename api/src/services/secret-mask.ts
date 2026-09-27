@@ -92,3 +92,40 @@ export function sameLoggedBody(logged: string | null | undefined, sent: unknown)
   const a = canonical(maskBodySecrets(logged))
   return a != null && a === canonical(maskBodySecrets(sentText))
 }
+
+/** Longest query string the request log keeps. */
+export const QUERY_CAP = 500
+
+/**
+ * A request's query string for the log: values under credential-looking names
+ * become `••••••`, the rest is kept as sent. Cut at QUERY_CAP with a trailing
+ * `…`. Returns null for no query.
+ */
+export function maskQueryString(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const q = raw.startsWith('?') ? raw.slice(1) : raw
+  if (!q) return null
+  const out = q
+    .split('&')
+    .filter((part) => part.length > 0)
+    .map((part) => {
+      const eq = part.indexOf('=')
+      if (eq < 0) return part
+      const name = part.slice(0, eq)
+      let plain = name
+      try {
+        plain = decodeURIComponent(name.replace(/\+/g, ' '))
+      } catch {
+        /* keep the raw name */
+      }
+      return isSensitiveKey(plain) && part.length > eq + 1 ? `${name}=${MASK}` : part
+    })
+    .join('&')
+  return out.length > QUERY_CAP ? `${out.slice(0, QUERY_CAP - 1)}…` : out
+}
+
+/** Whether a stored query string can be sent again as it is. */
+export function queryIsReplayable(stored: string | null | undefined): boolean {
+  if (!stored) return true
+  return !stored.endsWith('…') && !stored.includes(MASK)
+}

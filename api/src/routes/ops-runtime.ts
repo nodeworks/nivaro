@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { configEpochState } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { bustAllCaches, bustCache, listCaches } from '../services/cache-registry.js'
+import { bustEverywhere, listCaches } from '../services/cache-registry.js'
 import { listInstances } from '../services/instance-roster.js'
 import { probeSmtp } from '../services/mail.js'
 import { runtimeStats } from '../services/runtime-monitor.js'
@@ -29,19 +30,56 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
 
   // #236 — in-process caches (PER REPLICA — the UI says so).
   app.get('/caches', async (_req, reply) => {
-    return reply.send({ data: listCaches() })
+    return reply.send({ data: listCaches(), epoch: configEpochState() })
   })
+  // Clears here at once and moves the configuration epoch, so every other
+  // process on this database clears within its poll (5 seconds).
   app.post<{ Params: { name: string } }>('/caches/:name/bust', async (req, reply) => {
     const name = req.params.name
-    const ok = name === '__all__' ? bustAllCaches().length > 0 : bustCache(name)
-    if (!ok) return reply.code(404).send({ error: 'Unknown cache' })
+    const { busted, epoch } = await bustEverywhere(name)
+    if (busted.length === 0) return reply.code(404).send({ error: 'Unknown cache' })
     await logActivity({
       action: 'cache-bust',
       user: req.user?.id,
-      comment: name === '__all__' ? 'all caches' : name,
+      comment: name === '__all__' ? `all caches (${busted.length})` : name,
       req
     })
-    return reply.send({ data: { busted: name } })
+    return reply.send({ data: { busted: name, caches: busted, epoch, everywhere: epoch != null } })
+  })
+
+  // How long this process took to start, phase by phase, against what is
+  // usual for this instance (the newest 20 boots are kept in Redis).
+  app.get('/boot', async (_req, reply) => {
+    const { bootReport, earlierBoots, judgePhases } = await import('../services/boot-phases.js')
+    const { instanceKey } = await import('../services/settings-overrides.js')
+    const report = bootReport()
+    const redis = (app as unknown as { redis?: Parameters<typeof earlierBoots>[0] }).redis
+    const earlier = redis ? await earlierBoots(redis, instanceKey()) : []
+    const phases = judgePhases(
+      report.phases,
+      earlier.map((b) => b.phases ?? [])
+    )
+    const totals = earlier.map((b) => b.total_ms).filter((v): v is number => typeof v === 'number')
+    const sorted = [...totals].sort((a, b) => a - b)
+    const usual = sorted.length >= 3 ? sorted[Math.floor(sorted.length / 2)] : null
+    return reply.send({
+      data: {
+        instance: instanceKey(),
+        ...report,
+        phases,
+        usual_total_ms: usual,
+        slow:
+          usual != null &&
+          report.total_ms != null &&
+          report.total_ms >= usual * 2 &&
+          report.total_ms - usual >= 2000,
+        slow_phases: phases.filter((p) => p.slow).map((p) => p.name),
+        earlier: earlier.slice(0, 10).map((b) => ({
+          started_at: b.started_at,
+          total_ms: b.total_ms
+        }))
+      }
+    })
   })
 
   // #252 — subsystem status → which FEATURES are impacted, in plain language.

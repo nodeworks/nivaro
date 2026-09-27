@@ -2,6 +2,12 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  announceScheduleChange,
+  type DesiredSchedule,
+  reconcile,
+  registerScheduleResync
+} from '../services/row-schedules.js'
 import { runSyncJob, type SyncJobRow, type SyncStats } from '../services/sync-engine.js'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -90,8 +96,35 @@ function scheduleJob(app: FastifyInstance, job: Pick<SyncJobRow, 'id' | 'schedul
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
+registerScheduleResync('sync-jobs', async (app) => {
+  const jobs = (await db('nivaro_sync_jobs')
+    .whereNotNull('schedule')
+    .where({ is_active: true })
+    .select('id', 'schedule')) as Array<{ id: number; schedule: string }>
+  const desired = new Map<string, DesiredSchedule>()
+  for (const job of jobs) {
+    if (!String(job.schedule ?? '').trim()) continue
+    desired.set(cronId(job.id), {
+      expression: job.schedule,
+      run: async () => {
+        try {
+          await runSyncJob(job.id)
+        } catch (err) {
+          app.log.error({ err, syncJobId: job.id }, 'Scheduled sync job failed')
+        }
+      }
+    })
+  }
+  return reconcile(app, 'sync-job-', desired)
+})
+
 export async function syncJobsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
+  // Other processes on this database follow a schedule change.
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.method !== 'GET' && reply.statusCode < 400 && !/\/run(\/|$|\?)/.test(req.url))
+      announceScheduleChange()
+  })
 
   // Register schedules for existing active jobs at startup.
   app.addHook('onReady', async () => {

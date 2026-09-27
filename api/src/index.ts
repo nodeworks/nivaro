@@ -20,6 +20,13 @@ import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
+import {
+  bootPhase,
+  bootReport,
+  markBootPhase,
+  markBootReady,
+  storeBoot
+} from './services/boot-phases.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
@@ -45,7 +52,7 @@ async function main() {
   // Run pending migrations on startup (self-hosted only).
   // In cloud mode, tenant migrations are run by the provisioning system.
   if (!process.env.CLOUD_META_DB_URL) {
-    const [batch, migrations] = await runMigrationsSafely()
+    const [batch, migrations] = await bootPhase('Migrations', () => runMigrationsSafely())
     if (migrations.length > 0) {
       console.log(`Migrations: ran batch ${batch}: ${migrations.join(', ')}`)
     }
@@ -77,11 +84,11 @@ async function main() {
     }
   }
 
-  const app = await buildServer()
+  const app = await bootPhase('Server: plugins, routes, extensions', () => buildServer())
 
   // These all query the static DB at startup — skip in cloud mode.
   if (!process.env.CLOUD_META_DB_URL) {
-    await loadEventFlows(app)
+    await bootPhase('Event flows', () => loadEventFlows(app))
     setFieldWatchApp(app)
     setSubscriptionApp(app)
     setSlaApp(app)
@@ -97,6 +104,7 @@ async function main() {
   // does not retry a child that exits at boot — an EADDRINUSE here would sit
   // as a silent "hang" until the next save. Retry briefly in development.
   const attempts = config.NODE_ENV === 'development' ? 20 : 1
+  const listenBegan = Date.now()
   for (let i = 1; ; i++) {
     try {
       await app.listen({ port: config.PORT, host: '0.0.0.0' })
@@ -110,7 +118,25 @@ async function main() {
       await new Promise((r) => setTimeout(r, 500))
     }
   }
+  markBootPhase('Listen (ready hooks run here)', Date.now() - listenBegan)
+  markBootReady()
   app.log.info(`Nivaro API v${NIVARO_VERSION} listening on port ${config.PORT}`)
+  {
+    const report = bootReport()
+    app.log.info(
+      { total_ms: report.total_ms, phases: report.phases.map((p) => `${p.name} ${p.ms}ms`) },
+      'Boot phases'
+    )
+    const redis = (app as unknown as { redis?: Parameters<typeof storeBoot>[0] }).redis
+    if (redis) {
+      const { instanceKey } = await import('./services/settings-overrides.js')
+      const key = instanceKey()
+      void storeBoot(redis, key)
+      // Background phases (cache warms, the schema build) land a little later.
+      const later = setTimeout(() => void storeBoot(redis, key), 90_000)
+      later.unref()
+    }
+  }
   // Development: an edit under a loaded extension restarts this process (tsx
   // watch never sees those files — they are loaded by dynamic import).
   startDevExtensionWatch(config.NODE_ENV, (m) => app.log.info(m))

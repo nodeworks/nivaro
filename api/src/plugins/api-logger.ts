@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
+import { maskQueryString } from '../services/secret-mask.js'
 
 interface ApiLogRow {
   method: string
@@ -15,6 +17,7 @@ interface ApiLogRow {
   ip: string | null
   user_agent: string | null
   error: string | null
+  query: string | null
   request_body: string | null
   created_at: Date
   /** The request's integration chain (plugins/chain.ts). */
@@ -117,7 +120,11 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       // A tenant that has not run migration 351 has no chain columns —
       // drop both fields rather than fail the whole flush.
       const stamp = await hasChainColumns('nivaro_api_logs')
-      const shaped = stamp ? rows : rows.map(({ chain_id: _c, chain_parent: _p, ...rest }) => rest)
+      const chained = stamp ? rows : rows.map(({ chain_id: _c, chain_parent: _p, ...rest }) => rest)
+      // Same for the query string (migration 357).
+      const shaped = (await hasColumn('nivaro_api_logs', 'query'))
+        ? chained
+        : chained.map(({ query: _q, ...rest }) => rest)
       // Insert in modest chunks to stay under MSSQL parameter limits
       for (let i = 0; i < shaped.length; i += 50) {
         await db('nivaro_api_logs').insert(shaped.slice(i, i + 50))
@@ -189,7 +196,9 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   })
 
   app.addHook('onResponse', async (req, reply) => {
-    const path = (req.raw.url ?? req.url).split('?')[0]
+    const rawUrl = req.raw.url ?? req.url
+    const mark = rawUrl.indexOf('?')
+    const path = mark < 0 ? rawUrl : rawUrl.slice(0, mark)
     if (shouldSkip(path, req.method)) return
     if (isInternalDispatch(req as unknown as { headers: Record<string, unknown> })) return
 
@@ -206,6 +215,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       ip: clientIp(req as unknown as { headers: Record<string, unknown>; ip: string }),
       user_agent: typeof ua === 'string' ? ua.slice(0, 300) : null,
       error: (req as unknown as { __nvrErr?: string }).__nvrErr ?? null,
+      query: mark < 0 ? null : maskQueryString(rawUrl.slice(mark + 1)),
       request_body: captureRequestBody(
         req as unknown as {
           method: string

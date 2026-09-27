@@ -1,3 +1,4 @@
+import { onOwnersChanged } from '../db/owner-signal.js'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import { getLabels } from './queues.js'
@@ -360,6 +361,8 @@ let scanCache: {
   at: number
   value: { sources: LinkSource[]; users: InactiveUserLinks[]; failed: string[] }
 } | null = null
+
+onOwnersChanged(() => bustInactiveLinkCache())
 
 export function bustInactiveLinkCache() {
   scanCache = null

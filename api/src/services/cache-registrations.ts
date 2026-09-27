@@ -1,11 +1,27 @@
+import { clearMetadataQueryCache } from '../db/metadata-query-cache.js'
+import { ownersChanged } from '../db/owner-signal.js'
 import { clearAccountabilityCache } from '../hooks/activity.js'
+import { bustWorkflowAutoCaches } from '../hooks/workflow-auto.js'
+import { clearDefaultWorkspaceCache } from '../middleware/workspace.js'
+import { bustPortalLinkCache } from './app-links.js'
+import { clearScheduleCache } from './business-hours.js'
 import { registerCache } from './cache-registry.js'
 import { clearMetadataCache } from './collections.js'
+import { bustDefinitionCache } from './definition-cache.js'
+import { clearEncryptedFieldCache } from './encryption.js'
 import { bustFormulaContextCache } from './formula-context.js'
+import { bustContractCache } from './integration-contracts.js'
 import { bustMailTemplateOverrides } from './mail.js'
+import { bustNotificationTemplateCache } from './notification-templates.js'
 import { bustOwnerGroupCache } from './pipeline-engine.js'
 import { bustRollupContributorCache } from './rollups.js'
+import { clearRowRuleCache } from './row-rules-autofill.js'
+import { bustSectionLockCache } from './section-locks.js'
 import { bustInstanceOverridesCache } from './settings-overrides.js'
+import { clearSlaZoneCache } from './sla-zones.js'
+import { bustTransitionGuardCache } from './transition-guard.js'
+import { clearTreePermissionCache } from './tree-permissions.js'
+import { bustScopeDimensionCache, bustScopePathCache, bustUserScopeCache } from './user-scopes.js'
 
 /**
  * Cache console wiring (#236): names the process's major in-memory caches so
@@ -48,4 +64,52 @@ export function registerKnownCaches(): void {
     'Per-instance settings override row (30s TTL)',
     bustInstanceOverridesCache
   )
+  registerCache(
+    'config-reads',
+    'Configuration reads at the driver seam (relations, fields, rules, layouts, column lists)',
+    clearMetadataQueryCache
+  )
+  registerCache('user-scopes', 'User scope rows, scope dimensions and resolved scope paths', () => {
+    bustUserScopeCache()
+    bustScopeDimensionCache()
+    bustScopePathCache()
+  })
+  registerCache(
+    'workflow-auto',
+    'Workflow bindings and watched child collections for automatic transitions',
+    bustWorkflowAutoCaches
+  )
+  registerCache(
+    'owner-derived',
+    'Working-on lists and inactive-people scans (cleared whenever owners change)',
+    ownersChanged
+  )
+  registerCache('row-rules', 'Grid row rules read from the active layouts', clearRowRuleCache)
+  registerCache('section-locks', 'Sections locked per role', bustSectionLockCache)
+  registerCache('tree-permissions', 'Which collections carry subtree permission rules', () =>
+    clearTreePermissionCache()
+  )
+  registerCache('definitions', 'Widget and custom query definitions (60s)', () =>
+    bustDefinitionCache()
+  )
+  registerCache('sla-zones', 'Regional business-hour clocks', clearSlaZoneCache)
+  registerCache('business-hours', 'Business hours and holidays', clearScheduleCache)
+  registerCache('transition-guard', 'Repeat transition guard setting', bustTransitionGuardCache)
+  registerCache('integration-contracts', 'Inbound payload contracts', bustContractCache)
+  registerCache('notification-templates', 'In-app notification templates', () =>
+    bustNotificationTemplateCache()
+  )
+  registerCache('encrypted-fields', 'Which fields are stored encrypted', () =>
+    clearEncryptedFieldCache()
+  )
+  registerCache('default-workspace', 'The default workspace id', clearDefaultWorkspaceCache)
+  registerCache('portal-links', 'Portal base URL and route templates', bustPortalLinkCache)
+  registerCache('compiled-checks', 'Data integrity checks compiled per collection', () => {
+    void import('./config-conformance.js').then((m) => m.bustCompiledChecks()).catch(() => {})
+  })
+  registerCache('extension-settings', 'Extension settings values', () => {
+    void import('../extensions/loader.js')
+      .then((m) => m.bustExtensionSettingsCache())
+      .catch(() => {})
+  })
 }

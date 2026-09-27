@@ -1202,6 +1202,16 @@ function SettingMeta({ d }: { d: SettingDecl }) {
 // ─── Registry sheet (#40) — what an extension registered, by kind ────────────
 type RegistryData = {
   hooks: Array<{ timing: string; collection: string; action: string; disabled: boolean }>
+  hook_timings?: Array<{
+    timing: string
+    collection: string
+    action: string
+    runs: number
+    errors: number
+    p50_ms: number | null
+    p95_ms: number | null
+    max_ms: number | null
+  }>
   crons: Array<{ id: string; expression: string; next_run: string | null; paused: boolean }>
   registrations: Record<string, string[]>
   settings: Array<{
@@ -1293,19 +1303,55 @@ function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => vo
         ) : (
           <div className='mt-4 space-y-4 text-[12px]'>
             <Section title='Hooks' count={data.hooks.length}>
-              {data.hooks.map((h, i) => (
-                <li
-                  key={`${h.timing}-${h.collection}-${h.action}-${i}`}
-                  className='font-mono text-[11px] text-slate-700 dark:text-slate-200'
-                >
-                  <span className='text-slate-400'>{h.timing}</span> {h.collection}
-                  <span className='text-slate-400'>.</span>
-                  {h.action}
-                  {h.disabled && (
-                    <span className='ml-1.5 font-sans text-[10px] text-amber-600'>disabled</span>
-                  )}
-                </li>
-              ))}
+              {data.hooks.map((h, i) => {
+                // Same order as the registry lists them, so index pairs them.
+                const t = data.hook_timings?.[i]
+                const timed =
+                  t &&
+                  t.timing === h.timing &&
+                  t.collection === h.collection &&
+                  t.action === h.action
+                    ? t
+                    : null
+                return (
+                  <li
+                    key={`${h.timing}-${h.collection}-${h.action}-${i}`}
+                    className='flex flex-wrap items-baseline gap-x-2 font-mono text-[11px] text-slate-700 dark:text-slate-200'
+                    data-ext-hook={`${h.timing}:${h.collection}:${h.action}`}
+                  >
+                    <span>
+                      <span className='text-slate-500 dark:text-slate-400'>{h.timing}</span>{' '}
+                      {h.collection}
+                      <span className='text-slate-500 dark:text-slate-400'>.</span>
+                      {h.action}
+                    </span>
+                    {h.disabled && (
+                      <span className='font-sans text-[10px] text-amber-700 dark:text-amber-300'>
+                        disabled
+                      </span>
+                    )}
+                    {timed && timed.runs > 0 ? (
+                      <span
+                        className={cn(
+                          'ml-auto font-sans text-[10.5px] tabular-nums',
+                          (timed.p95_ms ?? 0) >= 500
+                            ? 'text-amber-700 dark:text-amber-300'
+                            : 'text-slate-500 dark:text-slate-400'
+                        )}
+                        data-ext-hook-timing
+                        data-tip={`Since this process started: ${timed.runs.toLocaleString()} runs, slowest ${timed.max_ms} ms${timed.errors ? `, ${timed.errors} failed` : ''}`}
+                      >
+                        {timed.p50_ms} ms typical · {timed.p95_ms} ms slow
+                        {timed.errors > 0 && ` · ${timed.errors} failed`}
+                      </span>
+                    ) : timed ? (
+                      <span className='ml-auto font-sans text-[10.5px] text-slate-500 dark:text-slate-400'>
+                        not run yet
+                      </span>
+                    ) : null}
+                  </li>
+                )
+              })}
             </Section>
             <Section title='Crons' count={data.crons.length}>
               {data.crons.map((c) => (

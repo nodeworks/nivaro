@@ -1,3 +1,4 @@
+import { errorText } from '../lib/db-refusal.js'
 import { randomUUID } from 'node:crypto'
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
@@ -193,7 +194,7 @@ async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionCo
     return { status: 'resolve' as const, output }
   } catch (err) {
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Script execution failed')
-    return { status: 'reject' as const, output: { ...data, $error: String(err) } }
+    return { status: 'reject' as const, output: { ...data, $error: errorText(err) } }
   }
 }
 
@@ -393,7 +394,7 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
     return { status: 'resolve' as const, output: data }
   } catch (err) {
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Mail send failed')
-    return { status: 'reject' as const, output: { ...data, $error: String(err) } }
+    return { status: 'reject' as const, output: { ...data, $error: errorText(err) } }
   }
 }
 
@@ -454,7 +455,7 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
     return { status: 'resolve' as const, output: data }
   } catch (err) {
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Notification send failed')
-    return { status: 'reject' as const, output: { ...data, $error: String(err) } }
+    return { status: 'reject' as const, output: { ...data, $error: errorText(err) } }
   }
 }
 
@@ -503,7 +504,7 @@ async function runWebhook(op: FlowOperation, data: FlowData, ctx: ExecutionConte
     }
   } catch (err) {
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Webhook request failed')
-    return { status: 'reject' as const, output: { ...data, $error: String(err) } }
+    return { status: 'reject' as const, output: { ...data, $error: errorText(err) } }
   }
 }
 
@@ -1129,7 +1130,7 @@ function notifyFlowError(ctx: ExecutionContext, err: unknown): void {
     const { notifyUser } = await import('./notification-channels.js')
     const { getIo } = await import('./io-holder.js')
     const appShim = { io: getIo() ?? undefined } as unknown as Parameters<typeof notifyUser>[0]
-    const snippet = String(err).slice(0, 200)
+    const snippet = errorText(err, 200)
     await notifyUser(appShim, creator, {
       subject: `Flow "${ctx.flowName}" failed`,
       category: 'system',
@@ -1481,7 +1482,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
         status: 'error',
         completed_at: new Date(),
         duration_ms: Date.now() - startMs,
-        error_message: String(err)
+        error_message: errorText(err)
       })
       .catch((updErr) =>
         ctx.log.warn({ err: updErr, flowId: ctx.flowId }, 'Failed to record flow run error')
@@ -1493,7 +1494,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
       const { resolveObligation } = await import('./integration-obligations.js')
       await resolveObligation(obligationId, {
         outcome: 'failed',
-        reason: `flow errored: ${String(err).slice(0, 400)}`
+        reason: `flow errored: ${errorText(err, 400)}`
       })
     }
     // #622: tell the flow's creator the run errored — fire-and-forget,

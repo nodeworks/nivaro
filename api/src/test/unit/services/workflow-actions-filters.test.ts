@@ -7,7 +7,11 @@ vi.mock('../../../services/integration-remediation.js', () => ({
   classifyError: vi.fn(() => 'unknown')
 }))
 
-import { registerPayloadFilters } from '../../../services/workflow-actions.js'
+import {
+  registerPayloadFilters,
+  addCalendarDays,
+  calendarDay
+} from '../../../services/workflow-actions.js'
 
 const engine = new Liquid({ strictFilters: false, strictVariables: false })
 registerPayloadFilters(engine)
@@ -47,6 +51,22 @@ describe('payload template filters — pad_start', () => {
   })
 })
 
+describe('calendar days', () => {
+  it('keeps a date-only value as the day it names', () => {
+    expect(calendarDay('2026-10-31')).toBe('2026-10-31')
+    expect(addCalendarDays('2026-10-31', 1)).toBe('2026-11-01')
+    expect(addCalendarDays('2026-10-25', 14)).toBe('2026-11-08')
+    expect(addCalendarDays('2026-03-01', -1)).toBe('2026-02-28')
+  })
+
+  it('reads a timestamp as the day it falls on here, and nothing as today', () => {
+    const evening = new Date(2026, 8, 27, 19, 30)
+    expect(calendarDay(undefined, evening)).toBe('2026-09-27')
+    expect(calendarDay(evening)).toBe('2026-09-27')
+    expect(calendarDay('not a date')).toBeNull()
+  })
+})
+
 describe('payload template filters — the pre-existing set still registers', () => {
   it('jsonify renders a missing value as null and strings quoted', async () => {
     expect(await render('{{ v | jsonify }}', {})).toBe('null')
@@ -54,9 +74,12 @@ describe('payload template filters — the pre-existing set still registers', ()
   })
 
   it('add_days on a missing variable counts from today', async () => {
-    const expected = new Date()
-    expected.setDate(expected.getDate() + 60)
-    const iso = expected.toISOString().slice(0, 10)
+    // Sixty days on the calendar from today's date here, whatever the hour
+    // and whether or not a daylight-saving change falls in between.
+    const now = new Date()
+    const iso = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() + 60))
+      .toISOString()
+      .slice(0, 10)
     expect(await render('{{ missing | add_days: 60 }}')).toBe(iso)
     // The idiom for "today + N" in a template: LiquidJS's `nil` literal hands a
     // filter an internal Nil object (not null), so `{{ nil | add_days: 60 }}`

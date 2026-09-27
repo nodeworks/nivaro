@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser } from '../services/request-trace.js'
 import type { Role, User } from '../types.js'
 

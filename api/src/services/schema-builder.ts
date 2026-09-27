@@ -1,5 +1,6 @@
 import {
   GraphQLBoolean,
+  GraphQLEnumType,
   type GraphQLFieldConfig,
   GraphQLFloat,
   GraphQLID,
@@ -15,7 +16,6 @@ import {
 } from 'graphql'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
-import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import {
   domainMutationFields,
   domainQueryFields,
@@ -23,6 +23,7 @@ import {
 } from '../graphql/resolvers.js'
 import { GraphQLJSON } from '../graphql/scalars.js'
 import { ALL_DOMAIN_TYPES } from '../graphql/types.js'
+import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
 import { applyNestedGate, narrowNestedRow, nestedGate } from './graphql-nested-access.js'
@@ -37,6 +38,7 @@ import {
   updateOne,
   upsertInfoOf
 } from './items.js'
+import { RECORD_ORIGINS, translateVirtualKeys } from './virtual-filters.js'
 import {
   executeWorkflowTransition,
   startWorkflowInstance,
@@ -68,6 +70,80 @@ function fieldType(fieldName: string, cmsType: string): GraphQLOutputType {
 }
 
 // ─── Shared filter operator input types ──────────────────────────────────────
+
+// Filters that are not columns. GraphQL names cannot start with `$`, so the
+// inputs spell them `_state`, `_origin`, … and the resolvers rename them to
+// the keys both REST surfaces use (services/virtual-filters.ts).
+const RecordOriginEnum = new GraphQLEnumType({
+  name: 'RecordOrigin',
+  description: 'Who made a write.',
+  values: Object.fromEntries(RECORD_ORIGINS.map((o) => [o, { value: o }]))
+})
+
+const StateVirtualFilter = new GraphQLInputObjectType({
+  name: 'PipelineStateFilter',
+  description:
+    "The record's pipeline state, by state key. `__none__` names records that run no pipeline.",
+  fields: {
+    _eq: { type: GraphQLString },
+    _neq: { type: GraphQLString },
+    _in: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
+    _nin: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) }
+  }
+})
+
+const OriginVirtualFilter = new GraphQLInputObjectType({
+  name: 'RecordOriginFilter',
+  description:
+    'Who wrote to the record. `_in` = a write of these origins exists, `_nin` = none exists; the other keys narrow which writes count.',
+  fields: {
+    _eq: { type: RecordOriginEnum },
+    _neq: { type: RecordOriginEnum },
+    _in: { type: new GraphQLList(new GraphQLNonNull(RecordOriginEnum)) },
+    _nin: { type: new GraphQLList(new GraphQLNonNull(RecordOriginEnum)) },
+    days: { type: GraphQLInt, description: 'Only writes of the last N days.' },
+    since: { type: GraphQLString, description: 'Only writes at or after this ISO time.' },
+    until: { type: GraphQLString, description: 'Only writes at or before this ISO time.' },
+    by: { type: GraphQLID, description: 'Only writes by this account.' },
+    action: {
+      type: new GraphQLList(new GraphQLNonNull(GraphQLString)),
+      description: 'Only these kinds of write: create, update, delete.'
+    }
+  }
+})
+
+const AddendumPresenceEnum = new GraphQLEnumType({
+  name: 'AddendumPresence',
+  values: {
+    active: { value: 'active', description: 'An addendum is in flight.' },
+    none: { value: 'none', description: 'No addendum is in flight.' },
+    any: { value: 'any', description: 'The record has had an addendum.' }
+  }
+})
+
+const IntegrationStandingEnum = new GraphQLEnumType({
+  name: 'IntegrationStanding',
+  values: {
+    danger: { value: 'danger', description: 'A partner was not told: overdue, failed or missing.' },
+    warning: { value: 'warning', description: 'A message is pending or was skipped.' },
+    positive: { value: 'positive', description: 'A partner was told.' },
+    none: { value: 'none', description: 'Nothing is owed to any partner.' }
+  }
+})
+
+const VIRTUAL_FILTER_FIELDS: Record<string, { type: GraphQLInputType; description: string }> = {
+  _state: { type: StateVirtualFilter, description: 'Pipeline state of the record.' },
+  _origin: { type: OriginVirtualFilter, description: 'Who wrote to the record.' },
+  _addendums: { type: AddendumPresenceEnum, description: 'Addendums on the record.' },
+  _at_risk: {
+    type: new GraphQLList(new GraphQLNonNull(GraphQLString)),
+    description: 'Highlight rule ids the record matches, or "any".'
+  },
+  _integrations: {
+    type: IntegrationStandingEnum,
+    description: 'How the record stands with its integration partners.'
+  }
+}
 
 const StringFilterOps = new GraphQLInputObjectType({
   name: 'StringFilter',
@@ -326,7 +402,11 @@ async function applyNestedListArgs(
   m2oOf: (field: string) => string | undefined
 ): Promise<void> {
   if (args.filter && Object.keys(args.filter).length)
-    await applyFilterToQuery(q, args.filter, collection)
+    await applyFilterToQuery(
+      q,
+      translateVirtualKeys(args.filter) as Record<string, unknown>,
+      collection
+    )
   const joined = new Set<string>()
   for (const raw of args.sort ?? []) {
     const desc = raw.startsWith('-')
@@ -369,8 +449,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
 
   // Pre-load all fields per collection
   const allFields = new Map<string, Awaited<ReturnType<typeof getFields>>>()
+  // Every registered field, hidden ones included: a junction's own columns are
+  // routinely hidden, and `_link` filters exactly those.
+  const rawFields = new Map<string, Awaited<ReturnType<typeof getFields>>>()
   for (const col of visible) {
     const fields = await getFields(col.collection)
+    rawFields.set(col.collection, fields)
     // `hidden` is a UI flag — it means "do not put this on the form", not "do
     // not expose it". The primary key is routinely flagged hidden (the legacy
     // import did it to every table), which made `{ id }` — the one selection
@@ -676,6 +760,38 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
   ): Record<string, { type: GraphQLInputType }> =>
     Object.fromEntries(Object.entries(inner.getFields()).map(([k, v]) => [k, { type: v.type }]))
 
+  // `_link`: the junction row's own columns. One input type per junction,
+  // built from its scalar fields; a junction nobody registered takes JSON.
+  const linkTypes = new Map<string, GraphQLInputType>()
+  const linkFilterFor = (junction: string): GraphQLInputType => {
+    const hit = linkTypes.get(junction)
+    if (hit) return hit
+    const scalars = (rawFields.get(junction) ?? []).filter(
+      (f) =>
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(f.field) &&
+        !m2mMap.has(`${junction}.${f.field}`) &&
+        !o2mMap.has(`${junction}.${f.field}`)
+    )
+    if (scalars.length === 0) {
+      linkTypes.set(junction, GraphQLJSON)
+      return GraphQLJSON
+    }
+    const t: GraphQLInputObjectType = new GraphQLInputObjectType({
+      name: `${junction}_link_filter`,
+      description: `Columns of a ${junction} row.`,
+      fields: (): Record<string, { type: GraphQLInputType }> => ({
+        ...Object.fromEntries(
+          scalars.map((f) => [f.field, { type: filterOpsForField(f.field, f.type) }])
+        ),
+        _and: { type: new GraphQLList(new GraphQLNonNull(t)) },
+        _or: { type: new GraphQLList(new GraphQLNonNull(t)) }
+      })
+    })
+    relationWrapperTypes.push(t)
+    linkTypes.set(junction, t)
+    return t
+  }
+
   for (const col of visible) {
     const colName = col.collection
     const fields = allFields.get(colName) ?? []
@@ -706,10 +822,19 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                     // Offered only when the related collection has no field of
                     // that name, which would otherwise change meaning.
                     const leg = m2mInfo.fkToOther
+                    // `_link` filters the JUNCTION row of the same link the
+                    // other keys filter the related record of.
+                    const link = linkFilterFor(m2mInfo.junction)
+                    const some = new GraphQLInputObjectType({
+                      name: `${colName}_${field.field}_m2m_some`,
+                      fields: () => ({ ...own, _link: { type: link } })
+                    })
+                    relationWrapperTypes.push(some)
                     return {
-                      _some: { type: inner },
-                      _none: { type: inner },
+                      _some: { type: some },
+                      _none: { type: some },
                       ...own,
+                      _link: { type: link },
                       ...(leg && !(leg in own) ? { [leg]: { type: inner } } : {})
                     }
                   }
@@ -780,6 +905,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             f[field.field] = { type: filterOpsForField(field.field, field.type) }
           }
 
+          // Filters that are not columns — never over a real field's name.
+          for (const [k, def] of Object.entries(VIRTUAL_FILTER_FIELDS)) if (!(k in f)) f[k] = def
+
           // Logical combinators
           const selfType = filterRegistry.get(colName)
           if (selfType) {
@@ -829,7 +957,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           extensions: { code: 'UNAUTHENTICATED' }
         })
       return readItems(ctx.user, name, {
-        filter: args.filter as Record<string, unknown> | undefined,
+        filter: translateVirtualKeys(args.filter) as Record<string, unknown> | undefined,
         sort: args.sort as string[] | undefined,
         limit: args.limit as number | undefined,
         offset: args.offset as number | undefined,

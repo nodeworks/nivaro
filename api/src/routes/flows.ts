@@ -9,6 +9,12 @@ import { logActivity } from '../services/activity.js'
 import { executeFlow } from '../services/flow-executor.js'
 import { flowHealth } from '../services/flow-health.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import {
+  announceScheduleChange,
+  type DesiredSchedule,
+  reconcile,
+  registerScheduleResync
+} from '../services/row-schedules.js'
 
 interface Flow {
   id: string
@@ -264,8 +270,9 @@ function opPatchIsStructural(body: Partial<FlowOperation>): boolean {
 
 // ─── Cron helpers ─────────────────────────────────────────────────────────────
 
+const FLOW_CRON_PREFIX = 'flow:'
 function flowCronId(flowId: string) {
-  return `flow:${flowId}`
+  return `${FLOW_CRON_PREFIX}${flowId}`
 }
 
 async function sendFlowEvent(
@@ -310,6 +317,38 @@ function scheduleFlow(app: FastifyInstance, flow: Flow) {
 function unscheduleFlow(app: FastifyInstance, flowId: string) {
   app.cron.unschedule(flowCronId(flowId))
 }
+
+// A scheduled flow created, edited or switched off by another process.
+registerScheduleResync('flows', async (app) => {
+  const flows = await db<Flow>('nivaro_flows').where({ trigger: 'schedule', status: 'active' })
+  const desired = new Map<string, DesiredSchedule>()
+  for (const flow of flows) {
+    let expression: unknown
+    try {
+      expression = flow.trigger_options
+        ? (JSON.parse(flow.trigger_options) as Record<string, unknown>).cron
+        : undefined
+    } catch {
+      expression = undefined
+    }
+    if (typeof expression !== 'string' || !expression.trim()) continue
+    desired.set(flowCronId(flow.id), {
+      expression,
+      run: async () => {
+        app.log.info({ flowId: flow.id, name: flow.name }, 'Scheduled flow triggered')
+        await executeFlow({
+          flowId: flow.id,
+          flowName: flow.name,
+          trigger: 'schedule',
+          payload: {},
+          log: app.log
+        })
+        await sendFlowEvent(app.log, flow.id, flow.name, 'schedule')
+      }
+    })
+  }
+  return reconcile(app, FLOW_CRON_PREFIX, desired)
+})
 
 export async function loadScheduledFlows(app: FastifyInstance) {
   const flows = await db<Flow>('nivaro_flows').where({ trigger: 'schedule', status: 'active' })
@@ -515,6 +554,12 @@ export async function webhookFlowRoute(app: FastifyInstance) {
 let flowHealthCheckRegistered = false
 
 export async function flowsRoutes(app: FastifyInstance) {
+  // Other processes on this database follow a change to a scheduled flow.
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.method === 'GET' || reply.statusCode >= 400) return
+    if (/\/(test|run|replay|webhook)(\/|$|\?)/.test(req.url)) return
+    announceScheduleChange()
+  })
   if (!flowHealthCheckRegistered) {
     flowHealthCheckRegistered = true
     registerReadinessCheck({

@@ -1,3 +1,4 @@
+import { onOwnersChanged } from '../db/owner-signal.js'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { listScopeDimensions, resolveScopeLabelsForUsers } from './user-scopes.js'
@@ -563,6 +564,9 @@ type WorkingOnRaw = Array<{
   aging_hours: number | null
 }>
 
+// A transition, a manual owner, a delegate or an owner group changed.
+onOwnersChanged(() => workingOnCache.clear())
+
 export function bustWorkingOn(userId?: string): void {
   if (userId) workingOnCache.delete(userId)
   else workingOnCache.clear()
@@ -662,8 +666,7 @@ async function resolveWorkingOn(userId: string): Promise<WorkingOnRaw> {
   })
   const rank = (v: string | null) => (v === 'breached' ? 0 : v === 'warning' ? 1 : 2)
   enriched.sort(
-    (a, b) =>
-      rank(a.sla_status) - rank(b.sla_status) || (b.aging_hours ?? 0) - (a.aging_hours ?? 0)
+    (a, b) => rank(a.sla_status) - rank(b.sla_status) || (b.aging_hours ?? 0) - (a.aging_hours ?? 0)
   )
   return enriched
 }
