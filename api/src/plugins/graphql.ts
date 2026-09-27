@@ -306,7 +306,7 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       document,
       variableValues: body.variables,
       operationName: body.operationName,
-      contextValue: { user: req.user, isAdmin: req.isAdmin ?? false }
+      contextValue: { user: req.user, isAdmin: req.isAdmin ?? false, req }
     })
 
     return reply.send(result)

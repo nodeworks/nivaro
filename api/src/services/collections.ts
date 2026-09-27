@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { clearMetadataQueryCache } from '../db/metadata-query-cache.js'
 import { rawRows } from '../db/raw-rows.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
+import { clearVirtualSqlCache } from './virtual-sql.js'
 
 function parseJson<T>(val: unknown): T | null {
   if (!val) return null
@@ -87,6 +88,7 @@ const fieldsCache = new Map<string, { value: CMSField[]; at: number }>()
 /** Drop cached collection/field metadata (all, or one collection). */
 export function clearMetadataCache(collection?: string): void {
   clearMetadataQueryCache()
+  clearVirtualSqlCache()
   if (collection) {
     collectionCache.delete(collection)
     fieldsCache.delete(collection)

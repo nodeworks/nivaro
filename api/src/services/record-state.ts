@@ -175,24 +175,46 @@ export async function attachRecordState(
   }
 }
 
-/** filter={"$state": {...}} — EXISTS on the instance in the given key set. */
+/** A record that runs no pipeline at all, as a member of a `$state` key list. */
+export const NO_STATE_KEY = '__none__'
+
+/**
+ * filter={"$state": {...}} — EXISTS on the instance in the given key set.
+ *
+ * Records with no pipeline instance: `_in` / `_eq` never match them, `_nin` /
+ * `_neq` keep them (NOT EXISTS). To say otherwise, name `__none__` in the
+ * list: `_in: ["__none__", "started"]` = no pipeline OR started;
+ * `_nin: ["__none__", "canceled"]` = runs a pipeline AND is not canceled.
+ */
 export function applyStateFilter(q: Knex.QueryBuilder, collection: string, value: unknown): void {
-  const { include, exclude } = stateKeysFromOps(value)
+  const parsed = stateKeysFromOps(value)
   // A filter narrows. One we cannot read is a caller error, and answering it
   // with every row in the collection is the one answer that must not happen.
-  if (include.length === 0 && exclude.length === 0) {
+  if (parsed.include.length === 0 && parsed.exclude.length === 0) {
     q.whereRaw('1 = 0')
     return
   }
-  const exists = (keys: string[]) =>
+  const includeNone = parsed.include.includes(NO_STATE_KEY)
+  const excludeNone = parsed.exclude.includes(NO_STATE_KEY)
+  const include = parsed.include.filter((k) => k !== NO_STATE_KEY)
+  const exclude = parsed.exclude.filter((k) => k !== NO_STATE_KEY)
+  const exists = (keys: string[] | null) =>
     function (this: Knex.QueryBuilder) {
       this.select(db.raw('1'))
         .from('nivaro_workflow_instances as wfi')
         .join('nivaro_workflow_states as wfs', 'wfi.current_state', 'wfs.id')
         .where('wfi.collection', collection)
         .whereRaw('wfi.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
-        .whereIn('wfs.key', keys)
+      if (keys) this.whereIn('wfs.key', keys)
     }
-  if (include.length) q.whereExists(exists(include))
+  if (includeNone) {
+    q.where(function (this: Knex.QueryBuilder) {
+      this.whereNotExists(exists(null))
+      if (include.length) this.orWhereExists(exists(include))
+    })
+  } else if (include.length) {
+    q.whereExists(exists(include))
+  }
+  if (excludeNone) q.whereExists(exists(null))
   if (exclude.length) q.whereNotExists(exists(exclude))
 }

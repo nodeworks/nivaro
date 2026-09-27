@@ -1230,6 +1230,7 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   app.patch('/:collection/:id', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
+    if (!id?.trim()) return reply.code(400).send({ error: 'A record id is required' })
     const q = req.query as Record<string, string>
     const parentCollection = q.parent_collection ?? null
     const parentId = q.parent_id ?? null
@@ -1264,6 +1265,10 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   app.delete('/:collection/:id', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
+    // `DELETE /items/<collection>/` used to answer 204 and log a delete of ''
+    // while removing nothing — a script whose id variable came back blank
+    // read that as success.
+    if (!id?.trim()) return reply.code(400).send({ error: 'A record id is required' })
     const q = req.query as Record<string, string>
     const parentCollection = q.parent_collection ?? null
     const parentId = q.parent_id ?? null

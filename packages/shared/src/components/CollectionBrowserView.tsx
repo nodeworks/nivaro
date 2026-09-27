@@ -106,6 +106,9 @@ interface CMSField {
   hidden: boolean
   computed_formula?: string | null
   computed_store?: boolean
+  /** A calculated field the server can filter and sort in SQL. */
+  sql_filterable?: boolean
+  sql_kind?: 'number' | 'value'
 }
 export interface CollectionBrowserConfig {
   /** Row selection checkboxes + bulk bar (default true). */
@@ -4628,7 +4631,12 @@ export function CollectionBrowserView({
     if (!f) return null
     // Virtual computed fields have no physical column — not SQL-filterable.
     // Stored ones (computed_store) are real columns: filter/sort freely.
-    if (f.computed_formula && !f.computed_store) return null
+    if (f.computed_formula && !f.computed_store) {
+      // Arithmetic / coalesce over the record's own columns compiles to SQL
+      // on the server; anything else only exists after the rows are read.
+      if (!f.sql_filterable) return null
+      return f.sql_kind === 'number' ? { kind: 'num' } : { kind: 'text', path: [key] }
+    }
     if (f.type === 'integer' || f.type === 'decimal' || f.type === 'float') return { kind: 'num' }
     if (f.type === 'boolean') return { kind: 'bool' }
     if (f.type === 'date' || f.type === 'datetime' || f.type === 'timestamp')
@@ -6872,8 +6880,12 @@ export function CollectionBrowserView({
                         )
                       }
                       const f0 = fieldByName.get(key)
-                      const resolved =
-                        isResolvedCol(key) || !!(f0?.computed_formula && !f0.computed_store)
+                      const readOnlyComputed = !!(
+                        f0?.computed_formula &&
+                        !f0.computed_store &&
+                        !f0.sql_filterable
+                      )
+                      const resolved = isResolvedCol(key) || readOnlyComputed
                       const active =
                         !resolved &&
                         (sort === key ||
@@ -6895,8 +6907,13 @@ export function CollectionBrowserView({
                           {label}
                           {f?.computed_formula && (
                             <span
-                              title={`Computed: ${f.computed_formula}`}
-                              className='ml-1 text-violet-400'
+                              data-cbv-computed={readOnlyComputed ? 'read-only' : 'filterable'}
+                              data-tip={
+                                readOnlyComputed
+                                  ? 'Calculated when the list is read, so it cannot be filtered or sorted.'
+                                  : 'Calculated field.'
+                              }
+                              className='ml-1 text-violet-500 dark:text-violet-300'
                             >
                               ƒ
                             </span>
@@ -6993,7 +7010,10 @@ export function CollectionBrowserView({
                               <SimpleSelectXs
                                 ariaLabel='Integrations filter'
                                 value={curVal}
-                                options={[{ value: '', label: 'All' }, ...INTEGRATIONS_FILTER_OPTIONS]}
+                                options={[
+                                  { value: '', label: 'All' },
+                                  ...INTEGRATIONS_FILTER_OPTIONS
+                                ]}
                                 onChange={(v: string) =>
                                   setColFilter(
                                     '__integrations__',

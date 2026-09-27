@@ -138,7 +138,21 @@ export async function collectionsRoutes(app: FastifyInstance) {
       svc.getFields(collection),
       svc.getRelations(collection)
     ])
-    const fields = metaFields.length > 0 ? metaFields : await synthesizeFields(collection)
+    const baseFields = metaFields.length > 0 ? metaFields : await synthesizeFields(collection)
+    // Calculated fields that compile to SQL can be filtered and sorted; the
+    // list UI reads this flag instead of guessing from the formula.
+    const { sqlFilterableVirtualFields } = await import('../services/items.js')
+    const sqlFields = new Map(
+      (await sqlFilterableVirtualFields(collection).catch(() => [])).map((f) => [f.field, f.kind])
+    )
+    const fields =
+      sqlFields.size === 0
+        ? baseFields
+        : baseFields.map((f) =>
+            sqlFields.has(f.field)
+              ? { ...f, sql_filterable: true, sql_kind: sqlFields.get(f.field) }
+              : f
+          )
     const parseJsonList = (v: string | null | undefined): string[] | null => {
       if (!v) return null
       try {

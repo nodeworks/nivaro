@@ -51,6 +51,13 @@ import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
 import { applyUserScopesToQuery } from './user-scopes.js'
 import { enforceValidationRules } from './validation-rules.js'
+import {
+  cachedVirtualSql,
+  compileFormulaToSql,
+  peekVirtualSql,
+  storeVirtualSql,
+  type VirtualSql
+} from './virtual-sql.js'
 
 export type { NormalizedRollup, RollupSource }
 // Re-exported for compatibility with existing importers/tests — canonical
@@ -155,6 +162,13 @@ export class RouteOnlyCollectionError extends Error {
   constructor(collection: string, route: string) {
     super(`${collection} is only available through ${route}, which enforces per-room visibility`)
     this.name = 'RouteOnlyCollectionError'
+  }
+}
+
+/** An update or delete with a blank id touches nothing and must say so. */
+function assertRecordId(id: unknown): void {
+  if (id === null || id === undefined || String(id).trim() === '') {
+    throw Object.assign(new Error('A record id is required'), { statusCode: 400 })
   }
 }
 
@@ -483,6 +497,63 @@ export async function applyReadComputedFields(
     )
     for (const item of targets) item[f.field] = totals.get(String(item.id)) ?? null
   }
+}
+
+/**
+ * Virtual fields in an explicit projection.
+ *
+ * A read-computed formula or a virtual rollup has no column. Named in
+ * `fields=` it used to reach the SELECT and fail with "Invalid column name" —
+ * on list reads, on single reads, and for any role whose policy field list
+ * names one. Here the virtual names leave the SELECT, the columns their
+ * formulas read join it, and the caller computes them after the read exactly
+ * as a `*` read does. `extras` are the inputs that were added only for the
+ * computation; they are removed from the rows before they are returned.
+ */
+async function splitVirtualFields(
+  collection: string,
+  select: string[]
+): Promise<{ select: string[]; requested: string[] | undefined; extras: string[] }> {
+  if (select[0] === '*' || select.length === 0) {
+    return { select, requested: undefined, extras: [] }
+  }
+  const computed = (await getComputedFields(collection)).filter(
+    (f) =>
+      (f.computed_type === 'read' || f.computed_type === 'rollup') &&
+      !(f.computed_store === true || f.computed_store === 1)
+  )
+  if (computed.length === 0) return { select, requested: select, extras: [] }
+  const byName = new Map(computed.map((f) => [f.field, f]))
+  if (!select.some((f) => byName.has(f))) return { select, requested: select, extras: [] }
+  const physical = await getActualColumns(collection)
+  const virtual = select.filter((f) => byName.has(f) && !physical.has(f))
+  if (virtual.length === 0) return { select, requested: select, extras: [] }
+
+  const kept = select.filter((f) => !virtual.includes(f))
+  const have = new Set(kept)
+  const extras: string[] = []
+  const need = (col: string) => {
+    if (!physical.has(col) || have.has(col)) return
+    have.add(col)
+    extras.push(col)
+  }
+  for (const name of virtual) {
+    const f = byName.get(name) as ComputedFieldRow
+    const formula = String(f.computed_formula ?? '')
+    if (f.computed_type === 'read') {
+      for (const m of formula.matchAll(/\bitem\.([A-Za-z_][A-Za-z0-9_]*)/g)) need(m[1])
+    } else {
+      need('id')
+      const cfg = parseRollupFormula(formula)
+      for (const k of Object.keys(cfg?.parent_filter ?? {})) need(k)
+    }
+  }
+  return { select: [...kept, ...extras], requested: select, extras }
+}
+
+function dropExtras(rows: Record<string, unknown>[], extras: string[]): void {
+  if (extras.length === 0) return
+  for (const row of rows) for (const k of extras) delete row[k]
 }
 
 /**
@@ -1126,49 +1197,106 @@ async function recomputeJunctionAutoIds(
 
 // ─── Filter operators ─────────────────────────────────────────────────────────
 
-function applyOneFilterOp(q: QB, key: string, op: string, val: unknown) {
+// ─── Calculated fields that compile to SQL ──────────────────────────────────
+// A read-computed field made of arithmetic / coalesce over the record's own
+// columns can be filtered and sorted in the database (services/virtual-sql.ts).
+// The compiled expressions are cached per collection; the synchronous filter
+// builders read the cache, so every async entry point primes it first.
+export async function primeVirtualSql(collection: string): Promise<Map<string, VirtualSql>> {
+  const hit = cachedVirtualSql(collection)
+  if (hit) return hit
+  const fields = new Map<string, VirtualSql>()
+  try {
+    const computed = (await getComputedFields(collection)).filter(
+      (f) =>
+        f.computed_type === 'read' &&
+        f.computed_formula &&
+        !(f.computed_store === true || f.computed_store === 1)
+    )
+    if (computed.length > 0) {
+      const physical = await getActualColumns(collection)
+      for (const f of computed) {
+        if (physical.has(f.field)) continue
+        const compiled = compileFormulaToSql(String(f.computed_formula), collection, physical)
+        if (compiled) fields.set(f.field, compiled)
+      }
+    }
+  } catch {
+    // no calculated fields known — plain columns only
+  }
+  storeVirtualSql(collection, fields)
+  return fields
+}
+
+/** The names of a collection's calculated fields that filter and sort in SQL. */
+export async function sqlFilterableVirtualFields(
+  collection: string
+): Promise<Array<{ field: string; kind: 'number' | 'value' }>> {
+  const fields = await primeVirtualSql(collection)
+  return [...fields.entries()].map(([field, v]) => ({ field, kind: v.kind }))
+}
+
+/** Column reference for a filter or sort: the compiled expression when the
+ *  name is a calculated field of `collection`, the column otherwise. */
+function columnRef(collection: string | null, key: string): Knex.Raw {
+  if (collection) {
+    const bare = key.startsWith(`${collection}.`) ? key.slice(collection.length + 1) : key
+    const v = peekVirtualSql(collection)?.get(bare)
+    if (v) return db.raw(`(${v.sql})`, v.bindings)
+  }
+  return db.raw('??', [key])
+}
+
+function applyOneFilterOp(
+  q: QB,
+  key: string,
+  op: string,
+  val: unknown,
+  collection: string | null = null
+) {
+  const ref = columnRef(collection, key)
   switch (op) {
     case '_eq':
-      q.where(db.raw('??', [key]), '=', val as Knex.Value)
+      q.where(ref, '=', val as Knex.Value)
       break
     case '_neq':
-      q.where(db.raw('??', [key]), '!=', val as Knex.Value)
+      q.where(ref, '!=', val as Knex.Value)
       break
     case '_gt':
-      q.where(db.raw('??', [key]), '>', val as Knex.Value)
+      q.where(ref, '>', val as Knex.Value)
       break
     case '_gte':
-      q.where(db.raw('??', [key]), '>=', val as Knex.Value)
+      q.where(ref, '>=', val as Knex.Value)
       break
     case '_lt':
-      q.where(db.raw('??', [key]), '<', val as Knex.Value)
+      q.where(ref, '<', val as Knex.Value)
       break
     case '_lte':
-      q.where(db.raw('??', [key]), '<=', val as Knex.Value)
+      q.where(ref, '<=', val as Knex.Value)
       break
     case '_in':
-      q.whereIn(db.raw('??', [key]) as unknown as string, val as Knex.Value[])
+      q.whereIn(ref as unknown as string, val as Knex.Value[])
       break
     case '_nin':
-      q.whereNotIn(db.raw('??', [key]) as unknown as string, val as Knex.Value[])
+      q.whereNotIn(ref as unknown as string, val as Knex.Value[])
       break
     case '_null':
-      q.whereNull(db.raw('??', [key]) as unknown as string)
+      q.whereNull(ref as unknown as string)
       break
     case '_nnull':
-      q.whereNotNull(db.raw('??', [key]) as unknown as string)
+      q.whereNotNull(ref as unknown as string)
       break
     case '_contains':
-      q.where(db.raw('??', [key]), 'like', `%${val}%`)
+      q.where(ref, 'like', `%${val}%`)
       break
     case '_ncontains':
-      q.where(db.raw('??', [key]), 'not like', `%${val}%`)
+      q.where(ref, 'not like', `%${val}%`)
       break
     case '_starts_with':
-      q.where(db.raw('??', [key]), 'like', `${val}%`)
+      q.where(ref, 'like', `${val}%`)
       break
     case '_ends_with':
-      q.where(db.raw('??', [key]), 'like', `%${val}`)
+      q.where(ref, 'like', `%${val}`)
       break
   }
 }
@@ -1221,6 +1349,7 @@ export async function applyFilterToQuery(
 ): Promise<void> {
   const rels = await getRelsForCollection(collection)
   await primeRelCacheForFilter(filter, collection, rels)
+  await primeVirtualSql(collection)
   applyFilters(q, filter, collection, rels)
 }
 
@@ -1480,10 +1609,10 @@ function applyFilters(
     if (typeof value === 'object' && value !== null) {
       const ops = value as Record<string, unknown>
       for (const [op, val] of Object.entries(ops)) {
-        applyOneFilterOp(q, key, op, val)
+        applyOneFilterOp(q, key, op, val, collection)
       }
     } else {
-      q.where(db.raw('??', [key]), '=', value as Knex.Value)
+      q.where(columnRef(collection, key), '=', value as Knex.Value)
     }
   }
 }
@@ -1509,8 +1638,10 @@ async function applySorts(
     const direction = desc ? 'desc' : 'asc'
 
     if (!path.includes('.')) {
-      // Simple scalar sort
-      q.orderBy(path, direction)
+      // Simple scalar sort — a calculated field orders by its expression
+      const virtual = (await primeVirtualSql(collection)).get(path)
+      if (virtual) q.orderByRaw(`(${virtual.sql}) ${direction}`, virtual.bindings)
+      else q.orderBy(path, direction)
       continue
     }
 
@@ -1558,36 +1689,43 @@ async function applySorts(
 
 // ─── Legacy path-based conditions (kept for backwards compat) ─────────────────
 
-function applyOneFilter(q: QB, field: string, op: string, value: unknown): QB {
+function applyOneFilter(
+  q: QB,
+  field: string,
+  op: string,
+  value: unknown,
+  collection: string | null = null
+): QB {
+  const ref = columnRef(collection, field)
   switch (op) {
     case '_eq':
-      return q.where(db.raw('??', [field]), '=', value as Knex.Value)
+      return q.where(ref, '=', value as Knex.Value)
     case '_neq':
-      return q.where(db.raw('??', [field]), '!=', value as Knex.Value)
+      return q.where(ref, '!=', value as Knex.Value)
     case '_gt':
-      return q.where(db.raw('??', [field]), '>', value as Knex.Value)
+      return q.where(ref, '>', value as Knex.Value)
     case '_gte':
-      return q.where(db.raw('??', [field]), '>=', value as Knex.Value)
+      return q.where(ref, '>=', value as Knex.Value)
     case '_lt':
-      return q.where(db.raw('??', [field]), '<', value as Knex.Value)
+      return q.where(ref, '<', value as Knex.Value)
     case '_lte':
-      return q.where(db.raw('??', [field]), '<=', value as Knex.Value)
+      return q.where(ref, '<=', value as Knex.Value)
     case '_contains':
-      return q.where(db.raw('??', [field]), 'like', `%${value}%`)
+      return q.where(ref, 'like', `%${value}%`)
     case '_ncontains':
-      return q.where(db.raw('??', [field]), 'not like', `%${value}%`)
+      return q.where(ref, 'not like', `%${value}%`)
     case '_starts_with':
-      return q.where(db.raw('??', [field]), 'like', `${value}%`)
+      return q.where(ref, 'like', `${value}%`)
     case '_ends_with':
-      return q.where(db.raw('??', [field]), 'like', `%${value}`)
+      return q.where(ref, 'like', `%${value}`)
     case '_in':
-      return q.whereIn(db.raw('??', [field]) as unknown as string, value as Knex.Value[])
+      return q.whereIn(ref as unknown as string, value as Knex.Value[])
     case '_nin':
-      return q.whereNotIn(db.raw('??', [field]) as unknown as string, value as Knex.Value[])
+      return q.whereNotIn(ref as unknown as string, value as Knex.Value[])
     case '_null':
-      return q.whereNull(db.raw('??', [field]) as unknown as string)
+      return q.whereNull(ref as unknown as string)
     case '_nnull':
-      return q.whereNotNull(db.raw('??', [field]) as unknown as string)
+      return q.whereNotNull(ref as unknown as string)
     default:
       return q
   }
@@ -1643,6 +1781,7 @@ export async function planConditionPath(collection: string, path: string[]): Pro
         })
         return { hops, leafTable: alias.many_collection, leafCol: alias.junction_field ?? 'id' }
       }
+      await primeVirtualSql(current)
       return { hops, leafTable: current, leafCol: seg }
     }
     if (m2o?.one_collection) {
@@ -1680,7 +1819,8 @@ function applyPlannedCondition(
         qb as QB,
         plan.hops.length === 0 ? plan.leafCol : `${plan.leafTable}.${plan.leafCol}`,
         op,
-        value
+        value,
+        plan.leafTable
       )
       return
     }
@@ -1697,6 +1837,57 @@ function applyPlannedCondition(
 }
 
 export type OrCondition = { or: FilterCondition[] }
+
+/**
+ * A calculated field that does NOT compile to SQL cannot narrow or order a
+ * list. Naming one used to reach the database as a column and come back as a
+ * 500; the caller is told which field and why instead.
+ */
+async function assertFilterableFields(
+  collection: string,
+  filter: Record<string, unknown>,
+  sort: string[],
+  conditions: Array<FilterCondition | OrCondition> | undefined
+): Promise<void> {
+  const named = new Set<string>()
+  const walk = (f: unknown) => {
+    if (!f || typeof f !== 'object' || Array.isArray(f)) return
+    for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
+      if ((k === '_and' || k === '_or') && Array.isArray(v)) for (const c of v) walk(c)
+      else if (!k.startsWith('_') && !k.startsWith('$')) named.add(k)
+    }
+  }
+  walk(filter)
+  for (const s of sort) {
+    const path = s.startsWith('-') ? s.slice(1) : s
+    if (!path.includes('.')) named.add(path)
+  }
+  for (const c of conditions ?? []) {
+    const list = 'or' in c ? c.or : [c]
+    for (const one of list) if (one?.path?.length === 1) named.add(String(one.path[0]))
+  }
+  if (named.size === 0) return
+  const computed = (await getComputedFields(collection)).filter(
+    (f) =>
+      named.has(f.field) &&
+      (f.computed_type === 'read' || f.computed_type === 'rollup') &&
+      !(f.computed_store === true || f.computed_store === 1)
+  )
+  if (computed.length === 0) return
+  const [physical, compiled] = await Promise.all([
+    getActualColumns(collection),
+    primeVirtualSql(collection)
+  ])
+  const blocked = computed.filter((f) => !physical.has(f.field) && !compiled.has(f.field))
+  if (blocked.length === 0) return
+  const names = blocked.map((f) => `"${f.field}"`).join(', ')
+  throw Object.assign(
+    new Error(
+      `${names} ${blocked.length === 1 ? 'is' : 'are'} calculated when the record is read and cannot be filtered or sorted`
+    ),
+    { statusCode: 400, code: 'FIELD_NOT_FILTERABLE', fields: blocked.map((f) => f.field) }
+  )
+}
 
 /** Active at-risk rules named by a `$at_risk` condition value (id / ids / 'any'). */
 async function loadRiskRules(collection: string, value: unknown) {
@@ -2078,9 +2269,17 @@ export async function readItems(
     if (selectFields.length === 0) selectFields = ['*']
   }
 
+  // Virtual computed fields named in the projection: out of the SELECT, their
+  // inputs in, computed after the read.
+  const virtualSplit = await splitVirtualFields(collection, selectFields as string[])
+  selectFields = virtualSplit.select
+  if (selectFields.length === 0) selectFields = ['id']
+
   // For each related collection referenced in the filter or sort, pre-load their
   // relations into the cache so the synchronous applyFilters can access them.
   await primeRelCacheForFilter(filter, collection, rels)
+  await primeVirtualSql(collection)
+  await assertFilterableFields(collection, filter, sort, conditions)
 
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
   // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
@@ -2259,14 +2458,10 @@ export async function readItems(
   // Apply read-time computed fields (scoped to the explicit field selection when present)
   await span(
     'computed-fields',
-    () =>
-      applyReadComputedFields(
-        collection,
-        data,
-        selectFields[0] === '*' ? undefined : (selectFields as string[])
-      ),
+    () => applyReadComputedFields(collection, data, virtualSplit.requested),
     `${data.length} rows`
   )
+  dropExtras(data, virtualSplit.extras)
 
   // `$state` — one instance ⨝ states read for the whole page, opt-in only.
   if (stateSplit.wantsState && data.length > 0) {
@@ -2529,6 +2724,11 @@ export async function readOne(
     if (selectCols.length === 0) selectCols = ['*']
   }
 
+  // Virtual computed fields — see splitVirtualFields.
+  const virtualSplit = await splitVirtualFields(collection, selectCols as string[])
+  selectCols = virtualSplit.select
+  if (selectCols.length === 0) selectCols = ['id']
+
   // An alias segment ("REQ-1234") is not a key. Resolve it first, and never
   // pass it to the id column: an int primary key raises a conversion error
   // rather than simply not matching.
@@ -2557,7 +2757,8 @@ export async function readOne(
   if (item) {
     item = await decryptItemFields(collection, item)
     await applyInheritedFields(collection, [item])
-    await applyReadComputedFields(collection, [item])
+    await applyReadComputedFields(collection, [item], virtualSplit.requested)
+    dropExtras([item], virtualSplit.extras)
     if (oneState.wantsState) await attachRecordState(collection, [item])
     if (Object.keys(nestedFieldMap).length > 0) {
       await expandRelations(user, [item], collection, nestedFieldMap, 0, workspaceId)
@@ -3214,6 +3415,7 @@ export async function updateOne(
   workspaceId?: string
 ) {
   assertNotRouteOnly(collection)
+  assertRecordId(id)
   await enforceContracts(collection, user?.id, data, 'update')
   let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)
@@ -3492,6 +3694,7 @@ export async function deleteOne(
   workspaceId?: string
 ) {
   assertNotRouteOnly(collection)
+  assertRecordId(id)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 

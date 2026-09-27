@@ -24,6 +24,7 @@ import { GraphQLJSON } from '../graphql/scalars.js'
 import { ALL_DOMAIN_TYPES } from '../graphql/types.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
+import { applyNestedGate, narrowNestedRow, nestedGate } from './graphql-nested-access.js'
 import {
   applyFilterToQuery,
   CollectionNotFoundError,
@@ -233,6 +234,10 @@ function wrapWorkflowError(err: unknown): never {
 interface GQLContext {
   user?: User
   isAdmin?: boolean
+  /** The HTTP request behind a query or mutation; absent on subscriptions.
+   *  Writes hand it to the items service so hooks, activity rows and the
+   *  admin check see the same request a REST write gives them. */
+  req?: import('fastify').FastifyRequest
 }
 
 /** Directus-style arguments on a nested to-many field
@@ -474,11 +479,21 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   // integrations send them. A to-one has nothing to page, so
                   // they are accepted and ignored rather than rejected.
                   args: NESTED_LIST_ARGS,
-                  resolve: async (source: unknown) => {
+                  resolve: async (
+                    source: unknown,
+                    _args: Record<string, unknown>,
+                    ctx: GQLContext
+                  ) => {
                     const parent = source as Record<string, unknown>
                     const fkVal = parent[col]
                     if (fkVal == null) return null
-                    return (await db(target).where({ id: fkVal }).first()) ?? null
+                    const gate = await nestedGate(ctx, target)
+                    const q = db(target).where(`${target}.id`, fkVal as string | number)
+                    if (!applyNestedGate(q, target, gate, ctx.user as User)) return null
+                    const row = (await q.first(`${target}.*`)) as
+                      | Record<string, unknown>
+                      | undefined
+                    return row ? narrowNestedRow(row, gate) : null
                   }
                 }
                 continue
@@ -504,20 +519,26 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       type: (filterRegistry.get(otherCol) ?? GraphQLJSON) as GraphQLInputType
                     }
                   },
-                  resolve: async (source: unknown, args: Record<string, unknown>) => {
+                  resolve: async (
+                    source: unknown,
+                    args: Record<string, unknown>,
+                    ctx: GQLContext
+                  ) => {
                     const parentId = (source as Record<string, unknown>)['id']
                     if (parentId == null) return []
+                    const gate = await nestedGate(ctx, otherCol)
                     const q = db(`${info.junction} as _j`)
                       .join(otherCol, `${otherCol}.id`, `_j.${info.fkToOther}`)
                       .where(`_j.${info.fkToParent}`, parentId as string | number)
                       .select(`${otherCol}.*`, '_j.id as __junction_id')
+                    if (!applyNestedGate(q, otherCol, gate, ctx.user as User)) return []
                     await applyNestedListArgs(q, otherCol, args as never, (fk) =>
                       m2oMap.get(`${otherCol}.${fk}`)
                     )
                     const rows = (await q) as Array<Record<string, unknown>>
                     return rows.map(({ __junction_id, ...target }) => ({
                       __junction_id,
-                      __target: target
+                      __target: narrowNestedRow(target, gate)
                     }))
                   }
                 }
@@ -541,16 +562,23 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       type: (filterRegistry.get(manyCol) ?? GraphQLJSON) as GraphQLInputType
                     }
                   },
-                  resolve: async (source: unknown, args: Record<string, unknown>) => {
+                  resolve: async (
+                    source: unknown,
+                    args: Record<string, unknown>,
+                    ctx: GQLContext
+                  ) => {
                     const parentId = (source as Record<string, unknown>)['id']
                     if (parentId == null) return []
+                    const gate = await nestedGate(ctx, manyCol)
                     const q = db(manyCol)
                       .where(`${manyCol}.${info.manyField}`, parentId as string | number)
                       .select(`${manyCol}.*`)
+                    if (!applyNestedGate(q, manyCol, gate, ctx.user as User)) return []
                     await applyNestedListArgs(q, manyCol, args as never, (fk) =>
                       m2oMap.get(`${manyCol}.${fk}`)
                     )
-                    return q
+                    const rows = (await q) as Array<Record<string, unknown>>
+                    return gate.fields ? rows.map((r) => narrowNestedRow(r, gate)) : rows
                   }
                 }
                 continue
@@ -807,7 +835,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
-          return await createOne(ctx.user, name, data)
+          return await createOne(ctx.user, name, data, ctx.req)
         } catch (e) {
           wrapError(e)
         }
@@ -836,7 +864,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
-          return await updateOne(ctx.user, name, id, data)
+          return await updateOne(ctx.user, name, id, data, ctx.req)
         } catch (e) {
           wrapError(e)
         }
@@ -852,7 +880,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
-          await deleteOne(ctx.user, name, id)
+          await deleteOne(ctx.user, name, id, ctx.req)
           return { id }
         } catch (e) {
           wrapError(e)
@@ -877,7 +905,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         const results: unknown[] = []
         try {
           for (const row of rows) {
-            results.push(await createOne(ctx.user, name, row as Record<string, unknown>))
+            results.push(await createOne(ctx.user, name, row as Record<string, unknown>, ctx.req))
           }
           return results
         } catch (e) {
@@ -890,7 +918,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             const id = (made as { id?: unknown } | null)?.id
             if (id == null) continue
             try {
-              await deleteOne(ctx.user, name, String(id))
+              await deleteOne(ctx.user, name, String(id), ctx.req)
             } catch {
               stuck.push(id)
             }
@@ -911,7 +939,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
-          for (const id of ids) await deleteOne(ctx.user, name, id)
+          for (const id of ids) await deleteOne(ctx.user, name, id, ctx.req)
           return { ids }
         } catch (e) {
           wrapError(e)

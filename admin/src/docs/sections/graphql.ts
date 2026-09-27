@@ -96,6 +96,11 @@ query {
   }
 }`
     },
+    { type: 'h3', text: 'Permissions on nested fields' },
+    {
+      type: 'p',
+      text: "A nested field is read with the caller's own access to the related collection. Read permission, row filters, user scopes and the policy's field list all apply, exactly as they do when the related collection is queried on its own. A to-many field returns only the rows the caller may read; a to-one field returns `null` when the caller may not read the related record. API keys that carry scope restrictions are narrowed the same way, whoever owns them."
+    },
     { type: 'h3', text: 'Scalar type mapping' },
     {
       type: 'table',

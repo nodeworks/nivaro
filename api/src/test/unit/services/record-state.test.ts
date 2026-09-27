@@ -84,6 +84,27 @@ describe('applyStateFilter', () => {
     expect(bindings).toContain('started')
   })
 
+  it('reads __none__ as "runs no pipeline"', () => {
+    const inc = qb()
+    applyStateFilter(inc, 'workflows', { _in: ['__none__', 'started'] })
+    const a = inc.toSQL()
+    expect(a.sql).toMatch(/where \(not exists .* or exists /i)
+    expect(a.bindings).toContain('started')
+    expect(a.bindings).not.toContain('__none__')
+
+    const onlyNone = qb()
+    applyStateFilter(onlyNone, 'workflows', { _in: ['__none__'] })
+    expect(onlyNone.toSQL().sql).toMatch(/where \(not exists /i)
+    expect(onlyNone.toSQL().sql).not.toMatch(/ or exists/i)
+
+    const exc = qb()
+    applyStateFilter(exc, 'workflows', { _nin: ['__none__', 'canceled'] })
+    const b = exc.toSQL()
+    expect(b.sql).toMatch(/where exists .* and not exists /i)
+    expect(b.bindings).toContain('canceled')
+    expect(b.bindings).not.toContain('__none__')
+  })
+
   // A filter that cannot be read must not answer with the whole collection.
   it('matches nothing when no keys parse', () => {
     for (const v of [{}, null, 7, { _gt: 'x' }]) {

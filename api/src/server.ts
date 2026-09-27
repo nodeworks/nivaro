@@ -379,6 +379,10 @@ export async function buildServer() {
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',
         message: err.message,
+        // A refusal's machine code rides every 4xx; driver codes on a 5xx stay in the log.
+        ...(err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
+          ? { code: err.code }
+          : {}),
         ...(err.code && err.violations ? { code: err.code, violations: err.violations } : {}),
         ...(err.code === 'MIDAIR_COLLISION'
           ? { code: err.code, conflicts: err.conflicts, latest_revision: err.latest_revision }

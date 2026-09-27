@@ -422,6 +422,24 @@ export const apiFilter: DocSection = {
         ['_ends_with', 'LIKE %?', 'Suffix match.']
       ]
     },
+    { type: 'h3', text: 'Pipeline state (`$state`)' },
+    {
+      type: 'pre',
+      code: '// In one of these states\n?filter={"$state":{"_in":["started","in_review"]}}\n\n// Anything but canceled — records that run no pipeline are kept\n?filter={"$state":{"_nin":["canceled"]}}\n\n// Records that run no pipeline at all\n?filter={"$state":{"_in":["__none__"]}}\n\n// Runs a pipeline and is not canceled\n?filter={"$state":{"_nin":["__none__","canceled"]}}'
+    },
+    {
+      type: 'p',
+      text: "State keys are the pipeline's own keys. `__none__` stands for a record with no pipeline instance: name it in `_in` to include such records, or in `_nin` to leave them out."
+    },
+    { type: 'h3', text: 'Calculated fields' },
+    {
+      type: 'p',
+      text: "A calculated field made of arithmetic or `coalesce` over the record's own columns can be filtered and sorted like a column; the comparison runs in the database. `GET /api/collections/<collection>` marks such fields with `sql_filterable: true`. Any other calculated field, and every rollup that is not stored, exists only after the rows are read: naming one in a filter or sort is refused with `400` `FIELD_NOT_FILTERABLE`."
+    },
+    {
+      type: 'pre',
+      code: '// remaining = budget - spent  (a calculated field)\n?filter={"remaining":{"_lt":0}}&sort=-remaining\n\n// Any calculated field may be named in fields=, filterable or not\n?fields=id,name,remaining,open_order_total'
+    },
     { type: 'h3', text: 'Combining filters (AND / OR)' },
     {
       type: 'pre',

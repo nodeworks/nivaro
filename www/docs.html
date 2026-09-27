@@ -2335,6 +2335,26 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>_starts_with</td><td>LIKE ?%</td><td>Prefix match.</td></tr>
               <tr><td>_ends_with</td><td>LIKE %?</td><td>Suffix match.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Pipeline state (<code class="doc-code">$state</code>)</h3>
+          <pre class="doc-pre"><code>// In one of these states
+?filter={"$state":{"_in":["started","in_review"]}}
+
+// Anything but canceled — records that run no pipeline are kept
+?filter={"$state":{"_nin":["canceled"]}}
+
+// Records that run no pipeline at all
+?filter={"$state":{"_in":["__none__"]}}
+
+// Runs a pipeline and is not canceled
+?filter={"$state":{"_nin":["__none__","canceled"]}}</code></pre>
+          <p class="doc-p">State keys are the pipeline's own keys. <code class="doc-code">__none__</code> stands for a record with no pipeline instance: name it in <code class="doc-code">_in</code> to include such records, or in <code class="doc-code">_nin</code> to leave them out.</p>
+          <h3 class="doc-h3">Calculated fields</h3>
+          <p class="doc-p">A calculated field made of arithmetic or <code class="doc-code">coalesce</code> over the record's own columns can be filtered and sorted like a column; the comparison runs in the database. <code class="doc-code">GET /api/collections/&lt;collection&gt;</code> marks such fields with <code class="doc-code">sql_filterable: true</code>. Any other calculated field, and every rollup that is not stored, exists only after the rows are read: naming one in a filter or sort is refused with <code class="doc-code">400</code> <code class="doc-code">FIELD_NOT_FILTERABLE</code>.</p>
+          <pre class="doc-pre"><code>// remaining = budget - spent  (a calculated field)
+?filter={"remaining":{"_lt":0}}&amp;sort=-remaining
+
+// Any calculated field may be named in fields=, filterable or not
+?fields=id,name,remaining,open_order_total</code></pre>
           <h3 class="doc-h3">Combining filters (AND / OR)</h3>
           <pre class="doc-pre"><code>// AND — all conditions must match
 ?filter={"_and":[{"status":{"_eq":"active"}},{"amount":{"_gt":1000}}]}
@@ -3707,6 +3727,8 @@ query {
     }
   }
 }</code></pre>
+          <h3 class="doc-h3">Permissions on nested fields</h3>
+          <p class="doc-p">A nested field is read with the caller's own access to the related collection. Read permission, row filters, user scopes and the policy's field list all apply, exactly as they do when the related collection is queried on its own. A to-many field returns only the rows the caller may read; a to-one field returns <code class="doc-code">null</code> when the caller may not read the related record. API keys that carry scope restrictions are narrowed the same way, whoever owns them.</p>
           <h3 class="doc-h3">Scalar type mapping</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Nivaro field type</th><th>GraphQL type</th></tr></thead>
