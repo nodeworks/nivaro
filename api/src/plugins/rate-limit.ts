@@ -75,9 +75,13 @@ export const rateLimitPlugin = fp(async (app: FastifyInstance) => {
 
     if (count > limit) {
       reply.header('Retry-After', String(Math.max(resetAt - nowSec, 1)))
+      const wait = Math.max(resetAt - nowSec, 1)
       return reply.code(429).send({
+        statusCode: 429,
         error: 'Too Many Requests',
-        retry_after: Math.max(resetAt - nowSec, 1)
+        message: `This instance allows ${limit} requests per minute per caller. Try again in ${wait} seconds.`,
+        code: 'RATE_LIMITED',
+        retry_after: wait
       })
     }
   })

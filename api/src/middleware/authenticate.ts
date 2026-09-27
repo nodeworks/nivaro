@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { setTraceUser } from '../services/request-trace.js'
@@ -26,8 +27,61 @@ declare module 'fastify' {
   }
 }
 
-function httpError(statusCode: number, message: string): Error & { statusCode: number } {
-  return Object.assign(new Error(message), { statusCode })
+/**
+ * Every refusal carries a machine code beside its sentence, so a caller can
+ * tell an expired key from a blocked address from a missing scope without
+ * reading prose — and so the request log can group failures by cause.
+ */
+function httpError(
+  statusCode: number,
+  message: string,
+  code?: string
+): Error & { statusCode: number; code?: string } {
+  return Object.assign(new Error(message), { statusCode, ...(code ? { code } : {}) })
+}
+
+const KEY_WINDOW_SECONDS = 60
+
+/**
+ * Per-key request limit. `rate_limit_per_minute` was stored on the key and
+ * read onto the request, and nothing ever counted against it. A fixed
+ * one-minute window in Redis; over the limit the caller gets 429 with
+ * Retry-After. Redis trouble lets the request through — a counter that
+ * cannot be read must not take an integration down.
+ */
+async function enforceKeyRateLimit(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  keyId: string | number,
+  limit: number
+): Promise<void> {
+  const nowSec = Math.floor(Date.now() / 1000)
+  const windowStart = Math.floor(nowSec / KEY_WINDOW_SECONDS) * KEY_WINDOW_SECONDS
+  const resetAt = windowStart + KEY_WINDOW_SECONDS
+  let count = 0
+  try {
+    const results = await req.server.redis
+      .multi()
+      .incr(`nvr:keyrl:${keyId}:${windowStart}`)
+      .expire(`nvr:keyrl:${keyId}:${windowStart}`, KEY_WINDOW_SECONDS + 5)
+      .exec()
+    count = Number(results?.[0]?.[1] ?? 0)
+  } catch {
+    return
+  }
+  if (!Number.isFinite(count) || count <= 0) return
+  void reply.header('X-RateLimit-Limit', String(limit))
+  void reply.header('X-RateLimit-Remaining', String(Math.max(limit - count, 0)))
+  void reply.header('X-RateLimit-Reset', String(resetAt))
+  if (count > limit) {
+    const wait = Math.max(resetAt - nowSec, 1)
+    void reply.header('Retry-After', String(wait))
+    throw httpError(
+      429,
+      `This API key is limited to ${limit} requests per minute. Try again in ${wait} seconds.`,
+      'API_KEY_RATE_LIMITED'
+    )
+  }
 }
 
 /** nivaro_users.last_access used to be written ONLY at OIDC login, so a
@@ -129,27 +183,47 @@ function parseJsonArray<T>(raw: unknown): T[] {
 
 const LAST_USED_THROTTLE_MS = 60_000
 
-async function authenticateApiKey(req: FastifyRequest, token: string) {
+async function authenticateApiKey(req: FastifyRequest, reply: FastifyReply, token: string) {
+  // Stamped before the lookup: a refused key is still an API-key attempt in
+  // the request log, even when no key row matches it.
+  req.authMethod = 'api_key'
   const hash = createHash('sha256').update(token).digest('hex')
-  const key = (await db<ApiKeyRow>('nivaro_api_keys')
-    .where({ key_hash: hash, is_active: true })
-    .first()) as ApiKeyRow | undefined
-  if (!key) throw httpError(401, 'Invalid API key')
+  const key = (await db<ApiKeyRow>('nivaro_api_keys').where({ key_hash: hash }).first()) as
+    | ApiKeyRow
+    | undefined
+  if (!key) throw httpError(401, 'Invalid API key', 'API_KEY_INVALID')
+  // From here the failure belongs to a known key — the request log names it.
+  req.apiKeyId = Number(key.id)
+  if (!(key.is_active === true || (key.is_active as unknown) === 1)) {
+    throw httpError(401, 'This API key has been switched off', 'API_KEY_REVOKED')
+  }
 
   if (key.expires_at && new Date(key.expires_at).getTime() < Date.now()) {
-    throw httpError(401, 'API key expired')
+    throw httpError(
+      401,
+      `This API key expired on ${new Date(key.expires_at).toISOString().slice(0, 10)}`,
+      'API_KEY_EXPIRED'
+    )
   }
 
   const allowlist = parseJsonArray<string>(key.ip_allowlist)
   if (allowlist.length > 0) {
     const ip = req.ip ?? ''
     if (!allowlist.some((cidr) => cidrMatch(ip, cidr))) {
-      throw httpError(403, 'IP address not allowed for this API key')
+      throw httpError(
+        403,
+        `This API key may not be used from ${ip || 'this address'}`,
+        'API_KEY_IP_NOT_ALLOWED'
+      )
     }
   }
 
+  const limit = Number(key.rate_limit_per_minute)
+  if (Number.isFinite(limit) && limit > 0) await enforceKeyRateLimit(req, reply, key.id, limit)
+
   const user = await db<User>('nivaro_users').where({ id: key.user, status: 'active' }).first()
-  if (!user) throw httpError(401, 'API key owner is not active')
+  if (!user)
+    throw httpError(401, 'The account behind this API key is not active', 'API_KEY_OWNER_INACTIVE')
 
   await hydrateRole(req, user, { touch: false })
   // Key-level row scoping: rides the user object so getUserScopeEnforcement
@@ -163,6 +237,9 @@ async function authenticateApiKey(req: FastifyRequest, token: string) {
   // Per-key GraphQL cost cap (#162).
   if (key.graphql_max_depth != null) user.api_key_graphql_max_depth = Number(key.graphql_max_depth)
   req.apiKeyScopes = parseJsonArray<ApiKeyScope>(key.scopes)
+  // Scopes narrower than everything ride the user object, where can() reads
+  // them: every permission-checked read and write is held to them.
+  if (!scopesAreOpen(req.apiKeyScopes)) user.api_key_scopes = req.apiKeyScopes
   req.apiKeyRateLimit = key.rate_limit_per_minute ?? null
   req.apiKeyId = Number(key.id)
 
@@ -186,17 +263,12 @@ async function authenticateApiKey(req: FastifyRequest, token: string) {
 export function checkApiKeyScope(req: FastifyRequest, action: string, collection: string): boolean {
   const scopes = req.apiKeyScopes
   if (!scopes) return true
-  return scopes.some(
-    (s) =>
-      (s.collection === '*' || s.collection === collection) &&
-      Array.isArray(s.actions) &&
-      (s.actions.includes('*') || s.actions.includes(action))
-  )
+  return scopeAllows(scopes, action, collection)
 }
 
 // ─── Main authenticate middleware ─────────────────────────────────────────────
 
-export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
+export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   // Bearer auth — Authorization: Bearer <token>
   const authHeader = req.headers.authorization
   if (authHeader?.startsWith('Bearer ')) {
@@ -204,51 +276,57 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply) {
     if (token) {
       // Named API key
       if (token.startsWith('nvk_')) {
-        await authenticateApiKey(req, token)
+        await authenticateApiKey(req, reply, token)
         req.authMethod = 'api_key'
         return
       }
       // Masquerade token — admin-issued, Redis-backed, resolves to the target user
       if (token.startsWith('nvm_')) {
+        req.authMethod = 'masquerade'
         const raw = await req.server.redis.get(`masq:${token}`)
-        if (!raw) throw httpError(401, 'Masquerade session expired')
+        if (!raw) throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
         let payload: { user_id?: string; admin_id?: string }
         try {
           payload = JSON.parse(raw) as { user_id?: string; admin_id?: string }
         } catch {
-          throw httpError(401, 'Masquerade session expired')
+          throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
         }
         const user = await db<User>('nivaro_users')
           .where({ id: payload.user_id, status: 'active' })
           .first()
-        if (!user) throw httpError(401, 'Masqueraded user is not active')
+        if (!user)
+          throw httpError(401, 'Masqueraded user is not active', 'MASQUERADE_TARGET_INACTIVE')
         await hydrateRole(req, user, { touch: false })
         req.masqueradeAdminId = payload.admin_id
         req.authMethod = 'masquerade'
         return
       }
       // Static user token
-      const user = await db<User>('nivaro_users')
-        .where({ static_token: token, status: 'active' })
-        .first()
-      if (user) {
+      const user = await db<User>('nivaro_users').where({ static_token: token }).first()
+      if (user && user.status === 'active') {
         await hydrateRole(req, user)
         req.authMethod = 'token'
         return
       }
+      if (user) {
+        // The token is real; the account behind it cannot act.
+        req.authMethod = 'token'
+        throw httpError(401, 'The account behind this token is not active', 'ACCOUNT_NOT_ACTIVE')
+      }
     }
     // Token provided but not valid — don't fall through to session
-    throw httpError(401, 'Invalid token')
+    req.authMethod = 'token'
+    throw httpError(401, 'Invalid token', 'TOKEN_INVALID')
   }
 
   // Session auth
   const userId = req.session.userId
-  if (!userId) throw httpError(401, 'Unauthorized')
+  if (!userId) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
 
   const user = await db<User>('nivaro_users').where({ id: userId, status: 'active' }).first()
   if (!user) {
     await req.session.destroy()
-    throw httpError(401, 'Unauthorized')
+    throw httpError(401, 'Unauthorized', 'ACCOUNT_NOT_ACTIVE')
   }
 
   await hydrateRole(req, user)
@@ -261,5 +339,40 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply) {
 
 export async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
   await authenticate(req, reply)
-  if (!req.isAdmin) throw httpError(403, 'Forbidden')
+  if (!req.isAdmin) throw httpError(403, 'Forbidden', 'ADMIN_ONLY')
+  // A key limited to named collections stays out of administration, whoever
+  // owns it.
+  if (req.user?.api_key_scopes)
+    throw httpError(
+      403,
+      'This API key is limited to named collections and cannot use administrator routes',
+      'API_KEY_SCOPE_MISSING'
+    )
+}
+
+/**
+ * Many routes answer a refused permission with a bare `Forbidden`. When the
+ * refusal came from the key's own scopes, the caller is told which scope.
+ */
+export function scopeRefusalBody(
+  req: FastifyRequest,
+  status: number,
+  payload: unknown
+): string | null {
+  if (status !== 403) return null
+  const denied = req.user?.api_key_scope_denied
+  if (!denied || typeof payload !== 'string') return null
+  try {
+    const body = JSON.parse(payload) as Record<string, unknown>
+    if (typeof body.code === 'string' && body.code !== 'FORBIDDEN') return null
+    return JSON.stringify({
+      statusCode: 403,
+      error: 'Forbidden',
+      message: `This API key has no ${denied.action} scope on ${denied.collection}`,
+      code: 'API_KEY_SCOPE_MISSING',
+      scope: denied
+    })
+  } catch {
+    return null
+  }
 }

@@ -548,98 +548,62 @@ export const devexRateLimits: DocSection = {
     { type: 'h1', id: 'rate-limits', text: 'Rate Limiting & Headers' },
     {
       type: 'p',
-      text: 'All API requests are rate-limited per principal using a Redis fixed-window counter. A global limit applies to all keys; individual API keys can override with their own per-key limits. Every response includes standard X-RateLimit headers so clients can adjust their request rate.'
+      text: 'There are two limits, and both are off until someone sets them. An API key may carry its own calls-per-minute limit. The instance may carry one limit for every caller. Both count in one-minute windows that start on the minute.'
     },
-    {
-      type: 'h3',
-      id: 'rate-limits-configuration',
-      text: 'Configuration'
-    },
-    {
-      type: 'pre',
-      code: `# .env
-RATE_LIMIT_PER_MINUTE=600    # Global limit (unset/0 = no rate limiting, the default)
-RATE_LIMIT_BURST=100         # Allow temporary bursts (optional)`
-    },
-    {
-      type: 'h3',
-      id: 'rate-limits-api-key-overrides',
-      text: 'Per-API-Key Overrides'
-    },
+    { type: 'h3', id: 'rate-limits-api-key-overrides', text: 'A limit on one API key' },
     {
       type: 'p',
-      text: 'Named API keys can have their own rate limit. Set when creating the key:'
+      text: 'Set `rate_limit_per_minute` when creating or editing the key. Leave it empty for no limit. The limit counts calls made with that key on every instance that shares the same Redis.'
     },
     {
       type: 'pre',
       code: `POST /api/api-keys
 {
-  "name": "Mobile App",
-  "scopes": ["read:items", "create:items"],
-  "rate_limit": 2000  # This key gets 2000 req/min instead of global 600
+  "name": "Warehouse feed",
+  "rate_limit_per_minute": 120
 }`
     },
-    {
-      type: 'h3',
-      id: 'rate-limits-headers',
-      text: 'Response Headers'
-    },
+    { type: 'h3', id: 'rate-limits-configuration', text: 'A limit for the whole instance' },
     {
       type: 'pre',
-      code: `X-RateLimit-Limit: 600          # Requests allowed per minute
-X-RateLimit-Remaining: 597       # Requests remaining in current window
-X-RateLimit-Reset: 1718000460    # Epoch seconds when window resets`
+      code: `# .env
+RATE_LIMIT_PER_MINUTE=600    # unset or 0 = no instance limit, the default`
     },
     {
-      type: 'h3',
-      id: 'rate-limits-exceeded',
-      text: 'When Limit Exceeded'
+      type: 'p',
+      text: 'The instance limit counts per signed-in user, per bearer token, or per address for callers without a credential. A record page makes more than a hundred calls, so a low value refuses people using the app.'
     },
+    { type: 'h3', id: 'rate-limits-headers', text: 'Response headers' },
+    {
+      type: 'pre',
+      code: `X-RateLimit-Limit: 120          # calls allowed per minute
+X-RateLimit-Remaining: 117       # calls left in this window
+X-RateLimit-Reset: 1718000460    # epoch seconds when the window ends`
+    },
+    { type: 'h3', id: 'rate-limits-exceeded', text: 'When the limit is passed' },
     {
       type: 'pre',
       code: `HTTP/1.1 429 Too Many Requests
-
 Retry-After: 45
-X-RateLimit-Limit: 600
+X-RateLimit-Limit: 120
 X-RateLimit-Remaining: 0
 X-RateLimit-Reset: 1718000460
 
 {
-  "error": "Rate limit exceeded",
-  "retry_after_seconds": 45
+  "statusCode": 429,
+  "error": "Too Many Requests",
+  "message": "This API key is limited to 120 requests per minute. Try again in 45 seconds.",
+  "code": "API_KEY_RATE_LIMITED"
 }`
     },
     {
-      type: 'h3',
-      id: 'rate-limits-best-practices',
-      text: 'Best Practices'
-    },
-    {
       type: 'ul',
       items: [
-        'Check X-RateLimit-Remaining before making requests to avoid unnecessary 429s',
-        'Implement exponential backoff when receiving 429 responses',
-        'Respect Retry-After header — it tells you exactly how long to wait',
-        'Use per-key limits for trusted integrations or high-volume workloads',
-        'Distribute requests across multiple API keys if doing bulk operations'
+        'Wait for the number of seconds in `Retry-After`, then send the call again.',
+        'Read `X-RateLimit-Remaining` to slow down before a refusal.',
+        'A refused call is listed for administrators under Monitoring, Integrations, Inbound, in the Refused credentials list, one line per key with a count.',
+        'When Redis cannot be reached the call is let through. A limit never takes an integration down.'
       ]
-    },
-    {
-      type: 'h3',
-      id: 'rate-limits-reliability',
-      text: 'Reliability'
-    },
-    {
-      type: 'ul',
-      items: [
-        'Rate limiting fails open — if Redis is down, requests are allowed (limits are advisory, not hard blocks)',
-        'Fixed-window counters reset at minute boundaries (60-second window)',
-        'Static tokens (user session cookies) and API keys share the same limit pool'
-      ]
-    },
-    {
-      type: 'note',
-      text: "The rate limiter is per-principal (per user or per API key), not global. Each client has its own counter, so one user's burst does not affect another."
     }
   ]
 }

@@ -87,10 +87,18 @@ export async function matchWebhookConditions(
   conditions: ConditionRule[],
   collection: string,
   data: unknown,
-  event: string
+  event: string,
+  meta: { origin?: string | null; changed_fields?: string[] } = {}
 ): Promise<WebhookMatch> {
   if (conditions.length === 0) return { matches: true, rules: [] }
-  const snapshot = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>
+  const snapshot = {
+    ...((data && typeof data === 'object' ? data : {}) as Record<string, unknown>),
+    // Facts about the WRITE, beside the record's own fields:
+    //   $origin   person | machine | import | integration
+    //   $changed  the changed field names, comma-joined (use `contains`)
+    $origin: meta.origin ?? null,
+    $changed: (meta.changed_fields ?? []).join(',')
+  } as Record<string, unknown>
   let record = snapshot
   const needsResolve = conditions.some((c) => c.field.includes('.'))
   if (needsResolve && event !== 'delete' && snapshot.id != null) {
@@ -313,16 +321,24 @@ export async function dispatchWebhook(
 export async function fireWebhooks(
   collection: string,
   event: 'create' | 'update' | 'delete' | string,
-  data: unknown
+  data: unknown,
+  meta: { origin?: string | null; changed_fields?: string[] } = {}
 ): Promise<void> {
   try {
     const webhooks = (await db('nivaro_webhooks')
       .where({ enabled: true })
       .select('*')) as DispatchableWebhook[]
 
+    const id = (data as { id?: unknown } | null | undefined)?.id
     const payload = {
       event,
       collection,
+      item: id == null ? null : String(id),
+      // Who made the write (person, machine, import, integration) and, for an
+      // update, which fields it changed — so a receiver can skip machine
+      // writes or react to one field without diffing records itself.
+      origin: meta.origin ?? null,
+      changed_fields: event === 'update' ? (meta.changed_fields ?? []) : [],
       data,
       timestamp: new Date().toISOString()
     }
@@ -340,7 +356,7 @@ export async function fireWebhooks(
       const conditions = parseWebhookConditions(wh.conditions)
       if (conditions.length > 0) {
         try {
-          const verdict = await matchWebhookConditions(conditions, collection, data, event)
+          const verdict = await matchWebhookConditions(conditions, collection, data, event, meta)
           if (!verdict.matches) continue
         } catch (err) {
           console.warn(

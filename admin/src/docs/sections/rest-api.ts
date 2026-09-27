@@ -35,10 +35,96 @@ export const apiOverview: DocSection = {
       text: 'If an `Authorization: Bearer` header is present but the token is invalid, the request returns 401 immediately — it does not fall back to the session cookie.'
     },
     { type: 'h2', id: 'api-errors', text: 'Error responses' },
-    { type: 'p', text: 'All error responses use JSON with an `error` string field:' },
+    {
+      type: 'p',
+      text: 'A refused request answers with its HTTP status, a sentence in `message`, and a machine `code` to branch on. `error` holds the status text. Some routes answer with `error` alone; read `message` first and fall back to `error`.'
+    },
     {
       type: 'pre',
-      code: '{ "error": "Not found" }\n{ "error": "Forbidden" }\n{ "error": "Invalid token" }'
+      code: `HTTP/1.1 401 Unauthorized
+
+{
+  "statusCode": 401,
+  "error": "Unauthorized",
+  "message": "This API key expired on 2026-09-01",
+  "code": "API_KEY_EXPIRED"
+}`
+    },
+    { type: 'h3', text: 'Sign-in and credential codes' },
+    {
+      type: 'table',
+      head: ['Code', 'Status', 'Meaning'],
+      rows: [
+        ['NOT_SIGNED_IN', '401', 'No credential was sent and there is no session.'],
+        ['TOKEN_INVALID', '401', 'The bearer token matches no account.'],
+        [
+          'ACCOUNT_NOT_ACTIVE',
+          '401',
+          'The credential is real. The account behind it is suspended.'
+        ],
+        ['API_KEY_INVALID', '401', 'The API key matches none on file.'],
+        ['API_KEY_REVOKED', '401', 'The API key is switched off.'],
+        [
+          'API_KEY_EXPIRED',
+          '401',
+          'The API key passed its expiry date. The message names the date.'
+        ],
+        ['API_KEY_OWNER_INACTIVE', '401', 'The account that owns the API key is not active.'],
+        [
+          'API_KEY_IP_NOT_ALLOWED',
+          '403',
+          "The call came from outside the key's address allowlist."
+        ],
+        [
+          'API_KEY_SCOPE_MISSING',
+          '403',
+          'The key has no scope for the action on that collection. `scope` names both.'
+        ],
+        [
+          'API_KEY_RATE_LIMITED',
+          '429',
+          'The key went past its calls-per-minute limit. `Retry-After` says how long to wait.'
+        ],
+        ['RATE_LIMITED', '429', 'The caller went past the instance limit, when one is set.'],
+        ['MASQUERADE_EXPIRED', '401', 'A view-as session ran out.'],
+        ['ADMIN_ONLY', '403', 'The route is for administrators.']
+      ]
+    },
+    { type: 'h3', text: 'Codes for refused writes' },
+    {
+      type: 'table',
+      head: ['Code', 'Status', 'Meaning'],
+      rows: [
+        ['LINKED_RECORD_MISSING', '422', 'A field points at a record that does not exist.'],
+        ['RECORD_IN_USE', '409', 'The record cannot be removed while other records point at it.'],
+        ['DUPLICATE_RECORD', '409', 'A record with the same unique value already exists.'],
+        ['VALUE_TOO_LONG', '422', 'A value is longer than its field allows.'],
+        [
+          'FIELD_NOT_FILTERABLE',
+          '400',
+          'A filter or sort names a calculated field that cannot be compared in the database.'
+        ],
+        [
+          'VALIDATION_RULE_FAILED',
+          '400',
+          'A field rule refused the value. `violations` lists field, rule and message.'
+        ],
+        [
+          'CHANGE_REASON_REQUIRED',
+          '422',
+          'The change needs `_change_reason`. `violations` lists the fields.'
+        ],
+        [
+          'MIDAIR_COLLISION',
+          '409',
+          'Someone else changed the same fields. `conflicts` lists them.'
+        ],
+        ['DELETE_GUARDED', '409', 'A deletion guard on the collection refused the delete.']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'A refusal from the database names the constraint that refused the write. It never includes the statement or the database name. Administrators read every refused credential under Monitoring, Integrations, Inbound, in the Refused credentials list.'
     }
   ]
 }
@@ -336,6 +422,21 @@ Content-Type: application/json
     {
       type: 'note',
       text: 'Keys belong to the caller that sent them. Two API keys, or two users, may use the same value without meeting each other. `IDEMPOTENCY_TTL_SECONDS` changes how long answers are kept.'
+    },
+    { type: 'h3', text: 'When a create matches an existing record' },
+    {
+      type: 'p',
+      text: 'A collection may name a natural key. A `POST` whose values match an existing record on that key updates that record and creates nothing. The answer says so: `meta.upserted` is true, `meta.matched_id` is the record that was updated, `meta.keys` lists the key fields, and the header `X-Nivaro-Upserted` carries the id. In a bulk call each such row carries `upserted: true`.'
+    },
+    {
+      type: 'pre',
+      code: `HTTP/1.1 201 Created
+X-Nivaro-Upserted: 8812
+
+{
+  "data": { "id": 8812, "order": 42, "year": 2026, "total": 159 },
+  "meta": { "upserted": true, "matched_id": 8812, "keys": ["order", "year"] }
+}`
     },
     { type: 'h3', text: 'Update example' },
     {

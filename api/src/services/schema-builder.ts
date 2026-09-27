@@ -15,6 +15,7 @@ import {
 } from 'graphql'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import {
   domainMutationFields,
   domainQueryFields,
@@ -33,7 +34,8 @@ import {
   ForbiddenError,
   readItems,
   readOne,
-  updateOne
+  updateOne,
+  upsertInfoOf
 } from './items.js'
 import {
   executeWorkflowTransition,
@@ -197,12 +199,73 @@ const DeleteManyResponseType = new GraphQLObjectType({
 
 // ─── Error conversion ─────────────────────────────────────────────────────────
 
+const STATUS_CODES_GQL: Record<number, string> = {
+  400: 'BAD_REQUEST',
+  401: 'UNAUTHENTICATED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  422: 'UNPROCESSABLE',
+  423: 'LOCKED',
+  429: 'RATE_LIMITED'
+}
+
+/**
+ * A refusal from the items service becomes a GraphQL error a client can
+ * branch on: `extensions.code` is the service's own machine code
+ * (CHANGE_REASON_REQUIRED, VALIDATION_RULE_FAILED, …) or one derived from the
+ * status, `extensions.status` the HTTP status the REST API would have
+ * answered, and the structured detail (violations, conflicts, the nested row
+ * that failed) rides along. A server fault keeps its reason but never the
+ * statement that raised it.
+ */
 function wrapError(err: unknown): never {
   if (err instanceof ForbiddenError)
-    throw Object.assign(new Error('Forbidden'), { extensions: { code: 'FORBIDDEN' } })
+    throw Object.assign(new Error('Forbidden'), {
+      extensions: { code: 'FORBIDDEN', status: 403 }
+    })
   if (err instanceof CollectionNotFoundError)
-    throw Object.assign(new Error(err.message), { extensions: { code: 'NOT_FOUND' } })
-  throw err
+    throw Object.assign(new Error(err.message), {
+      extensions: { code: 'NOT_FOUND', status: 404 }
+    })
+  const e = err as {
+    message?: string
+    statusCode?: number
+    code?: unknown
+    violations?: unknown
+    conflicts?: unknown
+    latest_revision?: unknown
+    nested?: unknown
+    fields?: unknown
+    first?: unknown
+  }
+  const refusal = typeof e?.statusCode === 'number' ? null : describeDbRefusal(err)
+  if (refusal)
+    throw Object.assign(new Error(refusal.message), {
+      extensions: { code: refusal.code, status: refusal.status }
+    })
+  const status = typeof e?.statusCode === 'number' ? e.statusCode : 500
+  if (status >= 400 && status < 500) {
+    const own = typeof e.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(e.code) ? e.code : null
+    throw Object.assign(new Error(e.message ?? 'Request refused'), {
+      extensions: {
+        code: own ?? STATUS_CODES_GQL[status] ?? 'BAD_REQUEST',
+        status,
+        ...(e.violations !== undefined ? { violations: e.violations } : {}),
+        ...(e.conflicts !== undefined ? { conflicts: e.conflicts } : {}),
+        ...(e.latest_revision !== undefined ? { latest_revision: e.latest_revision } : {}),
+        ...(e.nested !== undefined ? { nested: e.nested } : {}),
+        ...(e.fields !== undefined ? { fields: e.fields } : {}),
+        ...(e.first !== undefined ? { first: e.first } : {})
+      }
+    })
+  }
+  // A driver error's message leads with the statement it ran.
+  const message = reasonWithoutSql(String(e?.message ?? 'Internal error'))
+  throw Object.assign(new Error(message), {
+    extensions: { code: 'INTERNAL_SERVER_ERROR', status: 500 },
+    originalError: err
+  })
 }
 
 // WorkflowMutationError carries an HTTP-ish status from the shared workflow
@@ -238,6 +301,8 @@ interface GQLContext {
    *  Writes hand it to the items service so hooks, activity rows and the
    *  admin check see the same request a REST write gives them. */
   req?: import('fastify').FastifyRequest
+  /** Creates the natural key routed to an update, reported in `extensions`. */
+  upserts?: Array<{ collection: string; matched_id: string | number; keys: string[] }>
 }
 
 /** Directus-style arguments on a nested to-many field
@@ -835,7 +900,10 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         try {
-          return await createOne(ctx.user, name, data, ctx.req)
+          const item = await createOne(ctx.user, name, data, ctx.req)
+          const upsert = upsertInfoOf(item)
+          if (upsert) ctx.upserts?.push({ collection: name, ...upsert })
+          return item
         } catch (e) {
           wrapError(e)
         }
@@ -905,7 +973,10 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         const results: unknown[] = []
         try {
           for (const row of rows) {
-            results.push(await createOne(ctx.user, name, row as Record<string, unknown>, ctx.req))
+            const item = await createOne(ctx.user, name, row as Record<string, unknown>, ctx.req)
+            const upsert = upsertInfoOf(item)
+            if (upsert) ctx.upserts?.push({ collection: name, ...upsert })
+            results.push(item)
           }
           return results
         } catch (e) {
@@ -917,6 +988,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           for (const made of [...results].reverse()) {
             const id = (made as { id?: unknown } | null)?.id
             if (id == null) continue
+            // A row the natural key matched existed before this call — the
+            // undo must never delete it.
+            if (upsertInfoOf(made)) continue
             try {
               await deleteOne(ctx.user, name, String(id), ctx.req)
             } catch {
@@ -927,6 +1001,104 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             e.message += ` — and ${stuck.length} row(s) created before the failure could not be removed: ${stuck.join(', ')}`
           wrapError(e)
         }
+      }
+    }
+
+    // Batch updates, under the legacy names:
+    //   update_<c>_items(ids, data)      the same change to several records
+    //   update_<c>_batch(data: [{id, …}]) a different change per record
+    // Sequential updateOne as the caller. All or nothing: when one is
+    // refused, the records already changed get their prior values back
+    // (only the fields this call wrote), newest first.
+    const runUpdates = async (
+      ctx: GQLContext,
+      changes: Array<{ id: string; data: Record<string, unknown> }>
+    ): Promise<unknown[]> => {
+      if (!ctx.user)
+        throw Object.assign(new Error('Unauthorized'), {
+          extensions: { code: 'UNAUTHENTICATED' }
+        })
+      if (changes.length > 500)
+        throw Object.assign(new Error('At most 500 records per call'), {
+          extensions: { code: 'BATCH_LIMIT', status: 422 }
+        })
+      const results: unknown[] = []
+      const done: Array<{ id: string; prior: Record<string, unknown> }> = []
+      const user = ctx.user
+      try {
+        for (const [index, change] of changes.entries()) {
+          if (!change.id)
+            throw Object.assign(new Error(`Row ${index + 1} has no id`), { statusCode: 400 })
+          const before = (await readOne(user, name, change.id)) as Record<string, unknown> | null
+          if (!before)
+            throw Object.assign(new Error(`Row ${index + 1}: no record ${change.id}`), {
+              statusCode: 404
+            })
+          const prior: Record<string, unknown> = {}
+          for (const k of Object.keys(change.data))
+            if (!k.startsWith('_') && k in before) prior[k] = before[k]
+          results.push(await updateOne(user, name, change.id, { ...change.data }, ctx.req))
+          done.push({ id: change.id, prior })
+        }
+        return results
+      } catch (e) {
+        const stuck: string[] = []
+        for (const d of [...done].reverse()) {
+          if (Object.keys(d.prior).length === 0) continue
+          try {
+            await updateOne(
+              user,
+              name,
+              d.id,
+              { ...d.prior, _change_reason: 'Batch update undone: a later record was refused' },
+              ctx.req
+            )
+          } catch {
+            stuck.push(d.id)
+          }
+        }
+        if (e instanceof Error) {
+          e.message += done.length
+            ? stuck.length
+              ? ` — ${done.length - stuck.length} earlier record(s) restored; could not restore: ${stuck.join(', ')}`
+              : ` — nothing was changed (${done.length} earlier record(s) restored)`
+            : ' — nothing was changed'
+        }
+        wrapError(e)
+      }
+    }
+
+    mutationFields[`update_${name}_items`] = {
+      type: new GraphQLList(new GraphQLNonNull(itemType)),
+      description: 'The same change applied to several records. All or nothing.',
+      args: {
+        ids: { type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLID))) },
+        data: { type: new GraphQLNonNull(GraphQLJSON) }
+      },
+      resolve: (
+        _root,
+        { ids, data }: { ids: string[]; data: Record<string, unknown> },
+        ctx: GQLContext
+      ) =>
+        runUpdates(
+          ctx,
+          ids.map((id) => ({ id: String(id), data }))
+        )
+    }
+
+    mutationFields[`update_${name}_batch`] = {
+      type: new GraphQLList(new GraphQLNonNull(itemType)),
+      description: 'A list of {id, …fields}: each record gets its own change. All or nothing.',
+      args: { data: { type: new GraphQLNonNull(GraphQLJSON) } },
+      resolve: (_root, { data }: { data: unknown }, ctx: GQLContext) => {
+        const rows = Array.isArray(data) ? data : [data]
+        return runUpdates(
+          ctx,
+          rows.map((r) => {
+            const { id, ...rest } = (r ?? {}) as Record<string, unknown>
+            return { id: id == null ? '' : String(id), data: rest }
+          })
+        )
       }
     }
 

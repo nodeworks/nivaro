@@ -122,7 +122,9 @@ async function buildCollectionSourceRows(
   source: QueueSourceRow,
   ownerUser: User
 ): Promise<MaterializedRowInput[]> {
-  const { items } = await resolveCollectionSource(source, ownerUser, BACKFILL_CEILING)
+  const { items } = await resolveCollectionSource(source, ownerUser, BACKFILL_CEILING, {
+    enforceAccess: false
+  })
   if (items.length === 0) return []
 
   const collection = source.collection as string

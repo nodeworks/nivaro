@@ -159,10 +159,16 @@ export const securityApiKeys: DocSection = {
           'Token format',
           '`nvk_` prefix + random secret; sha256 hash stored, plaintext never persisted'
         ],
-        ['Scopes', 'Restrict what the key can do (e.g. items:read, items:write, scim)'],
+        [
+          'Scopes',
+          'A list of `{ collection, actions }`. Actions are read, create, update, delete, or `*`. A collection of `*` means every collection. Left out, the key may do whatever its owner may.'
+        ],
         ['Expiry', 'Optional timestamp; expired keys are rejected'],
         ['IP allowlist', 'Optional list of CIDRs/IPs the key may be used from'],
-        ['Rate limit', 'Optional per-key requests-per-minute override']
+        [
+          'Rate limit',
+          '`rate_limit_per_minute`. Calls past it answer `429` `API_KEY_RATE_LIMITED` with `Retry-After`.'
+        ]
       ]
     },
     { type: 'h3', text: 'Usage' },
@@ -170,7 +176,15 @@ export const securityApiKeys: DocSection = {
       type: 'pre',
       code: `# Create (admin)
 POST /api/api-keys
-{ "name": "ci-deploy", "scopes": ["items:read"], "expires_at": "2027-01-01" }
+{
+  "name": "warehouse-feed",
+  "scopes": [
+    { "collection": "orders", "actions": ["read", "update"] },
+    { "collection": "order_lines", "actions": ["read"] }
+  ],
+  "rate_limit_per_minute": 120,
+  "expires_at": "2027-01-01"
+}
 # → { "key": "nvk_..." }   // shown once — store it now
 
 # Authenticate exactly like a Bearer token:
@@ -180,6 +194,28 @@ curl -H "Authorization: Bearer nvk_..." https://nivaro.example.com/api/items/art
 GET    /api/api-keys        # list (hashes only, never plaintext)
 PATCH  /api/api-keys/:id    # rename, change scopes/expiry/allowlist
 DELETE /api/api-keys/:id    # revoke immediately`
+    },
+    { type: 'h3', text: 'What scopes hold a key to' },
+    {
+      type: 'ul',
+      items: [
+        'Scopes narrow what the owner may do. They never add to it: a key scoped to update orders still needs an owner whose role may update orders.',
+        'They apply to every read and write that is checked per collection: the items API, GraphQL including nested fields, bulk calls, queues, comments and files attached to records.',
+        'They apply to keys owned by administrators too. A key with narrowed scopes cannot use administrator routes.',
+        'A call outside the scopes answers `403` `API_KEY_SCOPE_MISSING`, and the message names the action and collection the key lacks.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `HTTP/1.1 403 Forbidden
+
+{
+  "statusCode": 403,
+  "error": "Forbidden",
+  "message": "This API key has no create scope on invoices",
+  "code": "API_KEY_SCOPE_MISSING",
+  "scope": { "action": "create", "collection": "invoices" }
+}`
     },
     {
       type: 'note',

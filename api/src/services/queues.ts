@@ -25,6 +25,7 @@ import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
 import { can } from './permissions.js'
+import { applyQueueGate, queueGateFor } from './queue-access.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -1730,11 +1731,19 @@ function joinMultiHop(
 export async function resolveCollectionSource(
   source: QueueSourceRow,
   user: User,
-  ceiling: number = QUEUE_SANITY_CEILING
+  ceiling: number = QUEUE_SANITY_CEILING,
+  opts: {
+    /** false = the whole matched set, whoever asks: the cache backfill, which
+     *  stores rows for every viewer and is narrowed per viewer when read. */
+    enforceAccess?: boolean
+  } = {}
 ): Promise<SourceResult> {
   const empty: SourceResult = { items: [], matchedCount: 0, truncated: false }
   if (!source.collection) return empty
   if (!(await can(user, 'read', source.collection))) return empty
+  // The viewer's row filter and user scopes — null when nothing applies.
+  const gate =
+    opts.enforceAccess === false ? null : await queueGateFor(user, source.collection)
   const conditions = (parseJson(source.filters) as QueueCondition[] | null) ?? []
   const stateValues = parseJson(source.state_values) as string[] | null
 
@@ -1769,6 +1778,7 @@ export async function resolveCollectionSource(
   try {
     const q = db(source.collection).select('id')
     applyQueueConditions(q as unknown as ConditionBuilder, conditions)
+    applyQueueGate(q, gate, user)
     if (pushedDownState) {
       // EXISTS/NOT EXISTS expresses what a WHERE on the joined state key cannot:
       // "has no instance at all" is a real, keepable case in both modes, and it
@@ -1831,6 +1841,7 @@ export async function resolveCollectionSource(
       try {
         const cq = db(source.collection).select('id').whereIn('id', wanted)
         applyQueueConditions(cq as unknown as ConditionBuilder, conditions)
+        applyQueueGate(cq, gate, user)
         const extra = (await cq) as Array<{ id: string | number }>
         for (const r of extra) idSet.add(String(r.id))
       } catch {

@@ -91,9 +91,9 @@ function validateConditions(raw: unknown): string | null {
     if (!rule || typeof rule !== 'object') return `Condition ${i + 1} is not an object`
     if (
       typeof rule.field !== 'string' ||
-      !/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,2}$/.test(rule.field)
+      !/^(\$origin|\$changed|[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,2})$/.test(rule.field)
     )
-      return `Condition ${i + 1}: field must be a column name or a dotted path of up to three parts`
+      return `Condition ${i + 1}: field must be a column name, a dotted path of up to three parts, $origin or $changed`
     if (!(WEBHOOK_CONDITION_OPS as readonly string[]).includes(String(rule.op)))
       return `Condition ${i + 1}: operator must be one of ${WEBHOOK_CONDITION_OPS.join(', ')}`
   }
@@ -273,7 +273,14 @@ export async function webhooksRoutes(app: FastifyInstance) {
   // condition held it back. Sends nothing.
   app.post<{
     Params: { id: string }
-    Body: { collection?: string; item?: string | number; conditions?: unknown; event?: string }
+    Body: {
+      collection?: string
+      item?: string | number
+      conditions?: unknown
+      event?: string
+      origin?: string
+      changed_fields?: string[]
+    }
   }>('/:id/match', async (req, reply) => {
     const row = (await db('nivaro_webhooks')
       .where({ id: Number(req.params.id) })
@@ -300,7 +307,10 @@ export async function webhooksRoutes(app: FastifyInstance) {
     const event = String(body.event ?? 'update')
     const collections = parseJson<string[]>(row.collections) ?? []
     const events = parseJson<string[]>(row.events) ?? []
-    const verdict = await matchWebhookConditions(conditions, collection, record, event)
+    const verdict = await matchWebhookConditions(conditions, collection, record, event, {
+      origin: typeof body.origin === 'string' ? body.origin : 'person',
+      changed_fields: Array.isArray(body.changed_fields) ? body.changed_fields.map(String) : []
+    })
     const listens = collections.length === 0 || collections.includes(collection)
     const hears = events.includes(event)
     return {

@@ -140,8 +140,35 @@ export function applyRowFilter(
   }
 }
 
+/** Whether a key's scope list covers one action on one collection. */
+export function scopeAllows(
+  scopes: Array<{ collection: string; actions: string[] }>,
+  action: string,
+  collection: string
+): boolean {
+  return scopes.some(
+    (s) =>
+      (s.collection === '*' || s.collection === collection) &&
+      Array.isArray(s.actions) &&
+      (s.actions.includes('*') || s.actions.includes(action))
+  )
+}
+
+/** A scope list that restricts nothing. */
+export function scopesAreOpen(scopes: Array<{ collection: string; actions: string[] }>): boolean {
+  return scopes.some(
+    (s) => s.collection === '*' && Array.isArray(s.actions) && s.actions.includes('*')
+  )
+}
+
 export async function can(user: User, action: Action, collection: string): Promise<boolean> {
   if (!user.role) return false
+  // An API key's scopes come first: they narrow whatever the owner may do,
+  // an administrator included.
+  if (user.api_key_scopes && !scopeAllows(user.api_key_scopes, action, collection)) {
+    user.api_key_scope_denied = { action, collection }
+    return false
+  }
 
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (!role) return false

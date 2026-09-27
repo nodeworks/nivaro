@@ -381,10 +381,13 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string | undefined>
     const hours = parseHours(q.hours)
     const from = since(hours)
+    // A refused credential that matched nobody is logged as token / api_key
+    // with no caller — those belong to /auth-failures, not to a caller card.
     const inbound = () =>
       db('nivaro_api_logs as l')
         .where('l.created_at', '>=', from)
         .whereIn('l.auth', ['token', 'api_key'])
+        .where((w) => w.whereNotNull('l.user').orWhereNotNull('l.api_key_id'))
 
     const [agg, paths, errs] = await Promise.all([
       inbound()
@@ -421,12 +424,50 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const keyOf = (r: Record<string, unknown>) =>
       r.auth === 'api_key' ? `key:${r.api_key_id}` : `user:${String(r.user ?? '').toUpperCase()}`
 
+    // A refused call by a known key carries the key and no account, so one
+    // key can arrive as two grouped rows. One caller, one card.
+    const fold = (
+      rows: Array<Record<string, unknown>>,
+      extra: (r: Record<string, unknown>) => string
+    ) => {
+      const out = new Map<string, Record<string, unknown>>()
+      for (const r of rows) {
+        const k = `${keyOf(r)}|${extra(r)}`
+        const prev = out.get(k)
+        if (!prev) {
+          out.set(k, { ...r })
+          continue
+        }
+        const calls = Number(prev.calls) + Number(r.calls)
+        if (r.avg_ms != null || prev.avg_ms != null) {
+          prev.avg_ms =
+            (Number(prev.avg_ms ?? 0) * Number(prev.calls) +
+              Number(r.avg_ms ?? 0) * Number(r.calls)) /
+            Math.max(1, calls)
+        }
+        prev.calls = calls
+        prev.errors = Number(prev.errors ?? 0) + Number(r.errors ?? 0)
+        if (r.max_ms != null) prev.max_ms = Math.max(Number(prev.max_ms ?? 0), Number(r.max_ms))
+        if (
+          r.last_at != null &&
+          (prev.last_at == null || new Date(r.last_at as string) > new Date(prev.last_at as string))
+        )
+          prev.last_at = r.last_at
+        if (prev.user == null && r.user != null) prev.user = r.user
+      }
+      return [...out.values()]
+    }
+    const aggFolded = fold(agg, () => '')
+    const pathsFolded = fold(paths, (r) => `${r.method} ${r.path}`).sort(
+      (x, y) => Number(y.calls) - Number(x.calls)
+    )
+
     const userIds = [
-      ...new Set(agg.filter((r) => r.auth !== 'api_key' && r.user).map((r) => String(r.user)))
+      ...new Set(aggFolded.filter((r) => r.auth !== 'api_key' && r.user).map((r) => String(r.user)))
     ]
     const keyIds = [
       ...new Set(
-        agg
+        aggFolded
           .filter((r) => r.auth === 'api_key' && r.api_key_id != null)
           .map((r) => Number(r.api_key_id))
       )
@@ -454,7 +495,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       string,
       Array<{ method: string; path: string; calls: number; errors: number }>
     >()
-    for (const r of paths) {
+    for (const r of pathsFolded) {
       const k = keyOf(r)
       const list = topPaths.get(k) ?? []
       if (list.length < 5)
@@ -472,14 +513,14 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       if (!lastErr.has(k)) lastErr.set(k, r)
     }
 
-    const data = agg
+    const data = aggFolded
       .map((r) => {
         const k = keyOf(r)
         const isKey = r.auth === 'api_key'
         const u = isKey ? null : userById.get(String(r.user ?? '').toUpperCase())
         const key = isKey ? keyById.get(Number(r.api_key_id)) : null
         const label = isKey
-          ? String(key?.name ?? `API key #${r.api_key_id}`)
+          ? String(key?.name ?? `API key #${r.api_key_id} (deleted)`)
           : u
             ? `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? r.user)
             : String(r.user ?? 'unknown')
@@ -508,4 +549,184 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
 
     return reply.send({ data, hours })
   })
+
+  // ── Refused credentials ──────────────────────────────────────────────────
+  // 401 / 403 / 429 answers given to non-session callers, grouped by who asked
+  // (API key, account, or address when the credential matched nobody) and by
+  // the machine code of the refusal.
+  app.get('/auth-failures', { preHandler: requireAdmin }, async (req, reply) => {
+    const q = req.query as Record<string, string | undefined>
+    const hours = parseHours(q.hours)
+    const from = since(hours)
+    const SCAN = 5000
+    const rows = (await db('nivaro_api_logs as l')
+      .where('l.created_at', '>=', from)
+      .whereIn('l.status', [401, 403, 429])
+      .whereIn('l.auth', ['token', 'api_key', 'masquerade'])
+      .select(
+        'l.auth',
+        'l.user',
+        'l.api_key_id',
+        'l.status',
+        'l.method',
+        'l.path',
+        'l.error',
+        'l.ip',
+        'l.user_agent',
+        'l.created_at'
+      )
+      .orderBy('l.created_at', 'desc')
+      .limit(SCAN + 1)) as Array<Record<string, unknown>>
+    const truncated = rows.length > SCAN
+    if (truncated) rows.length = SCAN
+
+    type Group = {
+      key: string
+      kind: 'api_key' | 'token' | 'masquerade' | 'unknown'
+      credential: string
+      api_key_id: number | null
+      user: string | null
+      ip: string | null
+      code: string
+      status: number
+      message: string | null
+      count: number
+      first_at: unknown
+      last_at: unknown
+      sample: { method: string; path: string }
+      ips: string[]
+      user_agent: string | null
+    }
+    const groups = new Map<string, Group>()
+    for (const r of rows) {
+      const parsed = parseRefusal(r.error, Number(r.status))
+      const known = r.api_key_id != null || r.user != null
+      const who =
+        r.api_key_id != null
+          ? `key:${r.api_key_id}`
+          : r.user != null
+            ? `user:${String(r.user).toUpperCase()}`
+            : `ip:${r.ip ?? 'unknown'}`
+      const k = `${who}|${parsed.code}`
+      const g = groups.get(k)
+      const ip = r.ip ? String(r.ip) : null
+      if (g) {
+        g.count += 1
+        g.first_at = r.created_at
+        if (ip && g.ips.length < 5 && !g.ips.includes(ip)) g.ips.push(ip)
+        continue
+      }
+      groups.set(k, {
+        key: k,
+        kind: known ? (String(r.auth) as Group['kind']) : 'unknown',
+        credential: String(r.auth),
+        api_key_id: r.api_key_id != null ? Number(r.api_key_id) : null,
+        user: r.user != null ? String(r.user) : null,
+        ip,
+        code: parsed.code,
+        status: Number(r.status),
+        message: parsed.message,
+        count: 1,
+        first_at: r.created_at,
+        last_at: r.created_at,
+        sample: { method: String(r.method), path: String(r.path) },
+        ips: ip ? [ip] : [],
+        user_agent: r.user_agent ? String(r.user_agent) : null
+      })
+    }
+
+    const list = [...groups.values()]
+    const userIds = [...new Set(list.map((g) => g.user).filter((v): v is string => !!v))]
+    const keyIds = [...new Set(list.map((g) => g.api_key_id).filter((v): v is number => v != null))]
+    const [users, keys] = await Promise.all([
+      userIds.length
+        ? (db('nivaro_users')
+            .whereIn('id', userIds)
+            .select('id', 'first_name', 'last_name', 'email', 'status') as Promise<
+            Array<Record<string, unknown>>
+          >)
+        : Promise.resolve([] as Array<Record<string, unknown>>),
+      keyIds.length
+        ? (db('nivaro_api_keys')
+            .whereIn('id', keyIds)
+            .select('id', 'name', 'is_active', 'expires_at', 'rate_limit_per_minute') as Promise<
+            Array<Record<string, unknown>>
+          >)
+        : Promise.resolve([] as Array<Record<string, unknown>>)
+    ])
+    const userById = new Map(users.map((u) => [String(u.id).toUpperCase(), u]))
+    const keyById = new Map(keys.map((k) => [Number(k.id), k]))
+
+    const data = list
+      .map((g) => {
+        const key = g.api_key_id != null ? keyById.get(g.api_key_id) : null
+        const u = g.user ? userById.get(g.user.toUpperCase()) : null
+        const label = key
+          ? String(key.name ?? `API key #${g.api_key_id}`)
+          : g.api_key_id != null
+            ? `API key #${g.api_key_id} (deleted)`
+            : u
+              ? `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? g.user)
+              : g.ip
+                ? `Unrecognised caller at ${g.ip}`
+                : 'Unrecognised caller'
+        return {
+          ...g,
+          label,
+          email: u?.email ?? null,
+          user_status: u?.status ?? null,
+          key_active: key ? key.is_active === true || key.is_active === 1 : null,
+          key_expires_at: key?.expires_at ?? null,
+          key_rate_limit: key?.rate_limit_per_minute ?? null
+        }
+      })
+      .sort((a, b) => b.count - a.count)
+
+    return reply.send({
+      data,
+      hours,
+      truncated,
+      totals: {
+        failures: rows.length,
+        callers: new Set(data.map((d) => d.key.split('|')[0])).size,
+        by_code: Object.entries(
+          data.reduce<Record<string, number>>((acc, d) => {
+            acc[d.code] = (acc[d.code] ?? 0) + d.count
+            return acc
+          }, {})
+        )
+          .map(([code, count]) => ({ code, count }))
+          .sort((a, b) => b.count - a.count)
+      }
+    })
+  })
+}
+
+/**
+ * The refusal as the caller received it. The log keeps the first part of the
+ * response body; a body cut mid-JSON still yields its code by pattern.
+ */
+export function parseRefusal(
+  raw: unknown,
+  status: number
+): { code: string; message: string | null } {
+  const fallback = status === 429 ? 'RATE_LIMITED' : status === 403 ? 'FORBIDDEN' : 'UNAUTHORIZED'
+  if (typeof raw !== 'string' || !raw) return { code: fallback, message: null }
+  try {
+    const body = JSON.parse(raw) as Record<string, unknown>
+    const first = Array.isArray(body.errors)
+      ? (body.errors[0] as Record<string, unknown> | undefined)
+      : undefined
+    const ext = (first?.extensions ?? {}) as Record<string, unknown>
+    const code = body.code ?? ext.code
+    const message = body.message ?? first?.message ?? body.error
+    return {
+      code: typeof code === 'string' && code ? code : fallback,
+      message: typeof message === 'string' ? message.slice(0, 300) : null
+    }
+  } catch {
+    const code = raw.match(/"code"\s*:\s*"([A-Z0-9_]+)"/)?.[1]
+    const message = raw.match(/"message"\s*:\s*"([^"]{1,300})/)?.[1]
+    return { code: code ?? fallback, message: message ?? null }
+  }
 }

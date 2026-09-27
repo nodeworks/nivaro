@@ -179,6 +179,8 @@ export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
 export {
   type ApiCaller,
+  type AuthFailure,
+  AuthFailuresSection,
   type ApiLogRow,
   ApiRequestLog,
   type ApiRequestLogFilters,

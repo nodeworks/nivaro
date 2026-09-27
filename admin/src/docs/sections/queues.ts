@@ -43,6 +43,11 @@ export const queuesGuide: DocSection = {
         'Every new queue is seeded with one owned_by_me source, so a useful personal worklist exists with zero configuration.'
       ]
     },
+    { type: 'h3', text: 'Who sees which rows' },
+    {
+      type: 'p',
+      text: "A queue lists only records its viewer may read. The role's read permission, its row filter and the viewer's user scopes apply to every collection source, on live queues and on cached ones. Counts and state totals follow the same rows. Two people opening one shared queue may therefore see different totals. Administrators see every row."
+    },
     { type: 'h3', text: 'Configuring a queue' },
     {
       type: 'p',
@@ -123,7 +128,7 @@ export const queuesGuide: DocSection = {
     { type: 'h3', text: 'Item column label' },
     {
       type: 'p',
-      text: 'Each collection source can set an Item label template — e.g. {{project_id}} — {{title}} — controlling what the Item column (and kanban card title) shows. Tokens are direct fields of the source collection. Left empty, the collection\'s display template applies, falling back to the first of title/name/label/subject.'
+      text: "Each collection source can set an Item label template — e.g. {{project_id}} — {{title}} — controlling what the Item column (and kanban card title) shows. Tokens are direct fields of the source collection. Left empty, the collection's display template applies, falling back to the first of title/name/label/subject."
     },
     { type: 'h3', text: 'Source filters' },
     {
@@ -140,7 +145,7 @@ export const queuesGuide: DocSection = {
       items: [
         "Clicking a row (or kanban card) opens a side sheet with the item's meta, extra fields, available workflow transitions, claim/release, and comments — handle items without leaving the queue. The Open link (or the o key) jumps to the full record.",
         'Keyboard triage in Table view: j/k (or arrows) move the highlight, Enter opens the sheet, c claims/releases, o opens the full record, Esc closes the sheet.',
-        'Work Next claims the most urgent unclaimed item (following the current table order) and opens it; the sheet\'s Next button advances to the following item. It never auto-releases — releasing or transitioning stays an explicit action.'
+        "Work Next claims the most urgent unclaimed item (following the current table order) and opens it; the sheet's Next button advances to the following item. It never auto-releases — releasing or transitioning stays an explicit action."
       ]
     },
     { type: 'h3', text: 'Saved views and bulk actions' },
@@ -167,7 +172,7 @@ export const queuesGuide: DocSection = {
     { type: 'h3', text: 'Trends' },
     {
       type: 'p',
-      text: 'A nightly snapshot records each queue\'s totals (total, unowned, SLA warning/breached, at risk, per-state counts). Stat tiles show a 14-day sparkline and a delta versus the last snapshot — rising breached/at-risk counts render red, falling ones green. Trends appear after the first nightly snapshot.'
+      text: "A nightly snapshot records each queue's totals (total, unowned, SLA warning/breached, at risk, per-state counts). Stat tiles show a 14-day sparkline and a delta versus the last snapshot — rising breached/at-risk counts render red, falling ones green. Trends appear after the first nightly snapshot."
     }
   ]
 }

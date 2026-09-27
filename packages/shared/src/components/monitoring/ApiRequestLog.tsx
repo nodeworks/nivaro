@@ -1,5 +1,14 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { AlertCircle, ChevronDown, ChevronRight, KeyRound, RotateCw, Search, X } from 'lucide-react'
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  KeyRound,
+  RotateCw,
+  Search,
+  ShieldAlert,
+  X
+} from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -61,6 +70,51 @@ export interface ApiCaller {
     error: string | null
   } | null
   top_paths: Array<{ method: string; path: string; calls: number; errors: number }>
+}
+
+/** One refused credential: who asked, the refusal's code, how often. */
+export interface AuthFailure {
+  key: string
+  kind: 'api_key' | 'token' | 'masquerade' | 'unknown'
+  credential: string
+  label: string
+  email: string | null
+  api_key_id: number | null
+  user: string | null
+  user_status: string | null
+  ip: string | null
+  ips: string[]
+  user_agent: string | null
+  code: string
+  status: number
+  message: string | null
+  count: number
+  first_at: string
+  last_at: string
+  sample: { method: string; path: string }
+  key_active: boolean | null
+  key_expires_at: string | null
+  key_rate_limit: number | null
+}
+
+/** What an administrator does about each refusal. Codes without an entry show the server's own sentence. */
+const REFUSAL_HINT: Record<string, string> = {
+  API_KEY_INVALID: 'The key matches none on file. The caller holds a deleted or mistyped key.',
+  API_KEY_REVOKED: 'The key is switched off. Switch it back on under API Keys, or issue a new one.',
+  API_KEY_EXPIRED: 'The key passed its expiry date. Extend it or issue a new one.',
+  API_KEY_IP_NOT_ALLOWED: "The call came from an address outside the key's allowlist.",
+  API_KEY_SCOPE_MISSING:
+    'The key asked for something outside its scopes. Widen the scopes under API Keys if the call is wanted.',
+  API_KEY_RATE_LIMITED: "The caller went past the key's calls-per-minute limit.",
+  API_KEY_OWNER_INACTIVE: 'The account that owns the key is suspended or removed.',
+  TOKEN_INVALID: 'The token matches no account. It was rotated, or never existed.',
+  ACCOUNT_NOT_ACTIVE: 'The token is real. The account behind it is suspended.',
+  MASQUERADE_EXPIRED: 'A view-as session ran out. Start a new one.',
+  MASQUERADE_TARGET_INACTIVE: 'The account being viewed as is no longer active.',
+  ADMIN_ONLY: 'The caller reached an administrator-only route.',
+  FORBIDDEN: 'The caller is signed in but lacks permission for what it asked.',
+  RATE_LIMITED: "The caller went past the instance's rate limit.",
+  UNAUTHORIZED: 'The caller was not recognised.'
 }
 
 export interface ApiRequestLogFilters {
@@ -837,6 +891,20 @@ export function InboundCallersView({ hours: initialHours = 24 }: { hours?: numbe
         </div>
       )}
 
+      <AuthFailuresSection
+        hours={hours}
+        onPick={(f) => {
+          setPicked(null)
+          setListFilters(
+            f.api_key_id != null
+              ? { api_key: f.api_key_id, status: String(f.status), inbound: true }
+              : f.user
+                ? { user: f.user, status: String(f.status), auth: f.credential }
+                : { status: String(f.status), auth: f.credential }
+          )
+        }}
+      />
+
       <ApiRequestLog
         hours={hours}
         filters={listFilters}
@@ -845,5 +913,168 @@ export function InboundCallersView({ hours: initialHours = 24 }: { hours?: numbe
         description='Newest first. Expand a row for IP, user agent and the full response body on failures.'
       />
     </section>
+  )
+}
+
+/**
+ * Credentials the API turned away: a wrong or expired key, a suspended
+ * account, a call past the key's rate limit. Grouped by caller and reason so a
+ * partner retrying every minute reads as one line with a count.
+ */
+export function AuthFailuresSection({
+  hours,
+  onPick
+}: {
+  hours: number
+  onPick?: (failure: AuthFailure) => void
+}) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(true)
+  const { data, isLoading } = useQuery({
+    queryKey: ['api-auth-failures', hours],
+    queryFn: () =>
+      client.request<{
+        data: AuthFailure[]
+        truncated: boolean
+        totals: {
+          failures: number
+          callers: number
+          by_code: Array<{ code: string; count: number }>
+        }
+      }>(get('/api-analytics/auth-failures', { hours })),
+    refetchInterval: 30_000
+  })
+  const rows = data?.data ?? []
+  const total = data?.totals.failures ?? 0
+
+  if (isLoading) {
+    return <div className='h-10 animate-pulse rounded-lg bg-[hsl(var(--nvr-skeleton))]' />
+  }
+
+  return (
+    <div
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-auth-failures={total}
+    >
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className='flex w-full items-center gap-2 px-3 py-2 text-left'
+      >
+        <ShieldAlert
+          className={cn(
+            'h-4 w-4 shrink-0',
+            total > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'
+          )}
+        />
+        <span className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
+          Refused credentials
+        </span>
+        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+          {total === 0
+            ? `None in the last ${hours}h`
+            : `${total.toLocaleString()}${data?.truncated ? '+' : ''} refusals · ${data?.totals.callers ?? 0} ${
+                (data?.totals.callers ?? 0) === 1 ? 'caller' : 'callers'
+              }`}
+        </span>
+        <span className='ml-auto text-slate-400'>
+          {open ? <ChevronDown className='h-4 w-4' /> : <ChevronRight className='h-4 w-4' />}
+        </span>
+      </button>
+
+      {open && rows.length > 0 && (
+        <div className='overflow-x-auto border-t border-slate-100 dark:border-border/60'>
+          <table className='w-full min-w-[720px] text-[12px] tabular-nums'>
+            <thead>
+              <tr className='text-left text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+                <th className='px-3 py-1.5 font-medium'>Caller</th>
+                <th className='px-3 py-1.5 font-medium'>Refusal</th>
+                <th className='px-3 py-1.5 font-medium'>Last asked for</th>
+                <th className='px-3 py-1.5 text-right font-medium'>Times</th>
+                <th className='px-3 py-1.5 text-right font-medium'>Last</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((f) => {
+                const hint = REFUSAL_HINT[f.code] ?? f.message ?? ''
+                return (
+                  <tr
+                    key={f.key}
+                    data-auth-failure={f.code}
+                    onClick={onPick ? () => onPick(f) : undefined}
+                    onKeyDown={
+                      onPick
+                        ? (e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              onPick(f)
+                            }
+                          }
+                        : undefined
+                    }
+                    tabIndex={onPick ? 0 : undefined}
+                    className={cn(
+                      'border-t border-slate-100 align-top dark:border-border/60',
+                      onPick && 'cursor-pointer hover:bg-muted focus-visible:bg-muted'
+                    )}
+                  >
+                    <td className='px-3 py-2'>
+                      <p className='font-medium text-slate-800 dark:text-slate-100'>{f.label}</p>
+                      <p className='text-[10.5px] text-slate-500 dark:text-slate-400'>
+                        {f.kind === 'unknown'
+                          ? `${f.credential === 'api_key' ? 'API key' : 'token'} that matches nobody`
+                          : f.kind === 'api_key'
+                            ? 'API key'
+                            : f.kind === 'masquerade'
+                              ? 'view-as session'
+                              : (f.email ?? 'static token')}
+                        {f.kind !== 'unknown' && f.ips.length > 0 && ` · ${f.ips.join(', ')}`}
+                      </p>
+                    </td>
+                    <td className='px-3 py-2'>
+                      <span
+                        className={cn(
+                          'inline-block rounded px-1.5 py-0.5 font-mono text-[10.5px]',
+                          f.status === 429
+                            ? 'bg-amber-100 text-amber-900 dark:bg-amber-400/15 dark:text-amber-200'
+                            : 'bg-red-100 text-red-900 dark:bg-red-400/15 dark:text-red-200'
+                        )}
+                      >
+                        {f.status} {f.code}
+                      </span>
+                      {hint && (
+                        <p className='mt-1 max-w-[52ch] text-[11px] text-slate-600 dark:text-slate-300'>
+                          {hint}
+                        </p>
+                      )}
+                    </td>
+                    <td className='px-3 py-2'>
+                      <span className='font-mono text-[11px] text-slate-600 dark:text-slate-300'>
+                        {f.sample.method} {f.sample.path}
+                      </span>
+                    </td>
+                    <td className='px-3 py-2 text-right font-semibold text-slate-800 dark:text-slate-100'>
+                      {f.count.toLocaleString()}
+                    </td>
+                    <td
+                      className='whitespace-nowrap px-3 py-2 text-right text-slate-500 dark:text-slate-400'
+                      data-tip={formatDateTime(f.last_at)}
+                    >
+                      {formatRelative(f.last_at)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {data?.truncated && (
+            <p className='border-t border-slate-100 px-3 py-1.5 text-[10.5px] text-slate-500 dark:border-border/60 dark:text-slate-400'>
+              Counts cover the newest 5,000 refusals in this window.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

@@ -2089,10 +2089,46 @@ const { data: tx } = await nivaro.request(
           <pre class="doc-pre"><code>Authorization: Bearer 3a7f2b9c1d4e...</code></pre>
           <div class="doc-note">If an <code class="doc-code">Authorization: Bearer</code> header is present but the token is invalid, the request returns 401 immediately — it does not fall back to the session cookie.</div>
           <h2 class="doc-h2" id="api-errors">Error responses</h2>
-          <p class="doc-p">All error responses use JSON with an <code class="doc-code">error</code> string field:</p>
-          <pre class="doc-pre"><code>{ "error": "Not found" }
-{ "error": "Forbidden" }
-{ "error": "Invalid token" }</code></pre>
+          <p class="doc-p">A refused request answers with its HTTP status, a sentence in <code class="doc-code">message</code>, and a machine <code class="doc-code">code</code> to branch on. <code class="doc-code">error</code> holds the status text. Some routes answer with <code class="doc-code">error</code> alone; read <code class="doc-code">message</code> first and fall back to <code class="doc-code">error</code>.</p>
+          <pre class="doc-pre"><code>HTTP/1.1 401 Unauthorized
+
+{
+  "statusCode": 401,
+  "error": "Unauthorized",
+  "message": "This API key expired on 2026-09-01",
+  "code": "API_KEY_EXPIRED"
+}</code></pre>
+          <h3 class="doc-h3">Sign-in and credential codes</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Code</th><th>Status</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>NOT_SIGNED_IN</td><td>401</td><td>No credential was sent and there is no session.</td></tr>
+              <tr><td>TOKEN_INVALID</td><td>401</td><td>The bearer token matches no account.</td></tr>
+              <tr><td>ACCOUNT_NOT_ACTIVE</td><td>401</td><td>The credential is real. The account behind it is suspended.</td></tr>
+              <tr><td>API_KEY_INVALID</td><td>401</td><td>The API key matches none on file.</td></tr>
+              <tr><td>API_KEY_REVOKED</td><td>401</td><td>The API key is switched off.</td></tr>
+              <tr><td>API_KEY_EXPIRED</td><td>401</td><td>The API key passed its expiry date. The message names the date.</td></tr>
+              <tr><td>API_KEY_OWNER_INACTIVE</td><td>401</td><td>The account that owns the API key is not active.</td></tr>
+              <tr><td>API_KEY_IP_NOT_ALLOWED</td><td>403</td><td>The call came from outside the key's address allowlist.</td></tr>
+              <tr><td>API_KEY_SCOPE_MISSING</td><td>403</td><td>The key has no scope for the action on that collection. <code class="doc-code">scope</code> names both.</td></tr>
+              <tr><td>API_KEY_RATE_LIMITED</td><td>429</td><td>The key went past its calls-per-minute limit. <code class="doc-code">Retry-After</code> says how long to wait.</td></tr>
+              <tr><td>RATE_LIMITED</td><td>429</td><td>The caller went past the instance limit, when one is set.</td></tr>
+              <tr><td>MASQUERADE_EXPIRED</td><td>401</td><td>A view-as session ran out.</td></tr>
+              <tr><td>ADMIN_ONLY</td><td>403</td><td>The route is for administrators.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Codes for refused writes</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Code</th><th>Status</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>LINKED_RECORD_MISSING</td><td>422</td><td>A field points at a record that does not exist.</td></tr>
+              <tr><td>RECORD_IN_USE</td><td>409</td><td>The record cannot be removed while other records point at it.</td></tr>
+              <tr><td>DUPLICATE_RECORD</td><td>409</td><td>A record with the same unique value already exists.</td></tr>
+              <tr><td>VALUE_TOO_LONG</td><td>422</td><td>A value is longer than its field allows.</td></tr>
+              <tr><td>FIELD_NOT_FILTERABLE</td><td>400</td><td>A filter or sort names a calculated field that cannot be compared in the database.</td></tr>
+              <tr><td>VALIDATION_RULE_FAILED</td><td>400</td><td>A field rule refused the value. <code class="doc-code">violations</code> lists field, rule and message.</td></tr>
+              <tr><td>CHANGE_REASON_REQUIRED</td><td>422</td><td>The change needs <code class="doc-code">_change_reason</code>. <code class="doc-code">violations</code> lists the fields.</td></tr>
+              <tr><td>MIDAIR_COLLISION</td><td>409</td><td>Someone else changed the same fields. <code class="doc-code">conflicts</code> lists them.</td></tr>
+              <tr><td>DELETE_GUARDED</td><td>409</td><td>A deletion guard on the collection refused the delete.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">A refusal from the database names the constraint that refused the write. It never includes the statement or the database name. Administrators read every refused credential under Monitoring, Integrations, Inbound, in the Refused credentials list.</div>
           <!-- /SYNC:api-overview -->
         </div>
 
@@ -2257,6 +2293,15 @@ Content-Type: application/json
               <tr><td>Key longer than 200 characters or containing spaces</td><td><code class="doc-code">400</code> <code class="doc-code">IDEMPOTENCY_KEY_INVALID</code>.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Keys belong to the caller that sent them. Two API keys, or two users, may use the same value without meeting each other. <code class="doc-code">IDEMPOTENCY_TTL_SECONDS</code> changes how long answers are kept.</div>
+          <h3 class="doc-h3">When a create matches an existing record</h3>
+          <p class="doc-p">A collection may name a natural key. A <code class="doc-code">POST</code> whose values match an existing record on that key updates that record and creates nothing. The answer says so: <code class="doc-code">meta.upserted</code> is true, <code class="doc-code">meta.matched_id</code> is the record that was updated, <code class="doc-code">meta.keys</code> lists the key fields, and the header <code class="doc-code">X-Nivaro-Upserted</code> carries the id. In a bulk call each such row carries <code class="doc-code">upserted: true</code>.</p>
+          <pre class="doc-pre"><code>HTTP/1.1 201 Created
+X-Nivaro-Upserted: 8812
+
+{
+  "data": { "id": 8812, "order": 42, "year": 2026, "total": 159 },
+  "meta": { "upserted": true, "matched_id": 8812, "keys": ["order", "year"] }
+}</code></pre>
           <h3 class="doc-h3">Update example</h3>
           <pre class="doc-pre"><code>PATCH /api/items/articles/uuid-1
 Content-Type: application/json
@@ -3577,10 +3622,46 @@ Authorization: Bearer &lt;admin-token&gt;
               <tr><td>create_collectionName_item</td><td>data: JSON — Directus-compatible alias</td><td>User with create permission</td></tr>
               <tr><td>create_collectionName_items</td><td>data: [JSON] — batch, one row per entry</td><td>User with create permission</td></tr>
               <tr><td>update_collectionName_item</td><td>id: ID!, data: JSON (partial)</td><td>User with update permission</td></tr>
+              <tr><td>update_collectionName_items</td><td>ids: [ID!]!, data: JSON — the same change to several records</td><td>User with update permission</td></tr>
+              <tr><td>update_collectionName_batch</td><td>data: [JSON] — each entry is { id, …fields }</td><td>User with update permission</td></tr>
               <tr><td>delete_collectionName_item</td><td>id: ID!</td><td>User with delete permission</td></tr>
               <tr><td>delete_collectionName_items</td><td>ids: [ID!]! — batch, returns { ids }</td><td>User with delete permission</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Create/update payloads accept Directus-era relation shapes: an M2O may be <code class="doc-code">{ id: … }</code>, and an M2M alias may be a single object, an array of <code class="doc-code">{ junction_field: { id } }</code> entries, or <code class="doc-code">{ create: [...] }</code> — alias writes are additive (junction rows are created, never detached).</div>
+          <h3 class="doc-h3">Changing several records in one call</h3>
+          <pre class="doc-pre"><code>mutation {
+  # the same change to each
+  update_orders_items(ids: [11, 12, 13], data: { status: "approved" }) { id status }
+
+  # a different change per record
+  update_orders_batch(data: [
+    { id: 11, total: 120 },
+    { id: 12, total: 80, status: "held" }
+  ]) { id total status }
+}</code></pre>
+          <ul class="doc-ul">
+            <li>Each record is changed as the caller, one after the other, with the same rules as a single update.</li>
+            <li>All or nothing. When one record is refused, the records changed before it get their earlier values back and the error says so.</li>
+            <li>At most 500 records per call.</li>
+          </ul>
+          <h3 class="doc-h3">Refused mutations</h3>
+          <p class="doc-p">A refused mutation answers HTTP 200 with <code class="doc-code">errors</code>. Each error carries <code class="doc-code">extensions.code</code> and <code class="doc-code">extensions.status</code>, the same code and status the REST API gives for the same refusal. Refusals that list details carry them too: <code class="doc-code">violations</code>, <code class="doc-code">conflicts</code>, <code class="doc-code">fields</code>, <code class="doc-code">nested</code>.</p>
+          <pre class="doc-pre"><code>{
+  "errors": [{
+    "message": "A linked record does not exist (fk_orders_customer)",
+    "path": ["create_orders_item"],
+    "extensions": { "code": "LINKED_RECORD_MISSING", "status": 422 }
+  }],
+  "data": null
+}</code></pre>
+          <h3 class="doc-h3">When a create matches an existing record</h3>
+          <p class="doc-p">A create whose values match an existing record on the collection's natural key updates that record. The response names each such record under <code class="doc-code">extensions.upserts</code>.</p>
+          <pre class="doc-pre"><code>{
+  "data": { "create_forecasts_item": { "id": 8812 } },
+  "extensions": {
+    "upserts": [{ "collection": "forecasts", "matched_id": 8812, "keys": ["order", "year"] }]
+  }
+}</code></pre>
           <h3 class="doc-h3">Create a record with its related rows</h3>
           <p class="doc-p">One-to-many rows ride inside <code class="doc-code">data</code> under the relation's field name, and the selection set can read them straight back. One mutation replaces the create-parent, read-id, create-children sequence.</p>
           <pre class="doc-pre"><code>mutation {
@@ -5108,21 +5189,13 @@ console.log(testResult.status, testResult.response_time)
 await nivaro.request(deleteWebhook(wh.id))</code></pre>
           <h3 class="doc-h3">Payload shape</h3>
           <pre class="doc-pre"><code>{
-  "event": "item.create",
+  "event": "update",                      // create | update | delete
   "collection": "projects",
-  "item": {
-    "id": "123",
-    "name": "New Project",
-    "status": "draft",
-    ...
-  },
-  "delta": {
-    // For updates only — fields that changed
-    "status": "draft"
-  },
-  "timestamp": "2024-06-14T10:30:00Z",
-  "user_id": "user-uuid",
-  "delivery_id": "delivery-uuid"
+  "item": "123",
+  "origin": "person",                     // person | machine | import | integration
+  "changed_fields": ["status"],           // updates only
+  "data": { "id": 123, "name": "New Project", "status": "active" },
+  "timestamp": "2026-09-27T10:30:00.000Z"
 }</code></pre>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Function</th><th>Route</th><th>Auth</th></tr></thead>
@@ -7431,7 +7504,7 @@ Authorization: Bearer &lt;token&gt;
           <!-- /SYNC:data-integrity -->
         </div>
 
-        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>
+        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-processors","label":"Import processors"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>
           <!-- SYNC:imports -->
           <h1 class="doc-h1" id="data-import-guide">Imports</h1>
           <p class="doc-p">The Import Console (Monitoring → Imports) covers two different importers behind one surface. Staged imports load a file into a staging table and optionally run a stored procedure over it. Collection imports map a CSV's columns onto a collection's fields and write each row through the item API. The console is the shared <code class="doc-code">ImportConsole</code> component, so the admin and any headless frontend built on @nivaro/react run exactly the same screen.</p>
@@ -7447,6 +7520,39 @@ Authorization: Bearer &lt;token&gt;
           <p class="doc-p">The New import dialog previews the file BEFORE queueing, using the worker's own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file's columns against the staging table, warning about columns the table does not have and columns it expects but the file omits.</p>
           <p class="doc-p">Service-mode definitions (rows written through the items service instead of a staging table + procedure) go one step further: the preview is a DRY RUN of the real importer — the same lookups, header mapping, natural-key dedupe and field diff, with nothing written — and reports what a run would do: how many rows would be created, how many existing rows would change (field by field, old → new), how many are unchanged, and every skipped row with the rule that dropped it ("row 12 · no cifa_items match for cifa", "row 40 · duplicate key in file (a later row wins)"). Lookup values a real run would stub-create are listed too. Click a count to see the rows behind it.</p>
           <div class="doc-note">The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.</div>
+          <h3 class="doc-h3" id="imports-processors">Import processors</h3>
+          <p class="doc-p">Service mode writes one collection per file. A file that spans several — a header and its lines, the links between them, totals that follow from the lines — is handled by an import processor: code an extension registers and a definition names in its Processor field. The file is compared with live data first and only real differences are written, through the items service, as the person who queued the file, so every change has a revision and an author. The upload preview shows the same dry run as service mode.</p>
+          <pre class="doc-pre"><code>// api/extensions/&lt;name&gt;/index.ts
+ctx.importProcessors.register({
+  key: 'my-extension:orders',          // what the definition's Processor holds
+  label: 'Orders (headers and lines)',
+  async run({ rows, dryRun, tools, progress }) {
+    const vendors = await tools.lookup('vendors', 'name', rows.map((r) =&gt; r.Vendor))
+    // ...compare rows with live data, build the list of real changes...
+    if (dryRun) return { created, updated, unchanged, skipped: {}, failed: 0, log, samples }
+
+    const out = await tools.runWrites(
+      changes.map((c) =&gt; ({
+        label: c.label,
+        run: () =&gt; tools.update('orders', c.id, c.patch)
+      }))
+    )
+    await tools.recalcStoredRollups('projects', touchedProjectIds)
+    await tools.runProcedure('orders_after_import')
+    return { created, updated, unchanged, skipped: {}, failed: out.failed, log,
+      affected: { orders: changedIds } }
+  }
+})</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>lookup(table, column, values)</td><td>One batched read: value → id, case-insensitive, lowest id wins.</td></tr>
+              <tr><td>create / update / remove</td><td>Items-service writes as the queuing user, stamped with the run.</td></tr>
+              <tr><td>runWrites(jobs)</td><td>Runs write jobs eight at a time. A failed job never stops the others.</td></tr>
+              <tr><td>recalcStoredRollups(collection, ids)</td><td>Every stored rollup on those records, once each.</td></tr>
+              <tr><td>runProcedure(name)</td><td>EXEC on its own long-running request; returns the time taken.</td></tr>
+              <tr><td>db</td><td>Read access for batched comparisons.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">The staging table is still loaded before a processor runs, so it stays the record of the last file and post-run flows that read it keep working. The records a run changed are handed to those flows as <code class="doc-code">affected</code> in the payload. If the extension that owns the processor is not loaded on an instance, the definition falls back to its procedure and the run says so.</div>
           <h2 class="doc-h2" id="imports-collection">Collection imports</h2>
           <p class="doc-p">The row-by-row CSV importer. Rows go through the normal item API, so validation rules, hooks, row-level security and activity logging all apply. Jobs process in the background with live progress counters.</p>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -7463,7 +7569,7 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>merge</td><td>Only the mapped fields are updated.</td></tr></tr></tbody>
           </table></div>
           <h2 class="doc-h2" id="imports-definitions">Definitions</h2>
-          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).</p>
+          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).</p>
           <div class="doc-note doc-warn">Both importers are admin-only for writes, and <code class="doc-code">nivaro_*</code> system tables are blocked as collection-import targets. Staging table and procedure names are validated as plain identifiers because they are interpolated into SQL — BULK INSERT and EXEC cannot bind an object name.</div>
           <!-- /SYNC:imports -->
         </div>
@@ -11129,15 +11235,23 @@ SAML_AUDIENCE=nivaro                                 # expected audience (option
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Property</th><th>Behaviour</th></tr></thead>
             <tbody><tr><tr><td>Token format</td><td><code class="doc-code">nvk_</code> prefix + random secret; sha256 hash stored, plaintext never persisted</td></tr>
-              <tr><td>Scopes</td><td>Restrict what the key can do (e.g. items:read, items:write, scim)</td></tr>
+              <tr><td>Scopes</td><td>A list of <code class="doc-code">{ collection, actions }</code>. Actions are read, create, update, delete, or <code class="doc-code">*</code>. A collection of <code class="doc-code">*</code> means every collection. Left out, the key may do whatever its owner may.</td></tr>
               <tr><td>Expiry</td><td>Optional timestamp; expired keys are rejected</td></tr>
               <tr><td>IP allowlist</td><td>Optional list of CIDRs/IPs the key may be used from</td></tr>
-              <tr><td>Rate limit</td><td>Optional per-key requests-per-minute override</td></tr></tr></tbody>
+              <tr><td>Rate limit</td><td><code class="doc-code">rate_limit_per_minute</code>. Calls past it answer <code class="doc-code">429</code> <code class="doc-code">API_KEY_RATE_LIMITED</code> with <code class="doc-code">Retry-After</code>.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Usage</h3>
           <pre class="doc-pre"><code># Create (admin)
 POST /api/api-keys
-{ "name": "ci-deploy", "scopes": ["items:read"], "expires_at": "2027-01-01" }
+{
+  "name": "warehouse-feed",
+  "scopes": [
+    { "collection": "orders", "actions": ["read", "update"] },
+    { "collection": "order_lines", "actions": ["read"] }
+  ],
+  "rate_limit_per_minute": 120,
+  "expires_at": "2027-01-01"
+}
 # → { "key": "nvk_..." }   // shown once — store it now
 
 # Authenticate exactly like a Bearer token:
@@ -11147,6 +11261,22 @@ curl -H "Authorization: Bearer nvk_..." https://nivaro.example.com/api/items/art
 GET    /api/api-keys        # list (hashes only, never plaintext)
 PATCH  /api/api-keys/:id    # rename, change scopes/expiry/allowlist
 DELETE /api/api-keys/:id    # revoke immediately</code></pre>
+          <h3 class="doc-h3">What scopes hold a key to</h3>
+          <ul class="doc-ul">
+            <li>Scopes narrow what the owner may do. They never add to it: a key scoped to update orders still needs an owner whose role may update orders.</li>
+            <li>They apply to every read and write that is checked per collection: the items API, GraphQL including nested fields, bulk calls, queues, comments and files attached to records.</li>
+            <li>They apply to keys owned by administrators too. A key with narrowed scopes cannot use administrator routes.</li>
+            <li>A call outside the scopes answers <code class="doc-code">403</code> <code class="doc-code">API_KEY_SCOPE_MISSING</code>, and the message names the action and collection the key lacks.</li>
+          </ul>
+          <pre class="doc-pre"><code>HTTP/1.1 403 Forbidden
+
+{
+  "statusCode": 403,
+  "error": "Forbidden",
+  "message": "This API key has no create scope on invoices",
+  "code": "API_KEY_SCOPE_MISSING",
+  "scope": { "action": "create", "collection": "invoices" }
+}</code></pre>
           <div class="doc-note">Keys are managed in the admin UI at /api-keys. Because only the hash is stored, a lost key cannot be recovered — revoke and re-issue.</div>
           <!-- /SYNC:api-keys -->
         </div>
@@ -11668,53 +11798,44 @@ const result = await callExternalApi(apiId, {
         </div>
 
         <!-- RATE LIMITING -->
-        <div class="doc-section" id="s-rate-limits" data-toc='[{"id":"rate-limits","label":"Rate Limiting &amp; Headers"},{"id":"rate-limits-configuration","label":"Configuration"},{"id":"rate-limits-api-key-overrides","label":"Per-API-Key Overrides"},{"id":"rate-limits-headers","label":"Response Headers"},{"id":"rate-limits-exceeded","label":"When Limit Exceeded"},{"id":"rate-limits-best-practices","label":"Best Practices"},{"id":"rate-limits-reliability","label":"Reliability"}]'>
+        <div class="doc-section" id="s-rate-limits" data-toc='[{"id":"rate-limits","label":"Rate Limiting &amp; Headers"},{"id":"rate-limits-api-key-overrides","label":"A limit on one API key"},{"id":"rate-limits-configuration","label":"A limit for the whole instance"},{"id":"rate-limits-headers","label":"Response headers"},{"id":"rate-limits-exceeded","label":"When the limit is passed"}]'>
           <!-- SYNC:rate-limits -->
           <h1 class="doc-h1" id="rate-limits">Rate Limiting &amp; Headers</h1>
-          <p class="doc-p">All API requests are rate-limited per principal using a Redis fixed-window counter. A global limit applies to all keys; individual API keys can override with their own per-key limits. Every response includes standard X-RateLimit headers so clients can adjust their request rate.</p>
-          <h3 class="doc-h3" id="rate-limits-configuration">Configuration</h3>
-          <pre class="doc-pre"><code># .env
-RATE_LIMIT_PER_MINUTE=600    # Global limit (unset/0 = no rate limiting, the default)
-RATE_LIMIT_BURST=100         # Allow temporary bursts (optional)</code></pre>
-          <h3 class="doc-h3" id="rate-limits-api-key-overrides">Per-API-Key Overrides</h3>
-          <p class="doc-p">Named API keys can have their own rate limit. Set when creating the key:</p>
+          <p class="doc-p">There are two limits, and both are off until someone sets them. An API key may carry its own calls-per-minute limit. The instance may carry one limit for every caller. Both count in one-minute windows that start on the minute.</p>
+          <h3 class="doc-h3" id="rate-limits-api-key-overrides">A limit on one API key</h3>
+          <p class="doc-p">Set <code class="doc-code">rate_limit_per_minute</code> when creating or editing the key. Leave it empty for no limit. The limit counts calls made with that key on every instance that shares the same Redis.</p>
           <pre class="doc-pre"><code>POST /api/api-keys
 {
-  "name": "Mobile App",
-  "scopes": ["read:items", "create:items"],
-  "rate_limit": 2000  # This key gets 2000 req/min instead of global 600
+  "name": "Warehouse feed",
+  "rate_limit_per_minute": 120
 }</code></pre>
-          <h3 class="doc-h3" id="rate-limits-headers">Response Headers</h3>
-          <pre class="doc-pre"><code>X-RateLimit-Limit: 600          # Requests allowed per minute
-X-RateLimit-Remaining: 597       # Requests remaining in current window
-X-RateLimit-Reset: 1718000460    # Epoch seconds when window resets</code></pre>
-          <h3 class="doc-h3" id="rate-limits-exceeded">When Limit Exceeded</h3>
+          <h3 class="doc-h3" id="rate-limits-configuration">A limit for the whole instance</h3>
+          <pre class="doc-pre"><code># .env
+RATE_LIMIT_PER_MINUTE=600    # unset or 0 = no instance limit, the default</code></pre>
+          <p class="doc-p">The instance limit counts per signed-in user, per bearer token, or per address for callers without a credential. A record page makes more than a hundred calls, so a low value refuses people using the app.</p>
+          <h3 class="doc-h3" id="rate-limits-headers">Response headers</h3>
+          <pre class="doc-pre"><code>X-RateLimit-Limit: 120          # calls allowed per minute
+X-RateLimit-Remaining: 117       # calls left in this window
+X-RateLimit-Reset: 1718000460    # epoch seconds when the window ends</code></pre>
+          <h3 class="doc-h3" id="rate-limits-exceeded">When the limit is passed</h3>
           <pre class="doc-pre"><code>HTTP/1.1 429 Too Many Requests
-
 Retry-After: 45
-X-RateLimit-Limit: 600
+X-RateLimit-Limit: 120
 X-RateLimit-Remaining: 0
 X-RateLimit-Reset: 1718000460
 
 {
-  "error": "Rate limit exceeded",
-  "retry_after_seconds": 45
+  "statusCode": 429,
+  "error": "Too Many Requests",
+  "message": "This API key is limited to 120 requests per minute. Try again in 45 seconds.",
+  "code": "API_KEY_RATE_LIMITED"
 }</code></pre>
-          <h3 class="doc-h3" id="rate-limits-best-practices">Best Practices</h3>
           <ul class="doc-ul">
-            <li>Check X-RateLimit-Remaining before making requests to avoid unnecessary 429s</li>
-            <li>Implement exponential backoff when receiving 429 responses</li>
-            <li>Respect Retry-After header — it tells you exactly how long to wait</li>
-            <li>Use per-key limits for trusted integrations or high-volume workloads</li>
-            <li>Distribute requests across multiple API keys if doing bulk operations</li>
+            <li>Wait for the number of seconds in <code class="doc-code">Retry-After</code>, then send the call again.</li>
+            <li>Read <code class="doc-code">X-RateLimit-Remaining</code> to slow down before a refusal.</li>
+            <li>A refused call is listed for administrators under Monitoring, Integrations, Inbound, in the Refused credentials list, one line per key with a count.</li>
+            <li>When Redis cannot be reached the call is let through. A limit never takes an integration down.</li>
           </ul>
-          <h3 class="doc-h3" id="rate-limits-reliability">Reliability</h3>
-          <ul class="doc-ul">
-            <li>Rate limiting fails open — if Redis is down, requests are allowed (limits are advisory, not hard blocks)</li>
-            <li>Fixed-window counters reset at minute boundaries (60-second window)</li>
-            <li>Static tokens (user session cookies) and API keys share the same limit pool</li>
-          </ul>
-          <div class="doc-note">The rate limiter is per-principal (per user or per API key), not global. Each client has its own counter, so one user's burst does not affect another.</div>
           <!-- /SYNC:rate-limits -->
         </div>
 

@@ -269,6 +269,28 @@ POST /api/webhooks/12/match
         'When conditions cannot be judged, the webhook does not fire for that write.'
       ]
     },
+    { type: 'h2', id: 'integration-events-webhook-payload', text: 'What a webhook receives' },
+    {
+      type: 'pre',
+      code: `{
+  "event": "update",
+  "collection": "orders",
+  "item": "1001",
+  "origin": "person",
+  "changed_fields": ["status", "total"],
+  "data": { "id": 1001, "status": "approved", "total": 159 },
+  "timestamp": "2026-09-27T14:03:11.000Z"
+}`
+    },
+    {
+      type: 'ul',
+      items: [
+        '`origin` says who made the write: person, machine, import or integration.',
+        '`changed_fields` lists the fields an update changed. It is empty for a create or a delete. Housekeeping stamps such as the updated-at time are left out.',
+        'Conditions may use both: `{ "field": "$origin", "op": "neq", "value": "import" }` skips imported rows, and `{ "field": "$changed", "op": "contains", "value": "status" }` fires only when status changed.',
+        '`POST /api/webhooks/:id/match` accepts `origin` and `changed_fields` to judge such conditions for a record without sending anything.'
+      ]
+    },
     { type: 'h2', id: 'integration-events-mock', text: 'Mock mode per instance' },
     {
       type: 'p',

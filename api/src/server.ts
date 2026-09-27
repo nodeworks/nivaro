@@ -7,12 +7,14 @@ import fastifyStatic from '@fastify/static'
 import fastify from 'fastify'
 import { registerSession } from './auth/session.js'
 import { config } from './config.js'
+import { describeDbRefusal } from './lib/db-refusal.js'
 import { db } from './db/index.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
+import { scopeRefusalBody } from './middleware/authenticate.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { chainPlugin } from './plugins/chain.js'
 import { cronPlugin } from './plugins/cron.js'
@@ -154,6 +156,13 @@ export async function buildServer() {
   await app.register(chainPlugin)
   await app.register(requestTracePlugin)
   await app.register(rateLimitPlugin)
+  // Ahead of the request log, so the log keeps the answer the caller received.
+  app.addHook('onSend', async (req, reply, payload) => {
+    const body = scopeRefusalBody(req, reply.statusCode, payload)
+    if (body === null) return payload
+    void reply.header('content-length', Buffer.byteLength(body))
+    return body
+  })
   await app.register(apiLoggerPlugin)
 
   // ─── Sessions ─────────────────────────────────────────────────────────────
@@ -332,6 +341,19 @@ export async function buildServer() {
       req,
       reply
     ) => {
+      // A write the database refused over the caller's data (a link to a
+      // record that does not exist, a duplicate) is a 4xx with a reason —
+      // not a 500, not an issue, and never the database's own names.
+      const refusal = err.statusCode == null ? describeDbRefusal(err) : null
+      if (refusal) {
+        req.log.info({ code: refusal.code, url: req.url }, refusal.message)
+        return reply.code(refusal.status).send({
+          statusCode: refusal.status,
+          error: STATUS_CODES[refusal.status] ?? 'Error',
+          message: refusal.message,
+          code: refusal.code
+        })
+      }
       const status = err.statusCode ?? 500
       if (status >= 500 && req.url.startsWith('/api/')) {
         // #300 — every 5th 500 per route also captures a REDACTED request

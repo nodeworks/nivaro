@@ -3133,6 +3133,28 @@ async function undoNewParent(
  * where that column IS NULL, so one natural key can cover both a plain record
  * and its optional sub-divisions.
  */
+/** A create that the natural key routed to an update — read by the API
+ *  layers to say so in the response. Keyed by the returned record object. */
+export interface UpsertInfo {
+  matched_id: string | number
+  keys: string[]
+}
+const upsertMarks = new WeakMap<object, UpsertInfo>()
+export function upsertInfoOf(item: unknown): UpsertInfo | null {
+  return item && typeof item === 'object' ? (upsertMarks.get(item) ?? null) : null
+}
+
+function upsertKeysOf(col: { upsert_keys?: string | null } | null): string[] {
+  try {
+    const parsed = JSON.parse(String(col?.upsert_keys ?? ''))
+    return Array.isArray(parsed)
+      ? parsed.map(String).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*\??$/.test(k))
+      : []
+  } catch {
+    return []
+  }
+}
+
 async function findUpsertTarget(
   collection: string,
   col: { upsert_keys?: string | null } | null,
@@ -3231,7 +3253,14 @@ export async function createOne(
       '_change_reason' in data
         ? data
         : { ...data, _change_reason: 'Natural-key upsert (create matched an existing record)' }
-    return updateOne(user, collection, upsertTarget, patch, req, workspaceId)
+    const updated = await updateOne(user, collection, upsertTarget, patch, req, workspaceId)
+    if (updated && typeof updated === 'object') {
+      upsertMarks.set(updated, {
+        matched_id: upsertTarget,
+        keys: upsertKeysOf(col as { upsert_keys?: string | null })
+      })
+    }
+    return updated
   }
 
   // Change reason on CREATE (config on_create): judged on the caller's raw

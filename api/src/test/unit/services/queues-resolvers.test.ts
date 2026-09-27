@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn().mockResolvedValue(true) }))
+// Row access gates are covered by queue-access.test.ts; here the viewer has none.
+vi.mock('../../../services/queue-access.js', () => ({
+  queueGateFor: vi.fn().mockResolvedValue(null),
+  applyQueueGate: vi.fn()
+}))
 vi.mock('../../../services/pipeline-engine.js', () => ({
   parseJson: (v: unknown) => {
     if (typeof v === 'string') return JSON.parse(v)

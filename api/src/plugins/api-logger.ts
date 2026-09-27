@@ -30,11 +30,15 @@ const REQUEST_BODY_CAP = 64 * 1024
 function captureRequestBody(req: {
   method: string
   authMethod?: string
+  user?: unknown
   body?: unknown
   headers: Record<string, unknown>
 }): string | null {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return null
   if (req.authMethod !== 'token' && req.authMethod !== 'api_key') return null
+  // A refused credential is still stamped token / api_key so the failure is
+  // attributed — but a payload from a caller nobody recognised is not kept.
+  if (!req.user) return null
   const ct = String(req.headers['content-type'] ?? '')
   if (!ct.includes('json')) return null
   if (req.body == null) return null
@@ -206,6 +210,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         req as unknown as {
           method: string
           authMethod?: string
+          user?: unknown
           body?: unknown
           headers: Record<string, unknown>
         }

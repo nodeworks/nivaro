@@ -215,21 +215,13 @@ await nivaro.request(deleteWebhook(wh.id))`
     {
       type: 'pre',
       code: `{
-  "event": "item.create",
+  "event": "update",                      // create | update | delete
   "collection": "projects",
-  "item": {
-    "id": "123",
-    "name": "New Project",
-    "status": "draft",
-    ...
-  },
-  "delta": {
-    // For updates only — fields that changed
-    "status": "draft"
-  },
-  "timestamp": "2024-06-14T10:30:00Z",
-  "user_id": "user-uuid",
-  "delivery_id": "delivery-uuid"
+  "item": "123",
+  "origin": "person",                     // person | machine | import | integration
+  "changed_fields": ["status"],           // updates only
+  "data": { "id": 123, "name": "New Project", "status": "active" },
+  "timestamp": "2026-09-27T10:30:00.000Z"
 }`
     },
     {

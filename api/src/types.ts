@@ -27,6 +27,14 @@ export interface User {
    * receives the user, not the request. See migration 208.
    */
   api_key_scope_restrictions?: Array<{ dimension: string; values: Array<string | number> }>
+  /**
+   * Set ONLY when the request authenticated via an API key whose scopes are
+   * narrower than everything. Checked by can() ahead of the role, so a key
+   * owned by an administrator is held to its scopes too.
+   */
+  api_key_scopes?: Array<{ collection: string; actions: string[] }>
+  /** The scope the key lacked, when can() refused because of one. */
+  api_key_scope_denied?: { action: string; collection: string }
   /** Sandbox key (#166): writes validate + simulate, persist nothing. */
   api_key_sandbox?: boolean
   /** Per-key GraphQL depth cap (#162). */

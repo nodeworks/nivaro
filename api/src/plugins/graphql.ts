@@ -301,14 +301,31 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       }
     }
 
+    const upserts: Array<{ collection: string; matched_id: string | number; keys: string[] }> = []
     const result = await execute({
       schema,
       document,
       variableValues: body.variables,
       operationName: body.operationName,
-      contextValue: { user: req.user, isAdmin: req.isAdmin ?? false, req }
+      contextValue: { user: req.user, isAdmin: req.isAdmin ?? false, req, upserts }
     })
 
+    // A refusal that came from the API key's own scopes names the scope.
+    const denied = req.user?.api_key_scope_denied
+    if (denied && result.errors?.length) {
+      for (const e of result.errors) {
+        const ext = (e.extensions ?? {}) as Record<string, unknown>
+        if (ext.code !== 'FORBIDDEN') continue
+        e.message = `This API key has no ${denied.action} scope on ${denied.collection}`
+        Object.assign(ext, { code: 'API_KEY_SCOPE_MISSING', status: 403, scope: denied })
+      }
+    }
+
+    // A create that matched an existing record by its natural key was an
+    // update; the response says which.
+    if (upserts.length > 0) {
+      return reply.send({ ...result, extensions: { ...(result.extensions ?? {}), upserts } })
+    }
     return reply.send(result)
   })
 

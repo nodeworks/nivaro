@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { db } from '../db/index.js'
+import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
@@ -23,7 +24,8 @@ import {
   ForbiddenError,
   readItems,
   readOne,
-  updateOne
+  updateOne,
+  upsertInfoOf
 } from '../services/items.js'
 import { startJobRun } from '../services/job-runs.js'
 import { can } from '../services/permissions.js'
@@ -877,6 +879,8 @@ export async function itemsRoutes(app: FastifyInstance) {
     data?: unknown
     error?: string
     code?: string
+    /** A create the collection's natural key routed to an existing record. */
+    upserted?: boolean
   }
 
   function rowError(err: unknown): { status: number; error: string; code?: string } {
@@ -889,28 +893,10 @@ export async function itemsRoutes(app: FastifyInstance) {
         : 500
     // A driver error carries the statement in its message; callers get the
     // reason only.
-    let message = String(e?.message ?? 'failed')
-    const cut = message.lastIndexOf(' - ')
-    if (status === 500 && /^(insert|update|delete|select|merge|exec)\b/i.test(message) && cut > 0)
-      message = message.slice(cut + 3)
-    // Constraint refusals are the caller's data, not a server fault: say
-    // which rule refused the row, without the database's own names.
-    const fk = /FOREIGN KEY constraint "([^"]+)"/i.exec(message)
-    if (fk) {
-      return {
-        status: 422,
-        error: `A linked record does not exist (${fk[1]})`,
-        code: 'LINKED_RECORD_MISSING'
-      }
-    }
-    const unique = /(UNIQUE KEY constraint|unique index) ['"]([^'"]+)['"]/i.exec(message)
-    if (unique || /Cannot insert duplicate key/i.test(message)) {
-      return {
-        status: 409,
-        error: `A record with these values already exists${unique ? ` (${unique[2]})` : ''}`,
-        code: 'DUPLICATE_RECORD'
-      }
-    }
+    const message = status === 500 ? reasonWithoutSql(String(e?.message ?? 'failed')) : String(e?.message ?? 'failed')
+    // Constraint refusals are the caller's data, not a server fault.
+    const refusal = describeDbRefusal(err)
+    if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
     return {
       status,
       error: message.slice(0, 1000),
@@ -972,12 +958,15 @@ export async function itemsRoutes(app: FastifyInstance) {
             opts.req,
             opts.workspaceId
           )) as Record<string, unknown>
-          created.push(item.id)
+          const upsert = upsertInfoOf(item)
+          // A row the natural key matched was an update: nothing to take back.
+          if (!upsert) created.push(item.id)
           results.push({
             index,
-            op,
-            status: 201,
+            op: upsert ? 'update' : op,
+            status: upsert ? 200 : 201,
             id: item.id,
+            ...(upsert ? { upserted: true } : {}),
             ...(opts.slim ? {} : { data: item })
           })
         }
@@ -1221,6 +1210,12 @@ export async function itemsRoutes(app: FastifyInstance) {
           }),
           req
         })
+      }
+      // A create the natural key routed to an existing record says so.
+      const upsert = upsertInfoOf(item)
+      if (upsert) {
+        reply.header('x-nivaro-upserted', String(upsert.matched_id))
+        return reply.code(201).send({ data: item, meta: { upserted: true, ...upsert } })
       }
       return reply.code(201).send({ data: item })
     } catch (err) {

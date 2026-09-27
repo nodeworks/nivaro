@@ -423,6 +423,16 @@ export const graphqlMutations: DocSection = {
           'id: ID!, data: JSON (partial)',
           'User with update permission'
         ],
+        [
+          'update_collectionName_items',
+          'ids: [ID!]!, data: JSON — the same change to several records',
+          'User with update permission'
+        ],
+        [
+          'update_collectionName_batch',
+          'data: [JSON] — each entry is { id, …fields }',
+          'User with update permission'
+        ],
         ['delete_collectionName_item', 'id: ID!', 'User with delete permission'],
         [
           'delete_collectionName_items',
@@ -434,6 +444,58 @@ export const graphqlMutations: DocSection = {
     {
       type: 'note',
       text: 'Create/update payloads accept Directus-era relation shapes: an M2O may be `{ id: … }`, and an M2M alias may be a single object, an array of `{ junction_field: { id } }` entries, or `{ create: [...] }` — alias writes are additive (junction rows are created, never detached).'
+    },
+    { type: 'h3', text: 'Changing several records in one call' },
+    {
+      type: 'pre',
+      code: `mutation {
+  # the same change to each
+  update_orders_items(ids: [11, 12, 13], data: { status: "approved" }) { id status }
+
+  # a different change per record
+  update_orders_batch(data: [
+    { id: 11, total: 120 },
+    { id: 12, total: 80, status: "held" }
+  ]) { id total status }
+}`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Each record is changed as the caller, one after the other, with the same rules as a single update.',
+        'All or nothing. When one record is refused, the records changed before it get their earlier values back and the error says so.',
+        'At most 500 records per call.'
+      ]
+    },
+    { type: 'h3', text: 'Refused mutations' },
+    {
+      type: 'p',
+      text: 'A refused mutation answers HTTP 200 with `errors`. Each error carries `extensions.code` and `extensions.status`, the same code and status the REST API gives for the same refusal. Refusals that list details carry them too: `violations`, `conflicts`, `fields`, `nested`.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  "errors": [{
+    "message": "A linked record does not exist (fk_orders_customer)",
+    "path": ["create_orders_item"],
+    "extensions": { "code": "LINKED_RECORD_MISSING", "status": 422 }
+  }],
+  "data": null
+}`
+    },
+    { type: 'h3', text: 'When a create matches an existing record' },
+    {
+      type: 'p',
+      text: "A create whose values match an existing record on the collection's natural key updates that record. The response names each such record under `extensions.upserts`."
+    },
+    {
+      type: 'pre',
+      code: `{
+  "data": { "create_forecasts_item": { "id": 8812 } },
+  "extensions": {
+    "upserts": [{ "collection": "forecasts", "matched_id": 8812, "keys": ["order", "year"] }]
+  }
+}`
     },
     { type: 'h3', text: 'Create a record with its related rows' },
     {

@@ -5,6 +5,7 @@ import type { User } from '../types.js'
 import { getSlaScheduleSync } from './business-hours.js'
 import { parseColumnFilterOp } from './column-filter-ops.js'
 import { parseJson } from './pipeline-engine.js'
+import { applyQueueGatesToCache, type QueueGate, queueGatesFor } from './queue-access.js'
 import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { normalizeDisplayConfig } from './queues.js'
 
@@ -274,9 +275,13 @@ function applyScope(
   qb: Knex.QueryBuilder,
   queueId: string,
   user: User,
-  scope: QueueScope
+  scope: QueueScope,
+  gates: QueueGate[] = []
 ): Knex.QueryBuilder {
   qb.where('qi.queue_id', queueId)
+  // The viewer's row filter + user scopes per source collection — the cache
+  // holds every viewer's rows, so it is narrowed here, on every read.
+  applyQueueGatesToCache(qb, gates, user)
   if (scope === 'mine') {
     qb.whereExists(function () {
       this.select('*')
@@ -366,7 +371,8 @@ export async function fetchMaterializedStats(
     owners: Array<{ id: string; name: string }>
   }
 }> {
-  const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope)
+  const gates = await queueGatesFor(user, queueId)
+  const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope, gates)
 
   const statsRows = (await scopeBase
     .clone()
@@ -500,7 +506,8 @@ export async function fetchMaterializedQueueItems(
   // computeAvailableValues(scoped) which are computed on the scope-filtered set
   // BEFORE column filters, so the stat strip and filter dropdown options never
   // shrink as a viewer narrows the table via column filters.
-  const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope)
+  const gates = await queueGatesFor(user, queueId)
+  const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope, gates)
 
   // base = scopeBase + column filters — feeds total count and the paginated rows.
   // sla_status/aging_hours filters and an owners sort are intentionally NOT
