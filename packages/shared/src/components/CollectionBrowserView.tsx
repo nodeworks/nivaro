@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { CopyAsButton } from './CopyAsButton'
 import { toast } from 'sonner'
 import {
   type DrilldownTarget,
@@ -5811,6 +5812,17 @@ export function CollectionBrowserView({
         >
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
+        <CopyAsButton
+          collection={collection}
+          list={{
+            conditions: conditionsParam,
+            search: appliedSearch || undefined,
+            sort: sort || undefined,
+            limit: effPageSize,
+            page
+          }}
+          fields={effectiveColumns}
+        />
         {geo && (
           <button
             type='button'

@@ -121,6 +121,8 @@ import { HeaderOverflowChip } from './item-edit/HeaderOverflowChip'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
+import { HighlightedCode } from './item-edit/HighlightedCode'
+import { CopyAsButton } from './CopyAsButton'
 import {
   applyDisplayTemplate,
   type CascadeRule,
@@ -207,7 +209,6 @@ import {
   WorkflowPanel
 } from './panels'
 import { RecordEventPathSheet } from './panels/IntegrationActivitySection'
-import { type HighlightKind, highlightGraphql, highlightJson } from '../lib/highlight'
 import type { PendingTask } from './panels/TaskPanel'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
@@ -983,41 +984,6 @@ function dedent(text: string): string {
 
 /** Colour classes per token kind — one set that reads on both the light
  *  slate-50 block and the dark navy block (every pair ≥ 4.5:1). */
-const HL_CLASS: Record<HighlightKind, string> = {
-  keyword: 'font-semibold text-violet-700 dark:text-violet-300',
-  name: 'font-semibold text-slate-900 dark:text-slate-100',
-  field: 'text-sky-800 dark:text-sky-300',
-  arg: 'text-slate-600 dark:text-slate-400',
-  string: 'text-emerald-800 dark:text-emerald-300',
-  number: 'text-amber-800 dark:text-amber-300',
-  bool: 'text-rose-700 dark:text-rose-300',
-  punct: 'text-slate-400 dark:text-slate-500',
-  comment: 'italic text-slate-400 dark:text-slate-500',
-  text: ''
-}
-
-function HighlightedCode({ kind, text }: { kind: string; text: string }) {
-  const tokens = useMemo(
-    () =>
-      kind === 'query' ? highlightGraphql(text) : kind === 'text' ? null : highlightJson(text),
-    [kind, text]
-  )
-  if (!tokens) return <>{text}</>
-  return (
-    <>
-      {tokens.map((t, i) =>
-        t.kind === 'text' ? (
-          t.text
-        ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: static token stream
-          <span key={i} className={HL_CLASS[t.kind]}>
-            {t.text}
-          </span>
-        )
-      )}
-    </>
-  )
-}
 
 function ApiProvenanceChip({
   collection,
@@ -4332,6 +4298,22 @@ export function ItemEditForm({
     return new Set(assignments.map((a) => a.field))
   }, [layoutSlug, activeLayoutData, assignments])
 
+  // The plain fields a copied request selects: everything the form shows
+  // that is a column, never an alias (a relation set is not a column).
+  const copyAsFields = useMemo(
+    () =>
+      (fieldConfig ?? [])
+        .filter(
+          (f) =>
+            !f.hidden &&
+            !f.field.startsWith('__') &&
+            !f.field.includes('.') &&
+            !relations.some((r) => r.one_collection === collection && r.one_field === f.field)
+        )
+        .map((f) => f.field)
+        .slice(0, 40),
+    [fieldConfig, relations, collection]
+  )
   const allFields = useMemo<CMSField[]>(() => {
     if (!fieldConfig) return []
     // Slug requested but layout not yet resolved — suppress stale cache to avoid field flash
@@ -9178,6 +9160,12 @@ export function ItemEditForm({
                                                 <Clipboard className='h-4 w-4' />
                                               )}
                                             </button>
+                                            <CopyAsButton
+                                              compact
+                                              collection={collection}
+                                              itemId={String(itemId)}
+                                              fields={copyAsFields}
+                                            />
                                             <RecordSubscribeButton
                                               compact
                                               collection={collection}

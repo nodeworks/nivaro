@@ -222,6 +222,11 @@ DELETE /api/saved-views/:id        Delete view (creator/admin only)`
     {
       type: 'note',
       text: 'Saved views are lightweight snapshots — they do not create named queries or stored procedures. On load, the browser applies the stored filter/sort/columns to a normal collection list request.'
+    },
+    { type: 'h2', id: 'saved-views-copy-as', text: 'Copy as curl, SDK or GraphQL' },
+    {
+      type: 'p',
+      text: "The code button beside Refresh renders the list request the browser is making — the applied filters, search, sort and page — three ways: a curl command, an SDK call (`readItems` with the equivalent `filter`), and a GraphQL document that reads the rows and the total. A record's header carries the same button for the single-record forms. The visible columns become the GraphQL selection; a related column nests. Every snippet names `NIVARO_TOKEN` in place of a token — the viewer's own never leaves the page."
     }
   ]
 }

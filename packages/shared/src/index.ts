@@ -42,6 +42,8 @@ export type {
 } from './components/CollectionBrowserView'
 export { CollectionBrowserView } from './components/CollectionBrowserView'
 export * from './components/ConformanceView'
+export { CopyAsButton } from './components/CopyAsButton'
+export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { CronBuilder, describeCron } from './components/CronBuilder'
 export type { CustomStatus } from './components/CustomStatusEditor'
 export {
@@ -236,7 +238,10 @@ export {
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
 export { SectionCard as ProfileSectionCard } from './components/profile/primitives'
-export { type PersonProfile as PersonProfileData, usePersonProfile } from './components/profile/types'
+export {
+  type PersonProfile as PersonProfileData,
+  usePersonProfile
+} from './components/profile/types'
 export * from './components/panels'
 export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
 export type { PipelineEditorSection } from './components/pipeline/PipelineEditorView'

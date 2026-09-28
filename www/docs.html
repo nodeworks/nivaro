@@ -14547,7 +14547,7 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
         </div>
 
         <!-- SAVED VIEWS -->
-        <div class="doc-section" id="s-saved-views" data-toc='[{"id":"saved-views","label":"Saved Views"},{"id":"saved-views-crud","label":"Creating and Managing Views"},{"id":"saved-views-loading","label":"Loading and Switching"},{"id":"saved-views-permissions","label":"Visibility and Permissions"},{"id":"saved-views-api","label":"API Reference"}]'>
+        <div class="doc-section" id="s-saved-views" data-toc='[{"id":"saved-views","label":"Saved Views"},{"id":"saved-views-crud","label":"Creating and Managing Views"},{"id":"saved-views-loading","label":"Loading and Switching"},{"id":"saved-views-permissions","label":"Visibility and Permissions"},{"id":"saved-views-api","label":"API Reference"},{"id":"saved-views-copy-as","label":"Copy as curl, SDK or GraphQL"}]'>
           <!-- SYNC:saved-views -->
           <h1 class="doc-h1" id="saved-views">Saved Views</h1>
           <p class="doc-p">Named collection browser states (filters, sort, visible columns) can be saved and shared. Saved views appear as pills above the filter bar for instant access, and support private, workspace-wide, or role-based visibility. This feature eliminates the need to rebuild complex filter combinations repeatedly.</p>
@@ -14619,6 +14619,8 @@ GET /api/saved-views/:id           Get view details
 PATCH /api/saved-views/:id         Update view (creator/admin only)
 DELETE /api/saved-views/:id        Delete view (creator/admin only)</code></pre>
           <div class="doc-note">Saved views are lightweight snapshots — they do not create named queries or stored procedures. On load, the browser applies the stored filter/sort/columns to a normal collection list request.</div>
+          <h2 class="doc-h2" id="saved-views-copy-as">Copy as curl, SDK or GraphQL</h2>
+          <p class="doc-p">The code button beside Refresh renders the list request the browser is making — the applied filters, search, sort and page — three ways: a curl command, an SDK call (<code class="doc-code">readItems</code> with the equivalent <code class="doc-code">filter</code>), and a GraphQL document that reads the rows and the total. A record's header carries the same button for the single-record forms. The visible columns become the GraphQL selection; a related column nests. Every snippet names <code class="doc-code">NIVARO_TOKEN</code> in place of a token — the viewer's own never leaves the page.</p>
           <!-- /SYNC:saved-views -->
         </div>
 
