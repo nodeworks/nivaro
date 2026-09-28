@@ -14,6 +14,7 @@ import {
   getFieldInterface
 } from '../../lib/field-interfaces'
 import { precisionOf } from '../../lib/format-value'
+import { resolveOptionFilterTokens } from '../../lib/option-filter-tokens'
 import { choiceLabel } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Input } from '../ui/input'
@@ -60,55 +61,7 @@ import { RichTextEditor } from './RichTextEditor'
 import type { RowMatchPanelConfig } from './RowMatchPanel'
 import type { CMSField, CMSRelation } from './types'
 
-function resolveTokenNode(
-  node: unknown,
-  draft: Record<string, unknown> | undefined,
-  itemId: string
-): { v: unknown; ok: boolean } {
-  if (typeof node === 'string' && node.startsWith('$parent.')) {
-    const key = node.slice('$parent.'.length)
-    const val = key === 'id' ? (itemId && itemId !== 'new' ? itemId : undefined) : draft?.[key]
-    return { v: val, ok: val !== undefined && val !== null && val !== '' }
-  }
-  if (Array.isArray(node)) {
-    const out: unknown[] = []
-    for (const item of node) {
-      const r = resolveTokenNode(item, draft, itemId)
-      if (!r.ok) return { v: out, ok: false }
-      out.push(r.v)
-    }
-    return { v: out, ok: true }
-  }
-  if (node && typeof node === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      const r = resolveTokenNode(v, draft, itemId)
-      if (!r.ok) return { v: out, ok: false }
-      out[k] = r.v
-    }
-    return { v: out, ok: true }
-  }
-  return { v: node, ok: true }
-}
-
-export function resolveOptionFilterTokens(
-  filter: Record<string, unknown> | undefined,
-  draft: Record<string, unknown> | undefined,
-  itemId: string
-): Record<string, unknown> | undefined {
-  if (!filter) return undefined
-  // Top-level _and: prune entries whose tokens are unresolved
-  if (Array.isArray(filter._and)) {
-    const kept: unknown[] = []
-    for (const entry of filter._and) {
-      const r = resolveTokenNode(entry, draft, itemId)
-      if (r.ok) kept.push(r.v)
-    }
-    return kept.length > 0 ? { _and: kept } : undefined
-  }
-  const r = resolveTokenNode(filter, draft, itemId)
-  return r.ok ? (r.v as Record<string, unknown>) : undefined
-}
+export { resolveOptionFilterTokens }
 
 /** Extension-registered custom field interface (#17): a framework-free DOM
  *  mount. Re-renders on value change via handle.update; late-loading bundles

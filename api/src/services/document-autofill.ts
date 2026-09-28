@@ -53,7 +53,15 @@ export type ProposedLine = {
 
 /** How the review dialog lets a person answer an ask without leaving it. */
 export type AskInput =
-  | { type: 'relation'; collection: string; template: string | null }
+  | {
+      type: 'relation'
+      collection: string
+      template: string | null
+      /** The field's own picker narrowing, so the review dialog's picker
+       *  offers what the form's would under the proposal's values. */
+      cascades?: CascadeRule[]
+      option_filter?: Record<string, unknown> | null
+    }
   | { type: 'choices'; choices: Array<{ value: string; text: string }> }
   | { type: 'boolean' }
   | { type: 'number' }
@@ -1263,7 +1271,9 @@ function askInputFor(f: SpecField | undefined, spec: Spec): AskInput | null {
     return {
       type: 'relation',
       collection: f.lookup.collection,
-      template: spec.lookups.get(f.lookup.collection)?.template ?? null
+      template: spec.lookups.get(f.lookup.collection)?.template ?? null,
+      cascades: f.cascades ?? [],
+      option_filter: f.optionFilter ?? null
     }
   if (f.choices) return { type: 'choices', choices: f.choices }
   if (f.type === 'boolean') return { type: 'boolean' }
