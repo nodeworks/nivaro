@@ -568,7 +568,7 @@ async function segmentsToHops(collection: string, segments: string[]): Promise<S
 
 const roleAdminCache = new Map<string, { at: number; admin: boolean }>()
 
-async function isAdminRole(roleId: string | null | undefined): Promise<boolean> {
+export async function isAdminRole(roleId: string | null | undefined): Promise<boolean> {
   if (!roleId) return false
   const hit = roleAdminCache.get(roleId)
   if (hit && Date.now() - hit.at < TTL) return hit.admin

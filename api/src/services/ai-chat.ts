@@ -1,8 +1,11 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { logActivityThrottled } from './activity.js'
 import { settingsRow } from './ai-client.js'
 import { embedText, searchEmbeddings } from './embeddings.js'
+import type { PathNode } from './event-path/types.js'
+import { getApp } from './io-holder.js'
 import {
   applyConditions,
   type FilterCondition,
@@ -12,6 +15,7 @@ import {
 } from './items.js'
 import { can, getRowFilter } from './permissions.js'
 import { getLabels } from './queues.js'
+import { isAdminRole } from './user-scopes.js'
 
 /**
  * Ask-your-data chat — a Claude tool-use loop over the CMS.
@@ -171,6 +175,64 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
         limit: { type: 'number', description: 'Max 10' }
       },
       required: ['collection', 'query']
+    }
+  },
+  {
+    name: 'record_event_path',
+    description:
+      'What happened around one record across systems: the newest integration events naming it (an inbound request, a partner push, a feed entry) and, for each, the path it set off — the writes, transitions, flows and partner calls in order, who or what did each, and where it failed. Use for "what did the import do to this", "why did that push fire", "what changed after the partner wrote this". Read-only, permission-checked as the asker.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        collection: { type: 'string', description: "The record's collection." },
+        id: { type: 'string', description: 'The record id.' },
+        limit: { type: 'number', description: 'How many events to walk, newest first (max 5).' }
+      },
+      required: ['collection', 'id']
+    }
+  },
+  {
+    name: 'explain_access',
+    description:
+      'Why the asker — or, for administrators, another named user — can or cannot see one record: role permission, row-level filter, User Scopes per dimension (the record\'s values against the allowance), or the record being gone. Use for "why can\'t Beth see X", "why is this record missing for me". Never guess at access from the record\'s fields.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        collection: { type: 'string' },
+        id: { type: 'string', description: 'The record id.' },
+        user_id: {
+          type: 'string',
+          description:
+            "Another user's id (administrators only — find it with query_items on nivaro_users is NOT possible; ask the user for the id or explain the asker's own access). Omit to explain the asker's own access."
+        }
+      },
+      required: ['collection', 'id']
+    }
+  },
+  {
+    name: 'record_integrity',
+    description:
+      'Data-integrity findings. With an id: what is wrong with that record right now — required fields, validation rules, picker values no longer available, line rules and lints — checked fresh. Without an id: the newest integrity sweep of the collection — records checked, violations, counts per rule and per field. Use for "what is wrong with this record", "is this data clean", "which fields fail most on X".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        collection: { type: 'string' },
+        id: { type: 'string', description: 'A record id; omit for the collection sweep.' }
+      },
+      required: ['collection']
+    }
+  },
+  {
+    name: 'run_custom_query',
+    description:
+      'Run one of the saved SQL queries listed in your instructions under "Saved queries you may run", with parameters by name. Returns up to 200 rows. Only listed slugs work; a required parameter (marked *) must be given. Prefer this over guessing a figure a saved report already computes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string' },
+        params: { type: 'object', description: 'Parameter values by name.' }
+      },
+      required: ['slug']
     }
   }
 ]
@@ -584,6 +646,152 @@ async function describeCollection(user: User, collection: string) {
   }
 }
 
+// ─── Record tools (#751 / #809 / #838) ───────────────────────────────────
+
+const MAX_PATH_STEPS = 40
+const MAX_QUERY_ROWS = 200
+const MAX_CATALOGUE = 80
+
+function requireId(v: unknown): string {
+  const id = String(v ?? '').trim()
+  if (!id) throw new Error('id is required')
+  return id
+}
+
+/** Whether the asker's role has admin access — the executor only holds the
+ *  user row, never the request, so the role is asked directly (cached). */
+function askerIsAdmin(user: User): Promise<boolean> {
+  return isAdminRole(user.role)
+}
+
+/** Is this record readable by the asker through the items service — RLS and
+ *  User Scopes applied — the same test the record routes make. */
+async function visibleRecord(user: User, collection: string, id: string): Promise<boolean> {
+  try {
+    const res = (await readItems(user, collection, {
+      filter: { id: { _eq: id } },
+      fields: ['id'],
+      limit: 1
+    })) as { data?: unknown[] }
+    return (res.data ?? []).length > 0
+  } catch {
+    return false
+  }
+}
+
+/** The event path's per-record reader for a non-admin viewer (mirrors the
+ *  integration-events route): read permission per collection, then the
+ *  items service decides row by row. */
+function readerFor(user: User) {
+  return async (refs: Array<{ collection: string; item: string }>): Promise<Set<string>> => {
+    const allowed = new Set<string>()
+    const byColl = new Map<string, Set<string>>()
+    for (const r of refs) {
+      if (!r.collection || r.item == null || r.item === '') continue
+      const set = byColl.get(r.collection) ?? new Set<string>()
+      set.add(String(r.item))
+      byColl.set(r.collection, set)
+    }
+    for (const [collection, items] of byColl) {
+      if (/^(nivaro|directus)_/i.test(collection)) continue
+      if (!(await can(user, 'read', collection).catch(() => false))) continue
+      try {
+        const res = (await readItems(user, collection, {
+          filter: { id: { _in: [...items] } },
+          fields: ['id'],
+          limit: items.size
+        })) as { data?: Array<{ id?: unknown }> }
+        for (const row of res.data ?? []) allowed.add(`${collection}:${String(row.id)}`)
+      } catch {
+        /* unreadable collection contributes nothing */
+      }
+    }
+    return allowed
+  }
+}
+
+export interface FlatPathStep {
+  depth: number
+  at: string
+  kind: string
+  who: string | null
+  record: string | null
+  summary: string
+  failed?: boolean
+  inferred?: boolean
+  reason?: string | null
+}
+
+/** An event path as a flat, depth-marked list the model can read top to
+ *  bottom — the tree is for people, a list is for a prompt. Capped; a group
+ *  node contributes its own line and its members' summaries. Bodies are never
+ *  included (a non-admin viewer's path carries none to begin with). */
+export function flattenPath(root: PathNode, cap = MAX_PATH_STEPS): FlatPathStep[] {
+  const out: FlatPathStep[] = []
+  const walk = (node: PathNode, depth: number) => {
+    if (out.length >= cap) return
+    out.push({
+      depth,
+      at: node.at,
+      kind: node.kind,
+      who: node.who ?? null,
+      record: node.record
+        ? `${node.record.label ?? `${node.record.collection} ${node.record.item}`} (${node.record.collection}/${node.record.item})`
+        : null,
+      summary: node.summary,
+      ...(node.failed ? { failed: true } : {}),
+      ...(node.inferred ? { inferred: true } : {}),
+      ...(node.reason ? { reason: String(node.reason).slice(0, 300) } : {})
+    })
+    for (const m of node.members ?? []) walk(m, depth + 1)
+    for (const c of node.children ?? []) walk(c, depth + 1)
+  }
+  walk(root, 0)
+  return out
+}
+
+interface SavedQueryRow {
+  id: number
+  slug: string
+  name: string
+  description: string | null
+  params: string | null
+  access: string
+  enabled: boolean
+  cache_ttl: number
+  sql_text: string
+  scope_params?: string | null
+}
+
+/** The saved queries this asker may run — the catalogue rides the system
+ *  prompt so the model never has to discover slugs by trial. */
+export async function savedQueryCatalogue(user: User): Promise<string[]> {
+  const admin = await askerIsAdmin(user)
+  const rows = (await db('nivaro_custom_queries')
+    .where({ enabled: true })
+    .whereIn('access', admin ? ['admin', 'authenticated', 'public'] : ['authenticated', 'public'])
+    .orderBy('slug')
+    .limit(MAX_CATALOGUE + 1)
+    .select('slug', 'name', 'description', 'params')
+    .catch(() => [])) as Array<Pick<SavedQueryRow, 'slug' | 'name' | 'description' | 'params'>>
+  const lines = rows.slice(0, MAX_CATALOGUE).map((r) => {
+    let defs: Array<{ name?: string; required?: boolean }> = []
+    try {
+      const parsed = r.params ? JSON.parse(r.params) : []
+      defs = Array.isArray(parsed) ? parsed : []
+    } catch {
+      defs = []
+    }
+    const params = defs
+      .filter((d) => d && typeof d.name === 'string')
+      .map((d) => `${d.name}${d.required ? '*' : ''}`)
+    const desc = (r.description ?? '').replace(/\s+/g, ' ').trim().slice(0, 140)
+    return `- ${r.slug}: ${r.name}${desc ? ` — ${desc}` : ''}${params.length ? ` (params: ${params.join(', ')})` : ''}`
+  })
+  if (rows.length > MAX_CATALOGUE) lines.push(`- … and more; ask an administrator for the slug.`)
+  return lines
+}
+
 export async function executeChatTool(
   user: User,
   name: string,
@@ -785,6 +993,267 @@ export async function executeChatTool(
       }
     }
 
+    case 'record_event_path': {
+      const collection = assertBusinessCollection(input.collection)
+      const id = requireId(input.id)
+      if (!(await can(user, 'read', collection))) throw new Error('No read access')
+      if (!(await visibleRecord(user, collection, id))) throw new Error('Record not found')
+      const admin = await askerIsAdmin(user)
+      const limit = Math.min(5, Math.max(1, Number(input.limit) || 3))
+      const [{ chainsTouchingRecord }, { listEvents }, { buildChainPath, buildEventPath }] =
+        await Promise.all([
+          import('./event-path/record-ref.js'),
+          import('./integration-event-sources.js'),
+          import('./event-path/index.js')
+        ])
+      const chainIds = await chainsTouchingRecord(collection, id)
+      const events = (
+        await listEvents({
+          limit: limit * 3,
+          record: { collection, item: id },
+          chainIds,
+          // A person's own writes are not integration activity — same rule as
+          // the record's Events tab.
+          includePeople: false
+        })
+      )
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+        .slice(0, limit)
+      const viewer = { isAdmin: admin, canReadRecords: admin ? undefined : readerFor(user) }
+      const out: Array<Record<string, unknown>> = []
+      for (const ev of events) {
+        let path: Awaited<ReturnType<typeof buildChainPath>> = null
+        try {
+          path = ev.chain_id
+            ? await buildChainPath(ev.chain_id, viewer)
+            : await buildEventPath(ev.source, ev.id, viewer)
+        } catch {
+          path = null
+        }
+        out.push({
+          source: ev.source,
+          id: ev.id,
+          at: ev.created_at,
+          direction: ev.direction,
+          label: ev.label,
+          text: ev.text,
+          status: ev.status ?? null,
+          partner: ev.partner ?? null,
+          caller: ev.caller ?? null,
+          mode: path?.mode ?? null,
+          first_failure: path?.first_failure ?? null,
+          hidden_steps: path?.hidden_steps ?? 0,
+          steps: path ? flattenPath(path.root) : []
+        })
+      }
+      return {
+        result: { record: `${collection}/${id}`, events: out },
+        summary:
+          out.length === 0
+            ? `No integration events name ${collection}/${id}`
+            : `${out.length} event(s) with paths for ${collection}/${id}`
+      }
+    }
+
+    case 'explain_access': {
+      const collection = assertBusinessCollection(input.collection)
+      const id = requireId(input.id)
+      const askerAdmin = await askerIsAdmin(user)
+      let target: User = user
+      let targetAdmin = askerAdmin
+      const asUserId = String(input.user_id ?? '').trim()
+      if (asUserId && asUserId.toUpperCase() !== String(user.id).toUpperCase()) {
+        if (!askerAdmin) throw new Error("Only administrators can explain another person's access")
+        const row = (await db('nivaro_users').where({ id: asUserId }).first()) as User | undefined
+        if (!row) throw new Error('User not found')
+        target = row
+        targetAdmin = await isAdminRole(row.role)
+      }
+      const { explainAccess } = await import('./access-explain.js')
+      const res = await explainAccess(target, targetAdmin, collection, id)
+      // Never the trash id — a tool answer must not hand out a restore handle.
+      const reasons = res.reasons.map(({ trash_id: _trash, ...r }) => r)
+      const who =
+        target.id === user.id
+          ? 'you'
+          : [target.first_name, target.last_name].filter(Boolean).join(' ').trim() ||
+            target.email ||
+            asUserId
+      return {
+        result: { record: `${collection}/${id}`, user: who, access: res.access, reasons },
+        summary: `${who} ${res.access ? 'can' : 'cannot'} see ${collection}/${id}${reasons.length ? ` (${reasons.map((r) => r.type).join(', ')})` : ''}`
+      }
+    }
+
+    case 'record_integrity': {
+      const collection = assertBusinessCollection(input.collection)
+      if (!(await can(user, 'read', collection))) throw new Error('No read access')
+      const cc = await import('./config-conformance.js')
+      const id = input.id != null && String(input.id).trim() ? String(input.id).trim() : null
+      if (id) {
+        if (!(await visibleRecord(user, collection, id))) throw new Error('Record not found')
+        const live = await cc.checkRecord(collection, id).catch(() => null)
+        const stored = live ? null : await cc.readRecordResult(collection, id)
+        const findings = (live?.findings ?? stored?.findings ?? []).map((f) => ({
+          field: f.field,
+          rule: f.rule,
+          message: f.message
+        }))
+        return {
+          result: {
+            record: `${collection}/${id}`,
+            checked: live ? 'now' : stored ? `stored ${stored.checked_at}` : 'none',
+            findings
+          },
+          summary: `${findings.length} integrity finding(s) on ${collection}/${id}`
+        }
+      }
+      const run = (await db('nivaro_conformance_runs')
+        .where({ collection, status: 'completed' })
+        .orderBy('id', 'desc')
+        .first(
+          'id',
+          'checked_records',
+          'violation_count',
+          'truncated',
+          'rule_counts',
+          'field_counts',
+          'finished_at'
+        )) as
+        | {
+            id: number
+            checked_records: number
+            violation_count: number
+            truncated: boolean
+            rule_counts: string | null
+            field_counts: string | null
+            finished_at: Date | null
+          }
+        | undefined
+      if (!run) {
+        return {
+          result: { collection, sweep: null, note: 'No completed integrity sweep yet.' },
+          summary: `No integrity sweep for ${collection}`
+        }
+      }
+      const parseCounts = (raw: string | null): Record<string, number> => {
+        try {
+          const v = raw ? JSON.parse(raw) : {}
+          return v && typeof v === 'object' ? (v as Record<string, number>) : {}
+        } catch {
+          return {}
+        }
+      }
+      return {
+        result: {
+          collection,
+          sweep: {
+            run_id: run.id,
+            finished_at: run.finished_at,
+            checked_records: run.checked_records,
+            violations: run.violation_count,
+            truncated: !!run.truncated,
+            by_rule: parseCounts(run.rule_counts),
+            by_field: parseCounts(run.field_counts)
+          }
+        },
+        summary: `${collection}: ${run.violation_count} violation(s) over ${run.checked_records} record(s) in sweep ${run.id}`
+      }
+    }
+
+    case 'run_custom_query': {
+      const slug = String(input.slug ?? '').trim()
+      if (!slug) throw new Error('slug is required')
+      const query = (await db('nivaro_custom_queries').where({ slug }).first()) as
+        | SavedQueryRow
+        | undefined
+      if (!query || !query.enabled) {
+        throw new Error(
+          `No saved query "${slug}" — only the slugs listed under "Saved queries you may run" can run.`
+        )
+      }
+      const admin = await askerIsAdmin(user)
+      if (!['admin', 'authenticated', 'public'].includes(query.access)) {
+        throw new Error('This query cannot be run here')
+      }
+      if (query.access === 'admin' && !admin)
+        throw new Error('This query is for administrators only')
+      const [{ buildFinalParams, execCustomQuerySql }, { applyScopeParams }] = await Promise.all([
+        import('./custom-query-exec.js'),
+        import('./custom-query-scope.js')
+      ])
+      let defs: Parameters<typeof buildFinalParams>[0] = []
+      try {
+        const parsed = query.params ? JSON.parse(query.params) : []
+        defs = Array.isArray(parsed) ? parsed : []
+      } catch {
+        defs = []
+      }
+      const incoming =
+        input.params && typeof input.params === 'object' && !Array.isArray(input.params)
+          ? (input.params as Record<string, unknown>)
+          : {}
+      const finalParams = buildFinalParams(defs, incoming)
+      // The raw-SQL scope gap closes here exactly as it does on the execute
+      // route: a restricted asker's allowance is injected before anything runs
+      // or is cached.
+      await applyScopeParams(query.scope_params ?? null, finalParams, user.id, admin)
+      const redis = (getApp() as { redis?: unknown } | null)?.redis as
+        | { get(k: string): Promise<string | null>; set(...a: unknown[]): Promise<string | null> }
+        | undefined
+      const cacheKey = `cq:${slug}:${JSON.stringify(finalParams)}`
+      let rows: Array<Record<string, unknown>> | null = null
+      let cached = false
+      if (query.cache_ttl > 0 && redis) {
+        try {
+          const hit = await redis.get(cacheKey)
+          if (hit) {
+            const parsed = JSON.parse(hit) as unknown
+            rows = Array.isArray(parsed)
+              ? (parsed as Array<Record<string, unknown>>)
+              : ((parsed as { rows?: Array<Record<string, unknown>> } | null)?.rows ?? null)
+            cached = rows !== null
+          }
+        } catch {
+          rows = null
+        }
+      }
+      if (!rows) {
+        rows = await execCustomQuerySql(query.sql_text, finalParams)
+        if (query.cache_ttl > 0 && redis) {
+          try {
+            await redis.set(
+              cacheKey,
+              JSON.stringify({ cached_at: new Date().toISOString(), rows }),
+              'EX',
+              query.cache_ttl
+            )
+          } catch {
+            /* cache is a convenience */
+          }
+        }
+      }
+      void logActivityThrottled(redis ?? null, `cq:${query.id}:${user.id}`, 300, {
+        action: 'run',
+        user: user.id,
+        collection: 'nivaro_custom_queries',
+        item: String(query.id),
+        comment: 'via Ask AI'
+      })
+      const capped = rows.slice(0, MAX_QUERY_ROWS)
+      return {
+        result: {
+          slug,
+          params: finalParams,
+          total_rows: rows.length,
+          truncated: rows.length > capped.length,
+          cached,
+          rows: capped
+        },
+        summary: `${slug}: ${rows.length} row(s)${rows.length > capped.length ? `, first ${capped.length} returned` : ''}${cached ? ' (cached)' : ''}`
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`)
   }
@@ -796,6 +1265,7 @@ Rules:
 - Always ground answers in tool results. If a tool errors or returns nothing, say so plainly.
 - Prefer aggregate for counts/totals/breakdowns; query_items for record lists. When someone names a place, vendor, title or id, query_items with "search" finds it across the collection's text columns in one call — semantic_search only covers indexed records and is a last resort.
 - When someone asks whether or why an external system was or was not told about a record ("why didn't X get this", "did the partner receive it"), call integration_status with the record's collection and id — it returns the real reason from the ledger; never guess from the record's own fields.
+- For "what happened to this record across systems", "what did the import / the partner do to it", "why did that push fire", call record_event_path — it walks the real chain of writes, transitions, flows and partner calls. For "why can't I (or Beth) see this record" call explain_access. For "what is wrong with this record" or "how clean is this collection's data" call record_integrity. A saved query listed below answers its question in one call — run_custom_query with its slug beats rebuilding the figure from rows.
 - Two things that are not directly linked usually meet on a THIRD collection: read the relations list_collections reports and look for the collection that carries a link to both (a request record that names a vendor and a site, a junction between two tables), then filter through it with dotted paths. Say which path you used.
 - The readable collections are listed below — do not call list_collections without a collection name. Call it WITH a name once per collection you have not inspected, then query. When several calls do not depend on each other, make them in the same turn.
 - A record's workflow/pipeline state is not a column: filter with {"$state": {"_in": [keys]}} using the pipeline_states keys list_collections reports. Relations are filtered with dotted paths ("project.name").
@@ -815,7 +1285,11 @@ export async function buildChatSystemPrompt(
   user: User,
   opts: { playbooks?: string } = {}
 ): Promise<string> {
-  const [readable, settings] = await Promise.all([readableCollections(user), settingsRow()])
+  const [readable, settings, queries] = await Promise.all([
+    readableCollections(user),
+    settingsRow(),
+    savedQueryCatalogue(user)
+  ])
   const guide = settings?.ai_chat_guide?.trim()
   const lines = readable.map((c) =>
     c.display_name && c.display_name !== c.collection
@@ -827,7 +1301,14 @@ export async function buildChatSystemPrompt(
 Today is ${new Date().toISOString().slice(0, 10)} — resolve "this year", "last month" and similar against that date.
 ${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}${opts.playbooks ? `\n${opts.playbooks}\n` : ''}
 Readable collections (${readable.length}):
-${lines.join(', ')}`
+${lines.join(', ')}${
+  queries.length
+    ? `
+
+Saved queries you may run (run_custom_query with the slug; * = required parameter):
+${queries.join('\n')}`
+    : ''
+}`
 }
 
 /**

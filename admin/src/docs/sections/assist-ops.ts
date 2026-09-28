@@ -21,7 +21,7 @@ export const aiChatDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Tools: list_collections, query_items (items service — RLS applies), aggregate (refuses when the user is row-filtered), semantic_search (hits intersected with the permission-checked read).',
+        "Tools: list_collections, query_items (items service — RLS applies), aggregate (refuses when the user is row-filtered), semantic_search (hits intersected with the permission-checked read), integration_status (the obligation ledger for a record), record_event_path (the newest integration events naming a record and the path each set off — writes, transitions, flows, partner calls, where it failed), explain_access (why the asker — or, for administrators, another user — can or cannot see a record), record_integrity (a record's live integrity findings, or a collection's newest sweep totals) and run_custom_query (a saved SQL query from the catalogue the assistant is given — only queries whose access admits the asker, User-Scope params injected, 200 rows at most).",
         'Reads are direct; mutations only ever happen through the proposal gate (see AI Actions & Dashboards) — the model can never write without your approval.',
         'Every answer shows the tool trace: exactly which queries produced it.',
         'Uses the model configured in Settings → AI Features.'
