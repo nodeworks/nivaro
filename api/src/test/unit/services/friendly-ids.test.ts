@@ -1,13 +1,15 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/queues.js', () => ({ getLabels: vi.fn() }))
 
 const { db } = await import('../../../db/index.js')
 const { getLabels } = await import('../../../services/queues.js')
-const { resolveFriendlyId, resolveFriendlyIds } = await import(
+const { bustFriendlyIdFieldCache, resolveFriendlyId, resolveFriendlyIds } = await import(
   '../../../services/workflow-transitions.js'
 )
+
+beforeEach(() => bustFriendlyIdFieldCache())
 
 /** Minimal knex stand-in: where().first() for the registry lookup,
  *  whereIn().select() for the business-table batch — same shape as the

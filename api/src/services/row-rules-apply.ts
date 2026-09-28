@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { evaluateRowRules, type RowRule, RowRuleLookupCache } from './field-rules.js'
+import { parseRowLints, type RowLint } from './row-lints.js'
 
 /**
  * Row-rule re-derivation, shared by the grid's "re-run rules" endpoint
@@ -82,6 +83,61 @@ export async function gridRuleConfigsFor(parentCollection: string): Promise<Grid
       parentContextFields: Array.isArray(opts?.parent_context_fields)
         ? (opts.parent_context_fields as string[])
         : []
+    })
+  }
+  return out
+}
+
+export interface GridLintConfig {
+  aliasField: string
+  label: string | null
+  layoutId: number
+  parentCollection: string
+  childCollection: string
+  fkField: string
+  lints: RowLint[]
+}
+
+/** Grids on the ACTIVE grouped layout carrying `options.row_lints` (#766). */
+export async function gridLintConfigsFor(parentCollection: string): Promise<GridLintConfig[]> {
+  const layout = (await db('nivaro_collection_layouts')
+    .where({ collection: parentCollection, layout_type: 'grouped', is_active: true })
+    .first('id')) as { id: number } | undefined
+  if (!layout) return []
+  const rows = (await db('nivaro_layout_field_assignments')
+    .where('layout_id', layout.id)
+    .whereRaw("overrides LIKE '%row_lints%'")
+    .select('field', 'label_override', 'overrides')) as Array<{
+    field: string
+    label_override: string | null
+    overrides: string | null
+  }>
+  if (rows.length === 0) return []
+  const rels = (await db('nivaro_relations')
+    .where('one_collection', parentCollection)
+    .whereNull('junction_field')
+    .select('one_field', 'many_collection', 'many_field')) as Array<{
+    one_field: string | null
+    many_collection: string
+    many_field: string
+  }>
+  const out: GridLintConfig[] = []
+  for (const row of rows) {
+    const overrides = parseJson<{ label?: string; options?: Record<string, unknown> }>(
+      row.overrides
+    )
+    const lints = parseRowLints(overrides?.options?.row_lints)
+    if (lints.length === 0) continue
+    const rel = rels.find((r) => r.one_field === row.field || r.many_collection === row.field)
+    if (!rel) continue
+    out.push({
+      aliasField: row.field,
+      label: overrides?.label || row.label_override || null,
+      layoutId: layout.id,
+      parentCollection,
+      childCollection: rel.many_collection,
+      fkField: rel.many_field,
+      lints
     })
   }
   return out

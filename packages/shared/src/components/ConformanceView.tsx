@@ -24,6 +24,7 @@ interface CheckableCollection {
   validation: number
   cascade: number
   row_rules?: number
+  row_lints?: number
   skipped: number
 }
 
@@ -92,6 +93,10 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
   'row-input': {
     label: 'Lines missing rule inputs',
     cls: 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
+  },
+  'row-lint': {
+    label: 'Lines failing a lint',
+    cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
   }
 }
 
@@ -278,6 +283,8 @@ export function ConformanceView({ className }: { className?: string }) {
             cascade check{selected.cascade === 1 ? '' : 's'}
             {(selected.row_rules ?? 0) > 0 &&
               ` · ${selected.row_rules} grid${selected.row_rules === 1 ? '' : 's'} with row rules`}
+            {(selected.row_lints ?? 0) > 0 &&
+              ` · ${selected.row_lints} grid${selected.row_lints === 1 ? '' : 's'} with row lints`}
             {selected.skipped > 0 && ` · ${selected.skipped} not evaluable`}
           </p>
         )}

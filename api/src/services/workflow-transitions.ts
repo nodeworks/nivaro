@@ -825,6 +825,47 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
  * records each collection's human id column; unregistered collections (or a
  * missing value) fall back to the internal id. Never throws.
  */
+const friendlyFieldCache = new Map<string, { at: number; field: string | null }>()
+const FRIENDLY_FIELD_TTL_MS = 60_000
+
+export function bustFriendlyIdFieldCache(): void {
+  friendlyFieldCache.clear()
+}
+
+/**
+ * The column that names a record to people (#776): `nivaro_collections.
+ * friendly_id_field` first, the chat entity-room registry's match_field as
+ * the fallback for a collection that never set one. Null = no human id —
+ * readers fall back to the display label, then the internal id.
+ */
+export async function friendlyIdField(collection: string): Promise<string | null> {
+  const hit = friendlyFieldCache.get(collection)
+  if (hit && Date.now() - hit.at < FRIENDLY_FIELD_TTL_MS) return hit.field
+  let field: string | null = null
+  try {
+    const col = (await db('nivaro_collections').where({ collection }).first()) as
+      | { friendly_id_field?: string | null }
+      | undefined
+    const f = col?.friendly_id_field
+    if (f && f !== 'id' && IDENT_RE.test(f)) field = f
+  } catch {
+    /* fall through to the registry */
+  }
+  if (!field) {
+    try {
+      const rt = (await db('nivaro_chat_room_types')
+        .where({ collection, is_active: true })
+        .first()) as { match_field?: string | null } | undefined
+      const f = rt?.match_field
+      if (f && f !== 'id' && IDENT_RE.test(f)) field = f
+    } catch {
+      /* no registry */
+    }
+  }
+  friendlyFieldCache.set(collection, { at: Date.now(), field })
+  return field
+}
+
 export async function resolveFriendlyId(collection: string, item: string): Promise<string> {
   // An addendum is named by its PARENT's friendly id plus its own title —
   // a bare addendum uuid in a mail subject means nothing to anyone.
@@ -840,11 +881,8 @@ export async function resolveFriendlyId(collection: string, item: string): Promi
     }
   }
   try {
-    const rt = (await db('nivaro_chat_room_types')
-      .where({ collection, is_active: true })
-      .first()) as { match_field?: string | null } | undefined
-    const field = rt?.match_field
-    if (field && field !== 'id' && IDENT_RE.test(field)) {
+    const field = await friendlyIdField(collection)
+    if (field) {
       const row = (await db(collection).where({ id: item }).select(field).first()) as
         | Record<string, unknown>
         | undefined
@@ -918,11 +956,8 @@ export async function resolveFriendlyIds(
   }
 
   try {
-    const rt = (await db('nivaro_chat_room_types')
-      .where({ collection, is_active: true })
-      .first()) as { match_field?: string | null } | undefined
-    const field = rt?.match_field
-    if (field && field !== 'id' && IDENT_RE.test(field)) {
+    const field = await friendlyIdField(collection)
+    if (field) {
       const rows = (await selectInChunks(remainingIds, 1000, (chunk) =>
         db(collection).whereIn('id', chunk).select('id', field)
       )) as Array<Record<string, unknown>>

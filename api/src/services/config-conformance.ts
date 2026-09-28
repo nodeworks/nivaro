@@ -7,8 +7,11 @@ import {
   integrityChecksFor
 } from './integrity-checks.js'
 import { getLabels } from './queues.js'
+import { failingLints } from './row-lints.js'
 import {
+  type GridLintConfig,
   type GridRuleConfig,
+  gridLintConfigsFor,
   gridRuleConfigsFor,
   parentContextFrom,
   parentFieldsFor,
@@ -121,11 +124,18 @@ interface CompiledChecks {
   /** Inline-grid row rules (task / labor price / line type autofill) judged
    *  against every SAVED child row of each record. */
   rowRules: RowRuleCheck[]
+  /** Inline-grid row lints (`options.row_lints`) — the grid's amber triangle,
+   *  judged per saved line. Never auto-fixed. */
+  rowLints: RowLintCheck[]
   /** Extension-registered checks (services/integrity-checks.ts) — judged over
    *  the batch's ids by the extension that owns the domain. */
   external: IntegrityCheck[]
   /** Rules present in config but not evaluable by this sweep. */
   skipped: string[]
+}
+
+export interface RowLintCheck extends GridLintConfig {
+  lineField: string | null
 }
 
 export interface RowRuleCheck extends GridRuleConfig {
@@ -310,6 +320,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     displayTokens: [],
     dateOffsets: [],
     rowRules: [],
+    rowLints: [],
     external: [],
     skipped: []
   }
@@ -619,6 +630,12 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
       : null
     out.rowRules.push({ ...cfg, lineField, childFields })
   }
+  for (const cfg of await gridLintConfigsFor(collection).catch(() => [] as GridLintConfig[])) {
+    const lineField = (await hasPhysicalColumn(cfg.childCollection, 'line_number'))
+      ? 'line_number'
+      : null
+    out.rowLints.push({ ...cfg, lineField })
+  }
   out.external = integrityChecksFor(collection)
   return out
 }
@@ -630,6 +647,8 @@ export interface CollectionCheckSummary {
   cascade: number
   /** Inline grids on the active layout carrying row rules. */
   row_rules: number
+  /** Inline grids on the active layout carrying row lints (#766). */
+  row_lints: number
   /** Extension-registered checks. */
   external: number
   skipped: number
@@ -708,6 +727,7 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
         validation: 0,
         cascade: 0,
         row_rules: 0,
+        row_lints: 0,
         external: 0,
         skipped: 0
       }
@@ -759,6 +779,17 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
   for (const g of gridRows) {
     if (!IDENT.test(g.collection) || /^nivaro_|^directus_/i.test(g.collection)) continue
     entry(g.collection).row_rules++
+  }
+  const lintRows = (await db('nivaro_layout_field_assignments as a')
+    .join('nivaro_collection_layouts as l', 'l.id', 'a.layout_id')
+    .where('l.is_active', true)
+    .where('l.layout_type', 'grouped')
+    .whereRaw("a.overrides LIKE '%row_lints%'")
+    .select('l.collection')
+    .catch(() => [])) as Array<{ collection: string }>
+  for (const g of lintRows) {
+    if (!IDENT.test(g.collection) || /^nivaro_|^directus_/i.test(g.collection)) continue
+    entry(g.collection).row_lints++
   }
   for (const [collection, n] of integrityCheckCounts()) {
     if (!IDENT.test(collection) || /^nivaro_|^directus_/i.test(collection)) continue
@@ -1266,15 +1297,34 @@ async function evaluateRows(
     return out
   }
 
-  const [m2m, cas, opt, disp, rr, ext] = await Promise.all([
+  // ── inline-grid row lints: the grid's amber triangle, per saved line ───
+  const rowLints = async (): Promise<RecordFinding[]> =>
+    (
+      await Promise.all(
+        checks.rowLints.map(async (lc) => {
+          try {
+            return await evaluateRowLintCheck(lc, rows)
+          } catch (err) {
+            console.warn(
+              `conformance row-lint check skipped for ${collection}.${lc.aliasField}:`,
+              err
+            )
+            return []
+          }
+        })
+      )
+    ).flat()
+
+  const [m2m, cas, opt, disp, rr, rl, ext] = await Promise.all([
     m2mRequired(),
     cascades(),
     optionFilters(),
     display(),
     rowRules(),
+    rowLints(),
     external()
   ])
-  return [...scalar, ...m2m, ...cas, ...opt, ...disp, ...rr, ...ext]
+  return [...scalar, ...m2m, ...cas, ...opt, ...disp, ...rr, ...rl, ...ext]
 }
 
 // compileChecks walks field config + layouts + relations (~120 reads, 6s
@@ -1350,6 +1400,7 @@ export async function hasChecks(collection: string): Promise<boolean> {
       checks.displayTokens.length +
       checks.dateOffsets.length +
       checks.rowRules.length +
+      checks.rowLints.length +
       checks.external.length >
     0
   )
@@ -1656,6 +1707,36 @@ async function evaluate(
  * line naming each stored-vs-derived disagreement. FK values are shown as
  * labels so "Task is X — rules derive Y" reads like the form does.
  */
+async function evaluateRowLintCheck(
+  lc: RowLintCheck,
+  parents: Array<Record<string, unknown>>
+): Promise<Array<{ item_id: string; field: string; rule: string; message: string }>> {
+  const out: Array<{ item_id: string; field: string; rule: string; message: string }> = []
+  const parentIds = parents.map((p) => String(p.id))
+  const children = await selectInChunks(
+    parentIds,
+    1000,
+    (ids) =>
+      db(lc.childCollection).whereIn(lc.fkField, ids).orderBy('id').select('*') as Promise<
+        Array<Record<string, unknown>>
+      >
+  )
+  for (const line of children) {
+    const fails = failingLints(line, lc.lints)
+    if (fails.length === 0) continue
+    const lineNo = lc.lineField ? line[lc.lineField] : null
+    const head =
+      lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(line.id)}`
+    out.push({
+      item_id: String(line[lc.fkField]),
+      field: lc.aliasField,
+      rule: 'row-lint',
+      message: `${head}: ${fails.join('; ')}`
+    })
+  }
+  return out
+}
+
 async function evaluateRowRuleCheck(
   rc: RowRuleCheck,
   parents: Array<Record<string, unknown>>,

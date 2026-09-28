@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { Parser } from 'expr-eval'
-import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { config } from '../config.js'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hooks } from '../hooks/registry.js'
+import { describeDbRefusal } from '../lib/db-refusal.js'
 import {
   decodeCursor,
   encodeCursor,
@@ -16,6 +16,7 @@ import {
 } from '../lib/keyset.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
+import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
 import {
   applyAutoIdsExt,
@@ -27,16 +28,14 @@ import {
   resolveAutoIdPattern
 } from './auto-ids.js'
 import { getCollection, getFields, getRelations } from './collections.js'
-import { describeDbRefusal } from '../lib/db-refusal.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
-import { enforceRelationLimits } from './relation-limits.js'
-import { enforcePickerRules } from './picker-rules.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import { enforceContracts } from './integration-contracts.js'
 import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
+import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import {
@@ -45,6 +44,7 @@ import {
   STATE_FIELD,
   splitStateField
 } from './record-state.js'
+import { enforceRelationLimits } from './relation-limits.js'
 import { span } from './request-trace.js'
 import {
   computeRollupTotal,
@@ -3332,8 +3332,20 @@ export async function resolveAliasId(
   const col = await getCollection(collection)
   const raw = (col as { url_alias_fields?: unknown } | null)?.url_alias_fields
   const fields = parseJson(typeof raw === 'string' ? raw : null)
-  if (!Array.isArray(fields) || fields.length === 0) return null
-  const names = fields.filter((f): f is string => typeof f === 'string' && IDENT_RE.test(f))
+  let names = Array.isArray(fields)
+    ? fields.filter((f): f is string => typeof f === 'string' && IDENT_RE.test(f))
+    : []
+  // #776: the human id field is an alias too — a collection that names one
+  // and lists no URL alias resolves /collections/<c>/<friendly id> through it.
+  const friendly = (col as { friendly_id_field?: unknown } | null)?.friendly_id_field
+  if (
+    names.length === 0 &&
+    typeof friendly === 'string' &&
+    IDENT_RE.test(friendly) &&
+    friendly !== 'id'
+  ) {
+    names = [friendly]
+  }
   if (names.length === 0) return null
 
   // A multi-field alias joins its parts with '-', so split from the LEFT by
@@ -4698,83 +4710,84 @@ export async function createOne(
   // create has landed, and are dropped when a child is refused and the parent
   // undone.
   return withUnitOfWork(`create:${collection}`, async () => {
-  const rows = (await db(collection)
-    .insert(filterToActualColumns(securedPayload, actualCols))
-    .returning('id')) as unknown[]
-  const id = rows[0] as { id: string | number } | string | number
-  const returnedId = typeof id === 'object' && id !== null ? (id as { id: string | number }).id : id
+    const rows = (await db(collection)
+      .insert(filterToActualColumns(securedPayload, actualCols))
+      .returning('id')) as unknown[]
+    const id = rows[0] as { id: string | number } | string | number
+    const returnedId =
+      typeof id === 'object' && id !== null ? (id as { id: string | number }).id : id
 
-  // Count the new item against the workspace quota (non-fatal)
-  await incrementUsage(quotaWorkspace, 'items').catch(() => {})
+    // Count the new item against the workspace quota (non-fatal)
+    await incrementUsage(quotaWorkspace, 'items').catch(() => {})
 
-  // Alias M2M links BEFORE the read-back — the junction creates recompute any
-  // auto-id fields drawing on them, so the response already carries the
-  // rendered name/prefix the caller asked for.
-  await applyAliasM2MWrites(user, returnedId as string | number, aliasWrites, req)
+    // Alias M2M links BEFORE the read-back — the junction creates recompute any
+    // auto-id fields drawing on them, so the response already carries the
+    // rendered name/prefix the caller asked for.
+    await applyAliasM2MWrites(user, returnedId as string | number, aliasWrites, req)
 
-  // Nested child sets (lines, forecasts…) — before the read-back so stored
-  // rollups over them are already in the response, and before the after-hooks
-  // so a failed child set leaves no trace of the parent either.
-  if (nestedWrites.length > 0) {
-    try {
-      await applyAliasO2MWrites(
-        user,
-        returnedId as string | number,
-        nestedWrites,
-        req,
-        workspaceId,
-        true
-      )
-    } catch (err) {
-      await undoNewParent(collection, returnedId as string | number, aliasWrites)
-      throw err
+    // Nested child sets (lines, forecasts…) — before the read-back so stored
+    // rollups over them are already in the response, and before the after-hooks
+    // so a failed child set leaves no trace of the parent either.
+    if (nestedWrites.length > 0) {
+      try {
+        await applyAliasO2MWrites(
+          user,
+          returnedId as string | number,
+          nestedWrites,
+          req,
+          workspaceId,
+          true
+        )
+      } catch (err) {
+        await undoNewParent(collection, returnedId as string | number, aliasWrites)
+        throw err
+      }
     }
-  }
 
-  const result = await readOne(user, collection, returnedId as string | number)
+    const result = await readOne(user, collection, returnedId as string | number)
 
-  // Recalc any stored rollups this new row contributes to (never throws). Callers
-  // that create many rows in one batch (e.g. import execute) can opt out and run
-  // one deduped recalc pass of their own after the whole batch commits.
-  if (!opts?.skipRollupRecalc) {
-    await recalcAffectedRollups(collection, (result ?? ctx.payload) as Record<string, unknown>)
-  }
+    // Recalc any stored rollups this new row contributes to (never throws). Callers
+    // that create many rows in one batch (e.g. import execute) can opt out and run
+    // one deduped recalc pass of their own after the whole batch commits.
+    if (!opts?.skipRollupRecalc) {
+      await recalcAffectedRollups(collection, (result ?? ctx.payload) as Record<string, unknown>)
+    }
 
-  // If this collection is an M2M junction table, recompute any parent auto_id
-  // fields whose pattern draws from it (never throws).
-  await recomputeJunctionAutoIds(collection, (result ?? ctx.payload) as Record<string, unknown>)
+    // If this collection is an M2M junction table, recompute any parent auto_id
+    // fields whose pattern draws from it (never throws).
+    await recomputeJunctionAutoIds(collection, (result ?? ctx.payload) as Record<string, unknown>)
 
-  // after_create rules
-  await evaluateRules(
-    collection,
-    'after_create',
-    (result ?? ctx.payload) as Record<string, unknown>
-  )
+    // after_create rules
+    await evaluateRules(
+      collection,
+      'after_create',
+      (result ?? ctx.payload) as Record<string, unknown>
+    )
 
-  await hooks.trigger('after', {
-    ...ctx,
-    keys: [returnedId as string | number],
-    result,
-    changeReason: createReason || undefined
-  })
-
-  // Auto-watch (#400): creators subscribe to their own records when the
-  // preference says so — fire-and-forget.
-  void deferEffect('auto-watch', () =>
-    import('./auto-watch.js')
-      .then(({ ensureAutoWatch }) =>
-        ensureAutoWatch(user?.id, collection, returnedId as string | number, 'created')
-      )
-      .catch(() => {})
-  )
-
-  void deferEffect('realtime:create', () =>
-    broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
-      action: 'create'
+    await hooks.trigger('after', {
+      ...ctx,
+      keys: [returnedId as string | number],
+      result,
+      changeReason: createReason || undefined
     })
-  )
 
-  return result
+    // Auto-watch (#400): creators subscribe to their own records when the
+    // preference says so — fire-and-forget.
+    void deferEffect('auto-watch', () =>
+      import('./auto-watch.js')
+        .then(({ ensureAutoWatch }) =>
+          ensureAutoWatch(user?.id, collection, returnedId as string | number, 'created')
+        )
+        .catch(() => {})
+    )
+
+    void deferEffect('realtime:create', () =>
+      broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
+        action: 'create'
+      })
+    )
+
+    return result
   })
 }
 

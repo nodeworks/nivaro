@@ -7117,18 +7117,37 @@ function UrlAliasSection({ tableName }: { tableName: string }) {
     queryKey: ['collection-meta-alias', tableName],
     queryFn: () =>
       api
-        .get<{ data: { url_alias_fields: string[] | null; slug_field?: string | null } }>(
-          `/collections/${tableName}`
-        )
+        .get<{
+          data: {
+            url_alias_fields: string[] | null
+            slug_field?: string | null
+            friendly_id_field?: string | null
+          }
+        }>(`/collections/${tableName}`)
         .then((r) => r.data.data)
   })
   const [draft, setDraft] = useState('')
+  const [friendlyDraft, setFriendlyDraft] = useState('')
   const loadedRef = useRef(false)
   useEffect(() => {
     if (loadedRef.current || !col) return
     loadedRef.current = true
     setDraft((col.url_alias_fields ?? []).join(', '))
+    setFriendlyDraft(col.friendly_id_field ?? '')
   }, [col])
+  async function saveFriendly() {
+    try {
+      await api.patch(`/collections/${tableName}`, {
+        friendly_id_field: friendlyDraft.trim() || null
+      })
+      qc.invalidateQueries({ queryKey: ['collection-meta-alias', tableName] })
+      toast.success(friendlyDraft.trim() ? 'Human id field saved' : 'Human id field cleared')
+    } catch (e) {
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Save failed'
+      )
+    }
+  }
 
   async function save() {
     const fields = draft
@@ -7143,6 +7162,30 @@ function UrlAliasSection({ tableName }: { tableName: string }) {
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white'>
       <div className='px-4 py-3 space-y-3'>
+        <div data-friendly-id-field>
+          <p className='text-[13px] font-medium text-slate-800'>Human id field</p>
+          <p className='mt-0.5 text-[12px] text-slate-500'>
+            The column that names a record to people — in notifications, mail subjects, event paths,
+            chat rooms and alias URLs (<span className='font-mono'>CM26-79811</span>, never the
+            internal id). Blank falls back to the chat room registry, then the display label.
+          </p>
+          <div className='mt-2 flex items-center gap-2'>
+            <input
+              value={friendlyDraft}
+              onChange={(e) => setFriendlyDraft(e.target.value)}
+              placeholder='e.g. workflow_id'
+              className='h-8 w-64 rounded-md border border-slate-200 px-2 font-mono text-[12px] dark:border-border dark:bg-background'
+              data-friendly-id-input
+            />
+            <button
+              type='button'
+              onClick={saveFriendly}
+              className='h-8 rounded-md border border-slate-200 bg-white px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground'
+            >
+              Save
+            </button>
+          </div>
+        </div>
         <div>
           <p className='text-[13px] font-medium text-slate-800'>URL alias</p>
           <p className='mt-0.5 text-[12px] text-slate-500'>

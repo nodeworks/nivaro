@@ -1789,35 +1789,58 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         input_bindings?: unknown
         widget_id?: number | null
         show_approval_chain?: boolean
+        hide_actions_when_collapsed?: boolean
       }>
     }
     if (!Array.isArray(body.assignments))
       return reply.code(400).send({ error: 'assignments array required' })
 
+    // Upsert by (layout_id, field) (#774): a save used to DELETE every row and
+    // re-insert, so assignment ids churned on each 400ms auto-save (version
+    // restores had to match by field, and any column the insert map forgot —
+    // hide_actions_when_collapsed — was silently dropped). Rows keep their
+    // id now; only what left the payload is deleted; every column is carried.
+    const wanted = new Map<string, (typeof body.assignments)[number]>()
+    for (const a of body.assignments) {
+      if (!a || typeof a.field !== 'string' || !a.field) continue
+      wanted.set(a.field, a) // a field named twice: the last entry wins
+    }
+    const rowOf = (a: (typeof body.assignments)[number]) => ({
+      group_key: a.group_key ?? null,
+      sort: a.sort,
+      label_override: a.label_override ?? null,
+      is_visible: a.is_visible === false ? 0 : 1,
+      default_expanded: a.default_expanded === false ? 0 : 1,
+      col_span: a.col_span ?? null,
+      overrides: serializeBindings(a.overrides),
+      show_row_revisions: a.show_row_revisions ? 1 : 0,
+      allow_revision_restore: a.allow_revision_restore === false ? 0 : 1,
+      lock_conditions: a.lock_conditions ?? null,
+      input_bindings: serializeBindings(a.input_bindings),
+      widget_id: a.widget_id ?? null,
+      show_approval_chain: a.show_approval_chain ? 1 : 0,
+      hide_actions_when_collapsed: a.hide_actions_when_collapsed ? 1 : 0
+    })
     await db.transaction(async (trx) => {
-      await trx('nivaro_layout_field_assignments')
+      const existing = (await trx('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
-        .delete()
-      if (body.assignments.length > 0) {
-        await trx('nivaro_layout_field_assignments').insert(
-          body.assignments.map((a) => ({
+        .select('id', 'field')) as Array<{ id: number; field: string }>
+      const byField = new Map(existing.map((r) => [r.field, r.id]))
+      const gone = existing.filter((r) => !wanted.has(r.field)).map((r) => r.id)
+      if (gone.length > 0) {
+        await trx('nivaro_layout_field_assignments').whereIn('id', gone).delete()
+      }
+      for (const [field, a] of wanted) {
+        const rowId = byField.get(field)
+        if (rowId != null) {
+          await trx('nivaro_layout_field_assignments').where({ id: rowId }).update(rowOf(a))
+        } else {
+          await trx('nivaro_layout_field_assignments').insert({
             layout_id: Number(id),
-            field: a.field,
-            group_key: a.group_key ?? null,
-            sort: a.sort,
-            label_override: a.label_override ?? null,
-            is_visible: a.is_visible === false ? 0 : 1,
-            default_expanded: a.default_expanded === false ? 0 : 1,
-            col_span: a.col_span ?? null,
-            overrides: serializeBindings(a.overrides),
-            show_row_revisions: a.show_row_revisions ? 1 : 0,
-            allow_revision_restore: a.allow_revision_restore === false ? 0 : 1,
-            lock_conditions: a.lock_conditions ?? null,
-            input_bindings: serializeBindings(a.input_bindings),
-            widget_id: a.widget_id ?? null,
-            show_approval_chain: a.show_approval_chain ? 1 : 0
-          }))
-        )
+            field,
+            ...rowOf(a)
+          })
+        }
       }
     })
 
@@ -1833,6 +1856,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const rows = await db('nivaro_layout_field_assignments')
       .where({ layout_id: Number(id) })
       .select(
+        'id',
         'field',
         'group_key',
         'sort',
@@ -1846,7 +1870,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'lock_conditions',
         'input_bindings',
         'widget_id',
-        'show_approval_chain'
+        'show_approval_chain',
+        'hide_actions_when_collapsed'
       )
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })

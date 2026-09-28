@@ -261,6 +261,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       url_alias_fields?: unknown
       delete_guard?: unknown
       slug_field?: unknown
+      friendly_id_field?: unknown
       empty_state?: unknown
       upsert_keys?: unknown
       summary_mode_rules?: unknown
@@ -272,6 +273,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
       url_alias_fields: rawUrlAlias,
       delete_guard: rawDeleteGuard,
       slug_field: rawSlugField,
+      friendly_id_field: rawFriendlyField,
       empty_state: rawEmptyState,
       upsert_keys: rawUpsertKeys,
       summary_mode_rules: rawSummaryRules,
@@ -292,6 +294,37 @@ export async function collectionsRoutes(app: FastifyInstance) {
       patch.summary_mode_rules = v.value ? JSON.stringify(v.value) : null
       // Same read-back-through-cache trap as read_mode_toggle.
       svc.clearMetadataCache()
+    }
+    // #776: friendly_id_field — the column that names a record to people.
+    // A real physical column, never id; blank clears it.
+    if ('friendly_id_field' in body) {
+      if (rawFriendlyField == null || rawFriendlyField === '') {
+        patch.friendly_id_field = null
+      } else {
+        if (
+          typeof rawFriendlyField !== 'string' ||
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawFriendlyField) ||
+          rawFriendlyField === 'id'
+        ) {
+          return reply.code(400).send({ error: 'friendly_id_field must be a plain column name' })
+        }
+        const cols = rawRows<{ COLUMN_NAME: string }>(
+          await db.raw(
+            `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+            [collection, rawFriendlyField]
+          )
+        )
+        if (cols.length === 0) {
+          return reply.code(400).send({
+            error: `friendly_id_field "${rawFriendlyField}" is not a column on ${collection}`
+          })
+        }
+        patch.friendly_id_field = rawFriendlyField
+      }
+      svc.clearMetadataCache()
+      const { bustFriendlyIdFieldCache } = await import('../services/workflow-transitions.js')
+      bustFriendlyIdFieldCache()
     }
     // #619: slug_field must name a real physical column when set — a stale or
     // mistyped name would make every by-slug lookup 500 instead of 404.

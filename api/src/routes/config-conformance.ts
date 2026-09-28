@@ -846,7 +846,10 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
       .filter((r) => IDENT.test(r.collection))
       .map((r) => {
         const s = summaries.get(r.collection)
-        if (!s || s.required + s.validation + s.cascade + s.row_rules + s.external === 0)
+        if (
+          !s ||
+          s.required + s.validation + s.cascade + s.row_rules + s.row_lints + s.external === 0
+        )
           return null
         return { display_name: r.display_name, ...s }
       })
