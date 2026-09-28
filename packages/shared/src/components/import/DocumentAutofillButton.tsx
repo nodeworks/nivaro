@@ -12,6 +12,7 @@ import {
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useOptionalNivaroClient } from '../../context'
+import { pollProposal } from '../../lib/autofill-poll'
 import { cn } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { Button } from '../ui/button'
@@ -347,39 +348,32 @@ export function DocumentAutofillButton({
     setAnswers({})
   }, [])
 
-  // Poll a running proposal until it lands (or fails).
+  // Poll a running proposal until it lands (or fails). A 202 keeps the
+  // waiting dialog up; only a landed or failed run clears busy/pollId.
   useEffect(() => {
     if (!pollId) return
-    let stop = false
-    const tick = async () => {
-      try {
+    return pollProposal({
+      fetchResult: async () => {
         const res = await fetch(`${apiBase}/ai/extract-record/result/${pollId}`, {
           headers: authHeaders,
           credentials
         })
         const json = await res.json().catch(() => ({}))
-        if (stop) return
-        if (res.status === 202) {
-          if (json?.data?.document_name) setBusy((b) => b ?? String(json.data.document_name))
-          setTimeout(tick, 2000)
-          return
-        }
-        if (!res.ok) throw new Error(json?.error || `Document autofill failed (${res.status})`)
-        showProposal(json.data as DocumentProposal)
+        return { status: res.status, ok: res.ok, json }
+      },
+      onRunning: (name) => {
+        if (name) setBusy((b) => b ?? name)
+      },
+      onDone: (data) => {
+        showProposal(data as DocumentProposal)
         void qc.invalidateQueries({ queryKey: ['nvr-ai-autofill-analytics'] })
-      } catch (err) {
-        if (!stop) toast.error((err as Error).message)
-      } finally {
-        if (!stop) {
-          setBusy(null)
-          setPollId(null)
-        }
+      },
+      onError: (message) => toast.error(message),
+      onSettled: () => {
+        setBusy(null)
+        setPollId(null)
       }
-    }
-    void tick()
-    return () => {
-      stop = true
-    }
+    })
   }, [pollId, apiBase, authHeaders, credentials, showProposal, qc])
 
   // A proposal id handed in by the URL: open it once.
