@@ -1222,6 +1222,14 @@ type RegistryData = {
     has_on_change: boolean
     production_expect: string | null
   }>
+  env?: Array<{
+    name: string
+    required?: boolean
+    description?: string
+    secret?: boolean
+    set: boolean
+    missing: boolean
+  }>
   observed_capabilities: string[]
   health_check: boolean
   staged: { next_present: boolean; prev_present: boolean; live_entry: string | null }
@@ -1400,6 +1408,38 @@ function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => vo
                 </li>
               ))}
             </Section>
+            {(data.env?.length ?? 0) > 0 && (
+              <Section title='Environment' count={data.env?.length ?? 0}>
+                {data.env?.map((e) => (
+                  <li
+                    key={e.name}
+                    className='flex flex-wrap items-baseline gap-x-2'
+                    data-ext-env={e.name}
+                    data-ext-env-state={e.missing ? 'missing' : e.set ? 'set' : 'unset'}
+                  >
+                    <span className='font-mono text-[11px] text-slate-700 dark:text-slate-200'>
+                      {e.name}
+                    </span>
+                    <span
+                      className={
+                        e.missing
+                          ? 'text-[10px] font-semibold text-rose-700 dark:text-rose-300'
+                          : 'text-[10px] text-slate-400'
+                      }
+                    >
+                      {e.missing ? 'missing · required' : e.set ? 'set' : 'not set'}
+                      {e.secret ? ' · secret' : ''}
+                      {e.required && !e.missing ? ' · required' : ''}
+                    </span>
+                    {e.description && (
+                      <span className='basis-full text-[11px] text-slate-500 dark:text-muted-foreground'>
+                        {e.description}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </Section>
+            )}
             <section>
               <h3 className='text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
                 Runtime

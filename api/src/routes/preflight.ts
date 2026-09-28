@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db, migrationSource } from '../db/index.js'
-import { extensionRegistry } from '../extensions/loader.js'
+import { extensionRegistry, missingExtensionEnv } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -145,6 +145,9 @@ function checkExtensions(): Check {
     .map((e) => ({ id: e.id, error: e.error }))
 
   const absent = required.filter((id) => !loaded.includes(id))
+  // A loaded extension without the variables it declares required does none
+  // of the work those variables gate — as invisible as a missing mount.
+  const missingEnv = missingExtensionEnv()
 
   if (absent.length) {
     return {
@@ -154,6 +157,17 @@ function checkExtensions(): Check {
         `Required extension(s) not loaded: ${absent.join(', ')}. ` +
         'This instance is running without them — check the volume mount.',
       detail: { required, loaded, absent, errored }
+    }
+  }
+
+  if (missingEnv.length) {
+    return {
+      id: 'extensions',
+      status: 'fail',
+      summary: `Extension environment incomplete: ${missingEnv
+        .map((m) => `${m.extension} needs ${m.name}`)
+        .join(', ')}.`,
+      detail: { required, loaded, missing_env: missingEnv, errored }
     }
   }
 

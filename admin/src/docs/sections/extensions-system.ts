@@ -51,6 +51,23 @@ Authorization: Bearer <admin-token>
     {
       type: 'note',
       text: 'Extensions are auto-discovered from `api/extensions/*/index.{ts,js}`. Each must have a unique id. Duplicate IDs are logged and skipped.'
+    },
+    { type: 'h3', id: 'ext-overview-env', text: 'Environment manifest' },
+    {
+      type: 'p',
+      text: 'An extension declares the variables it reads on its export. A required one that is not set fails `GET /api/preflight` and the readiness scorecard by name, the loader logs it at boot, and the Extensions registry sheet lists every declared variable as set or not set — never its value. Declare a credential with `secret: true`; leave `required` off for a variable whose absence only switches a behaviour off.'
+    },
+    {
+      type: 'pre',
+      code: `export default {
+  id: 'my-extension',
+  env: [
+    { name: 'PARTNER_BASE_URL', required: true, description: 'The partner API this extension pushes to' },
+    { name: 'PARTNER_CLIENT_SECRET', required: true, secret: true },
+    { name: 'PARTNER_DRY_RUN', description: 'Set to 1 to log pushes instead of sending them' }
+  ],
+  async register(ctx) { … }
+}`
     }
   ]
 }

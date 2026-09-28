@@ -6466,7 +6466,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6490,6 +6490,17 @@ Authorization: Bearer &lt;admin-token&gt;
 
 // Returns list of newly loaded extensions and any errors</code></pre>
           <div class="doc-note">Extensions are auto-discovered from <code class="doc-code">api/extensions/*/index.{ts,js}</code>. Each must have a unique id. Duplicate IDs are logged and skipped.</div>
+          <h3 class="doc-h3" id="ext-overview-env">Environment manifest</h3>
+          <p class="doc-p">An extension declares the variables it reads on its export. A required one that is not set fails <code class="doc-code">GET /api/preflight</code> and the readiness scorecard by name, the loader logs it at boot, and the Extensions registry sheet lists every declared variable as set or not set — never its value. Declare a credential with <code class="doc-code">secret: true</code>; leave <code class="doc-code">required</code> off for a variable whose absence only switches a behaviour off.</p>
+          <pre class="doc-pre"><code>export default {
+  id: 'my-extension',
+  env: [
+    { name: 'PARTNER_BASE_URL', required: true, description: 'The partner API this extension pushes to' },
+    { name: 'PARTNER_CLIENT_SECRET', required: true, secret: true },
+    { name: 'PARTNER_DRY_RUN', description: 'Set to 1 to log pushes instead of sending them' }
+  ],
+  async register(ctx) { … }
+}</code></pre>
           <!-- /SYNC:ext-overview -->
         </div>
 

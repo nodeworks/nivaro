@@ -416,6 +416,60 @@ export interface Extension {
   capabilities?: string[]
   /** Health probe (#262): quick self-check surfaced on the Extensions page. */
   healthCheck?(): Promise<{ ok: boolean; note?: string }>
+  /** Environment manifest (#805): the variables this extension reads. A
+   *  missing REQUIRED one fails /api/preflight and the readiness scorecard by
+   *  name; the registry sheet lists them. Values are never reported. */
+  env?: ExtensionEnvDecl[]
+}
+
+export interface ExtensionEnvDecl {
+  name: string
+  required?: boolean
+  description?: string
+  /** A credential: the registry says only whether it is set. */
+  secret?: boolean
+}
+
+/** The declared environment of every loaded extension, by extension id. */
+export const extensionEnvDecls = new Map<string, ExtensionEnvDecl[]>()
+
+const ENV_NAME = /^[A-Z][A-Z0-9_]{0,120}$/
+
+function normalizeEnvDecls(raw: unknown): ExtensionEnvDecl[] {
+  if (!Array.isArray(raw)) return []
+  const out: ExtensionEnvDecl[] = []
+  for (const d of raw.slice(0, 60)) {
+    const name = typeof d?.name === 'string' ? d.name.trim() : ''
+    if (!ENV_NAME.test(name)) continue
+    out.push({
+      name,
+      required: d.required === true,
+      description: typeof d.description === 'string' ? d.description.slice(0, 300) : undefined,
+      secret: d.secret === true
+    })
+  }
+  return out
+}
+
+/** What the environment holds for each declared variable, never the value. */
+export function describeExtensionEnv(
+  extId: string
+): Array<ExtensionEnvDecl & { set: boolean; missing: boolean }> {
+  return (extensionEnvDecls.get(extId) ?? []).map((d) => {
+    const v = process.env[d.name]
+    const set = v !== undefined && v !== ''
+    return { ...d, set, missing: !set && d.required === true }
+  })
+}
+
+/** Every required variable no loaded extension has, `<ext>: NAME`. */
+export function missingExtensionEnv(): Array<{ extension: string; name: string }> {
+  const out: Array<{ extension: string; name: string }> = []
+  for (const [ext] of extensionEnvDecls) {
+    for (const d of describeExtensionEnv(ext))
+      if (d.missing) out.push({ extension: ext, name: d.name })
+  }
+  return out
 }
 
 export interface PluginManifest {
@@ -1103,6 +1157,14 @@ async function loadExtension(
 
     if (Array.isArray(ext.settings) && ext.settings.length > 0)
       extensionSettingsDecls.set(extId, ext.settings)
+    const envDecls = normalizeEnvDecls(ext.env)
+    if (envDecls.length > 0) extensionEnvDecls.set(extId, envDecls)
+    else extensionEnvDecls.delete(extId)
+    for (const d of envDecls) {
+      if (d.required && !(process.env[d.name] ?? '')) {
+        console.warn(`[extensions] ${extId} requires ${d.name}, which is not set`)
+      }
+    }
     if (typeof ext.healthCheck === 'function')
       extensionHealthChecks.set(extId, ext.healthCheck.bind(ext))
 
@@ -1672,6 +1734,26 @@ export function registerExtensionSettingsReadiness(): void {
   if (settingsReadinessRegistered) return
   settingsReadinessRegistered = true
   registerReadinessCheck({
+    id: 'extension-environment',
+    label: 'Extensions have the environment they declare',
+    description:
+      'Every variable an extension declares as required is set on this instance (values are never read here).',
+    group: 'Configuration',
+    run: async () => {
+      const declared = [...extensionEnvDecls.values()].reduce((n, l) => n + l.length, 0)
+      if (declared === 0)
+        return { status: 'skip', detail: 'No extension declares its environment.' }
+      const missing = missingExtensionEnv()
+      return missing.length === 0
+        ? { status: 'pass', detail: `${declared} declared variable(s); every required one is set.` }
+        : {
+            status: 'fail',
+            detail: `${missing.length} required variable(s) missing.`,
+            blockers: missing.map((m) => `${m.extension} needs ${m.name}`)
+          }
+    }
+  })
+  registerReadinessCheck({
     id: 'extension-settings-expectations',
     label: 'Extension settings match their production expectations',
     description:
@@ -1742,6 +1824,7 @@ export async function describeExtensionRegistry(
       has_on_change: !!d.has_on_change,
       production_expect: d.production_expect ?? null
     })),
+    env: describeExtensionEnv(extId),
     observed_capabilities: getObservedCapabilities(extId),
     health_check: extensionHealthChecks.has(extId),
     staged: await stagedBuildStatus(extId)
