@@ -26,6 +26,7 @@ import {
   resolveAutoIdPattern
 } from './auto-ids.js'
 import { getCollection, getFields, getRelations } from './collections.js'
+import { describeDbRefusal } from '../lib/db-refusal.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
@@ -3942,15 +3943,148 @@ async function findUpsertTarget(
   }
 }
 
+// ── Rehearsed creates (`dry_run`) ────────────────────────────────────────────
+
+export interface DryRunNestedRow {
+  index: number
+  ok: boolean
+  data?: Record<string, unknown> | null
+  status?: number
+  error?: string
+  code?: string
+}
+
+/** What a create WOULD do. Nothing is stored and no number is taken. */
+export interface DryRunReport {
+  dry_run: true
+  ok: boolean
+  /** The status the real request would answer. */
+  status: number
+  would: 'create' | 'update' | null
+  /** The record as it would be stored (`id` is not reserved, so it is null). */
+  data: Record<string, unknown> | null
+  /** The record a natural key matched, and the keys that matched it. */
+  matched_id?: string | number
+  keys?: string[]
+  /** would = update: the stored fields the payload would change. */
+  changes?: Array<{ field: string; from: unknown; to: unknown }>
+  /** Fields the server set that the caller did not send. */
+  filled: string[]
+  /** Keys of the payload that are stored nowhere. */
+  ignored: string[]
+  /** Many-to-many links the payload would add, per alias. */
+  links: Record<string, Array<string | number>>
+  /** Child rows the payload would create, per alias. */
+  nested: Record<string, DryRunNestedRow[]>
+  notes: string[]
+  error?: string
+  code?: string
+  violations?: unknown
+  fields?: unknown
+}
+
+const dryReports = new WeakSet<object>()
+
+function sameStored(a: unknown, b: unknown): boolean {
+  const empty = (v: unknown) => v === null || v === undefined || v === ''
+  if (empty(a) && empty(b)) return true
+  if (empty(a) || empty(b)) return false
+  if (a instanceof Date || b instanceof Date) {
+    const ta = a instanceof Date ? a.getTime() : new Date(String(a)).getTime()
+    const tb = b instanceof Date ? b.getTime() : new Date(String(b)).getTime()
+    return ta === tb
+  }
+  if (typeof a === 'boolean' || typeof b === 'boolean') {
+    const t = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
+    return t(a) === t(b)
+  }
+  const na = Number(a)
+  const nb = Number(b)
+  if (String(a).trim() !== '' && String(b).trim() !== '' && !Number.isNaN(na) && !Number.isNaN(nb))
+    return na === nb
+  return String(a) === String(b)
+}
+
+/** What an error would have answered, without the statement. */
+export function describeWriteRefusal(err: unknown): {
+  status: number
+  error: string
+  code?: string
+  violations?: unknown
+  fields?: unknown
+} {
+  const refusal = describeDbRefusal(err)
+  if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
+  const e = err as {
+    statusCode?: number
+    message?: string
+    code?: unknown
+    violations?: unknown
+    fields?: unknown
+  }
+  const status = typeof e?.statusCode === 'number' ? e.statusCode : 500
+  const code = typeof e?.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(e.code) ? e.code : undefined
+  return {
+    status,
+    error: status >= 500 ? nestedReason(err as Error) : String(e?.message ?? 'failed'),
+    ...(code && status < 500 ? { code } : {}),
+    ...(e?.violations !== undefined ? { violations: e.violations } : {}),
+    ...(e?.fields !== undefined ? { fields: e.fields } : {})
+  }
+}
+
+/**
+ * Rehearse a create: contracts, the natural-key match, hooks (told it is a
+ * rehearsal), rules, row rules, generated ids, computed fields and validation
+ * all run; the insert is tried inside a transaction that is rolled back, so
+ * the database's own refusals (a missing linked record, a duplicate, a value
+ * too long) are found too. Nothing is stored, no sequence number is taken, no
+ * after-hook, notification, webhook or rollup runs.
+ *
+ * A caller who may not create in the collection, and a collection that does
+ * not exist, are refused as they would be for a real create.
+ */
+export async function rehearseCreate(
+  user: User,
+  collection: string,
+  data: Record<string, unknown>,
+  req?: FastifyRequest,
+  workspaceId?: string,
+  opts?: { insert?: boolean }
+): Promise<DryRunReport> {
+  try {
+    const out = await createOne(user, collection, structuredClone(data ?? {}), req, workspaceId, {
+      dryRun: { insert: opts?.insert !== false }
+    })
+    if (out && typeof out === 'object' && dryReports.has(out)) return out as DryRunReport
+    throw new Error('The rehearsal produced no report')
+  } catch (err) {
+    if (err instanceof CollectionNotFoundError || err instanceof ForbiddenError) throw err
+    return {
+      dry_run: true,
+      ok: false,
+      would: null,
+      data: null,
+      filled: [],
+      ignored: [],
+      links: {},
+      nested: {},
+      notes: [],
+      ...describeWriteRefusal(err)
+    }
+  }
+}
+
 export async function createOne(
   user: User,
   collection: string,
   data: Record<string, unknown>,
   req?: FastifyRequest,
   workspaceId?: string,
-  opts?: { skipRollupRecalc?: boolean }
+  opts?: { skipRollupRecalc?: boolean; dryRun?: { insert: boolean } }
 ) {
   assertNotRouteOnly(collection)
+  const dry = opts?.dryRun ?? null
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
   // Contract check on the RAW caller payload, before rules/computed passes
@@ -3987,6 +4121,37 @@ export async function createOne(
     col as { upsert_keys?: string | null },
     data
   )
+  if (upsertTarget != null && dry) {
+    if (!(await can(user, 'update', collection))) throw new ForbiddenError()
+    const cols = await getActualColumns(collection)
+    const stored = (await db(collection).where({ id: upsertTarget }).first()) as
+      | Record<string, unknown>
+      | undefined
+    const current = stored ? await decryptItemFields(collection, { ...stored }) : {}
+    const sent = filterToActualColumns(data, cols)
+    const changes = Object.entries(sent)
+      .filter(([k, v]) => k !== 'id' && !sameStored(current[k], v))
+      .map(([field, to]) => ({ field, from: current[field] ?? null, to }))
+    const report: DryRunReport = {
+      dry_run: true,
+      ok: true,
+      status: 201,
+      would: 'update',
+      data: { ...current, ...Object.fromEntries(changes.map((c) => [c.field, c.to])) },
+      matched_id: upsertTarget,
+      keys: upsertKeysOf(col as { upsert_keys?: string | null }),
+      changes,
+      filled: [],
+      ignored: Object.keys(data).filter((k) => !cols.has(k) && k !== '_change_reason'),
+      links: Object.fromEntries(aliasWrites.map((w) => [w.field, w.ids])),
+      nested: {},
+      notes: [
+        'The natural key matched an existing record, so the create would update it. The update was not rehearsed: rules and validation of the update did not run.'
+      ]
+    }
+    dryReports.add(report)
+    return report
+  }
   if (upsertTarget != null) {
     // A create-shaped write cannot carry a human change reason (the caller
     // did not know it was editing), so the change-reason requirement takes a
@@ -4031,7 +4196,15 @@ export async function createOne(
     throw new QuotaExceededError('items', quota.current, quota.limit as number)
   }
 
-  const ctx = { collection, action: 'create' as const, payload: data, user, database: db, req }
+  const ctx = {
+    collection,
+    action: 'create' as const,
+    payload: data,
+    user,
+    database: db,
+    req,
+    ...(dry ? { dryRun: true } : {})
+  }
   await hooks.trigger('before', ctx)
   // A before-hook may ADD or change alias M2M links (an extension deriving a
   // record's regions from its location) — re-read them off the hooked
@@ -4078,7 +4251,7 @@ export async function createOne(
   await applyAuditSpecials(collection, ctx.payload, user, 'create', callerFields)
 
   // Auto-ID generation — fill any auto_id fields not explicitly provided
-  await applyAutoIdsExt(db, collection, ctx.payload)
+  await applyAutoIdsExt(db, collection, ctx.payload, dry ? { peek: true } : undefined)
 
   // Write-time computed fields — evaluated after auto-IDs so formula can reference them
   // For create, the payload itself is the full context
@@ -4102,6 +4275,88 @@ export async function createOne(
   const securedPayload = await encryptItemFields(collection, ctx.payload)
 
   const actualCols = await getActualColumns(collection)
+  if (dry) {
+    const writable = filterToActualColumns(securedPayload, actualCols)
+    const notes: string[] = []
+    let storedRow: Record<string, unknown> | null = null
+    if (dry.insert && !/^nivaro_|^directus_/i.test(collection)) {
+      // The database's own word on the row: tried, read back, rolled back.
+      const trx = await db.transaction()
+      try {
+        const back = (await trx(collection).insert(writable).returning('*')) as unknown[]
+        storedRow = (back[0] ?? null) as Record<string, unknown> | null
+      } finally {
+        await trx.rollback().catch(() => {})
+      }
+    } else {
+      notes.push('The insert itself was not tried, so refusals of the database are not covered.')
+    }
+    const plain = ctx.payload as Record<string, unknown>
+    const would: Record<string, unknown> = { ...(storedRow ?? {}) }
+    for (const k of Object.keys(writable)) would[k] = plain[k]
+    if (!callerFields.has('id')) would.id = null
+    const nested: Record<string, DryRunNestedRow[]> = {}
+    for (const w of nestedWrites) {
+      const list: DryRunNestedRow[] = []
+      for (let i = 0; i < w.rows.length; i++) {
+        const { [w.fk]: _parent, ...row } = w.rows[i]
+        try {
+          const r = await rehearseCreate(user, w.collection, row, req, workspaceId, {
+            insert: false
+          })
+          list.push({
+            index: i,
+            ok: r.ok,
+            data: r.data,
+            ...(r.ok ? {} : { status: r.status, error: r.error, code: r.code })
+          })
+        } catch (err) {
+          const d = describeWriteRefusal(err)
+          list.push({
+            index: i,
+            ok: false,
+            status: err instanceof ForbiddenError ? 403 : d.status,
+            error: err instanceof ForbiddenError ? 'Forbidden' : d.error,
+            code: d.code
+          })
+        }
+      }
+      nested[w.field] = list
+    }
+    if (nestedWrites.length > 0)
+      notes.push(
+        'Child rows were checked without their parent, which does not exist: rules that read the parent record did not run for them.'
+      )
+    const childFailed = Object.values(nested).some((l) => l.some((r) => !r.ok))
+    const filled = Object.keys(writable).filter(
+      (k) => !callerFields.has(k) && plain[k] !== null && plain[k] !== undefined
+    )
+    const known = new Set([
+      ...actualCols,
+      ...aliasWrites.map((w) => w.field),
+      ...nestedWrites.map((w) => w.field)
+    ])
+    const report: DryRunReport = {
+      dry_run: true,
+      ok: !childFailed,
+      status: childFailed ? 422 : 201,
+      would: 'create',
+      data: would,
+      filled,
+      ignored: [...callerFields].filter((k) => !known.has(k)),
+      links: Object.fromEntries(aliasWrites.map((w) => [w.field, w.ids])),
+      nested,
+      notes,
+      ...(childFailed
+        ? {
+            error: 'A child row would be refused, so nothing would be created',
+            code: 'NESTED_ROW_REFUSED'
+          }
+        : {})
+    }
+    dryReports.add(report)
+    return report
+  }
   const rows = (await db(collection)
     .insert(filterToActualColumns(securedPayload, actualCols))
     .returning('id')) as unknown[]

@@ -308,6 +308,29 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       }
     }
 
+    // A sandbox key stores nothing: its mutations may only be rehearsals.
+    if (req.user?.api_key_sandbox) {
+      const stored: string[] = []
+      for (const def of document.definitions) {
+        if (def.kind !== 'OperationDefinition' || def.operation !== 'mutation') continue
+        for (const sel of def.selectionSet.selections) {
+          if (sel.kind !== 'Field') stored.push('a fragment')
+          else if (!sel.name.value.endsWith('_dry_run')) stored.push(sel.name.value)
+        }
+      }
+      if (stored.length > 0) {
+        return reply.send({
+          data: null,
+          errors: [
+            {
+              message: `A sandbox key stores nothing, so it cannot run ${stored.join(', ')}. Use the _dry_run mutation of the collection.`,
+              extensions: { code: 'SANDBOX_KEY_DRY_RUN_ONLY', status: 403, fields: stored }
+            }
+          ]
+        })
+      }
+    }
+
     const upserts: Array<{ collection: string; matched_id: string | number; keys: string[] }> = []
     const result = await execute({
       schema,

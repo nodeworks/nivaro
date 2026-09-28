@@ -399,8 +399,12 @@ function registerEventFlowHook(app: FastifyInstance, flow: Flow) {
             previousData: ctx.previousData ?? {}
           },
           log: app.log,
-          userId: ctx.user?.id
+          userId: ctx.user?.id,
+          ...(ctx.dryRun ? { dryRun: true } : {})
         }
+        // A rehearsed write runs only the flows that shape its payload, with
+        // their sending operations in dry-run mode.
+        if (ctx.dryRun && !returnPayload) return
         if (returnPayload) {
           try {
             const result = await executeFlow(execCtx)

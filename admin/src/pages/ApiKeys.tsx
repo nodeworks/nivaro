@@ -36,6 +36,7 @@ interface ApiKey {
   ip_allowlist: string[]
   last_used_at: string | null
   is_active: boolean
+  sandbox?: boolean
   created_at: string
 }
 
@@ -203,6 +204,7 @@ interface FormState {
   ip_allowlist: string
   rate_limit_per_minute: string
   scope_restrictions: string
+  sandbox: boolean
 }
 
 const FORM_DEFAULTS: FormState = {
@@ -211,7 +213,8 @@ const FORM_DEFAULTS: FormState = {
   scopes: [{ collection: ALL_COLLECTIONS, actions: ['*'] }],
   ip_allowlist: '',
   rate_limit_per_minute: '',
-  scope_restrictions: ''
+  scope_restrictions: '',
+  sandbox: false
 }
 
 function MetaCell({ label, value }: { label: string; value: React.ReactNode }) {
@@ -303,7 +306,8 @@ export function ApiKeysPage() {
       expires_at: form.expires_at || null,
       ip_allowlist: allowlist,
       rate_limit_per_minute: form.rate_limit_per_minute ? Number(form.rate_limit_per_minute) : null,
-      scope_restrictions: scopeRestrictions
+      scope_restrictions: scopeRestrictions,
+      sandbox: form.sandbox
     })
   }
 
@@ -470,6 +474,24 @@ export function ApiKeysPage() {
                 </div>
               </div>
 
+              <div className='flex items-start gap-2.5 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
+                <Checkbox
+                  id='key-sandbox'
+                  data-key-sandbox
+                  checked={form.sandbox}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, sandbox: v === true }))}
+                  className='mt-0.5'
+                />
+                <div className='space-y-0.5'>
+                  <Label htmlFor='key-sandbox'>Sandbox key</Label>
+                  <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+                    Reads are real. Writes are rehearsed: rules and validation run, the answer is
+                    shaped like the real one, and nothing is stored. For a partner testing against
+                    this instance.
+                  </p>
+                </div>
+              </div>
+
               <div className='space-y-1.5'>
                 <Label>Scopes</Label>
                 <ScopesEditor
@@ -528,8 +550,17 @@ export function ApiKeysPage() {
           ) : selected ? (
             <div className='mx-auto max-w-2xl space-y-5 p-6'>
               <div className='flex items-center justify-between'>
-                <h2 className='text-[14px] font-semibold text-slate-900 dark:text-slate-100'>
+                <h2 className='flex items-center gap-2 text-[14px] font-semibold text-slate-900 dark:text-slate-100'>
                   {selected.name}
+                  {selected.sandbox && (
+                    <Badge
+                      variant='outline'
+                      data-key-sandbox-badge
+                      className='h-5 border-amber-300 px-2 text-[11px] text-amber-800 dark:border-amber-500/50 dark:text-amber-300'
+                    >
+                      Sandbox · stores nothing
+                    </Badge>
+                  )}
                 </h2>
                 {selected.is_active ? (
                   <Badge variant='success' className='h-5 px-2 text-[11px]'>
@@ -696,7 +727,6 @@ export function ApiKeysPage() {
   )
 }
 
-
 // ─── Per-key usage analytics (#605) ──────────────────────────────────────────
 
 interface KeyUsage {
@@ -719,8 +749,7 @@ function KeyUsageSection({ keyId }: { keyId: string | number }) {
   const [open, setOpen] = useState(false)
   const { data, isLoading } = useQuery<KeyUsage>({
     queryKey: ['api-key-usage', keyId],
-    queryFn: () =>
-      api.get<{ data: KeyUsage }>(`/api-keys/${keyId}/usage`).then((r) => r.data.data),
+    queryFn: () => api.get<{ data: KeyUsage }>(`/api-keys/${keyId}/usage`).then((r) => r.data.data),
     enabled: open
   })
 
@@ -781,7 +810,10 @@ function KeyUsageSection({ keyId }: { keyId: string | number }) {
                           style={{ height: `${Math.max(d.count > 0 ? 3 : 0, total)}%` }}
                         >
                           {d.errors > 0 && (
-                            <div className='w-full bg-red-500' style={{ height: `${Math.max(8, errPct)}%` }} />
+                            <div
+                              className='w-full bg-red-500'
+                              style={{ height: `${Math.max(8, errPct)}%` }}
+                            />
                           )}
                         </div>
                       </div>
@@ -849,16 +881,21 @@ function KeyPreviewSection({
   collections: string[]
 }) {
   const [picked, setPicked] = useState<string>('')
-  const [rows, setRows] = useState<Array<{ collection: string; visible: number | null; error: string | null }>>([])
+  const [rows, setRows] = useState<
+    Array<{ collection: string; visible: number | null; error: string | null }>
+  >([])
   const preview = useMutation({
     mutationFn: (cols: string[]) =>
       api
-        .post<{ data: Array<{ collection: string; visible: number | null; error: string | null }> }>(
-          `/api-keys/${keyId}/preview`,
-          { collections: cols }
-        )
+        .post<{
+          data: Array<{ collection: string; visible: number | null; error: string | null }>
+        }>(`/api-keys/${keyId}/preview`, { collections: cols })
         .then((r) => r.data.data),
-    onSuccess: (d) => setRows((prev) => [...d, ...prev.filter((p) => !d.some((x) => x.collection === p.collection))]),
+    onSuccess: (d) =>
+      setRows((prev) => [
+        ...d,
+        ...prev.filter((p) => !d.some((x) => x.collection === p.collection))
+      ]),
     onError: () => toast.error('Preview failed')
   })
   return (

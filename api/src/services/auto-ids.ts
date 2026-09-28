@@ -463,10 +463,23 @@ function seqValueFor(
  * an `auto_id` config. Mutates `payload` in place (only sets fields not already
  * provided). Replaces items.ts's legacy `applyAutoIds`.
  */
+/** The value the next create would take, without taking it. */
+export async function peekSequenceValue(
+  db: Knex,
+  collection: string,
+  field: string
+): Promise<number> {
+  const row = (await db('nivaro_sequences')
+    .where({ id: `${collection}.${field}` })
+    .first('next_val')) as { next_val?: number | string } | undefined
+  return row?.next_val != null ? Number(row.next_val) + 1 : 1
+}
+
 export async function applyAutoIdsExt(
   db: Knex,
   collection: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  opts?: { peek?: boolean }
 ): Promise<void> {
   const fields = await autoIdFieldsFor(db, collection)
   if (!fields.length) return
@@ -489,7 +502,13 @@ export async function applyAutoIdsExt(
       | undefined
     // Seq-less pattern: pure template render, no sequence row consumed.
     const seqValue = seqToken
-      ? seqValueFor(seqToken, await nextSequenceValue(db, collection, field), config)
+      ? seqValueFor(
+          seqToken,
+          opts?.peek
+            ? await peekSequenceValue(db, collection, field)
+            : await nextSequenceValue(db, collection, field),
+          config
+        )
       : ''
 
     payload[field] = await resolveAutoIdTokens(parsed, {

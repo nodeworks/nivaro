@@ -16,6 +16,9 @@ export interface HookContext {
   /** Caller-supplied justification for this write (change-reason config) —
    *  stored on the activity row, never written to a column. */
   changeReason?: string
+  /** True while a write is being rehearsed (`dry_run`): a hook may read and
+   *  shape the payload, and must not write, send or notify. */
+  dryRun?: boolean
   user?: User
   database: Database
   req?: FastifyRequest

@@ -39,6 +39,7 @@ import {
   applyFilterToQuery,
   CollectionNotFoundError,
   createOne,
+  rehearseCreate,
   deleteOne,
   ForbiddenError,
   readItems,
@@ -1196,6 +1197,24 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     // schema keeps working — it costs one extra field in the schema and saves a
     // coordinated release with every third party that posts to us.
     mutationFields[`create_${name}_item`] = mutationFields[`create_${name}`]
+
+    // A rehearsal of the create: everything a create runs, nothing stored.
+    mutationFields[`create_${name}_dry_run`] = {
+      type: GraphQLJSON,
+      description: `What creating a ${col.singular ?? name} record with this data would do: the record as it would be stored, what the server would fill, and the refusal if there is one. Nothing is stored and no number is taken.`,
+      args: { data: { type: new GraphQLNonNull(GraphQLJSON) } },
+      resolve: async (_root, { data }: { data: Record<string, unknown> }, ctx: GQLContext) => {
+        if (!ctx.user)
+          throw Object.assign(new Error('Unauthorized'), {
+            extensions: { code: 'UNAUTHENTICATED' }
+          })
+        try {
+          return await rehearseCreate(ctx.user, name, data, ctx.req)
+        } catch (e) {
+          wrapError(e)
+        }
+      }
+    }
 
     mutationFields[`update_${name}_item`] = {
       type: itemType,

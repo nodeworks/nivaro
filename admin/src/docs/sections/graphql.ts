@@ -543,6 +543,18 @@ export const graphqlMutations: DocSection = {
       type: 'note',
       text: 'Create/update payloads accept Directus-era relation shapes: an M2O may be `{ id: … }`, and an M2M alias may be a single object, an array of `{ junction_field: { id } }` entries, or `{ create: [...] }` — alias writes are additive (junction rows are created, never detached).'
     },
+    { type: 'h3', text: 'Rehearse a create' },
+    {
+      type: 'p',
+      text: '`create_<collection>_dry_run(data)` answers the same report as REST `?dry_run=1`, as JSON: the record as it would be stored, what the server would fill, the keys stored nowhere, and the refusal if there is one. Nothing is stored and no number is taken.'
+    },
+    {
+      type: 'pre',
+      code: `mutation {
+  create_orders_dry_run(data: { customer: 12, note: "test" })
+}
+# → { "data": { "create_orders_dry_run": { "dry_run": true, "ok": true, "would": "create", "status": 201, "data": { ... } } } }`
+    },
     { type: 'h3', text: 'Changing several records in one call' },
     {
       type: 'pre',

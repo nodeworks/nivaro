@@ -2286,6 +2286,37 @@ Authorization: Bearer &lt;token&gt;
     "updated_at": "2026-06-15T12:00:00Z"
   }
 }</code></pre>
+          <h3 class="doc-h3">Rehearse a create (<code class="doc-code">dry_run</code>)</h3>
+          <p class="doc-p"><code class="doc-code">POST /api/items/:collection?dry_run=1</code> reports what the create would do and stores nothing. Contracts, the natural-key match, hooks, rules, row rules, generated ids, computed fields and validation all run. The insert is tried inside a transaction that is rolled back, so a missing linked record, a duplicate or a value that is too long is found as well. No sequence number is taken, and no notification, webhook or rollup runs.</p>
+          <pre class="doc-pre"><code>POST /api/items/orders?dry_run=1
+{ "customer": 12, "note": "test", "lines": [{ "product": 4, "quantity": 2, "price": 5 }], "colour": "red" }
+
+// Response (200)
+{
+  "dry_run": true,
+  "ok": true,
+  "status": 201,             // what the real request would answer
+  "would": "create",         // or "update" when the natural key matches a record
+  "data": { "id": null, "number": "SO-1042", "customer": 12, "note": "test", "created_by": "..." },
+  "filled": ["number", "created_by"],   // set by the server
+  "ignored": ["colour"],                // stored nowhere
+  "links": {},                          // many-to-many links it would add
+  "nested": { "lines": [{ "index": 0, "ok": true, "data": { "quantity": 2, "price": 5, "amount": 10, "id": null } }] },
+  "notes": ["Child rows were checked without their parent, ..."]
+}
+
+// A create that would be refused (still 200: the rehearsal ran)
+{ "dry_run": true, "ok": false, "status": 422, "code": "LINKED_RECORD_MISSING",
+  "error": "A linked record does not exist (fk_orders_customers)", "would": null, "data": null, ... }</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Case</th><th>Answer</th></tr></thead>
+            <tbody><tr><tr><td>The caller may not create in the collection</td><td>A real <code class="doc-code">403</code>, as for a create.</td></tr>
+              <tr><td>The collection does not exist</td><td>A real <code class="doc-code">404</code>.</td></tr>
+              <tr><td>The natural key matches a record</td><td><code class="doc-code">would: "update"</code>, <code class="doc-code">matched_id</code>, <code class="doc-code">keys</code>, and <code class="doc-code">changes</code> listing each stored field the payload would change. The update itself is not rehearsed.</td></tr>
+              <tr><td><code class="doc-code">id</code></td><td>null unless the caller sent one. The id is not reserved.</td></tr>
+              <tr><td>Generated ids</td><td>The value the next create would take. Two rehearsals show the same value.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Extension hooks receive <code class="doc-code">ctx.dryRun = true</code>. A hook may read and shape the payload. It must not write, send or notify while the flag is set.</div>
           <h3 class="doc-h3">Create with related rows</h3>
           <p class="doc-p">A create or update may carry the rows of a one-to-many relation under the relation's field name. The record and its rows are written in one request, so a caller never has to read the new id back before posting the children.</p>
           <pre class="doc-pre"><code>POST /api/items/orders
@@ -3766,6 +3797,12 @@ Authorization: Bearer &lt;admin-token&gt;
               <tr><td>delete_collectionName_items</td><td>ids: [ID!]! — batch, returns { ids }</td><td>User with delete permission</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Create/update payloads accept Directus-era relation shapes: an M2O may be <code class="doc-code">{ id: … }</code>, and an M2M alias may be a single object, an array of <code class="doc-code">{ junction_field: { id } }</code> entries, or <code class="doc-code">{ create: [...] }</code> — alias writes are additive (junction rows are created, never detached).</div>
+          <h3 class="doc-h3">Rehearse a create</h3>
+          <p class="doc-p"><code class="doc-code">create_&lt;collection&gt;_dry_run(data)</code> answers the same report as REST <code class="doc-code">?dry_run=1</code>, as JSON: the record as it would be stored, what the server would fill, the keys stored nowhere, and the refusal if there is one. Nothing is stored and no number is taken.</p>
+          <pre class="doc-pre"><code>mutation {
+  create_orders_dry_run(data: { customer: 12, note: "test" })
+}
+# → { "data": { "create_orders_dry_run": { "dry_run": true, "ok": true, "would": "create", "status": 201, "data": { ... } } } }</code></pre>
           <h3 class="doc-h3">Changing several records in one call</h3>
           <pre class="doc-pre"><code>mutation {
   # the same change to each
@@ -11424,7 +11461,19 @@ SAML_AUDIENCE=nivaro                                 # expected audience (option
               <tr><td>Scopes</td><td>A list of <code class="doc-code">{ collection, actions }</code>. Actions are read, create, update, delete, or <code class="doc-code">*</code>. A collection of <code class="doc-code">*</code> means every collection. Left out, the key may do whatever its owner may.</td></tr>
               <tr><td>Expiry</td><td>Optional timestamp; expired keys are rejected</td></tr>
               <tr><td>IP allowlist</td><td>Optional list of CIDRs/IPs the key may be used from</td></tr>
-              <tr><td>Rate limit</td><td><code class="doc-code">rate_limit_per_minute</code>. Calls past it answer <code class="doc-code">429</code> <code class="doc-code">API_KEY_RATE_LIMITED</code> with <code class="doc-code">Retry-After</code>.</td></tr></tr></tbody>
+              <tr><td>Rate limit</td><td><code class="doc-code">rate_limit_per_minute</code>. Calls past it answer <code class="doc-code">429</code> <code class="doc-code">API_KEY_RATE_LIMITED</code> with <code class="doc-code">Retry-After</code>.</td></tr>
+              <tr><td>Sandbox</td><td><code class="doc-code">sandbox: true</code>. Reads are real. Writes are rehearsed and nothing is stored. See below.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Sandbox keys</h3>
+          <p class="doc-p">A sandbox key is for a partner testing against a live instance. Reads answer real data within the key's scopes. A create through the items API runs everything a create runs (contracts, hooks, rules, generated ids, validation, the database's own constraints) and answers like the real one, with <code class="doc-code">sandbox: true</code>, and nothing is stored. A refusal answers the status and code the real request would.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Call</th><th>With a sandbox key</th></tr></thead>
+            <tbody><tr><tr><td>GET anywhere</td><td>Real.</td></tr>
+              <tr><td>POST /api/items/:collection</td><td>Rehearsed in full. <code class="doc-code">201</code> with the record as it would be stored.</td></tr>
+              <tr><td>PATCH, DELETE /api/items/:collection/:id</td><td>Permission is checked and the answer is shaped like the real one. Rules do not run.</td></tr>
+              <tr><td>Bulk and batch item calls</td><td><code class="doc-code">403</code>.</td></tr>
+              <tr><td>GraphQL mutations</td><td>Only <code class="doc-code">create_&lt;collection&gt;_dry_run</code>. Any other answers <code class="doc-code">SANDBOX_KEY_DRY_RUN_ONLY</code>.</td></tr>
+              <tr><td>Any other write</td><td><code class="doc-code">403</code> <code class="doc-code">SANDBOX_KEY_READ_ONLY</code>.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Usage</h3>
           <pre class="doc-pre"><code># Create (admin)

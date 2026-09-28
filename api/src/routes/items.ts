@@ -25,6 +25,7 @@ import {
   aggregateItems,
   readItems,
   readOne,
+  rehearseCreate,
   updateOne,
   upsertInfoOf
 } from '../services/items.js'
@@ -1241,9 +1242,41 @@ export async function itemsRoutes(app: FastifyInstance) {
     // Sandbox key (#166): the write is permission-checked and shaped like a
     // real response, but NOTHING persists — integration test traffic against
     // production stays side-effect free.
-    if (req.user?.api_key_sandbox) {
-      const sim = await simulateSandboxWrite(req, collection, 'create', null)
-      return reply.code(sim.code).send(sim.body)
+    const dryRun = q.dry_run === '1' || q.dry_run === 'true'
+    if (req.user?.api_key_sandbox || dryRun) {
+      // A rehearsal: everything a create runs, nothing stored. A sandbox key
+      // gets it on every create; any caller gets it with ?dry_run=1.
+      if (req.user?.api_key_sandbox && /^nivaro_/i.test(collection)) {
+        return reply.code(403).send({ error: 'Sandbox keys cannot write system collections' })
+      }
+      try {
+        const report = await rehearseCreate(
+          req.user!,
+          collection,
+          (req.body ?? {}) as Record<string, unknown>,
+          req,
+          req.workspaceId ?? undefined
+        )
+        if (dryRun) return reply.code(200).send(report)
+        // Sandbox: shaped like the real answer.
+        if (!report.ok) {
+          return reply.code(report.status).send({
+            error: report.error,
+            ...(report.code ? { code: report.code } : {}),
+            ...(report.violations !== undefined ? { violations: report.violations } : {}),
+            sandbox: true
+          })
+        }
+        return reply.code(201).send({
+          data: { ...report.data, id: report.matched_id ?? `sandbox-${Date.now().toString(36)}` },
+          sandbox: true,
+          ...(report.would === 'update'
+            ? { meta: { upserted: true, matched_id: report.matched_id, keys: report.keys } }
+            : {})
+        })
+      } catch (err) {
+        return handleError(err, reply)
+      }
     }
     try {
       const item = await createOne(

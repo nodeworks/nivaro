@@ -14,6 +14,8 @@ interface ApiKeyBody {
   rate_limit_per_minute?: number | null
   ip_allowlist?: string[] | null
   is_active?: boolean
+  /** Writes are rehearsed and nothing is stored. */
+  sandbox?: boolean
 }
 
 function toJsonStr(val: unknown): string | null {
@@ -40,7 +42,8 @@ function sanitize(row: Record<string, unknown>) {
       (rest as { scope_restrictions?: string | null }).scope_restrictions,
       []
     ),
-    ip_allowlist: parseJson<string[]>(rest.ip_allowlist, [])
+    ip_allowlist: parseJson<string[]>(rest.ip_allowlist, []),
+    sandbox: rest.sandbox === true || rest.sandbox === 1
   }
 }
 
@@ -120,6 +123,7 @@ export async function apiKeysRoutes(app: FastifyInstance) {
           ? toJsonStr(body.scope_restrictions)
           : null,
       is_active: true,
+      sandbox: body.sandbox === true,
       created_at: new Date()
     })
 
@@ -161,6 +165,7 @@ export async function apiKeysRoutes(app: FastifyInstance) {
           : null
     }
     if (body.is_active !== undefined) updates.is_active = body.is_active
+    if (body.sandbox !== undefined) updates.sandbox = body.sandbox === true
 
     if (Object.keys(updates).length > 0) {
       await db('nivaro_api_keys').where({ id }).update(updates)

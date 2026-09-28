@@ -430,6 +430,55 @@ Authorization: Bearer <token>
   }
 }`
     },
+    { type: 'h3', text: 'Rehearse a create (`dry_run`)' },
+    {
+      type: 'p',
+      text: '`POST /api/items/:collection?dry_run=1` reports what the create would do and stores nothing. Contracts, the natural-key match, hooks, rules, row rules, generated ids, computed fields and validation all run. The insert is tried inside a transaction that is rolled back, so a missing linked record, a duplicate or a value that is too long is found as well. No sequence number is taken, and no notification, webhook or rollup runs.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/items/orders?dry_run=1
+{ "customer": 12, "note": "test", "lines": [{ "product": 4, "quantity": 2, "price": 5 }], "colour": "red" }
+
+// Response (200)
+{
+  "dry_run": true,
+  "ok": true,
+  "status": 201,             // what the real request would answer
+  "would": "create",         // or "update" when the natural key matches a record
+  "data": { "id": null, "number": "SO-1042", "customer": 12, "note": "test", "created_by": "..." },
+  "filled": ["number", "created_by"],   // set by the server
+  "ignored": ["colour"],                // stored nowhere
+  "links": {},                          // many-to-many links it would add
+  "nested": { "lines": [{ "index": 0, "ok": true, "data": { "quantity": 2, "price": 5, "amount": 10, "id": null } }] },
+  "notes": ["Child rows were checked without their parent, ..."]
+}
+
+// A create that would be refused (still 200: the rehearsal ran)
+{ "dry_run": true, "ok": false, "status": 422, "code": "LINKED_RECORD_MISSING",
+  "error": "A linked record does not exist (fk_orders_customers)", "would": null, "data": null, ... }`
+    },
+    {
+      type: 'table',
+      head: ['Case', 'Answer'],
+      rows: [
+        ['The caller may not create in the collection', 'A real `403`, as for a create.'],
+        ['The collection does not exist', 'A real `404`.'],
+        [
+          'The natural key matches a record',
+          '`would: "update"`, `matched_id`, `keys`, and `changes` listing each stored field the payload would change. The update itself is not rehearsed.'
+        ],
+        ['`id`', 'null unless the caller sent one. The id is not reserved.'],
+        [
+          'Generated ids',
+          'The value the next create would take. Two rehearsals show the same value.'
+        ]
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Extension hooks receive `ctx.dryRun = true`. A hook may read and shape the payload. It must not write, send or notify while the flag is set.'
+    },
     { type: 'h3', text: 'Create with related rows' },
     {
       type: 'p',

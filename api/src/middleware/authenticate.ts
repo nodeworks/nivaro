@@ -233,7 +233,20 @@ async function authenticateApiKey(req: FastifyRequest, reply: FastifyReply, toke
   ).filter((r) => r && typeof r.dimension === 'string' && Array.isArray(r.values))
   if (restrictions.length > 0) user.api_key_scope_restrictions = restrictions
   // Sandbox keys (#166): writes simulate instead of persisting.
-  if (key.sandbox === true || key.sandbox === 1) user.api_key_sandbox = true
+  if (key.sandbox === true || key.sandbox === 1) {
+    user.api_key_sandbox = true
+    // The items API and GraphQL rehearse a sandbox key's writes. Every other
+    // route would store them, so a sandbox key may only read there.
+    const path = (req.url ?? '').split('?')[0]
+    const rehearsed = /^\/api\/items(\/|$)/.test(path) || /^(\/api)?\/graphql\/?$/.test(path)
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && !rehearsed) {
+      throw httpError(
+        403,
+        'A sandbox key stores nothing. It can read everywhere and rehearse writes through the items API and GraphQL.',
+        'SANDBOX_KEY_READ_ONLY'
+      )
+    }
+  }
   // Per-key GraphQL cost cap (#162).
   if (key.graphql_max_depth != null) user.api_key_graphql_max_depth = Number(key.graphql_max_depth)
   req.apiKeyScopes = parseJsonArray<ApiKeyScope>(key.scopes)

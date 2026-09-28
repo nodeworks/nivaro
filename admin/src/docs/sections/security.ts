@@ -168,7 +168,37 @@ export const securityApiKeys: DocSection = {
         [
           'Rate limit',
           '`rate_limit_per_minute`. Calls past it answer `429` `API_KEY_RATE_LIMITED` with `Retry-After`.'
+        ],
+        [
+          'Sandbox',
+          '`sandbox: true`. Reads are real. Writes are rehearsed and nothing is stored. See below.'
         ]
+      ]
+    },
+    { type: 'h3', text: 'Sandbox keys' },
+    {
+      type: 'p',
+      text: "A sandbox key is for a partner testing against a live instance. Reads answer real data within the key's scopes. A create through the items API runs everything a create runs (contracts, hooks, rules, generated ids, validation, the database's own constraints) and answers like the real one, with `sandbox: true`, and nothing is stored. A refusal answers the status and code the real request would."
+    },
+    {
+      type: 'table',
+      head: ['Call', 'With a sandbox key'],
+      rows: [
+        ['GET anywhere', 'Real.'],
+        [
+          'POST /api/items/:collection',
+          'Rehearsed in full. `201` with the record as it would be stored.'
+        ],
+        [
+          'PATCH, DELETE /api/items/:collection/:id',
+          'Permission is checked and the answer is shaped like the real one. Rules do not run.'
+        ],
+        ['Bulk and batch item calls', '`403`.'],
+        [
+          'GraphQL mutations',
+          'Only `create_<collection>_dry_run`. Any other answers `SANDBOX_KEY_DRY_RUN_ONLY`.'
+        ],
+        ['Any other write', '`403` `SANDBOX_KEY_READ_ONLY`.']
       ]
     },
     { type: 'h3', text: 'Usage' },

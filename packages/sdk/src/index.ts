@@ -632,6 +632,49 @@ export function createItem<T = Record<string, unknown>>(
   return cmd('POST', `/items/${collection}`, undefined, data)
 }
 
+/** What a create would do. Nothing is stored and no number is taken. */
+export interface DryRunReport<T = Record<string, unknown>> {
+  dry_run: true
+  ok: boolean
+  /** The status the real request would answer. */
+  status: number
+  would: 'create' | 'update' | null
+  data: Partial<T> | null
+  matched_id?: string | number
+  keys?: string[]
+  changes?: Array<{ field: string; from: unknown; to: unknown }>
+  filled: string[]
+  ignored: string[]
+  links: Record<string, Array<string | number>>
+  nested: Record<
+    string,
+    Array<{
+      index: number
+      ok: boolean
+      data?: Record<string, unknown> | null
+      status?: number
+      error?: string
+      code?: string
+    }>
+  >
+  notes: string[]
+  error?: string
+  code?: string
+  violations?: unknown
+}
+
+/**
+ * Rehearse a create: rules, generated ids, validation and the database's own
+ * constraints all run, and the report says what would be stored or why the
+ * create would be refused.
+ */
+export function rehearseCreateItem<T = Record<string, unknown>>(
+  collection: string,
+  data: Partial<T>
+): Command<DryRunReport<T>> {
+  return cmd('POST', `/items/${collection}`, { dry_run: 1 }, data)
+}
+
 export function updateItem<T = Record<string, unknown>>(
   collection: string,
   id: string | number,
