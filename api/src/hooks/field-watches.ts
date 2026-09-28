@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { emitTrigger } from '../flows/registry.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { hooks } from './registry.js'
@@ -53,6 +54,7 @@ export function registerFieldWatchHooks() {
 
       // #86 — a watched field change is a flow event too, subscribers or not.
       try {
+        void deferEffect('field-watch-trigger', () =>
         emitTrigger(
           'field-watch',
           {
@@ -67,6 +69,7 @@ export function registerFieldWatchHooks() {
           },
           console as unknown as Parameters<typeof emitTrigger>[2],
           ctx.user?.id ?? undefined
+        )
         )
       } catch {
         /* trigger emission is best-effort */

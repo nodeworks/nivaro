@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { deferEffect } from '../services/unit-of-work.js'
 import { db } from '../db/index.js'
 import type { HookAction } from '../hooks/registry.js'
 import { hooks } from '../hooks/registry.js'
@@ -416,8 +417,10 @@ function registerEventFlowHook(app: FastifyInstance, flow: Flow) {
             app.log.error({ err, flowId: flow.id }, 'Before-event flow failed')
           }
         } else {
-          executeFlow(execCtx).catch((err) =>
-            app.log.error({ err, flowId: flow.id }, 'Event flow execution failed')
+          void deferEffect(`event-flow:${flow.id}`, () =>
+            executeFlow(execCtx).catch((err) =>
+              app.log.error({ err, flowId: flow.id }, 'Event flow execution failed')
+            )
           )
         }
       }

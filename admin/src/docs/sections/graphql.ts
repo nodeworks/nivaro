@@ -543,7 +543,7 @@ export const graphqlMutations: DocSection = {
         ],
         [
           'create_collectionName_items',
-          'data: [JSON] — batch, one row per entry',
+          'data: [JSON] — batch, one row per entry; all or nothing, and its webhooks / flows / notifications wait for the whole batch and are dropped when it is undone',
           'User with create permission'
         ],
         [

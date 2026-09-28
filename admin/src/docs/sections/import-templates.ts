@@ -178,6 +178,10 @@ export const importTemplatesGuide: DocSection = {
       type: 'p',
       text: "Direct execute (relation mode): after each line/child row is created, its `nested.rows` members are created as real grandchild rows via the items service (`createOne` — full RBAC/validation/RLS/hooks), FK'd to the line's new id — the `nested` key is excluded from the child row's own payload entirely. This is inside the same all-or-nothing flow as everything else; on a later failure, compensation deletes in reverse-create order: grandchildren first (grouped by collection), then M2M junction rows, then child lines, then the parent, then any records created for `on_miss: 'create'` lookup misses last (they may be FK'd from rows created above). Relation-mode member rows join the shared `IMPORT_ROW_CAP` (5,000) total alongside line items, M2M linked-record ids, and `on_miss: 'create'` records-to-create; JSON-mode nested rows never count, since they ride along as a column value rather than a separate row."
     },
+    {
+      type: 'note',
+      text: 'Outbound effects of an execute — webhooks, event flows, watch and subscription notifications, auto-started pipelines, auto transitions, realtime broadcasts — are held until the whole import has landed and run in write order, and every 422 compensation drops them. Nobody is told about a parent, line, junction row or grandchild the compensation removed. Activity, revisions, rollups and integrity checks still write per row; the compensating deletes reverse those.'
+    },
     { type: 'h3', text: 'Test panel' },
     {
       type: 'p',

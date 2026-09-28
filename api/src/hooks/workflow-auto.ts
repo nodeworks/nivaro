@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { parseConditionRules } from '../services/workflow-conditions.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { runAutoTransitions } from '../services/workflow-transitions.js'
 import { hooks } from './registry.js'
 
@@ -119,7 +120,7 @@ export function registerWorkflowAutoHooks(): void {
     const bound = await boundCollections()
     if (item && bound.has(ctx.collection)) {
       // Fire-and-forget: automation must never fail or slow the write
-      void runAutoTransitions(ctx.collection, item)
+      void deferEffect('auto-transitions', () => runAutoTransitions(ctx.collection, item))
     }
     // Child-row write → re-evaluate the parent(s) it points at. previousData
     // covers deletes and FK moves (old parent may now satisfy related_none).
@@ -127,7 +128,8 @@ export function registerWorkflowAutoHooks(): void {
     if (!watches) return
     for (const w of watches) {
       for (const parentId of fkValues(ctx, w.fk)) {
-        for (const parent of w.parents) void runAutoTransitions(parent, parentId)
+        for (const parent of w.parents)
+          void deferEffect('auto-transitions:parent', () => runAutoTransitions(parent, parentId))
       }
     }
   }

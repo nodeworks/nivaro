@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance } from 'fastify'
+import { deferEffect } from '../services/unit-of-work.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
@@ -369,13 +370,15 @@ export function registerAiValidationHooks() {
     if (ctx.user?.id) {
       const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : null
       const message = violations.map((v) => `${v.rule}: ${v.explanation}`).join(' | ')
-      notifyUser(
-        ctx.user.id,
-        `Content warnings: ${ctx.collection}`,
-        message,
-        ctx.collection,
-        item
-      ).catch(() => {})
+      void deferEffect('ai-validation-warning', () =>
+        notifyUser(
+          ctx.user!.id,
+          `Content warnings: ${ctx.collection}`,
+          message,
+          ctx.collection,
+          item
+        ).catch(() => {})
+      )
     }
   }
 

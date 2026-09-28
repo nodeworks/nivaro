@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { logActivity } from '../services/activity.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { originForWrite } from '../services/note-authorship.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
 import { fireWebhooks } from '../services/webhook-dispatch.js'
@@ -76,7 +77,7 @@ export function registerActivityHooks() {
     const origin = originForWrite(ctx.user, ctx.changeReason)
     const meta = { origin, changed_fields: [] as string[] }
     if (level === 'none') {
-      await fireWebhooks(ctx.collection, 'create', ctx.result, meta)
+      await deferEffect('webhooks:create', () => fireWebhooks(ctx.collection, 'create', ctx.result, meta))
       return
     }
     const activityId = await logActivity({
@@ -99,7 +100,7 @@ export function registerActivityHooks() {
         delta: null
       })
     }
-    await fireWebhooks(ctx.collection, 'create', ctx.result, meta)
+    await deferEffect('webhooks:create', () => fireWebhooks(ctx.collection, 'create', ctx.result, meta))
   })
 
   hooks.after('*', 'update', async (ctx) => {
@@ -112,7 +113,7 @@ export function registerActivityHooks() {
       : null
     const meta = { origin, changed_fields: changedFieldNames(delta) }
     if (level === 'none') {
-      await fireWebhooks(ctx.collection, 'update', ctx.result, meta)
+      await deferEffect('webhooks:update', () => fireWebhooks(ctx.collection, 'update', ctx.result, meta))
       return
     }
     const activityId = await logActivity({
@@ -133,7 +134,7 @@ export function registerActivityHooks() {
         delta
       })
     }
-    await fireWebhooks(ctx.collection, 'update', ctx.result, meta)
+    await deferEffect('webhooks:update', () => fireWebhooks(ctx.collection, 'update', ctx.result, meta))
   })
 
   hooks.after('*', 'delete', async (ctx) => {
@@ -141,7 +142,7 @@ export function registerActivityHooks() {
     const level = await auditLevel(ctx.collection)
     const meta = { origin: originForWrite(ctx.user, null), changed_fields: [] as string[] }
     if (level === 'none') {
-      await fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta)
+      await deferEffect('webhooks:delete', () => fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta))
       return
     }
     const activityId = await logActivity({
@@ -161,6 +162,6 @@ export function registerActivityHooks() {
         delta: null
       })
     }
-    await fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta)
+    await deferEffect('webhooks:delete', () => fireWebhooks(ctx.collection, 'delete', ctx.previousData, meta))
   })
 }

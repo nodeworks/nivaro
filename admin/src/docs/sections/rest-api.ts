@@ -526,6 +526,7 @@ Authorization: Bearer <token>
         'Each row is created through the same path as `POST /items/<child>`, as the same caller: permissions, validation, hooks, field rules and computed fields apply per row. The foreign key to the parent is set for you.',
         'Sets are written in the order they appear in the payload, rows in array order. List a set first when a later one depends on it (a cap on payments that reads the sum of lines).',
         'All or nothing on create: if any row is refused, the rows already written and the new record are removed and the error names the row, e.g. `lines[2]: … — nothing was created`.',
+        'Side effects wait for the whole create. Webhooks, event flows, watch and subscription notifications, auto-started pipelines, auto transitions and realtime broadcasts for the record and its rows run only once every row has landed, in the order the writes happened. A refused row drops them, so a partner is never told about a record that was undone. Rollups, activity and revisions still write with each row — they describe the row itself and compensation reverses them by deleting it.',
         'On update, a row that carries an `id` is changed in place (the id must be a row of this record, else `422` `NESTED_ROW_NOT_OWNED`); a row without one is created. `{ "delete": [ids] }` removes rows, `{ "set": [...] }` makes the child set exactly the rows listed (rows with an id changed, rows without one created, every other child removed). A plain array on update never removes anything.',
         'All or nothing on update too: changes land first, then creates, then removals. A refused row puts the rows already changed back to their earlier values and removes the rows already created.',
         'At most 500 rows per relation per request.'
@@ -611,7 +612,8 @@ Authorization: Bearer <token>
         '`"atomic": true` makes the call all or nothing. It takes creates only. The first refused row stops the run, the rows created before it are removed, and the answer is `422` naming the row.',
         '`?return=ids` leaves the records out of the results and returns status and id per row.',
         '`?async=1` queues the run and answers `202` with a `run_id`. Read the results from `GET /api/items/<collection>/bulk/<run_id>`; they are kept for 24 hours. The run also appears under Background Jobs.',
-        'A refused row never stops the others unless `atomic` is set.'
+        'A refused row never stops the others unless `atomic` is set.',
+        'Outbound effects of the run (webhooks, event flows, notifications, auto transitions, realtime) are held until the run ends and dropped when an atomic run rolls back — nobody hears about rows that no longer exist. Without `atomic`, every row that landed has its effects sent once the run finishes.'
       ]
     },
     { type: 'h3', text: 'Safe retries with Idempotency-Key' },

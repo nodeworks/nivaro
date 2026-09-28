@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { getRelations } from '../services/collections.js'
@@ -891,15 +892,15 @@ async function rollUpToParents(
 }
 
 export function registerNotificationSubscriptionHooks() {
-  hooks.after('*', 'create', async (ctx) => {
+  hooks.after('*', 'create', (ctx) => deferEffect('subscriptions:create', async () => {
     if (ctx.collection.startsWith('nivaro_')) return
     const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
     const row = ctx.result as Record<string, unknown> | null
     await fireSubscriptionNotifications(ctx.collection, 'create', item, row, ctx.user?.id)
     await rollUpToParents(ctx.collection, 'create', item, row, ctx.user?.id)
-  })
+  }))
 
-  hooks.after('*', 'update', async (ctx) => {
+  hooks.after('*', 'update', (ctx) => deferEffect('subscriptions:update', async () => {
     if (ctx.collection.startsWith('nivaro_')) return
     const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
     const row = ctx.result as Record<string, unknown> | null
@@ -936,13 +937,13 @@ export function registerNotificationSubscriptionHooks() {
       ctx.user?.id,
       (ctx.previousData as Record<string, unknown> | null) ?? null
     )
-  })
+  }))
 
-  hooks.after('*', 'delete', async (ctx) => {
+  hooks.after('*', 'delete', (ctx) => deferEffect('subscriptions:delete', async () => {
     if (ctx.collection.startsWith('nivaro_')) return
     const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
     const prev = ctx.previousData as Record<string, unknown> | null
     await rollUpToParents(ctx.collection, 'delete', item, prev, ctx.user?.id)
     await fireSubscriptionNotifications(ctx.collection, 'delete', item, prev, ctx.user?.id)
-  })
+  }))
 }

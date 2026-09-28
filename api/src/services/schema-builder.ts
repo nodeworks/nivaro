@@ -18,6 +18,7 @@ import {
   GraphQLString
 } from 'graphql'
 import type { Knex } from 'knex'
+import { runUnit } from './unit-of-work.js'
 import { db } from '../db/index.js'
 import {
   domainMutationFields,
@@ -1481,37 +1482,41 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         const rows = Array.isArray(data) ? data : [data]
-        const results: unknown[] = []
-        try {
-          for (const row of rows) {
-            const item = await createOne(ctx.user, name, row as Record<string, unknown>, ctx.req)
-            const upsert = upsertInfoOf(item)
-            if (upsert) ctx.upserts?.push({ collection: name, ...upsert })
-            results.push(item)
-          }
-          return results
-        } catch (e) {
-          // All or nothing, as the legacy batch was: a caller that gets an
-          // error retries the WHOLE batch, so rows that landed before the
-          // failure would come back as duplicates. Undone through deleteOne so
-          // rollups and activity follow; a row that cannot be undone is named.
-          const stuck: unknown[] = []
-          for (const made of [...results].reverse()) {
-            const id = (made as { id?: unknown } | null)?.id
-            if (id == null) continue
-            // A row the natural key matched existed before this call — the
-            // undo must never delete it.
-            if (upsertInfoOf(made)) continue
-            try {
-              await deleteOne(ctx.user, name, String(id), ctx.req)
-            } catch {
-              stuck.push(id)
+        const user = ctx.user
+        return runUnit(`batch-create:${name}`, async (unit) => {
+          const results: unknown[] = []
+          try {
+            for (const row of rows) {
+              const item = await createOne(user, name, row as Record<string, unknown>, ctx.req)
+              const upsert = upsertInfoOf(item)
+              if (upsert) ctx.upserts?.push({ collection: name, ...upsert })
+              results.push(item)
             }
+            return results
+          } catch (e) {
+            // All or nothing, as the legacy batch was: a caller that gets an
+            // error retries the WHOLE batch, so rows that landed before the
+            // failure would come back as duplicates. Undone through deleteOne so
+            // rollups and activity follow; a row that cannot be undone is named.
+            unit.discard()
+            const stuck: unknown[] = []
+            for (const made of [...results].reverse()) {
+              const id = (made as { id?: unknown } | null)?.id
+              if (id == null) continue
+              // A row the natural key matched existed before this call — the
+              // undo must never delete it.
+              if (upsertInfoOf(made)) continue
+              try {
+                await deleteOne(user, name, String(id), ctx.req)
+              } catch {
+                stuck.push(id)
+              }
+            }
+            if (stuck.length > 0 && e instanceof Error)
+              e.message += ` — and ${stuck.length} row(s) created before the failure could not be removed: ${stuck.join(', ')}`
+            wrapError(e)
           }
-          if (stuck.length > 0 && e instanceof Error)
-            e.message += ` — and ${stuck.length} row(s) created before the failure could not be removed: ${stuck.join(', ')}`
-          wrapError(e)
-        }
+        })
       }
     }
 

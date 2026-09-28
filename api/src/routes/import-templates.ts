@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { runUnit } from '../services/unit-of-work.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -981,459 +982,490 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
   // POST /import-templates/:id/execute — all-or-nothing direct create: parent record
   // + line rows into the O2M child collection. Any failure compensates by deleting
   // everything created so far, leaving no partial import behind.
-  app.post('/:id/execute', { preHandler: authenticate }, async (req, reply) => {
-    const { id } = req.params as { id: string }
-    const template = (await db('nivaro_import_templates').where({ id }).first()) as
-      | Record<string, unknown>
-      | undefined
-    if (!template) return reply.code(404).send({ error: 'Not found' })
+  app.post('/:id/execute', { preHandler: authenticate }, async (req, reply) =>
+    runUnit('import-execute', async (unit) => {
+      const { id } = req.params as { id: string }
+      const template = (await db('nivaro_import_templates').where({ id }).first()) as
+        | Record<string, unknown>
+        | undefined
+      if (!template) return reply.code(404).send({ error: 'Not found' })
 
-    const collection = template.collection as string
-    if (!(await can(req.user!, 'create', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
-    }
+      const collection = template.collection as string
+      if (!(await can(req.user!, 'create', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
 
-    const mode = template.mode as string
-    if (mode !== 'direct' && mode !== 'both') {
-      return reply.code(403).send({ error: 'Template does not support direct execution' })
-    }
+      const mode = template.mode as string
+      if (mode !== 'direct' && mode !== 'both') {
+        return reply.code(403).send({ error: 'Template does not support direct execution' })
+      }
 
-    const body = req.body as {
-      values?: unknown
-      lines?: unknown
-      issues?: unknown
-      file_id?: string | null
-      m2m?: unknown
-    }
-    if (
-      typeof body.values !== 'object' ||
-      body.values === null ||
-      Array.isArray(body.values) ||
-      !Array.isArray(body.lines) ||
-      !Array.isArray(body.issues) ||
-      (body.m2m !== undefined && !isValidM2mBody(body.m2m))
-    ) {
-      return reply.code(400).send({ error: 'values, lines, and issues are required' })
-    }
-    const m2mBody = (body.m2m as Record<string, Array<string | number>> | undefined) ?? {}
-    const m2mEntries = Object.entries(m2mBody)
+      const body = req.body as {
+        values?: unknown
+        lines?: unknown
+        issues?: unknown
+        file_id?: string | null
+        m2m?: unknown
+      }
+      if (
+        typeof body.values !== 'object' ||
+        body.values === null ||
+        Array.isArray(body.values) ||
+        !Array.isArray(body.lines) ||
+        !Array.isArray(body.issues) ||
+        (body.m2m !== undefined && !isValidM2mBody(body.m2m))
+      ) {
+        return reply.code(400).send({ error: 'values, lines, and issues are required' })
+      }
+      const m2mBody = (body.m2m as Record<string, Array<string | number>> | undefined) ?? {}
+      const m2mEntries = Object.entries(m2mBody)
 
-    const bodyIssues = body.issues as ImportIssue[]
-    if (bodyIssues.some((issue) => issue.severity === 'error')) {
-      return reply.code(422).send({
-        error: 'Cannot execute import while unresolved errors remain',
-        issues: bodyIssues
-      })
-    }
+      const bodyIssues = body.issues as ImportIssue[]
+      if (bodyIssues.some((issue) => issue.severity === 'error')) {
+        {
+          unit.discard()
+          return reply.code(422).send({
+            error: 'Cannot execute import while unresolved errors remain',
+            issues: bodyIssues
+          })
+        }
+      }
 
-    const values = { ...(body.values as Record<string, unknown>) }
-    const lines = body.lines as LineDraft[]
-    const config = templateRowToConfig(template)
-    const attachField = config.attach_file_field
-    const wantsAttach = !!(attachField && body.file_id)
+      const values = { ...(body.values as Record<string, unknown>) }
+      const lines = body.lines as LineDraft[]
+      const config = templateRowToConfig(template)
+      const attachField = config.attach_file_field
+      const wantsAttach = !!(attachField && body.file_id)
 
-    // on_miss: 'create' misses resolved + deduped up front — pure/sync — so the
-    // record-to-create count can join the row-cap guard below before anything is
-    // created.
-    const createMisses = collectCreateMisses(config, lines)
-    const createGroups = buildCreateGroups(createMisses, values)
+      // on_miss: 'create' misses resolved + deduped up front — pure/sync — so the
+      // record-to-create count can join the row-cap guard below before anything is
+      // created.
+      const createMisses = collectCreateMisses(config, lines)
+      const createGroups = buildCreateGroups(createMisses, values)
 
-    // Lines with no way to be persisted must fail loudly before anything is created,
-    // rather than silently dropping the submitted rows. Resolved before the row-cap
-    // guard below so a relation-mode nested target's grandchild rows can join the total.
-    let childRelation: { collection: string; fkField: string } | null = null
-    let nestedRelation: { collection: string; fk_field: string } | null = null
-    if (lines.length > 0) {
-      childRelation = config.line_map
-        ? await resolveLineChildRelation(collection, config.line_map.target_field)
-        : null
-      nestedRelation = await resolveNestedRelation(
-        config.line_map,
-        childRelation?.collection ?? null
-      )
-    }
+      // Lines with no way to be persisted must fail loudly before anything is created,
+      // rather than silently dropping the submitted rows. Resolved before the row-cap
+      // guard below so a relation-mode nested target's grandchild rows can join the total.
+      let childRelation: { collection: string; fkField: string } | null = null
+      let nestedRelation: { collection: string; fk_field: string } | null = null
+      if (lines.length > 0) {
+        childRelation = config.line_map
+          ? await resolveLineChildRelation(collection, config.line_map.target_field)
+          : null
+        nestedRelation = await resolveNestedRelation(
+          config.line_map,
+          childRelation?.collection ?? null
+        )
+      }
 
-    const totalM2mIds = m2mEntries.reduce((sum, [, ids]) => sum + ids.length, 0)
-    // Relation-mode nested rows become real grandchild creates, so they count toward
-    // the cap same as line items; JSON-mode nested rows stay a plain column on the
-    // line and never count.
-    const totalMembers = nestedRelation
-      ? lines.reduce((sum, line) => sum + (line.nested?.rows.length ?? 0), 0)
-      : 0
-    const totalCreates = createGroups.length
-    const totalRows = lines.length + totalM2mIds + totalMembers + totalCreates
-    if (totalRows > IMPORT_ROW_CAP) {
-      return reply.code(422).send({
-        error: `Too many rows — the import cap is ${IMPORT_ROW_CAP} rows`,
-        issues: [
-          ...bodyIssues,
+      const totalM2mIds = m2mEntries.reduce((sum, [, ids]) => sum + ids.length, 0)
+      // Relation-mode nested rows become real grandchild creates, so they count toward
+      // the cap same as line items; JSON-mode nested rows stay a plain column on the
+      // line and never count.
+      const totalMembers = nestedRelation
+        ? lines.reduce((sum, line) => sum + (line.nested?.rows.length ?? 0), 0)
+        : 0
+      const totalCreates = createGroups.length
+      const totalRows = lines.length + totalM2mIds + totalMembers + totalCreates
+      if (totalRows > IMPORT_ROW_CAP) {
+        {
+          unit.discard()
+          return reply.code(422).send({
+            error: `Too many rows — the import cap is ${IMPORT_ROW_CAP} rows`,
+            issues: [
+              ...bodyIssues,
+              {
+                severity: 'error',
+                rule: 'execute',
+                message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records${totalMembers > 0 ? ` + ${totalMembers} nested members` : ''}${totalCreates > 0 ? ` + ${totalCreates} records to create` : ''}); the import cap is ${IMPORT_ROW_CAP} rows`
+              }
+            ]
+          })
+        }
+      }
+
+      if (lines.length > 0 && !childRelation) {
+        {
+          unit.discard()
+          return reply.code(422).send({
+            error: 'Template has no line mapping for the submitted lines',
+            issues: [
+              ...bodyIssues,
+              {
+                severity: 'error',
+                rule: 'execute',
+                message: 'Template has no line mapping for the submitted lines'
+              }
+            ]
+          })
+        }
+      }
+
+      // Stale-template guard: every body.m2m key must still resolve to a real M2M
+      // junction relation before anything is created — a dropped/renamed field would
+      // otherwise fail mid-way through the create sequence, after the parent exists.
+      let m2mAliasMap = new Map<string, M2mAliasInfo>()
+      if (m2mEntries.length > 0 || wantsAttach) {
+        m2mAliasMap = await resolveM2mAliasFields(collection)
+        const unresolved = m2mEntries.filter(([field]) => !m2mAliasMap.has(field))
+        if (unresolved.length > 0) {
           {
-            severity: 'error',
-            rule: 'execute',
-            message: `Submitted ${totalRows} rows (${lines.length} line items + ${totalM2mIds} linked records${totalMembers > 0 ? ` + ${totalMembers} nested members` : ''}${totalCreates > 0 ? ` + ${totalCreates} records to create` : ''}); the import cap is ${IMPORT_ROW_CAP} rows`
+            unit.discard()
+            return reply.code(422).send({
+              error: 'Template references an M2M field that could not be resolved',
+              issues: [
+                ...bodyIssues,
+                ...unresolved.map(([field]) => ({
+                  severity: 'error' as const,
+                  rule: 'execute',
+                  message: `M2M field "${field}" could not be resolved to a relation on ${collection} — the template may be stale`
+                }))
+              ]
+            })
           }
-        ]
-      })
-    }
+        }
+      }
 
-    if (lines.length > 0 && !childRelation) {
-      return reply.code(422).send({
-        error: 'Template has no line mapping for the submitted lines',
-        issues: [
-          ...bodyIssues,
+      // Attach the uploaded file: M2M alias attach fields become a junction link
+      // (deduped — the parse response usually already carried it in body.m2m);
+      // scalar file columns take the id directly.
+      if (wantsAttach) {
+        const fileId = body.file_id as string
+        if (m2mAliasMap.has(attachField as string)) {
+          const existing = m2mEntries.find(([field]) => field === attachField)
+          if (existing) {
+            if (!existing[1].map(String).includes(String(fileId))) existing[1].push(fileId)
+          } else {
+            m2mEntries.push([attachField as string, [fileId]])
+          }
+        } else {
+          values[attachField as string] = fileId
+        }
+      }
+
+      const workspaceId = req.workspaceId ?? undefined
+      // Every created-row bookkeeping array below carries `payload` (the exact object
+      // passed to createOne) alongside `collection`/`id`. Every createOne call in this
+      // route passes skipRollupRecalc: true — a happy-path success runs ONE deduped
+      // recalcContributorsForRows pass over everything created instead of one recalc per
+      // row; on failure, compensation's raw deletes bypass items-service hooks entirely,
+      // so that same pass (over the rows that existed before compensation) is what
+      // refreshes any stored rollup createOne would otherwise have bumped.
+      const createdChildIds: (string | number)[] = []
+      const createdChildren: Array<{
+        collection: string
+        id: string | number
+        payload: Record<string, unknown>
+      }> = []
+      const createdJunctions: Array<{
+        collection: string
+        id: string | number
+        payload: Record<string, unknown>
+      }> = []
+      const createdGrandchildren: Array<{
+        collection: string
+        id: string | number
+        payload: Record<string, unknown>
+      }> = []
+      const createdLookupRecords: Array<{
+        collection: string
+        id: string | number
+        payload: Record<string, unknown>
+      }> = []
+      let parent: { id: string | number } | null = null
+      const childCollection: string | null = childRelation?.collection ?? null
+      const fkField = childRelation?.fkField ?? null
+      let failedAtLine = 0
+      let failedM2mField: string | null = null
+
+      // on_miss: 'create' — bulk-create the deduped missing lookup records BEFORE the
+      // parent, so line/junction creates below can reference their ids. Nothing else
+      // exists yet at this point, so a failure here only needs to compensate the
+      // creates that already landed (no parent/children/junctions to unwind).
+      if (createGroups.length > 0) {
+        let failedCreateCollection: string | null = null
+        try {
+          for (const group of createGroups) {
+            failedCreateCollection = group.step.collection
+            const created = (await createOne(
+              req.user!,
+              group.step.collection,
+              group.defaultsPayload,
+              req,
+              workspaceId,
+              { skipRollupRecalc: true }
+            )) as { id: string | number }
+            createdLookupRecords.push({
+              collection: group.step.collection,
+              id: created.id,
+              payload: group.defaultsPayload
+            })
+            for (const apply of group.applies) apply(created.id)
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          try {
+            await deleteGroupedByCollection(createdLookupRecords)
+          } catch (compensationErr) {
+            app.log.error(
+              compensationErr,
+              'import-template execute compensation failed — created rows may be orphaned'
+            )
+          }
+          try {
+            await recalcContributorsForRows(createdLookupRecords)
+          } catch {
+            // swallow — compensation already reported the real error
+          }
           {
-            severity: 'error',
-            rule: 'execute',
-            message: 'Template has no line mapping for the submitted lines'
+            unit.discard()
+            return reply.code(422).send({
+              error: 'Import failed while creating referenced records — nothing was created',
+              issues: [
+                ...bodyIssues,
+                {
+                  severity: 'error',
+                  rule: 'execute',
+                  message: `Creating a referenced record in "${failedCreateCollection}" failed: ${message}`
+                }
+              ]
+            })
           }
-        ]
-      })
-    }
+        }
+      }
 
-    // Stale-template guard: every body.m2m key must still resolve to a real M2M
-    // junction relation before anything is created — a dropped/renamed field would
-    // otherwise fail mid-way through the create sequence, after the parent exists.
-    let m2mAliasMap = new Map<string, M2mAliasInfo>()
-    if (m2mEntries.length > 0 || wantsAttach) {
-      m2mAliasMap = await resolveM2mAliasFields(collection)
-      const unresolved = m2mEntries.filter(([field]) => !m2mAliasMap.has(field))
-      if (unresolved.length > 0) {
+      // The parent create is isolated: createOne inserts then reads the row back, so a
+      // throw here (e.g. a row-level filter hiding the freshly-created row from this user)
+      // may mean the record WAS written but is unreadable. We don't know its id, so we
+      // can't compensate — report honestly rather than claiming nothing was created.
+      const orphanReply = () => {
+        // The row may exist: its effects already ran inside createOne's own
+        // unit only if it returned, and it did not — nothing to release.
+        unit.discard()
         return reply.code(422).send({
-          error: 'Template references an M2M field that could not be resolved',
+          error: 'The record may have been created but could not be read back',
           issues: [
             ...bodyIssues,
-            ...unresolved.map(([field]) => ({
-              severity: 'error' as const,
+            {
+              severity: 'error',
               rule: 'execute',
-              message: `M2M field "${field}" could not be resolved to a relation on ${collection} — the template may be stale`
-            }))
+              message:
+                'The record may have been created but could not be read back (check read permissions / row-level filters for your role); line items were not created.'
+            }
           ]
         })
       }
-    }
 
-    // Attach the uploaded file: M2M alias attach fields become a junction link
-    // (deduped — the parse response usually already carried it in body.m2m);
-    // scalar file columns take the id directly.
-    if (wantsAttach) {
-      const fileId = body.file_id as string
-      if (m2mAliasMap.has(attachField as string)) {
-        const existing = m2mEntries.find(([field]) => field === attachField)
-        if (existing) {
-          if (!existing[1].map(String).includes(String(fileId))) existing[1].push(fileId)
-        } else {
-          m2mEntries.push([attachField as string, [fileId]])
-        }
-      } else {
-        values[attachField as string] = fileId
-      }
-    }
-
-    const workspaceId = req.workspaceId ?? undefined
-    // Every created-row bookkeeping array below carries `payload` (the exact object
-    // passed to createOne) alongside `collection`/`id`. Every createOne call in this
-    // route passes skipRollupRecalc: true — a happy-path success runs ONE deduped
-    // recalcContributorsForRows pass over everything created instead of one recalc per
-    // row; on failure, compensation's raw deletes bypass items-service hooks entirely,
-    // so that same pass (over the rows that existed before compensation) is what
-    // refreshes any stored rollup createOne would otherwise have bumped.
-    const createdChildIds: (string | number)[] = []
-    const createdChildren: Array<{
-      collection: string
-      id: string | number
-      payload: Record<string, unknown>
-    }> = []
-    const createdJunctions: Array<{
-      collection: string
-      id: string | number
-      payload: Record<string, unknown>
-    }> = []
-    const createdGrandchildren: Array<{
-      collection: string
-      id: string | number
-      payload: Record<string, unknown>
-    }> = []
-    const createdLookupRecords: Array<{
-      collection: string
-      id: string | number
-      payload: Record<string, unknown>
-    }> = []
-    let parent: { id: string | number } | null = null
-    const childCollection: string | null = childRelation?.collection ?? null
-    const fkField = childRelation?.fkField ?? null
-    let failedAtLine = 0
-    let failedM2mField: string | null = null
-
-    // on_miss: 'create' — bulk-create the deduped missing lookup records BEFORE the
-    // parent, so line/junction creates below can reference their ids. Nothing else
-    // exists yet at this point, so a failure here only needs to compensate the
-    // creates that already landed (no parent/children/junctions to unwind).
-    if (createGroups.length > 0) {
-      let failedCreateCollection: string | null = null
       try {
-        for (const group of createGroups) {
-          failedCreateCollection = group.step.collection
-          const created = (await createOne(
-            req.user!,
-            group.step.collection,
-            group.defaultsPayload,
-            req,
-            workspaceId,
-            { skipRollupRecalc: true }
-          )) as { id: string | number }
-          createdLookupRecords.push({
-            collection: group.step.collection,
-            id: created.id,
-            payload: group.defaultsPayload
+        parent = (await createOne(req.user!, collection, values, req, workspaceId, {
+          skipRollupRecalc: true
+        })) as {
+          id: string | number
+        }
+      } catch {
+        return orphanReply()
+      }
+      if (!parent || parent.id == null) {
+        return orphanReply()
+      }
+
+      try {
+        // Junction rows go before line items — a line's data never depends on an M2M
+        // link, but keeping the order fixed makes compensation easy to reason about.
+        for (const [field, ids] of m2mEntries) {
+          failedM2mField = field
+          const info = m2mAliasMap.get(field)!
+          // Dedupe by string key while preserving each id's first original value — a
+          // duplicated id would otherwise create redundant junction rows for one link.
+          const seen = new Set<string>()
+          const uniqueIds = ids.filter((idValue) => {
+            const key = String(idValue)
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
           })
-          for (const apply of group.applies) apply(created.id)
+          for (const idValue of uniqueIds) {
+            const junctionPayload = { [info.fkToParent]: parent.id, [info.fkToOther]: idValue }
+            const junctionRow = (await createOne(
+              req.user!,
+              info.junction,
+              junctionPayload,
+              req,
+              workspaceId,
+              { skipRollupRecalc: true }
+            )) as { id: string | number }
+            createdJunctions.push({
+              collection: info.junction,
+              id: junctionRow.id,
+              payload: junctionPayload
+            })
+          }
+        }
+        failedM2mField = null
+
+        if (childCollection && fkField) {
+          for (let i = 0; i < lines.length; i++) {
+            failedAtLine = i + 1
+            const line = lines[i]
+            // Relation-mode: nested rows become real grandchild creates below, so the
+            // nested key is excluded from childData entirely. JSON-mode (nestedRelation
+            // null): unchanged — nested rows ride along as a plain JSON column.
+            const childData: Record<string, unknown> = nestedRelation
+              ? { ...line.values, [fkField]: parent.id }
+              : {
+                  ...line.values,
+                  [fkField]: parent.id,
+                  ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
+                }
+            const child = (await createOne(
+              req.user!,
+              childCollection,
+              childData,
+              req,
+              workspaceId,
+              {
+                skipRollupRecalc: true
+              }
+            )) as { id: string | number }
+            createdChildIds.push(child.id)
+            createdChildren.push({ collection: childCollection, id: child.id, payload: childData })
+
+            if (nestedRelation && line.nested) {
+              for (const member of line.nested.rows) {
+                const grandchildPayload = { ...member, [nestedRelation.fk_field]: child.id }
+                const grandchild = (await createOne(
+                  req.user!,
+                  nestedRelation.collection,
+                  grandchildPayload,
+                  req,
+                  workspaceId,
+                  { skipRollupRecalc: true }
+                )) as { id: string | number }
+                createdGrandchildren.push({
+                  collection: nestedRelation.collection,
+                  id: grandchild.id,
+                  payload: grandchildPayload
+                })
+              }
+            }
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        const compensationIssues: ImportIssue[] = failedM2mField
+          ? [
+              {
+                severity: 'error',
+                rule: 'execute',
+                message: `Linking "${failedM2mField}" failed: ${message}`
+              }
+            ]
+          : [{ severity: 'error', rule: 'execute', row: failedAtLine, message }]
         try {
-          await deleteGroupedByCollection(createdLookupRecords)
+          // Grandchildren first (they FK to the child rows), then junctions, then
+          // children, then the parent — reverse of create order.
+          const grandchildrenByCollection = new Map<string, (string | number)[]>()
+          for (const grandchild of createdGrandchildren) {
+            const ids = grandchildrenByCollection.get(grandchild.collection) ?? []
+            ids.push(grandchild.id)
+            grandchildrenByCollection.set(grandchild.collection, ids)
+          }
+          for (const [grandchildCollection, ids] of grandchildrenByCollection) {
+            await chunkedDelete(grandchildCollection, ids)
+          }
+          const junctionsByCollection = new Map<string, (string | number)[]>()
+          for (const junction of createdJunctions) {
+            const ids = junctionsByCollection.get(junction.collection) ?? []
+            ids.push(junction.id)
+            junctionsByCollection.set(junction.collection, ids)
+          }
+          for (const [junctionCollection, ids] of junctionsByCollection) {
+            await chunkedDelete(junctionCollection, ids)
+          }
+          if (childCollection && createdChildIds.length > 0) {
+            await chunkedDelete(childCollection, createdChildIds)
+          }
+          if (parent) {
+            await db(collection).where({ id: parent.id }).del()
+          }
+          // Lookup records created for on_miss: 'create' misses are deleted LAST — any
+          // child/grandchild row created above may FK to them.
+          if (createdLookupRecords.length > 0) {
+            await deleteGroupedByCollection(createdLookupRecords)
+          }
         } catch (compensationErr) {
           app.log.error(
             compensationErr,
             'import-template execute compensation failed — created rows may be orphaned'
           )
-        }
-        try {
-          await recalcContributorsForRows(createdLookupRecords)
-        } catch {
-          // swallow — compensation already reported the real error
-        }
-        return reply.code(422).send({
-          error: 'Import failed while creating referenced records — nothing was created',
-          issues: [
-            ...bodyIssues,
-            {
-              severity: 'error',
-              rule: 'execute',
-              message: `Creating a referenced record in "${failedCreateCollection}" failed: ${message}`
-            }
-          ]
-        })
-      }
-    }
-
-    // The parent create is isolated: createOne inserts then reads the row back, so a
-    // throw here (e.g. a row-level filter hiding the freshly-created row from this user)
-    // may mean the record WAS written but is unreadable. We don't know its id, so we
-    // can't compensate — report honestly rather than claiming nothing was created.
-    const orphanReply = () =>
-      reply.code(422).send({
-        error: 'The record may have been created but could not be read back',
-        issues: [
-          ...bodyIssues,
-          {
+          compensationIssues.push({
             severity: 'error',
-            rule: 'execute',
-            message:
-              'The record may have been created but could not be read back (check read permissions / row-level filters for your role); line items were not created.'
-          }
-        ]
-      })
+            rule: 'execute-compensation',
+            row: failedAtLine,
+            message: 'Compensation failed — some created rows may be orphaned'
+          })
+        }
 
-    try {
-      parent = (await createOne(req.user!, collection, values, req, workspaceId, {
-        skipRollupRecalc: true
-      })) as {
-        id: string | number
-      }
-    } catch {
-      return orphanReply()
-    }
-    if (!parent || parent.id == null) {
-      return orphanReply()
-    }
+        // The compensation deletes above are raw db calls that bypass items-service
+        // hooks, so any stored rollup whose contributor FK lived on one of the deleted
+        // rows' own payloads is now stale — including FKs pointing OUTSIDE the created
+        // tree entirely (an M2M junction's far side, a lookup-resolved FK, a
+        // create.defaults constant). Swallowed: compensation already reported the real
+        // error; a recalc failure must not mask it.
+        try {
+          await recalcContributorsForRows([
+            ...createdGrandchildren,
+            ...createdJunctions,
+            ...createdChildren,
+            ...createdLookupRecords
+          ])
+        } catch {
+          // swallow
+        }
 
-    try {
-      // Junction rows go before line items — a line's data never depends on an M2M
-      // link, but keeping the order fixed makes compensation easy to reason about.
-      for (const [field, ids] of m2mEntries) {
-        failedM2mField = field
-        const info = m2mAliasMap.get(field)!
-        // Dedupe by string key while preserving each id's first original value — a
-        // duplicated id would otherwise create redundant junction rows for one link.
-        const seen = new Set<string>()
-        const uniqueIds = ids.filter((idValue) => {
-          const key = String(idValue)
-          if (seen.has(key)) return false
-          seen.add(key)
-          return true
-        })
-        for (const idValue of uniqueIds) {
-          const junctionPayload = { [info.fkToParent]: parent.id, [info.fkToOther]: idValue }
-          const junctionRow = (await createOne(
-            req.user!,
-            info.junction,
-            junctionPayload,
-            req,
-            workspaceId,
-            { skipRollupRecalc: true }
-          )) as { id: string | number }
-          createdJunctions.push({
-            collection: info.junction,
-            id: junctionRow.id,
-            payload: junctionPayload
+        {
+          unit.discard()
+          return reply.code(422).send({
+            error: failedM2mField
+              ? `Import failed while linking "${failedM2mField}" — nothing was created`
+              : `Import failed on line ${failedAtLine} — nothing was created`,
+            issues: [...bodyIssues, ...compensationIssues]
           })
         }
       }
-      failedM2mField = null
 
-      if (childCollection && fkField) {
-        for (let i = 0; i < lines.length; i++) {
-          failedAtLine = i + 1
-          const line = lines[i]
-          // Relation-mode: nested rows become real grandchild creates below, so the
-          // nested key is excluded from childData entirely. JSON-mode (nestedRelation
-          // null): unchanged — nested rows ride along as a plain JSON column.
-          const childData: Record<string, unknown> = nestedRelation
-            ? { ...line.values, [fkField]: parent.id }
-            : {
-                ...line.values,
-                [fkField]: parent.id,
-                ...(line.nested ? { [line.nested.field]: line.nested.rows } : {})
-              }
-          const child = (await createOne(req.user!, childCollection, childData, req, workspaceId, {
-            skipRollupRecalc: true
-          })) as { id: string | number }
-          createdChildIds.push(child.id)
-          createdChildren.push({ collection: childCollection, id: child.id, payload: childData })
-
-          if (nestedRelation && line.nested) {
-            for (const member of line.nested.rows) {
-              const grandchildPayload = { ...member, [nestedRelation.fk_field]: child.id }
-              const grandchild = (await createOne(
-                req.user!,
-                nestedRelation.collection,
-                grandchildPayload,
-                req,
-                workspaceId,
-                { skipRollupRecalc: true }
-              )) as { id: string | number }
-              createdGrandchildren.push({
-                collection: nestedRelation.collection,
-                id: grandchild.id,
-                payload: grandchildPayload
-              })
-            }
-          }
-        }
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      const compensationIssues: ImportIssue[] = failedM2mField
-        ? [
-            {
-              severity: 'error',
-              rule: 'execute',
-              message: `Linking "${failedM2mField}" failed: ${message}`
-            }
-          ]
-        : [{ severity: 'error', rule: 'execute', row: failedAtLine, message }]
-      try {
-        // Grandchildren first (they FK to the child rows), then junctions, then
-        // children, then the parent — reverse of create order.
-        const grandchildrenByCollection = new Map<string, (string | number)[]>()
-        for (const grandchild of createdGrandchildren) {
-          const ids = grandchildrenByCollection.get(grandchild.collection) ?? []
-          ids.push(grandchild.id)
-          grandchildrenByCollection.set(grandchild.collection, ids)
-        }
-        for (const [grandchildCollection, ids] of grandchildrenByCollection) {
-          await chunkedDelete(grandchildCollection, ids)
-        }
-        const junctionsByCollection = new Map<string, (string | number)[]>()
-        for (const junction of createdJunctions) {
-          const ids = junctionsByCollection.get(junction.collection) ?? []
-          ids.push(junction.id)
-          junctionsByCollection.set(junction.collection, ids)
-        }
-        for (const [junctionCollection, ids] of junctionsByCollection) {
-          await chunkedDelete(junctionCollection, ids)
-        }
-        if (childCollection && createdChildIds.length > 0) {
-          await chunkedDelete(childCollection, createdChildIds)
-        }
-        if (parent) {
-          await db(collection).where({ id: parent.id }).del()
-        }
-        // Lookup records created for on_miss: 'create' misses are deleted LAST — any
-        // child/grandchild row created above may FK to them.
-        if (createdLookupRecords.length > 0) {
-          await deleteGroupedByCollection(createdLookupRecords)
-        }
-      } catch (compensationErr) {
-        app.log.error(
-          compensationErr,
-          'import-template execute compensation failed — created rows may be orphaned'
-        )
-        compensationIssues.push({
-          severity: 'error',
-          rule: 'execute-compensation',
-          row: failedAtLine,
-          message: 'Compensation failed — some created rows may be orphaned'
-        })
-      }
-
-      // The compensation deletes above are raw db calls that bypass items-service
-      // hooks, so any stored rollup whose contributor FK lived on one of the deleted
-      // rows' own payloads is now stale — including FKs pointing OUTSIDE the created
-      // tree entirely (an M2M junction's far side, a lookup-resolved FK, a
-      // create.defaults constant). Swallowed: compensation already reported the real
-      // error; a recalc failure must not mask it.
+      // The full create phase succeeded — every createOne call above skipped its own
+      // per-row rollup recalc (skipRollupRecalc: true), so run ONE deduped pass over
+      // everything just created, including the parent itself (children's fkField and
+      // grandchildren's nested fk_field point at created ids in their own payloads, so
+      // the generic contributor-FK scan already covers the parent-child relationship —
+      // see recalcContributorsForRows). Never fails the response: the rows already
+      // committed, and a stale rollup here is recoverable via backfill.
       try {
         await recalcContributorsForRows([
-          ...createdGrandchildren,
-          ...createdJunctions,
+          { collection, payload: values },
+          ...createdLookupRecords,
           ...createdChildren,
-          ...createdLookupRecords
+          ...createdJunctions,
+          ...createdGrandchildren
         ])
-      } catch {
-        // swallow
+      } catch (err) {
+        console.error({ err }, 'import-template execute: happy-path rollup recalc failed')
       }
 
-      return reply.code(422).send({
-        error: failedM2mField
-          ? `Import failed while linking "${failedM2mField}" — nothing was created`
-          : `Import failed on line ${failedAtLine} — nothing was created`,
-        issues: [...bodyIssues, ...compensationIssues]
+      await logActivity({
+        action: 'import-template-execute',
+        user: req.user?.id,
+        collection,
+        item: String(parent.id),
+        req
       })
-    }
 
-    // The full create phase succeeded — every createOne call above skipped its own
-    // per-row rollup recalc (skipRollupRecalc: true), so run ONE deduped pass over
-    // everything just created, including the parent itself (children's fkField and
-    // grandchildren's nested fk_field point at created ids in their own payloads, so
-    // the generic contributor-FK scan already covers the parent-child relationship —
-    // see recalcContributorsForRows). Never fails the response: the rows already
-    // committed, and a stale rollup here is recoverable via backfill.
-    try {
-      await recalcContributorsForRows([
-        { collection, payload: values },
-        ...createdLookupRecords,
-        ...createdChildren,
-        ...createdJunctions,
-        ...createdGrandchildren
-      ])
-    } catch (err) {
-      console.error({ err }, 'import-template execute: happy-path rollup recalc failed')
-    }
-
-    await logActivity({
-      action: 'import-template-execute',
-      user: req.user?.id,
-      collection,
-      item: String(parent.id),
-      req
+      return reply
+        .code(201)
+        .send({ data: { id: String(parent.id), line_ids: createdChildIds.map(String) } })
     })
-
-    return reply
-      .code(201)
-      .send({ data: { id: String(parent.id), line_ids: createdChildIds.map(String) } })
-  })
+  )
 
   // POST /import-templates/test — builder "test panel": run an unsaved config, no persist
   app.post('/test', { preHandler: requireAdmin }, async (req, reply) => {

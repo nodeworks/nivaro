@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { db } from '../db/index.js'
+import { runUnit } from '../services/unit-of-work.js'
 import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
@@ -981,94 +982,97 @@ export async function itemsRoutes(app: FastifyInstance) {
     stopped_at: number | null
     leftover: unknown[]
   }> {
-    const results: BulkRowResult[] = []
-    const created: unknown[] = []
-    let failed = 0
-    let stoppedAt: number | null = null
-    for (const [index, row] of rows.entries()) {
-      if (opts.cancelled?.()) {
-        stoppedAt = index
-        break
-      }
-      const isUpdate = row != null && typeof row === 'object' && row.id != null && row.id !== ''
-      const op = isUpdate ? 'update' : 'create'
-      try {
-        if (row == null || typeof row !== 'object' || Array.isArray(row)) {
-          throw Object.assign(new Error('Each row must be an object'), { statusCode: 400 })
-        }
-        if (isUpdate) {
-          const { id, ...patch } = row
-          const item = (await updateOne(
-            user,
-            collection,
-            String(id),
-            patch,
-            opts.req,
-            opts.workspaceId
-          )) as Record<string, unknown>
-          results.push({ index, op, status: 200, id, ...(opts.slim ? {} : { data: item }) })
-        } else {
-          const item = (await createOne(
-            user,
-            collection,
-            { ...row },
-            opts.req,
-            opts.workspaceId
-          )) as Record<string, unknown>
-          const upsert = upsertInfoOf(item)
-          // A row the natural key matched was an update: nothing to take back.
-          if (!upsert) created.push(item.id)
-          results.push({
-            index,
-            op: upsert ? 'update' : op,
-            status: upsert ? 200 : 201,
-            id: item.id,
-            ...(upsert ? { upserted: true } : {}),
-            ...(opts.slim ? {} : { data: item })
-          })
-        }
-      } catch (err) {
-        failed++
-        results.push({ index, op, ...rowError(err) })
-        if (opts.atomic) {
+    return runUnit(`bulk:${collection}`, async (unit) => {
+      const results: BulkRowResult[] = []
+      const created: unknown[] = []
+      let failed = 0
+      let stoppedAt: number | null = null
+      for (const [index, row] of rows.entries()) {
+        if (opts.cancelled?.()) {
           stoppedAt = index
           break
         }
-      }
-      if ((index + 1) % 10 === 0) opts.onProgress?.(index + 1 - failed, failed)
-    }
-    let rolledBack = false
-    const leftover: unknown[] = []
-    if (opts.atomic && failed > 0) {
-      rolledBack = true
-      for (const id of [...created].reverse()) {
+        const isUpdate = row != null && typeof row === 'object' && row.id != null && row.id !== ''
+        const op = isUpdate ? 'update' : 'create'
         try {
-          await deleteOne(user, collection, String(id), opts.req, opts.workspaceId)
-        } catch {
+          if (row == null || typeof row !== 'object' || Array.isArray(row)) {
+            throw Object.assign(new Error('Each row must be an object'), { statusCode: 400 })
+          }
+          if (isUpdate) {
+            const { id, ...patch } = row
+            const item = (await updateOne(
+              user,
+              collection,
+              String(id),
+              patch,
+              opts.req,
+              opts.workspaceId
+            )) as Record<string, unknown>
+            results.push({ index, op, status: 200, id, ...(opts.slim ? {} : { data: item }) })
+          } else {
+            const item = (await createOne(
+              user,
+              collection,
+              { ...row },
+              opts.req,
+              opts.workspaceId
+            )) as Record<string, unknown>
+            const upsert = upsertInfoOf(item)
+            // A row the natural key matched was an update: nothing to take back.
+            if (!upsert) created.push(item.id)
+            results.push({
+              index,
+              op: upsert ? 'update' : op,
+              status: upsert ? 200 : 201,
+              id: item.id,
+              ...(upsert ? { upserted: true } : {}),
+              ...(opts.slim ? {} : { data: item })
+            })
+          }
+        } catch (err) {
+          failed++
+          results.push({ index, op, ...rowError(err) })
+          if (opts.atomic) {
+            stoppedAt = index
+            break
+          }
+        }
+        if ((index + 1) % 10 === 0) opts.onProgress?.(index + 1 - failed, failed)
+      }
+      let rolledBack = false
+      const leftover: unknown[] = []
+      if (opts.atomic && failed > 0) {
+        rolledBack = true
+        unit.discard()
+        for (const id of [...created].reverse()) {
           try {
-            await db(collection).where({ id }).del()
+            await deleteOne(user, collection, String(id), opts.req, opts.workspaceId)
           } catch {
-            leftover.push(id)
+            try {
+              await db(collection).where({ id }).del()
+            } catch {
+              leftover.push(id)
+            }
+          }
+        }
+        for (const r of results) {
+          if (r.status === 201) {
+            r.status = 424
+            r.error = 'Removed again — a later row was refused'
+            r.code = 'ROLLED_BACK'
+            delete r.data
           }
         }
       }
-      for (const r of results) {
-        if (r.status === 201) {
-          r.status = 424
-          r.error = 'Removed again — a later row was refused'
-          r.code = 'ROLLED_BACK'
-          delete r.data
-        }
+      return {
+        results,
+        ok: rolledBack ? 0 : results.length - failed,
+        failed,
+        rolled_back: rolledBack,
+        stopped_at: stoppedAt,
+        leftover
       }
-    }
-    return {
-      results,
-      ok: rolledBack ? 0 : results.length - failed,
-      failed,
-      rolled_back: rolledBack,
-      stopped_at: stoppedAt,
-      leftover
-    }
+    })
   }
 
   app.post('/:collection/bulk', async (req, reply) => {

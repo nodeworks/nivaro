@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { Parser } from 'expr-eval'
+import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { config } from '../config.js'
@@ -4692,6 +4693,11 @@ export async function createOne(
     dryReports.add(report)
     return report
   }
+  // Everything from the insert on is one unit of work (#793): the outbound
+  // effects of this row AND of the child rows it creates wait until the whole
+  // create has landed, and are dropped when a child is refused and the parent
+  // undone.
+  return withUnitOfWork(`create:${collection}`, async () => {
   const rows = (await db(collection)
     .insert(filterToActualColumns(securedPayload, actualCols))
     .returning('id')) as unknown[]
@@ -4754,17 +4760,22 @@ export async function createOne(
 
   // Auto-watch (#400): creators subscribe to their own records when the
   // preference says so — fire-and-forget.
-  void import('./auto-watch.js')
-    .then(({ ensureAutoWatch }) =>
-      ensureAutoWatch(user?.id, collection, returnedId as string | number, 'created')
-    )
-    .catch(() => {})
+  void deferEffect('auto-watch', () =>
+    import('./auto-watch.js')
+      .then(({ ensureAutoWatch }) =>
+        ensureAutoWatch(user?.id, collection, returnedId as string | number, 'created')
+      )
+      .catch(() => {})
+  )
 
-  broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
-    action: 'create'
-  })
+  void deferEffect('realtime:create', () =>
+    broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
+      action: 'create'
+    })
+  )
 
   return result
+  })
 }
 
 export async function updateOne(
@@ -5068,10 +5079,12 @@ export async function updateOne(
     })
   )
 
-  broadcastCollectionUpdate(req?.server?.io, collection, id, {
-    action: 'update',
-    changed_fields: Object.keys(columnPayload ?? {})
-  })
+  void deferEffect('realtime:update', () =>
+    broadcastCollectionUpdate(req?.server?.io, collection, id, {
+      action: 'update',
+      changed_fields: Object.keys(columnPayload ?? {})
+    })
+  )
 
   return result
 }
@@ -5193,5 +5206,7 @@ export async function deleteOne(
 
   await hooks.trigger('after', { ...ctx, previousData })
 
-  broadcastCollectionUpdate(req?.server?.io, collection, id, { action: 'delete' })
+  void deferEffect('realtime:delete', () =>
+    broadcastCollectionUpdate(req?.server?.io, collection, id, { action: 'delete' })
+  )
 }

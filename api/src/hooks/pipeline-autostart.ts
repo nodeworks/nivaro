@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { chainFields } from '../services/chain-columns.js'
 import { hooks } from './registry.js'
 
@@ -11,7 +12,7 @@ function coerceBool(val: unknown): boolean {
 }
 
 export function registerPipelineAutostartHooks() {
-  hooks.after('*', 'create', async (ctx) => {
+  hooks.after('*', 'create', (ctx) => deferEffect('pipeline-autostart', async () => {
     if (ctx.collection.startsWith('nivaro_')) return
     const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : null
     if (!item) return
@@ -74,5 +75,5 @@ export function registerPipelineAutostartHooks() {
     } catch {
       // Non-fatal — never block item creation
     }
-  })
+  }))
 }
