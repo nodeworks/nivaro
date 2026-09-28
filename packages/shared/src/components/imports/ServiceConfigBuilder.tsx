@@ -37,6 +37,43 @@ interface ColumnRow {
   /** What a lookup miss does: '' = skip the file row (historic default),
    *  'null' = keep the row with an empty link, 'create' = stub the record. */
   lookupOnMissing: '' | 'null' | 'create'
+  /** Settings of this column the builder does not show (what an empty cell
+   *  does, a value map, a default …) — carried through untouched. */
+  extra: Record<string, unknown>
+  /** The same for the column's lookup (scope, fallback, what an ambiguous
+   *  name does). */
+  lookupExtra: Record<string, unknown>
+}
+
+const COLUMN_KEYS = new Set(['field', 'type', 'lookup'])
+const LOOKUP_KEYS = new Set(['collection', 'match_field', 'on_missing'])
+const rest = (source: unknown, known: Set<string>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  if (!source || typeof source !== 'object') return out
+  for (const [k, v] of Object.entries(source as Record<string, unknown>)) {
+    if (!known.has(k)) out[k] = v
+  }
+  return out
+}
+
+const hasSteps = (raw: string): boolean => {
+  try {
+    return Array.isArray((JSON.parse(raw) as { steps?: unknown }).steps)
+  } catch {
+    return false
+  }
+}
+
+/** How many settings a configuration holds that the builder keeps but does
+ *  not show. */
+export function hiddenSettings(s: {
+  extras: Record<string, unknown>
+  rows: Array<{ extra: Record<string, unknown>; lookupExtra: Record<string, unknown> }>
+}): number {
+  return (
+    Object.keys(s.extras).length +
+    s.rows.reduce((n, r) => n + Object.keys(r.extra).length + Object.keys(r.lookupExtra).length, 0)
+  )
 }
 
 interface BuilderState {
@@ -75,6 +112,8 @@ function parseState(raw: string, stagingCols: string[]): BuilderState | null {
       return null
     }
   }
+  // several tables from one file: there is no single mapping to show
+  if (Array.isArray(cfg.steps)) return null
   const columns = (cfg.columns ?? {}) as Record<
     string,
     {
@@ -101,7 +140,9 @@ function parseState(raw: string, stagingCols: string[]): BuilderState | null {
       lookupOnMissing:
         c?.lookup?.on_missing === 'create' || c?.lookup?.on_missing === 'null'
           ? c.lookup.on_missing
-          : ''
+          : '',
+      extra: rest(c, COLUMN_KEYS),
+      lookupExtra: rest(c?.lookup, LOOKUP_KEYS)
     }
   }
   // Declared staging columns lead (file order); config-only keys follow so a
@@ -141,9 +182,10 @@ function serialize(s: BuilderState): string {
   const columns: Record<string, unknown> = {}
   for (const r of s.rows) {
     if (!r.field) continue
-    const entry: Record<string, unknown> = { field: r.field }
+    const entry: Record<string, unknown> = { field: r.field, ...r.extra }
     if (r.lookupOn && r.lookupCollection && r.lookupField) {
       entry.lookup = {
+        ...r.lookupExtra,
         collection: r.lookupCollection,
         match_field: r.lookupField,
         ...(r.lookupOnMissing ? { on_missing: r.lookupOnMissing } : {})
@@ -246,7 +288,9 @@ export function PickList({
                     className={cn('h-3 w-3', o.value === value ? 'opacity-100' : 'opacity-0')}
                   />
                   <span className='min-w-0 truncate'>{o.label ?? o.value}</span>
-                  {o.hint && <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>{o.hint}</span>}
+                  {o.hint && (
+                    <span className='ml-auto shrink-0 text-[10.5px] text-slate-400'>{o.hint}</span>
+                  )}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -303,14 +347,18 @@ export function ServiceConfigBuilder({
     onChange(json)
   }
 
-  const { data: collections = [] } = useQuery<Array<{ collection: string; display_name?: string }>>({
-    queryKey: ['svc-builder-collections'],
-    queryFn: () =>
-      client
-        .request<{ data: Array<{ collection: string; display_name?: string }> }>(get('/collections'))
-        .then((r) => (r.data ?? []).filter((c) => !/^nivaro_|^directus_/i.test(c.collection))),
-    staleTime: 5 * 60_000
-  })
+  const { data: collections = [] } = useQuery<Array<{ collection: string; display_name?: string }>>(
+    {
+      queryKey: ['svc-builder-collections'],
+      queryFn: () =>
+        client
+          .request<{ data: Array<{ collection: string; display_name?: string }> }>(
+            get('/collections')
+          )
+          .then((r) => (r.data ?? []).filter((c) => !/^nivaro_|^directus_/i.test(c.collection))),
+      staleTime: 5 * 60_000
+    }
+  )
 
   const targetCollection = state?.collection ?? ''
   const { data: targetMeta } = useQuery<CollectionMeta>({
@@ -359,8 +407,10 @@ export function ServiceConfigBuilder({
         />
         <div className='flex items-center justify-between'>
           {!state && value.trim() && (
-            <p className='text-[11px] text-amber-600 dark:text-amber-400'>
-              The builder needs valid JSON — fix it here to switch back.
+            <p className='text-[11px] text-amber-700 dark:text-amber-300'>
+              {hasSteps(value)
+                ? 'This import fills several tables from one file. It is edited as text.'
+                : 'The builder needs valid JSON. Fix it here to switch back.'}
             </p>
           )}
           <Button
@@ -396,7 +446,14 @@ export function ServiceConfigBuilder({
                 // A different table means different fields — stale references
                 // would fail server validation invisibly, so they clear.
                 ...(v !== state.collection
-                  ? { matchBy: [], requireValue: [], monthField: '', tsCreate: '', tsUpdate: '', rows: state.rows.map((r) => ({ ...r, field: '' })) }
+                  ? {
+                      matchBy: [],
+                      requireValue: [],
+                      monthField: '',
+                      tsCreate: '',
+                      tsUpdate: '',
+                      rows: state.rows.map((r) => ({ ...r, field: '' }))
+                    }
                   : {})
               })
             }
@@ -487,14 +544,15 @@ export function ServiceConfigBuilder({
                         )}
                       </td>
                       <td className='px-2.5 py-1 text-right'>
-                        <label className='inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                        <span className='inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
                           Lookup
                           <Switch
                             checked={r.lookupOn}
                             onCheckedChange={(v) => update({ lookupOn: v })}
                             className='scale-[0.8]'
+                            aria-label='Look the value up in another collection'
                           />
-                        </label>
+                        </span>
                       </td>
                     </tr>
                     {r.lookupOn && (
@@ -560,7 +618,17 @@ export function ServiceConfigBuilder({
                   ...state,
                   rows: [
                     ...state.rows,
-                    { col: newCol.trim(), field: '', type: '', lookupOn: false, lookupCollection: '', lookupField: '', lookupOnMissing: '' }
+                    {
+                      col: newCol.trim(),
+                      field: '',
+                      type: '',
+                      lookupOn: false,
+                      lookupCollection: '',
+                      lookupField: '',
+                      lookupOnMissing: '',
+                      extra: {},
+                      lookupExtra: {}
+                    }
                   ]
                 })
                 setNewCol('')
@@ -682,7 +750,16 @@ export function ServiceConfigBuilder({
         </div>
       </div>
 
-      <div className='flex justify-end border-t border-slate-200/70 pt-2 dark:border-border'>
+      <div className='flex items-center justify-between gap-3 border-t border-slate-200/70 pt-2 dark:border-border'>
+        {hiddenSettings(state) > 0 ? (
+          <p className='text-[11px] leading-snug text-slate-500' data-svc-hidden-settings>
+            {hiddenSettings(state)} more setting{hiddenSettings(state) === 1 ? '' : 's'} (links,
+            what an empty cell does, follow-up steps) {hiddenSettings(state) === 1 ? 'is' : 'are'}{' '}
+            kept as {hiddenSettings(state) === 1 ? 'it is' : 'they are'}. Edit them as text.
+          </p>
+        ) : (
+          <span />
+        )}
         <Button
           variant='ghost'
           size='sm'
@@ -714,7 +791,9 @@ export function LookupFieldPick({
   const { data } = useQuery<CollectionMeta>({
     queryKey: ['svc-builder-fields', collection],
     queryFn: () =>
-      client.request<{ data: CollectionMeta }>(get(`/collections/${collection}`)).then((r) => r.data),
+      client
+        .request<{ data: CollectionMeta }>(get(`/collections/${collection}`))
+        .then((r) => r.data),
     enabled: !!collection,
     staleTime: 5 * 60_000
   })

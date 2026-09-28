@@ -7,7 +7,12 @@ import { promisify } from 'node:util'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
 import { getImportProcessor, runImportProcessor } from './import-processors.js'
-import { type ImportRunReport, recordRanVia, saveRunReport } from './import-run-report.js'
+import {
+  type ImportRunItem,
+  type ImportRunReport,
+  recordRanVia,
+  saveRunReport
+} from './import-run-report.js'
 import { runLongSql as runLong } from './run-long.js'
 import { parseServiceConfig, runServiceImport } from './staged-import-service.js'
 import { parseStagingColumns, resolveHeaderMap } from './staged-import-validation.js'
@@ -497,6 +502,62 @@ export interface RunImportOptions {
   runId?: number | null
 }
 
+/** What a run reports, whichever importer produced it. */
+interface RunOutcome {
+  created: number
+  updated: number
+  unchanged: number
+  skipped: Record<string, number>
+  failed: number
+  report?: {
+    phases?: ImportRunReport['phases']
+    unmatched?: ImportRunReport['unmatched']
+    notes?: string[]
+    other?: Array<{ label: string; count: number }>
+  }
+  items?: ImportRunItem[]
+}
+
+async function storeRunReport(
+  runId: number,
+  result: RunOutcome,
+  rowCount: number,
+  parseMs: number,
+  loadMs: number | null
+): Promise<void> {
+  const skippedTotal = Object.values(result.skipped).reduce((a, b) => a + b, 0)
+  const collections: Record<string, { created: number; updated: number }> = {}
+  for (const it of result.items ?? []) {
+    if (!it.collection || (it.kind !== 'created' && it.kind !== 'updated')) continue
+    const c = collections[it.collection] ?? { created: 0, updated: 0 }
+    collections[it.collection] = c
+    if (it.kind === 'created') c.created++
+    else c.updated++
+  }
+  const report: ImportRunReport = {
+    counts: {
+      created: result.created,
+      updated: result.updated,
+      unchanged: result.unchanged,
+      skipped: skippedTotal,
+      failed: result.failed,
+      ...(result.report?.other?.length ? { other: result.report.other } : {})
+    },
+    skipped: result.skipped,
+    phases: [
+      { key: 'read-file', label: 'Read the file', ms: parseMs, count: rowCount },
+      ...(loadMs != null
+        ? [{ key: 'staging', label: 'Kept a copy of the file', ms: loadMs, count: rowCount }]
+        : []),
+      ...(result.report?.phases ?? [])
+    ],
+    unmatched: result.report?.unmatched ?? [],
+    notes: result.report?.notes ?? [],
+    collections
+  }
+  await saveRunReport(runId, report, result.items ?? [])
+}
+
 export async function runStagedImport({
   definition,
   buffer,
@@ -509,6 +570,8 @@ export async function runStagedImport({
   summary?: string
   /** Records a processor run changed, per collection — for the post-run flows. */
   affected?: Record<string, Array<string | number>>
+  /** Every stored record the file named, changed or not, per collection. */
+  matched?: Record<string, Array<string | number>>
 }> {
   const began = Date.now()
 
@@ -550,12 +613,25 @@ export async function runStagedImport({
     columns = declaredNames
   }
 
-  // Service mode: no staging table, no procedure — the parsed, header-mapped
-  // rows go through the items service so every write is revisioned/ruled.
+  // Service mode: the parsed, header-mapped rows are compared with the stored
+  // records and only what differs is written. No procedure runs over a
+  // staging table; the table is loaded only when the definition asks for a
+  // copy of the file there (a follow-up procedure reads it).
   if (definition.processor === 'service') {
     const cfg = parseServiceConfig(definition.service_config)
     if (!cfg)
       throw new Error(`Import "${definition.key}" is service-mode but has no valid service_config`)
+    let loadMs: number | null = null
+    if (cfg.keep_staging) {
+      await onProgress?.('preparing')
+      const loadBegan = Date.now()
+      await ensureStagingTable(table, columns, declaredNames)
+      const loader: StagingLoader =
+        definition.loader ?? ((process.env.IMPORT_LOADER as StagingLoader) || 'bulk')
+      if (loader === 'insert') await loadChunked(table, rows, columns)
+      else await loadViaShare(table, rows, columns)
+      loadMs = Date.now() - loadBegan
+    }
     if (runId != null) await recordRanVia(runId, 'service')
     await onProgress?.('importing')
     const summary = await runServiceImport({
@@ -565,13 +641,20 @@ export async function runStagedImport({
       onProgress: (written, total) => onProgress?.('importing', { written, total }),
       stamp: runId != null ? `import:${definition.label || definition.key}:run-${runId}` : null
     })
+    if (runId != null) await storeRunReport(runId, summary, rows.length, parseMs, loadMs)
     if (summary.failed > 0 && summary.created + summary.updated === 0) {
       // Nothing landed — surface as a failed run, not a quiet "completed".
       throw new Error(`Import wrote nothing:\n${summary.log}`)
     }
     const durationSeconds = Math.round((Date.now() - began) / 1000)
     await onProgress?.('completed', { row_count: rows.length, duration: durationSeconds })
-    return { rowCount: rows.length, durationSeconds, summary: summary.log }
+    return {
+      rowCount: rows.length,
+      durationSeconds,
+      summary: summary.log,
+      affected: summary.affected,
+      matched: summary.matched
+    }
   }
 
   // A registered processor: the rows are classified against live data and
@@ -618,36 +701,7 @@ export async function runStagedImport({
       onProgress: (written, total) => onProgress?.('importing', { written, total }),
       stamp: runId != null ? `import:${definition.label || definition.key}:run-${runId}` : null
     })
-    if (runId != null) {
-      const skippedTotal = Object.values(result.skipped).reduce((a, b) => a + b, 0)
-      const collections: Record<string, { created: number; updated: number }> = {}
-      for (const it of result.items ?? []) {
-        if (!it.collection || (it.kind !== 'created' && it.kind !== 'updated')) continue
-        const c = (collections[it.collection] ??= { created: 0, updated: 0 })
-        if (it.kind === 'created') c.created++
-        else c.updated++
-      }
-      const report: ImportRunReport = {
-        counts: {
-          created: result.created,
-          updated: result.updated,
-          unchanged: result.unchanged,
-          skipped: skippedTotal,
-          failed: result.failed,
-          ...(result.report?.other?.length ? { other: result.report.other } : {})
-        },
-        skipped: result.skipped,
-        phases: [
-          { key: 'read-file', label: 'Read the file', ms: parseMs, count: rows.length },
-          { key: 'staging', label: 'Kept a copy of the file', ms: loadMs, count: rows.length },
-          ...(result.report?.phases ?? [])
-        ],
-        unmatched: result.report?.unmatched ?? [],
-        notes: result.report?.notes ?? [],
-        collections
-      }
-      await saveRunReport(runId, report, result.items ?? [])
-    }
+    if (runId != null) await storeRunReport(runId, result, rows.length, parseMs, loadMs)
     if (result.failed > 0 && result.created + result.updated === 0) {
       throw new Error(`Import wrote nothing:\n${result.log}`)
     }

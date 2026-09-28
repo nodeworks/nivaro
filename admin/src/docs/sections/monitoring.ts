@@ -205,6 +205,51 @@ ctx.importProcessors.register({
       type: 'note',
       text: 'The staging table is still loaded before a processor runs, so it stays the record of the last file and post-run flows that read it keep working. The records a run changed are handed to those flows as `affected` in the payload. If the extension that owns the processor is not loaded on an instance, the definition falls back to its procedure and the run says so.'
     },
+    { type: 'h3', id: 'imports-table-config', text: 'Configuring a table import' },
+    {
+      type: 'p',
+      text: "A service-mode definition's configuration describes one collection per file (or several, in order, with `steps`): which file column feeds which field, how a name in the file becomes the id of the record it names, which sets of links the file states, and what runs afterwards. A run resolves the names once per column, builds one record per row (the last row of a repeated key counts), reads the stored records the file names, writes only what differs, brings each record's links to the file's set, and reports every step: what changed field by field, what was left out and why, which values matched nothing, which keys the collection already holds more than once."
+    },
+    {
+      type: 'pre',
+      code: `{
+  "collection": "units", "noun": "unit", "label_field": "system_id",
+  "match_by": ["system_id"], "duplicates": "refuse", "require_value": ["system_id"],
+  "columns": {
+    "system_id": { "field": "system_id", "type": "string" },
+    "name":      { "field": "name", "type": "string", "blank": "keep" },
+    "project":   { "field": "project", "type": "int", "blank": "keep", "unmatched": "keep",
+                   "lookup": { "collection": "projects", "match_field": "project_id", "ambiguous": "unmatched" } }
+  },
+  "links": {
+    "funding_years": { "column": "funding_years", "separator": "|", "junction": "units_funding_years",
+                       "parent_field": "units_id", "related_field": "funding_years_id", "mode": "replace" }
+  },
+  "after": [{ "procedure": "update_unit_spend", "args": { "Projects": "$touched.project" } }],
+  "write": { "mode": "auto", "batch_over": 500 }
+}`
+    },
+    {
+      type: 'table',
+      head: ['Key', 'Meaning'],
+      rows: [
+        ['match_by / match_optional', 'The fields that identify one record; an optional key field may be empty, and an empty value matches an empty value.'],
+        ['duplicates', 'A key the collection already holds more than once: write the first, write all, or refuse the row and name the records.'],
+        ['columns.<file column>', 'field, type (string, int, number, boolean, date, datetime), from (read another column), blank (clear or keep), default, map + map_else, case, aggregate: sum.'],
+        ['lookup', 'collection + match_field (or match_label for a display label); scope narrows by more columns; match_lookup resolves the file text first when the match field holds a reference; ambiguous decides a name held twice (first or unmatched); fallback tries a second collection; create_with fills a created record.'],
+        ['unmatched', 'A name that matches nothing: drop the row, store nothing, keep what the record holds, or create the record. A name that matches several records is never created.'],
+        ['links.<name>', 'A junction set the file states: column + separator + lookup, or via ({link, column}) to follow a column of the records another link resolved. mode replace brings the record to the file\'s set — only on a row whose every value matched; add only adds. per_row: the rows of a key add up.'],
+        ['compute / set / set_on_update / where', 'A field from an expression over the row; constants on created records; constants on every stored record the file names; the stored records the file may touch.'],
+        ['update_only / create_only', 'Never create, or never update.'],
+        ['after', 'Procedures run once after the rows landed; $touched.<field> passes the distinct values the run wrote.'],
+        ['write', 'items (every write through the items service), batch (set-based with per-record history), or auto with batch_over.'],
+        ['keep_staging', 'Load the staging table as well, for a procedure or flow that reads it.']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The preview is the same run with nothing written. In a steps import the preview also carries what an earlier step would create into the later steps, so a file that adds a connector and the jumpers that use it reports both.'
+    },
     { type: 'h3', id: 'imports-run-detail', text: 'Reading a run' },
     {
       type: 'p',

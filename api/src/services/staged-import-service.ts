@@ -1,7 +1,5 @@
-import { db } from '../db/index.js'
-import type { User } from '../types.js'
-import { createOne, updateOne } from './items.js'
-import { getLabels } from './queues.js'
+import type { ImportRunItem, ImportRunPhase, ImportRunUnmatched } from './import-run-report.js'
+import { parseTableConfig, runTableImport, type TableImportConfig } from './table-import.js'
 
 /**
  * Service-mode processor for staged imports.
@@ -21,7 +19,10 @@ import { getLabels } from './queues.js'
  * nothing at all. Rows a procedure would have silently dropped (unresolvable
  * lookup) are counted and reported instead.
  *
- * Config lives on the definition row as `service_config` JSON.
+ * Config lives on the definition row as `service_config` JSON. The keys below
+ * are the ones every service-mode definition has used from the start; the
+ * importer itself is `table-import.ts`, whose configuration adds links to
+ * many, computed values, set-based writes and follow-up procedures.
  */
 
 export interface ServiceColumnConfig {
@@ -101,135 +102,27 @@ export interface ServiceImportSummary {
   samples?: ServiceImportSamples
   failed: number
   log: string
+  /** Records the run changed, per collection. */
+  affected?: Record<string, Array<string | number>>
+  /** Every stored record the file named, changed or not, per collection. */
+  matched?: Record<string, Array<string | number>>
+  /** Where the time went, which values matched nothing, what else to know. */
+  report?: {
+    phases: ImportRunPhase[]
+    unmatched: ImportRunUnmatched[]
+    notes: string[]
+    other: Array<{ label: string; count: number }>
+  }
+  /** One entry per record created or changed and per file row left out. */
+  items?: ImportRunItem[]
 }
 
-const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
-const CHUNK = 500
-
-export function parseServiceConfig(raw: unknown): ServiceImportConfig | null {
-  if (!raw) return null
-  try {
-    const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw
-    if (!cfg || typeof cfg !== 'object') return null
-    const c = cfg as ServiceImportConfig
-    if (!c.collection || !IDENT.test(c.collection) || /^nivaro_/i.test(c.collection)) return null
-    // match_by [] is valid — append-only: every file row creates.
-    if (!Array.isArray(c.match_by)) return null
-    if (!c.columns || typeof c.columns !== 'object') return null
-    return c
-  } catch {
-    return null
-  }
-}
-
-/** The worker has no request — writes run as the user who queued the file, so
- *  RBAC applies to them like any other write. */
-async function loadUser(userId: string | null): Promise<User> {
-  if (!userId) throw new Error('Service-mode import requires a queuing user (created_by missing)')
-  const row = await db('nivaro_users').where('id', userId).first()
-  if (!row) throw new Error(`Queuing user ${userId} not found`)
-  return row as User
-}
-
-function coerce(value: string, type: ServiceColumnConfig['type']): unknown {
-  const v = value.trim()
-  if (v === '') return null
-  if (type === 'int') {
-    const n = Number.parseInt(v.replace(/,/g, ''), 10)
-    return Number.isFinite(n) ? n : null
-  }
-  if (type === 'number') {
-    const n = Number(v.replace(/[,$%]/g, ''))
-    return Number.isFinite(n) ? n : null
-  }
-  if (type === 'boolean') {
-    const low = v.toLowerCase()
-    if (['true', 'yes', 'y', '1'].includes(low)) return true
-    if (['false', 'no', 'n', '0'].includes(low)) return false
-    return null
-  }
-  if (type === 'date' || type === 'datetime') {
-    const d = new Date(v)
-    if (Number.isNaN(d.getTime())) return null
-    return type === 'date'
-      ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      : d
-  }
-  return v
-}
-
-/** Normalize a value for diff comparison. Dates (JS Date or yyyy-mm-dd-ish
- *  string) reduce to their UTC calendar day — MSSQL `date` columns come back
- *  as JS Dates at UTC midnight, payloads carry 'yyyy-mm-01' strings, and the
- *  two must compare equal. */
-function normForDiff(value: unknown): string {
-  if (value == null) return ''
-  if (value instanceof Date) {
-    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`
-  }
-  if (typeof value === 'number') return String(Math.round(value * 100) / 100)
-  const s = String(value).trim()
-  const dateish = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (dateish) return `${dateish[1]}-${dateish[2]}-${dateish[3]}`
-  const n = Number(s)
-  if (s !== '' && Number.isFinite(n)) return String(Math.round(n * 100) / 100)
-  return s
-}
-
-const normLabel = (v: string) =>
-  v
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-
-async function resolveLookup(
-  cfg: NonNullable<ServiceColumnConfig['lookup']>,
-  values: Set<string>
-): Promise<Map<string, unknown>> {
-  if (!IDENT.test(cfg.collection)) throw new Error(`Unsafe lookup collection: ${cfg.collection}`)
-  const map = new Map<string, unknown>()
-  if (cfg.match_label) {
-    const ids = (
-      (await db(cfg.collection).orderBy('id', 'asc').limit(5000).select('id')) as Array<{
-        id: unknown
-      }>
-    ).map((r) => String(r.id))
-    const labels = await getLabels(new Map([[cfg.collection, new Set(ids)]]))
-    const byNorm = new Map<string, string>()
-    for (const id of ids) {
-      const l = labels[`${cfg.collection}:${id}`]
-      if (!l) continue
-      const k = normLabel(l)
-      if (!byNorm.has(k)) byNorm.set(k, id)
-    }
-    for (const v of values) {
-      const hit = byNorm.get(normLabel(v))
-      if (hit != null) map.set(v.toLowerCase(), hit)
-    }
-    return map
-  }
-  if (!cfg.match_field || !IDENT.test(cfg.match_field)) {
-    throw new Error(`Unsafe lookup config: ${cfg.collection}.${String(cfg.match_field)}`)
-  }
-  const list = [...values]
-  for (let i = 0; i < list.length; i += CHUNK) {
-    const rows = await db(cfg.collection)
-      .whereIn(cfg.match_field, list.slice(i, i + CHUNK))
-      .orderBy('id', 'asc')
-      .select('id', cfg.match_field)
-    for (const r of rows as Array<Record<string, unknown>>) {
-      const key = String(r[cfg.match_field ?? ''] ?? '')
-        .trim()
-        .toLowerCase()
-      // first (lowest id) wins — MIN(id) convention for duplicate match values
-      if (!map.has(key)) map.set(key, r.id)
-    }
-  }
-  return map
+export function parseServiceConfig(raw: unknown): TableImportConfig | null {
+  return parseTableConfig(raw)
 }
 
 export interface RunServiceImportOptions {
-  config: ServiceImportConfig
+  config: TableImportConfig
   /** Parsed + header-mapped rows (staging column names as keys). */
   rows: Array<Record<string, string>>
   createdBy: string | null
@@ -244,282 +137,8 @@ export interface RunServiceImportOptions {
   stamp?: string | null
 }
 
-export async function runServiceImport({
-  config,
-  rows,
-  createdBy,
-  onProgress,
-  dryRun = false,
-  sampleLimit = 25,
-  stamp = null
-}: RunServiceImportOptions): Promise<ServiceImportSummary> {
-  const user = await loadUser(createdBy)
-  const skipped: Record<string, number> = {}
-  const samples: ServiceImportSamples = {
-    creates: [],
-    updates: [],
-    skipped_rows: [],
-    would_create_lookups: []
-  }
-  const skip = (reason: string, row?: number, key?: string | null) => {
-    skipped[reason] = (skipped[reason] ?? 0) + 1
-    if (dryRun && row != null && samples.skipped_rows.length < sampleLimit)
-      samples.skipped_rows.push({ row, key: key ?? null, reason })
-  }
-
-  // ── lookups, one batched resolve per configured lookup column ─────────────
-  const lookupCreated: string[] = []
-  const lookupMaps = new Map<string, Map<string, unknown>>()
-  for (const [col, cc] of Object.entries(config.columns)) {
-    if (!cc.lookup) continue
-    const values = new Set<string>()
-    for (const r of rows) {
-      const v = (r[col] ?? '').trim()
-      if (v) values.add(v)
-    }
-    const map = await resolveLookup(cc.lookup, values)
-    if (
-      dryRun &&
-      cc.lookup.on_missing === 'create' &&
-      cc.lookup.match_field &&
-      !cc.lookup.match_label
-    ) {
-      const missing = [...values].filter((v) => !map.has(v.toLowerCase()))
-      if (missing.length)
-        samples.would_create_lookups.push({
-          column: col,
-          collection: cc.lookup.collection,
-          values: missing.slice(0, sampleLimit)
-        })
-      // Pretend they exist so the rows classify as creates rather than drops.
-      for (const v of missing) map.set(v.toLowerCase(), `(new ${cc.lookup.collection})`)
-    } else if (
-      cc.lookup.on_missing === 'create' &&
-      cc.lookup.match_field &&
-      !cc.lookup.match_label
-    ) {
-      // Stub-create unmatched values through the items service so the rows
-      // are revisioned/attributed like any other write.
-      let stubbed = 0
-      for (const v of values) {
-        if (map.has(v.toLowerCase())) continue
-        try {
-          const created = await createOne(
-            user,
-            cc.lookup.collection,
-            { [cc.lookup.match_field as string]: v },
-            undefined,
-            undefined,
-            { skipRollupRecalc: true }
-          )
-          const id = (created as { id?: unknown })?.id
-          if (id != null) {
-            map.set(v.toLowerCase(), id)
-            stubbed++
-          }
-        } catch {
-          skip(`could not create ${cc.lookup.collection} for ${col}`)
-        }
-      }
-      if (stubbed) lookupCreated.push(`${stubbed} new ${cc.lookup.collection} row(s) from ${col}`)
-    }
-    lookupMaps.set(col, map)
-  }
-
-  // ── transform file rows → target payloads ─────────────────────────────────
-  const payloads: Array<Record<string, unknown>> = []
-  const rowIndexOf = new Map<Record<string, unknown>, number>()
-  for (const [ri, r] of rows.entries()) {
-    const rowNo = ri + 1
-    const out: Record<string, unknown> = {}
-    let drop: string | null = null
-    for (const [col, cc] of Object.entries(config.columns)) {
-      const raw = (r[col] ?? '').trim()
-      if (cc.lookup) {
-        const om = cc.lookup.on_missing
-        if (!raw) {
-          if (om) {
-            out[cc.field] = null
-            continue
-          }
-          drop = `empty ${col}`
-          break
-        }
-        const id = lookupMaps.get(col)?.get(raw.toLowerCase())
-        if (id == null) {
-          // 'create' mode already tried to stub the value — reaching here
-          // means the create itself failed; both modes degrade to null.
-          if (om) {
-            out[cc.field] = null
-            skip(`no ${cc.lookup.collection} match for ${col} (left empty)`, rowNo)
-            continue
-          }
-          drop = `no ${cc.lookup.collection} match for ${col}`
-          break
-        }
-        out[cc.field] = id
-      } else {
-        out[cc.field] = coerce(raw, cc.type)
-      }
-    }
-    if (!drop && config.month_from) {
-      const y = Number.parseInt((r[config.month_from.year_column] ?? '').trim(), 10)
-      const m = Number.parseInt((r[config.month_from.month_column] ?? '').trim(), 10)
-      if (!Number.isInteger(y) || y < 2000 || y > 2100 || !Number.isInteger(m) || m < 1 || m > 12) {
-        drop = 'invalid year/month'
-      } else {
-        out[config.month_from.field] = `${y}-${String(m).padStart(2, '0')}-01`
-      }
-    }
-    if (!drop) {
-      for (const f of config.require_value ?? []) {
-        if (out[f] == null) {
-          drop = `empty ${f}`
-          break
-        }
-      }
-    }
-    if (drop)
-      skip(
-        drop,
-        rowNo,
-        config.match_by.length ? config.match_by.map((f) => String(out[f] ?? '')).join('|') : null
-      )
-    else {
-      payloads.push(out)
-      rowIndexOf.set(out, rowNo)
-    }
-  }
-
-  // ── dedupe: last file row per natural key wins (the procs' ROW_NUMBER) ────
-  // Empty match_by = append-only: every payload is its own row, nothing
-  // matches existing data, everything creates.
-  const appendOnly = config.match_by.length === 0
-  const keyOf = (row: Record<string, unknown>) =>
-    config.match_by.map((f) => normForDiff(row[f])).join('|')
-  const byKey = new Map<string, Record<string, unknown>>()
-  if (appendOnly) {
-    payloads.forEach((p, i) => byKey.set(`#${i}`, p))
-  } else {
-    for (const p of payloads) {
-      const k = keyOf(p)
-      // Last file row per key wins — the EARLIER row is the one dropped.
-      if (byKey.has(k))
-        skip(
-          'duplicate key in file (a later row wins)',
-          rowIndexOf.get(byKey.get(k) as Record<string, unknown>),
-          k
-        )
-      byKey.set(k, p)
-    }
-  }
-
-  // ── existing rows, chunked on the first key column's distinct values ──────
-  const firstKey = config.match_by[0]
-  if (!IDENT.test(config.collection) || config.match_by.some((f) => !IDENT.test(f))) {
-    throw new Error('Unsafe service_config identifiers')
-  }
-  const compareFields = [...new Set(Object.values(config.columns).map((c) => c.field))]
-  if (config.month_from) compareFields.push(config.month_from.field)
-  const firstVals = appendOnly
-    ? []
-    : [...new Set([...byKey.values()].map((p) => p[firstKey]))].filter((v) => v != null)
-  const existingByKey = new Map<string, Record<string, unknown>>()
-  for (let i = 0; i < firstVals.length; i += CHUNK) {
-    const rows2 = await db(config.collection)
-      .whereIn(firstKey, firstVals.slice(i, i + CHUNK) as Array<string | number>)
-      .select('id', ...new Set([...config.match_by, ...compareFields]))
-    for (const er of rows2 as Array<Record<string, unknown>>) existingByKey.set(keyOf(er), er)
-  }
-
-  // ── diff + write through the items service ────────────────────────────────
-  let created = 0
-  let updated = 0
-  let unchanged = 0
-  let failed = 0
-  const failures: string[] = []
-  const total = byKey.size
-  const now = new Date()
-  for (const [k, payload] of byKey) {
-    const existing = existingByKey.get(k)
-    try {
-      if (!existing && config.update_only) {
-        skip(
-          `no existing ${config.collection} match (update-only import)`,
-          rowIndexOf.get(payload),
-          k
-        )
-        continue
-      }
-      if (!existing) {
-        const body = { ...payload }
-        if (config.timestamps?.create) body[config.timestamps.create] = now
-        if (stamp) body._change_reason = stamp
-        if (dryRun) {
-          if (samples.creates.length < sampleLimit)
-            samples.creates.push({ key: k, values: payload })
-        } else {
-          await createOne(user, config.collection, body, undefined, undefined, {
-            skipRollupRecalc: false
-          })
-        }
-        created++
-      } else {
-        const patch: Record<string, unknown> = {}
-        for (const f of compareFields) {
-          if (config.match_by.includes(f)) continue
-          if (normForDiff(payload[f]) !== normForDiff(existing[f])) patch[f] = payload[f]
-        }
-        if (Object.keys(patch).length === 0) {
-          unchanged++
-        } else {
-          if (dryRun) {
-            if (samples.updates.length < sampleLimit)
-              samples.updates.push({
-                key: k,
-                id: existing.id,
-                changes: Object.keys(patch).map((f) => ({
-                  field: f,
-                  from: existing[f],
-                  to: payload[f]
-                }))
-              })
-          } else {
-            if (config.timestamps?.update) patch[config.timestamps.update] = now
-            if (stamp) patch._change_reason = stamp
-            await updateOne(user, config.collection, String(existing.id), patch)
-          }
-          updated++
-        }
-      }
-    } catch (err) {
-      failed++
-      if (failures.length < 5) {
-        failures.push(`${k}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-    const written = created + updated + unchanged + failed
-    if (written % 100 === 0) await onProgress?.(written, total)
-  }
-
-  const skippedTotal = Object.values(skipped).reduce((a, b) => a + b, 0)
-  const parts = [
-    `${created} created`,
-    `${updated} updated`,
-    `${unchanged} unchanged`,
-    skippedTotal ? `${skippedTotal} skipped` : null,
-    failed ? `${failed} FAILED` : null
-  ].filter(Boolean)
-  const detail: string[] = []
-  for (const [reason, n] of Object.entries(skipped)) detail.push(`  skipped ${n}: ${reason}`)
-  for (const f of failures) detail.push(`  failed ${f}`)
-  return {
-    created,
-    updated,
-    unchanged,
-    skipped,
-    failed,
-    log: [parts.join(', '), ...detail].join('\n'),
-    ...(dryRun ? { samples } : {})
-  }
+export async function runServiceImport(
+  opts: RunServiceImportOptions
+): Promise<ServiceImportSummary> {
+  return runTableImport(opts)
 }

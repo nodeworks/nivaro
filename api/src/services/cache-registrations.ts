@@ -14,8 +14,9 @@ import { bustContractCache } from './integration-contracts.js'
 import { bustMailTemplateOverrides } from './mail.js'
 import { bustNotificationTemplateCache } from './notification-templates.js'
 import { bustOwnerGroupCache } from './pipeline-engine.js'
-import { bustRollupContributorCache } from './rollups.js'
 import { clearRelationLimitCache } from './relation-limits.js'
+import { clearPickerRuleCache } from './picker-rules.js'
+import { bustRollupContributorCache } from './rollups.js'
 import { clearRowRuleCache } from './row-rules-autofill.js'
 import { bustSectionLockCache } from './section-locks.js'
 import { bustInstanceOverridesCache } from './settings-overrides.js'
@@ -91,6 +92,7 @@ export function registerKnownCaches(): void {
     'Unique-row and link limits enforced on write',
     clearRelationLimitCache
   )
+  registerCache('picker-rules', 'Picker rules enforced on write', clearPickerRuleCache)
   registerCache('section-locks', 'Sections locked per role', bustSectionLockCache)
   registerCache('tree-permissions', 'Which collections carry subtree permission rules', () =>
     clearTreePermissionCache()

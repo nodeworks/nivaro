@@ -34,6 +34,8 @@
     "ai:chat-guide": "tsx extensions/efp-ops/scripts/ai-chat-guide.ts",
     "po:service-import": "tsx extensions/efp-ops/scripts/po-service-import.ts",
     "invoice:service-import": "tsx extensions/efp-ops/scripts/invoice-service-import.ts",
+    "import:services": "tsx extensions/efp-ops/scripts/import-services.ts",
+    "retire:imports": "tsx extensions/efp-ops/scripts/retire-imports.ts",
     "fix:invoice-copies": "tsx extensions/efp-ops/scripts/fix-invoice-copies.ts",
     "retire:workflow-task": "tsx extensions/efp-ops/scripts/retire-workflow-task.ts",
     "pipeline:row-menu": "tsx extensions/efp-ops/scripts/row-menu-transitions.ts",

@@ -30,6 +30,11 @@ export function clearAccountabilityCache(collection?: string): void {
   else levelCache.clear()
 }
 
+/** How much history a collection keeps: all (activity + revision), activity, none. */
+export async function auditLevelOf(collection: string): Promise<AuditLevel> {
+  return auditLevel(collection)
+}
+
 async function auditLevel(collection: string): Promise<AuditLevel> {
   const hit = levelCache.get(collection)
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.level
