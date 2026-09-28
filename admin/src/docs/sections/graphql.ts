@@ -32,6 +32,11 @@ export const graphqlOverview: DocSection = {
     {
       type: 'p',
       text: 'A query is measured before it executes. The total number of selected fields is capped at `GRAPHQL_MAX_SELECTIONS` (default 2500). Nesting depth is unlimited by default — set `GRAPHQL_MAX_DEPTH` on the instance to cap it, or give a named API key its own `graphql_max_depth`, which applies only to that key. A refused query answers HTTP 400 with an `errors[]` message naming the measured cost and the limit.'
+    },
+    { type: 'h2', id: 'graphql-analytics', text: 'Operation analytics' },
+    {
+      type: 'p',
+      text: "Every GraphQL request logs the operation it ran (its name, else the first root field), its kind, the measured depth and selection count, how many errors the answer carried, and which `@deprecated` fields it selected. Monitoring → API Analytics → GraphQL by operation shows each operation's calls, p50/p95 latency, error rate, average cost, top callers and slowest calls (`GET /api/api-analytics/graphql?hours=`); a strip above it names every deprecated field still being selected and by whom — what to check before the deprecation window closes."
     }
   ]
 }

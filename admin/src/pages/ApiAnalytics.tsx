@@ -2,7 +2,7 @@ import { createNivaro } from '@nivaro/sdk'
 import { ApiRequestLog, NivaroProvider } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { SlowTracesPanel } from '@/components/slow-traces'
 import { Button } from '@/components/ui/button'
@@ -294,6 +294,9 @@ export function ApiAnalyticsPage() {
           <ByKeyPanel hours={hours} />
         </div>
         <div className='mt-6'>
+          <GraphqlPanel hours={hours} />
+        </div>
+        <div className='mt-6'>
           <SlowTracesPanel />
         </div>
         <div className='mt-6'>
@@ -374,6 +377,175 @@ function ByKeyPanel({ hours }: { hours: number }) {
                 {k.last_seen ? new Date(k.last_seen).toLocaleString() : '—'}
               </TableCell>
             </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+/** Per-operation GraphQL view (#607): the one path integrations hit, split
+ *  by what each call asked for. Deprecated fields still being selected are
+ *  listed with who selects them — the deprecation policy's other half. */
+function GraphqlPanel({ hours }: { hours: number }) {
+  const { data } = useQuery<{
+    operations: Array<{
+      operation: string
+      kind: string | null
+      count: number
+      errors: number
+      error_rate: number
+      p50: number
+      p95: number
+      max: number
+      avg_depth: number | null
+      avg_selections: number | null
+      callers: Array<{ caller: string; count: number }>
+      slowest: Array<{
+        id: number | string
+        at: string
+        latency_ms: number
+        caller: string
+        failed: boolean
+      }>
+      deprecated_fields: string[]
+      last_seen: string
+    }>
+    deprecated: Array<{
+      field: string
+      count: number
+      operations: string[]
+      callers: Array<{ caller: string; count: number }>
+      last_seen: string
+    }>
+    total: number
+    unavailable: boolean
+  }>({
+    queryKey: ['api-analytics-graphql', hours],
+    queryFn: () => api.get(`/api-analytics/graphql?hours=${hours}`).then((r) => r.data.data)
+  })
+  const [open, setOpen] = useState<string | null>(null)
+  if (!data || data.unavailable || data.operations.length === 0) return null
+  return (
+    <div
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-graphql-analytics
+    >
+      <div className='border-b border-slate-200 px-4 py-3 dark:border-border'>
+        <p className='text-[13px] font-medium'>GraphQL by operation</p>
+        <p className='text-[11.5px] text-muted-foreground'>
+          {formatNumber(data.total)} GraphQL calls in the window, by the operation each one ran.
+          Click an operation for its callers and slowest calls.
+        </p>
+      </div>
+      {data.deprecated.length > 0 && (
+        <div
+          className='border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100'
+          data-graphql-deprecated
+        >
+          <span className='font-medium'>Deprecated fields still selected:</span>{' '}
+          {data.deprecated.map((d) => (
+            <span
+              key={d.field}
+              className='mr-3 inline-block'
+              data-graphql-deprecated-field={d.field}
+            >
+              <code className='font-mono'>{d.field}</code> · {formatNumber(d.count)} calls ·{' '}
+              {d.callers.map((c) => c.caller).join(', ')}
+            </span>
+          ))}
+        </div>
+      )}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className='text-[11px]'>Operation</TableHead>
+            <TableHead className='w-20 text-[11px]'>Kind</TableHead>
+            <TableHead className='w-20 text-right text-[11px]'>Calls</TableHead>
+            <TableHead className='w-20 text-right text-[11px]'>p50 ms</TableHead>
+            <TableHead className='w-20 text-right text-[11px]'>p95 ms</TableHead>
+            <TableHead className='w-24 text-right text-[11px]'>Errors</TableHead>
+            <TableHead className='w-24 text-right text-[11px]'>Depth · sel.</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.operations.map((o) => (
+            <React.Fragment key={o.operation}>
+              <TableRow
+                className='cursor-pointer'
+                data-graphql-operation={o.operation}
+                onClick={() => setOpen((v) => (v === o.operation ? null : o.operation))}
+              >
+                <TableCell className='text-[12px] font-medium'>
+                  {o.operation}
+                  {o.deprecated_fields.length > 0 && (
+                    <span className='ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200'>
+                      deprecated fields
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className='text-[12px] text-muted-foreground'>{o.kind ?? '—'}</TableCell>
+                <TableCell className='text-right text-[12px]'>{formatNumber(o.count)}</TableCell>
+                <TableCell className='text-right text-[12px]'>{o.p50}</TableCell>
+                <TableCell className='text-right text-[12px]'>{o.p95}</TableCell>
+                <TableCell
+                  className={cn(
+                    'text-right text-[12px]',
+                    o.errors > 0 && 'text-red-600 dark:text-red-400'
+                  )}
+                >
+                  {o.errors > 0 ? `${o.errors} (${o.error_rate}%)` : '0'}
+                </TableCell>
+                <TableCell className='text-right text-[12px] text-muted-foreground'>
+                  {o.avg_depth ?? '—'} · {o.avg_selections ?? '—'}
+                </TableCell>
+              </TableRow>
+              {open === o.operation && (
+                <TableRow data-graphql-operation-detail={o.operation}>
+                  <TableCell colSpan={7} className='bg-slate-50 dark:bg-background'>
+                    <div className='grid gap-4 py-1 text-[12px] sm:grid-cols-2'>
+                      <div>
+                        <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground'>
+                          Top callers
+                        </p>
+                        <ul>
+                          {o.callers.map((c) => (
+                            <li key={c.caller} className='flex justify-between'>
+                              <span>{c.caller}</span>
+                              <span className='tabular-nums text-muted-foreground'>
+                                {formatNumber(c.count)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        {o.deprecated_fields.length > 0 && (
+                          <p className='mt-2 text-amber-800 dark:text-amber-200'>
+                            Selects deprecated:{' '}
+                            <code className='font-mono'>{o.deprecated_fields.join(', ')}</code>
+                          </p>
+                        )}
+                      </div>
+                      <div>
+                        <p className='mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground'>
+                          Slowest calls
+                        </p>
+                        <ul>
+                          {o.slowest.map((s) => (
+                            <li key={String(s.id)} className='flex justify-between gap-2'>
+                              <span className='truncate'>
+                                {new Date(s.at).toLocaleString()} · {s.caller}
+                                {s.failed ? ' · failed' : ''}
+                              </span>
+                              <span className='shrink-0 tabular-nums'>{s.latency_ms} ms</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
+            </React.Fragment>
           ))}
         </TableBody>
       </Table>

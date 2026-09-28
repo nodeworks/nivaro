@@ -19,6 +19,14 @@ interface ApiLogRow {
   error: string | null
   query: string | null
   request_body: string | null
+  /** GraphQL operation analytics (#607, migration 362) — null on every
+   *  non-GraphQL row and on a tenant behind the migration. */
+  graphql_operation?: string | null
+  graphql_kind?: string | null
+  graphql_depth?: number | null
+  graphql_selections?: number | null
+  graphql_errors?: number | null
+  graphql_deprecated?: string | null
   created_at: Date
   /** The request's integration chain (plugins/chain.ts). */
   chain_id?: string | null
@@ -30,6 +38,30 @@ interface ApiLogRow {
 // caller, not a person's browser session) so a rejected push can be replayed
 // from the request log. Capped; multipart and non-JSON bodies are skipped.
 const REQUEST_BODY_CAP = 64 * 1024
+interface GraphQLStampLike {
+  operation: string | null
+  kind: string | null
+  depth: number | null
+  selections: number | null
+  errors: number
+  deprecated: string[]
+}
+
+/** The GraphQL columns of a log row, from the stamp plugins/graphql.ts left
+ *  on the request; nothing for every other request. */
+function graphqlColumns(req: { __nvrGql?: GraphQLStampLike }): Partial<ApiLogRow> {
+  const g = req.__nvrGql
+  if (!g) return {}
+  return {
+    graphql_operation: g.operation,
+    graphql_kind: g.kind,
+    graphql_depth: g.depth,
+    graphql_selections: g.selections,
+    graphql_errors: g.errors,
+    graphql_deprecated: g.deprecated.length > 0 ? g.deprecated.join(',').slice(0, 500) : null
+  }
+}
+
 function captureRequestBody(req: {
   method: string
   authMethod?: string
@@ -122,9 +154,23 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       const stamp = await hasChainColumns('nivaro_api_logs')
       const chained = stamp ? rows : rows.map(({ chain_id: _c, chain_parent: _p, ...rest }) => rest)
       // Same for the query string (migration 357).
-      const shaped = (await hasColumn('nivaro_api_logs', 'query'))
+      const withQuery = (await hasColumn('nivaro_api_logs', 'query'))
         ? chained
         : chained.map(({ query: _q, ...rest }) => rest)
+      // And the GraphQL columns (migration 362).
+      const shaped = (await hasColumn('nivaro_api_logs', 'graphql_operation'))
+        ? withQuery
+        : withQuery.map(
+            ({
+              graphql_operation: _a,
+              graphql_kind: _b,
+              graphql_depth: _c,
+              graphql_selections: _d,
+              graphql_errors: _e,
+              graphql_deprecated: _f,
+              ...rest
+            }) => rest
+          )
       // Insert in modest chunks to stay under MSSQL parameter limits
       for (let i = 0; i < shaped.length; i += 50) {
         await db('nivaro_api_logs').insert(shaped.slice(i, i + 50))
@@ -225,6 +271,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
           headers: Record<string, unknown>
         }
       ),
+      ...graphqlColumns(req as unknown as { __nvrGql?: GraphQLStampLike }),
       created_at: new Date(),
       chain_id: req.chainId ?? null,
       chain_parent: req.chainParent ?? null

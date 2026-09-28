@@ -15,7 +15,8 @@ export const obsApiAnalytics: DocSection = {
         'Filter by time range, route, method, status class, and user.',
         'p50/p95 are computed over the selected window; the error-rate card breaks down 4xx vs 5xx.',
         'The ring buffer self-prunes — no maintenance required and bounded storage.',
-        'The Requests panel is the per-request list behind the aggregates: newest first, filter by path, method, status class or how the caller authenticated (session, token, API key, masquerade, anonymous); expand a row for the client IP, user agent and — on a 4xx/5xx — the first kilobyte of the response body the caller received.'
+        'The Requests panel is the per-request list behind the aggregates: newest first, filter by path, method, status class or how the caller authenticated (session, token, API key, masquerade, anonymous); expand a row for the client IP, user agent and — on a 4xx/5xx — the first kilobyte of the response body the caller received.',
+        'GraphQL by operation splits the one /graphql path by what each call ran: calls, p50/p95, error rate (HTTP errors and 200 answers carrying errors), average depth and selections, top callers, the slowest calls, and every @deprecated field still selected with who selects it.'
       ]
     },
     {

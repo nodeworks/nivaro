@@ -3851,7 +3851,7 @@ Authorization: Bearer &lt;admin-token&gt;
         </div>
 
         <!-- GRAPHQL -->
-        <div class="doc-section" id="s-graphql-overview" data-toc='[{"id":"graphql-overview","label":"GraphQL API — Overview"},{"id":"graphql-cost-limits","label":"Query cost limits"}]'>
+        <div class="doc-section" id="s-graphql-overview" data-toc='[{"id":"graphql-overview","label":"GraphQL API — Overview"},{"id":"graphql-cost-limits","label":"Query cost limits"},{"id":"graphql-analytics","label":"Operation analytics"}]'>
           <!-- SYNC:graphql-overview -->
           <h1 class="doc-h1" id="graphql-overview">GraphQL API — Overview</h1>
           <p class="doc-p">Nivaro auto-generates a GraphQL schema from the live <code class="doc-code">nivaro_collections</code> + <code class="doc-code">nivaro_fields</code> metadata — the same source used to build the OpenAPI spec. Every non-hidden collection gets query and mutation fields automatically. Schema is rebuilt in the <code class="doc-code">onReady</code> hook when the server starts, and can be manually rebuilt at runtime.</p>
@@ -3864,6 +3864,8 @@ Authorization: Bearer &lt;admin-token&gt;
           <div class="doc-note">GraphQL queries and mutations go through the same RBAC permission layer as the REST API. Unauthenticated requests receive <code class="doc-code">UNAUTHENTICATED</code> errors; forbidden operations receive <code class="doc-code">FORBIDDEN</code> errors.</div>
           <h2 class="doc-h2" id="graphql-cost-limits">Query cost limits</h2>
           <p class="doc-p">A query is measured before it executes. The total number of selected fields is capped at <code class="doc-code">GRAPHQL_MAX_SELECTIONS</code> (default 2500). Nesting depth is unlimited by default — set <code class="doc-code">GRAPHQL_MAX_DEPTH</code> on the instance to cap it, or give a named API key its own <code class="doc-code">graphql_max_depth</code>, which applies only to that key. A refused query answers HTTP 400 with an <code class="doc-code">errors[]</code> message naming the measured cost and the limit.</p>
+          <h2 class="doc-h2" id="graphql-analytics">Operation analytics</h2>
+          <p class="doc-p">Every GraphQL request logs the operation it ran (its name, else the first root field), its kind, the measured depth and selection count, how many errors the answer carried, and which <code class="doc-code">@deprecated</code> fields it selected. Monitoring → API Analytics → GraphQL by operation shows each operation's calls, p50/p95 latency, error rate, average cost, top callers and slowest calls (<code class="doc-code">GET /api/api-analytics/graphql?hours=</code>); a strip above it names every deprecated field still being selected and by whom — what to check before the deprecation window closes.</p>
           <!-- /SYNC:graphql-overview -->
         </div>
 
@@ -15034,6 +15036,7 @@ POST /api/search/semantic/reindex
             <li>p50/p95 are computed over the selected window; the error-rate card breaks down 4xx vs 5xx.</li>
             <li>The ring buffer self-prunes — no maintenance required and bounded storage.</li>
             <li>The Requests panel is the per-request list behind the aggregates: newest first, filter by path, method, status class or how the caller authenticated (session, token, API key, masquerade, anonymous); expand a row for the client IP, user agent and — on a 4xx/5xx — the first kilobyte of the response body the caller received.</li>
+            <li>GraphQL by operation splits the one /graphql path by what each call ran: calls, p50/p95, error rate (HTTP errors and 200 answers carrying errors), average depth and selections, top callers, the slowest calls, and every @deprecated field still selected with who selects it.</li>
           </ul>
           <h2 class="doc-h2" id="api-analytics-traces">Slow requests: round trips, N+1s, the real plan</h2>
           <p class="doc-p">Requests slower than TRACE_SLOW_MS (default 1000) keep a waterfall of their phases. Each phase now also carries how many database round trips it made — at ~37ms per trip on a remote server, the count is the latency — and two flags the counter derives on its own: **N× same statement** when one statement shape ran five or more times inside a phase (an N+1), and **wide select** when a <code class="doc-code">select *</code> hit a table holding an nvarchar(max) column (the blob rides the wire whether or not anyone reads it). Below the waterfall the request's heaviest statement shapes are listed with their call counts.</p>

@@ -123,6 +123,217 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     })
   })
 
+  // GET /api-analytics/graphql?hours=24 — per-operation view of /graphql
+  // traffic (#607): latency percentiles, error rate, measured cost, callers,
+  // the slowest calls, and which @deprecated fields are still selected and by
+  // whom. Newest 20,000 GraphQL rows in the window, aggregated here.
+  app.get('/graphql', { preHandler: requireAdmin }, async (req, reply) => {
+    const { hours: hoursRaw } = req.query as { hours?: string }
+    const from = since(parseHours(hoursRaw))
+    if (!(await hasColumn('nivaro_api_logs', 'graphql_operation'))) {
+      return reply.send({ data: { operations: [], deprecated: [], total: 0, unavailable: true } })
+    }
+    type Row = {
+      id: number | string
+      created_at: Date | string
+      latency_ms: number
+      status: number
+      user: string | null
+      api_key_id: number | null
+      auth: string | null
+      graphql_operation: string | null
+      graphql_kind: string | null
+      graphql_depth: number | null
+      graphql_selections: number | null
+      graphql_errors: number | null
+      graphql_deprecated: string | null
+    }
+    const rows = (await db('nivaro_api_logs')
+      .where('created_at', '>=', from)
+      .whereNotNull('graphql_operation')
+      .orderBy('id', 'desc')
+      .limit(20000)
+      .select(
+        'id',
+        'created_at',
+        'latency_ms',
+        'status',
+        'user',
+        'api_key_id',
+        'auth',
+        'graphql_operation',
+        'graphql_kind',
+        'graphql_depth',
+        'graphql_selections',
+        'graphql_errors',
+        'graphql_deprecated'
+      )) as Row[]
+
+    const userIds = [...new Set(rows.map((r) => r.user).filter((u): u is string => !!u))]
+    const keyIds = [...new Set(rows.map((r) => r.api_key_id).filter((k): k is number => k != null))]
+    const [users, keys] = await Promise.all([
+      userIds.length
+        ? (db('nivaro_users')
+            .whereIn('id', userIds)
+            .select('id', 'first_name', 'last_name', 'email') as Promise<
+            Array<{
+              id: string
+              first_name: string | null
+              last_name: string | null
+              email: string
+            }>
+          >)
+        : Promise.resolve([]),
+      keyIds.length
+        ? (db('nivaro_api_keys').whereIn('id', keyIds).select('id', 'name') as Promise<
+            Array<{ id: number; name: string }>
+          >)
+        : Promise.resolve([])
+    ])
+    const userName = new Map(
+      users.map((u) => [
+        String(u.id).toUpperCase(),
+        `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email
+      ])
+    )
+    const keyName = new Map(keys.map((k) => [Number(k.id), k.name]))
+    const callerOf = (r: Row): string =>
+      r.api_key_id != null
+        ? `key · ${keyName.get(Number(r.api_key_id)) ?? `#${r.api_key_id}`}`
+        : r.user
+          ? (userName.get(String(r.user).toUpperCase()) ?? 'a person')
+          : r.auth === 'key_sim'
+            ? 'run-as-key session'
+            : 'anonymous'
+    const failed = (r: Row) => r.status >= 400 || Number(r.graphql_errors ?? 0) > 0
+
+    type Agg = {
+      operation: string
+      kind: string | null
+      count: number
+      errors: number
+      latencies: number[]
+      depth: number
+      depthN: number
+      selections: number
+      selectionsN: number
+      callers: Map<string, number>
+      slow: Array<{
+        id: number | string
+        at: string
+        latency_ms: number
+        caller: string
+        failed: boolean
+      }>
+      deprecated: Set<string>
+      last_seen: string
+    }
+    const byOp = new Map<string, Agg>()
+    const depUse = new Map<
+      string,
+      { count: number; operations: Set<string>; callers: Map<string, number>; last_seen: string }
+    >()
+    for (const r of rows) {
+      const name = r.graphql_operation ?? '(unnamed)'
+      const at = new Date(r.created_at).toISOString()
+      let a = byOp.get(name)
+      if (!a) {
+        a = {
+          operation: name,
+          kind: r.graphql_kind,
+          count: 0,
+          errors: 0,
+          latencies: [],
+          depth: 0,
+          depthN: 0,
+          selections: 0,
+          selectionsN: 0,
+          callers: new Map(),
+          slow: [],
+          deprecated: new Set(),
+          last_seen: at
+        }
+        byOp.set(name, a)
+      }
+      a.count++
+      if (failed(r)) a.errors++
+      a.latencies.push(Number(r.latency_ms) || 0)
+      if (r.graphql_depth != null) {
+        a.depth += Number(r.graphql_depth)
+        a.depthN++
+      }
+      if (r.graphql_selections != null) {
+        a.selections += Number(r.graphql_selections)
+        a.selectionsN++
+      }
+      const caller = callerOf(r)
+      a.callers.set(caller, (a.callers.get(caller) ?? 0) + 1)
+      a.slow.push({
+        id: r.id,
+        at,
+        latency_ms: Number(r.latency_ms) || 0,
+        caller,
+        failed: failed(r)
+      })
+      if (a.slow.length > 40) {
+        a.slow.sort((x, y) => y.latency_ms - x.latency_ms)
+        a.slow.length = 5
+      }
+      if (at > a.last_seen) a.last_seen = at
+      for (const f of (r.graphql_deprecated ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)) {
+        a.deprecated.add(f)
+        let d = depUse.get(f)
+        if (!d) {
+          d = { count: 0, operations: new Set(), callers: new Map(), last_seen: at }
+          depUse.set(f, d)
+        }
+        d.count++
+        d.operations.add(name)
+        d.callers.set(caller, (d.callers.get(caller) ?? 0) + 1)
+        if (at > d.last_seen) d.last_seen = at
+      }
+    }
+    const topCallers = (m: Map<string, number>) =>
+      [...m.entries()]
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, 3)
+        .map(([caller, count]) => ({ caller, count }))
+    const operations = [...byOp.values()]
+      .map((a) => {
+        const sorted = [...a.latencies].sort((x, y) => x - y)
+        return {
+          operation: a.operation,
+          kind: a.kind,
+          count: a.count,
+          errors: a.errors,
+          error_rate: a.count ? Math.round((a.errors / a.count) * 1000) / 10 : 0,
+          p50: percentile(sorted, 50),
+          p95: percentile(sorted, 95),
+          max: sorted[sorted.length - 1] ?? 0,
+          avg_depth: a.depthN ? Math.round((a.depth / a.depthN) * 10) / 10 : null,
+          avg_selections: a.selectionsN ? Math.round(a.selections / a.selectionsN) : null,
+          callers: topCallers(a.callers),
+          slowest: a.slow.sort((x, y) => y.latency_ms - x.latency_ms).slice(0, 5),
+          deprecated_fields: [...a.deprecated],
+          last_seen: a.last_seen
+        }
+      })
+      .sort((x, y) => y.count - x.count)
+    const deprecated = [...depUse.entries()]
+      .map(([field, d]) => ({
+        field,
+        count: d.count,
+        operations: [...d.operations].slice(0, 10),
+        callers: topCallers(d.callers),
+        last_seen: d.last_seen
+      }))
+      .sort((x, y) => y.count - x.count)
+    return reply.send({ data: { operations, deprecated, total: rows.length, unavailable: false } })
+  })
+
   // GET /api-analytics/by-key?hours=24 — per-API-key traffic (#67). Rows with
   // api_key_id NULL are session/static-token traffic and are excluded; a key
   // deleted since logging shows as its raw id rather than vanishing.

@@ -1,5 +1,14 @@
 import { markBootPhase } from '../services/boot-phases.js'
-import { execute, type GraphQLSchema, parse, validate } from 'graphql'
+import {
+  execute,
+  type GraphQLSchema,
+  Kind,
+  parse,
+  TypeInfo,
+  validate,
+  visit,
+  visitWithTypeInfo
+} from 'graphql'
 import { makeServer as makeWsServer } from 'graphql-ws'
 import { WebSocket, WebSocketServer } from 'ws'
 import { config } from '../config.js'
@@ -270,8 +279,14 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       return reply.send({ errors: [{ message: String(err) }] })
     }
 
+    // Operation analytics (#607): what this request asked for, on the log
+    // row the api-logger writes for it.
+    const gqlStamp = describeOperation(schema, document, body.operationName)
+    ;(req as unknown as { __nvrGql?: GraphQLStamp }).__nvrGql = gqlStamp
+
     const validationErrors = validate(schema, document)
     if (validationErrors.length > 0) {
+      gqlStamp.errors = validationErrors.length
       return reply.send({ errors: validationErrors })
     }
 
@@ -288,7 +303,10 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       const maxDepth = keyDepth ?? (Number.isFinite(envDepth) && envDepth > 0 ? envDepth : null)
       const maxSelections = Number(process.env.GRAPHQL_MAX_SELECTIONS ?? 2500)
       const cost = measureQueryCost(document)
+      gqlStamp.depth = cost.depth
+      gqlStamp.selections = cost.selections
       if (maxDepth != null && cost.depth > maxDepth) {
+        gqlStamp.errors = 1
         const scope = keyDepth != null ? ' for this API key' : ''
         return reply.code(400).send({
           errors: [
@@ -352,6 +370,8 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       }
     }
 
+    gqlStamp.errors = result.errors?.length ?? 0
+
     // A create that matched an existing record by its natural key was an
     // update; the response says which.
     if (upserts.length > 0) {
@@ -400,6 +420,61 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
   )
 
   app.log.info('GraphQL API registered at /api/graphql')
+}
+
+export interface GraphQLStamp {
+  operation: string | null
+  kind: string | null
+  depth: number | null
+  selections: number | null
+  errors: number
+  /** `Type.field` names the request selected that carry @deprecated. */
+  deprecated: string[]
+}
+
+/** The operation a document runs (its name, else the first root field), its
+ *  kind, and every @deprecated field it selects — the analytics identity of a
+ *  request that always hits the one path. */
+function describeOperation(
+  schema: GraphQLSchema,
+  document: ReturnType<typeof parse>,
+  requested: string | undefined
+): GraphQLStamp {
+  const ops = document.definitions.filter(
+    (d) => d.kind === Kind.OPERATION_DEFINITION
+  ) as unknown as Array<{
+    name?: { value: string }
+    operation: string
+    selectionSet: { selections: ReadonlyArray<{ kind: string; name?: { value: string } }> }
+  }>
+  const op = (requested && ops.find((o) => o.name?.value === requested)) || ops[0]
+  const firstRoot = op?.selectionSet.selections.find((s) => s.kind === Kind.FIELD)?.name?.value
+  const stamp: GraphQLStamp = {
+    operation: (op?.name?.value ?? firstRoot ?? null)?.slice(0, 200) ?? null,
+    kind: op?.operation ?? null,
+    depth: null,
+    selections: null,
+    errors: 0,
+    deprecated: []
+  }
+  try {
+    const typeInfo = new TypeInfo(schema)
+    const seen = new Set<string>()
+    visit(
+      document,
+      visitWithTypeInfo(typeInfo, {
+        Field() {
+          const def = typeInfo.getFieldDef()
+          const parent = typeInfo.getParentType()
+          if (def?.deprecationReason && parent) seen.add(`${parent.name}.${def.name}`)
+        }
+      })
+    )
+    stamp.deprecated = [...seen].slice(0, 20)
+  } catch {
+    // a document the type walker cannot read still logs its operation
+  }
+  return stamp
 }
 
 // Depth + selection count for the cost limiter (#162). Fragments count at
