@@ -823,7 +823,7 @@ function AllocateDrawer({
       <button
         type='button'
         onClick={() => setOpen(true)}
-        className='h-6 px-2.5 rounded border border-[#00ceff]/50 bg-[#00ceff]/5 text-[#0891b2] hover:border-[#00ceff] hover:bg-[#00ceff]/10 transition-colors'
+        className='h-6 rounded border border-nvr-cyan/50 bg-nvr-cyan/5 px-2.5 text-nvr-navy transition-colors hover:border-nvr-cyan hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
       >
         Allocate…
       </button>
