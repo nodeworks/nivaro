@@ -7806,7 +7806,8 @@ Content-Type: application/json
           </ul>
           <h2 class="doc-h2" id="ai-document-autofill-doors">Three ways in</h2>
           <ul class="doc-ul">
-            <li>**Fill from document** on the new-record form. The run goes to the server at once; the dialog shows what it is doing and offers **Tell me when it's ready** — leave, and a notification opens the form on the proposal.</li>
+            <li>**Fill from document** on the new-record form. The run goes to the server at once; the dialog shows what it is doing and offers **Tell me when it's ready** — the dialog folds into a small chip in the corner that keeps reading and turns into a Review button when the proposal lands; leave the page, and a notification opens the form on it instead.</li>
+            <li>**Still needs you** — a relation ask's picker narrows the way the form's own picker would: by the field's cascade rules over what the proposal is keeping (a Project ask offers the projects of the proposed zone, region and type) and by its option filter, and it follows the other asks as you answer them.</li>
             <li>**New from document…** in a list's "+ New item" menu (and the portal's + New menu): pick the file first, land on the new form with the review dialog open (<code class="doc-code">?autofill=&lt;proposal id&gt;</code>, kept 24 hours).</li>
             <li>**Fill from document** on a new addendum: the proposal is built against the addendum layout's fields and lines.</li>
           </ul>

@@ -7,11 +7,14 @@ import {
   FileText,
   HelpCircle,
   Loader2,
+  Sparkles,
   Wand2
 } from 'lucide-react'
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useOptionalNivaroClient } from '../../context'
+import { type AskRelationInput, askPickerNarrowing } from '../../lib/autofill-ask-filter'
 import { pollProposal } from '../../lib/autofill-poll'
 import { cn } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
@@ -41,7 +44,7 @@ import {
  */
 
 export type AskInput =
-  | { type: 'relation'; collection: string; template: string | null }
+  | AskRelationInput
   | { type: 'choices'; choices: Array<{ value: string; text: string }> }
   | { type: 'boolean' }
   | { type: 'number' }
@@ -222,15 +225,22 @@ function valueText(v: unknown): string {
   return s.length > 240 ? `${s.slice(0, 240)}…` : s
 }
 
-/** An ask answered in place (#704): the input the field's type calls for. */
+/** An ask answered in place (#704): the input the field's type calls for.
+ *  A relation ask narrows by the field's own cascades and option filter over
+ *  what the proposal is keeping (`draft`) — a project ask offers the projects
+ *  of the proposed zone / project type, not every project. */
 function AskAnswer({
   ask,
   value,
-  onChange
+  onChange,
+  draft,
+  labelOf
 }: {
   ask: DocumentProposal['asks'][number]
   value: unknown
   onChange: (v: unknown) => void
+  draft: Record<string, unknown>
+  labelOf: (field: string) => string
 }) {
   const client = useOptionalNivaroClient()
   const input = ask.input
@@ -239,13 +249,25 @@ function AskAnswer({
   if (!input) return null
   if (input.type === 'relation') {
     if (!client) return null
+    const narrowing = askPickerNarrowing(input, draft, labelOf)
     return (
-      <div className='w-64' data-autofill-ask-input='relation'>
+      <div
+        className='w-64'
+        data-autofill-ask-input='relation'
+        data-autofill-ask-narrowed={narrowing.narrowedBy.keys.join(',') || undefined}
+      >
         <RelationCombobox
           collection={input.collection}
           value={value ?? null}
           onChange={onChange}
-          placeholder={`Pick ${ask.label.toLowerCase()}…`}
+          extraFilter={narrowing.extraFilter}
+          narrowedBy={narrowing.narrowedBy.labels.length ? narrowing.narrowedBy : undefined}
+          disabled={!!narrowing.requiredParent}
+          placeholder={
+            narrowing.requiredParent
+              ? `Pick ${labelOf(narrowing.requiredParent).toLowerCase()} first`
+              : `Pick ${ask.label.toLowerCase()}…`
+          }
         />
       </div>
     )
@@ -320,6 +342,9 @@ export function DocumentAutofillButton({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [pollId, setPollId] = useState<string | null>(null)
+  /** 'Tell me when it's ready': the waiting dialog folds into a floating chip
+   *  that keeps polling; a landed proposal turns it into a Review button. */
+  const [minimized, setMinimized] = useState(false)
   const [hint, setHint] = useState(0)
   const [proposal, setProposal] = useState<DocumentProposal | null>(null)
   const [fieldOn, setFieldOn] = useState<Set<string>>(new Set())
@@ -381,6 +406,7 @@ export function DocumentAutofillButton({
     if (!initialProposalId || consumedRef.current === initialProposalId) return
     consumedRef.current = initialProposalId
     setBusy('the document')
+    setMinimized(false)
     setPollId(initialProposalId)
     onProposalConsumed?.()
   }, [initialProposalId, onProposalConsumed])
@@ -391,6 +417,27 @@ export function DocumentAutofillButton({
     [proposal, childOn]
   )
 
+  // What the review is keeping right now — the parent values an ask's picker
+  // narrows by: checked proposed fields, checked links (id arrays), and the
+  // other asks' answers on top.
+  const askDraft = useMemo(() => {
+    const d: Record<string, unknown> = {}
+    if (!proposal) return d
+    for (const f of proposal.fields) if (fieldOn.has(f.field)) d[f.field] = f.value
+    for (const m of proposal.m2m)
+      if (m2mOn.has(m.alias) && m.items.length) d[m.alias] = m.items.map((i) => i.id)
+    for (const [k, v] of Object.entries(answers)) if (v != null && v !== '') d[k] = v
+    return d
+  }, [proposal, fieldOn, m2mOn, answers])
+  const askLabelOf = useCallback(
+    (field: string) =>
+      proposal?.fields.find((f) => f.field === field)?.label ??
+      proposal?.m2m.find((m) => m.alias === field)?.label ??
+      proposal?.asks.find((a) => a.field === field)?.label ??
+      field.replace(/_/g, ' '),
+    [proposal]
+  )
+
   if (!config?.enabled && !initialProposalId) return null
 
   async function handleFile(e: ChangeEvent<HTMLInputElement>) {
@@ -398,6 +445,7 @@ export function DocumentAutofillButton({
     e.target.value = ''
     if (!file) return
     setBusy(file.name)
+    setMinimized(false)
     try {
       const id = await startDocumentExtraction(apiCfg, file, collection, { layoutId })
       setPollId(id)
@@ -409,18 +457,18 @@ export function DocumentAutofillButton({
 
   async function leaveRunning() {
     if (!pollId) return
+    // Keep polling from here (the chip shows progress and opens the review);
+    // the notification still covers leaving the page before it lands.
+    setMinimized(true)
     try {
       await fetch(`${apiBase}/ai/extract-record/${pollId}/notify`, {
         method: 'POST',
         headers: authHeaders,
         credentials
       })
-      toast.success('You will be told when the document has been read')
     } catch {
       toast.error('Could not arrange the notification')
     }
-    setPollId(null)
-    setBusy(null)
   }
 
   function toggle(set: Set<string>, key: string, setter: (s: Set<string>) => void) {
@@ -522,11 +570,45 @@ export function DocumentAutofillButton({
         </button>
       )}
 
+      {minimized &&
+        (busy || proposal) &&
+        createPortal(
+          <button
+            type='button'
+            onClick={() => setMinimized(false)}
+            data-autofill-chip={proposal ? 'ready' : 'reading'}
+            className={cn(
+              'fixed bottom-4 right-4 z-[110] flex max-w-[320px] items-center gap-2.5 rounded-full border px-3.5 py-2 text-left text-[12.5px] shadow-lg transition-colors',
+              proposal
+                ? 'border-nvr-cyan bg-nvr-cyan text-[#172940] hover:bg-[#00b8e0]'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-[#334155] dark:bg-[#1e293b] dark:text-slate-200 dark:hover:bg-[#263449]'
+            )}
+            title={proposal ? 'Open what the document says' : 'Show progress'}
+          >
+            {proposal ? (
+              <Sparkles className='h-3.5 w-3.5 shrink-0' />
+            ) : (
+              <Loader2 className='h-3.5 w-3.5 shrink-0 animate-spin text-nvr-navy dark:text-nvr-cyan' />
+            )}
+            <span className='min-w-0'>
+              <span className='block truncate font-medium'>
+                {proposal ? 'Document read — review it' : `Reading ${busy}`}
+              </span>
+              {!proposal && (
+                <span className='block truncate text-[11px] text-slate-500 dark:text-slate-400'>
+                  {WAIT_HINTS[hint]}
+                </span>
+              )}
+            </span>
+          </button>,
+          document.body
+        )}
+
       {/* One dialog, two bodies: the waiting state (30–70s, say what it is
           doing) and the review. Two separate Radix dialogs swapping in the
           same tick sometimes left the second one unpresented. */}
       <Dialog
-        open={!!busy || !!proposal}
+        open={!minimized && (!!busy || !!proposal)}
         onOpenChange={(o) => {
           if (!o && !busy && !applying) setProposal(null)
         }}
@@ -795,6 +877,8 @@ export function DocumentAutofillButton({
                                 <AskAnswer
                                   ask={a}
                                   value={answers[a.field]}
+                                  draft={askDraft}
+                                  labelOf={askLabelOf}
                                   onChange={(v) =>
                                     setAnswers((prev) => ({ ...prev, [a.field]: v }))
                                   }
