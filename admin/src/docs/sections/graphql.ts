@@ -13,7 +13,10 @@ export const graphqlOverview: DocSection = {
       type: 'table',
       head: ['Endpoint', 'Description'],
       rows: [
-        ['GET /api/graphql', 'GraphiQL explorer — interactive browser IDE.'],
+        [
+          'GET /api/graphql',
+          'GraphiQL explorer — interactive browser IDE. Administrators can run it as any named API key (Security → API keys → Run the playground as a key).'
+        ],
         ['POST /api/graphql', 'GraphQL endpoint. Body: { query, variables?, operationName? }.'],
         [
           'POST /api/graphql/rebuild',

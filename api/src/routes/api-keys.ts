@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { ApiKeyScope } from '../middleware/authenticate.js'
@@ -242,6 +242,29 @@ export async function apiKeysRoutes(app: FastifyInstance) {
 
     const row = await db('nivaro_api_keys').where({ id }).first()
     return reply.send({ data: sanitize(row) })
+  })
+
+  // Run as this key (#625): a short-lived token the playground sends as its
+  // bearer. The key's own identity and limits bind every request made with
+  // it; nothing is counted against the key. 15 minutes, then it lapses.
+  app.post('/:id/simulate-token', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const key = await db('nivaro_api_keys').where({ id }).first()
+    if (!key) return reply.code(404).send({ error: 'API key not found' })
+    const token = `nvq_${randomUUID()}`
+    const ttl = 15 * 60
+    await app.redis.setex(
+      `keysim:${token}`,
+      ttl,
+      JSON.stringify({ key_id: key.id, admin_id: req.user!.id })
+    )
+    await logActivity({
+      action: 'api_key_simulate',
+      user: req.user?.id,
+      comment: `${key.name} (${key.prefix}…)`,
+      req
+    })
+    return reply.send({ data: { token, expires_in: ttl, key: sanitize(key) } })
   })
 
   // Delete

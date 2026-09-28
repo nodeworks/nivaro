@@ -17,13 +17,17 @@ declare module 'fastify' {
     /** Numeric per-minute rate limit configured on the API key, if any. */
     apiKeyRateLimit?: number | null
     apiKeyId?: number | null
+    /** Set when an admin runs a request AS an API key (nvq_*): the key whose
+     *  scopes, restrictions, depth cap and sandbox flag bound this request.
+     *  Never attributed to the key in the request log or its usage stamps. */
+    apiKeySimulatedId?: number | null
     /** Set when the request authenticated via a masquerade token (nvm_*) — the admin who issued it. */
     masqueradeAdminId?: string
     /**
      * How this request authenticated — stamped by `authenticate` so the API
      * logger can tell an integration's token call from a person's session.
      */
-    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade'
+    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade' | 'key_sim'
   }
 }
 
@@ -194,6 +198,42 @@ async function authenticateApiKey(req: FastifyRequest, reply: FastifyReply, toke
   if (!key) throw httpError(401, 'Invalid API key', 'API_KEY_INVALID')
   // From here the failure belongs to a known key — the request log names it.
   req.apiKeyId = Number(key.id)
+  await applyApiKey(req, reply, key, false)
+}
+
+/**
+ * An admin running a request AS a key (#625): the key's own identity, scopes,
+ * row restrictions, depth cap and sandbox flag bind the request exactly as
+ * they bind the key's holder — so the playground shows the errors that
+ * holder sees. Not counted against the key: no IP check (the admin's
+ * browser is not the partner's host), no rate-limit tick, no last-used
+ * stamp, no attribution in the request log.
+ */
+async function authenticateSimulatedKey(req: FastifyRequest, reply: FastifyReply, token: string) {
+  req.authMethod = 'key_sim'
+  const raw = await req.server.redis.get(`keysim:${token}`)
+  if (!raw) throw httpError(401, 'The run-as-key session expired', 'KEY_SIM_EXPIRED')
+  let payload: { key_id?: string | number; admin_id?: string }
+  try {
+    payload = JSON.parse(raw) as { key_id?: string | number; admin_id?: string }
+  } catch {
+    throw httpError(401, 'The run-as-key session expired', 'KEY_SIM_EXPIRED')
+  }
+  const key = (await db<ApiKeyRow>('nivaro_api_keys').where({ id: payload.key_id }).first()) as
+    | ApiKeyRow
+    | undefined
+  if (!key) throw httpError(401, 'That API key no longer exists', 'API_KEY_INVALID')
+  req.apiKeySimulatedId = Number(key.id)
+  req.masqueradeAdminId = payload.admin_id
+  await applyApiKey(req, reply, key, true)
+}
+
+async function applyApiKey(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  key: ApiKeyRow,
+  simulated: boolean
+) {
   if (!(key.is_active === true || (key.is_active as unknown) === 1)) {
     throw httpError(401, 'This API key has been switched off', 'API_KEY_REVOKED')
   }
@@ -206,7 +246,7 @@ async function authenticateApiKey(req: FastifyRequest, reply: FastifyReply, toke
     )
   }
 
-  const allowlist = parseJsonArray<string>(key.ip_allowlist)
+  const allowlist = simulated ? [] : parseJsonArray<string>(key.ip_allowlist)
   if (allowlist.length > 0) {
     const ip = req.ip ?? ''
     if (!allowlist.some((cidr) => cidrMatch(ip, cidr))) {
@@ -219,7 +259,8 @@ async function authenticateApiKey(req: FastifyRequest, reply: FastifyReply, toke
   }
 
   const limit = Number(key.rate_limit_per_minute)
-  if (Number.isFinite(limit) && limit > 0) await enforceKeyRateLimit(req, reply, key.id, limit)
+  if (!simulated && Number.isFinite(limit) && limit > 0)
+    await enforceKeyRateLimit(req, reply, key.id, limit)
 
   const user = await db<User>('nivaro_users').where({ id: key.user, status: 'active' }).first()
   if (!user)
@@ -254,6 +295,7 @@ async function authenticateApiKey(req: FastifyRequest, reply: FastifyReply, toke
   // them: every permission-checked read and write is held to them.
   if (!scopesAreOpen(req.apiKeyScopes)) user.api_key_scopes = req.apiKeyScopes
   req.apiKeyRateLimit = key.rate_limit_per_minute ?? null
+  if (simulated) return
   req.apiKeyId = Number(key.id)
 
   // Update last_used_at, throttled to once per 60s to avoid write amplification
@@ -291,6 +333,11 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
       if (token.startsWith('nvk_')) {
         await authenticateApiKey(req, reply, token)
         req.authMethod = 'api_key'
+        return
+      }
+      // Run-as-key token — admin-issued, Redis-backed, resolves to the key's identity
+      if (token.startsWith('nvq_')) {
+        await authenticateSimulatedKey(req, reply, token)
         return
       }
       // Masquerade token — admin-issued, Redis-backed, resolves to the target user

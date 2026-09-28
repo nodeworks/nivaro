@@ -50,6 +50,9 @@ importers:
       '@graphiql/plugin-explorer':
         specifier: ^5.1.2
         version: 5.1.2(@graphiql/react@0.37.6-alpha.2(@types/node@22.19.19)(@types/react-dom@19.2.3(@types/react@19.2.16))(@types/react@19.2.16)(graphql-ws@6.0.8(graphql@16.14.1)(ws@8.21.0))(graphql@16.14.1)(immer@11.1.8)(react-compiler-runtime@19.1.0-rc.1(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7)))(graphql@16.14.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@graphiql/react':
+        specifier: 0.37.6-alpha.2
+        version: 0.37.6-alpha.2(@types/node@22.19.19)(@types/react-dom@19.2.3(@types/react@19.2.16))(@types/react@19.2.16)(graphql-ws@6.0.8(graphql@16.14.1)(ws@8.21.0))(graphql@16.14.1)(immer@11.1.8)(react-compiler-runtime@19.1.0-rc.1(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))
       '@nivaro/react':
         specifier: workspace:*
         version: link:../packages/react

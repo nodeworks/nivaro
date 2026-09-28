@@ -3857,7 +3857,7 @@ Authorization: Bearer &lt;admin-token&gt;
           <p class="doc-p">Nivaro auto-generates a GraphQL schema from the live <code class="doc-code">nivaro_collections</code> + <code class="doc-code">nivaro_fields</code> metadata — the same source used to build the OpenAPI spec. Every non-hidden collection gets query and mutation fields automatically. Schema is rebuilt in the <code class="doc-code">onReady</code> hook when the server starts, and can be manually rebuilt at runtime.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>GET /api/graphql</td><td>GraphiQL explorer — interactive browser IDE.</td></tr>
+            <tbody><tr><tr><td>GET /api/graphql</td><td>GraphiQL explorer — interactive browser IDE. Administrators can run it as any named API key (Security → API keys → Run the playground as a key).</td></tr>
               <tr><td>POST /api/graphql</td><td>GraphQL endpoint. Body: { query, variables?, operationName? }.</td></tr>
               <tr><td>POST /api/graphql/rebuild</td><td>Admin — rebuild the schema from current nivaro_collections/fields.</td></tr></tr></tbody>
           </table></div>
@@ -8164,7 +8164,7 @@ ctx.importProcessors.register({
               <tr><td>protect</td><td>Stored records the run must leave alone: {when: {field: literal | {_eq, _neq, _null, _nnull, _in}}, reason} — any one condition met keeps the record out of updates and removals, and the run names the reason.</td></tr>
               <tr><td>after</td><td>Procedures run once after the rows landed; $touched.&lt;field&gt; passes the distinct values the run wrote.</td></tr>
               <tr><td>write</td><td>items (every write through the items service), batch (set-based with per-record history), or auto with batch_over.</td></tr>
-              <tr><td>keep_staging</td><td>Load the staging table as well, for a procedure or flow that reads it.</td></tr></tr></tbody>
+              <tr><td>keep_staging</td><td>Also fill the staging table, for a post-run flow or procedure that reads it. Off by default — the items-service paths work from the parsed rows and never read the table.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">The preview is the same run with nothing written. In a steps import the preview also carries what an earlier step would create into the later steps, so a file that adds a connector and the jumpers that use it reports both.</div>
           <h3 class="doc-h3" id="imports-run-detail">Reading a run</h3>
@@ -8203,7 +8203,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }</code></
               <tr><td>merge</td><td>Only the mapped fields are updated.</td></tr></tr></tbody>
           </table></div>
           <h2 class="doc-h2" id="imports-definitions">Definitions</h2>
-          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).</p>
+          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (batched inserts by default; bulk = a file on an SMB share plus BULK INSERT, which needs smbclient and SAMBA_* on the host), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).</p>
           <div class="doc-note doc-warn">Both importers are admin-only for writes, and <code class="doc-code">nivaro_*</code> system tables are blocked as collection-import targets. Staging table and procedure names are validated as plain identifiers because they are interpolated into SQL — BULK INSERT and EXEC cannot bind an object name.</div>
           <!-- /SYNC:imports -->
         </div>
@@ -12120,7 +12120,7 @@ SAML_AUDIENCE=nivaro                                 # expected audience (option
         </div>
 
         <!-- NAMED API KEYS -->
-        <div class="doc-section" id="s-api-keys" data-toc='[{"id":"api-keys","label":"Named API Keys with Scopes"}]'>
+        <div class="doc-section" id="s-api-keys" data-toc='[{"id":"api-keys","label":"Named API Keys with Scopes"},{"id":"api-keys-run-as","label":"Run the playground as a key"}]'>
           <!-- SYNC:api-keys -->
           <h1 class="doc-h1" id="api-keys">Named API Keys with Scopes</h1>
           <p class="doc-p">Named API keys are a managed alternative to per-user static tokens. Each key has a name, an optional expiry, a set of scopes, an optional IP allowlist, and an optional per-key rate limit. Keys are prefixed with <code class="doc-code">nvk_</code> and are shown exactly once at creation — only a SHA-256 hash is stored.</p>
@@ -12185,6 +12185,9 @@ DELETE /api/api-keys/:id    # revoke immediately</code></pre>
   "scope": { "action": "create", "collection": "invoices" }
 }</code></pre>
           <div class="doc-note">Keys are managed in the admin UI at /api-keys. Because only the hash is stored, a lost key cannot be recovered — revoke and re-issue.</div>
+          <h2 class="doc-h2" id="api-keys-run-as">Run the playground as a key</h2>
+          <p class="doc-p">The GraphQL explorer's "Run as" control lets an administrator send queries as any named key: <code class="doc-code">POST /api/api-keys/:id/simulate-token</code> mints a fifteen-minute <code class="doc-code">nvq_</code> token that carries the key's identity, scopes, row restrictions, depth cap and sandbox flag, so a scope refusal, a depth refusal or a rehearsed mutation reads exactly as the key's holder sees it. Nothing is counted against the key — no rate-limit tick, no last-used stamp, no IP check, no attribution in the request log (the rows read <code class="doc-code">key_sim</code>). A revoked or expired key refuses the same way it refuses its holder.</p>
+          <p class="doc-p">The explorer toolbar saves the current query, its variables and the key it ran as, as a fixture (kept in the browser), so a partner's exact call can be replayed after a schema change.</p>
           <!-- /SYNC:api-keys -->
         </div>
 

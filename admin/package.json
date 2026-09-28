@@ -17,6 +17,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@graphiql/plugin-explorer": "^5.1.2",
+    "@graphiql/react": "0.37.6-alpha.2",
     "@nivaro/react": "workspace:*",
     "@nivaro/sdk": "workspace:*",
     "@nivaro/shared": "workspace:*",

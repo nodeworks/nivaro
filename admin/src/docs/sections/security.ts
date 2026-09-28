@@ -250,6 +250,15 @@ DELETE /api/api-keys/:id    # revoke immediately`
     {
       type: 'note',
       text: 'Keys are managed in the admin UI at /api-keys. Because only the hash is stored, a lost key cannot be recovered — revoke and re-issue.'
+    },
+    { type: 'h2', id: 'api-keys-run-as', text: 'Run the playground as a key' },
+    {
+      type: 'p',
+      text: "The GraphQL explorer's \"Run as\" control lets an administrator send queries as any named key: `POST /api/api-keys/:id/simulate-token` mints a fifteen-minute `nvq_` token that carries the key's identity, scopes, row restrictions, depth cap and sandbox flag, so a scope refusal, a depth refusal or a rehearsed mutation reads exactly as the key's holder sees it. Nothing is counted against the key — no rate-limit tick, no last-used stamp, no IP check, no attribution in the request log (the rows read `key_sim`). A revoked or expired key refuses the same way it refuses its holder."
+    },
+    {
+      type: 'p',
+      text: "The explorer toolbar saves the current query, its variables and the key it ran as, as a fixture (kept in the browser), so a partner's exact call can be replayed after a schema change."
     }
   ]
 }
