@@ -30,6 +30,18 @@ export default defineExtension({
   },
 });`
     },
+    { type: 'h3', id: 'ext-overview-routes', text: 'Routes and their gates' },
+    {
+      type: 'p',
+      text: 'Every route an extension registers — through `app.register(plugin, { prefix })` or straight on `ctx.app` — is recorded with the gate it carries: `admin` (`requireAdmin`), `signed in` (`requireAuth` / `authenticate`), `custom` (some other onRequest / preHandler, named), or no gate at all. The Extensions registry sheet lists them, and the readiness check `extension-route-gates` warns on a route with no gate. A route that is meant to be public says so with `config: { public: true }` on the route, which the check accepts.'
+    },
+    {
+      type: 'pre',
+      code: `app.register(async (f) => {
+  f.get('/partner/status', { preHandler: ctx.auth.requireAuth }, handler)
+  f.post('/partner/webhook', { config: { public: true } }, webhookHandler) // deliberately open
+}, { prefix: '/api' })`
+    },
     { type: 'h3', id: 'ext-overview-kit', text: 'The extension kit' },
     {
       type: 'p',

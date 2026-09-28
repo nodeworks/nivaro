@@ -6488,7 +6488,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6503,6 +6503,12 @@ export default defineExtension({
     ctx.logger.info('my-extension registered');
   },
 });</code></pre>
+          <h3 class="doc-h3" id="ext-overview-routes">Routes and their gates</h3>
+          <p class="doc-p">Every route an extension registers — through <code class="doc-code">app.register(plugin, { prefix })</code> or straight on <code class="doc-code">ctx.app</code> — is recorded with the gate it carries: <code class="doc-code">admin</code> (<code class="doc-code">requireAdmin</code>), <code class="doc-code">signed in</code> (<code class="doc-code">requireAuth</code> / <code class="doc-code">authenticate</code>), <code class="doc-code">custom</code> (some other onRequest / preHandler, named), or no gate at all. The Extensions registry sheet lists them, and the readiness check <code class="doc-code">extension-route-gates</code> warns on a route with no gate. A route that is meant to be public says so with <code class="doc-code">config: { public: true }</code> on the route, which the check accepts.</p>
+          <pre class="doc-pre"><code>app.register(async (f) =&gt; {
+  f.get('/partner/status', { preHandler: ctx.auth.requireAuth }, handler)
+  f.post('/partner/webhook', { config: { public: true } }, webhookHandler) // deliberately open
+}, { prefix: '/api' })</code></pre>
           <h3 class="doc-h3" id="ext-overview-kit">The extension kit</h3>
           <p class="doc-p">An extension cannot import <code class="doc-code">api/src</code> — the API compiles with <code class="doc-code">rootDir: src</code>, and a mounted extension runs against a built image that ships no source. <code class="doc-code">@nivaro/extension-kit</code> is the contract instead: the extension context (<code class="doc-code">ExtensionContext</code>), the default export shape (<code class="doc-code">ExtensionDefinition</code>, checked by <code class="doc-code">defineExtension</code>), and every registration the context accepts — bulk and item actions, readiness and integrity checks, notes providers, mail types, digest sections, obligation kinds, signals, import processors, flow operations and triggers. The API imports its own extension contract from the same package, so the two cannot drift.</p>
           <ul class="doc-ul">

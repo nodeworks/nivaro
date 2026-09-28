@@ -1230,9 +1230,18 @@ type RegistryData = {
     set: boolean
     missing: boolean
   }>
+  routes?: Array<{ method: string; url: string; gate: string; detail?: string }>
   observed_capabilities: string[]
   health_check: boolean
   staged: { next_present: boolean; prev_present: boolean; live_entry: string | null }
+}
+
+const GATE_LABELS: Record<string, string> = {
+  public: 'no gate',
+  'public-declared': 'public',
+  authenticated: 'signed in',
+  admin: 'admin',
+  custom: 'custom'
 }
 
 const REGISTRATION_LABELS: Record<string, string> = {
@@ -1408,6 +1417,36 @@ function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => vo
                 </li>
               ))}
             </Section>
+            {(data.routes?.length ?? 0) > 0 && (
+              <Section title='Routes' count={data.routes?.length ?? 0}>
+                {data.routes?.map((r) => (
+                  <li
+                    key={`${r.method} ${r.url}`}
+                    className='flex flex-wrap items-baseline gap-x-2'
+                    data-ext-route={`${r.method} ${r.url}`}
+                    data-ext-route-gate={r.gate}
+                  >
+                    <span className='w-14 shrink-0 font-mono text-[10px] font-semibold text-slate-500 dark:text-slate-400'>
+                      {r.method}
+                    </span>
+                    <span className='font-mono text-[11px] text-slate-700 dark:text-slate-200'>
+                      {r.url}
+                    </span>
+                    <span
+                      className={
+                        r.gate === 'public'
+                          ? 'text-[10px] font-semibold text-amber-700 dark:text-amber-300'
+                          : 'text-[10px] text-slate-400'
+                      }
+                      title={r.detail}
+                    >
+                      {GATE_LABELS[r.gate] ?? r.gate}
+                      {r.detail ? ` · ${r.detail}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </Section>
+            )}
             {(data.env?.length ?? 0) > 0 && (
               <Section title='Environment' count={data.env?.length ?? 0}>
                 {data.env?.map((e) => (

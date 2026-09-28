@@ -307,6 +307,159 @@ export function getObservedCapabilities(extId: string): string[] {
  *  Kept beside the observed-capability ledger: capabilities say WHICH ctx
  *  members were touched, this says WHAT they were given. */
 const extensionRegistrations = new Map<string, Map<string, string[]>>()
+// ── Extension routes (#813) — every route an extension registers, with the
+// gate it carries. An extension's `app.register(plugin, {prefix})` is
+// wrapped so an `onRoute` hook inside that scope attributes the plugin's
+// routes; a route added straight on the root app is read off its arguments.
+export type ExtensionRouteGate = 'public' | 'public-declared' | 'authenticated' | 'admin' | 'custom'
+
+export interface ExtensionRouteRecord {
+  method: string
+  url: string
+  gate: ExtensionRouteGate
+  /** The custom gate's function name(s), when `gate` is custom. */
+  detail?: string
+}
+
+export const extensionRoutes = new Map<string, ExtensionRouteRecord[]>()
+
+type GateFn = (...a: unknown[]) => unknown
+const GATE_HOOKS = new Set(['onRequest', 'preValidation', 'preHandler'])
+
+function gateOf(
+  route: {
+    config?: unknown
+    onRequest?: unknown
+    preHandler?: unknown
+    preValidation?: unknown
+  },
+  scopeGates: GateFn[] = []
+): { gate: ExtensionRouteGate; detail?: string } {
+  const list = (v: unknown): GateFn[] =>
+    (Array.isArray(v) ? v : v ? [v] : []).filter((f) => typeof f === 'function')
+  // A gate added at plugin scope (`f.addHook('preHandler', requireAuth)`)
+  // guards every route of that scope and its children exactly like a
+  // route-level one — most extensions gate a whole plugin that way.
+  const fns = [
+    ...scopeGates,
+    ...list(route.onRequest),
+    ...list(route.preValidation),
+    ...list(route.preHandler)
+  ]
+  if ((route.config as { public?: unknown } | undefined)?.public === true)
+    return { gate: 'public-declared' }
+  if (fns.includes(requireAdmin as never)) return { gate: 'admin' }
+  if (fns.includes(requireAuth as never) || fns.includes(authenticate as never))
+    return { gate: 'authenticated' }
+  if (fns.length > 0)
+    return { gate: 'custom', detail: fns.map((f) => f.name || 'anonymous').join(', ') }
+  return { gate: 'public' }
+}
+
+function recordRoute(
+  extId: string,
+  route: { method: string | string[]; url: string } & Parameters<typeof gateOf>[0],
+  scopeGates: GateFn[] = []
+): void {
+  const list = extensionRoutes.get(extId) ?? []
+  const { gate, detail } = gateOf(route, scopeGates)
+  for (const m of Array.isArray(route.method) ? route.method : [route.method]) {
+    const method = String(m).toUpperCase()
+    if (method === 'HEAD') continue
+    if (list.some((r) => r.method === method && r.url === route.url)) continue
+    list.push({ method, url: route.url, gate, ...(detail ? { detail } : {}) })
+  }
+  extensionRoutes.set(extId, list)
+}
+
+const ROUTE_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'all'])
+
+/**
+ * The extension's view of a Fastify instance (or of one of its plugin
+ * scopes): every route added through it is recorded with its gate. A
+ * scope-level gate hook (`f.addHook('preHandler', requireAuth)`) is kept on
+ * the scope and counts for the routes registered after it there and in the
+ * scopes it registers; `register` hands the plugin a wrapped child scope;
+ * `route()` and the direct route methods are read off their arguments.
+ * Everything else passes through. `onRegister` (a capability note) is
+ * optional.
+ */
+export function routeRecordingApp(
+  extId: string,
+  app: FastifyInstance,
+  onRegister?: () => void,
+  scopeGates: GateFn[] = []
+): FastifyInstance {
+  const gates = scopeGates
+  return new Proxy(app, {
+    get(target, prop) {
+      if (prop === 'register') {
+        return (plugin: unknown, opts?: unknown) => {
+          onRegister?.()
+          const wrapped = async (f: FastifyInstance, o: unknown) => {
+            // A child scope inherits the gates in force here and keeps its own.
+            const child = routeRecordingApp(extId, f, undefined, [...gates])
+            await (plugin as (f: FastifyInstance, o: unknown) => unknown)(child, o)
+          }
+          return (target.register as (p: unknown, o?: unknown) => unknown).call(
+            target,
+            wrapped,
+            opts
+          )
+        }
+      }
+      if (prop === 'addHook') {
+        return (name: string, fn: unknown) => {
+          if (GATE_HOOKS.has(name) && typeof fn === 'function') gates.push(fn as GateFn)
+          return (target.addHook as (n: string, f: unknown) => unknown).call(target, name, fn)
+        }
+      }
+      if (prop === 'route') {
+        return (opts: { method: string | string[]; url: string }) => {
+          recordRoute(extId, withPrefix(target, opts) as never, gates)
+          return (target.route as (o: unknown) => unknown).call(target, opts)
+        }
+      }
+      if (typeof prop === 'string' && ROUTE_METHODS.has(prop)) {
+        return (url: string, a: unknown, b?: unknown) => {
+          const routeOpts = typeof a === 'function' ? {} : ((a as object) ?? {})
+          recordRoute(
+            extId,
+            withPrefix(target, {
+              method: prop === 'all' ? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] : prop,
+              url,
+              ...routeOpts
+            }) as never,
+            gates
+          )
+          return (target[prop as 'get'] as (...x: unknown[]) => unknown).call(target, url, a, b)
+        }
+      }
+      return Reflect.get(target, prop)
+    }
+  }) as FastifyInstance
+}
+
+/** The scope's registered prefix folded onto a route read off its arguments. */
+function withPrefix<T extends { url: string }>(scope: FastifyInstance, route: T): T {
+  const prefix = (scope as unknown as { prefix?: string }).prefix ?? ''
+  if (!prefix || route.url.startsWith(prefix)) return route
+  return { ...route, url: `${prefix}${route.url}` }
+}
+
+/** Every route with no gate at all, `<ext>: METHOD /url`, for readiness. */
+export function ungatedExtensionRoutes(): Array<{
+  extension: string
+  method: string
+  url: string
+}> {
+  const out: Array<{ extension: string; method: string; url: string }> = []
+  for (const [ext, list] of extensionRoutes)
+    for (const r of list)
+      if (r.gate === 'public') out.push({ extension: ext, method: r.method, url: r.url })
+  return out
+}
+
 function recordRegistration(extId: string, kind: string, label: string): void {
   let kinds = extensionRegistrations.get(extId)
   if (!kinds) {
@@ -472,24 +625,15 @@ async function loadExtension(
     }
 
     const extId = ext.id
+    extensionRoutes.delete(extId)
 
     // Capability manifest (#660): the ctx members register() touches are noted
     // as observed capabilities, compared against the declared list in the UI.
     const note = (cap: string) => noteCapability(extId, cap)
     const own = (kind: string, label: string) => recordRegistration(extId, kind, label)
-    // app.register → 'routes': a minimal Proxy intercepting ONLY `register`;
-    // every other property passes through to the real instance untouched.
-    const observedApp = new Proxy(ctx.app, {
-      get(target, prop) {
-        if (prop === 'register') {
-          return (...args: unknown[]) => {
-            note('routes')
-            return (target.register as (...a: unknown[]) => unknown).apply(target, args)
-          }
-        }
-        return Reflect.get(target, prop)
-      }
-    }) as FastifyInstance
+    // app.register → 'routes' (a capability note), and every route the
+    // extension adds is recorded with its gate (#813).
+    const observedApp = routeRecordingApp(extId, ctx.app, () => note('routes'))
 
     // Scoped hooks + cron context — all entries are tagged with this extension's id
     const scopedCtx: ExtensionContext = {
@@ -1119,6 +1263,7 @@ export async function loadCloudExtensions(
 
       const scopedCtx: ExtensionContext = {
         ...ctx,
+        app: routeRecordingApp(extId, ctx.app),
         callExternalApi: (nameOrId, options) =>
           callExternalApi(nameOrId, withExtensionLog(extId, options)),
         events: {
@@ -1415,6 +1560,28 @@ export function registerExtensionSettingsReadiness(): void {
     }
   })
   registerReadinessCheck({
+    id: 'extension-route-gates',
+    label: 'Extension routes carry a gate',
+    description:
+      'Every route an extension registered runs behind authenticate / requireAuth / requireAdmin or a custom handler; a route meant to be public says so with `config: { public: true }`.',
+    group: 'Configuration',
+    run: async () => {
+      const total = [...extensionRoutes.values()].reduce((n, l) => n + l.length, 0)
+      if (total === 0) return { status: 'skip', detail: 'No extension registered a route.' }
+      const open = ungatedExtensionRoutes()
+      return open.length === 0
+        ? {
+            status: 'pass',
+            detail: `${total} route(s); every one carries a gate or is declared public.`
+          }
+        : {
+            status: 'warn',
+            detail: `${open.length} of ${total} route(s) have no gate and are not declared public.`,
+            blockers: open.map((r) => `${r.extension}: ${r.method} ${r.url}`)
+          }
+    }
+  })
+  registerReadinessCheck({
     id: 'extension-settings-expectations',
     label: 'Extension settings match their production expectations',
     description:
@@ -1486,6 +1653,7 @@ export async function describeExtensionRegistry(
       production_expect: d.production_expect ?? null
     })),
     env: describeExtensionEnv(extId),
+    routes: extensionRoutes.get(extId) ?? [],
     observed_capabilities: getObservedCapabilities(extId),
     health_check: extensionHealthChecks.has(extId),
     staged: await stagedBuildStatus(extId)

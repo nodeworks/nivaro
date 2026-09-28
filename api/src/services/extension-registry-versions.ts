@@ -17,6 +17,8 @@ export interface RegistryLedger {
   crons: string[]
   registrations: Record<string, string[]>
   settings: string[]
+  /** `METHOD /url [gate]` per route the extension registered (#813). */
+  routes?: string[]
 }
 
 export function ledgerFrom(desc: Record<string, unknown>): RegistryLedger {
@@ -32,7 +34,10 @@ export function ledgerFrom(desc: Record<string, unknown>): RegistryLedger {
   for (const [kind, list] of Object.entries((desc.registrations as Record<string, string[]>) ?? {}))
     regs[kind] = [...list].sort()
   const settings = ((desc.settings as Array<{ key: string }>) ?? []).map((s) => s.key).sort()
-  return { hooks, crons, registrations: Object.fromEntries(Object.entries(regs).sort()), settings }
+  const routes = ((desc.routes as Array<{ method: string; url: string; gate: string }>) ?? [])
+    .map((r) => `${r.method} ${r.url} [${r.gate}]`)
+    .sort()
+  return { hooks, crons, registrations: Object.fromEntries(Object.entries(regs).sort()), settings, routes }
 }
 
 export function fingerprint(ledger: RegistryLedger): string {
@@ -110,18 +115,15 @@ export function diffLedgers(
     'hooks',
     'crons',
     'settings',
+    'routes',
     ...Object.keys(after.registrations),
     ...Object.keys(before?.registrations ?? {})
   ])
   let total = 0
   for (const k of kinds) {
-    const a =
-      k === 'hooks' || k === 'crons' || k === 'settings' ? after[k] : (after.registrations[k] ?? [])
-    const b = before
-      ? k === 'hooks' || k === 'crons' || k === 'settings'
-        ? before[k]
-        : (before.registrations[k] ?? [])
-      : []
+    const own = k === 'hooks' || k === 'crons' || k === 'settings' || k === 'routes'
+    const a = own ? (after[k as 'hooks'] ?? []) : (after.registrations[k] ?? [])
+    const b = before ? (own ? (before[k as 'hooks'] ?? []) : (before.registrations[k] ?? [])) : []
     const bs = new Set(b)
     const as = new Set(a)
     const plus = a.filter((x) => !bs.has(x))
