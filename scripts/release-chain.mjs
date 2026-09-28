@@ -223,7 +223,13 @@ const npmHas = (pkg, v) => sh('npm', ['view', `${pkg}@${v}`, 'version'], { quiet
 
 async function imageExists(image, tag) {
   const [ns, name] = image.split('/')
-  const res = await fetch(`https://hub.docker.com/v2/repositories/${ns}/${name}/tags/${tag}`).catch(() => null)
+  // A registry request that never answers must not hold the chain: one
+  // stalled connection to Docker Hub wedged a run for good on 2026-09-28
+  // (no child process, one ESTABLISHED socket, nothing in the log). A
+  // timed-out request reads as "not there yet" and `until` asks again.
+  const res = await fetch(`https://hub.docker.com/v2/repositories/${ns}/${name}/tags/${tag}`, {
+    signal: AbortSignal.timeout(15_000)
+  }).catch(() => null)
   return res?.status === 200
 }
 
