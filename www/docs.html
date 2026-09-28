@@ -7662,7 +7662,9 @@ ctx.storage.setActive('s3');</code></pre>
             <li>Tools: list_collections, query_items (items service — RLS applies), aggregate (refuses when the user is row-filtered), semantic_search (hits intersected with the permission-checked read), integration_status (the obligation ledger for a record), record_event_path (the newest integration events naming a record and the path each set off — writes, transitions, flows, partner calls, where it failed), explain_access (why the asker — or, for administrators, another user — can or cannot see a record), record_integrity (a record's live integrity findings, or a collection's newest sweep totals) and run_custom_query (a saved SQL query from the catalogue the assistant is given — only queries whose access admits the asker, User-Scope params injected, 200 rows at most).</li>
             <li>Reads are direct; mutations only ever happen through the proposal gate (see AI Actions &amp; Dashboards) — the model can never write without your approval.</li>
             <li>Every answer shows the tool trace: exactly which queries produced it.</li>
-            <li>Uses the model configured in Settings → AI Features.</li>
+            <li>A breakdown or a series (per state, per month, per vendor) comes with a chart: the model attaches a fenced <code class="doc-code">chart</code> block ({type, title, data:[{label, value}]}) that renders as a bar, line or pie under the prose.</li>
+            <li>The same standalone question by the same person inside the answer-cache window (Settings → AI Features, default 15 minutes) answers from cache — the page says when it was first answered and offers "Ask again". Answers that propose an action are never cached; <code class="doc-code">fresh: true</code> in the request skips the cache.</li>
+            <li>Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.</li>
           </ul>
           <!-- /SYNC:ai-chat -->
         </div>
@@ -7791,22 +7793,32 @@ Content-Type: application/json
           <!-- /SYNC:ai-review-brief -->
         </div>
 
-        <div class="doc-section" id="s-ai-document-autofill" data-toc='[{"id":"ai-document-autofill","label":"Fill a record from a document"},{"id":"ai-document-autofill-setup","label":"Turning it on"},{"id":"ai-document-autofill-flow","label":"What happens"},{"id":"ai-document-autofill-guards","label":"What keeps it honest"},{"id":"ai-document-autofill-api","label":"API"}]'>
+        <div class="doc-section" id="s-ai-document-autofill" data-toc='[{"id":"ai-document-autofill","label":"Fill a record from a document"},{"id":"ai-document-autofill-setup","label":"Turning it on"},{"id":"ai-document-autofill-doors","label":"Three ways in"},{"id":"ai-document-autofill-flow","label":"What happens"},{"id":"ai-document-autofill-guards","label":"What keeps it honest"},{"id":"ai-document-autofill-api","label":"API"}]'>
           <!-- SYNC:ai-document-autofill -->
           <h1 class="doc-h1" id="ai-document-autofill">Fill a record from a document</h1>
           <p class="doc-p">A new-record form can read a statement of work, a quote, a purchase order PDF, a spreadsheet or an email and propose the whole record — header fields, related records, line items, a schedule — for a person to review before anything is saved. Off by default; turned on per collection.</p>
           <h2 class="doc-h2" id="ai-document-autofill-setup">Turning it on</h2>
           <ul class="doc-ul">
             <li>Data Model → the collection → Settings → AI Features → **Fill from document**. The new-record form of that collection gains a "Fill from document" button beside "Import from file".</li>
-            <li>Settings → AI Features → **Model id for document autofill** (gateway provider only). Blank uses the Ask AI model. This is a multi-step tool loop — the model looks vendors, people and categories up, then hands back a structured proposal — so it wants the strong model, not the one-shot one.</li>
+            <li>Settings → AI Features → **Model per feature** → *Document autofill* (gateway provider only). Blank uses the Ask AI model. This is a multi-step tool loop — the model looks vendors, people and categories up, then hands back a structured proposal — so it wants the strong model, not the one-shot one. A model the gateway refuses falls back to the chat model, then the default.</li>
+            <li>Same card, under the switch: **Hints for the reader** (plain sentences the model reads before every document of this collection), **keyed hints** (added once a named field resolves to a record whose label contains a text — a vendor's quirks), and the **confidence needed to fill a field** (default 40%, per-field overrides). A value under its threshold is offered as an ask with the candidate, never filled.</li>
             <li>AI governance: the feature key is <code class="doc-code">extract-record</code>; disabling it in <code class="doc-code">ai_disabled_features</code> hides the button everywhere.</li>
+          </ul>
+          <h2 class="doc-h2" id="ai-document-autofill-doors">Three ways in</h2>
+          <ul class="doc-ul">
+            <li>**Fill from document** on the new-record form. The run goes to the server at once; the dialog shows what it is doing and offers **Tell me when it's ready** — leave, and a notification opens the form on the proposal.</li>
+            <li>**New from document…** in a list's "+ New item" menu (and the portal's + New menu): pick the file first, land on the new form with the review dialog open (<code class="doc-code">?autofill=&lt;proposal id&gt;</code>, kept 24 hours).</li>
+            <li>**Fill from document** on a new addendum: the proposal is built against the addendum layout's fields and lines.</li>
           </ul>
           <h2 class="doc-h2" id="ai-document-autofill-flow">What happens</h2>
           <ul class="doc-ul">
             <li>The file is read to plain text (PDF via poppler when installed, else in process; DOCX; XLSX/CSV sheets; text, HTML, .eml). Scanned PDFs with no text layer are refused with a clear message — nothing is invented from an image.</li>
             <li>The model sees the collection's fillable fields from its active layout (types, choices, notes), its child collections (lines, materials, schedules) and its multi-select relations. Small lookup tables (types, regions, years — up to 200 rows) are listed whole; big ones (vendors, people, locations, items) are searched through <code class="doc-code">search_records</code>, which runs the same permission-checked read the person could do by hand.</li>
             <li>The proposal comes back as one structured call: value, confidence and the sentence it came from, per field and per line, plus "asks" for anything the document does not say.</li>
-            <li>The review dialog lists fields, lines, links and asks with checkboxes and confidence pills. Apply STAGES the selection exactly like an import prefill — lines run the grid's row rules, the document attaches to the record's file field — and the record still needs Create.</li>
+            <li>The form's dependencies are honoured: a field narrowed by others (a project under a zone and a project type) is searched WITH those parents once they are settled, and a value the picker would not offer becomes an ask that names the parent excluding it. Cross-record defaults and field rules then fill what the document did not cover (a project's zones, regions and funding years; a rule's derived value) — shown with a "default" / "rule" pill; the document always wins.</li>
+            <li>A document past the prompt cap is condensed: the head is read whole, every later part is read once for verbatim passages that could fill a field, and those excerpts join the run (the dialog says how many parts were read).</li>
+            <li>The review dialog lists fields, lines, links and asks with checkboxes and confidence pills. An ask can be answered in place — a record picker for a relation, a choice list, a date — and a refused candidate is one click away. Apply STAGES the selection exactly like an import prefill — lines run the grid's row rules, the document attaches to the record's file field — and the record still needs Create.</li>
+            <li>What people keep, change before Create or answer is recorded per proposal: the AI Analytics page shows a scorecard per collection and per field, and the last corrections ride the next extraction's prompt as worked examples.</li>
           </ul>
           <h2 class="doc-h2" id="ai-document-autofill-guards">What keeps it honest</h2>
           <ul class="doc-ul">
@@ -7818,10 +7830,16 @@ Content-Type: application/json
           </ul>
           <h2 class="doc-h2" id="ai-document-autofill-api">API</h2>
           <pre class="doc-pre"><code>GET  /api/ai/extract-record/config/:collection      → { data: { enabled, accept: [".pdf", …] } }
-POST /api/ai/extract-record   multipart: collection=&lt;name&gt;, file=&lt;upload&gt;
-→ 200 { data: { summary, fields[], children[], m2m[], asks[], warnings[], prefill: { values, lines_by_alias, m2m, file_id, attach_alias }, document, model, rounds } }
+POST /api/ai/extract-record   multipart: collection=&lt;name&gt;, file=&lt;upload&gt;, layout_id?=&lt;addendum layout&gt;, background?=1
+→ 200 { data: { id, summary, fields[{…, derived?}], children[], m2m[], asks[{…, candidate?, input?}], warnings[], prefill, document, model, rounds, latency_ms, condensed?, hints_used[] } }
+→ 202 { data: { proposal_id, status: "running" } }   (background=1)
 → 403 feature off / collection not enabled / no create permission
-→ 413 over 25 MB · 422 no readable text · 502 the model returned no proposal</code></pre>
+→ 413 over 25 MB · 422 no readable text · 502 the model returned no proposal
+GET  /api/ai/extract-record/result/:id          → the stored proposal (202 while running, 422 when it failed; kept 24 h)
+POST /api/ai/extract-record/:id/notify          → tell the asker when a running proposal lands
+POST /api/ai/extract-record/:id/apply           { kept_fields[], kept_lines, resolved_asks[] }   (the review dialog's Apply)
+POST /api/ai/extract-record/:id/outcome         { record_id, values }   (which proposed values changed before Create)
+GET  /api/ai/extract-record/analytics?days=     → the scorecard (admin)</code></pre>
           <div class="doc-note">Cost: a 5-page SOW on Sonnet is roughly 4–6 model rounds, 50–70 seconds, a few tens of cents. The system prompt (field spec + option lists) is prompt-cached across the rounds.</div>
           <!-- /SYNC:ai-document-autofill -->
         </div>

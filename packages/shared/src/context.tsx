@@ -121,6 +121,8 @@ export type ItemLinkTarget = {
    *  keyed by staging key). Rides the URL as `?prefill=<base64 JSON>`, the
    *  shape both hosts already consume. */
   prefill?: Record<string, unknown> | null
+  /** Extra query parameters the target page reads (`autofill=<proposal id>`). */
+  query?: Record<string, string> | null
 }
 
 /** `?prefill=` payload encoder — base64 of the JSON, URL-encoded. */
@@ -190,6 +192,8 @@ export function defaultItemUrl(t: ItemLinkTarget): string {
   const params: string[] = []
   if (t.layoutSlug) params.push(`layout=${encodeURIComponent(t.layoutSlug)}`)
   if (t.prefill && Object.keys(t.prefill).length) params.push(`prefill=${encodePrefill(t.prefill)}`)
+  for (const [k, v] of Object.entries(t.query ?? {}))
+    params.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
   return params.length ? `${base}?${params.join('&')}` : base
 }
 

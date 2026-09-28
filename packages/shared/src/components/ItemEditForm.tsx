@@ -531,6 +531,11 @@ export interface ItemEditFormProps {
   extraTopContent?: ReactNode
   extraBottomContent?: ReactNode
   onHeaderWidgets?: (widgets: HeaderWidgetInfo[]) => void
+  /** Open the new-record form on a stored document proposal (`?autofill=<id>`
+   *  from a list's "New from document…" or the ready notification). */
+  autofillProposalId?: string | null
+  /** The proposal was picked up — the host may drop `?autofill=` from the URL. */
+  onAutofillConsumed?: () => void
   /** Consumed once, on mount, when `isNew` — prefills the draft + stages O2M
    *  lines from an already-parsed import result (e.g. handed off by a caller
    *  that ran the file picker before this form existed). */
@@ -1143,6 +1148,8 @@ export function ItemEditForm({
   extraTopContent,
   extraBottomContent,
   onHeaderWidgets,
+  autofillProposalId,
+  onAutofillConsumed,
   initialImportResult,
   initialValues,
   initialLinks,
@@ -1981,8 +1988,11 @@ export function ItemEditForm({
   // Rich-text targets get the model's plain lines wrapped as paragraphs; every
   // child alias stages through applyImportResult so row rules, provenance and
   // the save flush treat these lines exactly like an import prefill.
+  // The proposal this NEW record was filled from (outcome event at Create, #701).
+  const autofillAppliedRef = useRef<{ id: string; fields: string[] } | null>(null)
   const applyDocumentProposal = useCallback(
     async (sel: DocumentApplySelection) => {
+      autofillAppliedRef.current = { id: sel.proposal_id, fields: Object.keys(sel.values) }
       const values: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(sel.values)) {
         const cfg = (fieldConfig ?? []).find((f) => f.field === k)
@@ -6934,6 +6944,19 @@ export function ItemEditForm({
           qc.invalidateQueries({ queryKey: ['m2m-items'] })
         })
       }
+      // The record was created from a document proposal: report which
+      // proposed values were changed before Create (the corrections memory).
+      if (isNew && autofillAppliedRef.current) {
+        const a = autofillAppliedRef.current
+        autofillAppliedRef.current = null
+        const finals: Record<string, unknown> = {}
+        for (const f of a.fields) finals[f] = draftRef.current[f]
+        void client
+          .request(
+            post(`/ai/extract-record/${a.id}/outcome`, { record_id: String(id), values: finals })
+          )
+          .catch(() => {})
+      }
       // Auto-close dialog after brief success display
       setTimeout(() => {
         setSaveDialogOpen(false)
@@ -9024,6 +9047,8 @@ export function ItemEditForm({
                                           <DocumentAutofillButton
                                             collection={collection}
                                             onApply={applyDocumentProposal}
+                                            initialProposalId={autofillProposalId ?? null}
+                                            onProposalConsumed={onAutofillConsumed}
                                           />
                                         )}
                                         {isNew && quickPickerSteps.length > 0 && !isReadOnly && (

@@ -1,5 +1,5 @@
-import { errorText } from '../lib/db-refusal.js'
 import { db } from '../db/index.js'
+import { errorText } from '../lib/db-refusal.js'
 import { getIo } from './io-holder.js'
 
 /**
@@ -20,6 +20,7 @@ export type JobRunKind =
   | 'directory'
   | 'bulk'
   | 'task'
+  | 'ai'
 
 export interface JobRunHandle {
   /** DB row id, null when the insert failed (bookkeeping degraded). */

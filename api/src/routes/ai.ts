@@ -1,6 +1,6 @@
+import { createHash, randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance } from 'fastify'
-import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -13,11 +13,16 @@ import {
   recordPlaybook,
   retrievePlaybooks
 } from '../services/ai-playbooks.js'
-import { can } from '../services/permissions.js'
-import { ACCEPTED_EXTENSIONS, extractDocumentText } from '../services/document-extract.js'
+import { loadProposal, saveProposal } from '../services/autofill-store.js'
 import { proposeFromDocument } from '../services/document-autofill.js'
+import { ACCEPTED_EXTENSIONS, extractDocumentText } from '../services/document-extract.js'
 import { uploadFileBuffer } from '../services/files.js'
-import { currentTraceMeta } from '../services/request-trace.js'
+import { withJobRun } from '../services/job-runs.js'
+import { notifyUser } from '../services/notification-channels.js'
+import { can } from '../services/permissions.js'
+import { getLabels } from '../services/queues.js'
+import { currentTraceMeta, runInTrace } from '../services/request-trace.js'
+import type { User } from '../types.js'
 
 /** AI governance (#407): per-feature toggles — settings.ai_disabled_features
  *  JSON list of route keys; a disabled feature answers 403 with the reason. */
@@ -1406,7 +1411,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
   // ─── POST /chat — ask-your-data tool-use loop ─────────────────────────────
   app.post('/chat', { preHandler: authenticate }, async (req, reply) => {
-    const { chatModel } = await getAiModelSettings()
+    const { chatModel, answerCacheMinutes } = await getAiModelSettings()
     const settings = { model: chatModel }
     const client = await getAiClient({ model: chatModel })
     if (!client) {
@@ -1414,7 +1419,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { messages } = req.body as { messages?: Array<{ role: string; content: string }> }
+    const { messages, fresh } = req.body as {
+      messages?: Array<{ role: string; content: string }>
+      fresh?: boolean
+    }
     if (!Array.isArray(messages) || messages.length === 0) {
       return reply.code(400).send({ error: 'messages array is required' })
     }
@@ -1439,6 +1447,30 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const playbooksUsed = playbooks.length
     // `convo` below aliases `history` and grows per round — judge "standalone" now.
     const standalone = history.length === 1
+    // #723 — the same standalone question by the same person inside the
+    // window answers from cache (per person: answers are permission-scoped).
+    const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
+    const cacheKey =
+      standalone && answerCacheMinutes > 0 && redis
+        ? `nvr:aichat:${req.user!.id}:${createHash('sha1').update(question.trim().toLowerCase().replace(/\s+/g, ' ')).digest('hex')}`
+        : null
+    if (cacheKey && !fresh) {
+      try {
+        const hit = await redis!.get(cacheKey)
+        if (hit) {
+          const cached = JSON.parse(hit) as Record<string, unknown>
+          await logActivity({
+            action: 'ai-chat',
+            user: req.user?.id,
+            comment: 'answered from cache',
+            req
+          })
+          return reply.send({ data: { ...cached, cached: true, playbooks_used: 0 } })
+        }
+      } catch {
+        // a cache miss is the normal path
+      }
+    }
     const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
     const proposals: Array<Record<string, unknown>> = []
     const convo: Anthropic.MessageParam[] = history
@@ -1477,15 +1509,26 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
               rounds: round + 1
             }).catch((err) => req.log.warn({ err }, 'AI playbook record failed'))
           }
-          return reply.send({
-            data: {
-              reply: text,
-              trace,
-              proposals,
-              request_id: requestId,
-              playbooks_used: playbooksUsed
-            }
-          })
+          const payload = {
+            reply: text,
+            trace,
+            proposals,
+            request_id: requestId,
+            playbooks_used: playbooksUsed
+          }
+          // An answer that proposes an ACTION is never cached — a proposal
+          // is single-use and expires; only plain answers repeat.
+          if (cacheKey && proposals.length === 0 && text) {
+            void redis!
+              .set(
+                cacheKey,
+                JSON.stringify({ ...payload, cached_at: new Date().toISOString() }),
+                'EX',
+                answerCacheMinutes * 60
+              )
+              .catch(() => {})
+          }
+          return reply.send({ data: payload })
         }
 
         convo.push({ role: 'assistant', content: response.content })
@@ -1585,6 +1628,66 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     }
   )
 
+  /** Read the upload, run the proposal, store it under its id. Shared by the
+   *  foreground and background paths. */
+  async function runExtraction(input: {
+    user: User
+    collection: string
+    layoutId: number | null
+    buffer: Buffer
+    filename: string
+    mimetype: string | null
+    proposalId: string
+  }): Promise<import('../services/document-autofill.js').DocumentProposal> {
+    const extracted = await extractDocumentText(input.buffer, input.filename, input.mimetype)
+    if (extracted.text.trim().length < 40) {
+      throw Object.assign(
+        new Error(
+          'No readable text in this document. A scanned PDF has no text layer — export it as text or a searchable PDF first.'
+        ),
+        { statusCode: 422 }
+      )
+    }
+    // Keep the document: the proposal attaches it to the record's file field
+    // when the collection has one, so the source rides with the record.
+    let fileId: string | null = null
+    try {
+      const stored = await uploadFileBuffer(
+        input.user,
+        input.buffer,
+        input.filename,
+        input.mimetype || 'application/octet-stream'
+      )
+      fileId = stored.id
+    } catch {
+      fileId = null
+    }
+    const proposal = await proposeFromDocument(
+      input.user,
+      input.collection,
+      { name: input.filename, ...extracted },
+      fileId,
+      { layoutId: input.layoutId, fullText: extracted.fullText ?? null }
+    )
+    proposal.id = input.proposalId
+    const prior = await loadProposal(app, proposal.id)
+    await saveProposal(app, proposal.id, {
+      proposal,
+      status: 'ready',
+      notify: prior?.notify ?? false,
+      user: input.user.id,
+      collection: input.collection,
+      document_name: input.filename,
+      created_at: new Date().toISOString()
+    })
+    await logActivity({
+      action: 'ai-extract',
+      user: input.user.id,
+      collection: input.collection,
+      comment: `${input.filename} → ${proposal.fields.length} field(s), ${proposal.children.reduce((n, c) => n + c.lines.length, 0)} line(s), ${proposal.asks.length} ask(s) · ${proposal.model} · ${proposal.rounds} round(s)${proposal.condensed ? ` · condensed ${proposal.condensed.chunks} chunk(s)` : ''}`
+    })
+    return proposal
+  }
   app.post('/extract-record', { preHandler: authenticate }, async (req, reply) => {
     if (!(await aiFeatureEnabled('extract-record'))) {
       return reply.code(403).send({ error: 'Document autofill is turned off for this instance' })
@@ -1596,9 +1699,12 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(400).send({ error: 'No file provided' })
     }
     if (!multipart) return reply.code(400).send({ error: 'No file provided' })
-    const colField = multipart.fields.collection
-    const colPart = Array.isArray(colField) ? colField[0] : colField
-    const collection = colPart?.type === 'field' ? String(colPart.value).trim() : ''
+    const fieldValue = (name: string): string => {
+      const f = multipart.fields[name]
+      const part = Array.isArray(f) ? f[0] : f
+      return part?.type === 'field' ? String(part.value).trim() : ''
+    }
+    const collection = fieldValue('collection')
     if (!collection || /^nivaro_/i.test(collection) || !/^[A-Za-z0-9_]+$/.test(collection)) {
       return reply.code(400).send({ error: 'collection is required' })
     }
@@ -1609,6 +1715,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     if (!settings.document_autofill) {
       return reply.code(403).send({ error: 'Document autofill is not enabled for this collection' })
     }
+    const layoutRaw = fieldValue('layout_id')
+    const layoutId = /^\d+$/.test(layoutRaw) ? Number(layoutRaw) : null
+    const background = /^(1|true|yes)$/i.test(fieldValue('background'))
     const buffer = await multipart.toBuffer()
     if (buffer.length > EXTRACT_MAX_BYTES) {
       return reply.code(413).send({ error: 'File exceeds 25MB limit' })
@@ -1620,51 +1729,84 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(400)
         .send({ error: `Unsupported file type. Accepted: ${ACCEPTED_EXTENSIONS.join(', ')}` })
     }
-
-    let extracted: Awaited<ReturnType<typeof extractDocumentText>>
-    try {
-      extracted = await extractDocumentText(buffer, filename, multipart.mimetype)
-    } catch (err) {
-      return reply
-        .code(422)
-        .send({ error: `Could not read the document: ${(err as Error).message}` })
-    }
-    if (extracted.text.trim().length < 40) {
-      return reply.code(422).send({
-        error:
-          'No readable text in this document. A scanned PDF has no text layer — export it as text or a searchable PDF first.'
-      })
+    const proposalId = randomUUID()
+    const input = {
+      user: req.user!,
+      collection,
+      layoutId,
+      buffer,
+      filename,
+      mimetype: multipart.mimetype || null,
+      proposalId
     }
 
-    // Keep the document: the proposal attaches it to the record's file field
-    // when the collection has one, so the source rides with the record.
-    let fileId: string | null = null
-    try {
-      const stored = await uploadFileBuffer(
-        req.user!,
-        buffer,
-        filename,
-        multipart.mimetype || 'application/octet-stream'
-      )
-      fileId = stored.id
-    } catch {
-      fileId = null
-    }
-
-    try {
-      const proposal = await proposeFromDocument(
-        req.user!,
+    if (background) {
+      // #760 — answer at once, run under a job run, tell the person when the
+      // proposal is ready (the notification opens the new-record form on it).
+      await saveProposal(app, proposalId, {
+        proposal: null,
+        status: 'running',
+        user: req.user!.id,
         collection,
-        { name: filename, ...extracted },
-        fileId
-      )
-      await logActivity({
-        action: 'ai-extract',
-        user: req.user?.id,
-        collection,
-        comment: `${filename} → ${proposal.fields.length} field(s), ${proposal.children.reduce((n, c) => n + c.lines.length, 0)} line(s), ${proposal.asks.length} ask(s) · ${proposal.model} · ${proposal.rounds} round(s)`,
-        req
+        document_name: filename,
+        created_at: new Date().toISOString()
       })
+      const userId = req.user!.id
+      void runInTrace('/api/ai/extract-record?background=1', userId, () =>
+        withJobRun(
+          'ai',
+          'document-autofill',
+          { label: filename, triggeredBy: userId },
+          async () => {
+            try {
+              const proposal = await runExtraction(input)
+              const n = proposal.fields.length
+              // Only a person who LEFT (the dialog's "tell me when it's ready",
+              // or a list's "New from document") is told; a poller that stayed
+              // sees it land in the dialog and needs no inbox row.
+              const stored = await loadProposal(app, proposalId)
+              if (!stored?.notify) return `${n} fields`
+              await notifyUser(app, userId, {
+                subject: `Document read: ${filename}`,
+                message: `${n} field${n === 1 ? '' : 's'}${proposal.children.length ? ` and ${proposal.children.reduce((a, c) => a + c.lines.length, 0)} lines` : ''} proposed${proposal.asks.length ? `, ${proposal.asks.length} still need you` : ''}. Open the new record to review.`,
+                category: 'system',
+                always_inbox: true,
+                target: { kind: 'record', collection, id: 'new', query: `autofill=${proposalId}` },
+                source: { kind: 'autofill', label: 'Document autofill' }
+              })
+              return `${n} fields`
+            } catch (err) {
+              const e = err as Error
+              const stored = await loadProposal(app, proposalId)
+              await saveProposal(app, proposalId, {
+                proposal: null,
+                status: 'error',
+                notify: stored?.notify ?? false,
+                error: e.message || 'Document autofill failed',
+                user: userId,
+                collection,
+                document_name: filename,
+                created_at: new Date().toISOString()
+              })
+              if (!stored?.notify) throw err
+              await notifyUser(app, userId, {
+                subject: `Could not read ${filename}`,
+                message: e.message || 'Document autofill failed',
+                category: 'system',
+                always_inbox: true,
+                target: { kind: 'record', collection, id: 'new' },
+                source: { kind: 'autofill', label: 'Document autofill' }
+              })
+              throw err
+            }
+          }
+        )
+      ).catch((err) => req.log.warn({ err }, 'background document autofill failed'))
+      return reply.code(202).send({ data: { proposal_id: proposalId, status: 'running' } })
+    }
+
+    try {
+      const proposal = await runExtraction(input)
       return reply.send({ data: proposal })
     } catch (err) {
       const e = err as Error & { statusCode?: number }
@@ -1673,6 +1815,301 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(code).send({ error: e.message || 'Document autofill failed' })
     }
   })
+
+  /** A stored proposal by id (the asker or an admin). 202 while a
+   *  background run is still going, 422 when it failed. */
+  app.get<{ Params: { id: string } }>(
+    '/extract-record/result/:id',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.id
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ error: 'bad id' })
+      const stored = await loadProposal(app, id)
+      if (!stored)
+        return reply.code(404).send({ error: 'No proposal with that id (they keep for 24 hours)' })
+      if (stored.user !== req.user!.id && !req.isAdmin)
+        return reply.code(403).send({ error: 'Forbidden' })
+      if (stored.status === 'running')
+        return reply
+          .code(202)
+          .send({ data: { status: 'running', document_name: stored.document_name } })
+      if (stored.status === 'error' || !stored.proposal)
+        return reply.code(422).send({ error: stored.error || 'Document autofill failed' })
+      return reply.send({ data: stored.proposal })
+    }
+  )
+
+  /** "Tell me when it's ready" — the asker is leaving; the run's completion
+   *  sends a notification that opens the new-record form on the proposal. */
+  app.post<{ Params: { id: string } }>(
+    '/extract-record/:id/notify',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.id
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ error: 'bad id' })
+      const stored = await loadProposal(app, id)
+      if (!stored) return reply.code(404).send({ error: 'No proposal with that id' })
+      if (stored.user !== req.user!.id && !req.isAdmin)
+        return reply.code(403).send({ error: 'Forbidden' })
+      if (stored.status !== 'running') return reply.send({ data: { status: stored.status } })
+      await saveProposal(app, id, { ...stored, notify: true })
+      return reply.send({ data: { status: 'running', notify: true } })
+    }
+  )
+
+  /** The review dialog's Apply: what was kept, what was answered. One event
+   *  row per proposal; the Create outcome completes it. */
+  app.post<{ Params: { id: string } }>(
+    '/extract-record/:id/apply',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.id
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ error: 'bad id' })
+      const stored = await loadProposal(app, id)
+      if (!stored?.proposal) return reply.code(404).send({ error: 'No proposal with that id' })
+      if (stored.user !== req.user!.id && !req.isAdmin)
+        return reply.code(403).send({ error: 'Forbidden' })
+      const body = (req.body ?? {}) as {
+        kept_fields?: unknown
+        kept_lines?: unknown
+        resolved_asks?: unknown
+      }
+      const p = stored.proposal
+      const kept = new Set(Array.isArray(body.kept_fields) ? body.kept_fields.map(String) : [])
+      const keptLines = Number(body.kept_lines) || 0
+      const resolved = Array.isArray(body.resolved_asks) ? body.resolved_asks.length : 0
+      const proposed = p.fields.map((f) => ({
+        field: f.field,
+        proposed: f.value,
+        proposed_display: f.display,
+        confidence: f.confidence,
+        derived: f.derived?.by ?? null,
+        kept: kept.has(f.field)
+      }))
+      const cost = (await db('nivaro_ai_calls')
+        .where({ request_id: p.request_id ?? '' })
+        .sum({ c: 'cost_usd' })
+        .first()
+        .catch(() => null)) as { c: unknown } | null
+      const existing = await db('nivaro_ai_autofill_events').where({ proposal_id: id }).first('id')
+      const row = {
+        created_at: new Date(),
+        proposal_id: id,
+        request_id: p.request_id,
+        user: req.user!.id,
+        collection: p.collection,
+        document_name: p.document.name.slice(0, 300),
+        file_id: p.prefill.file_id,
+        model: p.model,
+        rounds: p.rounds,
+        latency_ms: p.latency_ms,
+        cost_usd: cost?.c != null ? Number(cost.c) : null,
+        fields_proposed: p.fields.length,
+        fields_kept: proposed.filter((x) => x.kept).length,
+        lines_proposed: p.children.reduce((n, c) => n + c.lines.length, 0),
+        lines_kept: keptLines,
+        asks: p.asks.length,
+        asks_resolved: resolved,
+        proposed: JSON.stringify(proposed)
+      }
+      if (existing) await db('nivaro_ai_autofill_events').where({ id: existing.id }).update(row)
+      else await db('nivaro_ai_autofill_events').insert(row)
+      return reply.send({ data: { ok: true } })
+    }
+  )
+
+  /** The record was created: which proposed values were changed before it
+   *  was. Feeds the corrections memory the next extraction reads. */
+  app.post<{ Params: { id: string } }>(
+    '/extract-record/:id/outcome',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.id
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ error: 'bad id' })
+      const stored = await loadProposal(app, id)
+      if (!stored?.proposal) return reply.code(404).send({ error: 'No proposal with that id' })
+      if (stored.user !== req.user!.id && !req.isAdmin)
+        return reply.code(403).send({ error: 'Forbidden' })
+      const body = (req.body ?? {}) as { record_id?: unknown; values?: unknown }
+      const finalValues =
+        body.values && typeof body.values === 'object'
+          ? (body.values as Record<string, unknown>)
+          : {}
+      const p = stored.proposal
+      const same = (a: unknown, b: unknown) =>
+        String(a ?? '')
+          .trim()
+          .toLowerCase() ===
+          String(b ?? '')
+            .trim()
+            .toLowerCase() ||
+        (Number.isFinite(Number(a)) && Number.isFinite(Number(b)) && Number(a) === Number(b))
+      const overrides: Array<Record<string, unknown>> = []
+      const labelsWanted = new Map<string, Set<string>>()
+      for (const f of p.fields) {
+        if (!(f.field in finalValues)) continue
+        const fin = finalValues[f.field]
+        if (fin == null || fin === '' || same(fin, f.value)) continue
+        overrides.push({
+          field: f.field,
+          proposed: f.value,
+          proposed_display: f.display,
+          final: fin
+        })
+        const ask = p.asks.find((a) => a.field === f.field)
+        const rel = ask?.input?.type === 'relation' ? ask.input.collection : null
+        if (rel) {
+          if (!labelsWanted.has(rel)) labelsWanted.set(rel, new Set())
+          labelsWanted.get(rel)!.add(String(fin))
+        }
+      }
+      // Relation finals read as labels where the spec knows the target.
+      const specLabels = await getLabels(labelsWanted).catch(() => ({}) as Record<string, string>)
+      for (const o of overrides) {
+        const f = p.fields.find((x) => x.field === o.field)
+        const key = Object.keys(specLabels).find((k) => k.endsWith(`:${String(o.final)}`))
+        o.final_display = key
+          ? specLabels[key]
+          : f?.display && !same(o.final, f.value)
+            ? null
+            : null
+      }
+      await db('nivaro_ai_autofill_events')
+        .where({ proposal_id: id })
+        .update({
+          overrides: JSON.stringify(overrides),
+          fields_overridden: overrides.length,
+          record_id: body.record_id != null ? String(body.record_id).slice(0, 64) : null,
+          completed_at: new Date()
+        })
+      return reply.send({ data: { overrides: overrides.length } })
+    }
+  )
+
+  /** #703 — the autofill scorecard: per collection and per field, what was
+   *  proposed, kept, changed and asked; cost and time per document. */
+  app.get<{ Querystring: { days?: string; collection?: string } }>(
+    '/extract-record/analytics',
+    { preHandler: requireAdmin },
+    async (req) => {
+      const days = Math.min(365, Math.max(1, Number(req.query?.days) || 30))
+      const since = new Date(Date.now() - days * 86_400_000)
+      const q = db('nivaro_ai_autofill_events').where('created_at', '>=', since)
+      if (req.query?.collection) q.where({ collection: req.query.collection })
+      const rows = (await q.orderBy('id', 'desc').limit(2000).select('*')) as Array<
+        Record<string, unknown>
+      >
+      const num = (v: unknown) => Number(v ?? 0)
+      const byCollection = new Map<string, Record<string, number>>()
+      const byField = new Map<
+        string,
+        { proposed: number; kept: number; overridden: number; asked: number; confidence: number }
+      >()
+      let cost = 0
+      let latency = 0
+      let latencyN = 0
+      for (const r of rows) {
+        const c = String(r.collection)
+        const agg = byCollection.get(c) ?? {
+          documents: 0,
+          fields_proposed: 0,
+          fields_kept: 0,
+          fields_overridden: 0,
+          lines_proposed: 0,
+          lines_kept: 0,
+          asks: 0,
+          asks_resolved: 0,
+          cost_usd: 0,
+          rounds: 0
+        }
+        agg.documents++
+        for (const k of [
+          'fields_proposed',
+          'fields_kept',
+          'fields_overridden',
+          'lines_proposed',
+          'lines_kept',
+          'asks',
+          'asks_resolved',
+          'rounds'
+        ])
+          agg[k] += num(r[k])
+        agg.cost_usd += num(r.cost_usd)
+        byCollection.set(c, agg)
+        cost += num(r.cost_usd)
+        if (r.latency_ms != null) {
+          latency += num(r.latency_ms)
+          latencyN++
+        }
+        let proposed: Array<Record<string, unknown>> = []
+        let overrides: Array<Record<string, unknown>> = []
+        try {
+          proposed = JSON.parse(String(r.proposed ?? '[]'))
+        } catch {}
+        try {
+          overrides = JSON.parse(String(r.overrides ?? '[]'))
+        } catch {}
+        const overridden = new Set(overrides.map((o) => String(o.field)))
+        for (const pf of proposed) {
+          const key = `${c}:${String(pf.field)}`
+          const f = byField.get(key) ?? {
+            proposed: 0,
+            kept: 0,
+            overridden: 0,
+            asked: 0,
+            confidence: 0
+          }
+          f.proposed++
+          if (pf.kept) f.kept++
+          if (overridden.has(String(pf.field))) f.overridden++
+          f.confidence += num(pf.confidence)
+          byField.set(key, f)
+        }
+      }
+      return {
+        data: {
+          days,
+          documents: rows.length,
+          cost_usd: cost,
+          avg_latency_ms: latencyN ? Math.round(latency / latencyN) : null,
+          by_collection: [...byCollection.entries()].map(([collection, v]) => ({
+            collection,
+            ...v
+          })),
+          by_field: [...byField.entries()]
+            .map(([key, v]) => {
+              const [collection, field] = key.split(':')
+              return {
+                collection,
+                field,
+                proposed: v.proposed,
+                kept: v.kept,
+                overridden: v.overridden,
+                avg_confidence: v.proposed ? v.confidence / v.proposed : null
+              }
+            })
+            .sort((a, b) => b.proposed - a.proposed)
+            .slice(0, 200),
+          recent: rows.slice(0, 50).map((r) => ({
+            id: num(r.id),
+            created_at: r.created_at,
+            collection: r.collection,
+            document_name: r.document_name,
+            model: r.model,
+            rounds: num(r.rounds),
+            latency_ms: r.latency_ms == null ? null : num(r.latency_ms),
+            cost_usd: r.cost_usd == null ? null : num(r.cost_usd),
+            fields_proposed: num(r.fields_proposed),
+            fields_kept: num(r.fields_kept),
+            fields_overridden: num(r.fields_overridden),
+            asks: num(r.asks),
+            asks_resolved: num(r.asks_resolved),
+            record_id: r.record_id
+          }))
+        }
+      }
+    }
+  )
 
   app.post('/feedback', { preHandler: authenticate }, async (req, reply) => {
     const body = (req.body ?? {}) as { request_id?: unknown; rating?: unknown; comment?: unknown }

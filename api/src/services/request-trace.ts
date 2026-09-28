@@ -115,6 +115,28 @@ export function beginTrace(urlHint?: string): void {
   })
 }
 
+/** Run `fn` inside its own trace context — a background job that must
+ *  still attribute its AI calls to a request id and a person. */
+export function runInTrace<T>(
+  urlHint: string,
+  userId: string | null,
+  fn: () => Promise<T>
+): Promise<T> {
+  return als.run(
+    {
+      start: performance.now(),
+      spans: [],
+      urlHint,
+      id: randomUUID(),
+      userId: userId ?? undefined,
+      statements: [],
+      inflight: new Map(),
+      queries: 0
+    },
+    fn
+  )
+}
+
 /** Stamp the resolved user onto the current request's trace (authenticate calls it). */
 export function setTraceUser(userId: string): void {
   const ctx = als.getStore()

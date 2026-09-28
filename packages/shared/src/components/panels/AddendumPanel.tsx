@@ -7,6 +7,10 @@ import { del, get, post } from '../../lib/commands'
 import { sanitizeHtml } from '../../lib/sanitize-html'
 import { titleCase } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
+import {
+  type DocumentApplySelection,
+  DocumentAutofillButton
+} from '../import/DocumentAutofillButton'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
 import { evalClientFormula } from '../item-edit/InlineTableField'
 import {
@@ -663,6 +667,38 @@ function AddendumCreateSheet({
     setFormData((prev) => ({ ...prev, [field]: value }))
   }, [])
 
+  // #786 — fill the addendum from a document: the proposal is built against
+  // THIS addendum layout's fields (layout_id), values land in the draft and
+  // proposed line rows stage beside the parent's prefilled ones.
+  const applyDocumentToAddendum = useCallback(
+    (sel: DocumentApplySelection) => {
+      setFormData((prev) => ({ ...prev, ...sel.values }))
+      if (!title.trim() && sel.summary) setTitle(sel.summary.slice(0, 120))
+      for (const [alias, lines] of Object.entries(sel.lines_by_alias)) {
+        const rel = relations.find(
+          (r) =>
+            r.one_collection === collection &&
+            !r.junction_field &&
+            (r.one_field === alias || r.many_collection === alias)
+        )
+        if (!rel?.many_collection || !rel.many_field) continue
+        const fk = rel.many_field
+        const key = `${rel.many_collection}.${fk}`
+        setPendingO2MRows((prev) => {
+          const next = new Map(prev)
+          next.set(key, [
+            ...(next.get(key) ?? []),
+            ...lines.map((l) => ({ ...l.values, [fk]: itemId }))
+          ])
+          return next
+        })
+      }
+      if (sel.file_id)
+        setAttachments((prev) => [...prev, { id: sel.file_id!, name: sel.document_name }])
+    },
+    [collection, itemId, relations, title]
+  )
+
   // ── O2M staging context (prefill from parent) ─────────────────────────────
   const [pendingO2MRows, setPendingO2MRows] = useState<Map<string, Record<string, unknown>[]>>(
     new Map()
@@ -893,6 +929,13 @@ function AddendumCreateSheet({
                     )}
                     {uploadingCount > 0 ? 'Uploading…' : 'Upload'}
                   </button>
+                  <DocumentAutofillButton
+                    collection={collection}
+                    layoutId={resolvedLayoutId}
+                    label='Fill from document'
+                    onApply={applyDocumentToAddendum}
+                    className='h-7 px-2.5 text-[11px]'
+                  />
                 </div>
               </div>
             </div>

@@ -1,11 +1,16 @@
+import { randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 import type { CMSField, CMSRelation, User } from '../types.js'
 import { getAiClient, getAiModelSettings } from './ai-client.js'
 import { getCollection, getFields, getRelations } from './collections.js'
+import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
-import { readItems } from './items.js'
+import { MAX_TEXT_CHARS } from './document-extract.js'
+import { evaluateRulesForTrigger } from './field-rules.js'
+import { applyFilterToQuery, readItems } from './items.js'
 import { can } from './permissions.js'
+import { currentTraceMeta } from './request-trace.js'
 import { listUsers } from './users.js'
 
 /**
@@ -34,6 +39,9 @@ export type ProposedField = {
   display: string | null
   confidence: number
   source: string | null
+  /** Set when the value was NOT read from the document but derived from one
+   *  that was: a field rule or a cross-record default the form would run. */
+  derived?: { by: 'field_rule' | 'cross_record_defaults'; from: string } | null
 }
 
 export type ProposedLine = {
@@ -43,10 +51,36 @@ export type ProposedLine = {
   source: string | null
 }
 
-export type ProposedAsk = { field: string; label: string; reason: string }
+/** How the review dialog lets a person answer an ask without leaving it. */
+export type AskInput =
+  | { type: 'relation'; collection: string; template: string | null }
+  | { type: 'choices'; choices: Array<{ value: string; text: string }> }
+  | { type: 'boolean' }
+  | { type: 'number' }
+  | { type: 'date' }
+  | { type: 'text' }
+
+export type ProposedAsk = {
+  field: string
+  label: string
+  reason: string
+  /** What the model read, when it read something but the value was refused
+   *  (under the confidence threshold, outside a cascade) — offered as one click. */
+  candidate?: {
+    value: unknown
+    display: string | null
+    confidence: number
+    source: string | null
+  } | null
+  input?: AskInput | null
+}
 
 export type DocumentProposal = {
+  /** Stable id for the stored proposal (24h) — the form opens it by `?autofill=<id>`. */
+  id: string
+  request_id: string | null
   collection: string
+  layout_id: number | null
   summary: string
   fields: ProposedField[]
   children: Array<{
@@ -79,9 +113,26 @@ export type DocumentProposal = {
   }
   model: string
   rounds: number
+  latency_ms: number
+  /** A document past the prompt cap was condensed: how many extra chunks were read. */
+  condensed: { chunks: number; excerpt_chars: number } | null
+  /** Which configured hints rode the prompt (collection hints + keyed hints that fired). */
+  hints_used: string[]
 }
 
 // ─── Spec: what the model may fill ───────────────────────────────────────────
+
+/** A picker cascade (dependency_config.cascade_filters) — the same shape the
+ *  form's buildCascadeFilter and services/picker-rules.ts read. */
+export type CascadeRule = {
+  parent_field: string
+  filter_column: string
+  filter_is_m2m?: boolean
+  filter_via_many?: boolean
+  value_map?: Record<string, unknown>
+  value_map_default?: unknown
+  show_all_if_no_parent?: boolean
+}
 
 type SpecField = {
   field: string
@@ -92,6 +143,11 @@ type SpecField = {
   required: boolean
   choices?: Array<{ value: string; text: string }>
   lookup?: { collection: string; label: string }
+  /** The picker narrows by these parent fields — the model fills parents
+   *  first and passes them to search_records; the proposal is judged against them. */
+  cascades?: CascadeRule[]
+  /** The field's option_filter (may hold `$parent.<field>` tokens). */
+  optionFilter?: Record<string, unknown> | null
 }
 
 type SpecChild = {
@@ -116,6 +172,63 @@ type Spec = {
    *  region or year is picked from the real list instead of searched for. */
   lookupOptions: Map<string, Array<{ id: string | number; label: string }>>
   attachAlias: string | null
+  layoutId: number | null
+}
+
+/** Per-collection autofill configuration (migration 364). */
+export type AutofillConfig = {
+  hints: string | null
+  keyedHints: Array<{ field: string; match: string; hints: string }>
+  thresholds: Record<string, number>
+}
+
+export const DEFAULT_ASK_THRESHOLD = 0.4
+
+export async function autofillConfig(collection: string): Promise<AutofillConfig> {
+  const row = (await db('nivaro_ai_collection_settings')
+    .where({ collection })
+    .first('autofill_hints', 'autofill_keyed_hints', 'autofill_thresholds')
+    .catch(() => null)) as Record<string, unknown> | null | undefined
+  const parse = (v: unknown): unknown => {
+    if (typeof v !== 'string' || !v.trim()) return null
+    try {
+      return JSON.parse(v)
+    } catch {
+      return null
+    }
+  }
+  const keyed = parse(row?.autofill_keyed_hints)
+  const thresholds = parse(row?.autofill_thresholds)
+  return {
+    hints:
+      typeof row?.autofill_hints === 'string' && row.autofill_hints.trim()
+        ? row.autofill_hints.trim()
+        : null,
+    keyedHints: Array.isArray(keyed)
+      ? keyed
+          .filter(
+            (k): k is { field: string; match: string; hints: string } =>
+              !!k &&
+              typeof k === 'object' &&
+              typeof (k as Record<string, unknown>).field === 'string' &&
+              typeof (k as Record<string, unknown>).match === 'string' &&
+              typeof (k as Record<string, unknown>).hints === 'string'
+          )
+          .slice(0, 40)
+      : [],
+    thresholds:
+      thresholds && typeof thresholds === 'object' && !Array.isArray(thresholds)
+        ? Object.fromEntries(
+            Object.entries(thresholds as Record<string, unknown>)
+              .map(([k, v]) => [k, Number(v)] as const)
+              .filter(([, v]) => Number.isFinite(v) && v >= 0 && v <= 1)
+          )
+        : {}
+  }
+}
+
+export function thresholdFor(cfg: AutofillConfig, field: string): number {
+  return cfg.thresholds[field] ?? cfg.thresholds._default ?? DEFAULT_ASK_THRESHOLD
 }
 
 const PRELIST_MAX_ROWS = 200
@@ -208,12 +321,17 @@ function isFillable(f: CMSField, aliases: Set<string>): boolean {
   return true
 }
 
-async function layoutFieldSet(collection: string): Promise<Set<string> | null> {
-  const layout = (await db('nivaro_collection_layouts')
-    .where({ collection, layout_type: 'grouped', is_active: 1 })
-    .first('id')
-    .catch(() => null)) as { id: number } | null
-  if (!layout) return null
+async function layoutFieldSet(
+  collection: string,
+  layoutId: number | null
+): Promise<{ set: Set<string> | null; layoutId: number | null }> {
+  const layout = (await (layoutId
+    ? db('nivaro_collection_layouts').where({ collection, id: layoutId }).first('id')
+    : db('nivaro_collection_layouts')
+        .where({ collection, layout_type: 'grouped', is_active: 1 })
+        .first('id')
+  ).catch(() => null)) as { id: number } | null
+  if (!layout) return { set: null, layoutId: null }
   const rows = (await db('nivaro_layout_field_assignments')
     .where({ layout_id: layout.id })
     .select('field', 'is_visible')) as Array<{ field: string; is_visible: boolean | number | null }>
@@ -222,7 +340,33 @@ async function layoutFieldSet(collection: string): Promise<Set<string> | null> {
     if (r.is_visible === false || r.is_visible === 0) continue
     set.add(r.field)
   }
-  return set.size ? set : null
+  return { set: set.size ? set : null, layoutId: layout.id }
+}
+
+function parseJsonLoose<T>(v: unknown): T | null {
+  if (v == null) return null
+  if (typeof v === 'object') return v as T
+  try {
+    return JSON.parse(String(v)) as T
+  } catch {
+    return null
+  }
+}
+
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+function cascadesOf(f: CMSField): CascadeRule[] {
+  const dep = parseJsonLoose<{ cascade_filters?: CascadeRule[] }>(
+    (f as unknown as { dependency_config?: unknown }).dependency_config
+  )
+  return (dep?.cascade_filters ?? []).filter(
+    (c) =>
+      !!c &&
+      typeof c.parent_field === 'string' &&
+      typeof c.filter_column === 'string' &&
+      IDENT.test(c.parent_field) &&
+      c.filter_column.split('.').every((seg) => IDENT.test(seg))
+  )
 }
 
 async function scalarSpec(
@@ -272,6 +416,12 @@ async function scalarSpec(
       }
       lookups.set(target, { label, template })
       entry.lookup = { collection: target, label }
+      const cascades = cascadesOf(f)
+      if (cascades.length) entry.cascades = cascades
+      const opts = (f.options ?? {}) as Record<string, unknown>
+      const of = opts.option_filter
+      if (of && typeof of === 'object' && !Array.isArray(of) && Object.keys(of).length)
+        entry.optionFilter = of as Record<string, unknown>
     } else {
       if (
         !SCALAR_TYPES.has(f.type) &&
@@ -288,12 +438,16 @@ async function scalarSpec(
   return out
 }
 
-export async function buildSpec(user: User, collection: string): Promise<Spec> {
+export async function buildSpec(
+  user: User,
+  collection: string,
+  opts: { layoutId?: number | null } = {}
+): Promise<Spec> {
   const meta = await getCollection(collection)
   if (!meta) throw new Error(`Collection "${collection}" not found`)
   const rels = await getRelations(collection)
   const lookups: Spec['lookups'] = new Map()
-  const assigned = await layoutFieldSet(collection)
+  const { set: assigned, layoutId } = await layoutFieldSet(collection, opts.layoutId ?? null)
   const fields = await scalarSpec(collection, rels, lookups, assigned, new Set())
 
   const children: SpecChild[] = []
@@ -365,7 +519,8 @@ export async function buildSpec(user: User, collection: string): Promise<Spec> {
     m2m,
     lookups,
     lookupOptions,
-    attachAlias
+    attachAlias,
+    layoutId
   }
 }
 
@@ -421,7 +576,18 @@ const TOOLS: Anthropic.Tool[] = [
           description: 'One of the lookup collections listed in the spec'
         },
         query: { type: 'string', description: 'Name or number to search for' },
-        limit: { type: 'integer', minimum: 1, maximum: 8 }
+        limit: { type: 'integer', minimum: 1, maximum: 8 },
+        field: {
+          type: 'string',
+          description:
+            'The field you are filling (so the search honours its dependencies). Required for a field listed under Dependencies.'
+        },
+        parents: {
+          type: 'object',
+          description:
+            'Ids you already settled for the parent fields of `field`, e.g. {"division": 2, "project_type": 12}. The search is narrowed the way the form narrows the picker.',
+          additionalProperties: { type: ['string', 'number', 'null'] }
+        }
       },
       required: ['collection', 'query']
     }
@@ -510,7 +676,33 @@ function describeField(f: SpecField): string {
   return bits.join('\n')
 }
 
-function buildSystemPrompt(spec: Spec, today: string): string {
+function describeDeps(spec: Spec): string[] {
+  const out: string[] = []
+  for (const f of spec.fields) {
+    if (!f.cascades?.length) continue
+    const parents = [...new Set(f.cascades.map((c) => c.parent_field))].map(
+      (p) => spec.fields.find((x) => x.field === p)?.label ?? p
+    )
+    out.push(
+      `- ${f.field} (${f.label}) is narrowed by ${parents.join(', ')}: settle those first, then pass their ids as "parents" when you search_records for ${f.field}. A value outside them is refused.`
+    )
+  }
+  return out
+}
+
+export type CorrectionMemory = Array<{
+  field: string
+  label: string
+  from: string
+  to: string
+  times: number
+}>
+
+function buildSystemPrompt(
+  spec: Spec,
+  today: string,
+  extras: { hints?: string | null; corrections?: CorrectionMemory } = {}
+): string {
   const lines: string[] = []
   lines.push(
     `You fill in a NEW "${spec.label}" record from a document a person uploaded. You propose values; a person reviews every one before it is saved. Today is ${today}.`,
@@ -562,6 +754,23 @@ function buildSystemPrompt(spec: Spec, today: string): string {
         opts.map((o) => `${o.id}=${o.label}`).join('; ')
     )
   }
+  const deps = describeDeps(spec)
+  if (deps.length) {
+    lines.push('', 'Dependencies between fields (the form narrows one picker by another):', ...deps)
+  }
+  if (extras.hints) {
+    lines.push('', `Hints for ${spec.label} documents (written by an administrator):`, extras.hints)
+  }
+  if (extras.corrections?.length) {
+    lines.push(
+      '',
+      'People corrected earlier proposals on this collection — prefer what they chose:',
+      ...extras.corrections.map(
+        (c) =>
+          `- ${c.label}: "${c.from}" was changed to "${c.to}"${c.times > 1 ? ` (${c.times} times)` : ''}`
+      )
+    )
+  }
   return lines.join('\n')
 }
 
@@ -569,11 +778,142 @@ function buildSystemPrompt(spec: Spec, today: string): string {
 
 type Seen = Map<string, Map<string, string>> // collection → id → label
 
+/** The cascade clauses for the parent values in hand — the form's
+ *  buildCascadeFilter (same shape services/picker-rules.ts compiles). */
+export function cascadeFilterFor(
+  rules: CascadeRule[],
+  parentValue: (f: string) => unknown
+): { filter: Record<string, unknown> | null; used: string[]; missingRequired: string[] } {
+  let filter: Record<string, unknown> | null = null
+  const used: string[] = []
+  const missingRequired: string[] = []
+  const empty = (v: unknown) =>
+    v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)
+  for (const rule of rules) {
+    const pv = parentValue(rule.parent_field)
+    if (empty(pv)) {
+      if (rule.show_all_if_no_parent === false) missingRequired.push(rule.parent_field)
+      continue
+    }
+    let fv: unknown = pv
+    if (rule.value_map && typeof rule.value_map === 'object') {
+      const vm = rule.value_map
+      const one = (v: unknown) => vm[String(v)] ?? rule.value_map_default ?? v
+      fv = Array.isArray(pv)
+        ? [
+            ...new Set(
+              (pv as unknown[]).flatMap((v) => (Array.isArray(one(v)) ? one(v) : [one(v)]))
+            )
+          ]
+        : one(pv)
+    }
+    const clause = Array.isArray(fv) ? { _in: fv } : { _eq: fv }
+    if (!filter) filter = {}
+    if (rule.filter_is_m2m) {
+      filter[rule.filter_column] = { _some: { id: clause } }
+    } else if (rule.filter_column.includes('.')) {
+      const segs = rule.filter_column.split('.')
+      let nested: Record<string, unknown> = clause
+      for (let i = segs.length - 1; i >= 1; i--) nested = { [segs[i]]: nested }
+      filter[segs[0]] = rule.filter_via_many ? { _some: nested } : nested
+    } else {
+      filter[rule.filter_column] = clause
+    }
+    used.push(rule.parent_field)
+  }
+  return { filter, used, missingRequired }
+}
+
+/** `$parent.<field>` tokens off the values in hand; an `_and` entry that
+ *  cannot resolve is dropped, a bare filter that cannot resolve is skipped. */
+function resolveOptionFilterTokens(
+  filter: Record<string, unknown>,
+  parentValue: (f: string) => unknown
+): Record<string, unknown> | null {
+  const empty = (v: unknown) =>
+    v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)
+  const walk = (node: unknown): { v: unknown; ok: boolean } => {
+    if (typeof node === 'string' && node.startsWith('$parent.')) {
+      const val = parentValue(node.slice('$parent.'.length))
+      return { v: val, ok: !empty(val) }
+    }
+    if (Array.isArray(node)) {
+      const out: unknown[] = []
+      for (const item of node) {
+        const r = walk(item)
+        if (!r.ok) return { v: out, ok: false }
+        out.push(r.v)
+      }
+      return { v: out, ok: true }
+    }
+    if (node && typeof node === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        const r = walk(v)
+        if (!r.ok) return { v: out, ok: false }
+        out[k] = r.v
+      }
+      return { v: out, ok: true }
+    }
+    return { v: node, ok: true }
+  }
+  if (Array.isArray(filter._and)) {
+    const kept: unknown[] = []
+    for (const entry of filter._and) {
+      const r = walk(entry)
+      if (r.ok) kept.push(r.v)
+    }
+    return kept.length ? { _and: kept } : null
+  }
+  const r = walk(filter)
+  return r.ok ? (r.v as Record<string, unknown>) : null
+}
+
+/** Every narrowing the form's picker would apply for `field` given the
+ *  parent values in hand: cascades ∧ option_filter. */
+export function pickerFilterFor(
+  f: SpecField,
+  parentValue: (name: string) => unknown
+): { filter: Record<string, unknown> | null; parents: string[] } {
+  const parts: Record<string, unknown>[] = []
+  const parents: string[] = []
+  if (f.cascades?.length) {
+    const c = cascadeFilterFor(f.cascades, parentValue)
+    if (c.filter) parts.push(c.filter)
+    parents.push(...c.used)
+  }
+  if (f.optionFilter) {
+    const resolved = resolveOptionFilterTokens(f.optionFilter, parentValue)
+    if (resolved) parts.push(resolved)
+  }
+  if (!parts.length) return { filter: null, parents }
+  return { filter: parts.length === 1 ? parts[0] : { _and: parts }, parents }
+}
+
+/** Does the target hold `value` inside `filter`? The items service's own
+ *  compiler, so the check reads exactly as the picker's option query does. */
+async function offered(
+  target: string,
+  value: unknown,
+  filter: Record<string, unknown>
+): Promise<boolean | null> {
+  try {
+    const q = db(target).where(`${target}.id`, value as string | number)
+    await applyFilterToQuery(q, filter, target)
+    const hit = await q.first(`${target}.id as id`)
+    return !!hit
+  } catch {
+    return null
+  }
+}
+
 async function searchRecords(
   user: User,
   spec: Spec,
   seen: Seen,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  cfg?: AutofillConfig,
+  hintsUsed?: Set<string>
 ): Promise<{ result: unknown; summary: string }> {
   const collection = String(input.collection ?? '')
   const query = String(input.query ?? '')
@@ -602,21 +942,40 @@ async function searchRecords(
 
   const tokens = extractTemplateFields(lookup.template).filter((t) => !t.includes('.'))
   const fields = tokens.length ? ['id', ...tokens] : undefined
+  // The field being filled decides the narrowing: its cascades over the
+  // parents the model already settled, plus its option_filter.
+  const fieldName = typeof input.field === 'string' ? input.field : null
+  const specField =
+    (fieldName &&
+      spec.fields.find((f) => f.field === fieldName && f.lookup?.collection === collection)) ||
+    spec.fields.find(
+      (f) => f.lookup?.collection === collection && (f.cascades?.length || f.optionFilter)
+    )
+  const parents =
+    input.parents && typeof input.parents === 'object' && !Array.isArray(input.parents)
+      ? (input.parents as Record<string, unknown>)
+      : {}
+  const narrowing = specField
+    ? pickerFilterFor(specField, (name) => parents[name])
+    : { filter: null, parents: [] as string[] }
   let data: Array<Record<string, unknown>> = []
+  const run = async (withFilter: boolean, withFields: boolean) =>
+    (
+      (await readItems(user, collection, {
+        search: query,
+        limit,
+        ...(withFields && fields ? { fields } : {}),
+        ...(withFilter && narrowing.filter ? { filter: narrowing.filter } : {})
+      })) as { data?: Array<Record<string, unknown>> }
+    ).data ?? []
   try {
-    const res = (await readItems(user, collection, {
-      search: query,
-      limit,
-      ...(fields ? { fields } : {})
-    })) as {
-      data?: Array<Record<string, unknown>>
-    }
-    data = res.data ?? []
+    data = await run(true, true)
   } catch {
-    const res = (await readItems(user, collection, { search: query, limit })) as {
-      data?: Array<Record<string, unknown>>
+    try {
+      data = await run(true, false)
+    } catch {
+      data = await run(false, false)
     }
-    data = res.data ?? []
   }
   // A bare number may be the id itself (a year, a code) — search only walks
   // text columns, so read it by key too.
@@ -637,7 +996,24 @@ async function searchRecords(
     label: resolveDisplayValue(r, lookup.template) || String(r.id)
   }))
   for (const r of rows) bucket.set(String(r.id), r.label)
-  return { result: { candidates: rows }, summary: `${rows.length} ${collection} for "${query}"` }
+  const result: Record<string, unknown> = { candidates: rows }
+  if (narrowing.parents.length) result.narrowed_by = narrowing.parents
+  // Keyed hints (#839): once a candidate for this field matches a configured
+  // key ("Insight Global"), that key's hints ride the tool result so the
+  // model sees them before it submits.
+  if (cfg?.keyedHints.length && specField) {
+    const fired: string[] = []
+    for (const k of cfg.keyedHints) {
+      if (k.field !== specField.field) continue
+      const needle = k.match.toLowerCase()
+      if (rows.some((r) => r.label.toLowerCase().includes(needle))) {
+        fired.push(k.hints)
+        hintsUsed?.add(`${k.field}:${k.match}`)
+      }
+    }
+    if (fired.length) result.hints = fired
+  }
+  return { result, summary: `${rows.length} ${collection} for "${query}"` }
 }
 
 // ─── Coercion + checks ───────────────────────────────────────────────────────
@@ -796,33 +1172,205 @@ function shortSource(v: unknown): string | null {
 
 export const EXTRACT_MAX_ROUNDS = 14
 
+/** The last corrections people made to proposals on this collection — a
+ *  field whose proposed value was changed before Create, grouped by the
+ *  (from → to) pair so a repeat reads as one memory with a count. */
+export async function recentCorrections(collection: string, limit = 20): Promise<CorrectionMemory> {
+  const rows = (await db('nivaro_ai_autofill_events')
+    .where({ collection })
+    .whereNotNull('overrides')
+    .orderBy('id', 'desc')
+    .limit(60)
+    .select('overrides')
+    .catch(() => [])) as Array<{ overrides: string | null }>
+  const counts = new Map<string, { field: string; from: string; to: string; times: number }>()
+  for (const r of rows) {
+    let list: unknown
+    try {
+      list = JSON.parse(r.overrides ?? '[]')
+    } catch {
+      continue
+    }
+    if (!Array.isArray(list)) continue
+    for (const o of list as Array<Record<string, unknown>>) {
+      const field = String(o?.field ?? '')
+      const from = String(o?.proposed_display ?? o?.proposed ?? '').slice(0, 80)
+      const to = String(o?.final_display ?? o?.final ?? '').slice(0, 80)
+      if (!field || !to || from === to) continue
+      const key = `${field}\u0000${from}\u0000${to}`
+      const hit = counts.get(key)
+      if (hit) hit.times++
+      else counts.set(key, { field, from, to, times: 1 })
+    }
+  }
+  return [...counts.values()]
+    .sort((a, b) => b.times - a.times)
+    .slice(0, limit)
+    .map((c) => ({ ...c, label: c.field }))
+}
+
+/**
+ * A document past the prompt cap is CONDENSED (#759): the head rides whole
+ * and every later chunk is read once by the model for verbatim passages
+ * that could fill the spec's fields, which are appended as excerpts. The
+ * fee table on page 40 of a 60-page contract reaches the extraction this
+ * way; before, everything past the cap was cut and reported as truncated.
+ */
+export async function condenseLongDocument(
+  ask: (prompt: string) => Promise<string>,
+  spec: Spec,
+  fullText: string,
+  opts: { headChars?: number; chunkChars?: number; maxChunks?: number; cap?: number } = {}
+): Promise<{ text: string; chunks: number; excerptChars: number }> {
+  const headChars = opts.headChars ?? 42_000
+  const chunkChars = opts.chunkChars ?? 45_000
+  const maxChunks = opts.maxChunks ?? 8
+  const cap = opts.cap ?? MAX_TEXT_CHARS
+  const head = fullText.slice(0, headChars)
+  const rest = fullText.slice(headChars)
+  const wanted = [
+    ...spec.fields.map((f) => f.label),
+    ...spec.children.flatMap((c) => [c.label, ...c.fields.map((f) => f.label)])
+  ]
+  const excerpts: string[] = []
+  let chunks = 0
+  for (let off = 0; off < rest.length && chunks < maxChunks; off += chunkChars) {
+    const chunk = rest.slice(off, off + chunkChars)
+    chunks++
+    const prompt =
+      `You are reading part ${chunks + 1} of a long document. Copy out VERBATIM every passage, table row or heading that could give a value for any of these fields: ${wanted.slice(0, 80).join(', ')}. Keep the wording exactly; keep table rows whole. Output only the passages, one per paragraph. Answer NONE when nothing here relates.\n\n` +
+      chunk
+    let out = ''
+    try {
+      out = (await ask(prompt)).trim()
+    } catch {
+      out = ''
+    }
+    if (out && !/^none\.?$/i.test(out)) excerpts.push(`[excerpt from part ${chunks + 1}]\n${out}`)
+  }
+  let text = head
+  const excerptText = excerpts.join('\n\n')
+  if (excerptText) {
+    const room = Math.max(0, cap - head.length - 80)
+    text += `\n\n[Excerpts from the rest of the document]\n${excerptText.slice(0, room)}`
+  }
+  return { text, chunks, excerptChars: excerptText.length }
+}
+
+function askInputFor(f: SpecField | undefined, spec: Spec): AskInput | null {
+  if (!f) return null
+  if (f.lookup)
+    return {
+      type: 'relation',
+      collection: f.lookup.collection,
+      template: spec.lookups.get(f.lookup.collection)?.template ?? null
+    }
+  if (f.choices) return { type: 'choices', choices: f.choices }
+  if (f.type === 'boolean') return { type: 'boolean' }
+  if (['integer', 'bigInteger', 'decimal', 'float'].includes(f.type)) return { type: 'number' }
+  if (['date', 'dateTime', 'datetime', 'timestamp'].includes(f.type)) return { type: 'date' }
+  return { type: 'text' }
+}
+
+/** Display label for a relation value the document did not choose (a derived
+ *  fill) — one read by id as the caller; empty when unreadable. */
+async function labelFor(
+  user: User,
+  spec: Spec,
+  f: SpecField | undefined,
+  value: unknown
+): Promise<string | null> {
+  if (!f?.lookup || value == null) return null
+  const known = spec.lookupOptions
+    .get(f.lookup.collection)
+    ?.find((o) => String(o.id) === String(value))
+  if (known) return known.label
+  if (f.lookup.collection === 'nivaro_users') {
+    const res = await listUsers({
+      filter: { id: { _eq: value } },
+      limit: 1,
+      directory: true
+    }).catch(() => null)
+    const u = (res?.data as unknown as Array<Record<string, unknown>> | undefined)?.[0]
+    return u ? [u.first_name, u.last_name].filter(Boolean).join(' ') : null
+  }
+  const template = spec.lookups.get(f.lookup.collection)?.template ?? null
+  const tokens = extractTemplateFields(template).filter((t) => !t.includes('.'))
+  try {
+    const res = (await readItems(user, f.lookup.collection, {
+      filter: { id: { _eq: value } },
+      limit: 1,
+      ...(tokens.length ? { fields: ['id', ...tokens] } : {})
+    })) as { data?: Array<Record<string, unknown>> }
+    const row = res.data?.[0]
+    return row ? resolveDisplayValue(row, template) || String(row.id) : null
+  } catch {
+    return null
+  }
+}
+
+export type ProposeOptions = {
+  layoutId?: number | null
+  /** The whole document when it ran past the prompt cap (condensing, #759). */
+  fullText?: string | null
+}
+
 export async function proposeFromDocument(
   user: User,
   collection: string,
   doc: { name: string; text: string; method: string; pages: number | null; truncated: boolean },
-  fileId: string | null
+  fileId: string | null,
+  opts: ProposeOptions = {}
 ): Promise<DocumentProposal> {
+  const started = Date.now()
   const { extractModel } = await getAiModelSettings()
   const client = await getAiClient({ model: extractModel })
   if (!client) throw Object.assign(new Error('AI is not configured'), { statusCode: 503 })
-  const spec = await buildSpec(user, collection)
+  const spec = await buildSpec(user, collection, { layoutId: opts.layoutId ?? null })
+  const cfg = await autofillConfig(collection)
+  const corrections = await recentCorrections(collection).catch(() => [] as CorrectionMemory)
+  for (const c of corrections)
+    c.label = spec.fields.find((f) => f.field === c.field)?.label ?? c.field
   const today = new Date().toISOString().slice(0, 10)
-  const system = buildSystemPrompt(spec, today)
+  const hintsUsed = new Set<string>()
+  if (cfg.hints) hintsUsed.add('collection')
+  const system = buildSystemPrompt(spec, today, { hints: cfg.hints, corrections })
   const seen: Seen = new Map()
-  for (const [c, opts] of spec.lookupOptions) {
-    seen.set(c, new Map(opts.map((o) => [String(o.id), o.label])))
+  for (const [c, options] of spec.lookupOptions) {
+    seen.set(c, new Map(options.map((o) => [String(o.id), o.label])))
+  }
+
+  // ── long documents: condense what the cap cut off ──
+  let text = doc.text
+  let condensed: DocumentProposal['condensed'] = null
+  if (doc.truncated && opts.fullText && opts.fullText.length > doc.text.length) {
+    const ask = async (prompt: string) => {
+      const r = await client.messages.create({
+        model: extractModel,
+        max_tokens: 1800,
+        messages: [{ role: 'user', content: prompt }]
+      })
+      return r.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n')
+    }
+    const c = await condenseLongDocument(ask, spec, opts.fullText)
+    text = c.text
+    condensed = { chunks: c.chunks, excerpt_chars: c.excerptChars }
   }
 
   const convo: Anthropic.MessageParam[] = [
     {
       role: 'user',
-      content: `Document "${doc.name}"${doc.pages ? ` (${doc.pages} pages)` : ''}${doc.truncated ? ', truncated' : ''}:\n\n${doc.text}`
+      content: `Document "${doc.name}"${doc.pages ? ` (${doc.pages} pages)` : ''}${doc.truncated && !condensed ? ', truncated' : ''}:\n\n${text}`
     }
   ]
 
   let raw: Record<string, unknown> | null = null
   let rounds = 0
   let nudged = false
+  let modelUsed = extractModel
   for (; rounds < EXTRACT_MAX_ROUNDS && !raw; rounds++) {
     const response = await client.messages.create({
       model: extractModel,
@@ -831,6 +1379,7 @@ export async function proposeFromDocument(
       tools: TOOLS,
       messages: convo
     })
+    if (response.model) modelUsed = response.model
     const toolUses = response.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
     )
@@ -855,7 +1404,7 @@ export async function proposeFromDocument(
       }
       if (tu.name === 'search_records') {
         try {
-          const r = await searchRecords(user, spec, seen, input)
+          const r = await searchRecords(user, spec, seen, input, cfg, hintsUsed)
           results.push({
             type: 'tool_result',
             tool_use_id: tu.id,
@@ -899,6 +1448,10 @@ export async function proposeFromDocument(
   const fields: ProposedField[] = []
   const values: Record<string, unknown> = {}
   const seenFields = new Set<string>()
+  const pushAsk = (a: ProposedAsk) => {
+    if (asks.some((x) => x.field === a.field)) return
+    asks.push({ ...a, input: a.input ?? askInputFor(specByField.get(a.field), spec) })
+  }
   for (const entry of Array.isArray(raw.fields)
     ? (raw.fields as Array<Record<string, unknown>>)
     : []) {
@@ -910,18 +1463,26 @@ export async function proposeFromDocument(
     const conf = clampConf(entry.confidence)
     if (!c.ok) {
       if (c.why !== 'empty')
-        asks.push({
+        pushAsk({
           field: name,
           label: f.label,
           reason: `Proposed "${String(entry.value)}" — ${c.why}`
         })
       continue
     }
-    if (conf < 0.4) {
-      asks.push({
+    // #785 — under the field's threshold the value is offered, not filled.
+    const threshold = thresholdFor(cfg, name)
+    if (conf < threshold) {
+      pushAsk({
         field: name,
         label: f.label,
-        reason: `Low confidence (${Math.round(conf * 100)}%): ${c.display ?? String(c.value)}`
+        reason: `Read with ${Math.round(conf * 100)}% confidence, below this field's ${Math.round(threshold * 100)}% bar`,
+        candidate: {
+          value: c.value,
+          display: c.display,
+          confidence: conf,
+          source: shortSource(entry.source)
+        }
       })
       continue
     }
@@ -934,6 +1495,108 @@ export async function proposeFromDocument(
       source: shortSource(entry.source)
     })
     values[name] = c.value
+  }
+
+  // ── cascades: a relation value must be one its picker would offer given
+  //    the parents the proposal also carries (Rob: "aware of the layout
+  //    cascades / upstreams"). A value outside them becomes an ask with the
+  //    candidate kept, naming the parent that excludes it.
+  for (const pf of [...fields]) {
+    const f = specByField.get(pf.field)
+    if (!f?.lookup || !(f.cascades?.length || f.optionFilter)) continue
+    const { filter, parents } = pickerFilterFor(f, (name) => values[name])
+    if (!filter) continue
+    const ok = await offered(f.lookup.collection, pf.value, filter)
+    if (ok !== false) continue
+    const parentText = parents
+      .map((p) => {
+        const pl = fields.find((x) => x.field === p)
+        return pl
+          ? `${pl.label} = ${pl.display ?? String(pl.value)}`
+          : (specByField.get(p)?.label ?? p)
+      })
+      .join(', ')
+    fields.splice(fields.indexOf(pf), 1)
+    delete values[pf.field]
+    pushAsk({
+      field: pf.field,
+      label: pf.label,
+      reason: parentText
+        ? `"${pf.display ?? String(pf.value)}" is not offered under ${parentText}`
+        : `"${pf.display ?? String(pf.value)}" is not one of this field's allowed options`,
+      candidate: {
+        value: pf.value,
+        display: pf.display,
+        confidence: pf.confidence,
+        source: pf.source
+      }
+    })
+  }
+
+  // ── derived fills: what the form would do next — cross-record defaults
+  //    from the picked links, then the collection's field rules — for
+  //    fields the document did not cover. The proposal always wins.
+  const derivedFields: ProposedField[] = []
+  /** Links a cross-record default copied from a picked record (a project's
+   *  zones, regions, funding years) — the "upstream" set the form would stage. */
+  const derivedM2m: Array<{ alias: string; ids: Array<string | number>; from: string }> = []
+  try {
+    const payload: Record<string, unknown> = { ...values }
+    const callerFields = new Set(Object.keys(values))
+    const filled = await applyCrossRecordDefaults({ collection, payload, callerFields, user })
+    for (const k of filled) {
+      if (k in values || payload[k] == null) continue
+      const sourceLink = Object.entries(values).find(([, v]) => v != null)?.[0]
+      const alias = spec.m2m.find((m) => m.alias === k)
+      if (alias && Array.isArray(payload[k])) {
+        const ids = (payload[k] as unknown[]).filter((v) => v != null) as Array<string | number>
+        if (ids.length) derivedM2m.push({ alias: k, ids, from: sourceLink ?? '' })
+        continue
+      }
+      const f = specByField.get(k)
+      if (!f) continue
+      derivedFields.push({
+        field: k,
+        label: f.label,
+        value: payload[k],
+        display: await labelFor(user, spec, f, payload[k]),
+        confidence: 1,
+        source: null,
+        derived: { by: 'cross_record_defaults', from: sourceLink ?? '' }
+      })
+      values[k] = payload[k]
+    }
+  } catch {
+    // defaults are a courtesy
+  }
+  try {
+    for (const [trigger, tv] of Object.entries({ ...values })) {
+      const updates = await evaluateRulesForTrigger(db, collection, trigger, tv, { ...values })
+      for (const [k, v] of Object.entries(updates)) {
+        if (k in values || v == null || v === '') continue
+        const f = specByField.get(k)
+        if (!f) continue
+        derivedFields.push({
+          field: k,
+          label: f.label,
+          value: v,
+          display: await labelFor(user, spec, f, v),
+          confidence: 1,
+          source: null,
+          derived: { by: 'field_rule', from: trigger }
+        })
+        values[k] = v
+      }
+    }
+  } catch {
+    // rules are a courtesy
+  }
+  for (const d of derivedFields) {
+    d.source =
+      d.derived?.by === 'field_rule'
+        ? `Set by a field rule from ${specByField.get(d.derived.from)?.label ?? d.derived.from}`
+        : `Default from ${specByField.get(d.derived?.from ?? '')?.label ?? 'a linked record'}`
+    fields.push(d)
   }
 
   const children: DocumentProposal['children'] = []
@@ -1027,14 +1690,47 @@ export async function proposeFromDocument(
     m2mOut.push({ alias: m.alias, label: m.label, items })
     m2mPrefill[m.alias] = items.map((i) => i.id)
   }
+  for (const d of derivedM2m) {
+    if (m2mPrefill[d.alias]) continue
+    const m = spec.m2m.find((x) => x.alias === d.alias)
+    if (!m) continue
+    const labels = new Map<string, string>()
+    const known = spec.lookupOptions.get(m.collection)
+    if (known) for (const o of known) labels.set(String(o.id), o.label)
+    if (!known) {
+      try {
+        const template = spec.lookups.get(m.collection)?.template ?? null
+        const tokens = extractTemplateFields(template).filter((t) => !t.includes('.'))
+        const res = (await readItems(user, m.collection, {
+          filter: { id: { _in: d.ids } },
+          limit: d.ids.length,
+          ...(tokens.length ? { fields: ['id', ...tokens] } : {})
+        })) as { data?: Array<Record<string, unknown>> }
+        for (const r of res.data ?? [])
+          labels.set(String(r.id), resolveDisplayValue(r, template) || String(r.id))
+      } catch {
+        // unlabelled ids still link
+      }
+    }
+    const items = d.ids.map((id) => ({
+      id,
+      label: labels.get(String(id)) ?? String(id),
+      confidence: 1
+    }))
+    m2mOut.push({
+      alias: d.alias,
+      label: `${m.label} (from ${specByField.get(d.from)?.label ?? d.from})`,
+      items
+    })
+    m2mPrefill[d.alias] = d.ids
+  }
   if (fileId && spec.attachAlias) m2mPrefill[spec.attachAlias] = [fileId]
 
   for (const a of Array.isArray(raw.asks) ? (raw.asks as Array<Record<string, unknown>>) : []) {
     const name = String(a?.field ?? '')
     if (!name || (seenFields.has(name) && values[name] != null)) continue
-    if (asks.some((x) => x.field === name)) continue
     const f = specByField.get(name)
-    asks.push({
+    pushAsk({
       field: name,
       label: f?.label ?? titleCase(name),
       reason: String(a?.reason ?? '').slice(0, 300)
@@ -1043,12 +1739,14 @@ export async function proposeFromDocument(
   // Required fields the document never covered are asks too.
   for (const f of spec.fields) {
     if (!f.required || values[f.field] != null) continue
-    if (asks.some((x) => x.field === f.field)) continue
-    asks.push({ field: f.field, label: f.label, reason: 'Required, and the document does not say' })
+    pushAsk({ field: f.field, label: f.label, reason: 'Required, and the document does not say' })
   }
 
   return {
+    id: randomUUID(),
+    request_id: currentTraceMeta()?.id ?? null,
     collection,
+    layout_id: spec.layoutId,
     summary: String(raw.summary ?? '').slice(0, 500),
     fields,
     children,
@@ -1066,10 +1764,13 @@ export async function proposeFromDocument(
       name: doc.name,
       method: doc.method,
       pages: doc.pages,
-      truncated: doc.truncated,
-      chars: doc.text.length
+      truncated: doc.truncated && !condensed,
+      chars: text.length
     },
-    model: extractModel,
-    rounds
+    model: modelUsed,
+    rounds,
+    latency_ms: Date.now() - started,
+    condensed,
+    hints_used: [...hintsUsed]
   }
 }

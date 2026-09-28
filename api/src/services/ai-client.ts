@@ -38,6 +38,9 @@ export interface AiSettingsRow {
   ai_gateway_client_secret?: string | null
   ai_gateway_format?: string | null
   ai_gateway_model?: string | null
+  /** Per-feature model map (migration 364) — beats the three legacy columns. */
+  ai_models?: string | null
+  ai_answer_cache_minutes?: number | null
   ai_prompt_caching?: boolean | number | null
   ai_model?: string | null
   ai_max_tokens_generate?: number | null
@@ -64,6 +67,10 @@ export interface AiProviderInfo {
   /** prompt caching switched on (the markers ride every wire format) */
   caching: boolean
   reason?: string
+  /** The effective per-feature models (gateway) — what each feature runs on. */
+  models?: Record<string, string>
+  /** Where semantic-search vectors come from right now. */
+  embedding?: { provider: 'voyage' | 'gateway' | 'local'; model: string | null }
 }
 
 // unset (a row older than migration 323) = on; the column itself defaults to 1
@@ -104,7 +111,69 @@ export async function describeAiProvider(): Promise<AiProviderInfo> {
       reason: `gateway is missing its ${missing.join(', ')}`
     }
   }
-  return { provider, configured: true, model, format, caching }
+  const models = await getAiModelSettings()
+  return {
+    provider,
+    configured: true,
+    model,
+    format,
+    caching,
+    models: {
+      default: models.model,
+      chat: models.chatModel,
+      extract: models.extractModel,
+      generate: models.generateModel,
+      summarize: models.summarizeModel,
+      embed: models.embedModel ?? ''
+    },
+    embedding: embeddingProviderFor(s)
+  }
+}
+
+export function embeddingProviderFor(s: AiSettingsRow): {
+  provider: 'voyage' | 'gateway' | 'local'
+  model: string | null
+} {
+  if (process.env.VOYAGE_API_KEY) return { provider: 'voyage', model: 'voyage-3-lite' }
+  const models = parseAiModels(s)
+  if (s.ai_provider === 'gateway' && models.embed)
+    return { provider: 'gateway', model: models.embed }
+  return { provider: 'local', model: null }
+}
+
+// ─── per-feature models (#754) ───────────────────────────────────────────────
+
+export type AiFeatureModelKey = 'default' | 'chat' | 'extract' | 'generate' | 'summarize' | 'embed'
+export const AI_FEATURE_MODEL_KEYS: AiFeatureModelKey[] = [
+  'default',
+  'chat',
+  'extract',
+  'generate',
+  'summarize',
+  'embed'
+]
+
+/** The configured map, legacy columns folded in as the fallback for a
+ *  database migration 364 never reached. Blank entries are absent. */
+export function parseAiModels(s: AiSettingsRow): Partial<Record<AiFeatureModelKey, string>> {
+  const out: Partial<Record<AiFeatureModelKey, string>> = {}
+  let raw: unknown = null
+  try {
+    raw = s.ai_models ? JSON.parse(s.ai_models) : null
+  } catch {
+    raw = null
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const k of AI_FEATURE_MODEL_KEYS) {
+      const v = (raw as Record<string, unknown>)[k]
+      if (typeof v === 'string' && v.trim()) out[k] = v.trim()
+    }
+  }
+  if (!out.default && s.ai_gateway_model?.trim()) out.default = s.ai_gateway_model.trim()
+  if (!out.chat && s.ai_gateway_chat_model?.trim()) out.chat = s.ai_gateway_chat_model.trim()
+  if (!out.extract && s.ai_gateway_extract_model?.trim())
+    out.extract = s.ai_gateway_extract_model.trim()
+  return out
 }
 
 // ─── prompt caching ──────────────────────────────────────────────────────────
@@ -481,6 +550,58 @@ async function anthropicGatewayClient(
     : loggedClient(inner, 'gateway-anthropic', model)
 }
 
+// ─── model fallback (#761) ───────────────────────────────────────────────────
+
+const MODEL_REFUSED = /model|not found|unsupported|unknown|does not exist|not available|forbidden/i
+
+/** A gateway that refuses the pinned model (a retired id, one this
+ *  deployment's key does not cover) answers 400/403/404 naming the model.
+ *  The next model in the chain answers the same call; the log keeps the
+ *  failed attempt as its own row, so the fallback is visible, not silent. */
+export function withModelFallback(
+  chain: string[],
+  build: (model: string) => Promise<Anthropic> | Anthropic
+): Anthropic {
+  const clients = new Map<string, Promise<Anthropic>>()
+  const clientFor = (m: string) => {
+    let c = clients.get(m)
+    if (!c) {
+      c = Promise.resolve(build(m))
+      clients.set(m, c)
+    }
+    return c
+  }
+  const create = async (params: MessageParams): Promise<Anthropic.Message> => {
+    let lastErr: unknown
+    for (let i = 0; i < chain.length; i++) {
+      const client = await clientFor(chain[i])
+      try {
+        return (await client.messages.create(params)) as Anthropic.Message
+      } catch (err) {
+        lastErr = err
+        const msg = String((err as Error)?.message ?? '')
+        const status =
+          /AI gateway (\d{3})/.exec(msg)?.[1] ?? String((err as { status?: number })?.status ?? '')
+        const refused = ['400', '403', '404', '422'].includes(status) && MODEL_REFUSED.test(msg)
+        if (!refused || i === chain.length - 1) throw err
+        // biome-ignore lint/suspicious/noConsole: the fallback must be visible in the server log
+        console.warn(
+          `[ai] model "${chain[i]}" refused (${msg.slice(0, 120)}) — falling back to "${chain[i + 1]}"`
+        )
+        fallbackCount++
+      }
+    }
+    throw lastErr
+  }
+  return { messages: { create } } as unknown as Anthropic
+}
+
+let fallbackCount = 0
+/** How many calls fell back to another model since boot (the provider card). */
+export function modelFallbacksSinceBoot(): number {
+  return fallbackCount
+}
+
 // ─── public ──────────────────────────────────────────────────────────────────
 
 /**
@@ -489,17 +610,33 @@ async function anthropicGatewayClient(
  * model — Ask AI on the chat model — must ask for it: `getAiClient({ model })`.
  * A `model` in the messages.create params is overridden on those paths.
  */
-export async function getAiClient(opts?: { model?: string | null }): Promise<Anthropic | null> {
+export async function getAiClient(opts?: {
+  model?: string | null
+  /** false = no fallback to the chat/default model when the gateway refuses
+   *  the pinned one (#761). Default: fall back. */
+  fallback?: boolean
+}): Promise<Anthropic | null> {
   const s = (await settingsRow()) ?? {}
   const caching = cachingOn(s)
   if (s.ai_provider === 'gateway') {
     const api = gatewayFromSettings(s)
     if (!api.base_url || !api.token_url || !api.client_id || !api.client_secret) return null
-    const model =
-      opts?.model?.trim() || s.ai_gateway_model?.trim() || s.ai_model || 'claude-4-5-haiku'
-    return s.ai_gateway_format === 'anthropic'
-      ? anthropicGatewayClient(api, model, caching)
-      : openAiCompatClient(api, model, caching)
+    const models = parseAiModels(s)
+    const model = opts?.model?.trim() || models.default || s.ai_model || 'claude-4-5-haiku'
+    const build = (m: string) =>
+      s.ai_gateway_format === 'anthropic'
+        ? anthropicGatewayClient(api, m, caching)
+        : openAiCompatClient(api, m, caching)
+    const chain =
+      opts?.fallback === false
+        ? [model]
+        : [
+            ...new Set(
+              [model, models.chat ?? '', models.default ?? '', s.ai_model ?? ''].filter(Boolean)
+            )
+          ]
+    if (chain.length <= 1) return build(model)
+    return withModelFallback(chain, build)
   }
   const key = config.ANTHROPIC_API_KEY || s.anthropic_api_key
   if (!key) return null
@@ -510,18 +647,27 @@ export async function getAiClient(opts?: { model?: string | null }): Promise<Ant
 export async function getAiModelSettings() {
   const row = (await settingsRow()) ?? {}
   const gateway = row.ai_provider === 'gateway'
+  const models = gateway ? parseAiModels(row) : {}
   const model = gateway
-    ? row.ai_gateway_model?.trim() || row.ai_model || 'claude-4-5-haiku'
+    ? models.default || row.ai_model || 'claude-4-5-haiku'
     : (row.ai_model ?? 'claude-haiku-4-5-20251001')
+  const chatModel = (gateway && models.chat) || model
   return {
     model,
     /** Ask AI / chat bot: the multi-step tool loop, worth a stronger model than one-shot calls. */
-    chatModel: (gateway && row.ai_gateway_chat_model?.trim()) || model,
+    chatModel,
     /** Document autofill: extraction + lookup tool loop. Blank = the chat model. */
-    extractModel:
-      (gateway && row.ai_gateway_extract_model?.trim()) ||
-      (gateway && row.ai_gateway_chat_model?.trim()) ||
-      model,
+    extractModel: (gateway && models.extract) || chatModel,
+    /** One-shot field generation. Blank = the default model. */
+    generateModel: (gateway && models.generate) || model,
+    /** Record summaries / briefs. Blank = the default model. */
+    summarizeModel: (gateway && models.summarize) || model,
+    /** Gateway embedding model for semantic search (#681); null = not set. */
+    embedModel: (gateway && models.embed) || null,
+    answerCacheMinutes:
+      row.ai_answer_cache_minutes == null
+        ? 15
+        : Math.max(0, Number(row.ai_answer_cache_minutes) || 0),
     maxTokensGenerate: row.ai_max_tokens_generate ?? 500,
     maxTokensSummarize: row.ai_max_tokens_summarize ?? 200
   }

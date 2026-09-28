@@ -12,6 +12,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   FileDiff,
+  FileText,
   Map as MapIcon,
   Pin,
   RotateCw,
@@ -27,6 +28,7 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import {
   type DrilldownTarget,
+  useApiFetchConfig,
   useItemEditAuth,
   useItemNavigation,
   useNivaroClient,
@@ -72,6 +74,7 @@ import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
+import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
@@ -3952,6 +3955,31 @@ export function CollectionBrowserView({
     if (slug) openTarget({ collection, itemId: 'new', layoutSlug: slug })
     else openRow('new')
   }
+  // #705 — "New from document…": upload, start the extraction, open the new
+  // form on the proposal id (the form polls and shows the review dialog).
+  const autofillCfg = useDocumentAutofillConfig(canCreate && !meta?.singleton ? collection : null)
+  const autofillApi = useApiFetchConfig()
+  const autofillInputRef = useRef<HTMLInputElement | null>(null)
+  const [autofillSlug, setAutofillSlug] = useState<string | null>(null)
+  const [autofillBusy, setAutofillBusy] = useState(false)
+  const newFromDocument = (slug: string | null) => {
+    setAutofillSlug(slug)
+    autofillInputRef.current?.click()
+  }
+  const onAutofillFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setAutofillBusy(true)
+    try {
+      const id = await startDocumentExtraction(autofillApi, file, collection)
+      openTarget({ collection, itemId: 'new', layoutSlug: autofillSlug, query: { autofill: id } })
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setAutofillBusy(false)
+    }
+  }
   const stepsFor = (l: { quick_picker?: string[] | null } | null | undefined): string[] =>
     Array.isArray(l?.quick_picker) ? l.quick_picker.filter((x) => typeof x === 'string') : []
   const newItemMenuRef = useRef<HTMLDivElement | null>(null)
@@ -6514,6 +6542,25 @@ export function CollectionBrowserView({
                       )}
                     </div>
                   ))}
+                  {autofillCfg.data?.enabled && (
+                    <>
+                      <div className='my-1 border-t border-slate-100 dark:border-border' />
+                      <button
+                        type='button'
+                        data-cbv-new-from-document
+                        disabled={autofillBusy}
+                        onClick={() => {
+                          setNewItemMenuOpen(false)
+                          newFromDocument(null)
+                        }}
+                        className='flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:text-slate-200 dark:hover:bg-muted'
+                        title='Upload a SOW, quote or spreadsheet — the new record opens with what it says proposed'
+                      >
+                        <FileText className='h-3.5 w-3.5 text-slate-400' />
+                        New from document…
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -6525,7 +6572,9 @@ export function CollectionBrowserView({
                 onClick={() => startNew(null)}
                 className={cn(
                   'h-8 bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105',
-                  defaultQuickSteps.length > 0 ? 'rounded-l-md' : 'rounded-md'
+                  defaultQuickSteps.length > 0 || autofillCfg.data?.enabled
+                    ? 'rounded-l-md'
+                    : 'rounded-md'
                 )}
               >
                 + New item
@@ -6537,13 +6586,37 @@ export function CollectionBrowserView({
                   title='Quick pick — choose the related fields step by step, then open the form prefilled'
                   aria-label='Quick pick'
                   onClick={() => setQuickPick({ slug: null })}
-                  className='flex h-8 items-center rounded-r-md border-l border-white/30 bg-[#00ceff] px-2 text-white hover:brightness-105'
+                  className={cn(
+                    'flex h-8 items-center border-l border-white/30 bg-[#00ceff] px-2 text-white hover:brightness-105',
+                    !autofillCfg.data?.enabled && 'rounded-r-md'
+                  )}
                 >
                   <Wand2 className='h-3.5 w-3.5' />
                 </button>
               )}
+              {autofillCfg.data?.enabled && (
+                <button
+                  type='button'
+                  data-cbv-new-from-document
+                  disabled={autofillBusy}
+                  title='New from document — upload a SOW, quote or spreadsheet and review what it proposes'
+                  aria-label='New from document'
+                  onClick={() => newFromDocument(null)}
+                  className='flex h-8 items-center rounded-r-md border-l border-white/30 bg-[#00ceff] px-2 text-white hover:brightness-105 disabled:opacity-60'
+                >
+                  <FileText className='h-3.5 w-3.5' />
+                </button>
+              )}
             </div>
           ))}
+        <input
+          ref={autofillInputRef}
+          type='file'
+          accept={(autofillCfg.data?.accept ?? []).join(',')}
+          className='hidden'
+          onChange={onAutofillFile}
+          data-cbv-autofill-input
+        />
       </div>
       {quickPick && (
         <QuickPickerDialog

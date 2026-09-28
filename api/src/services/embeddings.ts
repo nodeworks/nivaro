@@ -68,9 +68,51 @@ async function voyageEmbed(text: string, apiKey: string): Promise<number[]> {
   return embedding
 }
 
+/** #681 — the model gateway's OpenAI-compatible embeddings endpoint, used
+ *  when the per-feature model map names an `embed` model. Same bearer as the
+ *  chat calls. Vectors live in their own space: switching provider or model
+ *  needs a reindex, exactly like switching Voyage on. */
+async function gatewayEmbed(text: string, model: string): Promise<number[]> {
+  const { settingsRow, gatewayFromSettings, gatewayBearer } = await import('./ai-client.js')
+  const s = (await settingsRow()) ?? {}
+  const api = gatewayFromSettings(s)
+  if (!api.base_url || !api.token_url) throw new Error('AI gateway is not configured')
+  const bearer = await gatewayBearer(api)
+  const res = await fetch(`${api.base_url}/openai/v1/embeddings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
+    body: JSON.stringify({ input: [text.slice(0, 8000)], model })
+  })
+  if (!res.ok) throw new Error(`Gateway embeddings request failed with status ${res.status}`)
+  const json = (await res.json()) as { data?: Array<{ embedding?: number[] }> }
+  const embedding = json.data?.[0]?.embedding
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    throw new Error('Gateway embeddings response missing embedding')
+  }
+  return embedding
+}
+
+/** Which embedder is live: Voyage (env key) → gateway `embed` model → local hash. */
+export async function embeddingProvider(): Promise<{
+  provider: 'voyage' | 'gateway' | 'local'
+  model: string | null
+}> {
+  if (process.env.VOYAGE_API_KEY) return { provider: 'voyage', model: VOYAGE_MODEL }
+  try {
+    const { getAiModelSettings } = await import('./ai-client.js')
+    const m = await getAiModelSettings()
+    if (m.embedModel) return { provider: 'gateway', model: m.embedModel }
+  } catch {
+    // settings unreadable — local
+  }
+  return { provider: 'local', model: null }
+}
+
 export async function embedText(text: string): Promise<number[]> {
   const voyageKey = process.env.VOYAGE_API_KEY
   if (voyageKey) return voyageEmbed(text, voyageKey)
+  const p = await embeddingProvider()
+  if (p.provider === 'gateway' && p.model) return gatewayEmbed(text, p.model)
   return localEmbed(text)
 }
 

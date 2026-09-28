@@ -1,10 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance } from 'fastify'
-import { deferEffect } from '../services/unit-of-work.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { embedText, getEmbeddableFields, searchEmbeddings } from '../services/embeddings.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { hooks } from './registry.js'
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,10 @@ export interface AiCollectionSettings {
   duplicate_threshold: number
   /** Offer "Fill from a document" on the new-record form (migration 354). */
   document_autofill: boolean
+  /** Migration 364 — prompt hints, hints keyed by a resolved value, per-field asks thresholds. */
+  autofill_hints?: string | null
+  autofill_keyed_hints?: Array<{ field: string; match: string; hints: string }>
+  autofill_thresholds?: Record<string, number>
 }
 
 const CACHE_TTL_MS = 60_000

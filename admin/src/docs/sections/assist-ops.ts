@@ -24,7 +24,9 @@ export const aiChatDocs: DocSection = {
         "Tools: list_collections, query_items (items service — RLS applies), aggregate (refuses when the user is row-filtered), semantic_search (hits intersected with the permission-checked read), integration_status (the obligation ledger for a record), record_event_path (the newest integration events naming a record and the path each set off — writes, transitions, flows, partner calls, where it failed), explain_access (why the asker — or, for administrators, another user — can or cannot see a record), record_integrity (a record's live integrity findings, or a collection's newest sweep totals) and run_custom_query (a saved SQL query from the catalogue the assistant is given — only queries whose access admits the asker, User-Scope params injected, 200 rows at most).",
         'Reads are direct; mutations only ever happen through the proposal gate (see AI Actions & Dashboards) — the model can never write without your approval.',
         'Every answer shows the tool trace: exactly which queries produced it.',
-        'Uses the model configured in Settings → AI Features.'
+        'A breakdown or a series (per state, per month, per vendor) comes with a chart: the model attaches a fenced `chart` block ({type, title, data:[{label, value}]}) that renders as a bar, line or pie under the prose.',
+        'The same standalone question by the same person inside the answer-cache window (Settings → AI Features, default 15 minutes) answers from cache — the page says when it was first answered and offers "Ask again". Answers that propose an action are never cached; `fresh: true` in the request skips the cache.',
+        'Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.'
       ]
     }
   ]

@@ -208,6 +208,8 @@ export type CMSSettings = {
   ai_gateway_model?: string | null
   ai_gateway_chat_model?: string | null
   ai_gateway_extract_model?: string | null
+  ai_models?: string | null
+  ai_answer_cache_minutes?: number | null
   ai_prompt_caching?: boolean | null
   ai_chat_guide?: string | null
   ai_max_tokens_generate: number | null

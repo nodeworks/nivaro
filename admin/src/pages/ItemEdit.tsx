@@ -1,4 +1,3 @@
-import { createPortal } from 'react-dom'
 import type { ImportParseResponse } from '@nivaro/sdk'
 import { createNivaro } from '@nivaro/sdk'
 import {
@@ -24,6 +23,7 @@ import {
   Waypoints
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
@@ -368,7 +368,9 @@ export function ItemEditPage() {
       void queryClient.invalidateQueries({ queryKey: ['addendums', collection] })
       void queryClient.invalidateQueries({ queryKey: ['item', collection, String(id)] })
       void queryClient.invalidateQueries({ queryKey: ['o2m-rows'] })
-      void queryClient.invalidateQueries({ queryKey: ['pipeline-instance', collection, String(id)] })
+      void queryClient.invalidateQueries({
+        queryKey: ['pipeline-instance', collection, String(id)]
+      })
       void queryClient.invalidateQueries({ queryKey: ['pipeline-all-owners'] })
       void queryClient.invalidateQueries({ queryKey: ['erp-submissions', collection, String(id)] })
     } catch (err) {
@@ -386,6 +388,9 @@ export function ItemEditPage() {
   const layoutSlug = searchParams.get('layout') || undefined
   const focusField = searchParams.get('focus') || undefined
   const addendumParam = searchParams.get('addendum') || undefined
+  // ?autofill=<proposal id> — a list's "New from document…" or the ready
+  // notification opens the new form straight onto the stored proposal.
+  const autofillParam = searchParams.get('autofill') || undefined
   const location = useLocation()
 
   // Back returns to wherever the user came from (queue worklist, browser, etc).
@@ -424,9 +429,9 @@ export function ItemEditPage() {
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
   // Pre-execute confirm dialog (action.confirm from the registry).
-  const [confirmItemAction, setConfirmItemAction] = useState<(typeof extItemActions)[number] | null>(
-    null
-  )
+  const [confirmItemAction, setConfirmItemAction] = useState<
+    (typeof extItemActions)[number] | null
+  >(null)
   const [itemActionNote, setItemActionNote] = useState('')
 
   // ── Admin-specific queries ────────────────────────────────────────────────
@@ -544,10 +549,7 @@ export function ItemEditPage() {
               input?: { label: string; placeholder?: string; required?: boolean }
             }
           }>
-        }>(
-          '/item-actions/registered',
-          { params: { collection, item: id } }
-        )
+        }>('/item-actions/registered', { params: { collection, item: id } })
         .then((r) => r.data.data),
     enabled: !!collection && !!id && !isNew,
     staleTime: 60_000
@@ -912,13 +914,18 @@ export function ItemEditPage() {
                             </div>
                           )}
                           <div className='mt-4 flex justify-end gap-2'>
-                            <Button size='sm' variant='ghost' onClick={() => setConfirmItemAction(null)}>
+                            <Button
+                              size='sm'
+                              variant='ghost'
+                              onClick={() => setConfirmItemAction(null)}
+                            >
                               Cancel
                             </Button>
                             <Button
                               size='sm'
                               disabled={
-                                !!confirmItemAction.confirm?.input?.required && !itemActionNote.trim()
+                                !!confirmItemAction.confirm?.input?.required &&
+                                !itemActionNote.trim()
                               }
                               onClick={() => {
                                 const a = confirmItemAction
@@ -1068,7 +1075,14 @@ export function ItemEditPage() {
                 itemId={isNew ? undefined : id}
                 layoutSlug={layoutSlug}
                 initialAddendumViewId={addendumParam}
-          focusField={focusField}
+                autofillProposalId={isNew ? autofillParam : undefined}
+                onAutofillConsumed={() => {
+                  const next = new URLSearchParams(window.location.search)
+                  next.delete('autofill')
+                  const qs = next.toString()
+                  navigate(`${window.location.pathname}${qs ? `?${qs}` : ''}`, { replace: true })
+                }}
+                focusField={focusField}
                 showHeader={true}
                 onBack={undefined}
                 onSaved={(newId) => {

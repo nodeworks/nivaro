@@ -7844,6 +7844,9 @@ interface AiCollectionSettings {
   review_enabled?: boolean
   duplicate_detection_enabled: boolean
   document_autofill?: boolean
+  autofill_hints?: string | null
+  autofill_keyed_hints?: Array<{ field: string; match: string; hints: string }>
+  autofill_thresholds?: Record<string, number>
   duplicate_threshold: number
 }
 
@@ -8016,6 +8019,14 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
   const [dupEnabled, setDupEnabled] = useState(false)
   const [dupThreshold, setDupThreshold] = useState(0.85)
   const [docAutofill, setDocAutofill] = useState(false)
+  const [autofillHints, setAutofillHints] = useState('')
+  const [keyedHints, setKeyedHints] = useState<
+    Array<{ field: string; match: string; hints: string }>
+  >([])
+  const [askThreshold, setAskThreshold] = useState('')
+  const [fieldThresholds, setFieldThresholds] = useState<Array<{ field: string; value: string }>>(
+    []
+  )
   const [seeded, setSeeded] = useState(false)
 
   useEffect(() => {
@@ -8027,6 +8038,15 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
       setDupEnabled(settings.duplicate_detection_enabled)
       setDupThreshold(settings.duplicate_threshold)
       setDocAutofill(!!settings.document_autofill)
+      setAutofillHints(settings.autofill_hints ?? '')
+      setKeyedHints(settings.autofill_keyed_hints ?? [])
+      const th = settings.autofill_thresholds ?? {}
+      setAskThreshold(th._default == null ? '' : String(Math.round(th._default * 100)))
+      setFieldThresholds(
+        Object.entries(th)
+          .filter(([k]) => k !== '_default')
+          .map(([field, v]) => ({ field, value: String(Math.round(v * 100)) }))
+      )
       setSeeded(true)
     }
   }, [settings, seeded])
@@ -8042,7 +8062,21 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
         review_enabled: reviewEnabled,
         duplicate_detection_enabled: dupEnabled,
         duplicate_threshold: Number(dupThreshold),
-        document_autofill: docAutofill
+        document_autofill: docAutofill,
+        autofill_hints: autofillHints.trim() || null,
+        autofill_keyed_hints: keyedHints.filter((k) => k.field && k.match && k.hints),
+        autofill_thresholds: (() => {
+          const out: Record<string, number> = {}
+          const d = Number(askThreshold)
+          if (askThreshold.trim() !== '' && Number.isFinite(d))
+            out._default = Math.min(1, Math.max(0, d / 100))
+          for (const t of fieldThresholds) {
+            const n = Number(t.value)
+            if (t.field.trim() && t.value.trim() !== '' && Number.isFinite(n))
+              out[t.field.trim()] = Math.min(1, Math.max(0, n / 100))
+          }
+          return out
+        })()
       }),
     onSuccess: () => {
       toast.success('AI feature settings saved')
@@ -8083,6 +8117,155 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
               to review
             </span>
           </div>
+          {docAutofill && (
+            <div
+              className='space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-muted/30'
+              data-ai-autofill-config
+            >
+              <div>
+                <Label className='mb-1 block text-[12px]'>Hints for the reader</Label>
+                <Textarea
+                  value={autofillHints}
+                  onChange={(e) => setAutofillHints(e.target.value)}
+                  rows={3}
+                  className='text-[12px]'
+                  placeholder='e.g. The fee table lists monthly amounts; the term is in section 3; "PO" in a quote means the customer reference, not ours.'
+                  data-ai-autofill-hints
+                />
+                <p className='mt-1 text-[11px] text-slate-400'>
+                  Plain sentences the model reads before every document of this collection.
+                </p>
+              </div>
+              <div>
+                <Label className='mb-1 block text-[12px]'>
+                  Hints for a particular vendor, project type…
+                </Label>
+                <div className='space-y-1.5'>
+                  {keyedHints.map((k, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: editable rows
+                    <div
+                      key={i}
+                      className='grid grid-cols-[120px_140px_1fr_auto] items-start gap-1.5'
+                    >
+                      <Input
+                        value={k.field}
+                        onChange={(e) =>
+                          setKeyedHints((l) =>
+                            l.map((x, j) => (j === i ? { ...x, field: e.target.value } : x))
+                          )
+                        }
+                        placeholder='field (vendor)'
+                        className='h-7 font-mono text-[11px]'
+                      />
+                      <Input
+                        value={k.match}
+                        onChange={(e) =>
+                          setKeyedHints((l) =>
+                            l.map((x, j) => (j === i ? { ...x, match: e.target.value } : x))
+                          )
+                        }
+                        placeholder='label contains…'
+                        className='h-7 text-[11px]'
+                      />
+                      <Input
+                        value={k.hints}
+                        onChange={(e) =>
+                          setKeyedHints((l) =>
+                            l.map((x, j) => (j === i ? { ...x, hints: e.target.value } : x))
+                          )
+                        }
+                        placeholder='their SOWs list rates in an appendix table'
+                        className='h-7 text-[11px]'
+                      />
+                      <button
+                        type='button'
+                        onClick={() => setKeyedHints((l) => l.filter((_, j) => j !== i))}
+                        className='h-7 px-1 text-[12px] text-slate-400 hover:text-red-500'
+                        aria-label='Remove hint'
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type='button'
+                    onClick={() =>
+                      setKeyedHints((l) => [...l, { field: '', match: '', hints: '' }])
+                    }
+                    className='text-[11.5px] text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+                    data-ai-autofill-add-keyed
+                  >
+                    + Add a keyed hint
+                  </button>
+                </div>
+                <p className='mt-1 text-[11px] text-slate-400'>
+                  Once the named field resolves to a record whose label contains the text, these
+                  hints join the run.
+                </p>
+              </div>
+              <div>
+                <Label className='mb-1 block text-[12px]'>Confidence needed to fill a field</Label>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Input
+                    value={askThreshold}
+                    onChange={(e) => setAskThreshold(e.target.value)}
+                    placeholder='40'
+                    inputMode='numeric'
+                    className='h-7 w-20 text-[12px]'
+                    data-ai-autofill-threshold
+                  />
+                  <span className='text-[11px] text-slate-500'>
+                    % by default; below it the value is offered as an ask, not filled
+                  </span>
+                </div>
+                <div className='mt-1.5 space-y-1.5'>
+                  {fieldThresholds.map((t, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: editable rows
+                    <div key={i} className='flex items-center gap-1.5'>
+                      <Input
+                        value={t.field}
+                        onChange={(e) =>
+                          setFieldThresholds((l) =>
+                            l.map((x, j) => (j === i ? { ...x, field: e.target.value } : x))
+                          )
+                        }
+                        placeholder='field'
+                        className='h-7 w-44 font-mono text-[11px]'
+                      />
+                      <Input
+                        value={t.value}
+                        onChange={(e) =>
+                          setFieldThresholds((l) =>
+                            l.map((x, j) => (j === i ? { ...x, value: e.target.value } : x))
+                          )
+                        }
+                        placeholder='80'
+                        inputMode='numeric'
+                        className='h-7 w-16 text-[11px]'
+                      />
+                      <span className='text-[11px] text-slate-500'>%</span>
+                      <button
+                        type='button'
+                        onClick={() => setFieldThresholds((l) => l.filter((_, j) => j !== i))}
+                        className='h-7 px-1 text-[12px] text-slate-400 hover:text-red-500'
+                        aria-label='Remove threshold'
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type='button'
+                    onClick={() => setFieldThresholds((l) => [...l, { field: '', value: '' }])}
+                    className='text-[11.5px] text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+                    data-ai-autofill-add-threshold
+                  >
+                    + Per-field threshold
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           <div className='flex items-center gap-3'>
             <Switch
               id='ai-review-enabled'

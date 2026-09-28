@@ -51,8 +51,20 @@ function formatRow(collection: string, row: Record<string, unknown> | undefined 
     duplicate_detection_enabled:
       row.duplicate_detection_enabled === true || row.duplicate_detection_enabled === 1,
     duplicate_threshold: Number(row.duplicate_threshold) || 0.85,
-    document_autofill: row.document_autofill === true || row.document_autofill === 1
+    document_autofill: row.document_autofill === true || row.document_autofill === 1,
+    autofill_hints: typeof row.autofill_hints === 'string' ? row.autofill_hints : null,
+    autofill_keyed_hints: parseLoose(row.autofill_keyed_hints, []),
+    autofill_thresholds: parseLoose(row.autofill_thresholds, {})
   } satisfies AiCollectionSettings
+}
+
+function parseLoose<T>(raw: unknown, fallback: T): T {
+  if (typeof raw !== 'string' || !raw.trim()) return fallback
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
 }
 
 export async function aiSettingsRoutes(app: FastifyInstance) {
@@ -83,6 +95,9 @@ export async function aiSettingsRoutes(app: FastifyInstance) {
         duplicate_detection_enabled: boolean
         duplicate_threshold: number
         document_autofill: boolean
+        autofill_hints: string | null
+        autofill_keyed_hints: unknown
+        autofill_thresholds: unknown
       }>
 
       const patch: Record<string, unknown> = { updated_at: new Date() }
@@ -120,6 +135,47 @@ export async function aiSettingsRoutes(app: FastifyInstance) {
       }
       if (body.document_autofill != null) {
         patch.document_autofill = body.document_autofill ? 1 : 0
+      }
+      if ('autofill_hints' in body) {
+        const h = typeof body.autofill_hints === 'string' ? body.autofill_hints.trim() : ''
+        if (h.length > 4000)
+          return reply.code(400).send({ error: 'autofill_hints is too long (4000)' })
+        patch.autofill_hints = h || null
+      }
+      if ('autofill_keyed_hints' in body) {
+        const raw = body.autofill_keyed_hints
+        if (raw != null && !Array.isArray(raw))
+          return reply.code(400).send({ error: 'autofill_keyed_hints must be an array' })
+        const list = (Array.isArray(raw) ? raw : [])
+          .filter(
+            (k): k is { field: string; match: string; hints: string } =>
+              !!k &&
+              typeof k === 'object' &&
+              typeof (k as Record<string, unknown>).field === 'string' &&
+              typeof (k as Record<string, unknown>).match === 'string' &&
+              typeof (k as Record<string, unknown>).hints === 'string'
+          )
+          .map((k) => ({
+            field: k.field.trim().slice(0, 100),
+            match: k.match.trim().slice(0, 200),
+            hints: k.hints.trim().slice(0, 2000)
+          }))
+          .filter((k) => k.field && k.match && k.hints)
+          .slice(0, 40)
+        patch.autofill_keyed_hints = list.length ? JSON.stringify(list) : null
+      }
+      if ('autofill_thresholds' in body) {
+        const raw = body.autofill_thresholds
+        if (raw != null && (typeof raw !== 'object' || Array.isArray(raw)))
+          return reply.code(400).send({ error: 'autofill_thresholds must be an object' })
+        const out: Record<string, number> = {}
+        for (const [k, v] of Object.entries((raw ?? {}) as Record<string, unknown>)) {
+          const n = Number(v)
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || !Number.isFinite(n) || n < 0 || n > 1)
+            return reply.code(400).send({ error: `autofill_thresholds.${k} must be a number 0–1` })
+          out[k] = n
+        }
+        patch.autofill_thresholds = Object.keys(out).length ? JSON.stringify(out) : null
       }
       if (body.duplicate_threshold != null) {
         const t = Number(body.duplicate_threshold)

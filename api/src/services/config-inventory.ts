@@ -246,6 +246,7 @@ export const RUNTIME_TABLES: string[] = [
   // ── classified 2026-09-17 — per-user state, logs, reactions, journals ──
   'nivaro_ai_calls',
   'nivaro_ai_feedback',
+  'nivaro_ai_autofill_events',
   'nivaro_concurrency_samples',
   'nivaro_outbox',
   'nivaro_action_journal',

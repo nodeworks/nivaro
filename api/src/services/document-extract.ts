@@ -24,7 +24,12 @@ export type ExtractedDocument = {
   method: 'pdftotext' | 'pdfjs' | 'docx' | 'sheet' | 'text'
   pages: number | null
   truncated: boolean
+  /** The whole cleaned text when it ran past the cap (up to FULL_TEXT_CAP),
+   *  so the autofill can condense the tail instead of losing it (#759). */
+  fullText?: string
 }
+
+export const FULL_TEXT_CAP = 600_000
 
 const PDFTOTEXT_CANDIDATES = [
   '/opt/homebrew/bin/pdftotext',
@@ -39,7 +44,7 @@ function findPdftotext(): string | null {
   return pdftotextPath
 }
 
-function cap(text: string): { text: string; truncated: boolean } {
+function cap(text: string): { text: string; truncated: boolean; fullText?: string } {
   const cleaned = text
     .replace(/\r\n?/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
@@ -47,7 +52,8 @@ function cap(text: string): { text: string; truncated: boolean } {
   if (cleaned.length <= MAX_TEXT_CHARS) return { text: cleaned, truncated: false }
   return {
     text: `${cleaned.slice(0, MAX_TEXT_CHARS)}\n\n[… document truncated …]`,
-    truncated: true
+    truncated: true,
+    fullText: cleaned.slice(0, FULL_TEXT_CAP)
   }
 }
 
@@ -72,7 +78,7 @@ async function pdfViaPdfjs(buffer: Buffer): Promise<{ text: string; pages: numbe
     disableFontFace: true
   }).promise
   const out: string[] = []
-  const pageCap = Math.min(doc.numPages, 40)
+  const pageCap = Math.min(doc.numPages, 120)
   for (let i = 1; i <= pageCap; i++) {
     const page = await doc.getPage(i)
     const content = await page.getTextContent()
@@ -114,15 +120,15 @@ export async function extractDocumentText(
       try {
         const raw = await pdfViaPoppler(bin, buffer)
         const pages = countPages(raw)
-        const { text, truncated } = cap(raw.replace(/\f/g, '\n\n'))
-        if (text.trim().length > 0) return { text, method: 'pdftotext', pages, truncated }
+        const { text, truncated, fullText } = cap(raw.replace(/\f/g, '\n\n'))
+        if (text.trim().length > 0) return { text, method: 'pdftotext', pages, truncated, fullText }
       } catch {
         // fall through to pdfjs
       }
     }
     const { text: raw, pages } = await pdfViaPdfjs(buffer)
-    const { text, truncated } = cap(raw)
-    return { text, method: 'pdfjs', pages, truncated }
+    const { text, truncated, fullText } = cap(raw)
+    return { text, method: 'pdfjs', pages, truncated, fullText }
   }
 
   if (
@@ -131,8 +137,8 @@ export async function extractDocumentText(
   ) {
     const mammoth = await import('mammoth')
     const res = await mammoth.extractRawText({ buffer })
-    const { text, truncated } = cap(res.value)
-    return { text, method: 'docx', pages: null, truncated }
+    const { text, truncated, fullText } = cap(res.value)
+    return { text, method: 'docx', pages: null, truncated, fullText }
   }
 
   if (['.xlsx', '.xls', '.xlsm', '.csv'].includes(ext) || /spreadsheet|excel|csv/.test(mime)) {
@@ -142,8 +148,8 @@ export async function extractDocumentText(
       const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false })
       parts.push(`--- sheet ${name} ---\n${csv}`)
     }
-    const { text, truncated } = cap(parts.join('\n\n'))
-    return { text, method: 'sheet', pages: wb.SheetNames.length, truncated }
+    const { text, truncated, fullText } = cap(parts.join('\n\n'))
+    return { text, method: 'sheet', pages: wb.SheetNames.length, truncated, fullText }
   }
 
   // .txt .md .eml .json .html — anything else is read as UTF-8 text. HTML
@@ -159,8 +165,8 @@ export async function extractDocumentText(
       .replace(/&nbsp;/g, ' ')
       .replace(/&amp;/g, '&')
   }
-  const { text, truncated } = cap(raw)
-  return { text, method: 'text', pages: null, truncated }
+  const { text, truncated, fullText } = cap(raw)
+  return { text, method: 'text', pages: null, truncated, fullText }
 }
 
 export const ACCEPTED_EXTENSIONS = [

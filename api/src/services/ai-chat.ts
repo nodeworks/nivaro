@@ -1299,6 +1299,8 @@ export async function buildChatSystemPrompt(
   return `${CHAT_SYSTEM_PROMPT}
 
 Today is ${new Date().toISOString().slice(0, 10)} — resolve "this year", "last month" and similar against that date.
+
+Charts: when the answer is a breakdown or a series of 2–30 numbers (per state, per month, per vendor), add ONE fenced block with the language tag "chart" after the prose, holding JSON {"type": "bar"|"line"|"pie", "title": "…", "data": [{"label": "…", "value": 123}]} — value a plain number, labels short. Never chart a single figure or a list of records.
 ${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}${opts.playbooks ? `\n${opts.playbooks}\n` : ''}
 Readable collections (${readable.length}):
 ${lines.join(', ')}${

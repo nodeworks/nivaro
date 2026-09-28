@@ -1552,6 +1552,11 @@ export function SettingsPage() {
   const [aiGatewayModel, setAiGatewayModel] = useState('')
   const [aiGatewayChatModel, setAiGatewayChatModel] = useState('')
   const [aiGatewayExtractModel, setAiGatewayExtractModel] = useState('')
+  // #754 — per-feature model map (nivaro_settings.ai_models); the three
+  // legacy columns above stay as the fallback the server reads when the map
+  // has no entry for a feature.
+  const [aiModels, setAiModels] = useState<Record<string, string>>({})
+  const [aiAnswerCacheMinutes, setAiAnswerCacheMinutes] = useState('')
   const [aiPromptCaching, setAiPromptCaching] = useState(true)
   const [aiChatGuide, setAiChatGuide] = useState('')
   const [aiTest, setAiTest] = useState<{
@@ -1681,6 +1686,15 @@ export function SettingsPage() {
     setAiGatewayModel(settings.ai_gateway_model ?? '')
     setAiGatewayChatModel(settings.ai_gateway_chat_model ?? '')
     setAiGatewayExtractModel(settings.ai_gateway_extract_model ?? '')
+    try {
+      const m = settings.ai_models ? JSON.parse(String(settings.ai_models)) : {}
+      setAiModels(m && typeof m === 'object' ? m : {})
+    } catch {
+      setAiModels({})
+    }
+    setAiAnswerCacheMinutes(
+      settings.ai_answer_cache_minutes == null ? '' : String(settings.ai_answer_cache_minutes)
+    )
     setAiPromptCaching(settings.ai_prompt_caching !== false)
     setAiChatGuide(settings.ai_chat_guide ?? '')
     setAiMaxGenerate(settings.ai_max_tokens_generate ?? 500)
@@ -1921,6 +1935,13 @@ export function SettingsPage() {
       ai_gateway_model: aiGatewayModel.trim() || null,
       ai_gateway_chat_model: aiGatewayChatModel.trim() || null,
       ai_gateway_extract_model: aiGatewayExtractModel.trim() || null,
+      ai_models: (() => {
+        const clean: Record<string, string> = {}
+        for (const [k, v] of Object.entries(aiModels)) if (v.trim()) clean[k] = v.trim()
+        return Object.keys(clean).length ? JSON.stringify(clean) : null
+      })(),
+      ai_answer_cache_minutes:
+        aiAnswerCacheMinutes.trim() === '' ? null : Math.max(0, Number(aiAnswerCacheMinutes) || 0),
       ai_prompt_caching: aiPromptCaching,
       ai_chat_guide: aiChatGuide.trim() || null,
       ai_max_tokens_generate: aiMaxGenerate,
@@ -2742,28 +2763,35 @@ export function SettingsPage() {
                         />
                       </Field>
                       <Field
-                        label='Model id for Ask AI'
-                        hint='The data assistant reasons across several tool calls, where a small model gives confident wrong answers. Blank = the model above. One-shot features (generate, summarize, validate, briefs) keep using the model above.'
+                        label='Model per feature'
+                        hint='Each AI feature can run on its own gateway model id. Blank = the default model above (Ask AI and document autofill fall back to the chat model first). The embed model turns semantic search onto the gateway embeddings endpoint — changing it needs a reindex.'
                       >
-                        <Input
-                          value={aiGatewayChatModel}
-                          onChange={(e) => setAiGatewayChatModel(e.target.value)}
-                          placeholder='claude-4-6-sonnet'
-                          className='h-8 font-mono text-[13px]'
-                          data-ai-gateway-chat-model
-                        />
-                      </Field>
-                      <Field
-                        label='Model id for document autofill'
-                        hint='"Fill from document" reads a SOW or quote, looks vendors and people up, and proposes a whole record with lines — a tool loop like Ask AI. Blank = the Ask AI model. Turn the feature on per collection under Data Model → Settings → AI Features.'
-                      >
-                        <Input
-                          value={aiGatewayExtractModel}
-                          onChange={(e) => setAiGatewayExtractModel(e.target.value)}
-                          placeholder='claude-4-6-sonnet'
-                          className='h-8 font-mono text-[13px]'
-                          data-ai-gateway-extract-model
-                        />
+                        <div className='space-y-1.5' data-ai-models>
+                          {(
+                            [
+                              ['chat', 'Ask AI + chat bot', 'claude-4-6-sonnet'],
+                              ['extract', 'Document autofill', 'claude-4-6-sonnet'],
+                              ['generate', 'Field generation', ''],
+                              ['summarize', 'Summaries + briefs', ''],
+                              ['embed', 'Semantic search embeddings', 'text-embedding-3-large']
+                            ] as const
+                          ).map(([key, label, ph]) => (
+                            <div key={key} className='flex items-center gap-2'>
+                              <span className='w-44 shrink-0 text-[12px] text-slate-600 dark:text-slate-300'>
+                                {label}
+                              </span>
+                              <Input
+                                value={aiModels[key] ?? ''}
+                                onChange={(e) =>
+                                  setAiModels((m) => ({ ...m, [key]: e.target.value }))
+                                }
+                                placeholder={ph || 'default model'}
+                                className='h-8 font-mono text-[13px]'
+                                data-ai-model={key}
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </Field>
                     </>
                   )}
@@ -2784,6 +2812,22 @@ export function SettingsPage() {
                       <span className='text-[12px] text-slate-600 dark:text-slate-300'>
                         {aiPromptCaching ? 'On' : 'Off'}
                       </span>
+                    </div>
+                  </Field>
+                  <Field
+                    label='Ask AI answer cache'
+                    hint='The same standalone question by the same person inside this window answers from cache instead of running the tool loop again. Blank = 15 minutes, 0 = off. Answers that propose an action are never cached.'
+                  >
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        value={aiAnswerCacheMinutes}
+                        onChange={(e) => setAiAnswerCacheMinutes(e.target.value)}
+                        placeholder='15'
+                        inputMode='numeric'
+                        className='h-8 w-24 text-[13px]'
+                        data-ai-answer-cache
+                      />
+                      <span className='text-[12px] text-slate-500'>minutes</span>
                     </div>
                   </Field>
                   <Field

@@ -52,6 +52,8 @@ const allowedSettingsKeys = [
   'ai_gateway_model',
   'ai_gateway_chat_model',
   'ai_gateway_extract_model',
+  'ai_models',
+  'ai_answer_cache_minutes',
   'ai_prompt_caching',
   'ai_chat_guide',
   'ai_max_tokens_generate',
@@ -134,6 +136,8 @@ const allowedSettingsKeys = [
   'lock_idle_release_minutes',
   'default_timezone',
   'ai_disabled_features',
+  // Per-role home-page defaults (#917, migration 365): `{ role uuid: layout }`
+  'dashboard_role_defaults',
   // Theme studio (#662)
   'theme_radius',
   'theme_font',
@@ -203,6 +207,28 @@ export async function settingsRoutes(app: FastifyInstance) {
           : typeof patch.theme_accents === 'string'
             ? patch.theme_accents
             : JSON.stringify(patch.theme_accents)
+    }
+
+    // Per-role home-page defaults (#917): every role's layout is validated the
+    // same way a person's own `preferences.dashboard` is, then stored as text.
+    if ('dashboard_role_defaults' in patch) {
+      const raw = patch.dashboard_role_defaults
+      if (raw == null || raw === '') {
+        patch.dashboard_role_defaults = null
+      } else {
+        const { normalizeDashboardRoleDefaults } = await import('../services/dashboard-layout.js')
+        const parsed = (() => {
+          if (typeof raw !== 'string') return raw
+          try {
+            return JSON.parse(raw) as unknown
+          } catch {
+            return null
+          }
+        })()
+        const n = normalizeDashboardRoleDefaults(parsed)
+        if (n.error) return reply.code(400).send({ error: n.error })
+        patch.dashboard_role_defaults = JSON.stringify(n.map)
+      }
     }
 
     if ('graphql_deprecation_days' in patch) {

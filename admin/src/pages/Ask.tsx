@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 interface TraceEntry {
   tool: string
@@ -32,6 +32,8 @@ interface ChatTurn {
   proposals?: Proposal[]
   requestId?: string | null
   playbooksUsed?: number
+  /** Served from the answer cache (#723) — when it was first answered. */
+  cachedAt?: string | null
 }
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
@@ -228,9 +230,12 @@ function AskPageInner() {
             proposals?: Proposal[]
             request_id?: string | null
             playbooks_used?: number
+            cached?: boolean
+            cached_at?: string
           }
         }>('/ai/chat', {
-          messages: history.map((t) => ({ role: t.role, content: t.content }))
+          messages: history.map((t) => ({ role: t.role, content: t.content })),
+          fresh: freshRef.current
         })
         .then((r) => r.data.data),
     onSuccess: (data) => {
@@ -242,9 +247,11 @@ function AskPageInner() {
           trace: data.trace,
           proposals: data.proposals,
           requestId: data.request_id ?? null,
-          playbooksUsed: data.playbooks_used ?? 0
+          playbooksUsed: data.playbooks_used ?? 0,
+          cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null
         }
       ])
+      freshRef.current = false
       speak(data.reply)
     },
     onError: (err: unknown) => {
@@ -253,6 +260,17 @@ function AskPageInner() {
       setTurns((prev) => prev.slice(0, -1)) // roll back the optimistic user turn
     }
   })
+
+  // "Ask again" bypasses the answer cache for the next send only (#723).
+  const freshRef = useRef(false)
+  function askAgain(question: string) {
+    freshRef.current = true
+    setTurns((prev) => {
+      const idx = prev.map((t) => t.content).lastIndexOf(question)
+      return idx >= 0 ? prev.slice(0, idx) : prev
+    })
+    submit(question)
+  }
 
   function submit(text?: string) {
     const content = (text ?? input).trim()
@@ -335,6 +353,24 @@ function AskPageInner() {
               >
                 {t.role === 'assistant' ? (
                   <>
+                    {t.cachedAt && (
+                      <div
+                        className='mb-1.5 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400'
+                        data-ask-cached
+                      >
+                        <span>
+                          Answered {formatRelative(t.cachedAt)} — same question, same answer.
+                        </span>
+                        <button
+                          type='button'
+                          className='underline decoration-dotted underline-offset-2 hover:text-slate-800 dark:hover:text-slate-200'
+                          onClick={() => askAgain(turns[i - 1]?.content ?? '')}
+                          data-ask-again
+                        >
+                          Ask again
+                        </button>
+                      </div>
+                    )}
                     <AiMarkdown content={t.content} />
                     {t.proposals?.map((p) => (
                       <ProposalCard key={p.proposal_id} proposal={p} />

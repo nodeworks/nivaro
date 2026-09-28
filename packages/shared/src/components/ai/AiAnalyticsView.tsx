@@ -337,6 +337,8 @@ export function AiAnalyticsView() {
         />
       </div>
 
+      <AutofillScorecard days={Math.max(1, Math.round(hours / 24))} />
+
       <div className='rounded-lg border border-border bg-card' data-ai-call-log>
         <div className='flex flex-wrap items-center gap-2 border-b border-border px-3 py-2'>
           <span className='text-[11px] font-medium uppercase tracking-wide text-muted-foreground'>
@@ -573,6 +575,115 @@ function BreakdownTable({
           ) : null}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// ─── Document autofill scorecard (#703) ──────────────────────────────────────
+
+type AutofillAnalytics = {
+  days: number
+  documents: number
+  cost_usd: number
+  avg_latency_ms: number | null
+  by_collection: Array<{
+    collection: string
+    documents: number
+    fields_proposed: number
+    fields_kept: number
+    fields_overridden: number
+    lines_proposed: number
+    lines_kept: number
+    asks: number
+    asks_resolved: number
+    cost_usd: number
+    rounds: number
+  }>
+  by_field: Array<{
+    collection: string
+    field: string
+    proposed: number
+    kept: number
+    overridden: number
+    avg_confidence: number | null
+  }>
+  recent: Array<{
+    id: number
+    created_at: string
+    collection: string
+    document_name: string | null
+    model: string | null
+    rounds: number
+    latency_ms: number | null
+    cost_usd: number | null
+    fields_proposed: number
+    fields_kept: number
+    fields_overridden: number
+    asks: number
+    asks_resolved: number
+    record_id: string | null
+  }>
+}
+
+function pct(n: number, d: number): string {
+  return d ? `${Math.round((n / d) * 100)}%` : '—'
+}
+
+/** What "Fill from document" proposed, what people kept, what they changed
+ *  before Create, what it asked — per collection and per field. */
+function AutofillScorecard({ days }: { days: number }) {
+  const client = useNivaroClient()
+  const q = useQuery({
+    queryKey: ['nvr-ai-autofill-analytics', days],
+    queryFn: () =>
+      client.request<{ data: AutofillAnalytics }>(get('/ai/extract-record/analytics', { days })),
+    refetchInterval: 60_000
+  })
+  const d = q.data?.data
+  if (!d || d.documents === 0) return null
+  return (
+    <div className='flex flex-col gap-3' data-ai-autofill-scorecard>
+      <div className='flex items-baseline gap-2'>
+        <span className='text-[11px] font-medium uppercase tracking-wide text-muted-foreground'>
+          Document autofill · last {d.days} days
+        </span>
+        <span className='text-[11.5px] text-muted-foreground'>
+          {num(d.documents)} document{d.documents === 1 ? '' : 's'} · {usd(d.cost_usd)}
+          {d.avg_latency_ms ? ` · ${(d.avg_latency_ms / 1000).toFixed(0)}s per document` : ''}
+        </span>
+      </div>
+      <div className='grid gap-3 lg:grid-cols-2'>
+        <BreakdownTable
+          title='By collection'
+          heads={['Docs', 'Kept', 'Changed', 'Lines kept', 'Asked', 'Spend']}
+          rows={d.by_collection.map((r) => ({
+            key: r.collection,
+            label: r.collection,
+            cells: [
+              num(r.documents),
+              `${pct(r.fields_kept, r.fields_proposed)} of ${num(r.fields_proposed)}`,
+              pct(r.fields_overridden, r.fields_kept),
+              `${pct(r.lines_kept, r.lines_proposed)} of ${num(r.lines_proposed)}`,
+              `${num(r.asks_resolved)}/${num(r.asks)}`,
+              usd(r.cost_usd)
+            ]
+          }))}
+        />
+        <BreakdownTable
+          title='By field'
+          heads={['Proposed', 'Kept', 'Changed', 'Conf.']}
+          rows={d.by_field.slice(0, 25).map((r) => ({
+            key: `${r.collection}:${r.field}`,
+            label: `${r.collection} · ${r.field}`,
+            cells: [
+              num(r.proposed),
+              pct(r.kept, r.proposed),
+              pct(r.overridden, r.proposed),
+              r.avg_confidence == null ? '—' : `${Math.round(r.avg_confidence * 100)}%`
+            ]
+          }))}
+        />
+      </div>
     </div>
   )
 }

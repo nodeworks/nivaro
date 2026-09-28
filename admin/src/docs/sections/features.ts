@@ -1083,8 +1083,18 @@ export const aiDocumentAutofill: DocSection = {
       type: 'ul',
       items: [
         'Data Model → the collection → Settings → AI Features → **Fill from document**. The new-record form of that collection gains a "Fill from document" button beside "Import from file".',
-        'Settings → AI Features → **Model id for document autofill** (gateway provider only). Blank uses the Ask AI model. This is a multi-step tool loop — the model looks vendors, people and categories up, then hands back a structured proposal — so it wants the strong model, not the one-shot one.',
+        'Settings → AI Features → **Model per feature** → *Document autofill* (gateway provider only). Blank uses the Ask AI model. This is a multi-step tool loop — the model looks vendors, people and categories up, then hands back a structured proposal — so it wants the strong model, not the one-shot one. A model the gateway refuses falls back to the chat model, then the default.',
+        "Same card, under the switch: **Hints for the reader** (plain sentences the model reads before every document of this collection), **keyed hints** (added once a named field resolves to a record whose label contains a text — a vendor's quirks), and the **confidence needed to fill a field** (default 40%, per-field overrides). A value under its threshold is offered as an ask with the candidate, never filled.",
         'AI governance: the feature key is `extract-record`; disabling it in `ai_disabled_features` hides the button everywhere.'
+      ]
+    },
+    { type: 'h2', id: 'ai-document-autofill-doors', text: 'Three ways in' },
+    {
+      type: 'ul',
+      items: [
+        "**Fill from document** on the new-record form. The run goes to the server at once; the dialog shows what it is doing and offers **Tell me when it's ready** — leave, and a notification opens the form on the proposal.",
+        '**New from document…** in a list\'s "+ New item" menu (and the portal\'s + New menu): pick the file first, land on the new form with the review dialog open (`?autofill=<proposal id>`, kept 24 hours).',
+        "**Fill from document** on a new addendum: the proposal is built against the addendum layout's fields and lines."
       ]
     },
     { type: 'h2', id: 'ai-document-autofill-flow', text: 'What happens' },
@@ -1092,9 +1102,12 @@ export const aiDocumentAutofill: DocSection = {
       type: 'ul',
       items: [
         'The file is read to plain text (PDF via poppler when installed, else in process; DOCX; XLSX/CSV sheets; text, HTML, .eml). Scanned PDFs with no text layer are refused with a clear message — nothing is invented from an image.',
-        'The model sees the collection\'s fillable fields from its active layout (types, choices, notes), its child collections (lines, materials, schedules) and its multi-select relations. Small lookup tables (types, regions, years — up to 200 rows) are listed whole; big ones (vendors, people, locations, items) are searched through `search_records`, which runs the same permission-checked read the person could do by hand.',
+        "The model sees the collection's fillable fields from its active layout (types, choices, notes), its child collections (lines, materials, schedules) and its multi-select relations. Small lookup tables (types, regions, years — up to 200 rows) are listed whole; big ones (vendors, people, locations, items) are searched through `search_records`, which runs the same permission-checked read the person could do by hand.",
         'The proposal comes back as one structured call: value, confidence and the sentence it came from, per field and per line, plus "asks" for anything the document does not say.',
-        'The review dialog lists fields, lines, links and asks with checkboxes and confidence pills. Apply STAGES the selection exactly like an import prefill — lines run the grid\'s row rules, the document attaches to the record\'s file field — and the record still needs Create.'
+        'The form\'s dependencies are honoured: a field narrowed by others (a project under a zone and a project type) is searched WITH those parents once they are settled, and a value the picker would not offer becomes an ask that names the parent excluding it. Cross-record defaults and field rules then fill what the document did not cover (a project\'s zones, regions and funding years; a rule\'s derived value) — shown with a "default" / "rule" pill; the document always wins.',
+        'A document past the prompt cap is condensed: the head is read whole, every later part is read once for verbatim passages that could fill a field, and those excerpts join the run (the dialog says how many parts were read).',
+        "The review dialog lists fields, lines, links and asks with checkboxes and confidence pills. An ask can be answered in place — a record picker for a relation, a choice list, a date — and a refused candidate is one click away. Apply STAGES the selection exactly like an import prefill — lines run the grid's row rules, the document attaches to the record's file field — and the record still needs Create.",
+        "What people keep, change before Create or answer is recorded per proposal: the AI Analytics page shows a scorecard per collection and per field, and the last corrections ride the next extraction's prompt as worked examples."
       ]
     },
     { type: 'h2', id: 'ai-document-autofill-guards', text: 'What keeps it honest' },
@@ -1112,10 +1125,16 @@ export const aiDocumentAutofill: DocSection = {
     {
       type: 'pre',
       code: `GET  /api/ai/extract-record/config/:collection      → { data: { enabled, accept: [".pdf", …] } }
-POST /api/ai/extract-record   multipart: collection=<name>, file=<upload>
-→ 200 { data: { summary, fields[], children[], m2m[], asks[], warnings[], prefill: { values, lines_by_alias, m2m, file_id, attach_alias }, document, model, rounds } }
+POST /api/ai/extract-record   multipart: collection=<name>, file=<upload>, layout_id?=<addendum layout>, background?=1
+→ 200 { data: { id, summary, fields[{…, derived?}], children[], m2m[], asks[{…, candidate?, input?}], warnings[], prefill, document, model, rounds, latency_ms, condensed?, hints_used[] } }
+→ 202 { data: { proposal_id, status: "running" } }   (background=1)
 → 403 feature off / collection not enabled / no create permission
-→ 413 over 25 MB · 422 no readable text · 502 the model returned no proposal`
+→ 413 over 25 MB · 422 no readable text · 502 the model returned no proposal
+GET  /api/ai/extract-record/result/:id          → the stored proposal (202 while running, 422 when it failed; kept 24 h)
+POST /api/ai/extract-record/:id/notify          → tell the asker when a running proposal lands
+POST /api/ai/extract-record/:id/apply           { kept_fields[], kept_lines, resolved_asks[] }   (the review dialog's Apply)
+POST /api/ai/extract-record/:id/outcome         { record_id, values }   (which proposed values changed before Create)
+GET  /api/ai/extract-record/analytics?days=     → the scorecard (admin)`
     },
     {
       type: 'note',

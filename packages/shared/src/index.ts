@@ -43,7 +43,6 @@ export type {
 export { CollectionBrowserView } from './components/CollectionBrowserView'
 export * from './components/ConformanceView'
 export { CopyAsButton } from './components/CopyAsButton'
-export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { CronBuilder, describeCron } from './components/CronBuilder'
 export type { CustomStatus } from './components/CustomStatusEditor'
 export {
@@ -67,7 +66,6 @@ export { CommandCenterView } from './components/command-center/CommandCenterView
 export * from './components/DataTable'
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
-export { OpsTasksView, type OpsTaskRow, type OpsTaskRun } from './components/ops/OpsTasksView'
 export { EmptyState } from './components/EmptyState'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
@@ -94,12 +92,14 @@ export type {
   UnsavedSummary
 } from './components/ItemEditForm'
 export { ItemEditForm } from './components/ItemEditForm'
-export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export {
-  DocumentAutofillButton,
   type DocumentApplySelection,
-  type DocumentProposal
+  DocumentAutofillButton,
+  type DocumentProposal,
+  startDocumentExtraction,
+  useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
+export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'
 export { DefinitionsPanel } from './components/imports/DefinitionsPanel'
@@ -182,11 +182,11 @@ export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
 export {
   type ApiCaller,
-  type AuthFailure,
-  AuthFailuresSection,
   type ApiLogRow,
   ApiRequestLog,
   type ApiRequestLogFilters,
+  type AuthFailure,
+  AuthFailuresSection,
   InboundCallersView
 } from './components/monitoring/ApiRequestLog'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
@@ -219,6 +219,7 @@ export {
   useSubscriptionMutations
 } from './components/notifications/SubscriptionEditor'
 export { OfflineBanner } from './components/OfflineBanner'
+export { type OpsTaskRow, type OpsTaskRun, OpsTasksView } from './components/ops/OpsTasksView'
 export type {
   PageRendererPage,
   PageRendererProps,
@@ -236,13 +237,6 @@ export {
   ProfileView,
   TimezoneCard
 } from './components/ProfileView'
-export { PersonHeader } from './components/profile/PersonHeader'
-export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
-export { SectionCard as ProfileSectionCard } from './components/profile/primitives'
-export {
-  type PersonProfile as PersonProfileData,
-  usePersonProfile
-} from './components/profile/types'
 export * from './components/panels'
 export { OwnerMatrix } from './components/pipeline/OwnerMatrix'
 export type { PipelineEditorSection } from './components/pipeline/PipelineEditorView'
@@ -261,6 +255,13 @@ export {
   tierOrder,
   useScopeDimensions
 } from './components/pipeline/teamScopes'
+export { PersonHeader } from './components/profile/PersonHeader'
+export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
+export { SectionCard as ProfileSectionCard } from './components/profile/primitives'
+export {
+  type PersonProfile as PersonProfileData,
+  usePersonProfile
+} from './components/profile/types'
 export { QualityRulesView } from './components/QualityRulesView'
 export type { QueryWidgetStat } from './components/QueryStatStrip'
 export { QueryStatStrip } from './components/QueryStatStrip'
@@ -313,6 +314,7 @@ export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export * from './lib/catalog-item-open'
 export * from './lib/commands'
+export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { useAfterIdle } from './lib/defer'
 export {
   deleteDraft,
