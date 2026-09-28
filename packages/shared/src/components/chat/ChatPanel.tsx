@@ -1,64 +1,64 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Bookmark,
   Bell,
   BellOff,
-  HelpCircle,
+  Bookmark,
   Check,
   CheckCheck,
   ChevronLeft,
+  ClipboardPlus,
   ExternalLink,
   Hash,
+  HelpCircle,
   Lock,
   LogOut,
   MessageCircle,
-  ClipboardPlus,
   Paperclip,
   Pencil,
   Pin,
-  Video,
-  Plus,
   PlayCircle,
+  Plus,
   Search,
   Send,
   Settings,
   SmilePlus,
   Trash2,
   Users,
+  Video,
   X
 } from 'lucide-react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { toast } from 'sonner'
+import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
-import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { CustomStatusEditor } from '../CustomStatusEditor'
+import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { UserAvatar } from '../UserAvatar'
 import {
   CHAT_DEFAULTS,
+  type ChannelMeta,
   type ChatConfig,
   ChatConfigContext,
   type ChatMessage,
   type ChatOnlineUser,
-  type RoomInfo,
   chatAvatarColor,
   chatInitials,
+  type DirectoryChannel,
   dmPeer,
   dmRoom,
   getMentionQuery,
-  splitMessageTokens,
-  type ChannelMeta,
-  type DirectoryChannel,
   REACTION_EMOJI,
+  type RoomInfo,
+  splitMessageTokens,
   useChannelAdmin,
   useChannelDirectory,
   useChannelMembers,
   useChatBotInfo,
   useChatBotName,
   useChatConfig,
-  useChatRoles,
   useChatMessages,
+  useChatRoles,
   useChatRooms,
   useChatSearch,
   useCreateChannel,
@@ -67,14 +67,14 @@ import {
   useEditMessage,
   useEntityRoomLink,
   useMarkRoomRead,
+  usePeerReadAt,
   useRoomMembership,
   useRoomPins,
-  useToggleReaction,
-  useTogglePin,
-  useUserSearch,
-  usePeerReadAt,
   useSendChatMessage,
-  useTypingIndicator
+  useTogglePin,
+  useToggleReaction,
+  useTypingIndicator,
+  useUserSearch
 } from './chat-core'
 
 /**
@@ -1253,6 +1253,15 @@ export function ChatRoomView({
                     {!mine && (
                       <p className='mb-0.5 text-[10.5px] font-medium text-slate-400'>
                         {m.sender_name ?? 'Unknown'}
+                        {m.masquerade_admin_name && (
+                          <span
+                            className='ml-1 font-normal text-violet-600 dark:text-violet-300'
+                            title={`Sent by ${m.masquerade_admin_name} while masquerading as ${m.sender_name ?? 'this person'}`}
+                            data-chat-message-masquerade
+                          >
+                            · via {m.masquerade_admin_name}
+                          </span>
+                        )}
                       </p>
                     )}
                     {/* Hover toolbar: react, and (own, in-window) edit/delete */}
@@ -2391,6 +2400,8 @@ interface PresenceExtra {
   idle_minutes?: number | null
   last_active?: string | null
   custom_status?: { text: string; emoji: string | null } | null
+  /** An admin is masquerading as this person right now. */
+  masquerade?: { admin_id: string | null; admin_name: string } | null
 }
 
 /** Set-your-status control (#33): free text + emoji, self-clearing. Saved in
@@ -2863,6 +2874,21 @@ export function ChatPanel({
                                 {idleLabel(idleSrc)}
                               </span>
                             )}
+                            {(() => {
+                              const mq = presenceExtras.byUser.get(
+                                String(u.user_id).toUpperCase()
+                              )?.masquerade
+                              if (!mq) return null
+                              return (
+                                <span
+                                  className='ml-1.5 rounded-full bg-violet-500/10 px-1.5 py-px text-[10px] font-medium text-violet-700 dark:bg-violet-400/15 dark:text-violet-300'
+                                  title={`${mq.admin_name} is signed in as this person right now`}
+                                  data-chat-masquerade={mq.admin_id ?? ''}
+                                >
+                                  {mq.admin_name} masquerading
+                                </span>
+                              )
+                            })()}
                           </span>
                           {(() => {
                             const cs = presenceExtras.byUser.get(

@@ -5,6 +5,7 @@ import { Redis } from 'ioredis'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { canSeeRoom } from '../services/chat.js'
+import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { can } from '../services/permissions.js'
 
 let pagePresenceReader:
@@ -389,12 +390,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (token.startsWith('nvm_')) {
           const raw = await app.redis.get(`masq:${token}`)
           if (!raw) return
-          const payloadIds = JSON.parse(raw) as { user_id?: string }
+          const payloadIds = JSON.parse(raw) as { user_id?: string; admin_id?: string }
           const user = await db<User>('nivaro_users')
             .where({ id: payloadIds.user_id, status: 'active' })
             .first()
           if (user) {
             authenticatedUser = user
+            touchMasqueradeMarker(app.redis, String(user.id), payloadIds.admin_id)
             const meta = socketMeta.get(socket.id)
             if (meta)
               meta.user = {

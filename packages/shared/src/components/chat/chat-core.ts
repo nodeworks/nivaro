@@ -1,7 +1,7 @@
 import { readItems } from '@nivaro/sdk'
-import { toast } from 'sonner'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
 
@@ -42,6 +42,8 @@ export interface ChatMessage {
   deleted_at?: string | null
   attachments?: string[]
   reactions?: ChatReaction[]
+  /** The admin who was masquerading as the sender when it was sent. */
+  masquerade_admin_name?: string | null
 }
 
 /** The reaction palette — mirrored server-side; anything else is rejected. */

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -28,6 +29,17 @@ import { sendWebPush } from '../services/web-push.js'
  * `chat_messages` directly, because a table-level policy cannot express "only
  * the rooms you belong to". Presence and typing stay on the plain items API.
  */
+
+/** Display name of the admin behind a masquerade, for the "via" tag. */
+async function adminNameOf(id: string): Promise<string | null> {
+  const a = (await db('nivaro_users')
+    .where({ id })
+    .select('first_name', 'last_name', 'email')
+    .first()) as Record<string, unknown> | undefined
+  if (!a) return null
+  return [a.first_name, a.last_name].filter(Boolean).join(' ') || String(a.email ?? '')
+}
+
 export async function chatRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
@@ -67,8 +79,27 @@ export async function chatRoutes(app: FastifyInstance) {
         'date_created',
         'edited_at',
         'deleted_at',
-        'attachments'
+        'attachments',
+        ...((await hasColumn('chat_messages', 'masquerade_admin')) ? ['masquerade_admin'] : [])
       )) as Array<Record<string, unknown>>
+
+    // Who was masquerading when a message was sent — names for the "via" tag.
+    const masqAdmins = [
+      ...new Set(
+        rows.map((r) => (r.masquerade_admin ? String(r.masquerade_admin) : null)).filter(Boolean)
+      )
+    ] as string[]
+    const masqNames = new Map<string, string>()
+    if (masqAdmins.length) {
+      const admins = (await db('nivaro_users')
+        .whereIn('id', masqAdmins)
+        .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
+      for (const a of admins)
+        masqNames.set(
+          String(a.id).toUpperCase(),
+          [a.first_name, a.last_name].filter(Boolean).join(' ') || String(a.email ?? '')
+        )
+    }
 
     // Reactions for the returned window, one query.
     const ids = rows.map((r) => Number(r.id))
@@ -96,7 +127,10 @@ export async function chatRoutes(app: FastifyInstance) {
       // A deleted message keeps its row (thread continuity) but sheds content.
       message: r.deleted_at ? '' : r.message,
       attachments: r.deleted_at ? [] : parseAttachments(r.attachments),
-      reactions: reactionsByMsg.get(Number(r.id)) ?? []
+      reactions: reactionsByMsg.get(Number(r.id)) ?? [],
+      masquerade_admin_name: r.masquerade_admin
+        ? (masqNames.get(String(r.masquerade_admin).toUpperCase()) ?? 'an administrator')
+        : null
     }))
     // Ascending for rendering; the query is descending so `limit` takes the
     // NEWEST messages rather than the oldest.
@@ -126,6 +160,8 @@ export async function chatRoutes(app: FastifyInstance) {
       [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
       req.user?.email ||
       null
+    const masqCol = await hasColumn('chat_messages', 'masquerade_admin')
+    const masqName = req.masqueradeAdminId ? await adminNameOf(req.masqueradeAdminId) : null
     const [inserted] = await db('chat_messages')
       .insert({
         room,
@@ -133,7 +169,8 @@ export async function chatRoutes(app: FastifyInstance) {
         sender: req.user?.id ?? null,
         sender_name: senderName,
         date_created: new Date(),
-        attachments: attachments.length ? JSON.stringify(attachments) : null
+        attachments: attachments.length ? JSON.stringify(attachments) : null,
+        ...(masqCol && req.masqueradeAdminId ? { masquerade_admin: req.masqueradeAdminId } : {})
       })
       .returning('id')
     const id =
@@ -149,7 +186,9 @@ export async function chatRoutes(app: FastifyInstance) {
       sender_name: senderName,
       date_created: new Date().toISOString(),
       attachments,
-      reactions: [] as unknown[]
+      reactions: [] as unknown[],
+      masquerade_admin: req.masqueradeAdminId ?? null,
+      masquerade_admin_name: masqName
     }
     // chat_messages is configured accountability='activity' (2026-08-06 audit
     // decision), but this native send route raw-inserts and bypasses the items

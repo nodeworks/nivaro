@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify'
-import { db } from '../db/index.js'
-import type { User } from '../types.js'
-import { can } from '../services/permissions.js'
-import { resolveDisplayValue } from '../services/display-value.js'
-import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { config } from '../config.js'
 import { adminBaseUrl } from '../admin-base.js'
+import { config } from '../config.js'
+import { db } from '../db/index.js'
+import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { resolveDisplayValue } from '../services/display-value.js'
+import { activeMasquerades } from '../services/masquerade-marker.js'
+import { can } from '../services/permissions.js'
+import type { User } from '../types.js'
 
 const KEY_PREFIX = 'presence:session:'
 
@@ -580,6 +581,25 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       }
     }
 
+    // Who is really at the keyboard: an admin masquerading as this user
+    // refreshes a short-lived marker on every request (masquerade-marker.ts).
+    const masqByUser = await activeMasquerades(app.redis, userIds.map(String))
+    const adminNames = new Map<string, string>()
+    if (masqByUser.size) {
+      try {
+        const admins = (await db('nivaro_users')
+          .whereIn('id', [...new Set(masqByUser.values())])
+          .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
+        for (const a of admins)
+          adminNames.set(
+            String(a.id).toUpperCase(),
+            [a.first_name, a.last_name].filter(Boolean).join(' ') || String(a.email ?? '')
+          )
+      } catch {
+        /* decoration only */
+      }
+    }
+
     const recordLabels = await resolveRecordLabels(
       visibleRows.map((r) => (r.current_path as string | null) ?? null),
       req.user!
@@ -637,7 +657,15 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           custom_status: statusByUser.get(uid) ?? null,
           scopes: [...(scopesByUser.get(uid)?.values() ?? [])].flat(),
           scopes_by_dimension: Object.fromEntries(scopesByUser.get(uid) ?? []),
-          recording_id: recordingByUser.get(uid) ?? null
+          recording_id: recordingByUser.get(uid) ?? null,
+          // Set while an admin is masquerading as this user — the row is
+          // theirs, the person behind it is someone else.
+          masquerade: masqByUser.has(uid)
+            ? {
+                admin_id: masqByUser.get(uid) ?? null,
+                admin_name: adminNames.get(masqByUser.get(uid) ?? '') ?? 'an administrator'
+              }
+            : null
         }
       }),
       config: {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser } from '../services/request-trace.js'
 import type { Role, User } from '../types.js'
@@ -359,6 +360,7 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
         await hydrateRole(req, user, { touch: false })
         req.masqueradeAdminId = payload.admin_id
         req.authMethod = 'masquerade'
+        touchMasqueradeMarker(req.server.redis, String(user.id), payload.admin_id)
         return
       }
       // Static user token
