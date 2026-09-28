@@ -16,110 +16,28 @@
  * Nothing here throws. A ledger failure is bookkeeping lost, never a send
  * lost.
  */
+
+import type {
+  ObligationKindDef,
+  ObligationOutcome,
+  ObligationResolvePatch,
+  ObligationTrigger,
+  ObligationTriggerContext
+} from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 
-export type ObligationOutcome =
-  | 'sent'
-  | 'skipped'
-  | 'failed'
-  | 'pending'
-  | 'overdue'
-  | 'missing'
-  | 'superseded'
-
-export type ObligationTrigger = 'transition' | 'hook' | 'flow' | 'cron' | 'reconcile' | 'manual'
+export type {
+  ExpectedObligation,
+  ObligationKindDef,
+  ObligationOutcome,
+  ObligationResolvePatch,
+  ObligationTrigger,
+  ObligationTriggerContext
+} from '@nivaro/extension-kit'
 
 /** Outcomes that still want something to happen. */
 export const OPEN_OUTCOMES: ObligationOutcome[] = ['pending', 'failed', 'overdue', 'missing']
-
-export interface ObligationTriggerContext {
-  collection: string
-  item: string
-  api: string
-  source: 'erp_submit' | 'flow' | 'hook' | 'cron' | 'manual'
-  endpoint_path?: string | null
-  transition_label?: string | null
-  to_state_key?: string | null
-  flow_name?: string | null
-  /** The action's own declared shape — its context-query keys and skip gates.
-   *  Two actions on one endpoint are told apart by this, because the rendered
-   *  payload does not exist yet when the obligation must be opened (guards
-   *  run after the open, so that a guard refusal is itself recorded). */
-  action_context_keys?: string[]
-  action_skip_unless_any?: string[]
-  action_skip_when_empty?: string | null
-}
-
-export interface ExpectedObligation {
-  item: string
-  due_at: Date
-  signature?: string | null
-  detail?: string | null
-}
-
-export interface ObligationKindDef {
-  api: string
-  kind: string
-  collection: string
-  label: string
-  /** Minutes after due_at before the sweep calls an unmet expectation overdue.
-   *  Falls back to the API's skip_grace_minutes. */
-  grace_minutes?: number
-  matches?(ctx: ObligationTriggerContext): boolean
-  /** Records the partner is BEHIND on, derived from data alone. A returned
-   *  row means "the partner does not have this", never "this happened".
-   *  `epoch` (getObligationsEpoch) is the moment obligations started
-   *  counting — a kind's own WHERE clause must exclude anything whose
-   *  relevant moment (state entry, last edit, a link's created stamp — the
-   *  kind decides which) predates it, or the first sweep against an
-   *  existing database floods `missing` for every never-pushed record since
-   *  the beginning of time. Required, not optional: a kind that ignores it
-   *  is exactly the flooding this parameter exists to prevent. */
-  expect(database: Knex, opts: { epoch: Date }): Promise<ExpectedObligation[]>
-  /**
-   * Phase 2 only: may the sweep re-fire a `missing` row by itself?
-   *
-   * OPT-IN, deliberately: absent or false means never. A re-fire repeats the
-   * BYTES of an earlier request, so it is only ever correct for a kind whose
-   * stored body cannot go stale (an id that is what it always was). A
-   * state-carrying kind would re-assert an old state, and a kind a person is
-   * supposed to trigger would act for them — both are worse than leaving the
-   * row `missing` for someone to look at.
-   */
-  safe_to_refire?: boolean
-  /**
-   * This kind's obligation belongs to a PERSON — the send is theirs to make
-   * (a button on the record), not the sweep's. Never auto-re-fired whatever
-   * `safe_to_refire` says.
-   */
-  human?: boolean
-  /**
-   * This kind's "record" is not one — its `expect()` derives its
-   * expectations from something the record-open UI can never resolve (an
-   * API log entry keyed by a time bucket, not a row of `collection`), rather
-   * than a genuine business record. Board rows of an inbound kind are shown
-   * but never clickable (the row-open rule already tests `collection` for
-   * this — see `isRoutableRecord`), and the board's "Inbound rejected"
-   * sub-tab (spec §2.4.1) is exactly these kinds.
-   *
-   * Optional and additive: a kind whose `collection` already starts with
-   * `nivaro_` is inbound-shaped by that alone (`isInboundKind`,
-   * packages/shared/src/lib/obligation-filters.ts) and needs no flag at
-   * all. This exists only for an inbound-shaped kind that, for whatever
-   * reason, does NOT key off a `nivaro_` table.
-   */
-  inbound?: boolean
-  /**
-   * The endpoint this kind's send goes to, as stored in
-   * `nivaro_erp_submissions.payload.endpoint_path`. Required before the
-   * sweep may re-fire anything: several kinds share one API, and "the most
-   * recent request for this record" without an endpoint filter can just as
-   * easily be a DIFFERENT push's body. A kind that cannot name its endpoint
-   * is never re-fired.
-   */
-  endpoint_path?: string | null
-}
 
 const registry = new Map<string, ObligationKindDef>()
 const keyOf = (api: string, kind: string) => `${api}::${kind}`
@@ -233,14 +151,7 @@ export async function recordObligation(opts: {
  *  never have to branch on whether the open succeeded. */
 export async function resolveObligation(
   id: number | null,
-  patch: {
-    outcome: ObligationOutcome
-    reason?: string | null
-    submission_id?: number | null
-    signature?: string | null
-    resolved_by?: string | null
-    detail?: unknown
-  }
+  patch: ObligationResolvePatch
 ): Promise<void> {
   if (id == null) return
   try {

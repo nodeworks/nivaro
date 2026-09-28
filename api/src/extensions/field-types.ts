@@ -1,15 +1,6 @@
-export interface FieldTypeDef {
-  type: string
-  label: string
-  /** Hint for the admin field editor: which built-in interface to fall back to. */
-  interface?: 'text' | 'textarea' | 'number' | 'boolean' | 'date' | 'json'
-  /** JSON schema for validation. Applied server-side on create/update. */
-  validationSchema?: Record<string, unknown>
-  /** Transform the raw value before storing. */
-  serialize?(value: unknown): unknown
-  /** Transform the stored value before returning to clients. */
-  deserialize?(value: unknown): unknown
-}
+import type { FieldTypeDef } from '@nivaro/extension-kit'
+
+export type { FieldTypeDef } from '@nivaro/extension-kit'
 
 class FieldTypeRegistry {
   private types = new Map<string, FieldTypeDef>()

@@ -21,16 +21,28 @@ export const extOverview: DocSection = {
     {
       type: 'pre',
       code: `// api/extensions/my-extension/index.ts
-import type { Extension } from '../../src/extensions/loader.js';
+import { defineExtension } from '@nivaro/extension-kit';
 
-const plugin: Extension = {
+export default defineExtension({
   id: 'my-extension',
   async register(ctx) {
     ctx.logger.info('my-extension registered');
   },
-};
-
-export default plugin;`
+});`
+    },
+    { type: 'h3', id: 'ext-overview-kit', text: 'The extension kit' },
+    {
+      type: 'p',
+      text: 'An extension cannot import `api/src` — the API compiles with `rootDir: src`, and a mounted extension runs against a built image that ships no source. `@nivaro/extension-kit` is the contract instead: the extension context (`ExtensionContext`), the default export shape (`ExtensionDefinition`, checked by `defineExtension`), and every registration the context accepts — bulk and item actions, readiness and integrity checks, notes providers, mail types, digest sections, obligation kinds, signals, import processors, flow operations and triggers. The API imports its own extension contract from the same package, so the two cannot drift.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Types are exported with `export type`; importing one costs nothing at runtime.',
+        'Two helpers are runtime code: `hasColumn(db, table, column)` — a per-database column probe for a writer that must keep working before a migration reaches the database — and `requesterInsertFields` / `requesterSelectColumns` for the ERP submission tables.',
+        'Members are only ever added to the context. An extension built against an older kit keeps compiling; a member that arrived in a later core release is documented as such on the type.',
+        'In the monorepo the kit is a workspace package; a mounted extension resolves it from the image. Released with `pnpm kit:release`.'
+      ]
     },
     {
       type: 'h3',
@@ -1036,7 +1048,9 @@ var __NVR_JSX__ = {
     {
       type: 'pre',
       code: `// src/types.ts
-// Shared between UI and API sides
+// Shared between UI and API sides. Context and registration types come
+// from @nivaro/extension-kit; only the plugin's own shapes live here.
+export type { ExtensionContext } from '@nivaro/extension-kit';
 
 export interface MyPluginConfig {
   clientId: string;

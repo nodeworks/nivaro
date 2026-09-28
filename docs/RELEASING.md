@@ -31,6 +31,7 @@ workflow does the publish. Secrets live in the GitHub repo settings
 | What | Command | Tag | Workflow → destination |
 |---|---|---|---|
 | SDK (`@nivaro/sdk`) | `pnpm sdk:release patch\|minor\|major` | `@sdk-x.y.z` | `publish-sdk.yml` → npm |
+| Extension kit (`@nivaro/extension-kit`) | `pnpm kit:release patch\|minor\|major` | `@kit-x.y.z` | `publish-kit.yml` → npm |
 | React (`@nivaro/react`) | `pnpm react:release …` | `@react-x.y.z` | `publish-react.yml` → npm |
 | www (marketing + docs site) | `pnpm www:release …` | `@www-x.y.z` | `vercel.yml` → Vercel |
 | Nivaro app image | `pnpm release …` | `v x.y.z` + `@app-x.y.z` | `docker-hub.yml` → `nodeworks/nivaro:x.y.z` + `:latest` |

@@ -9,6 +9,7 @@
  * the snapshot, never evaluates on page load.
  */
 
+import type { IntegrationSignal, SignalActionHandler, SignalRow } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { chunkArray } from './db-batch.js'
@@ -21,86 +22,15 @@ import {
   storedKey
 } from './integration-signal-settings.js'
 
-export interface SignalThreshold {
-  key: string
-  label: string
-  default: number
-  unit: string
-  min?: number
-  max?: number
-}
-
-export interface SignalAction {
-  kind: 'retry_submission' | 'resend' | 'open' | 'explain' | 'extension'
-  label: string
-  /** Extension action id (kind 'extension'), submission id (retry), etc. */
-  id?: string
-  payload?: Record<string, unknown>
-}
-
-export interface SignalRow {
-  /** Stable identity of the problem instance — NEVER a message or timestamp. */
-  key: string
-  group?: string
-  group_label?: string
-  title: string
-  detail?: string
-  since?: string
-  /**
-   * Identity of THIS occurrence of the problem — the failing run id
-   * (`run:<id>`), the submission attempt (`sub:<id>:<attempts>`), the
-   * obligation (`obl:<id>`), a snapshot/import timestamp, whatever the
-   * signal knows best. Distinct from `key`: `key` names the PROBLEM ("this
-   * import keeps failing") and stays the same across every failure; a
-   * Dismiss hides the row only until `occurrence` next changes — a genuinely
-   * new instance of the same problem re-shows it, like a notification you
-   * can dismiss once. Unset falls back to `since`, then a masked hash of the
-   * row (see `rowOccurrence` in integration-signal-settings.ts).
-   */
-  occurrence?: string
-  api?: string
-  record?: { collection: string; id: string; label?: string }
-  actions: SignalAction[]
-  /**
-   * What the console can open in place under this row (Task 15d): the
-   * failed push behind it, or the import run that errored. Extensions reuse
-   * these kinds for rows that are really one of them (a partner's failed
-   * order IS a submission); a kind the console does not know renders nothing.
-   */
-  drill?: SignalDrill
-}
-
-/** A typed "Details" reference on a signal row — see `SignalRow.drill`. */
-export interface SignalDrill {
-  kind: 'submission' | 'import_run'
-  id: string
-}
-
-export interface SignalEvalContext {
-  thresholds: Record<string, number>
-  /** A Date `n` business days before now (core SLA schedule: days + holidays). */
-  businessDaysAgo(n: number): Promise<Date>
-}
-
-export interface IntegrationSignal {
-  id: string
-  label: string
-  description: string
-  tab: string
-  severity: 'critical' | 'warn'
-  thresholds: SignalThreshold[]
-  evaluate(ctx: SignalEvalContext): Promise<{ count: number; rows: SignalRow[] }>
-}
-
-export interface SignalActionHandler {
-  id: string
-  label: string
-  run(args: {
-    rows: SignalRow[]
-    userId: string | null
-    authHeaders: Record<string, string>
-  }): Promise<Array<{ key: string; ok: boolean; message: string }>>
-}
+export type {
+  IntegrationSignal,
+  SignalAction,
+  SignalActionHandler,
+  SignalDrill,
+  SignalEvalContext,
+  SignalRow,
+  SignalThreshold
+} from '@nivaro/extension-kit'
 
 export const ROW_CAP = 500
 const DEFAULT_BUDGET_MS = 60_000

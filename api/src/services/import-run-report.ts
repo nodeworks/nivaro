@@ -1,4 +1,13 @@
+import type { ImportRunItem, ImportRunPhase, ImportRunUnmatched } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
+
+export type {
+  ImportRunChange,
+  ImportRunItem,
+  ImportRunItemKind,
+  ImportRunPhase,
+  ImportRunUnmatched
+} from '@nivaro/extension-kit'
 
 /**
  * What an import run did, stored so the run can be read and drilled into
@@ -11,49 +20,6 @@ import { db } from '../db/index.js'
  * Writing either is best effort. A run that imported its rows is a completed
  * run whether or not its report could be stored.
  */
-
-export type ImportRunItemKind = 'created' | 'updated' | 'removed' | 'skipped' | 'failed'
-
-export interface ImportRunChange {
-  field: string
-  from: unknown
-  to: unknown
-}
-
-export interface ImportRunItem {
-  kind: ImportRunItemKind
-  collection?: string | null
-  item_id?: string | number | null
-  /** How a person names the record or the file row. */
-  label: string
-  /** 1-based row in the file, header excluded. */
-  row?: number | null
-  /** Why it was left out, or what went wrong. */
-  message?: string | null
-  changes?: ImportRunChange[]
-}
-
-export interface ImportRunPhase {
-  key: string
-  label: string
-  ms: number
-  /** Rows or records the phase handled. */
-  count?: number
-  failed?: number
-}
-
-export interface ImportRunUnmatched {
-  column: string
-  /** 'vendor', 'purchase order key' — as a person says it. */
-  label: string
-  /** Distinct values, first 50. */
-  values: string[]
-  distinct: number
-  /** File rows that carry one of them. */
-  rows: number
-  /** What the import did about it. */
-  effect: string
-}
 
 export interface ImportRunReport {
   counts: {

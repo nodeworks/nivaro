@@ -1,11 +1,25 @@
+import type {
+  ImportProcessorDef,
+  ImportProcessorResult,
+  ImportProcessorTools
+} from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import type { ImportRunItem, ImportRunPhase, ImportRunUnmatched } from './import-run-report.js'
 import { createOne, deleteOne, updateOne } from './items.js'
 import { recalcStoredRollupsForRecords } from './rollups.js'
 import { runLongSql } from './run-long.js'
-import type { ImportRunItem, ImportRunPhase, ImportRunUnmatched } from './import-run-report.js'
 import type { ServiceImportSamples } from './staged-import-service.js'
+
+export type {
+  ImportProcessorDef,
+  ImportProcessorInput,
+  ImportProcessorResult,
+  ImportProcessorTools,
+  ImportWriteJob,
+  ImportWriteOutcome
+} from '@nivaro/extension-kit'
 
 /**
  * Import processors — a staged import whose file does not map onto ONE
@@ -24,85 +38,6 @@ import type { ServiceImportSamples } from './staged-import-service.js'
  * `definition.processor` names the registered key. 'service' and null/'proc'
  * keep their existing meaning.
  */
-
-export interface ImportProcessorResult {
-  created: number
-  updated: number
-  unchanged: number
-  /** Rows dropped before writing, with per-reason counts. */
-  skipped: Record<string, number>
-  failed: number
-  /** First line is the summary the run list shows; the rest is detail. */
-  log: string
-  /** Present on a dry run. */
-  samples?: ServiceImportSamples
-  /** Records the run changed, per collection — handed to the post-run flows
-   *  so they can work on exactly those instead of everything in the file. */
-  affected?: Record<string, Array<string | number>>
-  /** What the run did, for the run's detail view: where the time went, which
-   *  reference values matched nothing, anything else worth a sentence. */
-  report?: {
-    phases?: ImportRunPhase[]
-    unmatched?: ImportRunUnmatched[]
-    notes?: string[]
-    other?: Array<{ label: string; count: number }>
-  }
-  /** One entry per record created or changed and per file row left out. */
-  items?: ImportRunItem[]
-}
-
-export interface ImportWriteOutcome {
-  done: number
-  failed: number
-  /** First few failure messages, already prefixed with the job's label. */
-  failures: string[]
-  ms: number
-}
-
-export interface ImportWriteJob {
-  /** Names the row in a failure message ('line 102-300001123 / 2'). */
-  label: string
-  run: () => Promise<void>
-}
-
-export interface ImportProcessorTools {
-  /** Read access for batched lookups. Writes go through create / update / remove. */
-  db: Knex
-  /** value → id for one reference column, matched case-insensitively; when a
-   *  value matches several rows the lowest id wins. */
-  lookup(table: string, column: string, values: Iterable<string>): Promise<Map<string, unknown>>
-  /** Run `fn` over `values` in chunks small enough for one statement. */
-  inChunks<T>(values: unknown[], fn: (chunk: unknown[]) => Promise<T[]>): Promise<T[]>
-  create(collection: string, body: Record<string, unknown>): Promise<unknown>
-  update(collection: string, id: string | number, patch: Record<string, unknown>): Promise<void>
-  remove(collection: string, id: string | number): Promise<void>
-  /** Run write jobs several at a time. A failed job never stops the others. */
-  runWrites(jobs: ImportWriteJob[], opts?: { width?: number }): Promise<ImportWriteOutcome>
-  /** Recompute every stored rollup on these records, once each. */
-  recalcStoredRollups(collection: string, ids: Array<string | number>): Promise<number>
-  /** EXEC a stored procedure on its own long-running request. Returns ms. */
-  runProcedure(name: string): Promise<number>
-}
-
-export interface ImportProcessorInput {
-  definition: { key: string; label: string | null; config: Record<string, unknown> }
-  /** Parsed + header-mapped rows, staging column names as keys. */
-  rows: Array<Record<string, string>>
-  /** Classify and report only — every write tool refuses. */
-  dryRun: boolean
-  sampleLimit: number
-  tools: ImportProcessorTools
-  /** Rows classified so far, for the run's progress bar. */
-  progress(done: number, total: number): void
-}
-
-export interface ImportProcessorDef {
-  /** `<extension>:<name>` — what `nivaro_import_definitions.processor` holds. */
-  key: string
-  label: string
-  description?: string
-  run(input: ImportProcessorInput): Promise<ImportProcessorResult>
-}
 
 const KEY = /^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9_-]*$/i
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/

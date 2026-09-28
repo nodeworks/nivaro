@@ -1,10 +1,10 @@
+import type { HookAction, HookTiming } from '@nivaro/extension-kit'
 import type { FastifyRequest } from 'fastify'
 import type { Database } from '../db/index.js'
 import { span } from '../services/request-trace.js'
 import type { User } from '../types.js'
 
-export type HookAction = 'create' | 'update' | 'delete' | 'read'
-export type HookTiming = 'before' | 'after'
+export type { HookAction, HookTiming } from '@nivaro/extension-kit'
 
 export interface HookContext {
   collection: string

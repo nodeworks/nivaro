@@ -1,9 +1,22 @@
+import type {
+  EventDirection,
+  EventEntry,
+  EventListOpts,
+  EventSourceDef
+} from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { type RelatedNoteFeedEntry, relatedNoteRegistry } from '../extensions/related-notes.js'
 import { hasChainColumns } from './chain-columns.js'
 import { chainIdsForRoots } from './chain-roots.js'
 import { requesterSelectColumns } from './erp-requester-columns.js'
 import { resolveFriendlyIds } from './workflow-transitions.js'
+
+export type {
+  EventDirection,
+  EventEntry,
+  EventListOpts,
+  EventSourceDef
+} from '@nivaro/extension-kit'
 
 /**
  * The Integrations console's Events feed: one registry of event sources.
@@ -12,48 +25,6 @@ import { resolveFriendlyIds } from './workflow-transitions.js'
  * that can list across records joins as a poll source; an extension may
  * register its own through ctx.integrations.registerEventSource.
  */
-
-export type EventDirection = 'in' | 'out' | 'poll'
-
-export interface EventEntry {
-  id: string
-  source: string
-  direction: EventDirection
-  label: string
-  text: string
-  context?: string | null
-  created_at: string
-  status?: 'ok' | 'error' | 'info' | null
-  user?: string | null
-  collection: string | null
-  item_id: string | null
-  item_label?: string | null
-  record_count?: number
-  partner?: string | null
-  caller?: string | null
-  chain_id?: string | null
-  replayable?: boolean
-}
-
-export interface EventListOpts {
-  limit: number
-  status?: 'ok' | 'error' | 'info' | null
-  before?: string | null
-  partner?: string | null
-  caller?: string | null
-  includePeople?: boolean
-  /** Record search: restrict to these chains. */
-  chainIds?: string[] | null
-  record?: { collection: string; item: string } | null
-}
-
-export interface EventSourceDef {
-  id: string
-  label: string
-  direction: EventDirection
-  list(opts: EventListOpts): Promise<EventEntry[]>
-  get?(id: string): Promise<EventEntry | null>
-}
 
 const sources = new Map<string, EventSourceDef>()
 

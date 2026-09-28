@@ -82,6 +82,7 @@
     "golive:settings-check": "tsx extensions/efp-ops/scripts/check-prod-settings.ts"
   },
   "dependencies": {
+    "@nivaro/extension-kit": "workspace:*",
     "@anthropic-ai/sdk": "^0.101.0",
     "@aws-sdk/client-s3": "^3.1064.0",
     "@azure/storage-blob": "^12.32.0",

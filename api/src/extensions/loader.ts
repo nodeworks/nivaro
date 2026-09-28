@@ -29,6 +29,7 @@ import {
   registerExtensionEventHandler
 } from '../services/extension-events.js'
 import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
+import { type ImportProcessorDef, registerImportProcessor } from '../services/import-processors.js'
 import { registerEventSource } from '../services/integration-event-sources.js'
 import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
@@ -40,7 +41,6 @@ import { type CollectionViewDef, collectionViewRegistry } from './collection-vie
 import { type DashboardWidgetDef, dashboardWidgetRegistry } from './dashboard-widgets.js'
 import { type FieldTypeDef, fieldTypeRegistry } from './field-types.js'
 import { type ImportParserDef, importParserRegistry } from './import-parsers.js'
-import { type ImportProcessorDef, registerImportProcessor } from '../services/import-processors.js'
 import { type ItemActionDef, itemActionRegistry } from './item-actions.js'
 import {
   type NotificationChannelDef,
@@ -58,8 +58,25 @@ import {
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
+import type {
+  ExtensionContext,
+  ExtensionDefinition,
+  ExtensionEnvDecl,
+  ExtensionSettingDecl
+} from '@nivaro/extension-kit'
 import { runLongSql } from '../services/run-long.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
+
+export type {
+  ExtensionContext,
+  ExtensionDefinition,
+  ExtensionEnvDecl,
+  ExtensionSettingDecl,
+  ExtensionSettingValue,
+  FlowOpRegistration,
+  FlowTriggerRegistration
+} from '@nivaro/extension-kit'
+export type Extension = ExtensionDefinition
 
 /** Every extension call lands in the external API's Call Logs. A caller that
  *  names its own trigger (`_log.triggeredBy`) keeps it; one that passes nothing
@@ -73,8 +90,6 @@ function withExtensionLog(extId: string, options?: CallOptions): CallOptions {
   }
 }
 
-export type FlowOpRegistration = Omit<RegisteredOp, never>
-export type FlowTriggerRegistration = RegisteredTrigger
 export type {
   BulkActionDef,
   CollectionViewDef,
@@ -87,347 +102,6 @@ export type {
   OpHandler,
   StorageAdapter,
   ValidatorDef
-}
-
-export interface ExtensionContext {
-  app: FastifyInstance
-  database: Database
-  inngest: Inngest
-  logger: FastifyInstance['log']
-  /** Admin-editable extension settings (#112/#505) — declared on the export.
-   *  Values are parsed by the declared type (number/boolean), 30s cache. */
-  settings?: {
-    get(key: string): Promise<string | number | boolean | null>
-    getAll(): Promise<Record<string, string | number | boolean | null>>
-  }
-  /** Durable event outbox (#504) — publish inserts a pending row delivered by
-   *  the sweep cron; `on` registers a delivery handler for this extension's
-   *  events ('*' = every type). Delivery retries with exponential backoff. */
-  events: {
-    publish(eventType: string, payload?: unknown): Promise<number | null>
-    on(eventType: string | '*', fn: ExtensionEventHandler): void
-  }
-  /** Call a configured external API by name or numeric ID. Auth resolved automatically. */
-  callExternalApi(nameOrId: string | number, options?: CallOptions): Promise<CallResult>
-  /**
-   * Write an audit entry to nivaro_activity. Extension-driven mutations that
-   * bypass the items service (raw knex writes in crons, hooks, or routes) are
-   * invisible to the audit log otherwise — log them here. The action string is
-   * automatically namespaced with the extension id (`<extId>:<action>`) so
-   * extension activity is distinguishable from core activity. Never throws.
-   */
-  /**
-   * Long-running SQL outside knex.raw's 15s request timeout — an EXEC of a
-   * legacy procedure, a scan over a 16M-row activity table. One statement,
-   * its own timeout (default one hour), rows back. Bind nothing: the batch is
-   * sent as text, so only interpolate values you built yourself.
-   */
-  sql: {
-    runLong<T = Record<string, unknown>>(sql: string, opts?: { timeoutMs?: number }): Promise<T[]>
-  }
-  logActivity(entry: {
-    action: string
-    user?: string | null
-    collection?: string
-    item?: string | number
-    comment?: string
-    /** person | machine | import | integration — default: machine with no user (#518). */
-    origin?: 'person' | 'machine' | 'import' | 'integration'
-  }): Promise<number | null>
-  /**
-   * Deliver a notification through the full channel stack — inbox row, live
-   * socket event, browser push, optional email — honouring the recipient's
-   * notification rules (per-category in-app / push / email, quiet hours).
-   * Extensions must use this instead of inserting nivaro_notifications rows
-   * directly: a raw insert bypasses every preference. Never throws.
-   */
-  notifyUser(userId: string, opts: NotifyUserOptions): Promise<void>
-  /** Hook helpers scoped to this extension — hooks are tagged and can be disabled/removed. */
-  hooks: {
-    before(
-      collection: string | '*',
-      action: HookAction | '*',
-      fn: Parameters<typeof hooks.before>[2]
-    ): void
-    after(
-      collection: string | '*',
-      action: HookAction | '*',
-      fn: Parameters<typeof hooks.after>[2]
-    ): void
-  }
-  /** Cron helpers scoped to this extension — jobs are paused/resumed with the extension. */
-  cron: {
-    /** Register a recurring job. `id` is scoped to this extension automatically. */
-    schedule(
-      id: string,
-      expression: string,
-      fn: () => void | Promise<void>,
-      opts?: {
-        /** Plain-language purpose — what the job does and what it touches (Background Jobs page). */
-        description?: string
-        heavy?: boolean
-        idempotent?: 'safe' | 'unsafe' | 'unknown'
-      }
-    ): void
-    /** Cancel a previously scheduled job. */
-    unschedule(id: string): void
-    /** Attach a description / heavy / idempotent flag to one of this extension's jobs after scheduling. */
-    annotate(
-      id: string,
-      meta: {
-        description?: string
-        heavy?: boolean
-        idempotent?: 'safe' | 'unsafe' | 'unknown'
-        /** The deployment flag this job no-ops behind, and whether it currently lets the job run. */
-        gate?: { flag: string; enabled: boolean }
-      }
-    ): void
-  }
-  /** Register custom bulk actions that appear in the collection browser action bar. */
-  bulkActions: {
-    register(def: BulkActionDef): void
-  }
-  /** Register contextual action buttons shown in the item editor toolbar. */
-  itemActions: {
-    register(def: ItemActionDef): void
-  }
-  /** Register custom notification delivery channels (e.g. SMS, Slack, Teams). */
-  notificationChannels: {
-    register(def: NotificationChannelDef): void
-  }
-  /** Contribute extension-owned alert subscriptions to the profile's
-   *  notification-sources aggregation. */
-  notificationSources: {
-    register(provider: NotificationSourceProvider): void
-  }
-  /** Add read-only entries to a record's Notes thread (GET /comments/related)
-   *  — integration events, external history — beside transitions and
-   *  change reasons. */
-  notes: {
-    registerSource(provider: RelatedNoteProvider): void
-    /** #10 — declare the comment strings this extension's machinery writes
-     *  (sync provenance tags, proc markers) so the Notes thread drops them
-     *  and row history renders them as provenance, not as someone's note. */
-    registerMachineMarkers(set: MachineMarkerSet): void
-  }
-  /** Register custom dashboard widget types shown in the dashboard builder. */
-  dashboardWidgets: {
-    register(def: DashboardWidgetDef): void
-  }
-  /** Register a named file storage adapter (e.g. S3, Azure Blob). */
-  storage: {
-    register(name: string, adapter: StorageAdapter): void
-    /** Activate a registered adapter for all new uploads. */
-    setActive(name: string): void
-  }
-  /** Register custom field types with optional serialize/deserialize transforms. */
-  fieldTypes: {
-    register(def: FieldTypeDef): void
-  }
-  /** Register custom collection view modes (Kanban, calendar, Gantt, map, etc.). */
-  collectionViews: {
-    register(def: CollectionViewDef): void
-  }
-  /** Register file import parsers for additional formats (Excel, XML, JSON, etc.). */
-  importParsers: {
-    register(def: ImportParserDef): void
-  }
-  /** Register a processor for staged imports whose file spans several
-   *  collections (a header and its lines). `key` is `<extension>:<name>` and is
-   *  what an import definition's Processor names. The processor writes only
-   *  through the tools it is handed — the items service, as the person who
-   *  queued the file. */
-  importProcessors: {
-    register(def: ImportProcessorDef): void
-  }
-  /** Register custom field validators (new operators for validation_rules). */
-  validators: {
-    register(def: ValidatorDef): void
-  }
-  /** Register custom flow operation types and triggers. */
-  approvalBrief: {
-    /** One short line on the transition confirm's approval brief for records of `collection`. */
-    registerLine(
-      collection: string,
-      fn: import('../services/approval-brief-lines.js').BriefLineProvider
-    ): void
-  }
-  digest: {
-    /** Add a per-user section to the daily action digest email. */
-    registerSection(fn: import('../services/daily-digest.js').DigestSectionProvider): void
-  }
-  readiness: {
-    /** Register a scored check on the go-live readiness scorecard. */
-    registerCheck(check: import('../services/readiness.js').ReadinessCheck): void
-  }
-  chain: {
-    /** Start a chain for one feed event (e.g. one shipment) and run fn inside it. */
-    begin<T>(root: { source: string; ref: string }, fn: () => Promise<T>): Promise<T>
-    /** The chain currently open, or null. */
-    current(): { chain_id: string; parent: string | null } | null
-    /** chain_id/chain_parent for an insert into a core table (probe-aware).
-     *  A table outside ChainTable (extensions pass plain strings) yields {}. */
-    fields(
-      table: ChainTable | (string & {}),
-      opts?: { parent?: string | null }
-    ): Promise<Record<string, string | null>>
-  }
-  integrations: {
-    /** Declare an outbound obligation kind: what the partner expects, how a
-     *  decision point is attributed to it, and how to derive from DATA the
-     *  records the partner is currently behind on. Core owns the ledger and
-     *  the sweep; the extension owns the sends. */
-    registerObligationKind(
-      def: import('../services/integration-obligations.js').ObligationKindDef
-    ): void
-    /** Open an obligation for a decision point outside core's own writers
-     *  (a transition's erp_submit action, the flow executor's external-api
-     *  wrapper) — a hook, a cron, or a manually-clicked action that pushes
-     *  through an extension's own code. Returns null when no registered
-     *  kind claims the context, exactly like an unattributed transition
-     *  opens no row today. */
-    openObligation(
-      ctx: import('../services/integration-obligations.js').ObligationTriggerContext,
-      opts: {
-        trigger: import('../services/integration-obligations.js').ObligationTrigger
-        trigger_ref?: string | null
-        due_at?: Date
-      }
-    ): Promise<number | null>
-    /** Close an obligation with its outcome. A null id is a no-op, so a
-     *  caller never has to branch on whether the open succeeded. */
-    resolveObligation(
-      id: number | null,
-      patch: Parameters<
-        typeof import('../services/integration-obligations.js').resolveObligation
-      >[1]
-    ): Promise<void>
-    /** Register an integration signal (one kind of problem) on the
-     *  Integrations console's Firefight list; evaluated every 5 minutes. */
-    registerSignal(def: import('../services/integration-signals.js').IntegrationSignal): void
-    /** Register an action a signal row may offer (kind 'extension', id = def.id). */
-    registerSignalAction(
-      def: import('../services/integration-signals.js').SignalActionHandler
-    ): void
-    /** Register an event source on the Integrations console's Events feed
-     *  (a partner feed with its own list, and optionally a single lookup). */
-    registerEventSource(
-      def: import('../services/integration-event-sources.js').EventSourceDef
-    ): void
-  }
-  integrity: {
-    /** Register a Data Integrity check the conformance sweep, the record
-     *  banner and the Fix button run alongside the built-in rules. */
-    registerCheck(check: import('../services/integrity-checks.js').IntegrityCheck): void
-  }
-  links: {
-    /** Register the headless frontend's base URL + route map so email links
-     *  land there for non-admin recipients (Settings → Frontend app wins). */
-    register(reg: import('../services/app-links.js').LinkRegistration): void
-  }
-  mail: {
-    /** Register an email type so it appears in the admin mail harness
-     *  (preview / send with real data). */
-    registerType(def: import('../services/mail-types.js').MailTypeDef): void
-    /** Dry-run an active flow with a payload and return what its mail op would send. */
-    renderViaFlow(
-      flowName: string,
-      payload: Record<string, unknown>
-    ): Promise<{ to: string; subject: string; html: string } | null>
-    /** Render a named Liquid mail template (core or extension root). */
-    renderTemplate(name: string, data: Record<string, unknown>): Promise<string>
-  }
-  flows: {
-    /**
-     * Register a custom operation type. The handler receives parsed options,
-     * current flow data, and execution context.
-     */
-    registerOperation(op: FlowOpRegistration): void
-    /**
-     * Register a custom trigger type. It appears in the flow trigger dropdown.
-     * Call `flows.emit(type, payload)` from hooks, cron jobs, or route handlers
-     * to fire all active flows using this trigger.
-     */
-    registerTrigger(trigger: FlowTriggerRegistration): void
-    /**
-     * Fire all active flows registered to this trigger type.
-     * Safe to call from any async context — fire-and-forget.
-     */
-    emit(triggerType: string, payload: Record<string, unknown>): void
-  }
-  /** Chat bot (#247): register tools the AI chat bot may call. Handlers run
-   *  with the ASKING user — the extension owns its permission posture. */
-  chatBot: {
-    registerTool(def: import('../services/chat-bot.js').BotToolDef): void
-  }
-  /** Auth middleware helpers — use as Fastify `onRequest` handlers. */
-  auth: {
-    authenticate: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
-    requireAuth: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
-    requireAdmin: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
-  }
-  /**
-   * Cloud-only context — populated when CLOUD_META_DB_URL is set.
-   * Undefined in self-hosted mode. Cloud extensions check `if (ctx.cloud)` before use.
-   */
-  cloud?: {
-    /** Immutable tenant UUID for the current request (used as R2 key prefix). Undefined outside request context (e.g., cron jobs). */
-    getTenantId(): string | undefined
-    /** Tenant slug for the current request. Undefined outside request context. */
-    getTenantSlug(): string | undefined
-    /** Knex client connected to the Nivaro Cloud meta database (cloud_tenants, cloud_billing, etc.). */
-    metaDb: Knex
-  }
-}
-
-export interface Extension {
-  id: string
-  register(ctx: ExtensionContext): void | Promise<void>
-  /** Permission scopes (#215): what this extension touches — a declared
-   *  manifest shown before enabling, not an enforcement boundary. */
-  scopes?: string[]
-  /** Dependencies (#426): extension ids that must load FIRST. Missing or
-   *  failed deps make this extension error instead of half-working. */
-  requires?: string[]
-  /** Command-palette entries (#260) served to the admin palette. */
-  palette?: Array<{ label: string; path: string }>
-  /** Admin-editable settings (#112/#505), stored in nivaro_extension_settings.
-   *  type 'secret' (or the legacy `secret: true` flag) masks the value on read
-   *  and preserves the stored value when the mask is re-submitted. */
-  settings?: Array<{
-    key: string
-    label: string
-    type?: 'string' | 'number' | 'boolean' | 'secret'
-    description?: string
-    default?: string
-    secret?: boolean
-    /** #17 — what production is expected to hold; the readiness scorecard
-     *  warns when the live value differs. */
-    production_expect?: string
-    /** #13 — refuse a value with a message (null = fine). */
-    validate?: (value: string | number | boolean | null) => string | null | Promise<string | null>
-    /** #13 — applied the moment a value is saved (no restart, no cache wait). */
-    on_change?: (value: string | number | boolean | null) => void | Promise<void>
-  }>
-  /** Capability manifest (#660): freeform declared capabilities (e.g.
-   *  'routes','cron','hooks','flows','item-actions'). The loader ALSO records
-   *  which ctx members register() actually touched — the Extensions page shows
-   *  observed-but-undeclared capabilities amber. */
-  capabilities?: string[]
-  /** Health probe (#262): quick self-check surfaced on the Extensions page. */
-  healthCheck?(): Promise<{ ok: boolean; note?: string }>
-  /** Environment manifest (#805): the variables this extension reads. A
-   *  missing REQUIRED one fails /api/preflight and the readiness scorecard by
-   *  name; the registry sheet lists them. Values are never reported. */
-  env?: ExtensionEnvDecl[]
-}
-
-export interface ExtensionEnvDecl {
-  name: string
-  required?: boolean
-  description?: string
-  /** A credential: the registry says only whether it is set. */
-  secret?: boolean
 }
 
 /** The declared environment of every loaded extension, by extension id. */
@@ -526,19 +200,6 @@ function writeConfig(config: Record<string, boolean>): void {
 export const extensionRegistry = new Map<string, ExtensionEntry>()
 
 // ── Extension settings (#112/#505) ───────────────────────────────────────────
-
-export interface ExtensionSettingDecl {
-  key: string
-  label: string
-  /** Normalized: 'secret' folds in the legacy `secret: true` flag. */
-  type: 'string' | 'number' | 'boolean' | 'secret'
-  description?: string
-  default?: string
-  production_expect?: string
-  /** The decl carries a validate and/or on_change handler (#13). */
-  has_validate?: boolean
-  has_on_change?: boolean
-}
 
 export const extensionSettingsDecls = new Map<string, NonNullable<Extension['settings']>>()
 

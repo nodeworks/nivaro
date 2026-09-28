@@ -252,6 +252,9 @@ importers:
       '@fastify/static':
         specifier: ^9.1.3
         version: 9.1.3
+      '@nivaro/extension-kit':
+        specifier: workspace:*
+        version: link:../packages/extension-kit
       '@node-saml/node-saml':
         specifier: ^5.1.0
         version: 5.1.0
@@ -400,6 +403,27 @@ importers:
       tsx:
         specifier: ^4.19.4
         version: 4.22.4
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)(jsdom@25.0.1)(msw@2.14.6(@types/node@22.19.19)(typescript@5.9.3))
+
+  packages/extension-kit:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.21
+        version: 22.19.19
+      fastify:
+        specifier: ^5.3.3
+        version: 5.8.5
+      inngest:
+        specifier: ^3.32.0
+        version: 3.54.2(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.1))(fastify@5.8.5)(typescript@5.9.3)(zod@3.25.76)
+      knex:
+        specifier: ^3.1.0
+        version: 3.2.10(pg@8.21.0)(tedious@19.2.1(@azure/core-client@1.10.1))
       typescript:
         specifier: ^5.8.3
         version: 5.9.3

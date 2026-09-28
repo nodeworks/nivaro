@@ -1,0 +1,95 @@
+name: Publish extension kit
+
+on:
+  push:
+    tags:
+      - '@kit-*'
+
+  workflow_dispatch:
+
+jobs:
+  publish:
+    # The dev repo receives the same tags a minute earlier; only the public
+    # mirror publishes, or the two runs race for one version.
+    if: github.repository == 'nodeworks/nivaro'
+    name: Publish @nivaro/extension-kit to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4  # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4 # TODO: pin SHA — gh api repos/actions/setup-node/git/ref/tags/v4 --jq '.object.sha'
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build extension kit
+        run: pnpm --filter @nivaro/extension-kit build
+
+      - name: Extract version from tag
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#@kit-}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Idempotency: a delayed push-event run may already have published
+          # this version — skip instead of failing the re-run.
+          if npm view @nivaro/extension-kit@$VERSION version >/dev/null 2>&1; then
+            echo "already=true" >> $GITHUB_OUTPUT
+            echo "@nivaro/extension-kit@$VERSION already on npm — skipping publish"
+          fi
+
+      # The pre-check above is a check-then-act race: this workflow fires in
+      # BOTH the dev repo and the public mirror for the same tag, and both runs
+      # can start before either has published. Treat "already published" as
+      # success at publish time too.
+      - name: Publish to npm
+        if: steps.meta.outputs.already != 'true'
+        working-directory: packages/extension-kit
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if npm publish --access public; then exit 0; fi
+          # `npm view` (full metadata) and the tarball URL both lag a fresh
+          # publish; the abbreviated install-metadata document reflects it at
+          # once. Cache-bust the query so a CDN copy can't answer.
+          for i in 1 2 3 4 5 6; do
+            if curl -sf -H 'Accept: application/vnd.npm.install-v1+json' \
+                 "https://registry.npmjs.org/@nivaro%2fextension-kit?t=$(date +%s)" \
+               | grep -q "\"$VERSION\""; then
+              echo "@nivaro/extension-kit@$VERSION was published by a concurrent run — treating as success"
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Generate changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep "^@kit-" | sed -n '2p' || true)
+          node scripts/gen-changelog.mjs "${PREV_TAG}" "${CURRENT_TAG}" "@nivaro/extension-kit" > CHANGELOG_DRAFT.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if gh release view "@kit-${VERSION}" >/dev/null 2>&1; then
+            echo "release @kit-${VERSION} already exists — skipping"
+            exit 0
+          fi
+          gh release create "@kit-${VERSION}" \
+            --title "@nivaro/extension-kit v${VERSION}" \
+            --notes-file CHANGELOG_DRAFT.md

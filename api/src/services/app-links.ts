@@ -1,7 +1,10 @@
+import type { LinkKind, LinkRegistration } from '@nivaro/extension-kit'
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { overlaySettings } from './settings-overrides.js'
+
+export type { LinkKind, LinkRegistration } from '@nivaro/extension-kit'
 
 /**
  * One place that turns "the record REQ-1234" into a URL a person can open.
@@ -16,36 +19,7 @@ import { overlaySettings } from './settings-overrides.js'
  * no recipient → portal when configured (2026-09-13: portal link only).
  */
 
-export type LinkKind =
-  | 'record'
-  | 'queue'
-  | 'report'
-  | 'alerts'
-  | 'chat'
-  | 'tasks'
-  | 'approvals'
-  | 'access_requests'
-  | 'notifications'
-  | 'my_work'
-  | 'home'
-  | 'profile'
-  | 'issues'
-  | 'imports'
-  | 'dashboard'
-  /** The integrations board (obligations + per-API health). Admin-only
-   *  today; a portal that grows one registers its own route like any other
-   *  kind. */
-  | 'integrations'
-
 export type LinkParams = Record<string, string | number | null | undefined>
-
-export interface LinkRegistration {
-  /** Portal origin, no trailing slash. */
-  base: string
-  /** Route templates per kind: '/records/{collection}/{id}'. Missing kinds
-   *  fall back to the admin route. */
-  routes: Partial<Record<LinkKind, string>>
-}
 
 const ADMIN_ROUTES: Record<LinkKind, string> = {
   record: '/collections/{collection}/{id}',

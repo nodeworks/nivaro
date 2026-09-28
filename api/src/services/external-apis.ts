@@ -1,8 +1,11 @@
 import { createHash, createHmac } from 'node:crypto'
+import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { maskBodySecrets, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
+
+export type { CallOptions, CallResult } from '@nivaro/extension-kit'
 
 type AuthType = 'none' | 'bearer' | 'api_key' | 'basic' | 'oauth2_cc' | 'hmac' | 'aws_sigv4'
 
@@ -442,30 +445,6 @@ function applyAwsSigV4Auth(
 }
 
 // ─── Public interface ─────────────────────────────────────────────────────────
-
-export interface CallOptions {
-  method?: string
-  path?: string
-  body?: unknown
-  headers?: Record<string, string>
-  query?: Record<string, string>
-  timeoutMs?: number
-  /** Pre-defined endpoint name or id. Sets method/path/body/query/headers defaults; caller options override. */
-  endpoint?: string | number
-  /** Logging context — omit to skip logging. */
-  _log?: {
-    triggeredBy?: string
-    userId?: string
-  }
-}
-
-export interface CallResult {
-  status: number
-  headers: Record<string, string>
-  body: unknown
-  /** #66 — answered by this instance's mock rules, no network call was made. */
-  mock?: boolean
-}
 
 interface EndpointDefRow {
   id: number

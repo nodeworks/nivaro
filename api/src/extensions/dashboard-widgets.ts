@@ -1,12 +1,6 @@
-export interface DashboardWidgetDef {
-  type: string
-  label: string
-  icon?: string
-  /** JSON schema for the widget's configuration options. Displayed in the widget picker. */
-  configSchema?: Record<string, unknown>
-  /** Description shown in the widget picker. */
-  description?: string
-}
+import type { DashboardWidgetDef } from '@nivaro/extension-kit'
+
+export type { DashboardWidgetDef } from '@nivaro/extension-kit'
 
 class DashboardWidgetRegistry {
   private widgets = new Map<string, DashboardWidgetDef>()

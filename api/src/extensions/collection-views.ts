@@ -1,15 +1,6 @@
-export interface CollectionViewDef {
-  id: string
-  label: string
-  icon?: string
-  /** URL of the extension's UI bundle that renders this view.
-   *  Receives collection, filters, and item data via postMessage. */
-  bundleUrl?: string
-  /** Optional field mappings to configure the view (e.g. titleField, dateField). */
-  fieldMappings?: Array<{ key: string; label: string; required?: boolean }>
-  /** Which collections this view supports. Omit for all. */
-  collections?: string[]
-}
+import type { CollectionViewDef } from '@nivaro/extension-kit'
+
+export type { CollectionViewDef } from '@nivaro/extension-kit'
 
 class CollectionViewRegistry {
   private views = new Map<string, CollectionViewDef>()

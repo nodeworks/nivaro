@@ -16,6 +16,7 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY api/package.json ./api/
 COPY admin/package.json ./admin/
 COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/extension-kit/package.json ./packages/extension-kit/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/react/package.json ./packages/react/
 RUN pnpm install --frozen-lockfile
@@ -32,6 +33,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/api/node_modules ./api/node_modules
 COPY --from=deps /app/admin/node_modules ./admin/node_modules
 COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
+COPY --from=deps /app/packages/extension-kit/node_modules ./packages/extension-kit/node_modules
 COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY --from=deps /app/packages/react/node_modules ./packages/react/node_modules
 COPY . .
@@ -41,6 +43,9 @@ RUN rm -f packages/*/tsconfig.tsbuildinfo api/tsconfig.tsbuildinfo
 # Build order matters: shared type-imports @nivaro/sdk's dist, admin imports
 # shared's dist — without sdk built first, inference collapses to implicit-any.
 RUN pnpm --filter @nivaro/sdk build
+# The API imports its extension contract from the kit; a mounted extension
+# resolves the same package at runtime.
+RUN pnpm --filter @nivaro/extension-kit build
 RUN pnpm --filter @nivaro/shared build
 # admin imports @nivaro/react (Playground's live form preview)
 RUN pnpm --filter @nivaro/react build
@@ -76,6 +81,7 @@ RUN corepack enable pnpm
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY api/package.json ./api/
 COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/extension-kit/package.json ./packages/extension-kit/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/react/package.json ./packages/react/
 RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
@@ -83,6 +89,7 @@ RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 # Compiled API + SDK
 COPY --from=build /app/api/dist ./api/dist
 COPY --from=build /app/packages/sdk/dist ./packages/sdk/dist
+COPY --from=build /app/packages/extension-kit/dist ./packages/extension-kit/dist
 # Cloud extensions (injected from private repo during build — dir may not exist in OSS builds)
 COPY --from=build /app/api/cloud-extensions ./api/cloud-extensions
 

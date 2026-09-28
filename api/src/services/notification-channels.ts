@@ -1,3 +1,4 @@
+import type { NotificationDetail, NotifyCategory, NotifyUserOptions } from '@nivaro/extension-kit'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
@@ -11,6 +12,8 @@ import {
   resolveTargetUrl
 } from './notification-target.js'
 import { sendWebPush } from './web-push.js'
+
+export type { NotificationDetail, NotifyCategory, NotifyUserOptions } from '@nivaro/extension-kit'
 
 /**
  * Multi-channel user notification service.
@@ -94,70 +97,6 @@ export function sendPush(
   app.io.to(`user:${userId}`).emit('push', payload)
 }
 
-export interface NotifyUserOptions {
-  subject: string
-  message: string
-  collection?: string | null
-  item?: string | null
-  sender?: string | null
-  /** Defaults: inapp true, email false, sms false. */
-  channels?: { inapp?: boolean; email?: boolean; sms?: boolean }
-  /** Explicit notification-rules category. Senders whose subjects carry no
-   *  recognisable keyword (scheduled reports, view digests, flow ops) set it so
-   *  the recipient's matrix row for that category applies; otherwise the
-   *  category is sniffed from the subject. */
-  category?: NotifyCategory
-  /** Skip the two "you already know" suppressions — record mutes and
-   *  presence-aware suppression — so the inbox row ALWAYS lands. The matrix
-   *  (in-app / push off per category), quiet hours and suspended/redacted
-   *  skips still apply. Flow notification ops set this by default: a flow
-   *  author configured that notification deliberately. */
-  always_inbox?: boolean
-  /** Dedicated Liquid template for the EMAIL channel (default 'notification');
-   *  `template_data` is merged into its context. Built by mail-builders.ts. */
-  template?: string
-  template_data?: Record<string, unknown>
-  /** Footer "You're getting this because …" (see MailOptions.why). Falls
-   *  back to `template_data.why`, then to the honest default: the
-   *  recipient's notification rules for the category are on. */
-  why?: string | null
-  /** What the notification is about + what a click should offer
-   *  (services/notification-target.ts). Stored on the row, drives the bell /
-   *  center / push / portal click and the inline action. Defaults to the
-   *  record named by collection + item. */
-  target?: NotificationTargetSpec | null
-  /** What produced this row (#77 — the bell's "why me?"): a watch, a
-   *  subscription, a mention, a task, a flow… `label` names the specific
-   *  rule / watch / flow, `id` its row where one exists. Absent = the
-   *  category's notification rules are the honest answer. */
-  source?: { kind: string; label?: string | null; id?: string | number | null } | null
-  /** Structured content stored with the row (#27): the change lines a
-   *  coalesced watch folded in, the child row it was about. */
-  detail?: Omit<NotificationDetail, 'why'> | null
-  /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
-  _retry?: boolean
-}
-
-/** `nivaro_notifications.detail` — what the row is ABOUT, beyond subject +
- *  message: the diff lines (bundle preview), the child row, and why the
- *  person got it. Diagnostic + explanatory only; never drives delivery. */
-export interface NotificationDetail {
-  changes?: Array<{ field: string; label: string; old: string; new: string }>
-  via_child?: {
-    collection: string
-    item: string
-    event: string
-    label?: string | null
-  } | null
-  bundle?: { writes: number; children: string[] } | null
-  why?: {
-    kind: string
-    text: string
-    label?: string | null
-    id?: string | number | null
-  } | null
-}
-
 /** Serialise a detail record for the column — bounded, never throws. */
 export function detailColumn(detail: NotificationDetail | null | undefined): string | null {
   if (!detail) return null
@@ -207,18 +146,6 @@ export function parseDetail(raw: unknown): NotificationDetail | null {
 // from the subject so every existing caller participates without changes.
 // Quiet hours suppress PUSH only (the inbox row still lands — it IS the
 // inbox); truly critical subjects bypass. All America/New_York (the default wall clock).
-
-export type NotifyCategory =
-  | 'mentions'
-  | 'workflow'
-  | 'sla'
-  | 'watch'
-  | 'alerts'
-  | 'anomaly'
-  | 'reports'
-  | 'integrations'
-  | 'system'
-  | 'other'
 
 export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   'mentions',

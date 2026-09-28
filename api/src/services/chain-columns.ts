@@ -1,20 +1,9 @@
+import type { ChainTable } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { currentChain } from './chain.js'
 
-/**
- * Chain column probe (migration 351). Same contract as erp-requester-columns:
- * a hit is permanent, a miss is remembered for a minute, per tenant — so a
- * database that has not run 351 keeps writing and simply stamps nothing.
- */
-export type ChainTable =
-  | 'nivaro_activity'
-  | 'nivaro_api_logs'
-  | 'nivaro_erp_submissions'
-  | 'nivaro_erp_submission_attempts'
-  | 'nivaro_external_api_logs'
-  | 'nivaro_workflow_history'
-  | 'nivaro_flow_runs'
+export type { ChainTable } from '@nivaro/extension-kit'
 
 const MISS_TTL_MS = 60_000
 

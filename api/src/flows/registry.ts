@@ -1,65 +1,24 @@
+import type {
+  FlowExecutionContext,
+  FlowOpRegistration,
+  FlowTriggerRegistration,
+  OpFieldSchema,
+  OpHandler
+} from '@nivaro/extension-kit'
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 
-// Re-export types needed by extension context and executor
-export interface FlowData extends Record<string, unknown> {}
-
-export interface FlowTraceStep {
-  key: string
-  name: string
-  type: string
-  status: 'resolve' | 'reject' | 'async'
-  preview?: unknown
-}
-
-export interface ExecutionContext {
-  flowId: string
-  flowName: string
-  trigger: string
-  payload: Record<string, unknown>
-  log: FastifyBaseLogger
-  userId?: string
-  /** Test mode: side-effect ops (mail/notification/webhook/external-api/custom)
-   *  render but don't send — a preview lands in the trace instead. */
-  dryRun?: boolean
-  /** When provided, executeFlow appends one step per executed operation. */
-  trace?: FlowTraceStep[]
-}
-
-export type OpResult = { status: 'resolve' | 'reject'; output: FlowData }
-export type OpHandler = (
-  opts: Record<string, unknown>,
-  data: FlowData,
-  ctx: ExecutionContext
-) => Promise<OpResult>
-
-export interface OpFieldSchema {
-  key: string
-  label: string
-  type: 'string' | 'number' | 'boolean' | 'select' | 'textarea' | 'json'
-  options?: Array<{ value: string; label: string }>
-  placeholder?: string
-  required?: boolean
-  description?: string
-  defaultValue?: unknown
-}
-
-export interface RegisteredOp {
-  type: string
-  label: string
-  description?: string
-  color?: string // hex, e.g. '#7c3aed'
-  fields?: OpFieldSchema[]
-  handler: OpHandler
-}
-
-export interface RegisteredTrigger {
-  type: string
-  label: string
-  description?: string
-  fields?: OpFieldSchema[]
-}
-
+export type {
+  FlowData,
+  FlowTraceStep,
+  OpFieldSchema,
+  OpHandler,
+  OpResult
+} from '@nivaro/extension-kit'
+/** The core's names for the kit's flow types. */
+export type ExecutionContext = FlowExecutionContext
+export type RegisteredOp = FlowOpRegistration
+export type RegisteredTrigger = FlowTriggerRegistration
 // Module-level registries
 const _ops = new Map<string, RegisteredOp>()
 const _triggers = new Map<string, RegisteredTrigger>()

@@ -1,22 +1,8 @@
 import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
+import type { StorageAdapter } from '@nivaro/extension-kit'
 
-export interface StorageAdapter {
-  /** Store a file. `stream` is a readable stream of the file contents. */
-  put(key: string, stream: NodeJS.ReadableStream, meta: StorageFileMeta): Promise<void>
-  /** Return a readable stream for the file. */
-  get(key: string): Promise<NodeJS.ReadableStream>
-  /** Delete a file. Should not throw if the key does not exist. */
-  delete(key: string): Promise<void>
-  /** Return a public or pre-signed URL, or null if serving via proxy. */
-  url(key: string): Promise<string | null>
-}
-
-export interface StorageFileMeta {
-  filename: string
-  mimetype: string
-  size: number
-}
+export type { StorageAdapter, StorageFileMeta } from '@nivaro/extension-kit'
 
 // ─── Built-in local adapter ───────────────────────────────────────────────────
 

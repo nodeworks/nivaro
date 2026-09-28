@@ -1,35 +1,6 @@
-/** Who may run an action: everyone with update permission, admins, or listed role ids. */
-export type BulkActionAccess = {
-  mode: 'everyone' | 'admin' | 'roles'
-  role_ids?: string[]
-}
+import type { BulkActionDef } from '@nivaro/extension-kit'
 
-export interface BulkActionDef {
-  id: string
-  label: string
-  /** Optional icon name from lucide (informational — admin renders it). */
-  icon?: string
-  /** If provided, only shown for these collections. Omit for all. */
-  collections?: string[]
-  /** 'danger' renders red (destructive). */
-  variant?: 'default' | 'danger'
-  /** Defaults to everyone (with update permission on the collection). */
-  access?: BulkActionAccess
-  /** The bar prompts for a reason and passes it as ctx.reason. */
-  require_reason?: boolean
-  /** Confirm text shown before running. */
-  confirm?: string
-  /** Called by the API route. Return a message shown in the admin toast. */
-  execute(ctx: BulkActionContext): Promise<{ message: string }>
-}
-
-export interface BulkActionContext {
-  collection: string
-  ids: (string | number)[]
-  payload?: Record<string, unknown>
-  reason?: string | null
-  userId?: string
-}
+export type { BulkActionAccess, BulkActionContext, BulkActionDef } from '@nivaro/extension-kit'
 
 class BulkActionRegistry {
   private actions = new Map<string, BulkActionDef>()

@@ -1,10 +1,6 @@
-export interface ValidatorDef {
-  /** Operator name used in validation_rules JSON, e.g. 'phone', 'iban', 'luhn'. */
-  operator: string
-  label: string
-  /** Returns null on pass, or an error message string on fail. */
-  validate(value: unknown, options?: unknown): string | null
-}
+import type { ValidatorDef } from '@nivaro/extension-kit'
+
+export type { ValidatorDef } from '@nivaro/extension-kit'
 
 class ValidatorRegistry {
   private validators = new Map<string, ValidatorDef>()

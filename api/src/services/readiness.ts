@@ -1,3 +1,7 @@
+import type { ReadinessCheck, ReadinessStatus } from '@nivaro/extension-kit'
+
+export type { ReadinessCheck, ReadinessResult, ReadinessStatus } from '@nivaro/extension-kit'
+
 /**
  * Readiness check registry — a scored, continuously-runnable checklist for
  * "are we ready to X" questions (go-live cutover being the canonical one).
@@ -8,31 +12,6 @@
  * deployment-specific and live with the deployment's extension — core ships
  * none of its own, so a stock install simply reports an empty checklist.
  */
-
-export type ReadinessStatus = 'pass' | 'warn' | 'fail' | 'skip'
-
-export interface ReadinessResult {
-  status: ReadinessStatus
-  /** One-sentence current state, shown under the check. */
-  detail?: string
-  /** Concrete blockers to resolve, listed as bullet lines. */
-  blockers?: string[]
-}
-
-export interface ReadinessCheck {
-  id: string
-  label: string
-  description?: string
-  /** Grouping header on the scorecard (e.g. 'Data', 'Integrations'). */
-  group?: string
-  run: () => Promise<ReadinessResult>
-  /** Optional automatic fix. Runs as a BACKGROUND job with server-held
-   *  progress, so the admin can navigate away and come back. */
-  remediation?: {
-    label: string
-    run: () => Promise<{ detail: string }>
-  }
-}
 
 const registry = new Map<string, ReadinessCheck>()
 

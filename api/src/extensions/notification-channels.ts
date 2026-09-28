@@ -1,18 +1,6 @@
-export interface NotificationChannelDef {
-  id: string
-  label: string
-  /** Called for each notification that should be delivered via this channel. */
-  deliver(ctx: NotificationDeliveryContext): Promise<void>
-}
+import type { NotificationChannelDef, NotificationDeliveryContext } from '@nivaro/extension-kit'
 
-export interface NotificationDeliveryContext {
-  recipient: string
-  subject: string
-  message: string
-  collection?: string
-  item?: string | number
-  sender?: string
-}
+export type { NotificationChannelDef, NotificationDeliveryContext } from '@nivaro/extension-kit'
 
 class NotificationChannelRegistry {
   private channels = new Map<string, NotificationChannelDef>()

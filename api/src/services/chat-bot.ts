@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
+import type { BotToolDef } from '@nivaro/extension-kit'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
@@ -7,6 +8,8 @@ import { logActivity } from './activity.js'
 import { getAiClient } from './ai-client.js'
 import { parseRoom } from './chat.js'
 import { BOT_EMAIL } from './machine-accounts.js'
+
+export type { BotToolDef } from '@nivaro/extension-kit'
 
 /**
  * Chat AI bot — "@bot what state is REQ-1234".
@@ -155,15 +158,6 @@ export async function handleBotMention(
   }
 }
 
-// ── Extension bot tools (#247): extensions register tools the bot may call.
-// Handlers receive the ASKER — extension code decides its own permission
-// posture, same trust level as any extension route.
-export interface BotToolDef {
-  name: string
-  description: string
-  input_schema: Record<string, unknown>
-  handler: (asker: User, input: Record<string, unknown>) => Promise<unknown>
-}
 const extensionBotTools = new Map<string, BotToolDef>()
 export function registerBotTool(def: BotToolDef): void {
   if (!/^[a-z][a-z0-9_]{2,40}$/.test(def.name)) return

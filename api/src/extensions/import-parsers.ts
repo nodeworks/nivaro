@@ -1,16 +1,6 @@
-export interface ParsedRow {
-  [column: string]: string
-}
+import type { ImportParserDef } from '@nivaro/extension-kit'
 
-export interface ImportParserDef {
-  /** MIME type(s) this parser handles. */
-  mimeTypes: string[]
-  /** File extension(s), e.g. ['xlsx', 'xls']. Used for display + file filtering. */
-  extensions: string[]
-  label: string
-  /** Parse raw file content (Buffer or string) into column-named rows. */
-  parse(content: Buffer | string): Promise<ParsedRow[]> | ParsedRow[]
-}
+export type { ImportParserDef, ParsedRow } from '@nivaro/extension-kit'
 
 class ImportParserRegistry {
   private parsers: ImportParserDef[] = []

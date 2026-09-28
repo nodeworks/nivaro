@@ -1,4 +1,15 @@
+import type {
+  NotificationAction,
+  NotificationKind,
+  NotificationTargetSpec
+} from '@nivaro/extension-kit'
 import { linkTo, recordLink } from './app-links.js'
+
+export type {
+  NotificationAction,
+  NotificationKind,
+  NotificationTargetSpec
+} from '@nivaro/extension-kit'
 
 /**
  * What a notification is ABOUT, and what clicking it should do — structured,
@@ -11,54 +22,6 @@ import { linkTo, recordLink } from './app-links.js'
  * collection + item + subject and are DERIVED here at read time, so old
  * inboxes keep working.
  */
-
-export type NotificationKind =
-  | 'record'
-  | 'task'
-  | 'approval'
-  | 'access_request'
-  | 'sla'
-  | 'chat'
-  | 'queue'
-  | 'report'
-  | 'alerts'
-  | 'issue'
-  | 'import'
-  | 'dashboard'
-  | 'my_work'
-  | 'home'
-  | 'external'
-  | 'integration'
-
-export type NotificationAction =
-  | 'open'
-  | 'complete'
-  | 'acknowledge'
-  | 'review'
-  | 'approve'
-  | 'reply'
-
-export interface NotificationTargetSpec {
-  kind: NotificationKind
-  /** record / sla: the record. approval: the approval's record. */
-  collection?: string | null
-  /** record id, task id, approval instance id, queue / report / dashboard id. */
-  id?: string | number | null
-  /** chat: room key. */
-  room?: string | null
-  /** record: query string appended (addendum=…, layout=…). */
-  query?: string | null
-  /** record: field to focus / tab to open on arrival. */
-  focus?: string | null
-  tab?: string | null
-  /** external: absolute URL. */
-  url?: string | null
-  /** The primary thing a click should offer. Default 'open'. */
-  action?: NotificationAction
-  /** Extra ids the action needs (task id for a record-kind row, …). */
-  task_id?: string | number | null
-  instance_id?: string | number | null
-}
 
 /** An inline action the client may run without knowing the domain. */
 export interface NotificationActionSpec {

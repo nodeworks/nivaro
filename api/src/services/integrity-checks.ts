@@ -15,39 +15,18 @@
  * as the acting user: an extension writes through the items API with the
  * caller's headers so RBAC, revisions and hooks apply.
  */
+
+import type { IntegrityCheck } from '@nivaro/extension-kit'
 import type { FastifyRequest } from 'fastify'
 import type { User } from '../types.js'
 
-export interface IntegrityFinding {
-  item_id: string
-  message: string
-}
-
-export interface IntegrityFixArgs {
-  id: string
-  message: string | null
-  user: User
-  req?: FastifyRequest
-}
-
-export interface IntegrityCheck {
-  /** Rule key on the findings ('forecast-missing'); kebab-case, unique. */
-  id: string
-  collection: string
-  /** Human rule label for the Data Integrity facets. */
-  label: string
-  /** The field the finding anchors to on the form (a grid alias or column). */
-  field: string
-  run(ids: string[]): Promise<IntegrityFinding[]>
-  /** Optional one-click fix; `fix_label` is the proposal's button text. */
-  fix_label?: string
-  fix?(args: IntegrityFixArgs): Promise<{ fixed: boolean; detail?: string }>
-}
+export type { IntegrityCheck, IntegrityFinding, IntegrityFixArgs } from '@nivaro/extension-kit'
 
 const registry = new Map<string, IntegrityCheck>()
 
 export function registerIntegrityCheck(check: IntegrityCheck): void {
-  if (!/^[a-z][a-z0-9-]*$/.test(check.id)) throw new Error(`integrity check id must be kebab-case: ${check.id}`)
+  if (!/^[a-z][a-z0-9-]*$/.test(check.id))
+    throw new Error(`integrity check id must be kebab-case: ${check.id}`)
   registry.set(check.id, check)
 }
 

@@ -156,6 +156,9 @@ function detectChanges() {
     files: files.length,
     dirty,
     sdk: changedUnder(since('@sdk-*'), /^packages\/sdk\//, ['packages/sdk/package.json', 'packages/sdk/README.md']),
+    // The extension kit is what a mounted extension built elsewhere compiles
+    // against — it has to be on npm before that build can follow a core change.
+    kit: changedUnder(since('@kit-*'), /^packages\/extension-kit\//, ['packages/extension-kit/package.json']),
     react: changedUnder(since('@react-*'), /^packages\/(react|shared)\//, ['packages/react/package.json']),
     migrations: files.filter((f) => /^api\/src\/db\/migrations\/\d+_/.test(f)),
     // HEAD already IS a release commit: a previous run got as far as tagging
@@ -168,6 +171,7 @@ function detectChanges() {
 }
 
 function plan(cfg, ch) {
+  const wantKit = flag('with-kit') || ch.kit
   const wantSdk = flag('with-sdk') || ch.sdk
   const wantReact = !flag('no-react') && (flag('with-react') || ch.react || wantSdk)
   const lines = []
@@ -176,12 +180,13 @@ function plan(cfg, ch) {
   add('preflight', 'on main · `gh` signed in · api, admin and shared typecheck (an untracked probe under api/src breaks the image build)')
   if (ch.headTag.startsWith('v')) add('release', `HEAD is already tagged ${ch.headTag} — reuse it, mint nothing`)
   else {
+    if (wantKit) add('release', `pnpm kit:release ${BUMP}   (packages/extension-kit changed — extensions built outside the monorepo compile against the npm package)`)
     if (wantSdk) add('release', `pnpm sdk:release ${BUMP}   (packages/sdk changed — it must publish BEFORE react imports from it)`)
     if (wantReact) add('release', `pnpm react:release ${BUMP}   (packages/shared or packages/react changed — before the app tag, so the image reports the version the frontend pins)`)
     add('release', `pnpm release ${BUMP}`)
   }
   add('publish', cfg.mirror ? `push origin, then the public mirror ${cfg.mirror} — the mirror is what builds` : 'push origin (no mirror configured)')
-  add('artifacts', `wait for the image${wantSdk ? ', @nivaro/sdk' : ''}${wantReact ? ', @nivaro/react' : ''} — and then CHECK they exist, by asking the registry`)
+  add('artifacts', `wait for the image${wantKit ? ', @nivaro/extension-kit' : ''}${wantSdk ? ', @nivaro/sdk' : ''}${wantReact ? ', @nivaro/react' : ''} — and then CHECK they exist, by asking the registry`)
   if (ch.migrations.length > 0) {
     add('artifacts', `${ch.migrations.length} migration(s) ship in this release → no deployment is pushed until the image tag is confirmed`)
   }
@@ -198,7 +203,7 @@ function plan(cfg, ch) {
     add('verify', `${v.name}: poll ${v.url} until it reports ${what} twice in a row`)
   }
   if (!cfg.path) add('frontends', 'no release-chain.config.json — the chain stops after artifacts')
-  return { lines, wantSdk, wantReact }
+  return { lines, wantSdk, wantReact, wantKit }
 }
 
 /** `stage` is passed, not read from currentStage: the image wait runs in the
@@ -331,6 +336,7 @@ async function main() {
     if (runs('release') && !ch.headTag.startsWith('v')) {
       currentStage = 'release'
       emit('release', 'start')
+      if (p.wantKit) sh('pnpm', ['kit:release', BUMP])
       if (p.wantSdk) sh('pnpm', ['sdk:release', BUMP])
       // react BEFORE the app tag: the image is built from that tag and
       // reports the react version its tree holds (/api/version, the
@@ -344,6 +350,7 @@ async function main() {
     else emit('release', 'skip', `resumed from ${FROM}`)
     const V = version('package.json')
     const RV = version('packages/react/package.json')
+    const KV = version('packages/extension-kit/package.json')
     const SV = version('packages/sdk/package.json')
     log(`app ${V} · react ${RV} · sdk ${SV}`)
 
@@ -415,8 +422,10 @@ async function main() {
         if (cfg.image) await until(`image ${cfg.image}:${V} on the registry`, () => imageExists(cfg.image, V), { stage: 'artifacts' })
       })()
       imageWait.catch(() => {}) // awaited below — never an unhandled rejection meanwhile
+      if (repo && p.wantKit) await waitForWorkflow('artifacts', repo, 'publish-kit.yml', async () => npmHas('@nivaro/extension-kit', KV))
       if (repo && p.wantSdk) await waitForWorkflow('artifacts', repo, 'publish-sdk.yml', async () => npmHas('@nivaro/sdk', SV))
       if (repo && p.wantReact) await waitForWorkflow('artifacts', repo, 'publish-react.yml', async () => npmHas('@nivaro/react', RV))
+      if (p.wantKit) await until(`@nivaro/extension-kit@${KV} on npm`, async () => npmHas('@nivaro/extension-kit', KV))
       if (p.wantSdk) await until(`@nivaro/sdk@${SV} on npm`, async () => npmHas('@nivaro/sdk', SV))
       if (p.wantReact) await until(`@nivaro/react@${RV} on npm`, async () => npmHas('@nivaro/react', RV))
       await runFrontends()

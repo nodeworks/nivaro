@@ -6488,23 +6488,29 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
           <p class="doc-p">TypeScript (<code class="doc-code">index.ts</code>) and compiled JS (<code class="doc-code">index.js</code>) are both supported. TypeScript files load directly via <code class="doc-code">tsx</code> in dev mode.</p>
           <h3 class="doc-h3" id="ext-overview-minimal">Minimal Extension</h3>
           <pre class="doc-pre"><code>// api/extensions/my-extension/index.ts
-import type { Extension } from '../../src/extensions/loader.js';
+import { defineExtension } from '@nivaro/extension-kit';
 
-const plugin: Extension = {
+export default defineExtension({
   id: 'my-extension',
   async register(ctx) {
     ctx.logger.info('my-extension registered');
   },
-};
-
-export default plugin;</code></pre>
+});</code></pre>
+          <h3 class="doc-h3" id="ext-overview-kit">The extension kit</h3>
+          <p class="doc-p">An extension cannot import <code class="doc-code">api/src</code> — the API compiles with <code class="doc-code">rootDir: src</code>, and a mounted extension runs against a built image that ships no source. <code class="doc-code">@nivaro/extension-kit</code> is the contract instead: the extension context (<code class="doc-code">ExtensionContext</code>), the default export shape (<code class="doc-code">ExtensionDefinition</code>, checked by <code class="doc-code">defineExtension</code>), and every registration the context accepts — bulk and item actions, readiness and integrity checks, notes providers, mail types, digest sections, obligation kinds, signals, import processors, flow operations and triggers. The API imports its own extension contract from the same package, so the two cannot drift.</p>
+          <ul class="doc-ul">
+            <li>Types are exported with <code class="doc-code">export type</code>; importing one costs nothing at runtime.</li>
+            <li>Two helpers are runtime code: <code class="doc-code">hasColumn(db, table, column)</code> — a per-database column probe for a writer that must keep working before a migration reaches the database — and <code class="doc-code">requesterInsertFields</code> / <code class="doc-code">requesterSelectColumns</code> for the ERP submission tables.</li>
+            <li>Members are only ever added to the context. An extension built against an older kit keeps compiling; a member that arrived in a later core release is documented as such on the type.</li>
+            <li>In the monorepo the kit is a workspace package; a mounted extension resolves it from the image. Released with <code class="doc-code">pnpm kit:release</code>.</li>
+          </ul>
           <h3 class="doc-h3" id="ext-overview-loading">Loading &amp; Reloading</h3>
           <p class="doc-p">Extensions are loaded at startup. Reload without restarting:</p>
           <pre class="doc-pre"><code>POST /api/extensions/reload
@@ -7074,7 +7080,9 @@ var __NVR_JSX__ = {
 });</code></pre>
           <h3 class="doc-h3">Step 6 — src/types.ts</h3>
           <pre class="doc-pre"><code>// src/types.ts
-// Shared between UI and API sides
+// Shared between UI and API sides. Context and registration types come
+// from @nivaro/extension-kit; only the plugin's own shapes live here.
+export type { ExtensionContext } from '@nivaro/extension-kit';
 
 export interface MyPluginConfig {
   clientId: string;

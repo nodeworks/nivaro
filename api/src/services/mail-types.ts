@@ -1,8 +1,16 @@
+import type { MailRendered, MailSampleOption, MailTypeDef } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { renderMailTemplate, sendMail, sendRawMail } from './mail.js'
 import { buildRecordCard } from './mail-record-card.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { getLabels } from './queues.js'
+
+export type {
+  MailRendered,
+  MailSampleKind,
+  MailSampleOption,
+  MailTypeDef
+} from '@nivaro/extension-kit'
 
 /**
  * Mail-type registry — every kind of email the instance sends, described once:
@@ -13,47 +21,6 @@ import { getLabels } from './queues.js'
  * with the harness; extensions register their own types via
  * `ctx.mail.registerType` (e.g. invoice on-hold, PO received…).
  */
-
-export type MailSampleKind = 'record' | 'history' | 'user' | 'notification' | 'none'
-
-export interface MailSampleOption {
-  id: string
-  label: string
-  hint?: string
-}
-
-export interface MailRendered {
-  subject: string
-  html: string
-  /** Who production would send this to, with the reason each is on the list. */
-  recipients: Array<{ email: string; reason: string }>
-  category?: NotifyCategory
-}
-
-export interface MailTypeDef {
-  key: string
-  label: string
-  group: string
-  description: string
-  /** Liquid template name (core or extension root) — informational for
-   *  types whose builder assembles HTML itself. */
-  template: string | null
-  category?: NotifyCategory
-  sample: {
-    kind: MailSampleKind
-    /** For 'record': the collection the picker browses. For 'history': the
-     *  bound collection whose instances are offered (null = any). */
-    collection?: string | null
-    /** Extra narrowing for 'history' samples (e.g. only terminal 'canceled'). */
-    history_filter?: 'canceled' | 'any'
-    /** 'notification': subject prefix / category the sample rows are drawn from. */
-    notification_category?: NotifyCategory
-  }
-  /** Sample rows the picker offers (most recent first). */
-  samples: (q: string) => Promise<MailSampleOption[]>
-  /** Render for a chosen sample id (+ the recipient the harness will use). */
-  render: (sampleId: string, opts: { recipientUserId?: string }) => Promise<MailRendered>
-}
 
 const registry = new Map<string, MailTypeDef>()
 

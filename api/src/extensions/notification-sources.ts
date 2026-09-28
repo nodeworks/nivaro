@@ -1,3 +1,14 @@
+import type {
+  ExternalNotificationSourceGroup,
+  NotificationSourceProvider
+} from '@nivaro/extension-kit'
+
+export type {
+  ExternalNotificationSourceGroup,
+  ExternalNotificationSourceItem,
+  NotificationSourceProvider
+} from '@nivaro/extension-kit'
+
 /**
  * Extension-contributed notification sources.
  *
@@ -7,32 +18,6 @@
  * watches) register a provider here so those subscriptions appear alongside
  * the native ones instead of being invisible to the user.
  */
-
-export interface ExternalNotificationSourceItem {
-  id: string | number
-  /** What the user is watching, e.g. "Part 26824 · Main warehouse". */
-  label: string
-  /** Secondary line, e.g. "alert when on-hand < 50". */
-  detail?: string | null
-  is_active?: boolean
-}
-
-export interface ExternalNotificationSourceGroup {
-  /** Stable key, unique per provider (e.g. 'stock-watches'). */
-  key: string
-  /** Card section title, e.g. "Stock Planning watches". */
-  title: string
-  description?: string
-  /** Where the user manages these (the card renders a Manage link). */
-  manage_url?: string
-  items: ExternalNotificationSourceItem[]
-}
-
-export interface NotificationSourceProvider {
-  /** Unique provider id — conventionally the extension id. */
-  id: string
-  fetch(userId: string): Promise<ExternalNotificationSourceGroup[]>
-}
 
 class NotificationSourceRegistry {
   private providers = new Map<string, NotificationSourceProvider>()

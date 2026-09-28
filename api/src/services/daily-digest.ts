@@ -1,3 +1,4 @@
+import type { DigestLine, DigestSection, DigestSectionProvider } from '@nivaro/extension-kit'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
@@ -13,6 +14,8 @@ import {
   loadAddendums
 } from './pipeline-subject.js'
 import { fetchQueueItems } from './queues.js'
+
+export type { DigestLine, DigestSection, DigestSectionProvider } from '@nivaro/extension-kit'
 
 /**
  * Daily action summary — ONE morning email per user, at their chosen hour:
@@ -32,19 +35,6 @@ import { fetchQueueItems } from './queues.js'
  */
 
 const DIGEST_WHY = 'you asked for a daily summary instead of individual emails'
-
-export interface DigestLine {
-  text: string
-  sub?: string | null
-  url?: string | null
-}
-
-export interface DigestSection {
-  title: string
-  lines: DigestLine[]
-}
-
-export type DigestSectionProvider = (userId: string, email: string) => Promise<DigestSection | null>
 
 const providers: DigestSectionProvider[] = []
 
