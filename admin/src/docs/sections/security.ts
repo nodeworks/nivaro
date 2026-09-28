@@ -267,6 +267,10 @@ export const securityMasquerade: DocSection = {
   id: 'masquerade',
   label: 'Masquerade',
   content: [
+    {
+      type: 'p',
+      text: 'A masquerade is visible to everyone: while it runs, the Online list marks the person with a "<admin> masquerading" pill, and any chat message sent under it carries "via <admin>" beside the sender. Presence and messages are still recorded under the masqueraded person; the admin behind them is stored alongside (chat_messages.masquerade_admin) and kept in a short-lived marker that the masquerade session refreshes.'
+    },
     { type: 'h1', id: 'masquerade', text: 'Masquerade (View as User)' },
     {
       type: 'p',

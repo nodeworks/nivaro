@@ -12324,6 +12324,7 @@ DELETE /api/api-keys/:id    # revoke immediately</code></pre>
         <!-- MASQUERADE -->
         <div class="doc-section" id="s-masquerade" data-toc='[{"id":"masquerade","label":"Masquerade (View as User)"}]'>
           <!-- SYNC:masquerade -->
+          <p class="doc-p">A masquerade is visible to everyone: while it runs, the Online list marks the person with a "&lt;admin&gt; masquerading" pill, and any chat message sent under it carries "via &lt;admin&gt;" beside the sender. Presence and messages are still recorded under the masqueraded person; the admin behind them is stored alongside (chat_messages.masquerade_admin) and kept in a short-lived marker that the masquerade session refreshes.</p>
           <h1 class="doc-h1" id="masquerade">Masquerade (View as User)</h1>
           <p class="doc-p">Admins can mint a short-lived masquerade token that authenticates as another user — server-side, so RBAC, row-level security, and activity logging all genuinely run as the target. This is how support and admins reproduce exactly what a user sees.</p>
           <h3 class="doc-h3">How it works</h3>
