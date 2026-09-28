@@ -1,10 +1,137 @@
 {
-  "generated_at": "2026-09-28T03:32:08.763Z",
+  "generated_at": "2026-09-28T16:50:21.274Z",
   "releases": [
+    {
+      "version": "0.1.352",
+      "tag": "v0.1.352",
+      "date": "2026-09-28T12:50:09-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "bug button pins to the viewport; person chips share one baseline",
+              "hash": "53b03bb1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "copy as: administrators only, and a per-collection switch",
+              "hash": "477e5fa7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ask ai: event path, access explain, integrity and saved-query tools",
+              "hash": "5226289d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "subscriptions, rules, pipelines: filters on every event, sync writes leave history, rename rewrites references",
+              "hash": "5becd1f1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "layouts, integrity, ids: assignments upsert by field, row lints in the sweep, one human-id field per collection",
+              "hash": "a1c51dd9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "notifications + procs: system rows ride notifyUser; a failed proc never hands the pool an open transaction",
+              "hash": "fe89fd77"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "orphan relation removal, temp-table guard lint, mail relay health",
+              "hash": "fed446bd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "schema steps an extension owns, run once at load under the migration lock",
+              "hash": "3633f998"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ops tasks: test a seed-shaped task key",
+              "hash": "926923c2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "config seeds: checked-in rows applied by a task, with a drift report",
+              "hash": "8a464dfe"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ops tasks: repairs, backfills and migrations an extension owns, run from the console",
+              "hash": "ee1345f8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "one builder for the registration members, so the cloud build stamps the ledger",
+              "hash": "ab151fa8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "every route an extension registers is recorded with its gate",
+              "hash": "af4f8c5b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "extension-kit: a recording test context and an in-memory database for extension tests",
+              "hash": "8cc91d88"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "extension-kit: one contract for extensions, imported by core and extensions alike",
+              "hash": "b1de1f03"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "outbound effects wait for the unit of work; refused multi-row creates tell nobody",
+              "hash": "0236cb89"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "GraphQL traffic by operation, with deprecated-field use",
+              "hash": "1b2e1cf7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "deprecation policy for fields the API serves, changelog at /graphql/changelog",
+              "hash": "1a0796ad"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "relations that may point at several collections read as a union",
+              "hash": "1a8407fd"
+            }
+          ]
+        }
+      ],
+      "count": 19
+    },
     {
       "version": "0.1.351",
       "tag": "v0.1.351",
-      "date": "2026-09-27T23:31:56-04:00",
+      "date": "2026-09-27T23:32:08-04:00",
       "sections": [
         {
           "label": "Other",
