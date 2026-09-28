@@ -1,11 +1,17 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { judgeFieldRemoval } from '../services/deprecation-policy.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseAutoIdPattern, validateAutoIdPattern } from '../services/auto-ids.js'
 import { clearMetadataCache } from '../services/collections.js'
-import { deleteSyntheticBatch, describeSyntheticPlan, generateSynthetic, listSyntheticBatches } from '../services/synthetic-records.js'
+import {
+  deleteSyntheticBatch,
+  describeSyntheticPlan,
+  generateSynthetic,
+  listSyntheticBatches
+} from '../services/synthetic-records.js'
 import { chunkArray } from '../services/db-batch.js'
 import {
   bustRollupContributorCache,
@@ -985,6 +991,20 @@ export async function dataModelRoutes(app: FastifyInstance) {
     if (isSystemTable(table)) {
       return reply.code(403).send({ error: 'Cannot modify CMS system tables' })
     }
+    // A column the API serves leaves the schema with it (#613).
+    const forced = (req.query as { force?: string }).force === '1'
+    const verdict = await judgeFieldRemoval(table, column)
+    if (!verdict.ok && !forced) {
+      return reply.code(409).send({
+        statusCode: 409,
+        error: 'Conflict',
+        code: verdict.code,
+        message: verdict.reason,
+        deprecated_at: verdict.deprecated_at ?? null,
+        removable_after: verdict.removable_after ?? null,
+        window_days: verdict.window_days
+      })
+    }
 
     try {
       const pkRows = rawRows<{ cnt: number }>(
@@ -1015,7 +1035,10 @@ export async function dataModelRoutes(app: FastifyInstance) {
         item: `${table}.${column}`,
         user: req.user?.id,
         req,
-        comment: 'drop column'
+        comment:
+          !verdict.ok && forced
+            ? `drop column — forced past the deprecation policy: ${verdict.reason}`
+            : 'drop column'
       })
       return reply.code(204).send()
     } catch (err) {
@@ -1263,6 +1286,19 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   app.delete('/tables/:table/fields/:field', async (req, reply) => {
     const { table, field } = req.params as { table: string; field: string }
+    const forced = (req.query as { force?: string }).force === '1'
+    const verdict = await judgeFieldRemoval(table, field)
+    if (!verdict.ok && !forced) {
+      return reply.code(409).send({
+        statusCode: 409,
+        error: 'Conflict',
+        code: verdict.code,
+        message: verdict.reason,
+        deprecated_at: verdict.deprecated_at ?? null,
+        removable_after: verdict.removable_after ?? null,
+        window_days: verdict.window_days
+      })
+    }
 
     try {
       const deleted = await db('nivaro_fields').where({ collection: table, field }).delete()
@@ -1272,7 +1308,10 @@ export async function dataModelRoutes(app: FastifyInstance) {
         collection: 'nivaro_fields',
         item: `${table}.${field}`,
         user: req.user?.id,
-        req
+        req,
+        ...(!verdict.ok && forced
+          ? { comment: `forced past the deprecation policy: ${verdict.reason}` }
+          : {})
       })
       return reply.code(204).send()
     } catch (err) {
@@ -1288,7 +1327,10 @@ export async function dataModelRoutes(app: FastifyInstance) {
     const { table } = req.params as { table: string }
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_|^directus_/i.test(table))
       return reply.code(400).send({ error: 'Business collections only' })
-    const [plan, batches] = await Promise.all([describeSyntheticPlan(table), listSyntheticBatches(table)])
+    const [plan, batches] = await Promise.all([
+      describeSyntheticPlan(table),
+      listSyntheticBatches(table)
+    ])
     return { data: { plan, batches } }
   })
   app.post('/:table/synthetic', async (req, reply) => {

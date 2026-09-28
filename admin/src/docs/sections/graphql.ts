@@ -878,6 +878,11 @@ Authorization: Bearer <admin-token>
     {
       type: 'note',
       text: 'Rebuild is admin-only. It is safe to call at any time — in-flight GraphQL requests use the old schema until they complete; new requests after the rebuild use the updated schema.'
+    },
+    { type: 'h3', text: 'Changelog and deprecation policy' },
+    {
+      type: 'p',
+      text: 'Every rebuild that changes the schema writes a line-level diff (`+ type`, `- workflows.old_field`) to the changelog, `GET /api/graphql/changelog` (admin), and a removal notifies administrators. A field is retired in two steps: mark it deprecated in the Table Editor (Behavior → Deprecated for API callers, with a note naming the replacement) — the schema then carries `@deprecated(reason: …)` and clients that introspect see it — and remove it once the policy window has passed. Removing a served field before then is refused with `409` `FIELD_NOT_DEPRECATED` or `FIELD_DEPRECATION_TOO_RECENT`, naming the date it becomes removable; an administrator may force it with `?force=1`, which the activity log records. The window is Settings → Content → API field deprecation window: blank = 14 days, 0 = no policy.'
     }
   ]
 }

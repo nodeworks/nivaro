@@ -117,6 +117,9 @@ const allowedSettingsKeys = [
   // Where email links land for non-admins (services/app-links.ts)
   'portal_url',
   'transition_guard_seconds',
+  // Deprecation policy for the API surface (#613): days a field stays
+  // deprecated before it may be removed; blank = 14, 0 = no policy
+  'graphql_deprecation_days',
   'portal_routes',
   'welcome_message',
   // Provisional-account roles (migration 330): first sign-in role + the role an
@@ -200,6 +203,21 @@ export async function settingsRoutes(app: FastifyInstance) {
           : typeof patch.theme_accents === 'string'
             ? patch.theme_accents
             : JSON.stringify(patch.theme_accents)
+    }
+
+    if ('graphql_deprecation_days' in patch) {
+      const raw = patch.graphql_deprecation_days
+      if (raw == null || raw === '') patch.graphql_deprecation_days = null
+      else {
+        const n = Number(raw)
+        if (!Number.isInteger(n) || n < 0 || n > 3650)
+          return reply
+            .code(400)
+            .send({ error: 'graphql_deprecation_days must be a whole number from 0 to 3650' })
+        patch.graphql_deprecation_days = n
+      }
+      const { clearDeprecationPolicyCache } = await import('../services/deprecation-policy.js')
+      reply.raw.once('finish', () => clearDeprecationPolicyCache())
     }
 
     // Transition double-fire guard: whole seconds, 0 = off, blank = default.

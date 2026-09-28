@@ -8847,6 +8847,10 @@ interface FieldSettings {
   /** Layout-local: an "apply to lines" button beside this field that copies
    *  its value into one column of an inline grid on the same layout. */
   apply_to_lines?: ApplyToLinesConfig | null
+  /** #613 — field-level: retiring from the API; the schema says @deprecated
+   *  and removal waits for the policy window. */
+  deprecated_at?: string | null
+  deprecation_note?: string | null
 }
 
 interface ApplyToLinesConfig {
@@ -12964,6 +12968,8 @@ function FieldSettingsPopover({
   const [required, setRequired] = useState(settings.required)
   const [hidden, setHidden] = useState(settings.hidden)
   const [readonly, setReadonly] = useState(settings.readonly)
+  const [deprecated, setDeprecated] = useState(!!settings.deprecated_at)
+  const [deprecationNote, setDeprecationNote] = useState(settings.deprecation_note ?? '')
   const [editableComputed, setEditableComputed] = useState(settings.editable_computed === true)
   // Apply-to-lines (layout-local): overrides.apply_to_lines = {grid, target, label}
   const layoutEditor = useContext(LayoutEditorContext)
@@ -13941,6 +13947,20 @@ function FieldSettingsPopover({
     if (isM2O || isM2M) patch.dependency_config = depPatch
     if (optionsPatch !== null || needsOptionsPatch) patch.options = optionsPatch
     onSave(patch as Partial<FieldSettings> & { dependency_config?: string })
+    // Deprecation (#613) is a property of the field, never of a layout — it
+    // travels to the field row directly, whichever tab opened this popover.
+    if (
+      collection &&
+      (deprecated !== !!settings.deprecated_at ||
+        deprecationNote.trim() !== (settings.deprecation_note ?? ''))
+    ) {
+      void api
+        .patch(`/field-config/${collection}/${fieldName}`, {
+          deprecated,
+          deprecation_note: deprecated ? deprecationNote.trim() || null : null
+        })
+        .catch(() => toast.error('Could not save the deprecation'))
+    }
     onInlineDisplayChange?.({ entries: localInlineEntries, separator: localInlineSeparator })
     setOpen(false)
   }
@@ -14052,6 +14072,39 @@ function FieldSettingsPopover({
                     <Switch checked={row.value} onCheckedChange={row.set} className='scale-90' />
                   </div>
                 ))}
+                <div className='px-3 py-2' data-field-deprecation>
+                  <div className='flex items-center justify-between'>
+                    <span className='text-[12px] text-slate-700'>
+                      Deprecated for API callers
+                      <span className='block text-[10.5px] leading-relaxed text-slate-400'>
+                        GraphQL marks it @deprecated from today; removing it waits for the policy
+                        window (Settings → Content).
+                      </span>
+                    </span>
+                    <Switch
+                      checked={deprecated}
+                      onCheckedChange={setDeprecated}
+                      className='scale-90'
+                      data-field-deprecated
+                    />
+                  </div>
+                  {deprecated && (
+                    <div className='mt-2 space-y-1'>
+                      <Input
+                        value={deprecationNote}
+                        onChange={(e) => setDeprecationNote(e.target.value)}
+                        placeholder='What callers should use instead'
+                        className='h-8 text-[12px]'
+                        data-field-deprecation-note
+                      />
+                      {settings.deprecated_at && (
+                        <p className='text-[10.5px] text-slate-400'>
+                          Deprecated since {new Date(settings.deprecated_at).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {(isM2O || isM2M) && (
                   <div className='flex items-center justify-between px-3 py-2'>
                     <span className='text-[12px] text-slate-700'>Inline edit</span>
@@ -21804,6 +21857,10 @@ function FieldGroupsTab({
         required: ov.required !== undefined ? !!ov.required : !!fc?.required,
         hidden: ov.hidden !== undefined ? !!ov.hidden : !!fc?.hidden,
         readonly: ov.readonly !== undefined ? !!ov.readonly : !!fc?.readonly,
+        deprecated_at:
+          ((fc as Record<string, unknown> | undefined)?.deprecated_at as string | null) ?? null,
+        deprecation_note:
+          ((fc as Record<string, unknown> | undefined)?.deprecation_note as string | null) ?? null,
         inline_relation: mergedOpts.inline_relation === true,
         max_values: typeof mergedOpts.max_values === 'number' ? mergedOpts.max_values : null,
         options: Object.keys(mergedOpts).length > 0 ? JSON.stringify(mergedOpts) : null,
@@ -21866,6 +21923,8 @@ function FieldGroupsTab({
         required: !!raw?.required,
         hidden: !!raw?.hidden,
         readonly: !!raw?.readonly,
+        deprecated_at: (raw?.deprecated_at as string | null) ?? null,
+        deprecation_note: (raw?.deprecation_note as string | null) ?? null,
         inline_relation: opts.inline_relation === true,
         max_values: typeof opts.max_values === 'number' ? opts.max_values : null,
         options:

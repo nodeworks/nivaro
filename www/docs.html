@@ -4400,6 +4400,8 @@ Authorization: Bearer &lt;admin-token&gt;
             <li>After hiding/unhiding a collection or field that affects schema visibility</li>
           </ul>
           <div class="doc-note">Rebuild is admin-only. It is safe to call at any time — in-flight GraphQL requests use the old schema until they complete; new requests after the rebuild use the updated schema.</div>
+          <h3 class="doc-h3">Changelog and deprecation policy</h3>
+          <p class="doc-p">Every rebuild that changes the schema writes a line-level diff (<code class="doc-code">+ type</code>, <code class="doc-code">- workflows.old_field</code>) to the changelog, <code class="doc-code">GET /api/graphql/changelog</code> (admin), and a removal notifies administrators. A field is retired in two steps: mark it deprecated in the Table Editor (Behavior → Deprecated for API callers, with a note naming the replacement) — the schema then carries <code class="doc-code">@deprecated(reason: …)</code> and clients that introspect see it — and remove it once the policy window has passed. Removing a served field before then is refused with <code class="doc-code">409</code> <code class="doc-code">FIELD_NOT_DEPRECATED</code> or <code class="doc-code">FIELD_DEPRECATION_TOO_RECENT</code>, naming the date it becomes removable; an administrator may force it with <code class="doc-code">?force=1</code>, which the activity log records. The window is Settings → Content → API field deprecation window: blank = 14 days, 0 = no policy.</p>
           <!-- /SYNC:graphql-rebuild -->
         </div>
 

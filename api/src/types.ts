@@ -118,6 +118,10 @@ export interface CMSField {
   computed_formula: string | null
   computed_type: 'read' | 'write' | null
   computed_store: boolean
+  /** #613 — set when the field is retiring from the API; the GraphQL schema
+   *  marks it @deprecated and the removal policy counts from here. */
+  deprecated_at?: Date | string | null
+  deprecation_note?: string | null
   created_at: Date
   updated_at: Date
 }

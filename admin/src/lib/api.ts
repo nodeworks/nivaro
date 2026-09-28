@@ -171,6 +171,7 @@ export type CMSSettings = {
   field_watch_enabled?: boolean
   lock_idle_release_minutes?: number | null
   transition_guard_seconds?: number | null
+  graphql_deprecation_days?: number | null
   integration_notifications_enabled?: boolean
   integration_remediation_enabled?: boolean
   integration_obligations_epoch?: string | null

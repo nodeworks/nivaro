@@ -22,6 +22,8 @@ interface FieldRow {
   label: string | null
   note: string | null
   placeholder: string | null
+  deprecated_at?: Date | string | null
+  deprecation_note?: string | null
   hidden: number | boolean | null
   readonly: number | boolean | null
   required: number | boolean | null
@@ -49,6 +51,8 @@ function formatFieldConfig(row: FieldRow) {
     label: row.label ?? null,
     note: row.note ?? null,
     placeholder: row.placeholder ?? null,
+    deprecated_at: row.deprecated_at ? new Date(row.deprecated_at).toISOString() : null,
+    deprecation_note: row.deprecation_note ?? null,
     hidden: !!row.hidden,
     // A derived field is never editable: a rollup is recomputed from its
     // source rows and a write-computed field from its formula, so anything
@@ -175,7 +179,9 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         'repeater_schema',
         'is_translatable',
         'sort',
-        'placeholder'
+        'placeholder',
+        'deprecated_at',
+        'deprecation_note'
       )
       .orderBy('sort', 'asc')) as FieldRow[]
 
@@ -568,6 +574,18 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
       patch.placeholder = (body as Record<string, unknown>).placeholder ?? null
     if ('hidden' in body) patch.hidden = body.hidden ? 1 : 0
     if ('readonly' in body) patch.readonly = body.readonly ? 1 : 0
+    // Deprecation (#613): `deprecated: true` stamps now (kept when already
+    // set), `deprecated: false` clears; the note travels with it.
+    if ('deprecated' in body) {
+      const on = !!(body as Record<string, unknown>).deprecated
+      const already = (existing as { deprecated_at?: Date | string | null }).deprecated_at
+      patch.deprecated_at = on ? (already ?? new Date()) : null
+      if (!on) patch.deprecation_note = null
+    }
+    if ('deprecation_note' in body) {
+      const n = (body as Record<string, unknown>).deprecation_note
+      patch.deprecation_note = n == null || n === '' ? null : String(n).slice(0, 500)
+    }
     if ('required' in body) patch.required = body.required ? 1 : 0
     if ('interface' in body) patch.interface = body.interface ?? null
     if ('group_key' in body) patch.group_key = body.group_key ?? null
@@ -652,7 +670,9 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
         'cross_record_defaults',
         'remote_options_config',
         'repeater_schema',
-        'is_translatable'
+        'is_translatable',
+        'deprecated_at',
+        'deprecation_note'
       )
       .first()) as FieldRow
 

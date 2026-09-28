@@ -965,6 +965,18 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             }
           }
 
+          // Deprecation policy (#613): a retiring field says so in the
+          // schema from the day it was marked, whatever kind of field it is.
+          for (const f of fields) {
+            if (!f.deprecated_at || !gqlFields[f.field]) continue
+            const since = new Date(f.deprecated_at)
+            const day = Number.isNaN(since.getTime())
+              ? ''
+              : ` since ${since.toISOString().slice(0, 10)}`
+            gqlFields[f.field].deprecationReason =
+              (f.deprecation_note?.trim() || 'Being removed from the API') + day
+          }
+
           return gqlFields
         }
       })

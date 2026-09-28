@@ -3,6 +3,7 @@ import { execute, type GraphQLSchema, parse, validate } from 'graphql'
 import { makeServer as makeWsServer } from 'graphql-ws'
 import { WebSocket, WebSocketServer } from 'ws'
 import { config } from '../config.js'
+import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { buildGraphQLSchema } from '../services/schema-builder.js'
@@ -371,6 +372,30 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
     async (_req, reply) => {
       await rebuildGraphQLSchema()
       return reply.send({ ok: true })
+    }
+  )
+
+  // The schema changelog (#613) at the address a partner would guess, beside
+  // the endpoint it describes. Same rows the dev-tools route serves.
+  app.get(
+    '/graphql/changelog',
+    {
+      preHandler: async (req, reply) => {
+        await authenticate(req, reply)
+        if (!req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
+      }
+    },
+    async (req, reply) => {
+      const limit = Math.min(
+        200,
+        Math.max(1, Number((req.query as { limit?: string }).limit ?? 50))
+      )
+      const rows = await db('nivaro_graphql_schema_log')
+        .orderBy('id', 'desc')
+        .limit(limit)
+        .select('id', 'at', 'diff', 'breaking')
+      const { deprecationWindowDays } = await import('../services/deprecation-policy.js')
+      return reply.send({ data: rows, policy: { deprecation_days: await deprecationWindowDays() } })
     }
   )
 

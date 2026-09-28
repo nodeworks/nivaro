@@ -1606,6 +1606,7 @@ export function SettingsPage() {
   const [fieldWatchEnabled, setFieldWatchEnabled] = useState(false)
   const [lockIdleMinutes, setLockIdleMinutes] = useState<number | ''>('')
   const [transitionGuardSeconds, setTransitionGuardSeconds] = useState<number | ''>('')
+  const [graphqlDeprecationDays, setGraphqlDeprecationDays] = useState<number | ''>('')
   const [integrationNotificationsEnabled, setIntegrationNotificationsEnabled] = useState(false)
   const [integrationRemediationEnabled, setIntegrationRemediationEnabled] = useState(false)
   // datetime-local value (browser-local wall clock, no timezone of its own —
@@ -1719,6 +1720,9 @@ export function SettingsPage() {
     )
     setTransitionGuardSeconds(
       (settings as { transition_guard_seconds?: number | null }).transition_guard_seconds ?? ''
+    )
+    setGraphqlDeprecationDays(
+      (settings as { graphql_deprecation_days?: number | null }).graphql_deprecation_days ?? ''
     )
     setIntegrationNotificationsEnabled(
       !!(settings as { integration_notifications_enabled?: boolean })
@@ -1958,7 +1962,8 @@ export function SettingsPage() {
       revision_retention_count: revisionRetentionCount === '' ? null : revisionRetentionCount,
       field_watch_enabled: fieldWatchEnabled,
       lock_idle_release_minutes: lockIdleMinutes === '' ? null : lockIdleMinutes,
-      transition_guard_seconds: transitionGuardSeconds === '' ? null : transitionGuardSeconds
+      transition_guard_seconds: transitionGuardSeconds === '' ? null : transitionGuardSeconds,
+      graphql_deprecation_days: graphqlDeprecationDays === '' ? null : graphqlDeprecationDays
     })
   }
 
@@ -3179,6 +3184,25 @@ export function SettingsPage() {
                         setLockIdleMinutes(e.target.value === '' ? '' : Number(e.target.value))
                       }
                       placeholder='e.g. 15'
+                      className='h-8 w-40 text-[13px]'
+                    />
+                  </Field>
+                  <Field
+                    label='API field deprecation window (days)'
+                    hint='A field marked deprecated stays in the GraphQL schema as @deprecated for this many days before it may be removed; a removal before then is refused. Blank = 14 days. 0 = no policy.'
+                  >
+                    <Input
+                      type='number'
+                      min={0}
+                      max={3650}
+                      value={graphqlDeprecationDays}
+                      data-settings-deprecation-days
+                      onChange={(e) =>
+                        setGraphqlDeprecationDays(
+                          e.target.value === '' ? '' : Number(e.target.value)
+                        )
+                      }
+                      placeholder='14'
                       className='h-8 w-40 text-[13px]'
                     />
                   </Field>
