@@ -1,6 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 import { Bug, Camera, Loader2 } from 'lucide-react'
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -113,17 +114,25 @@ export function BugReporter() {
       toast.error(err.response?.data?.error ?? 'Could not file the report')
   })
 
+  // The button portals to <body>: a `position: fixed` element inside any
+  // ancestor that carries a transform (the page-enter animation keeps
+  // translateY(0) applied by its fill mode) anchors to THAT box and scrolls
+  // away with the page instead of pinning to the viewport corner.
+  const trigger = (
+    <button
+      type='button'
+      data-bug-reporter
+      onClick={openReporter}
+      title='Report a bug'
+      className='fixed bottom-4 right-4 z-40 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm transition-colors hover:border-red-200 hover:text-red-500 dark:border-border dark:bg-card'
+    >
+      {capturing ? <Loader2 className='h-4 w-4 animate-spin' /> : <Bug className='h-4 w-4' />}
+    </button>
+  )
+
   return (
     <>
-      <button
-        type='button'
-        data-bug-reporter
-        onClick={openReporter}
-        title='Report a bug'
-        className='fixed bottom-4 right-4 z-40 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm transition-colors hover:border-red-200 hover:text-red-500 dark:border-border dark:bg-card'
-      >
-        {capturing ? <Loader2 className='h-4 w-4 animate-spin' /> : <Bug className='h-4 w-4' />}
-      </button>
+      {typeof document === 'undefined' ? trigger : createPortal(trigger, document.body)}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className='max-w-lg' data-bug-reporter>

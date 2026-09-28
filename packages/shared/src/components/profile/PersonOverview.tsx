@@ -333,7 +333,7 @@ export function PeopleCard({ profile: p }: { profile: PersonProfile }) {
           <p className='mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
             Same manager · {p.peers.length}
           </p>
-          <ul className='flex flex-wrap gap-x-4 gap-y-1.5' data-person-peers>
+          <ul className='flex flex-wrap items-center gap-x-4 gap-y-1.5' data-person-peers>
             {p.peers.map((r) => (
               <li key={r.id}>
                 <PersonChip person={r} />
