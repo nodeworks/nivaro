@@ -485,6 +485,19 @@ export async function usersRoutes(app: FastifyInstance) {
         patch.theme_accent = raw
       }
     }
+    if ('dashboard' in body) {
+      // #848 — the person's home-page arrangement (items on a 12-column grid,
+      // sections one level deep, figure tiles). null = back to the role's
+      // published default. Validated so only a drawable layout is stored.
+      if (body.dashboard === null) {
+        patch.dashboard = null
+      } else {
+        const { normalizeDashboardLayout } = await import('../services/dashboard-layout.js')
+        const n = normalizeDashboardLayout(body.dashboard)
+        if (n.error) return reply.code(400).send({ error: `dashboard: ${n.error}` })
+        patch.dashboard = n.layout
+      }
+    }
     if ('notification_sound' in body) {
       // #684 — client-side chirp when an in-app notification lands.
       if (!['off', 'subtle', 'chime'].includes(String(body.notification_sound))) {
