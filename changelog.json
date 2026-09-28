@@ -1,10 +1,137 @@
 {
-  "generated_at": "2026-09-26T22:31:10.556Z",
+  "generated_at": "2026-09-28T02:44:00.478Z",
   "releases": [
+    {
+      "version": "0.1.350",
+      "tag": "v0.1.350",
+      "date": "2026-09-27T22:43:49-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "picker rules enforced on write, refusal details on the wire",
+              "hash": "16f48beb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a file may remove records, rename a key, and protect reviewed rows",
+              "hash": "91a3b55d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "every stored-procedure import is a configuration",
+              "hash": "ba7693e6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "nested child updates, alias set and delete, polymorphic links, root /items alias",
+              "hash": "de66879b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "defaults from linked records and relation limits on every write",
+              "hash": "b9719893"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "rehearse a create, sandbox keys that store nothing",
+              "hash": "a8a83c98"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "related rows in fields, cursors, aggregates, filters that refuse",
+              "hash": "b03ee577"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a run you can read, drill into and revert",
+              "hash": "e897ac25"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "filters that are not columns, caches across processes, schedules on save",
+              "hash": "27eb371a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "scripts for the invoice processor switch and the invoice copies cleanup",
+              "hash": "dcd8cb92"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "queue row access, API key scopes and limits, refusal codes, batch updates",
+              "hash": "a6f7dd84"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "processors for files that span several collections",
+              "hash": "f6d7f953"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "read gates on nested GraphQL fields, calculated fields filter in SQL",
+              "hash": "21f76313"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "bulk writes, idempotency keys, transition repeat guard, filtered webhooks",
+              "hash": "c4698398"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "cache configuration reads at the driver seam",
+              "hash": "53db7fd4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "nested write helpers and doc sections",
+              "hash": "77628ecf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "nested one-to-many writes on create and update",
+              "hash": "f71fc613"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ai autofill follow-ups: title-length rule, one dialog, tray labels, dark editor",
+              "hash": "ba99b97e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fill a new record from a document — proposal, review, stage",
+              "hash": "64f55df5"
+            }
+          ]
+        }
+      ],
+      "count": 19
+    },
     {
       "version": "0.1.349",
       "tag": "v0.1.349",
-      "date": "2026-09-26T18:30:59-04:00",
+      "date": "2026-09-26T18:31:10-04:00",
       "sections": [
         {
           "label": "Other",
