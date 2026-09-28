@@ -14,6 +14,33 @@ import {
 } from '../services/user-profile.js'
 import { getUser, listUsers, updateUser } from '../services/users.js'
 
+// Dashboard canvas prefs (#848 follow-up): the scope pickers (zone + year)
+// and the density toggle a person leaves the canvas in. Both are per-page UI
+// state, not layout data, so they live in preferences beside `dashboard`
+// rather than inside the layout blob itself.
+export function normalizeDashboardScope(
+  v: unknown
+): { zone: string | number | null; year: number | null } | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as { zone?: unknown; year?: unknown }
+  const zone =
+    o.zone === null || o.zone === undefined
+      ? null
+      : typeof o.zone === 'number' && Number.isFinite(o.zone)
+        ? o.zone
+        : typeof o.zone === 'string' && o.zone.length <= 80
+          ? o.zone
+          : undefined
+  const y = o.year === null || o.year === undefined ? null : Number(o.year)
+  const year = y === null ? null : Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : undefined
+  if (zone === undefined || year === undefined) return null
+  return { zone, year }
+}
+
+export function normalizeDashboardDensity(v: unknown): 'comfortable' | 'compact' | null {
+  return v === 'comfortable' || v === 'compact' ? v : null
+}
+
 export async function usersRoutes(app: FastifyInstance) {
   // Authenticated, not admin-only: the assignee and mention pickers on every
   // record form read this list, so requireAdmin here 403'd record pages for
@@ -497,6 +524,22 @@ export async function usersRoutes(app: FastifyInstance) {
         if (n.error) return reply.code(400).send({ error: `dashboard: ${n.error}` })
         patch.dashboard = n.layout
       }
+    }
+    if ('dashboard_scope' in body) {
+      // The canvas's zone/year scope chips — per-person, distinct from the
+      // layout itself so switching scope never touches the saved arrangement.
+      if (body.dashboard_scope === null) patch.dashboard_scope = null
+      else {
+        const s = normalizeDashboardScope(body.dashboard_scope)
+        if (!s) return reply.code(400).send({ error: 'dashboard_scope must be {zone, year}' })
+        patch.dashboard_scope = s
+      }
+    }
+    if ('dashboard_density' in body) {
+      const d = normalizeDashboardDensity(body.dashboard_density)
+      if (!d)
+        return reply.code(400).send({ error: 'dashboard_density must be comfortable or compact' })
+      patch.dashboard_density = d
     }
     if ('notification_sound' in body) {
       // #684 — client-side chirp when an in-app notification lands.
