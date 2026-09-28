@@ -1,10 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { TickerNumber } from './TickerNumber'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useOptionalRealtime } from '../lib/realtime'
 import { useApiFetchConfig, useItemNavigation } from '../context'
+import {
+  type NotificationRouteMap,
+  resolveNotificationTarget,
+  runNotificationTarget
+} from '../lib/notification-target'
+import { useOptionalRealtime } from '../lib/realtime'
+import { slaChip, withinDay } from '../lib/sla-chip'
+import { TickerNumber } from './TickerNumber'
 import { UserAvatar } from './UserAvatar'
-import { resolveNotificationTarget, runNotificationTarget, type NotificationRouteMap } from '../lib/notification-target'
 
 /**
  * My Work — the personal actionable inbox: records whose current pipeline
@@ -18,7 +23,7 @@ import { resolveNotificationTarget, runNotificationTarget, type NotificationRout
 
 interface SlaInfo {
   status: 'ok' | 'warning' | 'breached' | null
-  remaining_hours?: number | null
+  remaining_hours: number | null
 }
 
 interface OwnedRow {
@@ -66,18 +71,24 @@ interface MyWorkData {
   }
 }
 
+const SLA_TONE_CLASS: Record<'ok' | 'warn' | 'alert' | 'neutral', string> = {
+  alert: 'bg-red-500/10 text-red-600 dark:text-red-400',
+  warn: 'bg-amber-400/15 text-amber-700 dark:text-amber-400',
+  neutral: 'bg-slate-500/10 text-slate-600 dark:text-slate-400',
+  ok: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+}
+
+// Time-to-breach chip — "breaches in 6h" / "breached 2d ago" — amber for a
+// soon-due warning, red once breached, slate otherwise. #853.
 function SlaChip({ sla }: { sla: SlaInfo | null }) {
-  if (!sla?.status || sla.status === 'ok') return null
-  const breached = sla.status === 'breached'
+  const chip = slaChip(sla)
+  if (!chip) return null
   return (
     <span
-      className={
-        breached
-          ? 'rounded px-1.5 py-0.5 text-[10px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400'
-          : 'rounded px-1.5 py-0.5 text-[10px] font-semibold bg-amber-400/15 text-amber-700 dark:text-amber-400'
-      }
+      data-sla-chip={chip.tone}
+      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${SLA_TONE_CLASS[chip.tone]}`}
     >
-      {breached ? 'SLA breached' : 'SLA warning'}
+      {chip.label}
     </span>
   )
 }
@@ -155,6 +166,8 @@ export function MyWorkView({
   }
   const [customizeOpen, setCustomizeOpen] = useState(false)
   const debounceRef = useRef(0)
+  // #853 — which owned rows show, by their SLA reading; client-side only.
+  const [slaFilter, setSlaFilter] = useState<'all' | 'soon' | 'breached'>('all')
 
   const { data, isLoading, refetch, isFetching } = useQuery<MyWorkData>({
     queryKey: ['my-work'],
@@ -229,7 +242,8 @@ export function MyWorkView({
     }
   }
   const notificationTargetFor = (collection: string | null, item: string | null) => {
-    if (collection && item && !/^nivaro_/i.test(collection) && collection !== '__chat__') return true
+    if (collection && item && !/^nivaro_/i.test(collection) && collection !== '__chat__')
+      return true
     return !!resolveNotificationTarget(collection, item, {
       record: () => null,
       ...notificationRoutes
@@ -322,11 +336,27 @@ export function MyWorkView({
                     >
                       {hidden ? '' : '✓'}
                     </button>
-                    <span className={`min-w-0 flex-1 truncate text-[12px] ${hidden ? 'text-slate-400 line-through' : ''}`}>
+                    <span
+                      className={`min-w-0 flex-1 truncate text-[12px] ${hidden ? 'text-slate-400 line-through' : ''}`}
+                    >
                       {label}
                     </span>
-                    <button type='button' onClick={() => move(-1)} disabled={idx === 0} className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'>↑</button>
-                    <button type='button' onClick={() => move(1)} disabled={idx === sectionPrefs.order.length - 1} className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'>↓</button>
+                    <button
+                      type='button'
+                      onClick={() => move(-1)}
+                      disabled={idx === 0}
+                      className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => move(1)}
+                      disabled={idx === sectionPrefs.order.length - 1}
+                      className='px-1 text-[11px] text-slate-400 hover:text-foreground disabled:opacity-30'
+                    >
+                      ↓
+                    </button>
                   </div>
                 )
               })}
@@ -340,149 +370,191 @@ export function MyWorkView({
           sections pair up into the two-column grid. Per-browser UI pref. */}
       {(() => {
         const renderers: Record<string, () => React.ReactNode> = {
-          records: () => (
-            <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-        <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
-          <h2 className='text-[13px] font-medium'>Waiting on you</h2>
-          <p className='text-[11px] text-muted-foreground'>
-            Records whose current step resolves you as an owner — most urgent first.
-          </p>
-        </div>
-        {data.owned.length === 0 ? (
-          <p className='px-4 py-6 text-center text-[12.5px] text-muted-foreground'>
-            Nothing is waiting on you. Enjoy it.
-          </p>
-        ) : (
-          <ul className='divide-y divide-slate-100 dark:divide-border/60'>
-            {data.owned.map((o) => (
-              <li key={`${o.collection}:${o.item}`}>
-                <button
-                  type='button'
-                  onClick={() => open(o.collection, o.item)}
-                  className='flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-muted'
-                >
-                  <span className='min-w-0 flex-1 truncate text-[12.5px] font-medium'>
-                    {o.label}
-                  </span>
-                  <span className='hidden text-[11px] text-muted-foreground sm:inline'>
-                    {o.collection.replace(/_/g, ' ')}
-                  </span>
-                  <SlaChip sla={o.sla} />
-                  <StateChip state={o.state} color={o.state_color} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-          ),
+          records: () => {
+            const soonCount = data.owned.filter((o) => withinDay(o.sla)).length
+            const breachedCount = data.owned.filter((o) => o.sla?.status === 'breached').length
+            const filteredOwned =
+              slaFilter === 'soon'
+                ? data.owned.filter((o) => withinDay(o.sla))
+                : slaFilter === 'breached'
+                  ? data.owned.filter((o) => o.sla?.status === 'breached')
+                  : data.owned
+            const slaFilters = [
+              { key: 'all' as const, label: `All (${data.owned.length})` },
+              { key: 'soon' as const, label: `Warning within 24h (${soonCount})` },
+              { key: 'breached' as const, label: `Breached (${breachedCount})` }
+            ]
+            return (
+              <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+                <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+                  <h2 className='text-[13px] font-medium'>Waiting on you</h2>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Records whose current step resolves you as an owner — most urgent first.
+                  </p>
+                </div>
+                {data.owned.length > 0 && (
+                  <div className='flex flex-wrap items-center gap-1 border-b border-slate-100 px-4 py-2 dark:border-border/60'>
+                    <div className='flex items-center gap-1 rounded-lg bg-slate-100 p-1 dark:bg-muted'>
+                      {slaFilters.map((f) => (
+                        <button
+                          key={f.key}
+                          type='button'
+                          data-my-work-sla-filter={f.key}
+                          aria-pressed={slaFilter === f.key}
+                          onClick={() => setSlaFilter(f.key)}
+                          className={[
+                            'rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors duration-150',
+                            slaFilter === f.key
+                              ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-foreground'
+                              : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                          ].join(' ')}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {filteredOwned.length === 0 ? (
+                  <p className='px-4 py-6 text-center text-[12.5px] text-muted-foreground'>
+                    {data.owned.length === 0
+                      ? 'Nothing is waiting on you. Enjoy it.'
+                      : 'Nothing matches this filter.'}
+                  </p>
+                ) : (
+                  <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                    {filteredOwned.map((o) => (
+                      <li key={`${o.collection}:${o.item}`}>
+                        <button
+                          type='button'
+                          onClick={() => open(o.collection, o.item)}
+                          className='flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-muted'
+                        >
+                          <span className='min-w-0 flex-1 truncate text-[12.5px] font-medium'>
+                            {o.label}
+                          </span>
+                          <span className='hidden text-[11px] text-muted-foreground sm:inline'>
+                            {o.collection.replace(/_/g, ' ')}
+                          </span>
+                          <StateChip state={o.state} color={o.state_color} />
+                          <SlaChip sla={o.sla} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )
+          },
           tasks: () => (
             <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-          <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
-            <h2 className='text-[13px] font-medium'>My tasks</h2>
-          </div>
-          {data.tasks.length === 0 ? (
-            <p className='px-4 py-5 text-center text-[12.5px] text-muted-foreground'>
-              No open tasks.
-            </p>
-          ) : (
-            <ul className='divide-y divide-slate-100 dark:divide-border/60'>
-              {data.tasks.map((t) => (
-                <li key={t.id} className='flex items-center gap-2.5 px-4 py-2'>
-                  <button
-                    type='button'
-                    title='Mark done'
-                    onClick={() => completeTask.mutate(t.id)}
-                    disabled={completeTask.isPending}
-                    className='flex h-4 w-4 shrink-0 items-center justify-center rounded border border-slate-300 text-transparent hover:border-emerald-500 hover:text-emerald-500 dark:border-border'
-                  >
-                    ✓
-                  </button>
-                  {(t as { priority?: string }).priority === 'urgent' && (
-                    <span className='shrink-0 rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'>
-                      urgent
-                    </span>
-                  )}
-                  <button
-                    type='button'
-                    onClick={() => open(t.collection, t.item)}
-                    className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
-                  >
-                    {t.title}
-                  </button>
-                  {t.due_date && (
-                    <span
-                      className={`text-[11px] tabular-nums ${
-                        new Date(t.due_date) < new Date()
-                          ? 'font-medium text-red-600 dark:text-red-400'
-                          : 'text-muted-foreground'
-                      }`}
-                    >
-                      {new Date(t.due_date).toLocaleDateString()}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+              <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+                <h2 className='text-[13px] font-medium'>My tasks</h2>
+              </div>
+              {data.tasks.length === 0 ? (
+                <p className='px-4 py-5 text-center text-[12.5px] text-muted-foreground'>
+                  No open tasks.
+                </p>
+              ) : (
+                <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                  {data.tasks.map((t) => (
+                    <li key={t.id} className='flex items-center gap-2.5 px-4 py-2'>
+                      <button
+                        type='button'
+                        title='Mark done'
+                        onClick={() => completeTask.mutate(t.id)}
+                        disabled={completeTask.isPending}
+                        className='flex h-4 w-4 shrink-0 items-center justify-center rounded border border-slate-300 text-transparent hover:border-emerald-500 hover:text-emerald-500 dark:border-border'
+                      >
+                        ✓
+                      </button>
+                      {(t as { priority?: string }).priority === 'urgent' && (
+                        <span className='shrink-0 rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'>
+                          urgent
+                        </span>
+                      )}
+                      <button
+                        type='button'
+                        onClick={() => open(t.collection, t.item)}
+                        className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
+                      >
+                        {t.title}
+                      </button>
+                      {t.due_date && (
+                        <span
+                          className={`text-[11px] tabular-nums ${
+                            new Date(t.due_date) < new Date()
+                              ? 'font-medium text-red-600 dark:text-red-400'
+                              : 'text-muted-foreground'
+                          }`}
+                        >
+                          {new Date(t.due_date).toLocaleDateString()}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           ),
           notifications: () => (
             <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-          <div className='flex items-center justify-between border-b border-slate-200 px-4 py-2.5 dark:border-border'>
-            <h2 className='text-[13px] font-medium'>Unread notifications</h2>
-            {data.notifications.length > 0 && (
-              <button
-                type='button'
-                onClick={() => markRead.mutate(data.notifications.map((n) => n.id))}
-                className='text-[11px] text-[#00a5cc] hover:underline'
-              >
-                Mark all read
-              </button>
-            )}
-          </div>
-          {data.notifications.length === 0 ? (
-            <p className='px-4 py-5 text-center text-[12.5px] text-muted-foreground'>
-              You're all caught up.
-            </p>
-          ) : (
-            <ul className='divide-y divide-slate-100 dark:divide-border/60'>
-              {data.notifications.map((n) => (
-                <li key={n.id} className='flex items-start gap-2.5 px-4 py-2'>
-                  <UserAvatar
-                    userId={n.sender}
-                    className='mt-0.5 h-5 w-5'
-                    fallback={
-                      <span className='mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[9px] font-semibold text-slate-500 dark:bg-muted' />
-                    }
-                  />
+              <div className='flex items-center justify-between border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+                <h2 className='text-[13px] font-medium'>Unread notifications</h2>
+                {data.notifications.length > 0 && (
                   <button
                     type='button'
-                    onClick={() => open(n.collection, n.item)}
-                    className={
-                      notificationTargetFor(n.collection, n.item)
-                        ? 'min-w-0 flex-1 cursor-pointer text-left hover:opacity-80'
-                        : 'min-w-0 flex-1 cursor-default text-left'
-                    }
+                    onClick={() => markRead.mutate(data.notifications.map((n) => n.id))}
+                    className='text-[11px] text-[#00a5cc] hover:underline'
                   >
-                    <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>
-                    {n.message && (
-                      <p className='truncate text-[11.5px] text-muted-foreground'>{n.message}</p>
-                    )}
+                    Mark all read
                   </button>
-                  <button
-                    type='button'
-                    title='Mark read'
-                    onClick={() => markRead.mutate([n.id])}
-                    className='text-[11px] text-muted-foreground hover:text-foreground'
-                  >
-                    ✓
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+                )}
+              </div>
+              {data.notifications.length === 0 ? (
+                <p className='px-4 py-5 text-center text-[12.5px] text-muted-foreground'>
+                  You're all caught up.
+                </p>
+              ) : (
+                <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                  {data.notifications.map((n) => (
+                    <li key={n.id} className='flex items-start gap-2.5 px-4 py-2'>
+                      <UserAvatar
+                        userId={n.sender}
+                        className='mt-0.5 h-5 w-5'
+                        fallback={
+                          <span className='mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[9px] font-semibold text-slate-500 dark:bg-muted' />
+                        }
+                      />
+                      <button
+                        type='button'
+                        onClick={() => open(n.collection, n.item)}
+                        className={
+                          notificationTargetFor(n.collection, n.item)
+                            ? 'min-w-0 flex-1 cursor-pointer text-left hover:opacity-80'
+                            : 'min-w-0 flex-1 cursor-default text-left'
+                        }
+                      >
+                        <p className='truncate text-[12.5px] font-medium'>{n.subject}</p>
+                        {n.message && (
+                          <p className='truncate text-[11.5px] text-muted-foreground'>
+                            {n.message}
+                          </p>
+                        )}
+                      </button>
+                      <button
+                        type='button'
+                        title='Mark read'
+                        onClick={() => markRead.mutate([n.id])}
+                        className='text-[11px] text-muted-foreground hover:text-foreground'
+                      >
+                        ✓
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           )
         }
         const visible = sectionPrefs.order.filter((k) => !sectionPrefs.hidden.includes(k))
