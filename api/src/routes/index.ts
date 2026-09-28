@@ -51,6 +51,7 @@ import { cronTimelineRoutes } from './cron-timeline.js'
 import { crossTriggersRoutes } from './cross-triggers.js'
 import { customActionRoutes } from './custom-actions.js'
 import { customQueriesRoutes } from './custom-queries.js'
+import { dashboardFeedRoutes } from './dashboard-feed.js'
 import { dashboardLinkRoutes } from './dashboard-links.js'
 import { dashboardsRoutes } from './dashboards.js'
 import { dataModelReadRoutes, dataModelRoutes } from './data-model.js'
@@ -294,6 +295,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(inactiveUserLinkRoutes, { prefix: '/inactive-user-links' })
   await app.register(delegationRoutes)
   await app.register(myWorkRoutes)
+  await app.register(dashboardFeedRoutes, { prefix: '/dashboard' })
   await app.register(accessRequestRoutes)
   await app.register(lastTouchRoutes)
   await app.register(recordViewRoutes)

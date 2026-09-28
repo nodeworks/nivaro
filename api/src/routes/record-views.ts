@@ -30,6 +30,97 @@ function parseJson(val: unknown): Record<string, unknown> | null {
 const SESSION_GRACE_MS = 30 * 60 * 1000
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+export interface RecordRecap {
+  field_changes: number
+  /** Human labels of the changed fields (first 8); empty when labels were skipped. */
+  fields: string[]
+  comments: number
+  transitions: number
+  editors: string[]
+}
+
+/**
+ * What OTHER people did to one record after `since`: field changes (revision
+ * deltas of create/update activity), comments, workflow transitions, and the
+ * names of whoever edited. Read-only — it never moves a watermark. Shared by
+ * the /touch recap and the dashboard's changed-since read.
+ *
+ * Every source is best-effort — a missing table or column degrades to zero,
+ * never a 500.
+ */
+export async function recordRecapSince(
+  collection: string,
+  id: string,
+  userId: string,
+  since: Date,
+  opts: { labels?: boolean } = {}
+): Promise<RecordRecap> {
+  const [activity, comments, transitions] = await Promise.all([
+    db('nivaro_activity as a')
+      .leftJoin('nivaro_revisions as r', 'r.activity', 'a.id')
+      .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+      .where({ 'a.collection': collection, 'a.item': id })
+      .whereIn('a.action', ['create', 'update'])
+      .where('a.timestamp', '>', since)
+      .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
+      .select('a.user', 'u.first_name', 'u.last_name', 'u.email', 'r.delta')
+      .catch(() => [] as never[]),
+    db('nivaro_comments')
+      .where({ collection, item: id })
+      .where('created_at', '>', since)
+      .whereNot('user', userId)
+      .count({ c: '*' })
+      .first()
+      .catch(() => ({ c: 0 })),
+    db('nivaro_workflow_history as h')
+      .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+      .where({ 'i.collection': collection, 'i.item': id })
+      .where('h.timestamp', '>', since)
+      .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
+      .count({ c: '*' })
+      .first()
+      .catch(() => ({ c: 0 }))
+  ])
+
+  const fields = new Set<string>()
+  const editors = new Set<string>()
+  for (const row of activity as Array<Record<string, unknown>>) {
+    const name =
+      [row.first_name, row.last_name].filter(Boolean).join(' ') ||
+      (row.email as string | null) ||
+      null
+    if (name) editors.add(name)
+    const delta = parseJson(row.delta as string | null)
+    if (delta && typeof delta === 'object') {
+      for (const k of Object.keys(delta as Record<string, unknown>)) fields.add(k)
+    }
+  }
+
+  // Human labels, not machine names — nivaro_fields.label when set, else
+  // the same titlecased fallback every form header uses.
+  const fieldList = [...fields].slice(0, 8)
+  let fieldLabels: string[] = []
+  if (opts.labels !== false && fieldList.length > 0) {
+    const labelRows = (await db('nivaro_fields')
+      .where('collection', collection)
+      .whereIn('field', fieldList)
+      .select('field', 'label')
+      .catch(() => [])) as Array<{ field: string; label: string | null }>
+    const labelMap = new Map(labelRows.map((r) => [r.field, r.label]))
+    fieldLabels = fieldList.map(
+      (f) => labelMap.get(f) || f.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    )
+  }
+
+  return {
+    field_changes: fields.size,
+    fields: fieldLabels,
+    comments: Number((comments as { c?: unknown })?.c ?? 0),
+    transitions: Number((transitions as { c?: unknown })?.c ?? 0),
+    editors: [...editors].slice(0, 5)
+  }
+}
+
 export async function recordViewRoutes(app: FastifyInstance) {
   /** #43 — the caller's recently viewed records, newest first, with the
    *  record's friendly label and current pipeline state. The watermark table
@@ -185,83 +276,11 @@ export async function recordViewRoutes(app: FastifyInstance) {
 
       if (!since) return reply.send({ data: null })
 
-      // ── Recap: what OTHERS did between `since` and now ─────────────────────
-      // Every source is best-effort — a missing table or column must degrade
-      // to zero, never 500 the record form.
-      const [activity, comments, transitions] = await Promise.all([
-        db('nivaro_activity as a')
-          .leftJoin('nivaro_revisions as r', 'r.activity', 'a.id')
-          .leftJoin('nivaro_users as u', 'u.id', 'a.user')
-          .where({ 'a.collection': collection, 'a.item': String(id) })
-          .whereIn('a.action', ['create', 'update'])
-          .where('a.timestamp', '>', since)
-          .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
-          .select('a.user', 'u.first_name', 'u.last_name', 'u.email', 'r.delta')
-          .catch(() => [] as never[]),
-        db('nivaro_comments')
-          .where({ collection, item: String(id) })
-          .where('created_at', '>', since)
-          .whereNot('user', userId)
-          .count({ c: '*' })
-          .first()
-          .catch(() => ({ c: 0 })),
-        db('nivaro_workflow_history as h')
-          .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
-          .where({ 'i.collection': collection, 'i.item': String(id) })
-          .where('h.timestamp', '>', since)
-          .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
-          .count({ c: '*' })
-          .first()
-          .catch(() => ({ c: 0 }))
-      ])
-
-      const fields = new Set<string>()
-      const editors = new Set<string>()
-      for (const row of activity as Array<Record<string, unknown>>) {
-        const name =
-          [row.first_name, row.last_name].filter(Boolean).join(' ') ||
-          (row.email as string | null) ||
-          null
-        if (name) editors.add(name)
-        const delta = parseJson(row.delta as string | null)
-        if (delta && typeof delta === 'object') {
-          for (const k of Object.keys(delta as Record<string, unknown>)) fields.add(k)
-        }
-      }
-
-      const fieldChanges = fields.size
-      const commentCount = Number((comments as { c?: unknown })?.c ?? 0)
-      const transitionCount = Number((transitions as { c?: unknown })?.c ?? 0)
-      if (fieldChanges === 0 && commentCount === 0 && transitionCount === 0) {
+      const recap = await recordRecapSince(collection, String(id), userId, since)
+      if (recap.field_changes === 0 && recap.comments === 0 && recap.transitions === 0) {
         return reply.send({ data: null })
       }
-
-      // Human labels, not machine names — nivaro_fields.label when set, else
-      // the same titlecased fallback every form header uses.
-      const fieldList = [...fields].slice(0, 8)
-      let fieldLabels = fieldList
-      if (fieldList.length > 0) {
-        const labelRows = (await db('nivaro_fields')
-          .where('collection', collection)
-          .whereIn('field', fieldList)
-          .select('field', 'label')
-          .catch(() => [])) as Array<{ field: string; label: string | null }>
-        const labelMap = new Map(labelRows.map((r) => [r.field, r.label]))
-        fieldLabels = fieldList.map(
-          (f) => labelMap.get(f) || f.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-        )
-      }
-
-      return reply.send({
-        data: {
-          since: since.toISOString(),
-          field_changes: fieldChanges,
-          fields: fieldLabels,
-          comments: commentCount,
-          transitions: transitionCount,
-          editors: [...editors].slice(0, 5)
-        }
-      })
+      return reply.send({ data: { since: since.toISOString(), ...recap } })
     }
   )
 
