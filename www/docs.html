@@ -4183,6 +4183,22 @@ query {
     }
   }
 }</code></pre>
+          <h3 class="doc-h3">Links that may point at several collections</h3>
+          <p class="doc-p">A relation whose junction names the target's collection per row (a contact that is a user or an external address, a log entry about an invoice or a workflow) reads as a list of <code class="doc-code">&lt;collection&gt;_&lt;field&gt;_m2a</code> rows: <code class="doc-code">id</code> is the junction row, the discriminator column says which collection, <code class="doc-code">item_id</code> the stored id, and <code class="doc-code">item</code> is a union of the allowed collections' types — select the arms you want with <code class="doc-code">... on</code>. Users read as the <code class="doc-code">User</code> type. The field takes <code class="doc-code">collection: ["…"]</code> to keep only links into those collections, and <code class="doc-code">limit</code> / <code class="doc-code">offset</code> over the links. A link into a collection the schema does not carry, or one the caller cannot read, resolves <code class="doc-code">item: null</code>.</p>
+          <pre class="doc-pre"><code>{
+  inventory_request(limit: 5) {
+    id
+    internal_contact(collection: ["directus_users"]) {
+      id
+      collection
+      item {
+        __typename
+        ... on User { id email firstName lastName }
+        ... on additional_emails { id email }
+      }
+    }
+  }
+}</code></pre>
           <h3 class="doc-h3">Permissions on nested fields</h3>
           <p class="doc-p">A nested field is read with the caller's own access to the related collection. Read permission, row filters, user scopes and the policy's field list all apply, exactly as they do when the related collection is queried on its own. A to-many field returns only the rows the caller may read; a to-one field returns <code class="doc-code">null</code> when the caller may not read the related record. API keys that carry scope restrictions are narrowed the same way, whoever owns them.</p>
           <h3 class="doc-h3">Scalar type mapping</h3>

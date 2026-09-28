@@ -99,6 +99,28 @@ query {
   }
 }`
     },
+    { type: 'h3', text: 'Links that may point at several collections' },
+    {
+      type: 'p',
+      text: 'A relation whose junction names the target\'s collection per row (a contact that is a user or an external address, a log entry about an invoice or a workflow) reads as a list of `<collection>_<field>_m2a` rows: `id` is the junction row, the discriminator column says which collection, `item_id` the stored id, and `item` is a union of the allowed collections\' types — select the arms you want with `... on`. Users read as the `User` type. The field takes `collection: ["…"]` to keep only links into those collections, and `limit` / `offset` over the links. A link into a collection the schema does not carry, or one the caller cannot read, resolves `item: null`.'
+    },
+    {
+      type: 'pre',
+      code: `{
+  inventory_request(limit: 5) {
+    id
+    internal_contact(collection: ["directus_users"]) {
+      id
+      collection
+      item {
+        __typename
+        ... on User { id email firstName lastName }
+        ... on additional_emails { id email }
+      }
+    }
+  }
+}`
+    },
     { type: 'h3', text: 'Permissions on nested fields' },
     {
       type: 'p',

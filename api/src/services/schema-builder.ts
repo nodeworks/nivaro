@@ -12,6 +12,7 @@ import {
   GraphQLObjectType,
   type GraphQLOutputType,
   GraphQLSchema,
+  GraphQLUnionType,
   Kind,
   type SelectionNode,
   GraphQLString
@@ -24,7 +25,7 @@ import {
   domainSubscriptionFields
 } from '../graphql/resolvers.js'
 import { GraphQLJSON } from '../graphql/scalars.js'
-import { ALL_DOMAIN_TYPES } from '../graphql/types.js'
+import { ALL_DOMAIN_TYPES, UserType } from '../graphql/types.js'
 import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
@@ -507,6 +508,17 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     { junction: string; fkToParent: string; fkToOther: string; otherCollection: string }
   >()
 
+  // M2A (#821): "one_collection.one_field" → a junction whose item column may
+  // point at any of several collections, named per row by a discriminator.
+  interface M2AInfo {
+    junction: string
+    fkToParent: string
+    itemField: string
+    discriminator: string
+    allowed: string[]
+  }
+  const m2aMap = new Map<string, M2AInfo>()
+
   for (const rel of allRelations) {
     if (!rel.one_collection) continue
 
@@ -532,6 +544,29 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             fkToOther: rel.junction_field,
             otherCollection: otherRel.one_collection
           })
+        } else if (otherRel) {
+          const allowedRaw = (otherRel as { one_allowed_collections?: unknown })
+            .one_allowed_collections
+          const allowed = Array.isArray(allowedRaw)
+            ? allowedRaw.map(String)
+            : typeof allowedRaw === 'string'
+              ? allowedRaw
+                  .replace(/^\[|\]$/g, '')
+                  .split(',')
+                  .map((c) => c.trim().replace(/^"|"$/g, ''))
+                  .filter(Boolean)
+              : []
+          if (allowed.length > 0) {
+            m2aMap.set(`${rel.one_collection}.${rel.one_field}`, {
+              junction: rel.many_collection,
+              fkToParent: rel.many_field,
+              itemField: rel.junction_field,
+              discriminator:
+                (otherRel as { one_collection_field?: string | null }).one_collection_field ||
+                'collection',
+              allowed
+            })
+          }
         }
       }
     }
@@ -623,6 +658,62 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     return t
   }
 
+  // One object type per M2A alias (#821): the junction row id, the stored
+  // discriminator, and `item` as a union of the allowed collections' types
+  // (`directus_users` reads as the User type). An allowed collection nobody
+  // registered contributes nothing; a link into one resolves `item: null`.
+  const m2aRowTypes = new Map<string, GraphQLObjectType>()
+  const userTypeFor = (c: string) => c === 'directus_users' || c === 'nivaro_users'
+  const m2aMemberTypes = (info: M2AInfo): Map<string, GraphQLObjectType> => {
+    const out = new Map<string, GraphQLObjectType>()
+    for (const c of info.allowed) {
+      const t = userTypeFor(c) ? UserType : typeRegistry.get(c)
+      if (t) out.set(c, t)
+    }
+    return out
+  }
+  const m2aRowType = (parentCol: string, field: string, info: M2AInfo): GraphQLObjectType => {
+    const name = `${parentCol}_${field}_m2a`
+    const have = m2aRowTypes.get(name)
+    if (have) return have
+    const members = m2aMemberTypes(info)
+    const memberTypes = [...new Set(members.values())]
+    const itemType: GraphQLOutputType =
+      memberTypes.length === 0
+        ? GraphQLJSON
+        : new GraphQLUnionType({
+            name: `${name}_item`,
+            description: `One of ${[...members.keys()].join(', ')}`,
+            types: memberTypes,
+            resolveType: (v) => (v as { __typename?: string }).__typename ?? memberTypes[0].name
+          })
+    const t = new GraphQLObjectType({
+      name,
+      description: `${info.junction} rows linking ${parentCol} to ${info.allowed.join(' | ')}`,
+      fields: {
+        id: {
+          type: GraphQLID,
+          description: 'Junction row id',
+          resolve: (src) => (src as { __junction_id: unknown }).__junction_id
+        },
+        [info.discriminator]: {
+          type: GraphQLString,
+          description: 'Which collection the linked record belongs to, as stored'
+        },
+        item: {
+          type: itemType,
+          description: 'The linked record; null when its collection is unknown or unreadable'
+        },
+        item_id: {
+          type: GraphQLID,
+          description: 'The linked record id, as stored on the junction row'
+        }
+      }
+    })
+    m2aRowTypes.set(name, t)
+    return t
+  }
+
   for (const col of visible) {
     const colName = col.collection
     const fields = allFields.get(colName) ?? []
@@ -673,6 +764,114 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                 continue
               }
               // Target not registered → fall through to scalar (returns FK string)
+            }
+
+            // ── M2A: junction rows naming their target's collection ──────────
+            const m2aInfo = m2aMap.get(fkey)
+            if (m2aInfo) {
+              const info = { ...m2aInfo }
+              const members = m2aMemberTypes(info)
+              gqlFields[f.field] = {
+                type: new GraphQLList(new GraphQLNonNull(m2aRowType(colName, f.field, info))),
+                description: f.note ?? undefined,
+                args: {
+                  collection: {
+                    type: new GraphQLList(GraphQLString),
+                    description:
+                      'Only links into these collections (as stored on the junction row).'
+                  },
+                  limit: { type: GraphQLInt },
+                  offset: { type: GraphQLInt }
+                },
+                resolve: async (
+                  source: unknown,
+                  args: { collection?: string[]; limit?: number; offset?: number },
+                  ctx: GQLContext
+                ) => {
+                  const parentId = (source as Record<string, unknown>)['id']
+                  if (parentId == null) return []
+                  const q = db(info.junction)
+                    .where(info.fkToParent, parentId as string | number)
+                    .orderBy('id', 'asc')
+                    .select('id', info.itemField, info.discriminator)
+                  if (Array.isArray(args.collection) && args.collection.length > 0)
+                    q.whereIn(info.discriminator, args.collection.map(String))
+                  if (typeof args.limit === 'number' && args.limit > 0) q.limit(args.limit)
+                  if (typeof args.offset === 'number' && args.offset > 0) q.offset(args.offset)
+                  const links = (await q) as Array<Record<string, unknown>>
+                  // One read per collection the links name, each gated as the caller.
+                  const byCollection = new Map<string, Set<string>>()
+                  for (const l of links) {
+                    const c = String(l[info.discriminator] ?? '')
+                    const id = l[info.itemField]
+                    if (!c || id == null) continue
+                    byCollection.set(c, (byCollection.get(c) ?? new Set()).add(String(id)))
+                  }
+                  const found = new Map<string, Map<string, Record<string, unknown>>>()
+                  for (const [c, ids] of byCollection) {
+                    const type = members.get(c)
+                    if (!type) continue
+                    const rows = new Map<string, Record<string, unknown>>()
+                    if (userTypeFor(c)) {
+                      // People hang off a record the caller already read; the
+                      // User type carries only what a directory shows.
+                      const users = (await db('nivaro_users')
+                        .whereIn('id', [...ids])
+                        .where({ is_redacted: false })
+                        .select(
+                          'id',
+                          'email',
+                          'first_name',
+                          'last_name',
+                          'status',
+                          'last_access',
+                          'created_at',
+                          'updated_at'
+                        )
+                        .catch(() => [])) as Array<Record<string, unknown>>
+                      for (const u of users) {
+                        rows.set(String(u.id).toUpperCase(), {
+                          id: u.id,
+                          email: u.email,
+                          firstName: u.first_name,
+                          lastName: u.last_name,
+                          status: u.status,
+                          lastAccess: u.last_access,
+                          createdAt: u.created_at,
+                          updatedAt: u.updated_at,
+                          __typename: type.name
+                        })
+                      }
+                    } else {
+                      const gate = await nestedGate(ctx, c)
+                      const rq = db(c).whereIn(`${c}.id`, [...ids])
+                      if (!applyNestedGate(rq, c, gate, ctx.user as User)) continue
+                      const rs = (await rq.select(`${c}.*`).catch(() => [])) as Array<
+                        Record<string, unknown>
+                      >
+                      for (const r of rs) {
+                        rows.set(String(r.id).toUpperCase(), {
+                          ...narrowNestedRow(r, gate),
+                          __typename: type.name
+                        })
+                      }
+                    }
+                    found.set(c, rows)
+                  }
+                  return links.map((l) => {
+                    const c = String(l[info.discriminator] ?? '')
+                    const id = l[info.itemField]
+                    return {
+                      __junction_id: l.id,
+                      [info.discriminator]: c || null,
+                      item_id: id ?? null,
+                      item:
+                        id == null ? null : (found.get(c)?.get(String(id).toUpperCase()) ?? null)
+                    }
+                  })
+                }
+              }
+              continue
             }
 
             // ── M2M: virtual field → join through junction ────────────────────
