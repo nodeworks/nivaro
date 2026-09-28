@@ -7355,6 +7355,7 @@ interface BrowserConfig {
   checkbox_selection?: boolean
   show_actions?: boolean
   allow_create?: boolean
+  copy_as?: boolean
   page_size?: number
   quick_filters?: unknown[]
   default_sort?: string
@@ -7512,6 +7513,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.checkbox_selection === false) clean.checkbox_selection = false
     if (next.show_actions === false) clean.show_actions = false
     if (next.allow_create === false) clean.allow_create = false
+    if (next.copy_as === false) clean.copy_as = false
     if (next.page_size && next.page_size > 0) clean.page_size = next.page_size
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
     if (next.default_sort?.trim()) clean.default_sort = next.default_sort.trim()
@@ -7527,7 +7529,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
   const row = (
     label: string,
     desc: string,
-    key: 'checkbox_selection' | 'show_actions' | 'allow_create'
+    key: 'checkbox_selection' | 'show_actions' | 'allow_create' | 'copy_as'
   ) => (
     <div className='flex items-center justify-between gap-4'>
       <div>
@@ -7569,6 +7571,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           'show_actions'
         )}
         {row('New item button', 'Allow creating records from the browser', 'allow_create')}
+        {row(
+          'Copy as… button',
+          'Copy the list or a record as curl / SDK / GraphQL. Administrators only; off hides it for them too',
+          'copy_as'
+        )}
         <div className='flex items-center justify-between gap-4'>
           <div>
             <p className='text-[12.5px] font-medium text-slate-700'>Record workspace tabs</p>

@@ -81,13 +81,14 @@ import {
 } from '../lib/summary-mode'
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
-import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
-import { ImportColumnChips } from './import/ImportColumnChips'
-import { ImportFromFileButton } from './import/ImportFromFileButton'
+import { CopyAsButton } from './CopyAsButton'
 import {
   type DocumentApplySelection,
   DocumentAutofillButton
 } from './import/DocumentAutofillButton'
+import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
+import { ImportColumnChips } from './import/ImportColumnChips'
+import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
 import {
@@ -122,7 +123,6 @@ import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
 import { HighlightedCode } from './item-edit/HighlightedCode'
-import { CopyAsButton } from './CopyAsButton'
 import {
   applyDisplayTemplate,
   type CascadeRule,
@@ -1252,6 +1252,7 @@ export function ItemEditForm({
     addendum_allowed_states?: string | null
     read_mode_toggle?: boolean
     summary_mode_rules?: SummaryModeRules | null
+    browser_config?: { copy_as?: boolean } | null
   }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
@@ -1267,6 +1268,7 @@ export function ItemEditForm({
             addendum_allowed_states?: string | null
             read_mode_toggle?: boolean
             summary_mode_rules?: SummaryModeRules | null
+            browser_config?: { copy_as?: boolean } | null
           }
         }>(get(`/collections/${collection}`))
         .then((r) => r.data),
@@ -9160,12 +9162,15 @@ export function ItemEditForm({
                                                 <Clipboard className='h-4 w-4' />
                                               )}
                                             </button>
-                                            <CopyAsButton
-                                              compact
-                                              collection={collection}
-                                              itemId={String(itemId)}
-                                              fields={copyAsFields}
-                                            />
+                                            {isAdmin &&
+                                              colMeta?.browser_config?.copy_as !== false && (
+                                                <CopyAsButton
+                                                  compact
+                                                  collection={collection}
+                                                  itemId={String(itemId)}
+                                                  fields={copyAsFields}
+                                                />
+                                              )}
                                             <RecordSubscribeButton
                                               compact
                                               collection={collection}

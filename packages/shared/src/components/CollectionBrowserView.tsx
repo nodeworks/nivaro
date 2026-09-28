@@ -24,7 +24,6 @@ import {
 } from 'lucide-react'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CopyAsButton } from './CopyAsButton'
 import { toast } from 'sonner'
 import {
   type DrilldownTarget,
@@ -70,6 +69,7 @@ import {
   useBuiltinGate
 } from './bulk/BulkActionButtons'
 import { CellCopyLayer } from './CellCopyLayer'
+import { CopyAsButton } from './CopyAsButton'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
@@ -118,6 +118,10 @@ export interface CollectionBrowserConfig {
   show_actions?: boolean
   /** "+ New item" button (default true; the host's showCreate prop also gates it). */
   allow_create?: boolean
+  /** The "Copy as…" (curl / SDK / GraphQL) button on the list and the record
+   *  header. Administrators only; this switch removes it for them too
+   *  (default true). */
+  copy_as?: boolean
   /** Server page size (default 25, capped 200). */
   page_size?: number
   /** Quick-filter facet bar — same shape as the quickFilters prop; the prop
@@ -5812,17 +5816,19 @@ export function CollectionBrowserView({
         >
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
-        <CopyAsButton
-          collection={collection}
-          list={{
-            conditions: conditionsParam,
-            search: appliedSearch || undefined,
-            sort: sort || undefined,
-            limit: effPageSize,
-            page
-          }}
-          fields={effectiveColumns}
-        />
+        {isAdmin && bc.copy_as !== false && (
+          <CopyAsButton
+            collection={collection}
+            list={{
+              conditions: conditionsParam,
+              search: appliedSearch || undefined,
+              sort: sort || undefined,
+              limit: effPageSize,
+              page
+            }}
+            fields={effectiveColumns}
+          />
+        )}
         {geo && (
           <button
             type='button'
