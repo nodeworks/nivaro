@@ -4,7 +4,7 @@ import type { User } from '../types.js'
 import { recordLink } from './app-links.js'
 import { parseSpecial } from './collections.js'
 import { selectInChunks } from './db-batch.js'
-import { can } from './permissions.js'
+import { can, getRowFilter } from './permissions.js'
 import { type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 
 /**
@@ -747,7 +747,6 @@ export interface IntegrityRecord {
 }
 
 const INTEGRITY_CAP = 200
-const INTEGRITY_SCAN = 2000
 
 /**
  * Stored integrity findings (nivaro_record_integrity — the row the record
@@ -780,39 +779,30 @@ export async function listMyIntegrity(opts: { user: User; isAdmin: boolean }): P
   const kept: Array<{ collection: string; item: string; findings: string; at: number }> = []
   await Promise.all(
     [...creators.entries()].map(async ([collection, col]) => {
-      const rows = (await db('nivaro_record_integrity')
-        .where('collection', collection)
-        .whereNot('findings', '[]')
-        .orderBy('checked_at', 'desc')
-        .limit(INTEGRITY_SCAN)
-        .select('item_id', 'findings', 'checked_at')
-        .catch(() => [])) as Array<{ item_id: string; findings: string; checked_at: Date }>
-      if (rows.length === 0) return
-      const owned = new Set(
-        (
-          (await selectInChunks(
-            rows.map((r) => String(r.item_id)),
-            1000,
-            (chunk) => db(collection).whereIn('id', chunk).where(col, userId).pluck('id')
-          ).catch(() => [])) as unknown[]
-        ).map((id) => String(id).toUpperCase())
-      )
-      let mine = rows.filter((r) => owned.has(String(r.item_id).toUpperCase()))
-      if (mine.length === 0) return
+      // Owner (and, on a bound collection, open-instance) filtering happens IN
+      // SQL, so an older flagged record of the viewer's is never cut off by
+      // a newest-N scan of everyone's rows.
+      const q = db('nivaro_record_integrity as ri')
+        .join(`${collection} as r`, function () {
+          this.on(db.raw('CAST(r.id AS NVARCHAR(255)) = ri.item_id'))
+        })
+        .where('ri.collection', collection)
+        .where(`r.${col}`, userId)
+        .whereNot('ri.findings', '[]')
       if (bound.has(collection)) {
-        const open = (await selectInChunks(
-          mine.map((r) => String(r.item_id)),
-          1000,
-          (chunk) =>
-            db('nivaro_workflow_instances')
-              .where('collection', collection)
-              .whereIn('item', chunk)
-              .whereNull('completed_at')
-              .distinct('item')
-        ).catch(() => [])) as Array<{ item: string }>
-        const openSet = new Set(open.map((r) => String(r.item).toUpperCase()))
-        mine = mine.filter((r) => openSet.has(String(r.item_id).toUpperCase()))
+        void q.whereExists(function () {
+          void this.select(db.raw('1'))
+            .from('nivaro_workflow_instances as wi')
+            .where('wi.collection', collection)
+            .whereRaw('wi.item = ri.item_id')
+            .whereNull('wi.completed_at')
+        })
       }
+      const mine = (await q
+        .orderBy('ri.checked_at', 'desc')
+        .limit(INTEGRITY_CAP)
+        .select('ri.item_id', 'ri.findings', 'ri.checked_at')
+        .catch(() => [])) as Array<{ item_id: string; findings: string; checked_at: Date }>
       for (const r of mine) {
         kept.push({
           collection,
@@ -1030,12 +1020,12 @@ interface TransitionRow {
   requirements: string | null
 }
 
-/** Requirement blockers: the first manual forward transition the viewer could
- *  take from each record's current state, evaluated through its requirements
- *  gate exactly as the transition endpoint would. */
+/** Requirement blockers: the first manual forward transition from each
+ *  record's current state whose conditions hold (whoever may press it),
+ *  evaluated through its requirements gate exactly as the transition
+ *  endpoint would. When every forward step is closed by its conditions, one
+ *  blocker names the first failing condition. */
 async function requirementBlockers(
-  user: User,
-  isAdmin: boolean,
   collection: string,
   ids: string[]
 ): Promise<Map<string, ReadinessBlocker[]>> {
@@ -1081,16 +1071,12 @@ async function requirementBlockers(
       .catch(() => []) as Promise<TransitionRow[]>
   ])
   const stateById = new Map(states.map((s) => [String(s.id).toUpperCase(), s]))
-  const role = user.role ? String(user.role).toUpperCase() : null
-  const roleOk = (t: TransitionRow) => {
-    if (isAdmin || !t.required_roles) return true
-    const roles = parseJsonList(t.required_roles)
-    if (roles.length === 0) return true
-    return role != null && roles.some((r) => String(r).toUpperCase() === role)
-  }
-  const { evaluateConditionRules, fetchRecordForConditions } = await import(
-    './workflow-conditions.js'
-  )
+  const {
+    evaluateConditionRules,
+    evalConditionRule,
+    fetchRecordForConditions,
+    parseConditionRules
+  } = await import('./workflow-conditions.js')
   const { evaluateTransitionRequirements } = await import('./transition-requirements.js')
 
   await pool([...latest.values()], 6, async (inst) => {
@@ -1106,9 +1092,10 @@ async function requirementBlockers(
       const to = stateById.get(String(t.to_state).toUpperCase())
       if (!to || String(to.key).toLowerCase() === 'canceled') return false
       if (isSendBackEdge(current?.sort, to.sort, t.label, current?.key)) return false
-      if (current?.sort != null && to.sort != null && Number(to.sort) <= Number(current.sort))
-        return false
-      return roleOk(t)
+      // required_roles is deliberately NOT applied: readiness is about the
+      // RECORD, not whether the viewer may press the button — a creator's
+      // draft waiting on an approver-only step still has its gaps listed.
+      return !(current?.sort != null && to.sort != null && Number(to.sort) <= Number(current.sort))
     })
     if (candidates.length === 0) return
     let pick: TransitionRow | undefined
@@ -1121,10 +1108,34 @@ async function requirementBlockers(
             withRules.map((t) => t.condition_rules)
           ).catch(() => ({}))
         : {}
+    let firstFailing: { transition: TransitionRow; rule: ConditionRuleLike | null } | null = null
     for (const t of candidates) {
-      if (t.condition_rules && !evaluateConditionRules(t.condition_rules, record)) continue
+      if (t.condition_rules && !evaluateConditionRules(t.condition_rules, record)) {
+        if (!firstFailing) {
+          const rule =
+            (parseConditionRules(t.condition_rules) ?? []).find(
+              (r) => !evalConditionRule(r, record)
+            ) ?? null
+          firstFailing = { transition: t, rule }
+        }
+        continue
+      }
       pick = t
       break
+    }
+    if (!pick && firstFailing) {
+      // Every way forward is closed by its conditions — say which one.
+      const why = firstFailing.rule
+        ? describeConditionRule(firstFailing.rule)
+        : 'Its conditions are not met'
+      out.set(String(inst.item), [
+        {
+          kind: 'requirement',
+          label: 'No forward step available',
+          message: `“${firstFailing.transition.label}”: ${why}`
+        }
+      ])
+      return
     }
     if (!pick?.requirements) return
     const blocks = await evaluateTransitionRequirements(
@@ -1163,14 +1174,64 @@ async function requirementBlockers(
   return out
 }
 
-function parseJsonList(raw: unknown): unknown[] {
-  if (Array.isArray(raw)) return raw
-  if (typeof raw !== 'string') return []
-  try {
-    const v = JSON.parse(raw)
-    return Array.isArray(v) ? v : []
-  } catch {
-    return []
+export interface ConditionRuleLike {
+  field: string
+  op: string
+  value: string | number | null
+}
+
+function fieldWords(field: string): string {
+  return field
+    .split('.')
+    .map((seg) => titleCase(seg))
+    .join(' › ')
+}
+
+/** A transition condition rule in words: 'Vendor must be set',
+ *  'Needs at least one Workflow Line Items row'. */
+export function describeConditionRule(rule: ConditionRuleLike): string {
+  const op = String(rule.op)
+  const value = rule.value == null ? '' : String(rule.value)
+  if (op === 'related_some' || op === 'related_none') {
+    const child = fieldWords(String(rule.field).split(':')[0] ?? '')
+    return op === 'related_some'
+      ? `Needs at least one ${child} row`
+      : `Must have no matching ${child} rows`
+  }
+  const f = fieldWords(String(rule.field))
+  switch (op) {
+    case 'nnull':
+      return `${f} must be set`
+    case 'null':
+      return `${f} must be empty`
+    case 'eq':
+      return `${f} must be ${value}`
+    case 'neq':
+      return `${f} must not be ${value}`
+    case 'in':
+      return `${f} must be one of ${value
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .join(', ')}`
+    case 'notin':
+      return `${f} must not be any of ${value}`
+    case 'contains':
+      return `${f} must contain ${value}`
+    case 'gt':
+      return `${f} must be more than ${value}`
+    case 'gte':
+      return `${f} must be at least ${value}`
+    case 'lt':
+      return `${f} must be less than ${value}`
+    case 'lte':
+      return `${f} must be at most ${value}`
+    case 'within_days':
+      return `${f} must be within ${value} days`
+    case 'beyond_days':
+      return `${f} must be more than ${value} days away`
+    default:
+      return `${f} ${op.replace(/_/g, ' ')} ${value}`.trim()
   }
 }
 
@@ -1220,9 +1281,7 @@ export async function submissionReadiness(opts: {
 
   const [fields, reqs] = await Promise.all([
     fieldBlockers(collection, mine).catch(() => new Map<string, ReadinessBlocker[]>()),
-    requirementBlockers(opts.user, opts.isAdmin, collection, mine).catch(
-      () => new Map<string, ReadinessBlocker[]>()
-    )
+    requirementBlockers(collection, mine).catch(() => new Map<string, ReadinessBlocker[]>())
   ])
   const pick = (m: Map<string, ReadinessBlocker[]>, id: string) =>
     m.get(id) ?? [...m.entries()].find(([k]) => k.toUpperCase() === id.toUpperCase())?.[1] ?? []
@@ -1676,7 +1735,8 @@ async function tallyCollection(
  * Per zone (a scope dimension's target rows — the viewer's own restrictions,
  * else every row, 12 at most): open pipeline records per bound collection,
  * how many of those are past their SLA, and how many records changed in the
- * last 7 days. Counts only what the viewer can read. Cached 5 minutes per
+ * last 7 days. Counts only what the viewer can read; a collection whose read
+ * policy carries a row filter is left out entirely. Cached 5 minutes per
  * viewer and dimension. Answers null for an unknown dimension.
  */
 export async function zonePulse(opts: {
@@ -1722,6 +1782,15 @@ export async function zonePulse(opts: {
   const readable = await readableFilter(opts.user, opts.isAdmin, bound)
   const tallies = new Map<string, CollectionTally>()
   await pool([...readable], 3, async (collection) => {
+    // A row-filtered read policy (RLS) cannot be honoured by raw counts — the
+    // collection is left out rather than over-counted (the ai-chat aggregate
+    // precedent). A failed policy read counts as filtered.
+    const rowFiltered = opts.isAdmin
+      ? false
+      : await getRowFilter(opts.user, 'read', collection)
+          .then((rf) => Array.isArray(rf) && rf.length > 0)
+          .catch(() => true)
+    if (rowFiltered) return
     const hops = await scopes.scopeHopsFor(dim, collection).catch(() => null)
     if (!hops) return
     const enforcement = await scopes.getUserScopeEnforcement(opts.user, collection)
@@ -1730,7 +1799,7 @@ export async function zonePulse(opts: {
       opts.user,
       collection,
       hops,
-      `${collection}|${dim.name}|${sig}`
+      `${collection}|${dim.name}|rf${rowFiltered ? 1 : 0}|${sig}`
     ).catch(() => null)
     if (tally) tallies.set(collection, tally)
   })

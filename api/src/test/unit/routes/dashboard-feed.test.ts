@@ -12,7 +12,28 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     req.isAdmin = false
   })
 }))
-vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
+vi.mock('../../../services/permissions.js', () => ({
+  can: vi.fn(async () => true),
+  getRowFilter: vi.fn(async () => null)
+}))
+vi.mock('../../../services/workflow-conditions.js', () => ({
+  evaluateConditionRules: vi.fn(() => true),
+  evalConditionRule: vi.fn(() => false),
+  parseConditionRules: vi.fn((raw: string | null) => (raw ? JSON.parse(raw) : null)),
+  fetchRecordForConditions: vi.fn(async () => ({}))
+}))
+vi.mock('../../../services/transition-requirements.js', () => ({
+  evaluateTransitionRequirements: vi.fn(async () => null)
+}))
+vi.mock('../../../services/user-scopes.js', () => ({
+  listScopeDimensions: vi.fn(async () => []),
+  getUserScopes: vi.fn(async () => []),
+  scopeHopsFor: vi.fn(async () => []),
+  getUserScopeEnforcement: vi.fn(async () => ({ filters: [], deny: false })),
+  applyScopeEnforcement: vi.fn(),
+  resolveRecordDimensionIds: vi.fn(async () => new Map())
+}))
+vi.mock('../../../routes/sla.js', () => ({ computeStatusBatch: vi.fn(async () => ({})) }))
 vi.mock('../../../services/app-links.js', () => ({
   recordLink: vi.fn(async (c: string, id: string) => `/records/${c}/${id}`)
 }))
@@ -29,6 +50,10 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../../../db/index.js'
 import { dashboardFeedRoutes } from '../../../routes/dashboard-feed.js'
+import { getRowFilter } from '../../../services/permissions.js'
+import { evaluateTransitionRequirements } from '../../../services/transition-requirements.js'
+import { listScopeDimensions, resolveRecordDimensionIds } from '../../../services/user-scopes.js'
+import { evaluateConditionRules } from '../../../services/workflow-conditions.js'
 import { resolveFriendlyIds } from '../../../services/workflow-transitions.js'
 
 type Call = { table: string; method: string; args: unknown[] }
@@ -297,5 +322,128 @@ describe('GET /dashboard/zone-pulse', () => {
     fixtures = { nivaro_scope_dimensions: [] }
     const res = await inject('GET', '/dashboard/zone-pulse?dimension=nope')
     expect(res.statusCode).toBe(400)
+  })
+})
+
+describe('GET /dashboard/submission-readiness — the next step', () => {
+  const pipelineFixtures = (transition: Record<string, unknown>) => ({
+    nivaro_fields: [],
+    'information_schema.columns': [
+      { table_name: 'orders', column_name: 'id' },
+      { table_name: 'orders', column_name: 'creator' }
+    ],
+    orders: ['1'],
+    nivaro_collection_layouts: [],
+    nivaro_relations: [],
+    nivaro_workflow_instances: [{ id: 'I1', item: '1', template: 'T1', current_state: 'S1' }],
+    nivaro_workflow_states: [
+      { id: 'S1', key: 'draft', sort: 1 },
+      { id: 'S2', key: 'review', sort: 2 }
+    ],
+    nivaro_workflow_transitions: [
+      {
+        id: 'X1',
+        template: 'T1',
+        from_state: 'S1',
+        to_state: 'S2',
+        label: 'Submit',
+        sort: 1,
+        auto_trigger: 0,
+        condition_rules: null,
+        required_roles: null,
+        requirements: '[{"type":"child_fields"}]',
+        ...transition
+      }
+    ]
+  })
+
+  it('a forward step only another role may press still lists its requirement gaps', async () => {
+    fixtures = pipelineFixtures({ required_roles: '["APPROVER-ROLE"]' })
+    vi.mocked(evaluateTransitionRequirements).mockResolvedValueOnce([
+      {
+        type: 'child_fields',
+        collection: 'lines',
+        fk_field: 'order',
+        title: 'Enter REQ IDs',
+        fields: [{ field: 'req', label: 'REQ ID', type: 'string' }],
+        display_fields: [],
+        rows: [
+          { id: 1, label: 'Line 1', complete: false, values: {}, display: {} },
+          { id: 2, label: 'Line 2', complete: true, values: {}, display: {} }
+        ]
+      }
+    ])
+    const res = await inject('GET', '/dashboard/submission-readiness?collection=orders&ids=1')
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data['1']).toEqual({
+      ready: false,
+      blockers: [
+        {
+          kind: 'requirement',
+          label: 'Enter REQ IDs',
+          message: 'Before “Submit”: 1 of 2 lines need REQ ID'
+        }
+      ]
+    })
+    expect(vi.mocked(evaluateTransitionRequirements).mock.calls[0]?.[1]).toBe(
+      '[{"type":"child_fields"}]'
+    )
+  })
+
+  it('every forward step closed by its conditions reads as one blocker naming the condition', async () => {
+    fixtures = pipelineFixtures({
+      condition_rules: '[{"field":"vendor","op":"nnull","value":null}]'
+    })
+    vi.mocked(evaluateConditionRules).mockReturnValueOnce(false)
+    const res = await inject('GET', '/dashboard/submission-readiness?collection=orders&ids=1')
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data['1']).toEqual({
+      ready: false,
+      blockers: [
+        {
+          kind: 'requirement',
+          label: 'No forward step available',
+          message: '“Submit”: Vendor must be set'
+        }
+      ]
+    })
+    expect(vi.mocked(evaluateTransitionRequirements)).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /dashboard/zone-pulse — row-filtered collections', () => {
+  it('leaves out a collection whose read policy carries a row filter', async () => {
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([
+      {
+        id: 1,
+        name: 'division',
+        label: 'Zone',
+        target_collection: 'divisions',
+        display_field: 'short_name',
+        options_sort: null,
+        overrides: null,
+        exclusions: null,
+        strict: false,
+        is_active: true
+      }
+    ])
+    vi.mocked(getRowFilter).mockImplementation(async (_u, _a, c) =>
+      c === 'orders' ? [{ field: 'owner', op: '_eq', value: '$CURRENT_USER' }] : null
+    )
+    vi.mocked(resolveRecordDimensionIds).mockResolvedValue(new Map([['5', ['1']]]))
+    fixtures = {
+      divisions: [{ id: 1, short_name: 'Z1' }],
+      nivaro_workflow_bindings: [{ collection: 'orders' }, { collection: 'tasks' }],
+      'nivaro_workflow_instances as i': [
+        { id: 'I1', item: '5', current_state: 'S', template: 'T', started_at: '2026-09-01' }
+      ],
+      'information_schema.columns': []
+    }
+    const res = await inject('GET', '/dashboard/zone-pulse?dimension=division')
+    expect(res.statusCode).toBe(200)
+    const zones = res.json().data.zones as Array<{ id: string; open: Record<string, number> }>
+    expect(zones).toHaveLength(1)
+    expect(zones[0]?.open).toEqual({ tasks: 1 })
+    expect(Object.keys(zones[0]?.open ?? {})).not.toContain('orders')
   })
 })

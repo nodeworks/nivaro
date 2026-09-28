@@ -5,6 +5,7 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 import {
   creatorColumnFor,
   daysBetween,
+  describeConditionRule,
   isSendBackEdge,
   onboardingSteps,
   pickUnavailable,
@@ -290,5 +291,35 @@ describe('pickUnavailable', () => {
 
   it('an active owner is not listed', () => {
     expect(pickUnavailable([{ id: 'A' }], [{ ...base, id: 'A' }])).toEqual([])
+  })
+})
+
+describe('describeConditionRule', () => {
+  it('words the common operators', () => {
+    expect(describeConditionRule({ field: 'vendor', op: 'nnull', value: null })).toBe(
+      'Vendor must be set'
+    )
+    expect(describeConditionRule({ field: 'workflow_type', op: 'eq', value: 2 })).toBe(
+      'Workflow Type must be 2'
+    )
+    expect(describeConditionRule({ field: 'status', op: 'in', value: 'a, b' })).toBe(
+      'Status must be one of a, b'
+    )
+  })
+
+  it('names the child collection for a related-rows rule', () => {
+    expect(
+      describeConditionRule({
+        field: 'workflow_line_items:workflow',
+        op: 'related_some',
+        value: null
+      })
+    ).toBe('Needs at least one Workflow Line Items row')
+  })
+
+  it('walks a dotted field', () => {
+    expect(
+      describeConditionRule({ field: 'unit.schedule_date', op: 'within_days', value: 45 })
+    ).toBe('Unit › Schedule Date must be within 45 days')
   })
 })
