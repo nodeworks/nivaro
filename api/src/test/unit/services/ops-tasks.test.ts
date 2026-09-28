@@ -40,6 +40,15 @@ describe('ops tasks (#827)', () => {
     expect(() => registerOpsTask({ key: 'a:b', label: 'x', description: '' } as never)).toThrow(
       /execute/
     )
+    // a seed's task key carries two colons
+    expect(() =>
+      registerOpsTask({
+        key: 'seed:ext:name',
+        label: 'x',
+        description: '',
+        execute: async () => ({ summary: '' })
+      })
+    ).not.toThrow()
   })
 
   it('dry-runs by default, records output and outcome, and refuses a second run while one is running', async () => {
