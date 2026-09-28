@@ -177,8 +177,8 @@ function plan(cfg, ch) {
   if (ch.headTag.startsWith('v')) add('release', `HEAD is already tagged ${ch.headTag} — reuse it, mint nothing`)
   else {
     if (wantSdk) add('release', `pnpm sdk:release ${BUMP}   (packages/sdk changed — it must publish BEFORE react imports from it)`)
+    if (wantReact) add('release', `pnpm react:release ${BUMP}   (packages/shared or packages/react changed — before the app tag, so the image reports the version the frontend pins)`)
     add('release', `pnpm release ${BUMP}`)
-    if (wantReact) add('release', `pnpm react:release ${BUMP}   (packages/shared or packages/react changed)`)
   }
   add('publish', cfg.mirror ? `push origin, then the public mirror ${cfg.mirror} — the mirror is what builds` : 'push origin (no mirror configured)')
   add('artifacts', `wait for the image${wantSdk ? ', @nivaro/sdk' : ''}${wantReact ? ', @nivaro/react' : ''} — and then CHECK they exist, by asking the registry`)
@@ -332,8 +332,13 @@ async function main() {
       currentStage = 'release'
       emit('release', 'start')
       if (p.wantSdk) sh('pnpm', ['sdk:release', BUMP])
-      sh('pnpm', ['release', BUMP])
+      // react BEFORE the app tag: the image is built from that tag and
+      // reports the react version its tree holds (/api/version, the
+      // Environments "shared code" strip). Tagging the app first left the
+      // image one commit behind the pin efp-new gets — 0.1.299 vs 0.1.300
+      // on 2026-09-28 with byte-identical shared code.
       if (p.wantReact) sh('pnpm', ['react:release', BUMP])
+      sh('pnpm', ['release', BUMP])
       emit('release', 'ok')
     } else if (runs('release')) emit('release', 'skip', `HEAD already tagged ${ch.headTag}`)
     else emit('release', 'skip', `resumed from ${FROM}`)
