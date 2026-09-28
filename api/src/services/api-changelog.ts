@@ -1,6 +1,7 @@
 import type { GraphQLSchema } from 'graphql'
 import { db } from '../db/index.js'
-import { notificationRowMeta } from './notification-channels.js'
+import { getApp } from './io-holder.js'
+import { notificationRowMeta, notifyUser } from './notification-channels.js'
 
 /**
  * API surface changelogs: GraphQL (#163) — type/field diffs on every schema
@@ -68,7 +69,22 @@ async function notifyAdminsOfBreak(subject: string, message: string): Promise<vo
       .where('u.status', 'active')
       .limit(10)
       .select('u.id')) as Array<{ id: string }>
+    const app = getApp()
     for (const a of admins) {
+      if (app) {
+        // Through notifyUser (#782) — a breaking API change is critical for
+        // an admin: always_inbox, target = the API changelog.
+        await notifyUser(app, a.id, {
+          subject: subject.slice(0, 255),
+          message: message.slice(0, 500),
+          category: 'system',
+          always_inbox: true,
+          target: { kind: 'external', url: '/api-changelog', action: 'review' },
+          source: { kind: 'api_changelog', label: 'GraphQL schema change' },
+          why: 'You are an administrator; a schema change can break an integration.'
+        })
+        continue
+      }
       await db('nivaro_notifications').insert({
         recipient: a.id,
         subject: subject.slice(0, 255),

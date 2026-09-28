@@ -567,7 +567,15 @@ async function processCrossTriggers(ctx: HookContext) {
                 parts.push(`@${k} = ?`)
                 binds.push(rendered)
               }
-              await db.raw(`EXEC ${act.procedure} ${parts.join(', ')}`, binds)
+              // One batch: a procedure that opens a transaction without
+              // SET XACT_ABORT ON and fails leaves it open on the pooled
+              // connection (#779) — the CATCH rolls it back on the SAME
+              // connection before the error reaches us.
+              await db.raw(
+                `BEGIN TRY EXEC ${act.procedure} ${parts.join(', ')} END TRY
+                 BEGIN CATCH IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION; THROW; END CATCH`,
+                binds
+              )
             } catch (err) {
               logError(err, { rule: rule.id, procedure: act.procedure })
             }

@@ -1,8 +1,9 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { getApp } from './io-holder.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
-import { notificationRowMeta } from './notification-channels.js'
+import { notificationRowMeta, notifyUser } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
 
 /** Only an active, non-redacted account may hold a session. */
@@ -127,6 +128,21 @@ export async function findOrCreateFromOIDC(profile: {
       .then(async (settings) => {
         const msg = (settings as { welcome_message?: string | null } | undefined)?.welcome_message
         if (!msg?.trim()) return
+        const app = getApp()
+        if (app) {
+          // Through notifyUser (#782): a brand-new account has no rules yet,
+          // so this always lands; the target is the home page.
+          await notifyUser(app, newId, {
+            subject: 'Welcome!',
+            message: msg.trim().slice(0, 500),
+            category: 'system',
+            always_inbox: true,
+            target: { kind: 'home', action: 'open' },
+            source: { kind: 'welcome', label: 'Welcome message' },
+            why: 'This is the welcome message every new account receives once.'
+          })
+          return
+        }
         await db('nivaro_notifications').insert({
           recipient: newId,
           subject: 'Welcome!',

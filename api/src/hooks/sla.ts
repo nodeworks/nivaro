@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
-import { notificationRowMeta } from '../services/notification-channels.js'
+import { getApp } from '../services/io-holder.js'
+import { notificationRowMeta, notifyUser } from '../services/notification-channels.js'
 import { resolveRecordZones } from '../services/sla-zones.js'
 import { hooks } from './registry.js'
 
@@ -77,7 +78,24 @@ export async function checkSlaForInstance(
     const usersToNotify: string[] = []
     if (rule.escalation_user) usersToNotify.push(rule.escalation_user)
 
+    // Through notifyUser (#782): the escalation contact's own rules, quiet
+    // hours and channels apply, the row carries a real target + "why me".
+    // The raw insert stays only for a call before the app exists.
+    const app = _app ?? getApp()
     for (const userId of usersToNotify) {
+      if (app) {
+        await notifyUser(app, userId, {
+          subject,
+          message: message.slice(0, 500),
+          collection,
+          item,
+          category: 'sla',
+          target: { kind: 'sla', collection, id: item, action: 'acknowledge' },
+          source: { kind: 'sla_rule', label: rule.name, id: rule.id },
+          why: `SLA rule "${rule.name}" names you as its escalation contact.`
+        })
+        continue
+      }
       const inserted = await db('nivaro_notifications')
         .insert({
           recipient: userId,
@@ -91,9 +109,7 @@ export async function checkSlaForInstance(
           ...notificationRowMeta({ subject, category: 'sla', kind: 'sla', action: 'acknowledge' })
         })
         .returning('*')
-
       const notif = Array.isArray(inserted) ? inserted[0] : null
-
       if (_app?.io) {
         emitNotification(_app.io, userId, {
           id: notif?.id ?? null,

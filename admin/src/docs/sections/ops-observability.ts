@@ -110,6 +110,11 @@ export const dbHealthDocs: DocSection = {
       type: 'p',
       text: "Columns a model change left behind are registered in `api/src/db/dead-columns.ts` with the date the last writer stopped, what replaced them and whether they can be dropped yet. `pnpm --filter @nivaro/api run dead-columns:check` greps every source tree and fails when code still names a column marked droppable; the readiness check `dead-columns` reports droppable columns still present on the database (the dropping migration has not run there) and lists what still blocks the retiring ones. `GET /ops-db/dead-columns` is the same view. Migration 336 dropped the first one, the queues table's retired view-mode column."
     },
+    { type: 'h2', id: 'proc-transaction-guards', text: 'Open transactions on the pool' },
+    {
+      type: 'p',
+      text: "A stored procedure that opens a transaction without `SET XACT_ABORT ON` and then fails leaves the transaction open: the batch stops, the connection goes back to the pool mid-transaction, and the next caller on that connection inherits it. Every raw EXEC path now rolls an open transaction back on the same connection before releasing it (custom queries, rule `exec_procedure` actions, long-running statements), and the readiness check `proc-transaction-guards` lists every procedure with `BEGIN TRAN` that carries neither `SET XACT_ABORT ON` nor a CATCH that rolls back. `GET /api/ops-db/proc-transaction-lint` is the list as JSON. A request-timeout cancellation skips a CATCH, which is why the connection-level rollback stays."
+    },
     { type: 'h2', id: 'erp-payload-retention', text: 'ERP push payload retention' },
     {
       type: 'p',

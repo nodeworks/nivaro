@@ -64,7 +64,7 @@ emitNotification(app.io, targetUserId, {
     { type: 'h3', text: 'Why did I get this?' },
     {
       type: 'p',
-      text: 'Every notification row carries a "Why me?" expander: which record watch, subscription, sender or notification rule produced it (with a link to manage the subscription), and what each channel did with it — landed in-app, pushed, emailed now, held for the daily summary, or held by quiet hours. Rows written before this shipped answer with the category\'s notification rules.'
+      text: 'Every notification row carries a "Why me?" expander: which record watch, subscription, sender or notification rule produced it (with a link to manage the subscription), and what each channel did with it — landed in-app, pushed, emailed now, held for the daily summary, or held by quiet hours. Rows written before this shipped answer with the category\'s notification rules. System rows — an SLA escalation, an issue assigned to you, a breaking API change, the welcome message — go through the same delivery path as everything else, so their reason and click target are real, not synthesised.'
     },
     { type: 'h3', text: 'Every change in a bundled watch' },
     {

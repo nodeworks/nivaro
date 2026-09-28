@@ -73,6 +73,32 @@ export async function opsDbRoutes(app: FastifyInstance) {
   if (!deadColumnsCheckRegistered) {
     deadColumnsCheckRegistered = true
     registerReadinessCheck({
+      id: 'proc-transaction-guards',
+      label: 'Procedures that open a transaction abort on error',
+      group: 'Configuration',
+      description:
+        'A procedure with BEGIN TRAN but no SET XACT_ABORT ON (and no CATCH that rolls back) leaves its transaction open on the pooled connection when it fails; the next caller inherits it.',
+      run: async () => {
+        const { procTransactionLint, isUnguarded } = await import(
+          '../services/proc-transaction-lint.js'
+        )
+        const all = await procTransactionLint()
+        if (all.length === 0)
+          return { status: 'skip', detail: 'No stored procedure opens a transaction.' }
+        const bad = all.filter(isUnguarded)
+        if (bad.length === 0)
+          return {
+            status: 'pass',
+            detail: `${all.length} procedure(s) open a transaction; every one aborts on error.`
+          }
+        return {
+          status: 'warn',
+          detail: `${bad.length} of ${all.length} procedure(s) open a transaction without SET XACT_ABORT ON or a CATCH that rolls back.`,
+          blockers: bad.slice(0, 20).map((f) => `${f.procedure}: add SET XACT_ABORT ON after AS`)
+        }
+      }
+    })
+    registerReadinessCheck({
       id: 'dead-columns',
       label: 'Dead columns are dropped or on their way out',
       group: 'Configuration',
@@ -263,6 +289,15 @@ export async function opsDbRoutes(app: FastifyInstance) {
     )) as Array<Record<string, unknown>>
 
   // #505 — the dead-column registry against the live schema.
+  // #779 — every procedure that opens a transaction, with its guard state.
+  app.get('/proc-transaction-lint', async () => {
+    const { procTransactionLint, isUnguarded } = await import(
+      '../services/proc-transaction-lint.js'
+    )
+    const rows = await procTransactionLint()
+    return { data: rows.map((f) => ({ ...f, unguarded: isUnguarded(f) })) }
+  })
+
   app.get('/dead-columns', async () => ({ data: await deadColumnsLive() }))
 
   app.get('/backup-tables', async (_req, reply) => {

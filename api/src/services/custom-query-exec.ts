@@ -125,9 +125,44 @@ export async function execCustomQuerySql(
       req.on('error', (e) => done(() => reject(e)))
       conn.execSqlBatch(req)
     })
+  } catch (err) {
+    // A wrapper's procedure that opened a transaction without SET XACT_ABORT
+    // ON and then failed leaves it OPEN on this connection (#779) — hand the
+    // pool a clean connection, or the next caller inherits the transaction.
+    await rollbackOpenTransaction(Driver, conn)
+    throw err
   } finally {
     await knexClient.releaseConnection(conn)
   }
+}
+
+/** `IF @@TRANCOUNT > 0 ROLLBACK` on THIS connection; never throws. */
+async function rollbackOpenTransaction(
+  Driver: { Request: new (sql: string, cb: (err: Error | null) => void) => unknown },
+  conn: { execSqlBatch(r: unknown): void }
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const done = () => {
+      if (!settled) {
+        settled = true
+        resolve()
+      }
+    }
+    try {
+      const req = new Driver.Request('IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION', () => done()) as {
+        once(ev: 'requestCompleted', h: () => void): unknown
+        on(ev: 'error', h: (e: Error) => void): unknown
+        setTimeout?: (ms: number) => void
+      }
+      req.setTimeout?.(30_000)
+      req.once('requestCompleted', done)
+      req.on('error', done)
+      conn.execSqlBatch(req)
+    } catch {
+      done()
+    }
+  })
 }
 
 /**
