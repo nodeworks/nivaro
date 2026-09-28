@@ -110,6 +110,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
   'storage-snapshot': 'Nightly — records storage usage so DB Health can project the runway.',
   'config-snapshot':
     'Stores a gzipped snapshot of every configuration table so Environment Config can show what drifted since any past night.',
+  'dashboard-headline-snapshot':
+    'Nightly — records the dashboard budget headline figures (the whole year and each zone) from the query named in Settings, so the dashboard can show how far each moved.',
   'readiness-snapshot':
     'Daily — scores the go-live readiness checks and stores the result for the trend line.',
   'queue-stats-snapshot':

@@ -189,6 +189,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_extension_schema_steps',
   'nivaro_cache_epochs',
   'nivaro_config_snapshots',
+  'nivaro_dashboard_snapshots',
   'nivaro_extension_registry_versions',
   'nivaro_sessions',
   'nivaro_api_logs',

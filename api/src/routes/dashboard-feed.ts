@@ -13,6 +13,7 @@ import {
   submissionReadiness,
   zonePulse
 } from '../services/dashboard-feed.js'
+import { readHeadlineHistory } from '../services/headline-snapshots.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const SYSTEM = /^(nivaro_|directus_)/i
@@ -161,6 +162,28 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
     })
     return reply.send({ data })
   })
+
+  // Headline snapshots (#851): the recorded daily figures for one year and
+  // one zone (absent = every zone), oldest first — deltas + sparklines.
+  app.get<{ Querystring: { year?: string; zone?: string; days?: string } }>(
+    '/headline-history',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const rawYear = Number(req.query.year ?? new Date().getFullYear())
+      if (!Number.isInteger(rawYear) || rawYear < 1900 || rawYear > 3000) {
+        return reply.code(400).send({ error: 'year must be a four-digit year' })
+      }
+      const zone = req.query.zone?.trim() || null
+      if (zone && zone.length > 80) return reply.code(400).send({ error: 'zone is too long' })
+      const rawDays = Number(req.query.days ?? 30)
+      const days = Number.isFinite(rawDays) ? Math.min(366, Math.max(1, Math.floor(rawDays))) : 30
+      const data = await readHeadlineHistory({ year: rawYear, zone, days }).catch((err) => {
+        req.log.warn({ err }, 'dashboard headline-history failed')
+        return []
+      })
+      return reply.send({ data })
+    }
+  )
 
   app.get<{ Querystring: { dimension?: string } }>(
     '/zone-pulse',

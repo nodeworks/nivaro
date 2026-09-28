@@ -138,6 +138,9 @@ const allowedSettingsKeys = [
   'ai_disabled_features',
   // Per-role home-page defaults (#917, migration 365): `{ role uuid: layout }`
   'dashboard_role_defaults',
+  // Headline snapshots (#851, migration 366): which custom query + result
+  // columns the nightly dashboard-headline-snapshot cron records
+  'dashboard_headline',
   // Theme studio (#662)
   'theme_radius',
   'theme_font',
@@ -229,6 +232,15 @@ export async function settingsRoutes(app: FastifyInstance) {
         if (n.error) return reply.code(400).send({ error: n.error })
         patch.dashboard_role_defaults = JSON.stringify(n.map)
       }
+    }
+
+    // Headline snapshots (#851): strict shape (slug + identifiers only — the
+    // cron names these in a query and a table read), stored as JSON text.
+    if ('dashboard_headline' in patch) {
+      const { validateHeadlineSettings } = await import('../services/headline-snapshots.js')
+      const r = validateHeadlineSettings(patch.dashboard_headline)
+      if (r.error) return reply.code(400).send({ error: r.error })
+      patch.dashboard_headline = r.value ? JSON.stringify(r.value) : null
     }
 
     if ('graphql_deprecation_days' in patch) {

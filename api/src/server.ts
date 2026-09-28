@@ -1340,6 +1340,26 @@ export async function buildServer() {
         }
       )
 
+      // Headline snapshots (#851): the dashboard's budget headline figures,
+      // once for the whole year and once per zone, upserted one row per day
+      // into nivaro_dashboard_snapshots. Off until nivaro_settings.dashboard_headline
+      // names a query. Heavy: one custom-query run per zone (~7s each on EFP).
+      app.cron.schedule(
+        'dashboard-headline-snapshot',
+        '30 3 * * *',
+        async () => {
+          const { runHeadlineSnapshot } = await import('./services/headline-snapshots.js')
+          await runHeadlineSnapshot(app.log)
+        },
+        {
+          heavy: true,
+          dryRun: async () => {
+            const { dryRunHeadlineSnapshot } = await import('./services/headline-snapshots.js')
+            return dryRunHeadlineSnapshot()
+          }
+        }
+      )
+
       // Dead-file-link sweep: stat every stored file against the storage
       // provider (oldest verification first) and stamp nivaro_files.missing_at,
       // so file chips and the Files page render dead links honestly.
