@@ -44,6 +44,22 @@ export default defineExtension({
         'In the monorepo the kit is a workspace package; a mounted extension resolves it from the image. Released with `pnpm kit:release`.'
       ]
     },
+    { type: 'h3', id: 'ext-overview-testing', text: 'Testing an extension' },
+    {
+      type: 'p',
+      text: '`createTestContext()` from the kit is a context whose every effect is recorded instead of sent — notifications, external calls, activity rows, flow emits, obligations — and whose registrations the test can run: `runHooks(collection, action, timing, ctx)`, `runCron(id)`, `deliverEvent(type, payload)`, and `invoke(method, url, req)` for a route the extension registered. Its database is `createTestDb({ tables })`, an in-memory knex-shaped fake that covers the chain extensions use (where, whereIn, first, pluck, count, insert, update, del, `raw`, `schema.hasColumn`, `transaction`); joins are accepted and ignored, so seed the joined columns on the row you expect back. Nothing boots the API.'
+    },
+    {
+      type: 'pre',
+      code: `import { createTestContext } from '@nivaro/extension-kit'
+import ext from './index.js'
+
+const ctx = createTestContext({ tables: { orders: [{ id: 1, owner: 'u1' }] } })
+await ext.register(ctx)
+await ctx.runHooks('orders', 'create', 'after', { keys: [1], result: { id: 1, owner: 'u1' } })
+expect(ctx.calls.notifications).toHaveLength(1)
+expect(ctx.registered.signals.map((s) => s.id)).toContain('my-extension:stuck')`
+    },
     {
       type: 'h3',
       id: 'ext-overview-loading',

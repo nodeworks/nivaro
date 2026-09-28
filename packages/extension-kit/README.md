@@ -45,7 +45,27 @@ export default defineExtension({
   `requesterInsertFields` / `requesterSelectColumns` for the ERP submission
   tables.
 
-Types are exported with `export type`; the helpers are the only runtime code.
+Types are exported with `export type`; the helpers and the test context are
+the only runtime code.
+
+## Testing an extension
+
+`createTestContext()` is a context whose every effect is recorded instead of
+sent — notifications, external calls, activity, flow emits, obligations —
+and whose registrations can be run by the test: `runHooks`, `runCron`,
+`deliverEvent`, `invoke` (a route the extension registered). Its database is
+`createTestDb({ tables })`, an in-memory knex-shaped fake covering the chain
+extensions use (where / whereIn / first / pluck / count / insert / update /
+del, `raw`, `schema.hasColumn`, `transaction`); joins are accepted and
+ignored, so seed the joined columns on the row you expect back.
+
+```ts
+const ctx = createTestContext({ tables: { orders: [{ id: 1, owner: 'u1' }] } })
+await myExtension.register(ctx)
+await ctx.runHooks('orders', 'create', 'after', { keys: [1], result: { id: 1, owner: 'u1' } })
+expect(ctx.calls.notifications).toEqual([{ userId: 'u1', opts: { subject: 'Order 1', message: 'created' } }])
+const res = await ctx.invoke('GET', '/api/demo/orders/1')
+```
 
 ## Versioning
 

@@ -27,3 +27,11 @@ export type * from './user.js'
 export function defineExtension<T extends import('./context.js').ExtensionDefinition>(ext: T): T {
   return ext
 }
+export {
+  createTestContext,
+  createTestDb,
+  type TestContext,
+  type TestContextOptions,
+  type TestDbState,
+  type TestRoute
+} from './testing.js'

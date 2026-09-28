@@ -6488,7 +6488,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6511,6 +6511,16 @@ export default defineExtension({
             <li>Members are only ever added to the context. An extension built against an older kit keeps compiling; a member that arrived in a later core release is documented as such on the type.</li>
             <li>In the monorepo the kit is a workspace package; a mounted extension resolves it from the image. Released with <code class="doc-code">pnpm kit:release</code>.</li>
           </ul>
+          <h3 class="doc-h3" id="ext-overview-testing">Testing an extension</h3>
+          <p class="doc-p"><code class="doc-code">createTestContext()</code> from the kit is a context whose every effect is recorded instead of sent — notifications, external calls, activity rows, flow emits, obligations — and whose registrations the test can run: <code class="doc-code">runHooks(collection, action, timing, ctx)</code>, <code class="doc-code">runCron(id)</code>, <code class="doc-code">deliverEvent(type, payload)</code>, and <code class="doc-code">invoke(method, url, req)</code> for a route the extension registered. Its database is <code class="doc-code">createTestDb({ tables })</code>, an in-memory knex-shaped fake that covers the chain extensions use (where, whereIn, first, pluck, count, insert, update, del, <code class="doc-code">raw</code>, <code class="doc-code">schema.hasColumn</code>, <code class="doc-code">transaction</code>); joins are accepted and ignored, so seed the joined columns on the row you expect back. Nothing boots the API.</p>
+          <pre class="doc-pre"><code>import { createTestContext } from '@nivaro/extension-kit'
+import ext from './index.js'
+
+const ctx = createTestContext({ tables: { orders: [{ id: 1, owner: 'u1' }] } })
+await ext.register(ctx)
+await ctx.runHooks('orders', 'create', 'after', { keys: [1], result: { id: 1, owner: 'u1' } })
+expect(ctx.calls.notifications).toHaveLength(1)
+expect(ctx.registered.signals.map((s) =&gt; s.id)).toContain('my-extension:stuck')</code></pre>
           <h3 class="doc-h3" id="ext-overview-loading">Loading &amp; Reloading</h3>
           <p class="doc-p">Extensions are loaded at startup. Reload without restarting:</p>
           <pre class="doc-pre"><code>POST /api/extensions/reload
