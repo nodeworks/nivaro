@@ -164,6 +164,7 @@ export const DERIVED_TABLES: string[] = [
   'nivaro_embeddings',
   'nivaro_files',
   'nivaro_import_queue',
+  'nivaro_import_run_items', // what each import run created and changed (migration 359)
   'nivaro_sequences',
 
   // ── classified 2026-09-17 — regenerable sweeps, snapshots, version history ──

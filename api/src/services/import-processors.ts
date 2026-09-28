@@ -4,6 +4,7 @@ import type { User } from '../types.js'
 import { createOne, deleteOne, updateOne } from './items.js'
 import { recalcStoredRollupsForRecords } from './rollups.js'
 import { runLongSql } from './run-long.js'
+import type { ImportRunItem, ImportRunPhase, ImportRunUnmatched } from './import-run-report.js'
 import type { ServiceImportSamples } from './staged-import-service.js'
 
 /**
@@ -38,6 +39,16 @@ export interface ImportProcessorResult {
   /** Records the run changed, per collection — handed to the post-run flows
    *  so they can work on exactly those instead of everything in the file. */
   affected?: Record<string, Array<string | number>>
+  /** What the run did, for the run's detail view: where the time went, which
+   *  reference values matched nothing, anything else worth a sentence. */
+  report?: {
+    phases?: ImportRunPhase[]
+    unmatched?: ImportRunUnmatched[]
+    notes?: string[]
+    other?: Array<{ label: string; count: number }>
+  }
+  /** One entry per record created or changed and per file row left out. */
+  items?: ImportRunItem[]
 }
 
 export interface ImportWriteOutcome {

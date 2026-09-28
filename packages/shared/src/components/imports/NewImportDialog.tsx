@@ -23,7 +23,13 @@ import {
   DialogTitle
 } from '../ui/dialog'
 import { Input } from '../ui/input'
-import { type ImportDefinition, type ImportDryRun, type ImportPreview, definitionTitle } from './types'
+import {
+  type ImportDefinition,
+  type ImportDryRun,
+  type ImportPreview,
+  definitionTitle,
+  importMode
+} from './types'
 
 /**
  * Upload transport.
@@ -67,6 +73,25 @@ function acceptFor(def: ImportDefinition | null): string {
 
 function TargetLine({ def }: { def: ImportDefinition }) {
   const table = def.staging_table || `staging_${def.key}`
+  const mode = importMode(def)
+  // An items-service import names what writes the rows. Its staging table is
+  // only the copy of the last file, and its procedure does not run.
+  if (mode === 'processor' || mode === 'service') {
+    return (
+      <span
+        data-import-mode={mode}
+        className='flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'
+      >
+        <span className='shrink-0'>Items service</span>
+        {mode === 'processor' && (
+          <>
+            <span className='shrink-0 text-slate-300 dark:text-slate-600'>·</span>
+            <span className='truncate font-mono'>{def.processor}</span>
+          </>
+        )}
+      </span>
+    )
+  }
   return (
     <span className='flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
       <span className='truncate'>{table}</span>
@@ -218,6 +243,7 @@ export function NewImportDialog({
   }
 
   const previewData = preview.data
+  const selectedMode = selected ? importMode(selected) : null
   const hasWarnings =
     !!previewData && (previewData.unknown_columns.length > 0 || previewData.missing_columns.length > 0)
 
@@ -233,8 +259,8 @@ export function NewImportDialog({
         <DialogHeader className='shrink-0'>
           <DialogTitle className='text-[17px] dark:text-foreground'>New import</DialogTitle>
           <DialogDescription className='text-[12.5px]'>
-            The file is loaded into a staging table, then the import's procedure runs over it.
-            Nothing is queued until you confirm.
+            Choose an import and a file. The file is checked first, and nothing is queued until
+            you confirm.
           </DialogDescription>
         </DialogHeader>
 
@@ -468,10 +494,12 @@ export function NewImportDialog({
                             </span>
                           </p>
                         )}
-                        <p className='mt-1 text-amber-700 dark:text-amber-400'>
-                          The staging table is rebuilt from the file, so the procedure may fail on a
-                          column it expects.
-                        </p>
+                        {selectedMode === 'procedure' && (
+                          <p className='mt-1 text-amber-700 dark:text-amber-400'>
+                            The staging table is rebuilt from the file, so the procedure may fail on
+                            a column it expects.
+                          </p>
+                        )}
                       </div>
                     )}
 
@@ -538,7 +566,13 @@ export function NewImportDialog({
             </label>
             {selected && (
               <p className='min-w-0 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                {selected.procedure ? (
+                {selectedMode === 'processor' || selectedMode === 'service' ? (
+                  <span data-import-will-run={selectedMode}>
+                    Compares the file with live records and writes only what differs, through the
+                    items service. Every change is revisioned under your name.
+                    {selectedMode === 'processor' && ' No stored procedure runs.'}
+                  </span>
+                ) : selected.procedure ? (
                   <>
                     Will load into{' '}
                     <span className='font-mono text-slate-700 dark:text-foreground'>

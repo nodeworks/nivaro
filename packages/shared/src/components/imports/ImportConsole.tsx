@@ -29,6 +29,8 @@ import { Sheet, SheetContent } from '../ui/sheet'
 import { CollectionImportPanel } from './CollectionImportPanel'
 import { DefinitionsPanel } from './DefinitionsPanel'
 import { NewImportDialog } from './NewImportDialog'
+import { RunDetailSheet } from './RunDetailSheet'
+import { LIVE_POLL_MS, STATUS_STYLE, StatusPill, useElapsed } from './run-parts'
 import {
   type ImportDefinition,
   type ImportProgressEvent,
@@ -39,14 +41,13 @@ import {
   RUN_STATUSES,
   definitionTitle,
   formatDuration,
-  runnerName
+  runnerName,
+  importMode
 } from './types'
 
 export type { ImportProgressEvent, ImportRealtimeAdapter, ImportRun } from './types'
 
 const PAGE_SIZE = 25
-/** The poll is the safety net under the socket, not the primary signal. */
-const LIVE_POLL_MS = 5_000
 const IDLE_POLL_MS = 30_000
 
 const WINDOWS = [
@@ -55,18 +56,6 @@ const WINDOWS = [
   { value: '90', label: '90d' },
   { value: '0', label: 'All' }
 ]
-
-const STATUS_STYLE: Record<ImportRunStatus, { dot: string; text: string; label: string }> = {
-  queued: { dot: 'bg-slate-400', text: 'text-slate-600 dark:text-slate-300', label: 'Queued' },
-  running: { dot: 'bg-nvr-cyan', text: 'text-[#0284a8] dark:text-nvr-cyan', label: 'Running' },
-  completed: {
-    dot: 'bg-emerald-500',
-    text: 'text-emerald-700 dark:text-emerald-400',
-    label: 'Completed'
-  },
-  error: { dot: 'bg-red-500', text: 'text-red-700 dark:text-red-400', label: 'Error' },
-  canceled: { dot: 'bg-slate-300', text: 'text-slate-400 dark:text-slate-500', label: 'Canceled' }
-}
 
 // ─── Props ──────────────────────────────────────────────────────────────────
 
@@ -83,6 +72,10 @@ export interface ImportConsoleProps {
   /** Fires when a collection-import job's detail opens or closes, so a host
    *  can keep its own URL in step. */
   onJobOpen?: (id: string | null) => void
+  /** Deep link into a staged run's detail (admin /imports?run=9801). */
+  initialRunId?: number | null
+  /** Fires when a staged run's detail opens or closes. */
+  onRunOpen?: (id: number | null) => void
 }
 
 export type ConsoleTab = 'runs' | 'collection' | 'definitions'
@@ -94,39 +87,6 @@ const TAB_LABELS: Record<ConsoleTab, string> = {
 }
 
 // ─── Small parts ────────────────────────────────────────────────────────────
-
-function StatusPill({ status }: { status: ImportRunStatus }) {
-  const s = STATUS_STYLE[status]
-  return (
-    <span className={cn('flex items-center gap-1.5 text-[12px] font-medium', s.text)}>
-      <span className='relative flex h-1.5 w-1.5 shrink-0'>
-        {status === 'running' && (
-          <span
-            className={cn(
-              'absolute inline-flex h-full w-full rounded-full opacity-75 motion-safe:animate-ping',
-              s.dot
-            )}
-          />
-        )}
-        <span className={cn('relative inline-flex h-1.5 w-1.5 rounded-full', s.dot)} />
-      </span>
-      {s.label}
-    </span>
-  )
-}
-
-/** Seconds since a start point, ticking. Used only while something runs. */
-function useElapsed(startedAt: string | null | undefined, active: boolean): number | null {
-  const [, tick] = useState(0)
-  useEffect(() => {
-    if (!active) return
-    const t = setInterval(() => tick((n) => n + 1), 1000)
-    return () => clearInterval(t)
-  }, [active])
-  if (!startedAt || !active) return null
-  const seconds = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
-  return seconds >= 0 ? seconds : null
-}
 
 function InsightTile({
   label,
@@ -251,7 +211,9 @@ export function ImportConsole({
   realtime,
   defaultTab = 'runs',
   initialJobId,
-  onJobOpen
+  onJobOpen,
+  initialRunId = null,
+  onRunOpen
 }: ImportConsoleProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -269,7 +231,11 @@ export function ImportConsole({
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [windowDays, setWindowDays] = useState('30')
-  const [openRunId, setOpenRunId] = useState<number | null>(null)
+  const [openRunId, setOpenRunIdState] = useState<number | null>(initialRunId)
+  const setOpenRunId = (id: number | null) => {
+    setOpenRunIdState(id)
+    onRunOpen?.(id)
+  }
   const [newOpen, setNewOpen] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   /** Latest socket stage per run — instant feedback the poll then confirms. */
@@ -339,7 +305,7 @@ export function ImportConsole({
             : e.stage === 'preparing'
               ? 'Preparing the staging table'
               : e.stage === 'importing'
-                ? 'Running the procedure'
+                ? 'Importing the rows'
                 : e.stage === 'completed'
                   ? 'Completed'
                   : (e.error ?? 'Failed')
@@ -669,9 +635,9 @@ export function ImportConsole({
                   No imports have run yet
                 </h3>
                 <p className='mt-1.5 text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
-                  An import loads a file's rows into a staging table, then runs that import's stored
-                  procedure over them. Runs are queued here and picked up by the worker within a few
-                  seconds — one at a time, because procedures share their staging tables.
+                  An import reads a file and brings its rows into the records it is defined for.
+                  Runs are queued here and picked up by the worker within a few seconds, one at a
+                  time.
                 </p>
                 {isAdmin && (
                   <div className='mt-4 flex items-center gap-2'>
@@ -784,222 +750,5 @@ export function ImportConsole({
         />
       )}
     </div>
-  )
-}
-
-// ─── Detail sheet ───────────────────────────────────────────────────────────
-
-function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className='flex items-baseline justify-between gap-4 border-b border-slate-100 py-1.5 last:border-b-0 dark:border-border/60'>
-      <span className='shrink-0 text-[11.5px] text-slate-400'>{label}</span>
-      <span className='min-w-0 truncate text-right text-[12px] text-slate-800 dark:text-foreground'>
-        {children}
-      </span>
-    </div>
-  )
-}
-
-function RunDetailSheet({
-  run: cached,
-  runId,
-  stage,
-  isAdmin,
-  onClose,
-  onRequeue,
-  onCancel
-}: {
-  /** The list row, shown immediately; the fetch below fills in logs. */
-  run: ImportRun | undefined
-  runId: number | null
-  stage: string | null
-  isAdmin: boolean
-  onClose: () => void
-  onRequeue: (id: number) => void
-  onCancel: (id: number) => void
-}) {
-  const client = useNivaroClient()
-  const detail = useQuery({
-    queryKey: ['staged-import-run', runId],
-    queryFn: () => client.request(get<{ data: ImportRun }>(`/staged-imports/${runId}`)),
-    enabled: runId != null,
-    refetchInterval: (q) =>
-      // Keep a live run's logs and timings current while it's open.
-      q.state.data?.data?.status === 'running' || q.state.data?.data?.status === 'queued'
-        ? LIVE_POLL_MS
-        : false
-  })
-
-  const run = detail.data?.data ?? cached
-  const elapsed = useElapsed(run?.started_at ?? run?.created_at, run?.status === 'running')
-  const fileHref = run?.file ? client.fileUrl(run.file) : null
-
-  return (
-    <Sheet open={runId != null} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side='right' className='w-[min(560px,94vw)] p-0 sm:max-w-none'>
-        {!run ? (
-          <div className='p-5 text-[12.5px] text-slate-400'>Loading run…</div>
-        ) : (
-          <div className='flex h-full flex-col'>
-            <header className='shrink-0 border-b border-slate-200 px-5 py-4 dark:border-border'>
-              <div className='flex items-center gap-2.5'>
-                <StatusPill status={run.status} />
-                <span className='font-mono text-[12px] text-slate-400'>#{run.id}</span>
-              </div>
-              <h2 className='mt-1.5 text-[16px] font-semibold text-slate-900 dark:text-foreground'>
-                {run.definition_label?.trim() || run.import_key}
-              </h2>
-              <p className='font-mono text-[11px] text-slate-400'>{run.import_key}</p>
-              {stage && run.status === 'running' && (
-                <p className='mt-2 text-[12px] text-[#0284a8] dark:text-nvr-cyan'>
-                  {stage}
-                  {elapsed != null && ` · ${formatDuration(elapsed)} elapsed`}
-                </p>
-              )}
-            </header>
-
-            <div className='min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4'>
-              {/* What this run executes — visible before it does, which is the
-                  point of showing it at all. */}
-              <section>
-                <h3 className='mb-1.5 text-[11.5px] font-semibold text-slate-500 dark:text-muted-foreground'>
-                  What runs
-                </h3>
-                <div className='rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-border dark:bg-muted/30'>
-                  <p className='flex flex-wrap items-center gap-1.5 font-mono text-[12px] text-slate-800 dark:text-foreground'>
-                    <span>{run.staging_table || `staging_${run.import_key}`}</span>
-                    {run.procedure ? (
-                      <>
-                        <ArrowRight className='h-3.5 w-3.5 text-slate-400' />
-                        <span>{run.procedure}</span>
-                      </>
-                    ) : (
-                      <span className='font-sans text-[11.5px] text-slate-500'>
-                        · load only, no procedure
-                      </span>
-                    )}
-                  </p>
-                  <p className='mt-1 text-[11px] text-slate-400'>
-                    Loader: {run.loader ?? 'deployment default'}
-                    {run.definition_active === false && ' · this import is now inactive'}
-                  </p>
-                </div>
-              </section>
-
-              <section>
-                <h3 className='mb-1 text-[11.5px] font-semibold text-slate-500 dark:text-muted-foreground'>
-                  Timings
-                </h3>
-                <MetaRow label='Queued'>
-                  {run.created_at ? formatDateTime(run.created_at) : '—'}
-                </MetaRow>
-                <MetaRow label='Started'>
-                  {run.started_at ? formatDateTime(run.started_at) : '—'}
-                </MetaRow>
-                <MetaRow label='Finished'>
-                  {run.finished_at ? formatDateTime(run.finished_at) : '—'}
-                </MetaRow>
-                <MetaRow label='Duration'>
-                  <span className='font-mono tabular-nums'>{formatDuration(run.duration)}</span>
-                </MetaRow>
-                <MetaRow label='Rows'>
-                  <span className='font-mono tabular-nums'>
-                    {run.row_count == null ? '—' : formatNumber(run.row_count)}
-                  </span>
-                </MetaRow>
-                <MetaRow label='Priority'>
-                  <span className='font-mono tabular-nums'>{run.sort}</span>
-                </MetaRow>
-                <MetaRow label='Queued by'>{runnerName(run) ?? '—'}</MetaRow>
-              </section>
-
-              <section>
-                <h3 className='mb-1.5 text-[11.5px] font-semibold text-slate-500 dark:text-muted-foreground'>
-                  File
-                </h3>
-                {run.file_name || run.file ? (
-                  <div className='flex items-center gap-2.5 rounded-md border border-slate-200 px-3 py-2 dark:border-border'>
-                    <FileSpreadsheet className='h-4 w-4 shrink-0 text-slate-400' />
-                    <div className='min-w-0 flex-1'>
-                      <p className='truncate font-mono text-[11.5px] text-slate-800 dark:text-foreground'>
-                        {run.file_name ?? run.file}
-                      </p>
-                      {run.file_size != null && (
-                        <p className='text-[11px] text-slate-400'>
-                          {formatFileSize(Number(run.file_size))}
-                        </p>
-                      )}
-                    </div>
-                    {fileHref && (
-                      <a
-                        href={fileHref}
-                        target='_blank'
-                        rel='noreferrer'
-                        className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
-                        aria-label='Download the source file'
-                      >
-                        <Download className='h-3.5 w-3.5' />
-                      </a>
-                    )}
-                  </div>
-                ) : (
-                  <p className='text-[12px] text-slate-400'>
-                    No file — this run cannot be re-queued.
-                  </p>
-                )}
-              </section>
-
-              <section>
-                <h3 className='mb-1.5 text-[11.5px] font-semibold text-slate-500 dark:text-muted-foreground'>
-                  Log
-                </h3>
-                {run.logs ? (
-                  <pre
-                    className={cn(
-                      'max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-md border px-3 py-2.5 font-mono text-[11.5px] leading-relaxed',
-                      run.status === 'error'
-                        ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300'
-                        : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-border dark:bg-muted/30 dark:text-foreground'
-                    )}
-                  >
-                    {run.logs}
-                  </pre>
-                ) : (
-                  <p className='text-[12px] text-slate-400'>
-                    {run.status === 'completed'
-                      ? 'Completed with nothing to report.'
-                      : 'Nothing logged yet.'}
-                  </p>
-                )}
-              </section>
-            </div>
-
-            {isAdmin && (
-              <footer className='flex shrink-0 items-center gap-2 border-t border-slate-200 px-5 py-3 dark:border-border'>
-                <Button
-                  variant='outline'
-                  size='sm'
-                  disabled={run.status === 'running' || !run.file}
-                  onClick={() => onRequeue(run.id)}
-                >
-                  <RotateCcw className='h-3.5 w-3.5' /> Re-queue
-                </Button>
-                <Button
-                  variant='ghost'
-                  size='sm'
-                  disabled={run.status === 'completed'}
-                  onClick={() => onCancel(run.id)}
-                >
-                  <Ban className='h-3.5 w-3.5' /> Cancel
-                </Button>
-                <span className='ml-auto text-[11px] text-slate-400'>
-                  Re-queueing re-runs the same file.
-                </span>
-              </footer>
-            )}
-          </div>
-        )}
-      </SheetContent>
-    </Sheet>
   )
 }

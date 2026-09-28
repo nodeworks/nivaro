@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
 import { getImportProcessor, runImportProcessor } from './import-processors.js'
+import { type ImportRunReport, recordRanVia, saveRunReport } from './import-run-report.js'
 import { runLongSql as runLong } from './run-long.js'
 import { parseServiceConfig, runServiceImport } from './staged-import-service.js'
 import { parseStagingColumns, resolveHeaderMap } from './staged-import-validation.js'
@@ -522,6 +523,7 @@ export async function runStagedImport({
 
   let rows = parseImportFile(buffer)
   if (rows.length === 0) throw new Error('File contained no rows')
+  const parseMs = Date.now() - began
   await onProgress?.('row_count', { row_count: rows.length })
 
   // Derived from ALL rows: keying the schema off row 1 (as the legacy importer
@@ -554,6 +556,7 @@ export async function runStagedImport({
     const cfg = parseServiceConfig(definition.service_config)
     if (!cfg)
       throw new Error(`Import "${definition.key}" is service-mode but has no valid service_config`)
+    if (runId != null) await recordRanVia(runId, 'service')
     await onProgress?.('importing')
     const summary = await runServiceImport({
       config: cfg,
@@ -585,12 +588,25 @@ export async function runStagedImport({
   }
 
   await onProgress?.('preparing')
+  const loadBegan = Date.now()
   await ensureStagingTable(table, columns, declaredNames)
 
   const loader: StagingLoader =
     definition.loader ?? ((process.env.IMPORT_LOADER as StagingLoader) || 'bulk')
   if (loader === 'insert') await loadChunked(table, rows, columns)
   else await loadViaShare(table, rows, columns)
+  const loadMs = Date.now() - loadBegan
+
+  if (runId != null) {
+    await recordRanVia(
+      runId,
+      processor
+        ? String(definition.processor)
+        : definition.procedure
+          ? `procedure:${definition.procedure}`
+          : 'load'
+    )
+  }
 
   if (processor) {
     await onProgress?.('importing')
@@ -602,6 +618,36 @@ export async function runStagedImport({
       onProgress: (written, total) => onProgress?.('importing', { written, total }),
       stamp: runId != null ? `import:${definition.label || definition.key}:run-${runId}` : null
     })
+    if (runId != null) {
+      const skippedTotal = Object.values(result.skipped).reduce((a, b) => a + b, 0)
+      const collections: Record<string, { created: number; updated: number }> = {}
+      for (const it of result.items ?? []) {
+        if (!it.collection || (it.kind !== 'created' && it.kind !== 'updated')) continue
+        const c = (collections[it.collection] ??= { created: 0, updated: 0 })
+        if (it.kind === 'created') c.created++
+        else c.updated++
+      }
+      const report: ImportRunReport = {
+        counts: {
+          created: result.created,
+          updated: result.updated,
+          unchanged: result.unchanged,
+          skipped: skippedTotal,
+          failed: result.failed,
+          ...(result.report?.other?.length ? { other: result.report.other } : {})
+        },
+        skipped: result.skipped,
+        phases: [
+          { key: 'read-file', label: 'Read the file', ms: parseMs, count: rows.length },
+          { key: 'staging', label: 'Kept a copy of the file', ms: loadMs, count: rows.length },
+          ...(result.report?.phases ?? [])
+        ],
+        unmatched: result.report?.unmatched ?? [],
+        notes: result.report?.notes ?? [],
+        collections
+      }
+      await saveRunReport(runId, report, result.items ?? [])
+    }
     if (result.failed > 0 && result.created + result.updated === 0) {
       throw new Error(`Import wrote nothing:\n${result.log}`)
     }

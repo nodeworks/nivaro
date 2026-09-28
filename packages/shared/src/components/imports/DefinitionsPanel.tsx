@@ -454,7 +454,14 @@ export function DefinitionsPanel({
                 <h3 className='truncate text-[15px] font-semibold text-slate-900 dark:text-foreground'>
                   {selectedId === NEW ? 'New import definition' : definitionTitle(selected!)}
                 </h3>
-                {selected && (
+                {selected && selected.processor && selected.processor !== 'proc' ? (
+                  <p className='mt-0.5 text-[11px] text-slate-400'>
+                    Items service
+                    {selected.processor !== 'service' && (
+                      <span className='font-mono'> · {selected.processor}</span>
+                    )}
+                  </p>
+                ) : selected && (
                   <p className='mt-0.5 font-mono text-[11px] text-slate-400'>
                     {selected.staging_table || `staging_${selected.key}`}
                     {selected.procedure && (

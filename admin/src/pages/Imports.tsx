@@ -9,7 +9,7 @@ import {
 } from '@nivaro/shared'
 import { FileUp } from 'lucide-react'
 import { useMemo } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { io } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
 
@@ -44,6 +44,8 @@ function createImportRealtime(staticToken: string | null): ImportRealtimeAdapter
 export function ImportsPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const runParam = Number(searchParams.get('run'))
   const { user } = useAuth()
 
   const client = useMemo(() => createNivaro(window.location.origin), [])
@@ -72,6 +74,18 @@ export function ImportsPage() {
                 // section rather than being looked up as a job id.
                 defaultTab={id ? 'collection' : 'runs'}
                 initialJobId={id && id !== 'new' ? id : null}
+                initialRunId={Number.isInteger(runParam) && runParam > 0 ? runParam : null}
+                onRunOpen={(runId) =>
+                  setSearchParams(
+                    (prev) => {
+                      const next = new URLSearchParams(prev)
+                      if (runId) next.set('run', String(runId))
+                      else next.delete('run')
+                      return next
+                    },
+                    { replace: true }
+                  )
+                }
                 // Keep the URL in step so a job detail stays linkable, the way
                 // /imports/:id was before this page became one console.
                 onJobOpen={(jobId) =>

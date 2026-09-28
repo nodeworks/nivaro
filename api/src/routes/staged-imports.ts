@@ -7,6 +7,12 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFileBuffer } from '../services/files.js'
 import {
+  hasRunReports,
+  parseRunReport,
+  rebuildRunReport
+} from '../services/import-run-report.js'
+import { executeRevert, planRevert } from '../services/import-run-revert.js'
+import {
   getImportProcessor,
   isProcessorKey,
   listImportProcessors,
@@ -525,9 +531,12 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     'q.created_at',
     'q.updated_at',
     'q.legacy_id',
+    'q.ran_via',
+    'q.reverted_at',
     'd.label as definition_label',
     'd.staging_table',
     'd.procedure',
+    'd.processor',
     'd.loader',
     'd.is_active as definition_active',
     'f.filename_download as file_name',
@@ -690,10 +699,407 @@ export async function stagedImportRoutes(app: FastifyInstance) {
   })
 
   app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
-    const row = await runQuery().select(RUN_COLUMNS).where('q.id', req.params.id).first()
+    const row = await runQuery()
+      .select([...RUN_COLUMNS, 'q.report'])
+      .where('q.id', req.params.id)
+      .first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    return { data: row }
+    return { data: { ...row, report: parseRunReport(row.report) } }
   })
+
+  // ─── What a run did ───────────────────────────────────────────────────────
+
+  /** Collections of this run's items the caller may read. Admins: all. */
+  async function readableCollections(
+    runId: number,
+    req: { user?: unknown; isAdmin?: boolean }
+  ): Promise<{ all: boolean; names: string[] }> {
+    if (req.isAdmin) return { all: true, names: [] }
+    const { can } = await import('../services/permissions.js')
+    const rows = (await db('nivaro_import_run_items')
+      .where('run', runId)
+      .whereNotNull('collection')
+      .distinct('collection')) as Array<{ collection: string }>
+    const names: string[] = []
+    for (const r of rows) {
+      if (await can(req.user as never, 'read', String(r.collection))) names.push(String(r.collection))
+    }
+    return { all: false, names }
+  }
+
+  const ITEM_KINDS = new Set(['created', 'updated', 'skipped', 'failed'])
+
+  function itemsQuery(
+    runId: number,
+    q: { kind?: string; collection?: string; search?: string; reverted?: string },
+    access: { all: boolean; names: string[] }
+  ) {
+    const kinds = String(q.kind ?? '')
+      .split(',')
+      .map((k) => k.trim())
+      .filter((k) => ITEM_KINDS.has(k))
+    return db('nivaro_import_run_items')
+      .where('run', runId)
+      .modify((qb) => {
+        if (kinds.length) qb.whereIn('kind', kinds)
+        if (q.collection) qb.where('collection', q.collection)
+        if (q.reverted === '1') qb.whereNotNull('reverted_at')
+        // Rows the run left out quote the file; only records the caller may
+        // read are shown to anyone but an admin.
+        if (!access.all) qb.whereIn('collection', access.names.length ? access.names : ['__none__'])
+        const term = String(q.search ?? '').trim()
+        if (term) {
+          const like = `%${term.replace(/[\\%_[]/g, (m) => `\\${m}`)}%`
+          qb.where((b) =>
+            b
+              .whereRaw("label LIKE ? ESCAPE '\\'", [like])
+              .orWhereRaw("item_id LIKE ? ESCAPE '\\'", [like])
+              .orWhereRaw("message LIKE ? ESCAPE '\\'", [like])
+              .orWhereRaw("changes LIKE ? ESCAPE '\\'", [like])
+          )
+        }
+      })
+  }
+
+  type StoredItem = {
+    id: number
+    kind: string
+    collection: string | null
+    item_id: string | null
+    label: string | null
+    file_row: number | null
+    message: string | null
+    changes: string | null
+    reverted_at: Date | null
+    revert_note: string | null
+  }
+
+  /** Field names become labels and relation ids become the names people use. */
+  async function presentItems(rows: StoredItem[]) {
+    const { labelledChanges } = await import('../services/mail-types.js')
+    const { getLabels } = await import('../services/queues.js')
+    const cache = new Map()
+    const want = new Map<string, Set<string>>()
+    for (const r of rows) {
+      if (!r.collection || !r.item_id || (r.label ?? '').trim()) continue
+      want.set(r.collection, (want.get(r.collection) ?? new Set<string>()).add(String(r.item_id)))
+    }
+    const names = want.size ? await getLabels(want).catch(() => ({}) as Record<string, string>) : {}
+    return Promise.all(
+      rows.map(async (r) => {
+        let raw: Array<{ field: string; from?: unknown; to: unknown }> = []
+        try {
+          raw = r.changes ? JSON.parse(r.changes) : []
+        } catch {
+          raw = []
+        }
+        const delta: Record<string, unknown> = {}
+        const previous: Record<string, unknown> = {}
+        for (const c of raw) {
+          delta[c.field] = c.to
+          if (c.from !== undefined) previous[c.field] = c.from
+        }
+        const labelled = r.collection
+          ? await labelledChanges(r.collection, delta, previous, 60, cache).catch(() => [])
+          : []
+        const byField = new Map(labelled.map((l) => [l.field, l]))
+        return {
+          id: Number(r.id),
+          kind: r.kind,
+          collection: r.collection,
+          item_id: r.item_id,
+          label:
+            (r.label ?? '').trim() ||
+            (r.collection && r.item_id ? names[`${r.collection}:${r.item_id}`] : '') ||
+            (r.item_id ? `#${r.item_id}` : 'File row'),
+          row: r.file_row,
+          message: r.message,
+          reverted_at: r.reverted_at,
+          revert_note: r.revert_note,
+          changes: raw.map((c) => {
+            const l = byField.get(c.field)
+            return {
+              field: c.field,
+              label: l?.label ?? c.field,
+              from: c.from === undefined ? null : (l?.old ?? String(c.from ?? '')),
+              to: l?.new ?? String(c.to ?? ''),
+              from_known: c.from !== undefined
+            }
+          })
+        }
+      })
+    )
+  }
+
+  app.get<{ Params: { id: string } }>('/:id/items', async (req, reply) => {
+    if (!(await hasRunReports())) return { data: [], total: 0, page: 1, limit: 50, facets: {} }
+    const runId = Number(req.params.id)
+    if (!Number.isInteger(runId)) return reply.code(400).send({ error: 'Bad run id' })
+    const q = req.query as {
+      kind?: string
+      collection?: string
+      search?: string
+      reverted?: string
+      page?: string
+      limit?: string
+    }
+    const limit = Math.min(Math.max(Number(q.limit ?? 50) || 50, 1), 200)
+    const page = Math.max(1, Number(q.page ?? 1) || 1)
+    const access = await readableCollections(runId, req)
+
+    const [rows, counted, facets] = await Promise.all([
+      itemsQuery(runId, q, access)
+        .orderBy('id', 'asc')
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .select(
+          'id',
+          'kind',
+          'collection',
+          'item_id',
+          'label',
+          'file_row',
+          'message',
+          'changes',
+          'reverted_at',
+          'revert_note'
+        ) as Promise<StoredItem[]>,
+      itemsQuery(runId, q, access).count({ c: '*' }).first(),
+      // Facets ignore the kind / collection filter, so choosing one never
+      // hides the alternatives.
+      itemsQuery(runId, { search: q.search }, access)
+        .select('kind', 'collection')
+        .count({ c: '*' })
+        .groupBy('kind', 'collection') as Promise<
+        Array<{ kind: string; collection: string | null; c: number }>
+      >
+    ])
+    const byKind: Record<string, number> = {}
+    const byCollection: Record<string, number> = {}
+    for (const f of facets) {
+      byKind[f.kind] = (byKind[f.kind] ?? 0) + Number(f.c)
+      if (f.collection) byCollection[f.collection] = (byCollection[f.collection] ?? 0) + Number(f.c)
+    }
+    return {
+      data: await presentItems(rows),
+      total: Number(counted?.c ?? 0),
+      page,
+      limit,
+      facets: { kind: byKind, collection: byCollection }
+    }
+  })
+
+  const csvCell = (v: unknown) => {
+    const s = v == null ? '' : String(v)
+    // A cell that starts like a formula is text, not a formula.
+    const safe = /^[=+\-@]/.test(s) ? `'${s}` : s
+    return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
+  }
+
+  /** The run's items as a sheet: one line per changed field. */
+  app.get<{ Params: { id: string } }>(
+    '/:id/items.csv',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const runId = Number(req.params.id)
+      if (!Number.isInteger(runId)) return reply.code(400).send({ error: 'Bad run id' })
+      const q = req.query as { kind?: string; collection?: string; search?: string }
+      const rows = (await itemsQuery(runId, q, { all: true, names: [] })
+        .orderBy('id', 'asc')
+        .limit(50_000)
+        .select(
+          'id',
+          'kind',
+          'collection',
+          'item_id',
+          'label',
+          'file_row',
+          'message',
+          'changes',
+          'reverted_at',
+          'revert_note'
+        )) as StoredItem[]
+      const out: string[] = [
+        ['what happened', 'record', 'collection', 'record id', 'file row', 'field', 'before', 'after', 'note']
+          .map(csvCell)
+          .join(',')
+      ]
+      for (let i = 0; i < rows.length; i += 500) {
+        for (const it of await presentItems(rows.slice(i, i + 500))) {
+          const head = [it.kind, it.label, it.collection, it.item_id, it.row]
+          if (it.changes.length === 0) {
+            out.push([...head, '', '', '', it.message ?? it.revert_note ?? ''].map(csvCell).join(','))
+            continue
+          }
+          for (const c of it.changes) {
+            out.push(
+              [...head, c.label, c.from_known ? c.from : '(not kept)', c.to, it.message ?? it.revert_note ?? '']
+                .map(csvCell)
+                .join(',')
+            )
+          }
+        }
+      }
+      await logActivity({
+        action: 'import-run-export',
+        user: req.user?.id,
+        collection: 'nivaro_import_queue',
+        item: String(runId),
+        comment: `${rows.length} item(s)${q.kind ? ` · ${q.kind}` : ''}`,
+        req
+      })
+      return reply
+        .header('content-type', 'text/csv; charset=utf-8')
+        .header('content-disposition', `attachment; filename="import-run-${runId}${q.kind ? `-${q.kind}` : ''}.csv"`)
+        .send(`\uFEFF${out.join('\r\n')}`)
+    }
+  )
+
+  /** Reference values in the file that matched nothing, as a sheet. */
+  app.get<{ Params: { id: string } }>(
+    '/:id/unmatched.csv',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_queue').where('id', req.params.id).select('report').first()
+      const report = parseRunReport(row?.report)
+      if (!report) return reply.code(404).send({ error: 'This run kept no report' })
+      const out = [['column', 'value in the file', 'what the import did'].map(csvCell).join(',')]
+      for (const u of report.unmatched) {
+        for (const v of u.values) out.push([u.label, v, u.effect].map(csvCell).join(','))
+      }
+      return reply
+        .header('content-type', 'text/csv; charset=utf-8')
+        .header('content-disposition', `attachment; filename="import-run-${req.params.id}-unmatched.csv"`)
+        .send(`\uFEFF${out.join('\r\n')}`)
+    }
+  )
+
+  /** Read the run's items back from the changes it recorded. */
+  app.post<{ Params: { id: string } }>(
+    '/:id/report/rebuild',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const runId = Number(req.params.id)
+      const row = await db('nivaro_import_queue').where('id', runId).select('id', 'report').first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      if (parseRunReport(row.report)?.phases?.length) {
+        return reply.code(409).send({ error: 'This run already has its own report' })
+      }
+      const out = await rebuildRunReport(runId)
+      if (!out) return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
+      if (out.items === 0) {
+        return reply.code(404).send({
+          error:
+            'This run left no recorded changes. A run of a stored procedure writes outside the items service, so there is nothing to read back.'
+        })
+      }
+      return { data: out }
+    }
+  )
+
+  // ─── Reverting ────────────────────────────────────────────────────────────
+
+  const revertSummary = (plan: Awaited<ReturnType<typeof planRevert>>) => ({
+    run: plan.run,
+    total: plan.total,
+    remove: plan.remove,
+    restore: plan.restore,
+    partly: plan.partly,
+    left_alone: plan.left_alone,
+    already_reverted: plan.already_reverted,
+    not_applicable: plan.not_applicable,
+    // what stays, and why — the part worth reading before confirming
+    left: plan.items
+      .filter((i) => ['changed-since', 'gone', 'nothing-recorded', 'partly'].includes(i.verdict))
+      .slice(0, 50)
+      .map((i) => ({ id: i.id, label: i.label, collection: i.collection, item_id: i.item_id, note: i.note }))
+  })
+
+  /** What a revert would do. Writes nothing. */
+  app.post<{ Params: { id: string } }>(
+    '/:id/revert/preview',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const runId = Number(req.params.id)
+      if (!Number.isInteger(runId)) return reply.code(400).send({ error: 'Bad run id' })
+      if (!(await hasRunReports())) return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
+      const ids = Array.isArray((req.body as { item_ids?: unknown })?.item_ids)
+        ? ((req.body as { item_ids: unknown[] }).item_ids.map(Number).filter(Number.isInteger) as number[])
+        : undefined
+      return { data: revertSummary(await planRevert(runId, ids)) }
+    }
+  )
+
+  app.post<{ Params: { id: string } }>(
+    '/:id/revert',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const runId = Number(req.params.id)
+      if (!Number.isInteger(runId)) return reply.code(400).send({ error: 'Bad run id' })
+      if (!(await hasRunReports())) return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
+      const run = await runQuery().select(RUN_COLUMNS).where('q.id', runId).first()
+      if (!run) return reply.code(404).send({ error: 'Not found' })
+      if (run.status === 'running' || run.status === 'queued') {
+        return reply.code(409).send({ error: 'That import has not finished' })
+      }
+      const ids = Array.isArray((req.body as { item_ids?: unknown })?.item_ids)
+        ? ((req.body as { item_ids: unknown[] }).item_ids.map(Number).filter(Number.isInteger) as number[])
+        : undefined
+      const plan = await planRevert(runId, ids)
+      const work = plan.remove + plan.restore + plan.partly
+      if (work === 0) {
+        return reply.code(409).send({
+          error: 'Nothing can be reverted: every record was already reverted, changed again since the import, or kept no earlier values.',
+          data: revertSummary(plan)
+        })
+      }
+      const user = req.user!
+      const label = String(run.definition_label || run.import_key)
+      await logActivity({
+        action: 'import-revert',
+        user: user.id,
+        collection: 'nivaro_import_queue',
+        item: String(runId),
+        comment: `${ids ? `${ids.length} selected record(s)` : 'whole run'}: ${plan.remove} to remove, ${plan.restore + plan.partly} to restore, ${plan.left_alone} left alone`,
+        req
+      })
+      const finish = async (o: Awaited<ReturnType<typeof executeRevert>>) => {
+        await db('nivaro_import_queue')
+          .where('id', runId)
+          .update({ reverted_at: new Date(), reverted_by: user.id, updated_at: new Date() })
+        return `${o.removed} removed, ${o.restored} restored, ${o.left_alone} left alone${o.failed ? `, ${o.failed} failed` : ''}`
+      }
+      // A handful lands inside the request; a whole run is a background job.
+      if (work <= 25) {
+        const outcome = await executeRevert(plan, { user, label })
+        await finish(outcome)
+        return { data: { done: true, ...outcome } }
+      }
+      const { startJobRun } = await import('../services/job-runs.js')
+      const { isCancelled, clearCancel } = await import('../services/job-cancel.js')
+      const job = await startJobRun('bulk', `import-revert:${runId}`, {
+        label: `Revert ${label} import #${runId}`,
+        triggeredBy: user.id
+      })
+      void (async () => {
+        try {
+          const outcome = await executeRevert(plan, {
+            user,
+            label,
+            onProgress: (done, total) => job.progress({ done, total }),
+            cancelled: () => job.id != null && isCancelled(job.id)
+          })
+          if (job.id != null) clearCancel(job.id)
+          const summary = await finish(outcome)
+          if (outcome.failed > 0 && outcome.removed + outcome.restored === 0) await job.fail(summary)
+          else await job.complete(summary)
+        } catch (err) {
+          await job.fail(err)
+        }
+      })()
+      return reply.code(202).send({ data: { done: false, job_run_id: job.id, queued: work } })
+    }
+  )
 
   /**
    * Parse a file the way the worker will, without queueing anything.
@@ -791,6 +1197,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       }
     }
 
+    // A declared schema decides which columns load, and the validation report
+    // above already names what the file lacks or carries beyond it. Comparing
+    // the file with the physical staging table as well would report columns
+    // nothing reads (left there by older files) as missing.
+    const declaredSchema = definition ? parseStagingColumns(definition.staging_columns) : null
+    const compareWithTable = !!stagingColumns && !declaredSchema
+
     return {
       data: {
         row_count: rows.length,
@@ -799,8 +1212,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         file_name: multipart.filename,
         staging_table: table,
         staging_columns: stagingColumns,
-        unknown_columns: stagingColumns ? columns.filter((c) => !stagingColumns.includes(c)) : [],
-        missing_columns: stagingColumns ? stagingColumns.filter((c) => !columns.includes(c)) : [],
+        unknown_columns:
+          compareWithTable && stagingColumns ? columns.filter((c) => !stagingColumns.includes(c)) : [],
+        missing_columns:
+          compareWithTable && stagingColumns ? stagingColumns.filter((c) => !columns.includes(c)) : [],
         validation,
         dry_run: dryRun
       }

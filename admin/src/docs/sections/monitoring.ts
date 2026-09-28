@@ -205,6 +205,44 @@ ctx.importProcessors.register({
       type: 'note',
       text: 'The staging table is still loaded before a processor runs, so it stays the record of the last file and post-run flows that read it keep working. The records a run changed are handed to those flows as `affected` in the payload. If the extension that owns the processor is not loaded on an instance, the definition falls back to its procedure and the run says so.'
     },
+    { type: 'h3', id: 'imports-run-detail', text: 'Reading a run' },
+    {
+      type: 'p',
+      text: 'Click a run to open it. A run of an items-service import keeps a report and one item per record it touched, so the sheet answers in order: what happened (created, updated, unchanged, left out, failed), what needs a look (values in the file that match nothing, with the rows they sit on and what the import did instead), which records (filter by kind or collection, search, open a record, read each changed field as before → after), and where the time went. A run of a stored procedure keeps neither, because the procedure writes straight to the tables; it shows its timings and its log.'
+    },
+    {
+      type: 'table',
+      head: ['Action', 'What it does'],
+      rows: [
+        ['All as CSV / Values as CSV', 'Every item of the run, or every unmatched value, as a file.'],
+        ['Run the file again', 'Queues the same file as a new run.'],
+        [
+          'Revert…',
+          'Previews, then puts the run back: created records go to the trash, changed fields return to their earlier value. A record or field someone changed after the import is left alone and listed.'
+        ],
+        ['Revert one record', 'The same, for a single item in the list.'],
+        ['Rebuild from history', 'For a run made before reports existed: rebuilds the item list from the activity log (new values only).'],
+        ['Copy / Show as written', 'The log as plain text, for a ticket or a message.']
+      ]
+    },
+    {
+      type: 'p',
+      text: 'A processor reports through its return value: `report` carries `phases` (label, milliseconds, count, failed), `unmatched` (column, label, distinct, rows, values, effect), `notes` and `other` counts; `items` carries one entry per record with `kind` (created, updated, skipped, failed), `collection`, `item_id`, `label`, `file_row`, `message` and `changes` (field, from, to). Items are kept for 90 days, at most 50,000 per run.'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/staged-imports/:id                  // the run, with its report
+GET  /api/staged-imports/:id/items            // ?kind=&collection=&search=&page=&limit=
+GET  /api/staged-imports/:id/items.csv
+GET  /api/staged-imports/:id/unmatched.csv
+POST /api/staged-imports/:id/report/rebuild   // admin
+POST /api/staged-imports/:id/revert/preview   // admin · { item_ids? }
+POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
+    },
+    {
+      type: 'note',
+      text: 'A revert reaches what the run wrote through the items service. It does not reach set-based fills, the procedures a run calls at its end, or rows the run removed; the preview says which records it will leave alone and why. Link to a run with `/imports?run=<id>`.'
+    },
     { type: 'h2', id: 'imports-collection', text: 'Collection imports' },
     {
       type: 'p',

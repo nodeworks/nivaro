@@ -19,9 +19,17 @@ export interface ImportRun {
   created_at: string | null
   updated_at: string | null
   legacy_id: number | null
+  /** What executed: 'procedure:<name>', 'service', 'load' or a processor key.
+   *  Null on runs from before it was recorded. */
+  ran_via?: string | null
+  reverted_at?: string | null
+  /** Detail route only. */
+  report?: ImportRunReport | null
   definition_label: string | null
   staging_table: string | null
   procedure: string | null
+  /** null / 'proc' = stored procedure, 'service', or a registered processor key. */
+  processor?: string | null
   loader: 'bulk' | 'insert' | null
   definition_active: boolean | null
   file_name: string | null
@@ -167,6 +175,123 @@ export function runnerName(run: {
 
 export function definitionTitle(d: { label?: string | null; key: string }): string {
   return d.label?.trim() || d.key
+}
+
+export interface ImportRunPhase {
+  key: string
+  label: string
+  ms: number
+  count?: number
+  failed?: number
+}
+
+export interface ImportRunUnmatched {
+  column: string
+  label: string
+  values: string[]
+  distinct: number
+  rows: number
+  effect: string
+}
+
+/** What a run did — counts, timings, values in the file that matched nothing. */
+export interface ImportRunReport {
+  counts: {
+    created: number
+    updated: number
+    unchanged: number
+    skipped: number
+    failed: number
+    other?: Array<{ label: string; count: number }>
+  }
+  skipped: Record<string, number>
+  phases: ImportRunPhase[]
+  unmatched: ImportRunUnmatched[]
+  notes: string[]
+  collections?: Record<string, { created: number; updated: number }>
+  items_stored?: number
+  items_truncated?: boolean
+}
+
+export type ImportRunItemKind = 'created' | 'updated' | 'skipped' | 'failed'
+
+export interface ImportRunItemChange {
+  field: string
+  label: string
+  from: string | null
+  to: string
+  /** False when the value before the change was not kept. */
+  from_known: boolean
+}
+
+export interface ImportRunItem {
+  id: number
+  kind: ImportRunItemKind
+  collection: string | null
+  item_id: string | null
+  label: string
+  row: number | null
+  message: string | null
+  reverted_at: string | null
+  revert_note: string | null
+  changes: ImportRunItemChange[]
+}
+
+export interface ImportRevertPreview {
+  run: number
+  total: number
+  remove: number
+  restore: number
+  partly: number
+  left_alone: number
+  already_reverted: number
+  not_applicable: number
+  left: Array<{
+    id: number
+    label: string | null
+    collection: string | null
+    item_id: string | null
+    note: string
+  }>
+}
+
+/** What a FINISHED run executed. The definition may have changed since, so a
+ *  run answers from what it recorded; older runs predate processors. */
+export function runMode(run: {
+  status?: string
+  ran_via?: string | null
+  processor?: string | null
+  procedure?: string | null
+}): { mode: ImportMode; name: string | null } {
+  const via = (run.ran_via ?? '').trim()
+  if (via) {
+    if (via.startsWith('procedure:')) return { mode: 'procedure', name: via.slice(10) }
+    if (via === 'service') return { mode: 'service', name: null }
+    if (via === 'load') return { mode: 'load', name: null }
+    return { mode: 'processor', name: via }
+  }
+  if (run.status === 'queued' || run.status === 'running') {
+    const mode = importMode(run)
+    return { mode, name: mode === 'processor' ? (run.processor ?? null) : (run.procedure ?? null) }
+  }
+  return { mode: run.procedure ? 'procedure' : 'load', name: run.procedure ?? null }
+}
+
+/**
+ * What a run of this import executes.
+ *   procedure — rows go to the staging table, the stored procedure merges them
+ *   processor — a registered processor compares the file with live records and
+ *               writes the differences through the items service
+ *   service   — the single-collection items-service import
+ *   load      — staging table only
+ */
+export type ImportMode = 'procedure' | 'processor' | 'service' | 'load'
+
+export function importMode(d: { processor?: string | null; procedure?: string | null }): ImportMode {
+  const p = (d.processor ?? '').trim()
+  if (p === 'service') return 'service'
+  if (p && p !== 'proc') return 'processor'
+  return d.procedure ? 'procedure' : 'load'
 }
 
 /** `1m 12s` / `2h 04m` — durations here are whole seconds by contract. */

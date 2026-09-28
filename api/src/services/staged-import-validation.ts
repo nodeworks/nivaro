@@ -164,7 +164,7 @@ export async function validateStagedRows(
     if (missingRequired.length > 0) {
       report.errors.push({
         code: 'missing_columns',
-        message: `The file has no column for: ${missingRequired.map((c) => c.from_header ?? c.name).join(', ')} — the procedure reads them.`
+        message: `The file has no column for: ${missingRequired.map((c) => c.from_header ?? c.name).join(', ')} — the import reads them.`
       })
     }
     if (missingOptional.length > 0) {
@@ -176,7 +176,7 @@ export async function validateStagedRows(
     if (resolved.unknownHeaders.length > 0) {
       report.warnings.push({
         code: 'unknown_columns',
-        message: `File columns not in the declared schema (ignored by the procedure): ${resolved.unknownHeaders.join(', ')}`
+        message: `File columns the import does not read (ignored): ${resolved.unknownHeaders.join(', ')}`
       })
     }
   }
