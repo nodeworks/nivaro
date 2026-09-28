@@ -35,6 +35,7 @@ import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
+import { registerConfigSeed } from '../services/config-seeds.js'
 import { registerOpsTask } from '../services/ops-tasks.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
@@ -708,6 +709,13 @@ export function registrationMembers(
         registerOpsTask(def, extId)
       }
     },
+    seeds: {
+      register: (def) => {
+        note('seeds')
+        own('config_seeds', `${def.key} · ${def.collection} (${def.mode})`)
+        registerConfigSeed(def, extId)
+      }
+    },
     chain: buildChainContext(),
     integrations: {
       registerObligationKind: (def) => {
@@ -890,6 +898,7 @@ async function loadExtension(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'seeds'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1089,6 +1098,7 @@ export async function loadExtensions(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'seeds'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1238,6 +1248,7 @@ export async function loadCloudExtensions(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'seeds'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1420,6 +1431,7 @@ export async function scanNewExtensions(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'seeds'
     | 'integrations'
     | 'integrity'
     | 'mail'

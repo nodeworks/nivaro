@@ -14,7 +14,7 @@ import { logActivity } from './activity.js'
 import { clearCancel, isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
 
-const KEY = /^[a-z0-9][a-z0-9_-]*(?::[a-z0-9][a-z0-9_-]*)?$/i
+const KEY = /^[a-z0-9][a-z0-9_-]*(?::[a-z0-9][a-z0-9_-]*)*$/i
 const TAIL_LINES = 400
 const RUN_TIMEOUT_MS = 20 * 60_000
 

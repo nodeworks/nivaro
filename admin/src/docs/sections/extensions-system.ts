@@ -75,6 +75,32 @@ export default defineExtension({
         'In a test, `createTestContext().runTask(key, { execute })` runs the task with a recording context.'
       ]
     },
+    { type: 'h3', id: 'ext-overview-seeds', text: 'Config seeds' },
+    {
+      type: 'p',
+      text: 'Rows of a configuration collection an extension owns the definition of — a warehouse list, a category map, a set of reference values — are checked in beside its code and registered with `ctx.seeds.register(...)`. A seed is never applied at boot: it becomes the operational task `seed:<key>` whose dry run is the drift report (every row where the database differs from the file, which columns, and who last changed the row) and whose real run applies the file through the items service, as the admin who clicked, with `_change_reason` naming the seed. Rows match on `match_by` columns, never on `id`, so a seed survives an id-space difference between databases.'
+    },
+    {
+      type: 'pre',
+      code: `ctx.seeds.register({
+  key: 'my-extension:warehouse-ordering',
+  collection: 'warehouses',
+  match_by: ['name'],
+  rows: [
+    { name: 'PAE77', ordering_system: 'mdsi' },
+    { name: 'WAPUY', ordering_system: 'fusion_transfer' }
+  ],
+  mode: 'fill-only' // creates missing rows, fills empty columns, never overwrites a value someone set
+})`
+    },
+    {
+      type: 'ul',
+      items: [
+        '`fill-only` creates rows the database lacks and fills columns that are empty there; a value someone set stays and is reported as drift. `authoritative` writes the file\'s values back over differing columns.',
+        'A row that matches several database rows is `ambiguous`: reported, never written.',
+        '`GET /api/config-seeds` lists the seeds; `GET /api/config-seeds/:key/drift` is the report as JSON (admin only). The task appears under Ops Tasks like any other.'
+      ]
+    },
     { type: 'h3', id: 'ext-overview-kit', text: 'The extension kit' },
     {
       type: 'p',

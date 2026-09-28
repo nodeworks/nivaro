@@ -25,6 +25,7 @@ import type {
   CallResult,
   ChainTable,
   CollectionViewDef,
+  ConfigSeedDef,
   DashboardWidgetDef,
   EventSourceDef,
   FieldTypeDef,
@@ -212,6 +213,9 @@ export interface ExtensionContext {
   /** Operational tasks — repairs, backfills, migrations — run from the admin
    *  console (dry run by default, one at a time, every run recorded). */
   tasks: { register(def: OpsTaskDef): void }
+  /** Checked-in rows of a configuration collection, applied by a task —
+   *  never at boot — with a drift report as its dry run. */
+  seeds: { register(def: ConfigSeedDef): void }
   chain: {
     /** Start a chain for one feed event (e.g. one shipment) and run fn inside it. */
     begin<T>(root: { source: string; ref: string }, fn: () => Promise<T>): Promise<T>

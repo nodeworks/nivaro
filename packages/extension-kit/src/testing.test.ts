@@ -25,6 +25,13 @@ const ext = defineExtension({
       },
       execute: async () => ({ summary: 'closed them' })
     })
+    ctx.seeds.register({
+      key: 'demo:statuses',
+      collection: 'statuses',
+      match_by: ['key'],
+      rows: [{ key: 'open', label: 'Open' }],
+      mode: 'fill-only'
+    })
     ctx.integrations.registerSignal({
       id: 'demo:stuck',
       label: 'Stuck',
@@ -60,6 +67,7 @@ describe('test context', () => {
     })
     await ext.register(ctx)
     expect(ctx.registered.signals.map((s) => s.id)).toEqual(['demo:stuck'])
+    expect(ctx.registered.seeds.map((s) => s.key)).toEqual(['demo:statuses'])
 
     await ctx.runHooks('orders', 'create', 'after', { keys: [1], result: { id: 1, owner: 'u1' } })
     expect(ctx.calls.notifications).toEqual([

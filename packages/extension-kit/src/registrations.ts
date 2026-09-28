@@ -444,3 +444,35 @@ export interface OpsTaskDef {
   /** The real run. */
   execute(ctx: OpsTaskRunContext): Promise<OpsTaskOutcome>
 }
+
+// ─── Config seeds ───────────────────────────────────────────────────────────
+
+/**
+ * Rows of a configuration collection an extension owns the definition of,
+ * checked in beside its code. A seed is never applied at boot: it is
+ * registered as an operational task (`seed:<key>`) whose dry run is the
+ * drift report — every row where the database differs from the file, and
+ * who changed it — and whose real run applies the file.
+ */
+export interface ConfigSeedDef {
+  /** `<extension>:<name>`. */
+  key: string
+  label?: string
+  description?: string
+  /** The collection the rows belong to (never a `nivaro_*` system table). */
+  collection: string
+  /** Columns that identify a row across databases — never `id`. */
+  match_by: string[]
+  /** The rows, inline… */
+  rows?: Array<Record<string, unknown>>
+  /** …or a JSON file holding an array of rows (absolute path). */
+  file?: string
+  /**
+   * `fill-only`: create rows the database lacks and fill columns that are
+   * empty there; a value someone set stays. `authoritative`: the file wins —
+   * differing columns are written back to the seed's values.
+   */
+  mode: 'fill-only' | 'authoritative'
+  /** Columns the file carries that must never be written (ids, audit stamps). */
+  ignore?: string[]
+}

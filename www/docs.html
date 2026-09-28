@@ -6488,7 +6488,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6532,6 +6532,23 @@ export default defineExtension({
             <li>Routes (admin only): <code class="doc-code">GET /api/ops-tasks</code> (catalog + last ten runs each), <code class="doc-code">POST /api/ops-tasks/:key/run</code> with <code class="doc-code">{ "execute": true }</code> for a real run (dry by default; <code class="doc-code">409</code> while one runs), <code class="doc-code">GET /api/ops-tasks/runs/:id</code> (status, progress, outcome, output tail), <code class="doc-code">POST /api/ops-tasks/runs/:id/cancel</code> (cooperative — the task checks <code class="doc-code">rc.cancelled()</code> between chunks).</li>
             <li>The output tail lives in the process that ran the task; the run row itself is durable.</li>
             <li>In a test, <code class="doc-code">createTestContext().runTask(key, { execute })</code> runs the task with a recording context.</li>
+          </ul>
+          <h3 class="doc-h3" id="ext-overview-seeds">Config seeds</h3>
+          <p class="doc-p">Rows of a configuration collection an extension owns the definition of — a warehouse list, a category map, a set of reference values — are checked in beside its code and registered with <code class="doc-code">ctx.seeds.register(...)</code>. A seed is never applied at boot: it becomes the operational task <code class="doc-code">seed:&lt;key&gt;</code> whose dry run is the drift report (every row where the database differs from the file, which columns, and who last changed the row) and whose real run applies the file through the items service, as the admin who clicked, with <code class="doc-code">_change_reason</code> naming the seed. Rows match on <code class="doc-code">match_by</code> columns, never on <code class="doc-code">id</code>, so a seed survives an id-space difference between databases.</p>
+          <pre class="doc-pre"><code>ctx.seeds.register({
+  key: 'my-extension:warehouse-ordering',
+  collection: 'warehouses',
+  match_by: ['name'],
+  rows: [
+    { name: 'PAE77', ordering_system: 'mdsi' },
+    { name: 'WAPUY', ordering_system: 'fusion_transfer' }
+  ],
+  mode: 'fill-only' // creates missing rows, fills empty columns, never overwrites a value someone set
+})</code></pre>
+          <ul class="doc-ul">
+            <li><code class="doc-code">fill-only</code> creates rows the database lacks and fills columns that are empty there; a value someone set stays and is reported as drift. <code class="doc-code">authoritative</code> writes the file's values back over differing columns.</li>
+            <li>A row that matches several database rows is <code class="doc-code">ambiguous</code>: reported, never written.</li>
+            <li><code class="doc-code">GET /api/config-seeds</code> lists the seeds; <code class="doc-code">GET /api/config-seeds/:key/drift</code> is the report as JSON (admin only). The task appears under Ops Tasks like any other.</li>
           </ul>
           <h3 class="doc-h3" id="ext-overview-kit">The extension kit</h3>
           <p class="doc-p">An extension cannot import <code class="doc-code">api/src</code> — the API compiles with <code class="doc-code">rootDir: src</code>, and a mounted extension runs against a built image that ships no source. <code class="doc-code">@nivaro/extension-kit</code> is the contract instead: the extension context (<code class="doc-code">ExtensionContext</code>), the default export shape (<code class="doc-code">ExtensionDefinition</code>, checked by <code class="doc-code">defineExtension</code>), and every registration the context accepts — bulk and item actions, readiness and integrity checks, notes providers, mail types, digest sections, obligation kinds, signals, import processors, flow operations and triggers. The API imports its own extension contract from the same package, so the two cannot drift.</p>

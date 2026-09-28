@@ -41,6 +41,7 @@ import type {
   CallOptions,
   CallResult,
   CollectionViewDef,
+  ConfigSeedDef,
   DashboardWidgetDef,
   EventSourceDef,
   FieldTypeDef,
@@ -387,6 +388,7 @@ export interface TestContext extends ExtensionContext {
     digestSections: DigestSectionProvider[]
     readinessChecks: ReadinessCheck[]
     tasks: OpsTaskDef[]
+    seeds: ConfigSeedDef[]
     obligationKinds: ObligationKindDef[]
     signals: IntegrationSignal[]
     signalActions: SignalActionHandler[]
@@ -493,6 +495,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     digestSections: [],
     readinessChecks: [],
     tasks: [],
+    seeds: [],
     obligationKinds: [],
     signals: [],
     signalActions: [],
@@ -661,6 +664,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     digest: { registerSection: (fn) => registered.digestSections.push(fn) },
     readiness: { registerCheck: (c) => registered.readinessChecks.push(c) },
     tasks: { register: (d) => registered.tasks.push(d) },
+    seeds: { register: (d) => registered.seeds.push(d) },
     chain: {
       begin: async (_root, fn) => fn(),
       current: () => null,

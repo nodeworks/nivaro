@@ -103,6 +103,7 @@ import { itemActionsRoutes } from './item-actions.js'
 import { itemLocksRoutes } from './item-locks.js'
 import { itemsRoutes } from './items.js'
 import { jobRunRoutes } from './job-runs.js'
+import { configSeedRoutes } from './config-seeds.js'
 import { opsTaskRoutes } from './ops-tasks.js'
 import { journeyRoutes } from './journeys.js'
 import { lastTouchRoutes } from './last-touch.js'
@@ -309,6 +310,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(cronRoutes, { prefix: '/cron' })
   await app.register(jobRunRoutes, { prefix: '/job-runs' })
   await app.register(opsTaskRoutes, { prefix: '/ops-tasks' })
+  await app.register(configSeedRoutes, { prefix: '/config-seeds' })
   await app.register(monitorRoutes, { prefix: '/monitors' })
   await app.register(integrationContractRoutes, { prefix: '/integration-contracts' })
   await app.register(rumRoutes, { prefix: '/rum' })
