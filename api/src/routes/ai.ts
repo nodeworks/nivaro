@@ -14,9 +14,9 @@ import {
   retrievePlaybooks
 } from '../services/ai-playbooks.js'
 import { loadProposal, saveProposal } from '../services/autofill-store.js'
-import { proposeFromDocument } from '../services/document-autofill.js'
+import { proposeFromDocuments } from '../services/document-autofill.js'
 import { ACCEPTED_EXTENSIONS, extractDocumentText } from '../services/document-extract.js'
-import { uploadFileBuffer } from '../services/files.js'
+import { getFile, readFileBuffer, uploadFileBuffer } from '../services/files.js'
 import { withJobRun } from '../services/job-runs.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
@@ -1630,45 +1630,75 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
   /** Read the upload, run the proposal, store it under its id. Shared by the
    *  foreground and background paths. */
+  type ExtractInputFile = {
+    buffer: Buffer
+    filename: string
+    mimetype: string | null
+    /** Already stored (a document from the previous proposal) — not re-uploaded. */
+    fileId?: string | null
+  }
+  /** How the run names its documents in notifications, logs and the store. */
+  const documentsLabel = (files: Array<{ filename: string }>) =>
+    files.length <= 2
+      ? files.map((f) => f.filename).join(' + ')
+      : `${files[0].filename} + ${files.length - 1} more`
+  const MAX_DOCUMENTS = 8
+
   async function runExtraction(input: {
     user: User
     collection: string
     layoutId: number | null
-    buffer: Buffer
-    filename: string
-    mimetype: string | null
+    files: ExtractInputFile[]
     proposalId: string
   }): Promise<import('../services/document-autofill.js').DocumentProposal> {
-    const extracted = await extractDocumentText(input.buffer, input.filename, input.mimetype)
-    if (extracted.text.trim().length < 40) {
+    const docs: import('../services/document-autofill.js').SourceDocument[] = []
+    const skipped: string[] = []
+    for (const file of input.files) {
+      const extracted = await extractDocumentText(file.buffer, file.filename, file.mimetype)
+      if (extracted.text.trim().length < 40) {
+        skipped.push(file.filename)
+        continue
+      }
+      // Keep the document: the proposal attaches it to the record's file field
+      // when the collection has one, so the source rides with the record.
+      let fileId: string | null = file.fileId ?? null
+      if (!fileId) {
+        try {
+          const stored = await uploadFileBuffer(
+            input.user,
+            file.buffer,
+            file.filename,
+            file.mimetype || 'application/octet-stream'
+          )
+          fileId = stored.id
+        } catch {
+          fileId = null
+        }
+      }
+      docs.push({
+        name: file.filename,
+        ...extracted,
+        fullText: extracted.fullText ?? null,
+        fileId
+      })
+    }
+    if (!docs.length) {
       throw Object.assign(
         new Error(
-          'No readable text in this document. A scanned PDF has no text layer — export it as text or a searchable PDF first.'
+          input.files.length > 1
+            ? 'No readable text in these documents. A scanned PDF has no text layer — export it as text or a searchable PDF first.'
+            : 'No readable text in this document. A scanned PDF has no text layer — export it as text or a searchable PDF first.'
         ),
         { statusCode: 422 }
       )
     }
-    // Keep the document: the proposal attaches it to the record's file field
-    // when the collection has one, so the source rides with the record.
-    let fileId: string | null = null
-    try {
-      const stored = await uploadFileBuffer(
-        input.user,
-        input.buffer,
-        input.filename,
-        input.mimetype || 'application/octet-stream'
+    const label = documentsLabel(input.files)
+    const proposal = await proposeFromDocuments(input.user, input.collection, docs, {
+      layoutId: input.layoutId,
+      extraWarnings: skipped.map(
+        (name) => `${name} had no readable text (a scanned PDF?) and was left out.`
       )
-      fileId = stored.id
-    } catch {
-      fileId = null
-    }
-    const proposal = await proposeFromDocument(
-      input.user,
-      input.collection,
-      { name: input.filename, ...extracted },
-      fileId,
-      { layoutId: input.layoutId, fullText: extracted.fullText ?? null }
-    )
+    })
     proposal.id = input.proposalId
     const prior = await loadProposal(app, proposal.id)
     await saveProposal(app, proposal.id, {
@@ -1677,14 +1707,14 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       notify: prior?.notify ?? false,
       user: input.user.id,
       collection: input.collection,
-      document_name: input.filename,
+      document_name: label,
       created_at: new Date().toISOString()
     })
     await logActivity({
       action: 'ai-extract',
       user: input.user.id,
       collection: input.collection,
-      comment: `${input.filename} → ${proposal.fields.length} field(s), ${proposal.children.reduce((n, c) => n + c.lines.length, 0)} line(s), ${proposal.asks.length} ask(s) · ${proposal.model} · ${proposal.rounds} round(s)${proposal.condensed ? ` · condensed ${proposal.condensed.chunks} chunk(s)` : ''}`
+      comment: `${label} → ${proposal.fields.length} field(s), ${proposal.children.reduce((n, c) => n + c.lines.length, 0)} line(s), ${proposal.asks.length} ask(s) · ${proposal.model} · ${proposal.rounds} round(s)${proposal.condensed ? ` · condensed ${proposal.condensed.chunks} chunk(s)` : ''}`
     })
     return proposal
   }
@@ -1692,18 +1722,36 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     if (!(await aiFeatureEnabled('extract-record'))) {
       return reply.code(403).send({ error: 'Document autofill is turned off for this instance' })
     }
-    let multipart: Awaited<ReturnType<typeof req.file>>
+    // Every `file` part (a SOW and its quote read together) plus the plain
+    // fields; `file_ids` names documents already stored by an earlier run.
+    const fields: Record<string, string> = {}
+    const uploads: ExtractInputFile[] = []
     try {
-      multipart = await req.file()
+      for await (const part of req.parts()) {
+        if (part.type === 'field') {
+          fields[part.fieldname] = String(part.value ?? '').trim()
+          continue
+        }
+        if (uploads.length >= MAX_DOCUMENTS) {
+          await part.toBuffer()
+          return reply.code(400).send({ error: `At most ${MAX_DOCUMENTS} documents per run` })
+        }
+        const buffer = await part.toBuffer()
+        if (buffer.length > EXTRACT_MAX_BYTES) {
+          return reply.code(413).send({ error: 'File exceeds 25MB limit' })
+        }
+        const filename = part.filename || 'document'
+        if (!ACCEPTED_EXTENSIONS.some((ext) => filename.toLowerCase().endsWith(ext))) {
+          return reply
+            .code(400)
+            .send({ error: `Unsupported file type. Accepted: ${ACCEPTED_EXTENSIONS.join(', ')}` })
+        }
+        uploads.push({ buffer, filename, mimetype: part.mimetype || null })
+      }
     } catch {
       return reply.code(400).send({ error: 'No file provided' })
     }
-    if (!multipart) return reply.code(400).send({ error: 'No file provided' })
-    const fieldValue = (name: string): string => {
-      const f = multipart.fields[name]
-      const part = Array.isArray(f) ? f[0] : f
-      return part?.type === 'field' ? String(part.value).trim() : ''
-    }
+    const fieldValue = (name: string): string => fields[name] ?? ''
     const collection = fieldValue('collection')
     if (!collection || /^nivaro_/i.test(collection) || !/^[A-Za-z0-9_]+$/.test(collection)) {
       return reply.code(400).send({ error: 'collection is required' })
@@ -1718,27 +1766,34 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const layoutRaw = fieldValue('layout_id')
     const layoutId = /^\d+$/.test(layoutRaw) ? Number(layoutRaw) : null
     const background = /^(1|true|yes)$/i.test(fieldValue('background'))
-    const buffer = await multipart.toBuffer()
-    if (buffer.length > EXTRACT_MAX_BYTES) {
-      return reply.code(413).send({ error: 'File exceeds 25MB limit' })
+    // Documents the previous proposal already stored, read again alongside.
+    const stored: ExtractInputFile[] = []
+    for (const id of fieldValue('file_ids')
+      .split(',')
+      .map((v) => v.trim())
+      .filter((v) => /^[0-9a-f-]{36}$/i.test(v))
+      .slice(0, MAX_DOCUMENTS)) {
+      const row = await getFile(id)
+      if (!row) continue
+      try {
+        stored.push({
+          buffer: await readFileBuffer(row),
+          filename: row.filename_download || row.title || 'document',
+          mimetype: row.type ?? null,
+          fileId: row.id
+        })
+      } catch {
+        /* the object is gone — the new upload stands alone */
+      }
     }
-    const filename = multipart.filename || 'document'
-    const lower = filename.toLowerCase()
-    if (!ACCEPTED_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
-      return reply
-        .code(400)
-        .send({ error: `Unsupported file type. Accepted: ${ACCEPTED_EXTENSIONS.join(', ')}` })
+    const files = [...stored, ...uploads]
+    if (!files.length) return reply.code(400).send({ error: 'No file provided' })
+    if (files.length > MAX_DOCUMENTS) {
+      return reply.code(400).send({ error: `At most ${MAX_DOCUMENTS} documents per run` })
     }
+    const filename = documentsLabel(files)
     const proposalId = randomUUID()
-    const input = {
-      user: req.user!,
-      collection,
-      layoutId,
-      buffer,
-      filename,
-      mimetype: multipart.mimetype || null,
-      proposalId
-    }
+    const input = { user: req.user!, collection, layoutId, files, proposalId }
 
     if (background) {
       // #760 — answer at once, run under a job run, tell the person when the

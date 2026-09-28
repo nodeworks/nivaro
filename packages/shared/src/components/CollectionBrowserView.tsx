@@ -3967,12 +3967,12 @@ export function CollectionBrowserView({
     autofillInputRef.current?.click()
   }
   const onAutofillFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files ?? [])
     e.target.value = ''
-    if (!file) return
+    if (!files.length) return
     setAutofillBusy(true)
     try {
-      const id = await startDocumentExtraction(autofillApi, file, collection)
+      const id = await startDocumentExtraction(autofillApi, files, collection)
       openTarget({ collection, itemId: 'new', layoutSlug: autofillSlug, query: { autofill: id } })
     } catch (err) {
       toast.error((err as Error).message)
@@ -6613,6 +6613,7 @@ export function CollectionBrowserView({
           ref={autofillInputRef}
           type='file'
           accept={(autofillCfg.data?.accept ?? []).join(',')}
+          multiple
           className='hidden'
           onChange={onAutofillFile}
           data-cbv-autofill-input

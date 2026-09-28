@@ -103,6 +103,8 @@ export type DocumentProposal = {
     lines_by_alias: Record<string, Array<{ values: Record<string, unknown> }>>
     m2m: Record<string, Array<string | number>>
     file_id: string | null
+    /** Every stored document, in the order given (the first is `file_id`). */
+    file_ids?: string[]
     attach_alias: string | null
   }
   document: {
@@ -111,6 +113,15 @@ export type DocumentProposal = {
     pages: number | null
     truncated: boolean
     chars: number
+    /** One entry per document when several were read together. */
+    documents?: Array<{
+      name: string
+      method: string
+      pages: number | null
+      truncated: boolean
+      chars: number
+      file_id: string | null
+    }>
   }
   model: string
   rounds: number
@@ -145,20 +156,30 @@ type ApiCfg = {
   credentials: RequestCredentials
 }
 
-/** Upload a document and start the extraction. Answers the proposal id at
- *  once; the run continues on the server. A list's "New from document…" uses
- *  this then opens the new-record form on `?autofill=<id>`. */
+/** How a run is named to the person: the file, or "3 documents". */
+export function documentsLabel(files: Array<{ name: string }>): string {
+  if (files.length === 1) return files[0].name
+  return `${files.length} documents`
+}
+
+/** Upload one or more documents and start the extraction. Answers the
+ *  proposal id at once; the run continues on the server. A list's "New from
+ *  document…" uses this then opens the new-record form on `?autofill=<id>`.
+ *  `fileIds` names documents an earlier run already stored — they are read
+ *  again beside the new files, so a proposal can grow by one document. */
 export async function startDocumentExtraction(
   cfg: ApiCfg,
-  file: File,
+  files: File | File[],
   collection: string,
-  opts: { layoutId?: number | null; notify?: boolean } = {}
+  opts: { layoutId?: number | null; notify?: boolean; fileIds?: string[] } = {}
 ): Promise<string> {
+  const list = Array.isArray(files) ? files : [files]
   const form = new FormData()
   form.append('collection', collection)
   form.append('background', '1')
   if (opts.layoutId != null) form.append('layout_id', String(opts.layoutId))
-  form.append('file', file, file.name)
+  if (opts.fileIds?.length) form.append('file_ids', opts.fileIds.join(','))
+  for (const file of list) form.append('file', file, file.name)
   const res = await fetch(`${cfg.apiBase}/ai/extract-record`, {
     method: 'POST',
     headers: cfg.authHeaders,
@@ -343,6 +364,7 @@ export function DocumentAutofillButton({
   const { apiBase, authHeaders, credentials } = apiCfg
   const qc = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const addInputRef = useRef<HTMLInputElement>(null)
   /** The file is on its way up — no run id yet. */
   const [uploading, setUploading] = useState<string | null>(null)
   /** The run this form is showing (the store polls it — see lib/autofill-runs). */
@@ -444,21 +466,46 @@ export function DocumentAutofillButton({
 
   if (!config?.enabled && !initialProposalId) return null
 
-  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setUploading(file.name)
+  /** Start a run over `files` (+ the documents an open proposal already holds
+   *  when `append`), and show it here. */
+  async function startRun(files: File[], append: boolean) {
+    if (!files.length) return
+    const keep =
+      append && proposal
+        ? (proposal.document.documents?.map((d) => d.file_id).filter((id): id is string => !!id) ??
+          (proposal.prefill.file_id ? [proposal.prefill.file_id] : []))
+        : []
+    const total = keep.length + files.length
+    const label = total === 1 ? files[0].name : `${total} documents`
+    setUploading(label)
     setMinimized(false)
     try {
-      const id = await startDocumentExtraction(apiCfg, file, collection, { layoutId })
-      startAutofillRun(apiCfg, { id, collection, documentName: file.name, layoutId })
+      const id = await startDocumentExtraction(apiCfg, files, collection, {
+        layoutId,
+        fileIds: keep
+      })
+      if (append && activeId) dismissAutofillRun(activeId)
+      setProposal(null)
+      shownRef.current = null
+      startAutofillRun(apiCfg, { id, collection, documentName: label, layoutId })
       setActiveId(id)
     } catch (err) {
       toast.error((err as Error).message)
     } finally {
       setUploading(null)
     }
+  }
+
+  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    await startRun(files, false)
+  }
+
+  async function handleAddFiles(e: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    await startRun(files, true)
   }
 
   async function leaveRunning() {
@@ -558,9 +605,19 @@ export function DocumentAutofillButton({
         ref={fileInputRef}
         type='file'
         accept={accept}
+        multiple
         className='hidden'
         onChange={handleFile}
         data-autofill-file-input
+      />
+      <input
+        ref={addInputRef}
+        type='file'
+        accept={accept}
+        multiple
+        className='hidden'
+        onChange={handleAddFiles}
+        data-autofill-add-input
       />
       {config?.enabled && (
         <button
@@ -568,7 +625,7 @@ export function DocumentAutofillButton({
           data-autofill-button
           disabled={!!busy}
           onClick={() => fileInputRef.current?.click()}
-          title='Fill this record from a document — a statement of work, a quote, a spreadsheet'
+          title='Fill this record from one or more documents — a statement of work and its quote, a spreadsheet'
           className={cn(
             'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-70',
             className
@@ -630,7 +687,9 @@ export function DocumentAutofillButton({
                   <DialogDescription className='text-[12.5px]'>
                     {proposal.summary || `Read from ${proposal.document.name}.`}{' '}
                     <span className='text-slate-400'>
-                      {proposal.document.name}
+                      {(proposal.document.documents?.length ?? 0) > 1
+                        ? `${proposal.document.documents?.length} documents`
+                        : proposal.document.name}
                       {proposal.document.pages ? ` · ${proposal.document.pages} pages` : ''}
                       {proposal.condensed
                         ? ` · long document, ${proposal.condensed.chunks} later part${proposal.condensed.chunks === 1 ? '' : 's'} read for excerpts`
@@ -896,11 +955,39 @@ export function DocumentAutofillButton({
                 </div>
 
                 <DialogFooter className='items-center justify-between gap-3 border-t border-slate-200 px-5 py-3 dark:border-border sm:justify-between'>
-                  <span className='text-[11.5px] text-slate-400'>
-                    Nothing is saved until you press Create. Model {proposal.model},{' '}
-                    {proposal.rounds} step{proposal.rounds === 1 ? '' : 's'}
-                    {proposal.latency_ms ? ` · ${Math.round(proposal.latency_ms / 1000)}s` : ''}.
-                  </span>
+                  <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'>
+                    <span className='text-[11.5px] text-slate-400'>
+                      Nothing is saved until you press Create. Model {proposal.model},{' '}
+                      {proposal.rounds} step{proposal.rounds === 1 ? '' : 's'}
+                      {proposal.latency_ms ? ` · ${Math.round(proposal.latency_ms / 1000)}s` : ''}.
+                    </span>
+                    {(proposal.document.documents?.length ?? 0) > 1 && (
+                      <span className='flex flex-wrap gap-1' data-autofill-documents>
+                        {proposal.document.documents?.map((d) => (
+                          <span
+                            key={`${d.file_id ?? ''}:${d.name}`}
+                            className='inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 dark:border-border dark:text-slate-300'
+                            title={`${d.method}${d.pages ? ` · ${d.pages} pages` : ''}${d.truncated ? ' · truncated' : ''}`}
+                          >
+                            <FileText className='h-3 w-3' />
+                            {d.name}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                    {config?.enabled && (
+                      <button
+                        type='button'
+                        onClick={() => addInputRef.current?.click()}
+                        disabled={applying}
+                        data-autofill-add-document
+                        className='text-[11.5px] text-nvr-navy underline decoration-dotted underline-offset-2 hover:decoration-solid dark:text-nvr-cyan'
+                        title='Read one more document together with these — a quote beside its statement of work'
+                      >
+                        + Add another document…
+                      </button>
+                    )}
+                  </div>
                   <div className='flex items-center gap-2'>
                     <Button
                       type='button'

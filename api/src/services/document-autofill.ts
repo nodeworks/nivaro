@@ -110,6 +110,8 @@ export type DocumentProposal = {
     lines_by_alias: Record<string, Array<{ values: Record<string, unknown> }>>
     m2m: Record<string, Array<string | number>>
     file_id: string | null
+    /** Every stored document, in the order given (the first is `file_id`). */
+    file_ids: string[]
     attach_alias: string | null
   }
   document: {
@@ -118,6 +120,15 @@ export type DocumentProposal = {
     pages: number | null
     truncated: boolean
     chars: number
+    /** One entry per document when several were read together. */
+    documents?: Array<{
+      name: string
+      method: string
+      pages: number | null
+      truncated: boolean
+      chars: number
+      file_id: string | null
+    }>
   }
   model: string
   rounds: number
@@ -709,7 +720,7 @@ export type CorrectionMemory = Array<{
 function buildSystemPrompt(
   spec: Spec,
   today: string,
-  extras: { hints?: string | null; corrections?: CorrectionMemory } = {}
+  extras: { hints?: string | null; corrections?: CorrectionMemory; documents?: number } = {}
 ): string {
   const lines: string[] = []
   lines.push(
@@ -727,6 +738,11 @@ function buildSystemPrompt(
     '- A number in the document that IS an id (a year, a code) matches a listed option by id directly.',
     '- Do not fill audit, status, state or approval fields. Do not fill a field the document says nothing about.',
     '- A child collection whose fields are months or periods is a schedule: when the document states a total and a term but no month-by-month breakdown, propose one row per calendar year with the total spread evenly across the months inside the term (and its total field set), and say so in the source. Never spread across months outside the term.',
+    ...((extras.documents ?? 1) > 1
+      ? [
+          `- ${extras.documents} documents were uploaded together and describe ONE record (a statement of work and its quote, a request and its attachments). Read them all; when they disagree, prefer the more specific or more recent one and say so; name the document in every source ("quote.pdf: …").`
+        ]
+      : []),
     '- Finish with exactly one submit_proposal call.',
     '',
     `Fields on ${spec.label}:`,
@@ -1323,6 +1339,19 @@ export type ProposeOptions = {
   layoutId?: number | null
   /** The whole document when it ran past the prompt cap (condensing, #759). */
   fullText?: string | null
+  /** Warnings the caller already knows (a document that had no text). */
+  extraWarnings?: string[]
+}
+
+/** One document handed to the extraction — its text, and its stored file. */
+export type SourceDocument = {
+  name: string
+  text: string
+  method: string
+  pages: number | null
+  truncated: boolean
+  fullText?: string | null
+  fileId: string | null
 }
 
 export async function proposeFromDocument(
@@ -1332,6 +1361,66 @@ export async function proposeFromDocument(
   fileId: string | null,
   opts: ProposeOptions = {}
 ): Promise<DocumentProposal> {
+  return proposeFromDocuments(
+    user,
+    collection,
+    [{ ...doc, fullText: opts.fullText ?? null, fileId }],
+    opts
+  )
+}
+
+/** Several documents describe ONE record (a SOW and its quote): their texts
+ *  are read together under per-document headers, every file is attached,
+ *  and sources name the document they came from. */
+export function combineDocuments(docs: SourceDocument[]): {
+  name: string
+  text: string
+  method: string
+  pages: number | null
+  truncated: boolean
+  fullText: string | null
+} {
+  if (docs.length === 1) {
+    const d = docs[0]
+    return {
+      name: d.name,
+      text: d.text,
+      method: d.method,
+      pages: d.pages,
+      truncated: d.truncated,
+      fullText: d.fullText ?? null
+    }
+  }
+  const header = (d: SourceDocument, i: number) =>
+    `===== Document ${i + 1} of ${docs.length}: "${d.name}"${d.pages ? ` (${d.pages} pages)` : ''}${d.truncated ? ', truncated' : ''} =====`
+  const pages = docs.reduce<number | null>(
+    (n, d) => (d.pages == null ? n : (n ?? 0) + d.pages),
+    null
+  )
+  const anyFull = docs.some((d) => d.truncated && d.fullText)
+  return {
+    name: docs.map((d) => d.name).join(' + '),
+    text: docs.map((d, i) => `${header(d, i)}\n\n${d.text}`).join('\n\n'),
+    method: docs[0].method,
+    pages,
+    truncated: docs.some((d) => d.truncated),
+    fullText: anyFull
+      ? docs.map((d, i) => `${header(d, i)}\n\n${d.fullText ?? d.text}`).join('\n\n')
+      : null
+  }
+}
+
+export async function proposeFromDocuments(
+  user: User,
+  collection: string,
+  docs: SourceDocument[],
+  opts: ProposeOptions = {}
+): Promise<DocumentProposal> {
+  if (!docs.length) throw Object.assign(new Error('No document to read'), { statusCode: 400 })
+  const doc = combineDocuments(docs)
+  const fileIds = docs.map((d) => d.fileId).filter((id): id is string => !!id)
+  const fileId = fileIds[0] ?? null
+  opts = { ...opts, fullText: doc.fullText }
   const started = Date.now()
   const { extractModel } = await getAiModelSettings()
   const client = await getAiClient({ model: extractModel })
@@ -1344,7 +1433,11 @@ export async function proposeFromDocument(
   const today = new Date().toISOString().slice(0, 10)
   const hintsUsed = new Set<string>()
   if (cfg.hints) hintsUsed.add('collection')
-  const system = buildSystemPrompt(spec, today, { hints: cfg.hints, corrections })
+  const system = buildSystemPrompt(spec, today, {
+    hints: cfg.hints,
+    corrections,
+    documents: docs.length
+  })
   const seen: Seen = new Map()
   for (const [c, options] of spec.lookupOptions) {
     seen.set(c, new Map(options.map((o) => [String(o.id), o.label])))
@@ -1373,7 +1466,10 @@ export async function proposeFromDocument(
   const convo: Anthropic.MessageParam[] = [
     {
       role: 'user',
-      content: `Document "${doc.name}"${doc.pages ? ` (${doc.pages} pages)` : ''}${doc.truncated && !condensed ? ', truncated' : ''}:\n\n${text}`
+      content:
+        docs.length > 1
+          ? `${docs.length} documents describing one record${doc.truncated && !condensed ? ' (some truncated)' : ''}:\n\n${text}`
+          : `Document "${doc.name}"${doc.pages ? ` (${doc.pages} pages)` : ''}${doc.truncated && !condensed ? ', truncated' : ''}:\n\n${text}`
     }
   ]
 
@@ -1452,7 +1548,7 @@ export async function proposeFromDocument(
   }
 
   // ── validate + shape ──
-  const warnings: string[] = []
+  const warnings: string[] = [...(opts.extraWarnings ?? [])]
   const asks: ProposedAsk[] = []
   const specByField = new Map(spec.fields.map((f) => [f.field, f]))
   const fields: ProposedField[] = []
@@ -1734,7 +1830,7 @@ export async function proposeFromDocument(
     })
     m2mPrefill[d.alias] = d.ids
   }
-  if (fileId && spec.attachAlias) m2mPrefill[spec.attachAlias] = [fileId]
+  if (fileIds.length && spec.attachAlias) m2mPrefill[spec.attachAlias] = fileIds
 
   for (const a of Array.isArray(raw.asks) ? (raw.asks as Array<Record<string, unknown>>) : []) {
     const name = String(a?.field ?? '')
@@ -1768,6 +1864,7 @@ export async function proposeFromDocument(
       lines_by_alias: linesByAlias,
       m2m: m2mPrefill,
       file_id: fileId,
+      file_ids: fileIds,
       attach_alias: spec.attachAlias
     },
     document: {
@@ -1775,7 +1872,15 @@ export async function proposeFromDocument(
       method: doc.method,
       pages: doc.pages,
       truncated: doc.truncated && !condensed,
-      chars: text.length
+      chars: text.length,
+      documents: docs.map((d) => ({
+        name: d.name,
+        method: d.method,
+        pages: d.pages,
+        truncated: d.truncated,
+        chars: d.text.length,
+        file_id: d.fileId
+      }))
     },
     model: modelUsed,
     rounds,
