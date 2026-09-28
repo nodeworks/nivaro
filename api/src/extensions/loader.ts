@@ -460,6 +460,326 @@ export function ungatedExtensionRoutes(): Array<{
   return out
 }
 
+/**
+ * The registration members of an extension's context — every `register…`
+ * the core accepts, each stamping the capability note and the ledger (#40)
+ * — shared by the self-hosted and cloud context builds so the two cannot
+ * drift (#812: the cloud build used to skip the ledger entirely).
+ */
+export function registrationMembers(
+  extId: string,
+  ctx: Pick<ExtensionContext, 'app' | 'logger' | 'database'>,
+  opts: {
+    note: (capability: string) => void
+    own: (kind: string, label: string) => void
+    cronPrefix: string
+    /** Run long SQL on the handed-in (tenant) connection, not the default pool. */
+    runLongOnTenant?: boolean
+  }
+): Omit<ExtensionContext, 'app' | 'database' | 'inngest' | 'logger' | 'settings' | 'cloud'> {
+  const { note, own, cronPrefix, runLongOnTenant } = opts
+  return {
+    events: {
+      publish: (eventType, payload) => {
+        note('events')
+        return publishExtensionEvent(extId, eventType, payload)
+      },
+      on: (eventType, fn) => {
+        note('events')
+        own('event_handlers', eventType)
+        registerExtensionEventHandler(extId, eventType, fn)
+      }
+    },
+    callExternalApi: (nameOrId, options) => {
+      note('external-apis')
+      return callExternalApi(nameOrId, withExtensionLog(extId, options))
+    },
+    notifyUser: (userId, opts) => {
+      note('notifications')
+      return notifyUser(ctx.app, userId, opts).then(
+        () => undefined,
+        () => undefined
+      )
+    },
+    sql: {
+      runLong: (sql, o) =>
+        runLongSql(sql, runLongOnTenant ? { ...o, knex: ctx.database as never } : o)
+    },
+    logActivity: (entry) => {
+      note('activity')
+      return logActivity({
+        action: `${extId}:${entry.action}`,
+        user: entry.user ?? null,
+        collection: entry.collection,
+        item: entry.item != null ? String(entry.item) : undefined,
+        comment: entry.comment,
+        // An extension row with no acting user is the extension itself (#518).
+        origin: entry.origin ?? (entry.user ? 'person' : 'machine')
+      })
+    },
+    auth: { authenticate, requireAuth, requireAdmin },
+    hooks: {
+      before: (collection, action, fn) => {
+        note('hooks')
+        hooks.before(collection, action, fn, { extensionId: extId })
+      },
+      after: (collection, action, fn) => {
+        note('hooks')
+        hooks.after(collection, action, fn, { extensionId: extId })
+      }
+    },
+    cron: {
+      schedule: (id, expression, fn, opts) => {
+        note('cron')
+        ctx.app.cron.schedule(`${cronPrefix}${id}`, expression, fn, {
+          extensionId: extId,
+          ...(opts ?? {})
+        })
+      },
+      unschedule: (id) => ctx.app.cron.unschedule(`${cronPrefix}${id}`),
+      annotate: (id, meta) => ctx.app.cron.annotate(`${cronPrefix}${id}`, meta)
+    },
+    bulkActions: {
+      register: (def) => {
+        note('bulk-actions')
+        own('bulk_actions', `${def.id} · ${def.label}`)
+        bulkActionRegistry.register(def)
+      }
+    },
+    itemActions: {
+      register: (def) => {
+        note('item-actions')
+        own('item_actions', `${def.id} · ${def.label}`)
+        itemActionRegistry.register(def)
+      }
+    },
+    notificationChannels: {
+      register: (def) => {
+        note('notification-channels')
+        own(
+          'notification_channels',
+          String(
+            (def as { id?: string; key?: string }).id ?? (def as { key?: string }).key ?? 'channel'
+          )
+        )
+        notificationChannelRegistry.register(def)
+      }
+    },
+    notificationSources: {
+      register: (provider) => {
+        note('notification-sources')
+        own(
+          'notification_sources',
+          String(
+            (provider as { id?: string; key?: string }).id ??
+              (provider as { key?: string }).key ??
+              'source'
+          )
+        )
+        notificationSourceRegistry.register(provider)
+      }
+    },
+    notes: {
+      registerSource: (provider) => {
+        note('notes')
+        own('note_sources', `${provider.id} · ${provider.collection}`)
+        relatedNoteRegistry.register(provider)
+      },
+      registerMachineMarkers: (set) => {
+        note('notes')
+        own(
+          'note_markers',
+          [...(set.exact ?? []), ...(set.prefixes ?? []).map((p) => `${p}…`)].join(', ')
+        )
+        relatedNoteRegistry.registerMachineMarkers(extId, set)
+      }
+    },
+    dashboardWidgets: {
+      register: (def) => {
+        note('dashboard-widgets')
+        own(
+          'dashboard_widgets',
+          String(
+            (def as { type?: string; id?: string }).type ?? (def as { id?: string }).id ?? 'widget'
+          )
+        )
+        dashboardWidgetRegistry.register(def)
+      }
+    },
+    storage: {
+      register: (name, adapter) => {
+        note('storage')
+        own('storage_adapters', name)
+        storageAdapterRegistry.register(name, adapter)
+      },
+      setActive: (name) => storageAdapterRegistry.setActive(name)
+    },
+    fieldTypes: {
+      register: (def) => {
+        note('field-types')
+        own(
+          'field_types',
+          String(
+            (def as { type?: string; id?: string }).type ??
+              (def as { id?: string }).id ??
+              'field type'
+          )
+        )
+        fieldTypeRegistry.register(def)
+      }
+    },
+    collectionViews: {
+      register: (def) => {
+        note('collection-views')
+        own(
+          'collection_views',
+          String(
+            (def as { id?: string; type?: string }).id ?? (def as { type?: string }).type ?? 'view'
+          )
+        )
+        collectionViewRegistry.register(def)
+      }
+    },
+    importProcessors: {
+      register: (def) => {
+        note('import-processors')
+        own('import_processors', `${def.key} · ${def.label}`)
+        registerImportProcessor(def)
+      }
+    },
+    importParsers: {
+      register: (def) => {
+        note('import-parsers')
+        own(
+          'import_parsers',
+          String(
+            (def as { id?: string; name?: string }).id ??
+              (def as { name?: string }).name ??
+              'parser'
+          )
+        )
+        importParserRegistry.register(def)
+      }
+    },
+    validators: {
+      register: (def) => {
+        note('validators')
+        own(
+          'validators',
+          String(
+            (def as { id?: string; type?: string }).id ??
+              (def as { type?: string }).type ??
+              'validator'
+          )
+        )
+        validatorRegistry.register(def)
+      }
+    },
+    approvalBrief: {
+      registerLine: (collection, fn) => {
+        note('approvalBrief')
+        own('approval_brief_lines', collection)
+        registerBriefLine(extId, collection, fn)
+      }
+    },
+    digest: {
+      registerSection: (fn) => {
+        note('digest')
+        own(
+          'digest_sections',
+          fn.name ||
+            `section ${(extensionRegistrations.get(extId)?.get('digest_sections')?.length ?? 0) + 1}`
+        )
+        registerDigestSection(fn)
+      }
+    },
+    readiness: {
+      registerCheck: (check) => {
+        note('readiness')
+        own('readiness_checks', `${check.id} · ${check.label}`)
+        registerReadinessCheck(check)
+      }
+    },
+    chain: buildChainContext(),
+    integrations: {
+      registerObligationKind: (def) => {
+        void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
+          registerObligationKind(def)
+        )
+      },
+      openObligation: async (ctx, opts) => {
+        const { openObligationForTrigger } = await import('../services/integration-obligations.js')
+        return openObligationForTrigger(ctx, opts)
+      },
+      resolveObligation: async (id, patch) => {
+        const { resolveObligation } = await import('../services/integration-obligations.js')
+        return resolveObligation(id, patch)
+      },
+      registerSignal: (def) => {
+        note('integrations')
+        own('integration_signals', `${def.id} · ${def.label}`)
+        void registerExtensionSignal(def, extId, ctx.logger)
+      },
+      registerSignalAction: (def) => {
+        void registerExtensionSignalAction(def, extId, ctx.logger)
+      },
+      registerEventSource: (def) => {
+        note('integrations')
+        own('event_sources', `${def.id} · ${def.label}`)
+        registerEventSource(def)
+      }
+    },
+    integrity: {
+      registerCheck: (check) => {
+        note('integrity')
+        own('integrity_checks', `${check.id} · ${check.label}`)
+        registerIntegrityCheck(check)
+      }
+    },
+    links: {
+      register: (reg) => {
+        note('links')
+        own('portal_links', (reg as { base?: string }).base ?? 'routes')
+        registerPortalLinks(reg)
+      }
+    },
+    mail: {
+      registerType: (def) => {
+        note('mail')
+        own('mail_types', `${def.key} · ${def.label}`)
+        registerMailType(def)
+      },
+      renderViaFlow: (flowName, payload) => renderViaFlow(flowName, payload),
+      renderTemplate: (name, data) => renderMailTemplate(name, data)
+    },
+    flows: {
+      registerOperation: (op) => {
+        note('flows')
+        own('flow_operations', `${op.type}${op.label ? ` · ${op.label}` : ''}`)
+        registerOp(op)
+      },
+      registerTrigger: (trigger) => {
+        note('flows')
+        own('flow_triggers', `${trigger.type}${trigger.label ? ` · ${trigger.label}` : ''}`)
+        registerTrigger(trigger)
+      },
+      emit: (triggerType, payload) => {
+        note('flows')
+        emitTrigger(triggerType, payload, ctx.logger)
+      }
+    },
+    chatBot: {
+      registerTool: (def) => {
+        note('chat-bot')
+        own('chat_bot_tools', String((def as { name?: string }).name ?? 'tool'))
+        void import('../services/chat-bot.js')
+          .then(({ registerBotTool }) => registerBotTool(def))
+          .catch(() => {})
+      }
+    }
+  }
+}
+
 function recordRegistration(extId: string, kind: string, label: string): void {
   let kinds = extensionRegistrations.get(extId)
   if (!kinds) {
@@ -645,311 +965,7 @@ async function loadExtension(
         get: async (key: string) => (await readExtensionSettings(extId))[key] ?? null,
         getAll: () => readExtensionSettings(extId)
       },
-      events: {
-        publish: (eventType, payload) => {
-          note('events')
-          return publishExtensionEvent(extId, eventType, payload)
-        },
-        on: (eventType, fn) => {
-          note('events')
-          own('event_handlers', eventType)
-          registerExtensionEventHandler(extId, eventType, fn)
-        }
-      },
-      callExternalApi: (nameOrId, options) => {
-        note('external-apis')
-        return callExternalApi(nameOrId, withExtensionLog(extId, options))
-      },
-      notifyUser: (userId, opts) => {
-        note('notifications')
-        return notifyUser(ctx.app, userId, opts).then(
-          () => undefined,
-          () => undefined
-        )
-      },
-      sql: {
-        runLong: (sql, opts) => runLongSql(sql, opts)
-      },
-      logActivity: (entry) => {
-        note('activity')
-        return logActivity({
-          action: `${extId}:${entry.action}`,
-          user: entry.user ?? null,
-          collection: entry.collection,
-          item: entry.item != null ? String(entry.item) : undefined,
-          comment: entry.comment,
-          // An extension row with no acting user is the extension itself (#518).
-          origin: entry.origin ?? (entry.user ? 'person' : 'machine')
-        })
-      },
-      auth: { authenticate, requireAuth, requireAdmin },
-      hooks: {
-        before: (collection, action, fn) => {
-          note('hooks')
-          hooks.before(collection, action, fn, { extensionId: extId })
-        },
-        after: (collection, action, fn) => {
-          note('hooks')
-          hooks.after(collection, action, fn, { extensionId: extId })
-        }
-      },
-      cron: {
-        schedule: (id, expression, fn, opts) => {
-          note('cron')
-          ctx.app.cron.schedule(`ext:${extId}:${id}`, expression, fn, {
-            extensionId: extId,
-            ...(opts ?? {})
-          })
-        },
-        unschedule: (id) => ctx.app.cron.unschedule(`ext:${extId}:${id}`),
-        annotate: (id, meta) => ctx.app.cron.annotate(`ext:${extId}:${id}`, meta)
-      },
-      bulkActions: {
-        register: (def) => {
-          note('bulk-actions')
-          own('bulk_actions', `${def.id} · ${def.label}`)
-          bulkActionRegistry.register(def)
-        }
-      },
-      itemActions: {
-        register: (def) => {
-          note('item-actions')
-          own('item_actions', `${def.id} · ${def.label}`)
-          itemActionRegistry.register(def)
-        }
-      },
-      notificationChannels: {
-        register: (def) => {
-          note('notification-channels')
-          own(
-            'notification_channels',
-            String(
-              (def as { id?: string; key?: string }).id ??
-                (def as { key?: string }).key ??
-                'channel'
-            )
-          )
-          notificationChannelRegistry.register(def)
-        }
-      },
-      notificationSources: {
-        register: (provider) => {
-          note('notification-sources')
-          own(
-            'notification_sources',
-            String(
-              (provider as { id?: string; key?: string }).id ??
-                (provider as { key?: string }).key ??
-                'source'
-            )
-          )
-          notificationSourceRegistry.register(provider)
-        }
-      },
-      notes: {
-        registerSource: (provider) => {
-          note('notes')
-          own('note_sources', `${provider.id} · ${provider.collection}`)
-          relatedNoteRegistry.register(provider)
-        },
-        registerMachineMarkers: (set) => {
-          note('notes')
-          own(
-            'note_markers',
-            [...(set.exact ?? []), ...(set.prefixes ?? []).map((p) => `${p}…`)].join(', ')
-          )
-          relatedNoteRegistry.registerMachineMarkers(extId, set)
-        }
-      },
-      dashboardWidgets: {
-        register: (def) => {
-          note('dashboard-widgets')
-          own(
-            'dashboard_widgets',
-            String(
-              (def as { type?: string; id?: string }).type ??
-                (def as { id?: string }).id ??
-                'widget'
-            )
-          )
-          dashboardWidgetRegistry.register(def)
-        }
-      },
-      storage: {
-        register: (name, adapter) => {
-          note('storage')
-          own('storage_adapters', name)
-          storageAdapterRegistry.register(name, adapter)
-        },
-        setActive: (name) => storageAdapterRegistry.setActive(name)
-      },
-      fieldTypes: {
-        register: (def) => {
-          note('field-types')
-          own(
-            'field_types',
-            String(
-              (def as { type?: string; id?: string }).type ??
-                (def as { id?: string }).id ??
-                'field type'
-            )
-          )
-          fieldTypeRegistry.register(def)
-        }
-      },
-      collectionViews: {
-        register: (def) => {
-          note('collection-views')
-          own(
-            'collection_views',
-            String(
-              (def as { id?: string; type?: string }).id ??
-                (def as { type?: string }).type ??
-                'view'
-            )
-          )
-          collectionViewRegistry.register(def)
-        }
-      },
-      importProcessors: {
-        register: (def) => {
-          note('import-processors')
-          own('import_processors', `${def.key} · ${def.label}`)
-          registerImportProcessor(def)
-        }
-      },
-      importParsers: {
-        register: (def) => {
-          note('import-parsers')
-          own(
-            'import_parsers',
-            String(
-              (def as { id?: string; name?: string }).id ??
-                (def as { name?: string }).name ??
-                'parser'
-            )
-          )
-          importParserRegistry.register(def)
-        }
-      },
-      validators: {
-        register: (def) => {
-          note('validators')
-          own(
-            'validators',
-            String(
-              (def as { id?: string; type?: string }).id ??
-                (def as { type?: string }).type ??
-                'validator'
-            )
-          )
-          validatorRegistry.register(def)
-        }
-      },
-      approvalBrief: {
-        registerLine: (collection, fn) => {
-          note('approvalBrief')
-          own('approval_brief_lines', collection)
-          registerBriefLine(extId, collection, fn)
-        }
-      },
-      digest: {
-        registerSection: (fn) => {
-          note('digest')
-          own(
-            'digest_sections',
-            fn.name ||
-              `section ${(extensionRegistrations.get(extId)?.get('digest_sections')?.length ?? 0) + 1}`
-          )
-          registerDigestSection(fn)
-        }
-      },
-      readiness: {
-        registerCheck: (check) => {
-          note('readiness')
-          own('readiness_checks', `${check.id} · ${check.label}`)
-          registerReadinessCheck(check)
-        }
-      },
-      chain: buildChainContext(),
-      integrations: {
-        registerObligationKind: (def) => {
-          void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
-            registerObligationKind(def)
-          )
-        },
-        openObligation: async (ctx, opts) => {
-          const { openObligationForTrigger } = await import(
-            '../services/integration-obligations.js'
-          )
-          return openObligationForTrigger(ctx, opts)
-        },
-        resolveObligation: async (id, patch) => {
-          const { resolveObligation } = await import('../services/integration-obligations.js')
-          return resolveObligation(id, patch)
-        },
-        registerSignal: (def) => {
-          note('integrations')
-          own('integration_signals', `${def.id} · ${def.label}`)
-          void registerExtensionSignal(def, ext.id ?? 'extension', ctx.logger)
-        },
-        registerSignalAction: (def) => {
-          void registerExtensionSignalAction(def, ext.id ?? 'extension', ctx.logger)
-        },
-        registerEventSource: (def) => {
-          note('integrations')
-          own('event_sources', `${def.id} · ${def.label}`)
-          registerEventSource(def)
-        }
-      },
-      integrity: {
-        registerCheck: (check) => {
-          note('integrity')
-          own('integrity_checks', `${check.id} · ${check.label}`)
-          registerIntegrityCheck(check)
-        }
-      },
-      links: {
-        register: (reg) => {
-          note('links')
-          own('portal_links', (reg as { base?: string }).base ?? 'routes')
-          registerPortalLinks(reg)
-        }
-      },
-      mail: {
-        registerType: (def) => {
-          note('mail')
-          own('mail_types', `${def.key} · ${def.label}`)
-          registerMailType(def)
-        },
-        renderViaFlow: (flowName, payload) => renderViaFlow(flowName, payload),
-        renderTemplate: (name, data) => renderMailTemplate(name, data)
-      },
-      flows: {
-        registerOperation: (op) => {
-          note('flows')
-          own('flow_operations', `${op.type}${op.label ? ` · ${op.label}` : ''}`)
-          registerOp(op)
-        },
-        registerTrigger: (trigger) => {
-          note('flows')
-          own('flow_triggers', `${trigger.type}${trigger.label ? ` · ${trigger.label}` : ''}`)
-          registerTrigger(trigger)
-        },
-        emit: (triggerType, payload) => {
-          note('flows')
-          emitTrigger(triggerType, payload, ctx.logger)
-        }
-      },
-      chatBot: {
-        registerTool: (def) => {
-          note('chat-bot')
-          own('chat_bot_tools', String((def as { name?: string }).name ?? 'tool'))
-          void import('../services/chat-bot.js')
-            .then(({ registerBotTool }) => registerBotTool(def))
-            .catch(() => {})
-        }
-      }
+      ...registrationMembers(extId, ctx, { note, own, cronPrefix: `ext:${extId}:` })
     }
 
     await ext.register(scopedCtx)
@@ -1263,122 +1279,13 @@ export async function loadCloudExtensions(
 
       const scopedCtx: ExtensionContext = {
         ...ctx,
-        app: routeRecordingApp(extId, ctx.app),
-        callExternalApi: (nameOrId, options) =>
-          callExternalApi(nameOrId, withExtensionLog(extId, options)),
-        events: {
-          publish: (eventType, payload) => publishExtensionEvent(extId, eventType, payload),
-          on: (eventType, fn) => registerExtensionEventHandler(extId, eventType, fn)
-        },
-        approvalBrief: {
-          registerLine: (collection, fn) => registerBriefLine(ext.id ?? 'extension', collection, fn)
-        },
-        digest: {
-          registerSection: (fn) => registerDigestSection(fn)
-        },
-        readiness: {
-          registerCheck: (check) => registerReadinessCheck(check)
-        },
-        chain: buildChainContext(),
-        integrations: {
-          registerObligationKind: (def) => {
-            void import('../services/integration-obligations.js').then(
-              ({ registerObligationKind }) => registerObligationKind(def)
-            )
-          },
-          openObligation: async (ctx, opts) => {
-            const { openObligationForTrigger } = await import(
-              '../services/integration-obligations.js'
-            )
-            return openObligationForTrigger(ctx, opts)
-          },
-          resolveObligation: async (id, patch) => {
-            const { resolveObligation } = await import('../services/integration-obligations.js')
-            return resolveObligation(id, patch)
-          },
-          registerSignal: (def) => {
-            void registerExtensionSignal(def, ext.id ?? 'extension', ctx.logger)
-          },
-          registerSignalAction: (def) => {
-            void registerExtensionSignalAction(def, ext.id ?? 'extension', ctx.logger)
-          },
-          registerEventSource: (def) => registerEventSource(def)
-        },
-        integrity: {
-          registerCheck: (check) => registerIntegrityCheck(check)
-        },
-        links: {
-          register: (reg) => registerPortalLinks(reg)
-        },
-        mail: {
-          registerType: (def) => registerMailType(def),
-          renderViaFlow: (flowName, payload) => renderViaFlow(flowName, payload),
-          renderTemplate: (name, data) => renderMailTemplate(name, data)
-        },
-        notifyUser: (userId, opts) =>
-          notifyUser(ctx.app, userId, opts).then(
-            () => undefined,
-            () => undefined
-          ),
-        sql: {
-          runLong: (sql, opts) => runLongSql(sql, { ...opts, knex: ctx.database as never })
-        },
-        logActivity: (entry) =>
-          logActivity({
-            action: `${extId}:${entry.action}`,
-            user: entry.user ?? null,
-            collection: entry.collection,
-            item: entry.item != null ? String(entry.item) : undefined,
-            comment: entry.comment,
-            origin: entry.origin ?? (entry.user ? 'person' : 'machine')
-          }),
-        auth: { authenticate, requireAuth, requireAdmin },
-        hooks: {
-          before: (collection, action, fn) =>
-            hooks.before(collection, action, fn, { extensionId: extId }),
-          after: (collection, action, fn) =>
-            hooks.after(collection, action, fn, { extensionId: extId })
-        },
-        cron: {
-          schedule: (id, expression, fn) =>
-            ctx.app.cron.schedule(`cloud-ext:${extId}:${id}`, expression, fn, {
-              extensionId: extId
-            }),
-          unschedule: (id) => ctx.app.cron.unschedule(`cloud-ext:${extId}:${id}`),
-          annotate: (id, meta) => ctx.app.cron.annotate(`cloud-ext:${extId}:${id}`, meta)
-        },
-        bulkActions: { register: (def) => bulkActionRegistry.register(def) },
-        itemActions: { register: (def) => itemActionRegistry.register(def) },
-        notificationChannels: { register: (def) => notificationChannelRegistry.register(def) },
-        notificationSources: {
-          register: (provider) => notificationSourceRegistry.register(provider)
-        },
-        notes: {
-          registerSource: (provider) => relatedNoteRegistry.register(provider),
-          registerMachineMarkers: (set) => relatedNoteRegistry.registerMachineMarkers(extId, set)
-        },
-        dashboardWidgets: { register: (def) => dashboardWidgetRegistry.register(def) },
-        storage: {
-          register: (name, adapter) => storageAdapterRegistry.register(name, adapter),
-          setActive: (name) => storageAdapterRegistry.setActive(name)
-        },
-        fieldTypes: { register: (def) => fieldTypeRegistry.register(def) },
-        collectionViews: { register: (def) => collectionViewRegistry.register(def) },
-        importParsers: { register: (def) => importParserRegistry.register(def) },
-        importProcessors: { register: (def) => registerImportProcessor(def) },
-        validators: { register: (def) => validatorRegistry.register(def) },
-        flows: {
-          registerOperation: (op) => registerOp(op),
-          registerTrigger: (trigger) => registerTrigger(trigger),
-          emit: (triggerType, payload) => emitTrigger(triggerType, payload, ctx.logger)
-        },
-        chatBot: {
-          registerTool: (def) => {
-            void import('../services/chat-bot.js')
-              .then(({ registerBotTool }) => registerBotTool(def))
-              .catch(() => {})
-          }
-        }
+        app: routeRecordingApp(extId, ctx.app, () => noteCapability(extId, 'routes')),
+        ...registrationMembers(extId, ctx, {
+          note: (cap) => noteCapability(extId, cap),
+          own: (kind, label) => recordRegistration(extId, kind, label),
+          cronPrefix: `cloud-ext:${extId}:`,
+          runLongOnTenant: true
+        })
       }
 
       await ext.register(scopedCtx)
