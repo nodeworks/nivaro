@@ -34,13 +34,15 @@ describe('registrationMembers', () => {
       return null
     })
     m.cron.schedule('nightly', '0 3 * * *', async () => {})
+    m.schema.step('watermarks', { description: 'two tables', up: async () => {} })
     expect(owned).toEqual([
       'bulk_actions: b · Bulk',
       'item_actions: i · Item',
       'readiness_checks: r · Ready',
       'integrity_checks: x · X',
       'flow_triggers: trig · Trigger',
-      'digest_sections: mySection'
+      'digest_sections: mySection',
+      'schema_steps: watermarks · two tables'
     ])
     expect(noted).toEqual([
       'bulk-actions',
@@ -49,7 +51,8 @@ describe('registrationMembers', () => {
       'integrity',
       'flows',
       'digest',
-      'cron'
+      'cron',
+      'schema'
     ])
     expect(cron.schedule).toHaveBeenCalledWith(
       'cloud-ext:t:nightly',

@@ -6488,7 +6488,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-schema","label":"Schema steps"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6549,6 +6549,26 @@ export default defineExtension({
             <li><code class="doc-code">fill-only</code> creates rows the database lacks and fills columns that are empty there; a value someone set stays and is reported as drift. <code class="doc-code">authoritative</code> writes the file's values back over differing columns.</li>
             <li>A row that matches several database rows is <code class="doc-code">ambiguous</code>: reported, never written.</li>
             <li><code class="doc-code">GET /api/config-seeds</code> lists the seeds; <code class="doc-code">GET /api/config-seeds/:key/drift</code> is the report as JSON (admin only). The task appears under Ops Tasks like any other.</li>
+          </ul>
+          <h3 class="doc-h3" id="ext-overview-schema">Schema steps</h3>
+          <p class="doc-p">A table or column an extension keeps — a watermark table for a sweep, a column it adds to a business table, a registry row — is a schema step: <code class="doc-code">ctx.schema.step(id, { description, up, check })</code> declared inside <code class="doc-code">register()</code>. The loader runs each extension's steps right after its <code class="doc-code">register()</code> returns, in declaration order, each inside a transaction that holds the migration lock, and records what the step did in <code class="doc-code">nivaro_extension_schema_steps</code> with the same schema diff the migration ledger keeps (<code class="doc-code">+1 table</code>, <code class="doc-code">No schema change</code>). A step that ran once never runs again on that database; a step that threw is recorded as <code class="doc-code">error</code> and tried again on the next boot, and the steps after it wait. Nothing here replaces a lazily created table by accident: <code class="doc-code">up</code> should still guard with <code class="doc-code">hasTable</code> / <code class="doc-code">hasColumn</code>, because a database built by hand may already carry the object.</p>
+          <pre class="doc-pre"><code>ctx.schema.step('notice-watermarks', {
+  description: 'Watermark table for the hourly notice sweep',
+  up: async (db) =&gt; {
+    if (!(await db.schema.hasTable('my_ext_notices'))) {
+      await db.schema.createTable('my_ext_notices', (t) =&gt; {
+        t.string('record_id', 36).primary()
+        t.datetime('notified_at').notNullable()
+      })
+    }
+  },
+  check: async (db) =&gt;
+    (await db.schema.hasTable('my_ext_notices')) ? { ok: true } : { ok: false, detail: 'my_ext_notices is gone' }
+})</code></pre>
+          <ul class="doc-ul">
+            <li><code class="doc-code">check</code> runs after the step and on every readiness read; a check that fails reports drift — the readiness check <code class="doc-code">extension-schema-steps</code> fails while a step has not run or errored, and warns while a check reports drift.</li>
+            <li>The registry sheet on the Extensions page lists every step with when it ran, the version that ran it, its schema summary and its check verdict.</li>
+            <li>The ledger is per database (RUNTIME in the config inventory) — a step runs once on every database the extension boots against, including a fresh one at cutover.</li>
           </ul>
           <h3 class="doc-h3" id="ext-overview-kit">The extension kit</h3>
           <p class="doc-p">An extension cannot import <code class="doc-code">api/src</code> — the API compiles with <code class="doc-code">rootDir: src</code>, and a mounted extension runs against a built image that ships no source. <code class="doc-code">@nivaro/extension-kit</code> is the contract instead: the extension context (<code class="doc-code">ExtensionContext</code>), the default export shape (<code class="doc-code">ExtensionDefinition</code>, checked by <code class="doc-code">defineExtension</code>), and every registration the context accepts — bulk and item actions, readiness and integrity checks, notes providers, mail types, digest sections, obligation kinds, signals, import processors, flow operations and triggers. The API imports its own extension contract from the same package, so the two cannot drift.</p>

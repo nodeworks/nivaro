@@ -208,9 +208,9 @@ export async function closeDb(): Promise<void> {
   }
 }
 
-const MIGRATION_LOCK_NAME = 'nivaro_migrations'
+export const MIGRATION_LOCK_NAME = 'nivaro_migrations'
 // Stable integer key for pg_advisory_lock, derived from the lock name
-const PG_LOCK_KEY = 793_416_204
+export const PG_LOCK_KEY = 793_416_204
 
 async function acquireMigrationLock(timeoutMs: number): Promise<boolean> {
   if (config.DB_CLIENT === 'mssql') {

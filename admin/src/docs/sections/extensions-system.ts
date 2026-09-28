@@ -96,9 +96,38 @@ export default defineExtension({
     {
       type: 'ul',
       items: [
-        '`fill-only` creates rows the database lacks and fills columns that are empty there; a value someone set stays and is reported as drift. `authoritative` writes the file\'s values back over differing columns.',
+        "`fill-only` creates rows the database lacks and fills columns that are empty there; a value someone set stays and is reported as drift. `authoritative` writes the file's values back over differing columns.",
         'A row that matches several database rows is `ambiguous`: reported, never written.',
         '`GET /api/config-seeds` lists the seeds; `GET /api/config-seeds/:key/drift` is the report as JSON (admin only). The task appears under Ops Tasks like any other.'
+      ]
+    },
+    { type: 'h3', id: 'ext-overview-schema', text: 'Schema steps' },
+    {
+      type: 'p',
+      text: "A table or column an extension keeps — a watermark table for a sweep, a column it adds to a business table, a registry row — is a schema step: `ctx.schema.step(id, { description, up, check })` declared inside `register()`. The loader runs each extension's steps right after its `register()` returns, in declaration order, each inside a transaction that holds the migration lock, and records what the step did in `nivaro_extension_schema_steps` with the same schema diff the migration ledger keeps (`+1 table`, `No schema change`). A step that ran once never runs again on that database; a step that threw is recorded as `error` and tried again on the next boot, and the steps after it wait. Nothing here replaces a lazily created table by accident: `up` should still guard with `hasTable` / `hasColumn`, because a database built by hand may already carry the object."
+    },
+    {
+      type: 'pre',
+      code: `ctx.schema.step('notice-watermarks', {
+  description: 'Watermark table for the hourly notice sweep',
+  up: async (db) => {
+    if (!(await db.schema.hasTable('my_ext_notices'))) {
+      await db.schema.createTable('my_ext_notices', (t) => {
+        t.string('record_id', 36).primary()
+        t.datetime('notified_at').notNullable()
+      })
+    }
+  },
+  check: async (db) =>
+    (await db.schema.hasTable('my_ext_notices')) ? { ok: true } : { ok: false, detail: 'my_ext_notices is gone' }
+})`
+    },
+    {
+      type: 'ul',
+      items: [
+        '`check` runs after the step and on every readiness read; a check that fails reports drift — the readiness check `extension-schema-steps` fails while a step has not run or errored, and warns while a check reports drift.',
+        'The registry sheet on the Extensions page lists every step with when it ran, the version that ran it, its schema summary and its check verdict.',
+        'The ledger is per database (RUNTIME in the config inventory) — a step runs once on every database the extension boots against, including a fresh one at cutover.'
       ]
     },
     { type: 'h3', id: 'ext-overview-kit', text: 'The extension kit' },

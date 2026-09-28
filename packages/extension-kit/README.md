@@ -40,6 +40,10 @@ export default defineExtension({
 - **Flows** — operation and trigger registrations, the execution context.
 - **Integrations** — obligation kinds, signals, signal actions.
 - **Imports** — the import-processor contract and run-report shapes.
+- **Operations** — `OpsTaskDef` (repairs and backfills run from the console),
+  `ConfigSeedDef` (checked-in configuration rows with a drift report) and
+  `SchemaStepDef` (versioned DDL an extension owns, run once at load under
+  the migration lock).
 - **Helpers** — `hasColumn(db, table, column)` (a per-database column probe
   for writers that must survive an unmigrated database) and
   `requesterInsertFields` / `requesterSelectColumns` for the ERP submission

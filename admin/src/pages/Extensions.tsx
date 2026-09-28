@@ -1231,6 +1231,18 @@ type RegistryData = {
     missing: boolean
   }>
   routes?: Array<{ method: string; url: string; gate: string; detail?: string }>
+  schema_steps?: Array<{
+    step: string
+    description: string
+    status: 'applied' | 'error' | 'pending'
+    ran_at: string | null
+    summary: string | null
+    error: string | null
+    has_check: boolean
+    check_ok: boolean | null
+    check_detail: string | null
+    app_version: string | null
+  }>
   observed_capabilities: string[]
   health_check: boolean
   staged: { next_present: boolean; prev_present: boolean; live_entry: string | null }
@@ -1247,6 +1259,7 @@ const GATE_LABELS: Record<string, string> = {
 const REGISTRATION_LABELS: Record<string, string> = {
   ops_tasks: 'Operational tasks',
   config_seeds: 'Config seeds',
+  schema_steps: 'Schema steps (declared)',
   flow_operations: 'Flow operations',
   flow_triggers: 'Flow triggers',
   note_sources: 'Notes sources',
@@ -1419,6 +1432,60 @@ function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => vo
                 </li>
               ))}
             </Section>
+            {(data.schema_steps?.length ?? 0) > 0 && (
+              <Section title='Schema steps' count={data.schema_steps?.length ?? 0}>
+                {data.schema_steps?.map((st) => (
+                  <li
+                    key={st.step}
+                    className='flex flex-wrap items-baseline gap-x-2'
+                    data-ext-schema-step={st.step}
+                    data-ext-schema-status={st.status}
+                    data-ext-schema-check={
+                      st.check_ok == null ? 'none' : st.check_ok ? 'ok' : 'drift'
+                    }
+                  >
+                    <span className='font-mono text-[11px] text-slate-700 dark:text-slate-200'>
+                      {st.step}
+                    </span>
+                    <span
+                      className={
+                        st.status === 'applied'
+                          ? 'text-[10px] font-semibold text-emerald-700 dark:text-emerald-300'
+                          : st.status === 'error'
+                            ? 'text-[10px] font-semibold text-rose-700 dark:text-rose-300'
+                            : 'text-[10px] font-semibold text-amber-700 dark:text-amber-300'
+                      }
+                    >
+                      {st.status === 'applied'
+                        ? `applied${st.ran_at ? ` ${formatRelative(st.ran_at)}` : ''}${st.app_version ? ` · v${st.app_version}` : ''}`
+                        : st.status === 'error'
+                          ? 'failed'
+                          : 'not run'}
+                    </span>
+                    {st.has_check && st.status === 'applied' && (
+                      <span
+                        className={
+                          st.check_ok === false
+                            ? 'text-[10px] font-semibold text-amber-700 dark:text-amber-300'
+                            : 'text-[10px] text-slate-400'
+                        }
+                      >
+                        {st.check_ok === false
+                          ? `drift: ${st.check_detail ?? 'check failed'}`
+                          : st.check_ok
+                            ? 'check ok'
+                            : 'unchecked'}
+                      </span>
+                    )}
+                    <span className='basis-full text-[11px] text-slate-500 dark:text-muted-foreground'>
+                      {st.status === 'error' && st.error
+                        ? st.error
+                        : (st.summary ?? st.description)}
+                    </span>
+                  </li>
+                ))}
+              </Section>
+            )}
             {(data.routes?.length ?? 0) > 0 && (
               <Section title='Routes' count={data.routes?.length ?? 0}>
                 {data.routes?.map((r) => (

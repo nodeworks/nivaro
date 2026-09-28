@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify'
+import type { Knex } from 'knex'
 import type { ExtensionUser } from './user.js'
 
 // ─── Bulk and item actions ──────────────────────────────────────────────────
@@ -475,4 +476,39 @@ export interface ConfigSeedDef {
   mode: 'fill-only' | 'authoritative'
   /** Columns the file carries that must never be written (ids, audit stamps). */
   ignore?: string[]
+}
+
+// ─── Schema steps ───────────────────────────────────────────────────────────
+
+export interface SchemaCheckResult {
+  ok: boolean
+  /** What is missing or different, when not ok. */
+  detail?: string
+}
+
+/**
+ * A versioned schema or registry change an extension owns — a table it
+ * keeps, a column it adds to a business table, a registry row — declared
+ * with `ctx.schema.step(id, {...})` inside `register()` and run at load,
+ * under the migration lock, in declaration order. A step that ran once is
+ * recorded in `nivaro_extension_schema_steps` with the schema diff it
+ * produced and never runs again on that database; `check` reports drift.
+ */
+export interface SchemaStepDef {
+  /** Unique within the extension; kebab-case. */
+  id: string
+  /** What the step builds, in a sentence. */
+  description: string
+  /**
+   * The change. It runs inside a transaction that holds the migration
+   * lock; `db` is that transaction. Guard it (hasTable / hasColumn) anyway —
+   * a database built by hand may already carry the object.
+   */
+  up(db: Knex): Promise<void>
+  /**
+   * Does the database still carry what the step built? Run after the step
+   * (or on every readiness read) — cheap reads only. `false` or `{ok: false}`
+   * reports drift; absent = never checked.
+   */
+  check?(db: Knex): Promise<SchemaCheckResult | boolean>
 }

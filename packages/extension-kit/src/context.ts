@@ -37,6 +37,7 @@ import type {
   OpsTaskDef,
   ReadinessCheck,
   RelatedNoteProvider,
+  SchemaStepDef,
   StorageAdapter,
   ValidatorDef
 } from './registrations.js'
@@ -216,6 +217,9 @@ export interface ExtensionContext {
   /** Checked-in rows of a configuration collection, applied by a task —
    *  never at boot — with a drift report as its dry run. */
   seeds: { register(def: ConfigSeedDef): void }
+  /** A versioned schema change the extension owns, run at load under the
+   *  migration lock and recorded once per database (#826). */
+  schema: { step(id: string, def: Omit<SchemaStepDef, 'id'>): void }
   chain: {
     /** Start a chain for one feed event (e.g. one shipment) and run fn inside it. */
     begin<T>(root: { source: string; ref: string }, fn: () => Promise<T>): Promise<T>

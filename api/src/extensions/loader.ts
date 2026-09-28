@@ -1,20 +1,15 @@
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import type { Inngest } from 'inngest'
-import type { Knex } from 'knex'
-import type { Database } from '../db/index.js'
+import type { FastifyInstance } from 'fastify'
 import {
   emitTrigger,
   type OpFieldSchema,
   type OpHandler,
-  type RegisteredOp,
-  type RegisteredTrigger,
   registerOp,
   registerTrigger
 } from '../flows/registry.js'
-import { type HookAction, hooks } from '../hooks/registry.js'
+import { hooks } from '../hooks/registry.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { registerPortalLinks } from '../services/app-links.js'
@@ -22,20 +17,25 @@ import { registerBriefLine } from '../services/approval-brief-lines.js'
 import { currentChain } from '../services/chain.js'
 import { type ChainTable, chainFields } from '../services/chain-columns.js'
 import { beginChainRoot } from '../services/chain-roots.js'
+import { registerConfigSeed } from '../services/config-seeds.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import {
-  type ExtensionEventHandler,
   publishExtensionEvent,
   registerExtensionEventHandler
 } from '../services/extension-events.js'
-import { type CallOptions, type CallResult, callExternalApi } from '../services/external-apis.js'
-import { type ImportProcessorDef, registerImportProcessor } from '../services/import-processors.js'
+import {
+  declareSchemaStep,
+  extensionsWithSchemaSteps,
+  runSchemaChecks,
+  runSchemaSteps
+} from '../services/extension-schema-steps.js'
+import { type CallOptions, callExternalApi } from '../services/external-apis.js'
+import { registerImportProcessor } from '../services/import-processors.js'
 import { registerEventSource } from '../services/integration-event-sources.js'
 import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
-import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
-import { registerConfigSeed } from '../services/config-seeds.js'
+import { notifyUser } from '../services/notification-channels.js'
 import { registerOpsTask } from '../services/ops-tasks.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
@@ -48,15 +48,8 @@ import {
   type NotificationChannelDef,
   notificationChannelRegistry
 } from './notification-channels.js'
-import {
-  type NotificationSourceProvider,
-  notificationSourceRegistry
-} from './notification-sources.js'
-import {
-  type MachineMarkerSet,
-  type RelatedNoteProvider,
-  relatedNoteRegistry
-} from './related-notes.js'
+import { notificationSourceRegistry } from './notification-sources.js'
+import { relatedNoteRegistry } from './related-notes.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
@@ -716,6 +709,13 @@ export function registrationMembers(
         registerConfigSeed(def, extId)
       }
     },
+    schema: {
+      step: (id, def) => {
+        note('schema')
+        own('schema_steps', `${id} · ${def.description}`)
+        declareSchemaStep(extId, { id, ...def })
+      }
+    },
     chain: buildChainContext(),
     integrations: {
       registerObligationKind: (def) => {
@@ -899,6 +899,7 @@ async function loadExtension(
     | 'readiness'
     | 'tasks'
     | 'seeds'
+    | 'schema'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -987,6 +988,10 @@ async function loadExtension(
     }
 
     await ext.register(scopedCtx)
+    // Schema steps the extension declared run now, in order, under the
+    // migration lock (#826) — a failure is recorded, logged and does not
+    // stop the extension loading: its readiness check says what is wrong.
+    await runSchemaSteps(extId, ctx.database, { logger: scopedCtx.logger })
 
     // Respect initial enabled state from config
     if (!enabled) {
@@ -1001,7 +1006,6 @@ async function loadExtension(
     else extensionEnvDecls.delete(extId)
     for (const d of envDecls) {
       if (d.required && !(process.env[d.name] ?? '')) {
-        console.warn(`[extensions] ${extId} requires ${d.name}, which is not set`)
       }
     }
     if (typeof ext.healthCheck === 'function')
@@ -1099,6 +1103,7 @@ export async function loadExtensions(
     | 'readiness'
     | 'tasks'
     | 'seeds'
+    | 'schema'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1249,6 +1254,7 @@ export async function loadCloudExtensions(
     | 'readiness'
     | 'tasks'
     | 'seeds'
+    | 'schema'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1311,6 +1317,7 @@ export async function loadCloudExtensions(
       }
 
       await ext.register(scopedCtx)
+      await runSchemaSteps(extId, ctx.database, { logger: ctx.logger })
 
       // Load optional manifest.json for UI bundle support
       const manifestPath = join(dirPath, 'manifest.json')
@@ -1371,7 +1378,7 @@ export function setApp(app: FastifyInstance) {
 
 export function setExtensionEnabled(id: string, enabled: boolean): boolean {
   const entry = extensionRegistry.get(id)
-  if (!entry || entry.status !== 'loaded') return false
+  if (entry?.status !== 'loaded') return false
 
   entry.enabled = enabled
   hooks.setExtensionEnabled(id, enabled)
@@ -1432,6 +1439,7 @@ export async function scanNewExtensions(
     | 'readiness'
     | 'tasks'
     | 'seeds'
+    | 'schema'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1513,6 +1521,45 @@ export function registerExtensionSettingsReadiness(): void {
     }
   })
   registerReadinessCheck({
+    id: 'extension-schema-steps',
+    label: 'Extension schema steps applied and intact',
+    description:
+      "Every schema step an extension declared (`ctx.schema.step`) has run on this database, and each step's check still finds what it built.",
+    group: 'Configuration',
+    run: async () => {
+      const exts = extensionsWithSchemaSteps()
+      if (exts.length === 0)
+        return { status: 'skip', detail: 'No extension declared a schema step.' }
+      const blockers: string[] = []
+      const drift: string[] = []
+      let total = 0
+      for (const ext of exts) {
+        for (const st of await runSchemaChecks(ext)) {
+          total++
+          if (st.status === 'error')
+            blockers.push(`${ext}: ${st.step} failed — ${st.error ?? 'unknown error'}`)
+          else if (st.status === 'pending')
+            blockers.push(`${ext}: ${st.step} has not run on this database`)
+          else if (st.check_ok === false)
+            drift.push(`${ext}: ${st.step} — ${st.check_detail ?? 'check reports drift'}`)
+        }
+      }
+      if (blockers.length)
+        return {
+          status: 'fail',
+          detail: `${blockers.length} of ${total} step(s) not applied.`,
+          blockers: [...blockers, ...drift]
+        }
+      if (drift.length)
+        return {
+          status: 'warn',
+          detail: `${drift.length} of ${total} applied step(s) report drift.`,
+          blockers: drift
+        }
+      return { status: 'pass', detail: `${total} step(s) applied; every check passes.` }
+    }
+  })
+  registerReadinessCheck({
     id: 'extension-settings-expectations',
     label: 'Extension settings match their production expectations',
     description:
@@ -1585,6 +1632,7 @@ export async function describeExtensionRegistry(
     })),
     env: describeExtensionEnv(extId),
     routes: extensionRoutes.get(extId) ?? [],
+    schema_steps: await runSchemaChecks(extId),
     observed_capabilities: getObservedCapabilities(extId),
     health_check: extensionHealthChecks.has(extId),
     staged: await stagedBuildStatus(extId)

@@ -54,6 +54,7 @@ import type {
   OpsTaskOutcome,
   ReadinessCheck,
   RelatedNoteProvider,
+  SchemaStepDef,
   StorageAdapter,
   ValidatorDef
 } from './registrations.js'
@@ -93,7 +94,7 @@ export interface TestDbState {
   /** Every statement the fake ran, in order — assert on writes. */
   log: Array<{
     table: string
-    op: 'select' | 'insert' | 'update' | 'delete' | 'raw'
+    op: 'select' | 'insert' | 'update' | 'delete' | 'raw' | 'schema'
     detail?: unknown
   }>
 }
@@ -103,8 +104,9 @@ export interface TestDbState {
  * select / where (object, col=val, col op val, callback) / whereIn /
  * whereNotIn / whereNull / whereNotNull / orderBy / limit / offset /
  * first / pluck / count / insert(+returning) / update / del, `db.raw`
- * (answers `[]` unless `raw` is given), `db.schema.hasColumn`,
- * `db.transaction`, `db.fn.now`. Joins are accepted and ignored — a test
+ * (answers `[]` unless `raw` is given), `db.schema.hasColumn` / hasTable /
+ * createTable / alterTable / dropTable (tables recorded, columns not
+ * modelled), `db.transaction`, `db.fn.now`. Joins are accepted and ignored — a test
  * seeds the joined columns on the row it expects back.
  */
 export function createTestDb(
@@ -126,7 +128,7 @@ export function createTestDb(
     const table = tableExpr.split(/\s+/)[0]
     const filters: Where[] = []
     let columns: string[] | null = null
-    let order: Array<{ col: string; dir: 'asc' | 'desc' }> = []
+    const order: Array<{ col: string; dir: 'asc' | 'desc' }> = []
     let lim: number | null = null
     let off = 0
     const matching = () => {
@@ -294,7 +296,28 @@ export function createTestDb(
   }
   anyDb.schema = {
     hasColumn: async (t: string, c: string) => rowsOf(t).some((r) => c in r),
-    hasTable: async (t: string) => t in state.tables
+    hasTable: async (t: string) => t in state.tables,
+    // createTable / alterTable accept the builder callback and record the
+    // table (columns are not modelled — a test seeds rows with the columns
+    // it expects); dropTable forgets it.
+    createTable: async (t: string, fn?: (tb: unknown) => void) => {
+      const chain: unknown = new Proxy(() => chain, { get: () => () => chain, apply: () => chain })
+      fn?.(chain)
+      if (!state.tables[t]) state.tables[t] = []
+      state.log.push({ table: t, op: 'schema', detail: 'createTable' })
+    },
+    alterTable: async (t: string, fn?: (tb: unknown) => void) => {
+      const chain: unknown = new Proxy(() => chain, { get: () => () => chain, apply: () => chain })
+      fn?.(chain)
+      state.log.push({ table: t, op: 'schema', detail: 'alterTable' })
+    },
+    dropTable: async (t: string) => {
+      delete state.tables[t]
+      state.log.push({ table: t, op: 'schema', detail: 'dropTable' })
+    },
+    dropTableIfExists: async (t: string) => {
+      delete state.tables[t]
+    }
   }
   anyDb.transaction = async (fn: (trx: unknown) => Promise<unknown>) => fn(db)
   anyDb.fn = { now: () => new Date() }
@@ -389,6 +412,7 @@ export interface TestContext extends ExtensionContext {
     readinessChecks: ReadinessCheck[]
     tasks: OpsTaskDef[]
     seeds: ConfigSeedDef[]
+    schemaSteps: SchemaStepDef[]
     obligationKinds: ObligationKindDef[]
     signals: IntegrationSignal[]
     signalActions: SignalActionHandler[]
@@ -496,6 +520,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     readinessChecks: [],
     tasks: [],
     seeds: [],
+    schemaSteps: [],
     obligationKinds: [],
     signals: [],
     signalActions: [],
@@ -665,6 +690,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     readiness: { registerCheck: (c) => registered.readinessChecks.push(c) },
     tasks: { register: (d) => registered.tasks.push(d) },
     seeds: { register: (d) => registered.seeds.push(d) },
+    schema: { step: (id, d) => registered.schemaSteps.push({ id, ...d }) },
     chain: {
       begin: async (_root, fn) => fn(),
       current: () => null,
