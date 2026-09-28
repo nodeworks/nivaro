@@ -239,19 +239,21 @@ async function labelRecords(
     labels = {}
   }
   const out = new Map<string, string>()
-  let resolveFriendlyId: ((c: string, i: string) => Promise<string>) | null = null
+  // One batched friendly-id read per collection (never one per record).
+  let resolveFriendlyIds: ((c: string, ids: string[]) => Promise<Map<string, string>>) | null = null
   try {
-    resolveFriendlyId = (await import('./workflow-transitions.js')).resolveFriendlyId
+    resolveFriendlyIds = (await import('./workflow-transitions.js')).resolveFriendlyIds
   } catch {
-    resolveFriendlyId = null
+    resolveFriendlyIds = null
   }
   for (const [collection, ids] of byCollection) {
+    const friendly = resolveFriendlyIds
+      ? await resolveFriendlyIds(collection, [...ids]).catch(() => new Map<string, string>())
+      : new Map<string, string>()
     for (const item of ids) {
       const k = `${collection}:${item}`
-      const friendly = resolveFriendlyId
-        ? await resolveFriendlyId(collection, item).catch(() => null)
-        : null
-      out.set(k, friendly && friendly !== item ? friendly : (labels[k] ?? `#${item}`))
+      const f = friendly.get(item)
+      out.set(k, f && f !== item ? f : (labels[k] ?? `#${item}`))
     }
   }
   return out
@@ -350,7 +352,8 @@ function historyQuery(since: Date) {
 }
 
 /**
- * Send-backs in the last `days`: `to_me` = on records the viewer created;
+ * Send-backs in the last `days`: `to_me` = on records the viewer created, made
+ * by someone else (or no one — an automatic move);
  * `by_me` = made by the viewer, where the record still sits in the state it
  * was sent back to. Newest first, capped at 50.
  */
@@ -372,11 +375,18 @@ export async function listSendBacks(opts: {
           historyQuery(since)
             .where('i.collection', collection)
             .whereIn('i.item', chunk)
+            // A send-back you made on your own record was not sent back TO you.
+            .where((qb) => {
+              void qb.whereNull('h.user').orWhereNot('h.user', userId)
+            })
             .limit(SEND_BACK_CAP * 4)
         ).catch(() => [] as Array<Record<string, unknown>>)
       )
     )
-    rows = parts.flat() as Array<Record<string, unknown>>
+    const me = userId.toUpperCase()
+    rows = (parts.flat() as Array<Record<string, unknown>>).filter(
+      (r) => !r.user || String(r.user).toUpperCase() !== me
+    )
   } else {
     rows = (await historyQuery(since)
       .where('h.user', userId)

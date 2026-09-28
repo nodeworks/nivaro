@@ -19,10 +19,17 @@ vi.mock('../../../services/app-links.js', () => ({
 vi.mock('../../../services/pipeline-engine.js', () => ({
   resolveStateOwnersBatch: vi.fn(async () => new Map())
 }))
+vi.mock('../../../services/queues.js', () => ({ getLabels: vi.fn(async () => ({})) }))
+vi.mock('../../../services/workflow-transitions.js', () => ({
+  resolveFriendlyIds: vi.fn(
+    async (c: string, ids: string[]) => new Map(ids.map((i) => [i, `${c.toUpperCase()}-${i}`]))
+  )
+}))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../../../db/index.js'
 import { dashboardFeedRoutes } from '../../../routes/dashboard-feed.js'
+import { resolveFriendlyIds } from '../../../services/workflow-transitions.js'
 
 type Call = { table: string; method: string; args: unknown[] }
 const calls: Call[] = []
@@ -45,6 +52,9 @@ function chain(table: string, rows: unknown[]) {
       }
       return (...args: unknown[]) => {
         calls.push({ table, method: prop, args })
+        // Run where/join callbacks against the same chain so nested builder
+        // calls are recorded too.
+        for (const a of args) if (typeof a === 'function') a.call(proxy, proxy)
         return proxy
       }
     }
@@ -57,9 +67,12 @@ const ALLOWED: Record<string, unknown[]> = {
   'nivaro_workflow_history as h': [],
   nivaro_record_views: []
 }
+/** Per-test rows that override / extend ALLOWED. */
+let fixtures: Record<string, unknown[]> = {}
 
 function installDb() {
   const fn = vi.fn((table: string) => {
+    if (table in fixtures) return chain(table, fixtures[table] as unknown[])
     if (!(table in ALLOWED)) {
       unexpected.push(table)
       throw new Error(`unexpected table: ${table}`)
@@ -83,6 +96,7 @@ afterEach(() => {
   expect(unexpected).toEqual([])
   unexpected.length = 0
   calls.length = 0
+  fixtures = {}
   vi.clearAllMocks()
 })
 
@@ -122,6 +136,58 @@ describe('GET /dashboard/send-backs', () => {
     const since = calls.find((c) => c.method === 'where' && c.args[0] === 'h.timestamp')
     const days = (before - (since?.args[2] as Date).getTime()) / 86_400_000
     expect(Math.round(days)).toBe(1)
+  })
+})
+
+describe("GET /dashboard/send-backs?dir=to_me on the viewer's own records", () => {
+  const sendBack = (id: number, user: string | null) => ({
+    id,
+    instance: 'INST-1',
+    comment: null,
+    timestamp: new Date(Date.now() - id * 60_000).toISOString(),
+    user,
+    to_state: 'S1',
+    from_sort: 3,
+    to_sort: 1,
+    from_label: 'Review',
+    to_label: 'Started',
+    transition_label: 'Send Back',
+    collection: 'orders',
+    item: '42',
+    current_state: 'S1',
+    started_at: null,
+    current_key: 'started',
+    current_label: 'Started'
+  })
+
+  it('leaves out a send-back the viewer made themselves', async () => {
+    fixtures = {
+      nivaro_workflow_bindings: [{ collection: 'orders' }],
+      nivaro_fields: [],
+      'information_schema.columns': [{ table_name: 'orders', column_name: 'creator' }],
+      orders: ['42'],
+      nivaro_users: [{ id: 'OTHER', first_name: 'Kim', last_name: 'Diaz', email: null }],
+      // The viewer's own move (id differs only by case) and someone else's.
+      'nivaro_workflow_history as h': [
+        sendBack(1, 'user-1'),
+        sendBack(2, 'OTHER'),
+        sendBack(3, null)
+      ]
+    }
+    const res = await inject('GET', '/dashboard/send-backs?dir=to_me')
+    expect(res.statusCode).toBe(200)
+    const data = res.json().data as Array<{ by: { id: string } | null; label: string }>
+    expect(data.map((r) => r.by?.id ?? null)).toEqual(['OTHER', null])
+    expect(data[0]?.label).toBe('ORDERS-42')
+    // The exclusion also reaches the SQL.
+    expect(
+      calls.some(
+        (c) => c.method === 'orWhereNot' && c.args[0] === 'h.user' && c.args[1] === 'USER-1'
+      )
+    ).toBe(true)
+    // Friendly ids are read once per collection, not per record.
+    expect(vi.mocked(resolveFriendlyIds)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(resolveFriendlyIds)).toHaveBeenCalledWith('orders', ['42'])
   })
 })
 
