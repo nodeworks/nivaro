@@ -29,6 +29,7 @@ import { getCollection, getFields, getRelations } from './collections.js'
 import { describeDbRefusal } from '../lib/db-refusal.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { enforceRelationLimits } from './relation-limits.js'
+import { enforcePickerRules } from './picker-rules.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
@@ -4299,7 +4300,7 @@ export function describeWriteRefusal(err: unknown): {
   error: string
   code?: string
   violations?: unknown
-  fields?: unknown
+  [detail: string]: unknown
 } {
   const refusal = describeDbRefusal(err)
   if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
@@ -4312,14 +4313,40 @@ export function describeWriteRefusal(err: unknown): {
   }
   const status = typeof e?.statusCode === 'number' ? e.statusCode : 500
   const code = typeof e?.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(e.code) ? e.code : undefined
+  const details: Record<string, unknown> = {}
+  if (code && status < 500) {
+    for (const k of REFUSAL_DETAIL_KEYS) {
+      const v = (err as Record<string, unknown>)[k]
+      if (v !== undefined && typeof v !== 'function') details[k] = v
+    }
+  }
   return {
     status,
     error: status >= 500 ? nestedReason(err as Error) : String(e?.message ?? 'failed'),
     ...(code && status < 500 ? { code } : {}),
     ...(e?.violations !== undefined ? { violations: e.violations } : {}),
-    ...(e?.fields !== undefined ? { fields: e.fields } : {})
+    ...details
   }
 }
+
+/** The details a coded refusal may carry onto the wire (the global error
+ *  handler forwards the same set on a real request). */
+const REFUSAL_DETAIL_KEYS = [
+  'rule',
+  'field',
+  'fields',
+  'parents',
+  'value',
+  'target',
+  'existing_id',
+  'max',
+  'current',
+  'nested',
+  'first',
+  'scope',
+  'keys',
+  'meta'
+] as const
 
 /**
  * Rehearse a create: contracts, the natural-key match, hooks (told it is a
@@ -4571,6 +4598,13 @@ export async function createOne(
   // Limits of the relation this row belongs to (unique rows per parent, links
   // per record), where the relation says they bind every writer.
   await enforceRelationLimits(collection, ctx.payload as Record<string, unknown>)
+  // Values the field's picker would not offer for this record, where the
+  // field says its picker rules bind every writer.
+  await enforcePickerRules({
+    collection,
+    row: ctx.payload as Record<string, unknown>,
+    callerFields
+  })
 
   // Encrypt configured encrypted fields just before write
   const securedPayload = await encryptItemFields(collection, ctx.payload)
@@ -4954,6 +4988,7 @@ export async function updateOne(
       )
     )
     if (touched.size > 0) await enforceRelationLimits(collection, writeCtx, id, touched)
+    await enforcePickerRules({ collection, row: writeCtx, callerFields, id })
   }
 
   // Auto-ID prefix recompute — if a relation an auto_id pattern depends on

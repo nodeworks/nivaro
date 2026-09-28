@@ -58,6 +58,15 @@ export const fieldDisplaySettingsGuide: DocSection = {
       type: 'note',
       text: "The switch is off by default because a limit is often true of one layout only. A form that takes one region beside another form that takes several must not switch it on. Stored as `enforce_on_write: true` beside the option, on the field or on the assignment in the collection's active layout."
     },
+    { type: 'h3', text: 'Picker rules the server refuses too' },
+    {
+      type: 'p',
+      text: "A relation picker offers only what its rules allow: the cascade filters (a project of the chosen zone and funding year), the field's own option filter, the target collection's picker filter and its picker exclusions. Those rules shape the form only, so a script, an import or another application may store a value the form would never offer. A relation field's settings carry \"Enforce on API writes\": the server then judges every write that names the field against the same rules, with the record as it would be stored, and refuses a value outside them with `400` `PICKER_RULE_VIOLATED`. The answer names the `rule` (cascade, option_filter, picker_filter or picker_exclusion), the `field`, and for a cascade the `parents` it read."
+    },
+    {
+      type: 'note',
+      text: "Off by default: integrations write legacy combinations the form no longer offers, and a rule enforced on the field binds every writer. Only fields present in the write are judged; changing a parent alone never re-judges the children. On an update, a parent the write does not carry is read from the record's own links. Stored as `enforce_picker_rules: true` on the field, or on its assignment in the collection's active layout, where the layout's own option filter is the one judged."
+    },
     { type: 'h3', text: 'Input masks' },
     {
       type: 'p',

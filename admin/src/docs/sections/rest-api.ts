@@ -129,6 +129,11 @@ export const apiOverview: DocSection = {
           'LINK_LIMIT_REACHED',
           '409',
           'The record already holds as many links of this kind as the relation allows. `rule`, `max` and `current` say which and how many.'
+        ],
+        [
+          'PICKER_RULE_VIOLATED',
+          '400',
+          "The value is one the field's picker would not offer for this record (a field set to enforce its picker rules on every write). `rule` says which rule, `field` which field, `parents` the parent fields a cascade read."
         ]
       ]
     },

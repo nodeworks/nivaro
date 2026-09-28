@@ -349,6 +349,30 @@ export async function buildServer() {
 
   // ─── Error tracking: 5xx → nivaro_issues (deduped, fire-and-forget) ───────
   const errorContextCounters = new Map<string, number>()
+  const DETAIL_KEYS = [
+    'rule',
+    'field',
+    'fields',
+    'parents',
+    'value',
+    'target',
+    'existing_id',
+    'max',
+    'current',
+    'nested',
+    'first',
+    'scope',
+    'keys',
+    'meta'
+  ] as const
+  const refusalDetails = (err: object): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const k of DETAIL_KEYS) {
+      const v = (err as Record<string, unknown>)[k]
+      if (v !== undefined && typeof v !== 'function') out[k] = v
+    }
+    return out
+  }
   app.setErrorHandler(
     (
       err: Error & {
@@ -417,18 +441,20 @@ export async function buildServer() {
         }).catch(() => {})
       }
       req.log.error(err)
+      const coded = !!err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
       reply.code(status).send({
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',
         message: err.message,
         // A refusal's machine code rides every 4xx; driver codes on a 5xx stay in the log.
-        ...(err.code && status < 500 && /^[A-Z][A-Z0-9_]+$/.test(err.code)
-          ? { code: err.code }
-          : {}),
+        ...(coded ? { code: err.code } : {}),
         ...(err.code && err.violations ? { code: err.code, violations: err.violations } : {}),
         ...(err.code === 'MIDAIR_COLLISION'
           ? { code: err.code, conflicts: err.conflicts, latest_revision: err.latest_revision }
-          : {})
+          : {}),
+        // The details a coded refusal carries (which rule, which field, the
+        // record in the way) — a fixed set, never the error's whole shape.
+        ...(coded ? refusalDetails(err) : {})
       })
     }
   )

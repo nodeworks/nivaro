@@ -13077,6 +13077,18 @@ function FieldSettingsPopover({
       return ''
     }
   })
+  const [enforcePickerRules, setEnforcePickerRules] = useState<boolean>(() => {
+    try {
+      const o = settings.options
+        ? ((typeof settings.options === 'string'
+            ? JSON.parse(settings.options)
+            : settings.options) as Record<string, unknown>)
+        : {}
+      return o.enforce_picker_rules === true
+    } catch {
+      return false
+    }
+  })
   const [optionSort, setOptionSort] = useState<string>(() => {
     try {
       const o = settings.options
@@ -13842,12 +13854,18 @@ function FieldSettingsPopover({
         const linkLimitOpts = isM2M
           ? { enforce_on_write: maxV && maxV > 0 && enforceOnWrite ? true : undefined }
           : {}
+        // Picker rules on API writes (#733): the server judges cascade filters,
+        // option_filter and the target's picker_filter on every write.
+        const pickerRuleOpts = isM2O
+          ? { enforce_picker_rules: enforcePickerRules ? true : undefined }
+          : {}
         optionsPatch = JSON.stringify({
           ...existing,
           ...o2mOpts,
           ...fileOpts,
           ...formatOpts,
           ...groupedOpts,
+          ...pickerRuleOpts,
           ...pickerSortOpts,
           ...inputMaskOpts,
           ...unitOpts,
@@ -14311,6 +14329,29 @@ function FieldSettingsPopover({
                   descending); "label" / "-label" sorts by the rendered display label. Empty =
                   default (label ascending).
                 </p>
+              </div>
+            )}
+
+            {/* ── Picker rules on every write (M2O) ── */}
+            {isM2O && (
+              <div className='space-y-2'>
+                <SectionHeader label='Picker rules' />
+                <label className='flex items-start gap-2 text-[12px]'>
+                  <Checkbox
+                    checked={enforcePickerRules}
+                    onCheckedChange={(v) => setEnforcePickerRules(v === true)}
+                    data-enforce-picker-rules
+                  />
+                  <span>
+                    Enforce on API writes
+                    <span className='block text-[10.5px] leading-relaxed text-slate-400'>
+                      The server refuses a value this field's picker would not offer for the record:
+                      cascade filters, the option filter above, the target collection's picker
+                      filter and its picker exclusions. Off, those rules only shape the form;
+                      integrations may write any linked record.
+                    </span>
+                  </span>
+                </label>
               </div>
             )}
 
@@ -21381,6 +21422,7 @@ function FieldGroupsTab({
     'parent_context_fields',
     'unique_by',
     'enforce_on_write',
+    'enforce_picker_rules',
     'sort_field',
     'sort_dir',
     'section_group_by',
