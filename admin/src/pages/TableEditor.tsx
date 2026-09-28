@@ -100,6 +100,7 @@ import { RelationLabel } from '@/components/relation-label'
 import { RelationPicker } from '@/components/relation-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Command,
   CommandEmpty,
@@ -8028,7 +8029,8 @@ function AiFeaturesCard({ tableName }: { tableName: string }) {
               Fill from document
             </Label>
             <span className='text-[11px] text-slate-400'>
-              New-record form offers an upload (SOW, quote, spreadsheet) and proposes fields + lines to review
+              New-record form offers an upload (SOW, quote, spreadsheet) and proposes fields + lines
+              to review
             </span>
           </div>
           <div className='flex items-center gap-3'>
@@ -13106,6 +13108,8 @@ function FieldSettingsPopover({
   const [defaultPresetLocal, setDefaultPresetLocal] = useState<string>('')
   const [drawerRelationsLocal, setDrawerRelationsLocal] = useState<DrawerRelationItem[]>([])
   const [uniqueBy, setUniqueBy] = useState<string[]>([])
+  // unique_by / max_values refused by the server too, for every writer
+  const [enforceOnWrite, setEnforceOnWrite] = useState(false)
   const [uniqueByOpen, setUniqueByOpen] = useState(false)
   const [sortField, setSortField] = useState<string>('')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
@@ -13530,6 +13534,7 @@ function FieldSettingsPopover({
             : []
         )
         setUniqueBy(Array.isArray(opts.unique_by) ? (opts.unique_by as string[]) : [])
+        setEnforceOnWrite(opts.enforce_on_write === true)
         setSortField((opts.sort_field as string) ?? '')
         setSortDir((opts.sort_dir as 'asc' | 'desc') === 'desc' ? 'desc' : 'asc')
         setSectionGroupByLocal((opts.section_group_by as string) ?? '')
@@ -13602,6 +13607,7 @@ function FieldSettingsPopover({
       iface === 'files-m2m' ||
       iface === 'relation-grouped' ||
       ((isM2O || isM2M) && optionSort.trim() !== '') ||
+      isM2M ||
       inputMask.trim() !== '' ||
       fieldUnit.trim() !== '' ||
       abstractType === 'datetime' ||
@@ -13674,6 +13680,7 @@ function FieldSettingsPopover({
                         ? { drawer_relations: validDrawerRelations }
                         : { drawer_relations: undefined }),
                       ...(uniqueBy.length > 0 ? { unique_by: uniqueBy } : { unique_by: undefined }),
+                      enforce_on_write: uniqueBy.length > 0 && enforceOnWrite ? true : undefined,
                       ...(sortField
                         ? { sort_field: sortField, sort_dir: sortDir }
                         : { sort_field: undefined, sort_dir: undefined }),
@@ -13832,6 +13839,9 @@ function FieldSettingsPopover({
           abstractType === 'datetime' || iface === 'datetime'
             ? { date_mode: dateMode === 'date' ? 'date' : undefined }
             : {}
+        const linkLimitOpts = isM2M
+          ? { enforce_on_write: maxV && maxV > 0 && enforceOnWrite ? true : undefined }
+          : {}
         optionsPatch = JSON.stringify({
           ...existing,
           ...o2mOpts,
@@ -13841,7 +13851,8 @@ function FieldSettingsPopover({
           ...pickerSortOpts,
           ...inputMaskOpts,
           ...unitOpts,
-          ...dateModeOpts
+          ...dateModeOpts,
+          ...linkLimitOpts
         })
       } catch {
         optionsPatch = JSON.stringify({
@@ -14070,6 +14081,24 @@ function FieldSettingsPopover({
                   <p className='text-[10px] text-slate-400'>
                     Leave blank for unlimited. Set to 1 for single-select.
                   </p>
+                  {maxValues.trim() !== '' && (
+                    <label
+                      className='flex items-start gap-2 pt-1 text-[11px] text-slate-600'
+                      data-enforce-on-write='max_values'
+                    >
+                      <Checkbox
+                        checked={enforceOnWrite}
+                        onCheckedChange={(v) => setEnforceOnWrite(v === true)}
+                        className='mt-0.5'
+                      />
+                      <span>
+                        Refuse on the server too
+                        <span className='block text-[10px] text-slate-400'>
+                          Binds every writer of this relation: other layouts, imports and the API.
+                        </span>
+                      </span>
+                    </label>
+                  )}
                 </div>
               )}
             </div>
@@ -14909,6 +14938,24 @@ function FieldSettingsPopover({
                       <p className='text-[10px] text-slate-400'>
                         Blocks duplicates by: {uniqueBy.join(', ')}
                       </p>
+                    )}
+                    {uniqueBy.length > 0 && (
+                      <label
+                        className='flex items-start gap-2 text-[11px] text-slate-600'
+                        data-enforce-on-write='unique_by'
+                      >
+                        <Checkbox
+                          checked={enforceOnWrite}
+                          onCheckedChange={(v) => setEnforceOnWrite(v === true)}
+                          className='mt-0.5'
+                        />
+                        <span>
+                          Refuse duplicates on the server too
+                          <span className='block text-[10px] text-slate-400'>
+                            Binds every writer of these rows: other layouts, imports and the API.
+                          </span>
+                        </span>
+                      </label>
                     )}
                   </div>
                 )}
@@ -21333,6 +21380,7 @@ function FieldGroupsTab({
     'row_rules',
     'parent_context_fields',
     'unique_by',
+    'enforce_on_write',
     'sort_field',
     'sort_dir',
     'section_group_by',

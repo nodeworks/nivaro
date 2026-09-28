@@ -664,6 +664,11 @@ export const contentOpsCrossRecordDefaults: DocSection = {
 }
 // field_map: { target_field_on_orders: source_field_on_customers }`
     },
+    { type: 'h3', text: 'On writes through the API' },
+    {
+      type: 'p',
+      text: 'A create or update through the API applies the same defaults the form does, when the write sets the watched link: targets the caller did not send are filled from the linked record, `a||b` takes the first source field with a value, a target that is itself a watched link applies its own defaults (two levels), and a many-to-many target is filled only while it holds no link and the copied set fits its Max values. Values the caller sent are never touched. An update applies them only when the link changed. Set `"on_write": false` in the config to keep a field form-only, for an integration that sends whole rows.'
+    },
     { type: 'h3', text: 'Configuring via API' },
     {
       type: 'pre',
@@ -1926,7 +1931,7 @@ export const contentOpsGridPresets: DocSection = {
     { type: 'h3', id: 'grid-row-split', text: 'Plan grid and category split (row_split)' },
     {
       type: 'p',
-      text: 'An inline-table grid that carries `options.row_split` (layout-local; grid ⚙ → Plan grid / row split) renders as a key × period plan grid instead of a row list: one block per key (a year), the plan and the comparison series as two lines named once in a frozen left column, full right-aligned figures that scroll horizontally, a frozen total. A block is EITHER one top-line row (the category column empty) or a set of category rows that add up to it, and the two can differ from key to key — so detail is optional and history stays valid. Cells are always editable (arrows, Enter, Tab, Escape, multi-cell paste) and every edit stages with the record\'s Save; the figure strip, sum cap, spread and comparison series configured on the same grid are reused.'
+      text: "An inline-table grid that carries `options.row_split` (layout-local; grid ⚙ → Plan grid / row split) renders as a key × period plan grid instead of a row list: one block per key (a year), the plan and the comparison series as two lines named once in a frozen left column, full right-aligned figures that scroll horizontally, a frozen total. A block is EITHER one top-line row (the category column empty) or a set of category rows that add up to it, and the two can differ from key to key — so detail is optional and history stays valid. Cells are always editable (arrows, Enter, Tab, Escape, multi-cell paste) and every edit stages with the record's Save; the figure strip, sum cap, spread and comparison series configured on the same grid are reused."
     },
     {
       type: 'pre',
@@ -1958,7 +1963,11 @@ export const contentOpsGridPresets: DocSection = {
       type: 'p',
       text: 'An inline-table field may carry `options.row_lints` (layout-local): per-row consistency checks judged in the browser — when the first condition holds the second must too (`{label, when: {field, op, value}, expect: {field, op, value}}`, ops eq / neq / in / null / nnull, M2O values compared as ids). A row that fails gets an amber marker beside its line number naming the lint, on saved and staged rows alike. A typical lint checks that a Labor line carries a Services PO line type and a Materials line a Goods one.'
     },
-    { type: 'h3', id: 'grid-cascade-swap', text: 'Cascade swap on unavailable (parent_cascades[].on_unavailable)' },
+    {
+      type: 'h3',
+      id: 'grid-cascade-swap',
+      text: 'Cascade swap on unavailable (parent_cascades[].on_unavailable)'
+    },
     {
       type: 'p',
       text: 'A parent → child picker cascade (`options.parent_cascades`, Data Model → grid field ⚙ → Cascade from parent) can carry `on_unavailable`: when the USER changes the parent field on the record and a row’s current value is no longer offered under the new parent, the row is re-pointed instead of just flagged amber. The replacement is the target row that keeps the `keep` columns of the old value and takes the `replace` columns from the parent’s defaults (each entry uses the pinned_options shape — `parent_field`, `parent_collection`, `source_field`, optional `when` over `$parent.*` fields — first entry with a value wins). The grid then runs its row rules with the child field as the changed field, so every downstream derivation follows, and writes through its normal path (staged on pending-mode grids and new records, PATCHed on immediate grids). A record that merely loaded with a stale value is never touched; a value with no matching option stays flagged.'
@@ -2001,13 +2010,16 @@ export const contentOpsChangeReasons: DocSection = {
     { type: 'h1', id: 'content-ops-change-reasons', text: 'Change Reasons' },
     {
       type: 'p',
-      text: 'A collection can require a short justification whenever certain fields change (a forecast\'s months, a budget figure). The requirement is `nivaro_collections.change_reason_config` (Table Editor → Settings → Change reason) and is enforced in the items service: a write that changes a listed field without a `_change_reason` is refused with `422 CHANGE_REASON_REQUIRED`, and the reason a client then supplies is stripped from the payload and stored on the activity row, so it shows in the revision history and on the record\'s Notes.'
+      text: "A collection can require a short justification whenever certain fields change (a forecast's months, a budget figure). The requirement is `nivaro_collections.change_reason_config` (Table Editor → Settings → Change reason) and is enforced in the items service: a write that changes a listed field without a `_change_reason` is refused with `422 CHANGE_REASON_REQUIRED`, and the reason a client then supplies is stripped from the payload and stored on the activity row, so it shows in the revision history and on the record's Notes."
     },
     {
       type: 'table',
       head: ['Key', 'Meaning'],
       rows: [
-        ['`fields`', 'Fields whose change demands a reason (judged on the caller\'s own payload — machine-derived writes never prompt).'],
+        [
+          '`fields`',
+          "Fields whose change demands a reason (judged on the caller's own payload — machine-derived writes never prompt)."
+        ],
         ['`reasons`', 'Preset reasons offered as a pick list.'],
         ['`allow_free_text`', 'Whether a typed reason is accepted (default true).'],
         [

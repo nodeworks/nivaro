@@ -15,6 +15,7 @@ import { bustMailTemplateOverrides } from './mail.js'
 import { bustNotificationTemplateCache } from './notification-templates.js'
 import { bustOwnerGroupCache } from './pipeline-engine.js'
 import { bustRollupContributorCache } from './rollups.js'
+import { clearRelationLimitCache } from './relation-limits.js'
 import { clearRowRuleCache } from './row-rules-autofill.js'
 import { bustSectionLockCache } from './section-locks.js'
 import { bustInstanceOverridesCache } from './settings-overrides.js'
@@ -85,6 +86,11 @@ export function registerKnownCaches(): void {
     ownersChanged
   )
   registerCache('row-rules', 'Grid row rules read from the active layouts', clearRowRuleCache)
+  registerCache(
+    'relation-limits',
+    'Unique-row and link limits enforced on write',
+    clearRelationLimitCache
+  )
   registerCache('section-locks', 'Sections locked per role', bustSectionLockCache)
   registerCache('tree-permissions', 'Which collections carry subtree permission rules', () =>
     clearTreePermissionCache()

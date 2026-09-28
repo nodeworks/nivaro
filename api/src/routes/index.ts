@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
+import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
 import { accessAuditsRoutes } from './access-audits.js'
@@ -256,6 +257,7 @@ export async function registerRoutes(app: FastifyInstance) {
       void import('../services/config-conformance.js').then((m) => m.bustCompiledChecks())
       bustPortalLinkCache()
       clearRowRuleCache()
+      clearRelationLimitCache()
       // Config hot-push (#268): tell open clients the schema/layout changed —
       // they re-resolve field-config/layout queries in place and show an
       // "updated" chip instead of serving a stale form until reload.

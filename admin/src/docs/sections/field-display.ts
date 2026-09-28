@@ -49,6 +49,15 @@ export const fieldDisplaySettingsGuide: DocSection = {
         ]
       ]
     },
+    { type: 'h3', text: 'Limits the server refuses too' },
+    {
+      type: 'p',
+      text: 'Max values, and Unique rows by on an inline grid, are judged in the form. Each carries a switch, "Refuse on the server too", that makes the relation refuse the write wherever it comes from: another layout, an import through the items service, the API. The write answers `409` with `LINK_LIMIT_REACHED` or `DUPLICATE_ROW` and names the rule.'
+    },
+    {
+      type: 'note',
+      text: "The switch is off by default because a limit is often true of one layout only. A form that takes one region beside another form that takes several must not switch it on. Stored as `enforce_on_write: true` beside the option, on the field or on the assignment in the collection's active layout."
+    },
     { type: 'h3', text: 'Input masks' },
     {
       type: 'p',

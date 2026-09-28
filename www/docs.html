@@ -2126,7 +2126,9 @@ const { data: tx } = await nivaro.request(
               <tr><td>VALIDATION_RULE_FAILED</td><td>400</td><td>A field rule refused the value. <code class="doc-code">violations</code> lists field, rule and message.</td></tr>
               <tr><td>CHANGE_REASON_REQUIRED</td><td>422</td><td>The change needs <code class="doc-code">_change_reason</code>. <code class="doc-code">violations</code> lists the fields.</td></tr>
               <tr><td>MIDAIR_COLLISION</td><td>409</td><td>Someone else changed the same fields. <code class="doc-code">conflicts</code> lists them.</td></tr>
-              <tr><td>DELETE_GUARDED</td><td>409</td><td>A deletion guard on the collection refused the delete.</td></tr></tr></tbody>
+              <tr><td>DELETE_GUARDED</td><td>409</td><td>A deletion guard on the collection refused the delete.</td></tr>
+              <tr><td>DUPLICATE_ROW</td><td>409</td><td>A row of the same parent already holds these values. <code class="doc-code">rule</code> names the relation, <code class="doc-code">fields</code> the values compared, <code class="doc-code">existing_id</code> the row.</td></tr>
+              <tr><td>LINK_LIMIT_REACHED</td><td>409</td><td>The record already holds as many links of this kind as the relation allows. <code class="doc-code">rule</code>, <code class="doc-code">max</code> and <code class="doc-code">current</code> say which and how many.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">A refusal from the database names the constraint that refused the write. It never includes the statement or the database name. Administrators read every refused credential under Monitoring, Integrations, Inbound, in the Refused credentials list.</div>
           <!-- /SYNC:api-overview -->
@@ -8643,6 +8645,9 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
               <tr><td>Inline edit</td><td>M2O relations</td><td>On by default. When enabled, the related record can be opened and edited inline next to the relation picker; when disabled, the field is a plain pick-only combobox.</td></tr>
               <tr><td>Max values</td><td>M2M relations</td><td>Integer limit on how many related records can be linked. Leave blank for unlimited. Setting it to 1 switches the field to a single-select combobox.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Limits the server refuses too</h3>
+          <p class="doc-p">Max values, and Unique rows by on an inline grid, are judged in the form. Each carries a switch, "Refuse on the server too", that makes the relation refuse the write wherever it comes from: another layout, an import through the items service, the API. The write answers <code class="doc-code">409</code> with <code class="doc-code">LINK_LIMIT_REACHED</code> or <code class="doc-code">DUPLICATE_ROW</code> and names the rule.</p>
+          <div class="doc-note">The switch is off by default because a limit is often true of one layout only. A form that takes one region beside another form that takes several must not switch it on. Stored as <code class="doc-code">enforce_on_write: true</code> beside the option, on the field or on the assignment in the collection's active layout.</div>
           <h3 class="doc-h3">Input masks</h3>
           <p class="doc-p">Text fields can carry an input mask that formats as the user types — e.g. <code class="doc-code">(###) ###-####</code> for a phone number or <code class="doc-code">AA-####</code> for a reference code. Three tokens: <code class="doc-code">#</code> accepts a digit, <code class="doc-code">A</code> a letter, <code class="doc-code">*</code> any character; everything else in the mask is a literal that inserts itself automatically. The mask shapes only what is on screen — the stored value is the clean characters with the literals stripped, so filters and integrations never see the punctuation. The mask also doubles as the input placeholder when the field has no explicit one.</p>
           <h3 class="doc-h3">Display units on numbers</h3>
@@ -10636,6 +10641,8 @@ POST /api/field-config/:collection/:field/evaluate-defaults
   }
 }
 // field_map: { target_field_on_orders: source_field_on_customers }</code></pre>
+          <h3 class="doc-h3">On writes through the API</h3>
+          <p class="doc-p">A create or update through the API applies the same defaults the form does, when the write sets the watched link: targets the caller did not send are filled from the linked record, <code class="doc-code">a||b</code> takes the first source field with a value, a target that is itself a watched link applies its own defaults (two levels), and a many-to-many target is filled only while it holds no link and the copied set fits its Max values. Values the caller sent are never touched. An update applies them only when the link changed. Set <code class="doc-code">"on_write": false</code> in the config to keep a field form-only, for an integration that sends whole rows.</p>
           <h3 class="doc-h3">Configuring via API</h3>
           <pre class="doc-pre"><code>PATCH /api/field-config/orders/billing_address
 

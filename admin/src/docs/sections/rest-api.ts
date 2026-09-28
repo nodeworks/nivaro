@@ -119,7 +119,17 @@ export const apiOverview: DocSection = {
           '409',
           'Someone else changed the same fields. `conflicts` lists them.'
         ],
-        ['DELETE_GUARDED', '409', 'A deletion guard on the collection refused the delete.']
+        ['DELETE_GUARDED', '409', 'A deletion guard on the collection refused the delete.'],
+        [
+          'DUPLICATE_ROW',
+          '409',
+          'A row of the same parent already holds these values. `rule` names the relation, `fields` the values compared, `existing_id` the row.'
+        ],
+        [
+          'LINK_LIMIT_REACHED',
+          '409',
+          'The record already holds as many links of this kind as the relation allows. `rule`, `max` and `current` say which and how many.'
+        ]
       ]
     },
     {

@@ -84,7 +84,10 @@ import { applyValidationRule } from '../lib/validation-rules'
 import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
 import { ImportColumnChips } from './import/ImportColumnChips'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
-import { type DocumentApplySelection, DocumentAutofillButton } from './import/DocumentAutofillButton'
+import {
+  type DocumentApplySelection,
+  DocumentAutofillButton
+} from './import/DocumentAutofillButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
 import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
 import {
@@ -995,7 +998,8 @@ const HL_CLASS: Record<HighlightKind, string> = {
 
 function HighlightedCode({ kind, text }: { kind: string; text: string }) {
   const tokens = useMemo(
-    () => (kind === 'query' ? highlightGraphql(text) : kind === 'text' ? null : highlightJson(text)),
+    () =>
+      kind === 'query' ? highlightGraphql(text) : kind === 'text' ? null : highlightJson(text),
     [kind, text]
   )
   if (!tokens) return <>{text}</>
@@ -2016,7 +2020,10 @@ export function ItemEditForm({
         const cfg = (fieldConfig ?? []).find((f) => f.field === k)
         const iface = (cfg?.interface ?? '').toLowerCase()
         if (typeof v === 'string' && /rich|wysiwyg|editor/.test(iface) && !/^\s*</.test(v)) {
-          const lines = v.split(/\n+/).map((l) => l.trim()).filter(Boolean)
+          const lines = v
+            .split(/\n+/)
+            .map((l) => l.trim())
+            .filter(Boolean)
           const esc = (t: string) =>
             t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           const bullets = lines.filter((l) => /^[•\-*]\s+/.test(l))
@@ -6413,16 +6420,27 @@ export function ItemEditForm({
       if (hasM2M) {
         updateStep('m2m', { status: 'running' })
         try {
-          const m2mOps: Promise<unknown>[] = []
+          // Removals land BEFORE additions: replacing a link on a field that
+          // holds one at most would otherwise ask for a second link while the
+          // first still exists, and a server-side limit refuses that.
+          const failed: string[] = []
+          const note = (what: string) => (err: unknown) => {
+            failed.push(`${what}: ${errMsg(err)}`)
+          }
+          const removals: Promise<unknown>[] = []
           for (const [key, ids] of m2mUnlinks.entries()) {
             if (!ids.size) continue
             const rel = findM2MRel(key)
             if (!rel) continue
             for (const jId of ids)
-              m2mOps.push(
-                client.request(del(`/items/${rel.many_collection}/${jId}`)).catch(() => {})
+              removals.push(
+                client
+                  .request(del(`/items/${rel.many_collection}/${jId}`))
+                  .catch(note('A link could not be removed'))
               )
           }
+          await Promise.all(removals)
+          const additions: Promise<unknown>[] = []
           for (const [key, ids] of m2mLinks.entries()) {
             if (!ids.length) continue
             const rel = findM2MRel(key)
@@ -6438,7 +6456,7 @@ export function ItemEditForm({
             const m2a = m2aWriteMeta(companion)
             const extra = m2a ? { [m2a.field]: m2a.value } : {}
             for (const relId of ids)
-              m2mOps.push(
+              additions.push(
                 client
                   .request(
                     post(`/items/${rel.many_collection}`, {
@@ -6447,11 +6465,13 @@ export function ItemEditForm({
                       ...extra
                     })
                   )
-                  .catch(() => {})
+                  .catch(note('A link could not be added'))
               )
           }
-          await Promise.all(m2mOps)
-          updateStep('m2m', { status: 'done' })
+          await Promise.all(additions)
+          if (failed.length > 0) {
+            updateStep('m2m', { status: 'error', error: [...new Set(failed)].join(' · ') })
+          } else updateStep('m2m', { status: 'done' })
         } catch (err) {
           updateStep('m2m', { status: 'error', error: errMsg(err) })
         }

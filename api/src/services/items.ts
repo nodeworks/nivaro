@@ -27,6 +27,8 @@ import {
 } from './auto-ids.js'
 import { getCollection, getFields, getRelations } from './collections.js'
 import { describeDbRefusal } from '../lib/db-refusal.js'
+import { applyCrossRecordDefaults } from './cross-record-defaults.js'
+import { enforceRelationLimits } from './relation-limits.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
@@ -4206,6 +4208,15 @@ export async function createOne(
     ...(dry ? { dryRun: true } : {})
   }
   await hooks.trigger('before', ctx)
+  // Values the linked records supply (the form copies them when the link is
+  // picked). After the hooks, which may set the link; before the rules, which
+  // may read what was copied.
+  await applyCrossRecordDefaults({
+    collection,
+    payload: ctx.payload as Record<string, unknown>,
+    callerFields,
+    user
+  })
   // A before-hook may ADD or change alias M2M links (an extension deriving a
   // record's regions from its location) — re-read them off the hooked
   // payload; the first pass already normalised the caller's own to id arrays,
@@ -4270,6 +4281,10 @@ export async function createOne(
       ctx.payload[WORKSPACE_COLUMN] = workspaceId
     }
   }
+
+  // Limits of the relation this row belongs to (unique rows per parent, links
+  // per record), where the relation says they bind every writer.
+  await enforceRelationLimits(collection, ctx.payload as Record<string, unknown>)
 
   // Encrypt configured encrypted fields just before write
   const securedPayload = await encryptItemFields(collection, ctx.payload)
@@ -4586,6 +4601,23 @@ export async function updateOne(
       throw new ChangeReasonRequiredError(flaggedChanged, crConfig, previousData)
   }
 
+  // Values the linked records supply, when the write changes the link.
+  if (previousData) {
+    const filledByLink = await span('cross-record-defaults', () =>
+      applyCrossRecordDefaults({
+        collection,
+        payload: ctx.payload as Record<string, unknown>,
+        callerFields,
+        user,
+        previous: previousData,
+        id
+      })
+    )
+    if (filledByLink.length > 0) {
+      aliasWrites = await extractAliasM2MWrites(collection, ctx.payload as Record<string, unknown>)
+    }
+  }
+
   // before_update rules — may mutate the payload (e.g. set_field)
   await span('rules:before-update', () =>
     evaluateRules(collection, 'before_update', ctx.payload, previousData)
@@ -4626,6 +4658,17 @@ export async function updateOne(
 
   // Field validation rules on the caller's fields (see createOne)
   await enforceValidationRules(collection, ctx.payload, callerFields)
+
+  // Limits of the relation this row belongs to, judged on the row as it
+  // would be stored and only when the write touches what the limit reads.
+  if (previousData) {
+    const touched = new Set(
+      Object.keys(ctx.payload).filter(
+        (k) => String(previousData[k] ?? '') !== String(ctx.payload[k] ?? '')
+      )
+    )
+    if (touched.size > 0) await enforceRelationLimits(collection, writeCtx, id, touched)
+  }
 
   // Auto-ID prefix recompute — if a relation an auto_id pattern depends on
   // just changed (e.g. re-parenting to a different project), re-render the
