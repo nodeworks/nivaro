@@ -97,9 +97,13 @@ function DependentsCard({ id }: { id: string }) {
     queryKey: ['custom-queries', id, 'dependents'],
     queryFn: () =>
       api
-        .get<{ data: { dependents: DependentRow[]; shape: ShapeRow[] } }>(
-          `/custom-queries/${id}/dependents`
-        )
+        .get<{
+          data: {
+            dependents: DependentRow[]
+            shape: ShapeRow[]
+            guards?: Array<{ table: string; guarded: boolean }>
+          }
+        }>(`/custom-queries/${id}/dependents`)
         .then((r) => r.data.data),
     staleTime: 60_000
   })
@@ -163,6 +167,38 @@ function DependentsCard({ id }: { id: string }) {
           </ul>
         </div>
       ))}
+      {data && (data.guards?.length ?? 0) > 0 && (
+        <div className='mt-4 border-t border-slate-100 pt-3' data-cq-guards>
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+            Temp tables
+          </p>
+          <p className='mb-2 text-[11.5px] text-slate-500'>
+            A wrapper that builds a #temp table drops it first — a batch that fails midway leaves it
+            on the pooled connection and the next wrapper using that name dies.
+          </p>
+          <ul className='space-y-1'>
+            {data.guards?.map((g) => (
+              <li
+                key={g.table}
+                className='flex items-center gap-2 text-[12px]'
+                data-cq-guard={g.guarded ? 'ok' : 'missing'}
+              >
+                <span className='font-mono text-[11.5px] text-slate-800'>{g.table}</span>
+                <span
+                  className={`rounded px-1.5 py-px text-[10.5px] font-medium ${g.guarded ? 'bg-[#e4f4ec] text-[#1c7449]' : 'bg-[#fdf1e0] text-[#9a5b0f]'}`}
+                >
+                  {g.guarded ? 'dropped first' : 'no guard'}
+                </span>
+                {!g.guarded && (
+                  <span className='font-mono text-[10.5px] text-slate-500'>
+                    IF OBJECT_ID('tempdb..{g.table}') IS NOT NULL DROP TABLE {g.table}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {data && data.shape.length > 0 && (
         <div className='mt-4 border-t border-slate-100 pt-3'>
           <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>

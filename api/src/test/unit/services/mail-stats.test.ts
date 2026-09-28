@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateMailStats, normalizeError, UNTEMPLATED } from '../../../services/mail-stats.js'
+import {
+  aggregateMailStats,
+  normalizeError,
+  relayHealth,
+  UNTEMPLATED
+} from '../../../services/mail-stats.js'
 
 const now = new Date('2026-09-13T12:00:00Z')
 const at = (daysAgo: number, h = 10) =>
@@ -114,5 +119,41 @@ describe('normalizeError', () => {
     )
     expect(normalizeError(null)).toBe('(no error text)')
     expect(normalizeError('a'.repeat(500))).toHaveLength(160)
+  })
+})
+
+describe('relayHealth (#781)', () => {
+  const row = (i: number, status: 'sent' | 'failed', error: string | null = null) => ({
+    to: `u${i}@x.com`,
+    status,
+    template: null,
+    error,
+    created_at: new Date(now.getTime() - i * 60_000)
+  })
+  it('is quiet with too few attempts and ok when the newest attempts land', () => {
+    expect(relayHealth([row(0, 'failed', 'x'), row(1, 'failed', 'x')]).status).toBe('quiet')
+    const rows = Array.from({ length: 12 }, (_, i) => row(i, i % 5 === 0 ? 'failed' : 'sent', 'e'))
+    expect(relayHealth(rows).status).toBe('ok')
+  })
+  it('fails when the newest attempts fail with ONE error class, even if older sends landed', () => {
+    const rows = [
+      ...Array.from({ length: 10 }, (_, i) =>
+        row(
+          i,
+          'failed',
+          `421-4.3.0 Temporary System Problem. Try again later ${1000 + i}sm - gsmtp`
+        )
+      ),
+      ...Array.from({ length: 30 }, (_, i) => row(10 + i, 'sent'))
+    ]
+    const h = relayHealth(rows, 10)
+    expect(h.status).toBe('failing')
+    expect(h.error).toMatch(/Temporary System Problem/)
+    expect(h.share).toBe(1)
+    expect(h.since).toBe(row(9, 'failed').created_at.toISOString())
+  })
+  it('mixed failure classes are bounces, not a relay down', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => row(i, 'failed', `bounce class ${i}`))
+    expect(relayHealth(rows, 10).status).toBe('ok')
   })
 })

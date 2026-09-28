@@ -193,6 +193,44 @@ export function insertExecPairs(sql: string): InsertExec[] {
   return out
 }
 
+export interface TempTableGuard {
+  table: string
+  /** `IF OBJECT_ID('tempdb..#x') IS NOT NULL DROP TABLE #x` (or `DROP TABLE
+   *  IF EXISTS #x`) appears BEFORE the table is first built. */
+  guarded: boolean
+}
+
+/**
+ * Every `#temp` a wrapper builds (CREATE TABLE #x, SELECT … INTO #x,
+ * INSERT INTO #x EXEC) and whether it is dropped first (#780). A batch that
+ * fails between CREATE and DROP leaves the table on the pooled connection,
+ * and the next wrapper on that connection dies "There is already an object
+ * named '#b'" — one leaked `#b` broke four reports in 2026-09.
+ */
+export function tempTableGuards(sql: string): TempTableGuard[] {
+  const text = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ')
+  const firstBuild = new Map<string, number>()
+  const note = (name: string, at: number) => {
+    const k = name.toLowerCase()
+    if (!firstBuild.has(k) || at < (firstBuild.get(k) as number)) firstBuild.set(k, at)
+  }
+  for (const m of text.matchAll(/\bCREATE\s+TABLE\s+(#\w+)/gi)) note(m[1], m.index ?? 0)
+  for (const m of text.matchAll(/\bINTO\s+(#\w+)\b(?!\s*\()/gi)) note(m[1], m.index ?? 0)
+  for (const m of text.matchAll(/\bINSERT\s+(?:INTO\s+)?(#\w+)/gi)) note(m[1], m.index ?? 0)
+  const out: TempTableGuard[] = []
+  for (const [table, at] of firstBuild) {
+    const before = text.slice(0, at)
+    const esc = table.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const guarded =
+      new RegExp(
+        `OBJECT_ID\\(\\s*'tempdb\\.\\.${esc}'\\s*\\)\\s*IS\\s+NOT\\s+NULL\\s+DROP\\s+TABLE\\s+${esc}\\b`,
+        'i'
+      ).test(before) || new RegExp(`DROP\\s+TABLE\\s+IF\\s+EXISTS\\s+${esc}\\b`, 'i').test(before)
+    out.push({ table, guarded })
+  }
+  return out
+}
+
 /** Every `CREATE TABLE #x (…)` / `DECLARE @x TABLE (…)` in the wrapper: name → column names in order. */
 export function declaredTables(sql: string): Map<string, string[]> {
   const out = new Map<string, string[]>()

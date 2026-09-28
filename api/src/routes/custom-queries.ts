@@ -2,7 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
-import { customQueryDependents, shapeChecks } from '../services/custom-query-dependents.js'
+import {
+  customQueryDependents,
+  shapeChecks,
+  tempTableGuards
+} from '../services/custom-query-dependents.js'
 import {
   buildFinalParams,
   execCustomQuerySql,
@@ -264,6 +268,7 @@ async function shapeReport(): Promise<
     name: string
     enabled: boolean
     checks: Awaited<ReturnType<typeof shapeChecks>>
+    unguarded: string[]
   }>
 > {
   const rows = (await db('nivaro_custom_queries')
@@ -277,11 +282,15 @@ async function shapeReport(): Promise<
     name: string
     enabled: boolean
     checks: Awaited<ReturnType<typeof shapeChecks>>
+    unguarded: string[]
   }> = []
   for (const r of rows) {
     const checks = await shapeChecks(r.sql_text ?? '', r.slug)
-    if (checks.length)
-      out.push({ id: r.id, slug: r.slug, name: r.name, enabled: !!r.enabled, checks })
+    const unguarded = tempTableGuards(r.sql_text ?? '')
+      .filter((g) => !g.guarded)
+      .map((g) => g.table)
+    if (checks.length || unguarded.length)
+      out.push({ id: r.id, slug: r.slug, name: r.name, enabled: !!r.enabled, checks, unguarded })
   }
   return out
 }
@@ -307,6 +316,19 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         const unknown = report.filter(
           (r) => r.enabled && r.checks.every((c) => c.status === 'unknown')
         )
+        const leaky = report.filter((r) => r.enabled && r.unguarded.length > 0)
+        if (bad.length === 0 && leaky.length > 0) {
+          return {
+            status: 'warn',
+            detail: `${leaky.length} enabled wrapper(s) build a #temp table without dropping it first — a failed batch leaks it onto the pooled connection and breaks the next wrapper that uses the same name.`,
+            blockers: leaky
+              .slice(0, 12)
+              .map(
+                (r) =>
+                  `${r.slug}: ${r.unguarded.join(', ')} — start with IF OBJECT_ID('tempdb..${r.unguarded[0]}') IS NOT NULL DROP TABLE ${r.unguarded[0]}`
+              )
+          }
+        }
         if (bad.length === 0) {
           return {
             status: 'pass',
@@ -391,7 +413,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         customQueryDependents(row.id, row.slug),
         shapeChecks(row.sql_text ?? '', row.slug)
       ])
-      return { data: { dependents, shape } }
+      return { data: { dependents, shape, guards: tempTableGuards(row.sql_text ?? '') } }
     }
   )
 

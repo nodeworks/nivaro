@@ -150,6 +150,79 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ data: { registered: true, legs, alias_on: parent, alias } })
   })
 
+  // Orphan relation cleanup (#775): a relation-missing-table finding's fix.
+  // The row is snapshotted into the activity log before it goes, so a wrong
+  // removal can be re-inserted from the log; nothing else (fields, FKs) is
+  // touched — a relation naming a table that does not exist has no FK.
+  app.post<{ Params: { id: string } }>('/:id/remove-relation', async (req, reply) => {
+    const finding = await db('nivaro_config_health')
+      .where('id', req.params.id)
+      .first('id', 'code', 'subject', 'status')
+    if (!finding) return reply.code(404).send({ error: 'Not found' })
+    if (finding.code !== 'relation-missing-table') {
+      return reply.code(422).send({ error: 'Only a relation-missing-table finding has this fix' })
+    }
+    const relId = Number(String(finding.subject).replace(/^relation:/, ''))
+    if (!Number.isInteger(relId))
+      return reply.code(422).send({ error: 'Finding names no relation' })
+    const relation = await db('nivaro_relations').where('id', relId).first()
+    if (!relation) {
+      await db('nivaro_config_health').where('id', finding.id).del()
+      return reply.send({ data: { removed: false, note: 'The relation row was already gone' } })
+    }
+    // Refuse when both sides exist after all — the finding is stale.
+    const tables = new Set(
+      (
+        (await db('information_schema.tables').select('table_name')) as Array<{
+          table_name: string
+        }>
+      ).map((t) => t.table_name.toLowerCase())
+    )
+    const missing = [relation.many_collection, relation.one_collection].filter(
+      (t: string | null) => t && !/^nivaro_/i.test(t) && !tables.has(String(t).toLowerCase())
+    )
+    if (missing.length === 0) {
+      return reply.code(409).send({
+        error: 'Both tables exist now — re-run the sweep instead of removing the relation'
+      })
+    }
+    await logActivity({
+      action: 'schema-relation-remove',
+      user: req.user?.id,
+      collection: 'nivaro_relations',
+      item: String(relId),
+      comment:
+        `orphan (${missing.join(', ')} missing) · snapshot ${JSON.stringify(relation)}`.slice(
+          0,
+          4000
+        ),
+      req
+    })
+    await db('nivaro_relations').where('id', relId).del()
+    await db('nivaro_config_health').where('id', finding.id).del()
+    const { clearMetadataCache } = await import('../services/collections.js')
+    clearMetadataCache()
+    try {
+      const { bustScopePathCache } = await import('../services/user-scopes.js')
+      bustScopePathCache()
+    } catch {
+      // scope cache is optional here
+    }
+    return reply.send({
+      data: {
+        removed: true,
+        relation: {
+          id: relId,
+          many_collection: relation.many_collection,
+          many_field: relation.many_field,
+          one_collection: relation.one_collection,
+          one_field: relation.one_field
+        },
+        missing
+      }
+    })
+  })
+
   app.post<{ Params: { id: string } }>('/:id/dismiss', async (req, reply) => {
     const row = await db('nivaro_config_health').where('id', req.params.id).first('id', 'status')
     if (!row) return reply.code(404).send({ error: 'Not found' })

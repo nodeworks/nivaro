@@ -103,12 +103,12 @@ export const dbHealthDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The query editor\'s **Used by** card lists everything that references the query by slug or id — page widgets, record widgets, report widgets and catalog presets, metric and anomaly definitions, flow operations, other queries. Below it, **Procedure shape** checks each `INSERT … EXEC` in the wrapper against the procedure\'s real first result set: INSERT … EXEC binds by position, so the declared column COUNT must equal what the procedure returns; names are shown but never fail the check. SQL Server cannot describe a procedure that builds temp tables inside — those read "cannot be described", and the last failing run on this process (a shape error) is the honest fallback. The readiness check `custom-query-shapes` runs the same comparison over every wrapper. API: `GET /custom-queries/:id/dependents`, `GET /custom-queries/shape-report`.'
+      text: 'The query editor\'s **Used by** card lists everything that references the query by slug or id — page widgets, record widgets, report widgets and catalog presets, metric and anomaly definitions, flow operations, other queries. Below it, **Procedure shape** checks each `INSERT … EXEC` in the wrapper against the procedure\'s real first result set: INSERT … EXEC binds by position, so the declared column COUNT must equal what the procedure returns; names are shown but never fail the check. SQL Server cannot describe a procedure that builds temp tables inside — those read "cannot be described", and the last failing run on this process (a shape error) is the honest fallback. The readiness check `custom-query-shapes` runs the same comparison over every wrapper. A **Temp tables** card below it lists every `#temp` the wrapper builds and whether it is dropped first (`IF OBJECT_ID(\'tempdb..#x\') IS NOT NULL DROP TABLE #x` or `DROP TABLE IF EXISTS #x` before the build): a batch that fails between CREATE and DROP leaves the table on the pooled connection, and the next wrapper on that connection dies "There is already an object named #x". The same readiness check warns on every enabled wrapper with an unguarded temp table. API: `GET /custom-queries/:id/dependents`, `GET /custom-queries/shape-report`.'
     },
     { type: 'h2', id: 'dead-columns', text: 'Dead columns' },
     {
       type: 'p',
-      text: 'Columns a model change left behind are registered in `api/src/db/dead-columns.ts` with the date the last writer stopped, what replaced them and whether they can be dropped yet. `pnpm --filter @nivaro/api run dead-columns:check` greps every source tree and fails when code still names a column marked droppable; the readiness check `dead-columns` reports droppable columns still present on the database (the dropping migration has not run there) and lists what still blocks the retiring ones. `GET /ops-db/dead-columns` is the same view. Migration 336 dropped the first one, the queues table\'s retired view-mode column.'
+      text: "Columns a model change left behind are registered in `api/src/db/dead-columns.ts` with the date the last writer stopped, what replaced them and whether they can be dropped yet. `pnpm --filter @nivaro/api run dead-columns:check` greps every source tree and fails when code still names a column marked droppable; the readiness check `dead-columns` reports droppable columns still present on the database (the dropping migration has not run there) and lists what still blocks the retiring ones. `GET /ops-db/dead-columns` is the same view. Migration 336 dropped the first one, the queues table's retired view-mode column."
     },
     { type: 'h2', id: 'erp-payload-retention', text: 'ERP push payload retention' },
     {
@@ -375,6 +375,10 @@ DELETE /api/notification-templates/:key       # revert`
     {
       type: 'p',
       text: 'Mail Log → Delivery rolls the outbound log up over the last 7 / 14 / 30 days: sent / failed / dropped / deferred with the success rate (sent ÷ attempted), a per-day stacked chart, a per-template table (labelled with the mail type when one template maps to exactly one type; a row opens the log filtered to it), the busiest recipients, "Not reaching" (addresses whose LATEST attempt failed), and failure reasons grouped by the stable head of the SMTP error (addresses, ids and session tokens collapsed). Raw sends log a template name too (flow ops as flow:<op key>, the digest as daily_digest); rows older than that land in "Untemplated sends".'
+    },
+    {
+      type: 'p',
+      text: 'A red banner at the top of the board means the RELAY is failing, not the addresses: the newest 20 send attempts are judged as one, and when at least 80% failed with one normalised error class the banner names it and when the streak began. Mixed failure classes are bounces and never raise it. The readiness check `mail-relay` makes the same judgement (skip under 8 attempts, pass, fail); `GET /api/mail-log/relay` returns it as JSON.'
     },
     { type: 'h2', id: 'mail-harness-links', text: 'Where links land' },
     {

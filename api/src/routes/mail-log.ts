@@ -3,7 +3,14 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
-import { aggregateMailStats, type MailLogRow, UNTEMPLATED } from '../services/mail-stats.js'
+import {
+  aggregateMailStats,
+  type MailLogRow,
+  RELAY_TAIL,
+  relayHealth,
+  UNTEMPLATED
+} from '../services/mail-stats.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 
 /**
  * Outbound mail log (#71): every send attempt with its outcome — "did the
@@ -12,8 +19,48 @@ import { aggregateMailStats, type MailLogRow, UNTEMPLATED } from '../services/ma
  * replays the stored html through the normal pipeline (test mode applies).
  * Pruned alongside the api-log retention pass.
  */
+let relayCheckRegistered = false
+
 export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+
+  // Relay health (#781): the newest attempts, judged as one — registered
+  // from the route plugin so it exists in cloud mode too.
+  const newestAttempts = async () =>
+    (await db('nivaro_mail_log')
+      .whereIn('status', ['sent', 'failed'])
+      .orderBy('id', 'desc')
+      .limit(RELAY_TAIL)
+      .select('to', 'status', 'template', 'error', 'created_at')) as MailLogRow[]
+  app.get('/relay', async () => ({ data: relayHealth(await newestAttempts()) }))
+  if (!relayCheckRegistered) {
+    relayCheckRegistered = true
+    registerReadinessCheck({
+      id: 'mail-relay',
+      label: 'Mail relay is delivering',
+      group: 'Configuration',
+      description:
+        'The newest send attempts land. Fails when the newest attempts all fail with one error class — the relay, not the addresses.',
+      run: async () => {
+        const h = relayHealth(await newestAttempts().catch(() => []))
+        if (h.status === 'quiet')
+          return {
+            status: 'skip',
+            detail: `${h.attempted} attempt(s) on record — not enough to judge the relay.`
+          }
+        if (h.status === 'ok')
+          return {
+            status: 'pass',
+            detail: `${h.attempted - h.failed} of the newest ${h.attempted} attempts landed.`
+          }
+        return {
+          status: 'fail',
+          detail: `${h.failed} of the newest ${h.attempted} attempts failed the same way since ${h.since}.`,
+          blockers: [h.error ?? '(no error text)']
+        }
+      }
+    })
+  }
 
   // Delivery board (#9): the window rolled up per day / template / recipient.
   // Rows come back narrow (no body) and are aggregated in JS — recipients are

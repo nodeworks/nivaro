@@ -43,9 +43,74 @@ export interface MailStats {
   top_recipients: Array<{ email: string; total: number; failed: number }>
   failures: Array<{ error: string; count: number; last_at: string; recipients: string[] }>
   bounces: Array<{ email: string; failures: number; last_error: string | null; last_at: string }>
+  relay: RelayHealth
 }
 
 export const UNTEMPLATED = '(untemplated)'
+
+export interface RelayHealth {
+  /** 'failing' = the newest attempts fail with one error class; 'ok' = the
+   *  newest attempts land; 'quiet' = too few attempts to judge. */
+  status: 'ok' | 'failing' | 'quiet'
+  /** Attempts (sent + failed) judged, newest first — the window's tail. */
+  attempted: number
+  failed: number
+  /** The normalised error the failures share, when failing. */
+  error: string | null
+  /** Share of the judged failures carrying that error (0–1). */
+  share: number | null
+  /** When the failing streak began (oldest failure in the judged tail). */
+  since: string | null
+  /** The newest attempt's time. */
+  last_attempt_at: string | null
+}
+
+export const RELAY_TAIL = 20
+export const RELAY_MIN_ATTEMPTS = 8
+
+/**
+ * Is the relay itself failing? Judged on the NEWEST attempts only — a bad
+ * week last month says nothing about now — and only when they fail with
+ * ONE error class: mixed failures are addresses bouncing, not a relay
+ * down. 809 of 1,268 sends on the dev relay failed the same way unnoticed
+ * (#781); the board and the readiness scorecard say so now.
+ */
+export function relayHealth(rows: MailLogRow[], tail = RELAY_TAIL): RelayHealth {
+  const attempts = rows
+    .filter((r) => r.status === 'sent' || r.status === 'failed')
+    .sort((a, b) => (iso(a.created_at) < iso(b.created_at) ? 1 : -1))
+    .slice(0, tail)
+  const empty: RelayHealth = {
+    status: 'quiet',
+    attempted: attempts.length,
+    failed: attempts.filter((r) => r.status === 'failed').length,
+    error: null,
+    share: null,
+    since: null,
+    last_attempt_at: attempts[0] ? iso(attempts[0].created_at) : null
+  }
+  if (attempts.length < RELAY_MIN_ATTEMPTS) return empty
+  const failed = attempts.filter((r) => r.status === 'failed')
+  if (failed.length / attempts.length < 0.8) return { ...empty, status: 'ok' }
+  const byClass = new Map<string, number>()
+  for (const f of failed) {
+    const k = normalizeError(f.error)
+    byClass.set(k, (byClass.get(k) ?? 0) + 1)
+  }
+  const [error, count] = [...byClass.entries()].sort((a, b) => b[1] - a[1])[0]
+  const share = count / failed.length
+  if (share < 0.7) return { ...empty, status: 'ok' }
+  const streak = failed.filter((f) => normalizeError(f.error) === error)
+  return {
+    status: 'failing',
+    attempted: attempts.length,
+    failed: failed.length,
+    error,
+    share: Math.round(share * 100) / 100,
+    since: iso(streak[streak.length - 1].created_at),
+    last_attempt_at: iso(attempts[0].created_at)
+  }
+}
 
 const zero = (): StatusCounts => ({ sent: 0, failed: 0, dropped: 0, deferred: 0 })
 const bump = (c: StatusCounts, status: string) => {
@@ -159,6 +224,7 @@ export function aggregateMailStats(
 
   return {
     days: opts.days,
+    relay: relayHealth(rows),
     totals: {
       ...totals,
       total: totals.sent + totals.failed + totals.dropped + totals.deferred,

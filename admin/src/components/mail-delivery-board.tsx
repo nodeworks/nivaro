@@ -35,6 +35,13 @@ interface MailStats {
   top_recipients: Array<{ email: string; total: number; failed: number }>
   failures: Array<{ error: string; count: number; last_at: string; recipients: string[] }>
   bounces: Array<{ email: string; failures: number; last_error: string | null; last_at: string }>
+  relay?: {
+    status: 'ok' | 'failing' | 'quiet'
+    attempted: number
+    failed: number
+    error: string | null
+    since: string | null
+  }
 }
 
 const STATUS_COLOR: Record<keyof StatusCounts, string> = {
@@ -96,6 +103,24 @@ export function MailDeliveryBoard({
 
   return (
     <div className='space-y-5'>
+      {s.relay?.status === 'failing' && (
+        <div
+          className='rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/50 dark:bg-red-900/15'
+          data-mail-relay='failing'
+        >
+          <p className='text-[13px] font-semibold text-red-800 dark:text-red-200'>
+            The mail relay is failing — {s.relay.failed} of the newest {s.relay.attempted} attempts
+            failed the same way{s.relay.since ? ` since ${formatRelative(s.relay.since)}` : ''}.
+          </p>
+          <p className='mt-1 font-mono text-[11.5px] text-red-700 dark:text-red-300'>
+            {s.relay.error}
+          </p>
+          <p className='mt-1 text-[11.5px] text-red-700/80 dark:text-red-300/80'>
+            One error class across the whole tail points at the relay or its credentials, not at the
+            addresses. Check Settings → Email and the SMTP host.
+          </p>
+        </div>
+      )}
       {/* Stat strip */}
       <div className='grid grid-cols-5 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
         {(['sent', 'failed', 'dropped', 'deferred'] as const).map((k) => (

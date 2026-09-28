@@ -81,12 +81,35 @@ export default function ConfigHealth() {
     },
     onError: (e: unknown) =>
       toast.error(
-        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Registration failed'
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Registration failed'
       )
   })
   const dismiss = useMutation({
     mutationFn: (id: number) => api.post(`/config-health/${id}/dismiss`),
     onSuccess: invalidate
+  })
+  // Orphan relation cleanup (#775): two clicks, the row is logged before it goes.
+  const [confirmRemove, setConfirmRemove] = useState<number | null>(null)
+  const removeRelation = useMutation({
+    mutationFn: (id: number) =>
+      api
+        .post<{ data: { removed: boolean; note?: string; missing?: string[] } }>(
+          `/config-health/${id}/remove-relation`
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      toast.success(
+        d.removed ? 'Relation removed — snapshot is in the activity log' : (d.note ?? 'Done')
+      )
+      setConfirmRemove(null)
+      invalidate()
+    },
+    onError: (e: unknown) =>
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Removal failed'
+      )
   })
 
   const rows: Finding[] = (data?.data ?? []).filter(
@@ -219,7 +242,10 @@ export default function ConfigHealth() {
               <div className='min-w-0 flex-1'>
                 <p className='text-[12.5px] text-slate-800 dark:text-foreground'>
                   {f.href ? (
-                    <Link to={f.href} className='underline decoration-dotted underline-offset-2 hover:text-nvr-cyan'>
+                    <Link
+                      to={f.href}
+                      className='underline decoration-dotted underline-offset-2 hover:text-nvr-cyan'
+                    >
                       {f.title}
                     </Link>
                   ) : (
@@ -239,6 +265,28 @@ export default function ConfigHealth() {
                   className='shrink-0 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-2 py-1 text-[11.5px] font-medium text-[#007a99] disabled:opacity-50 dark:text-nvr-cyan'
                 >
                   {fixJunction.isPending ? 'Registering…' : 'Register junction'}
+                </button>
+              )}
+              {f.code === 'relation-missing-table' && f.status === 'open' && (
+                <button
+                  type='button'
+                  disabled={removeRelation.isPending}
+                  data-ch-remove-relation={confirmRemove === f.id ? 'confirm' : 'ask'}
+                  onClick={() =>
+                    confirmRemove === f.id ? removeRelation.mutate(f.id) : setConfirmRemove(f.id)
+                  }
+                  onBlur={() => setConfirmRemove((c) => (c === f.id ? null : c))}
+                  className={
+                    confirmRemove === f.id
+                      ? 'shrink-0 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-[11.5px] font-medium text-red-700 disabled:opacity-50 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300'
+                      : 'shrink-0 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-2 py-1 text-[11.5px] font-medium text-[#007a99] disabled:opacity-50 dark:text-nvr-cyan'
+                  }
+                >
+                  {removeRelation.isPending
+                    ? 'Removing…'
+                    : confirmRemove === f.id
+                      ? 'Remove the relation row?'
+                      : 'Remove relation'}
                 </button>
               )}
               <button
