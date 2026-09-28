@@ -113,6 +113,10 @@ export const notificationSubscriptionsGuide: DocSection = {
         ['Event Type', 'One of: create, update, delete.'],
         ['Filter Field', 'Optional. Only notify if this field matches filter_value.'],
         ['Filter Value', 'Optional. The value to match against filter_field.'],
+        [
+          'Record filters',
+          'Optional JSON list, AND-evaluated against the record on every event type: [{ field, op, value }] with ops eq, in, intersects, null, nnull. A field may be a plain column, a dotted relation path (project.project_type) or an M2M alias (divisions — matched with intersects against the linked ids).'
+        ],
         ['Label', 'Optional display name for the subscription.']
       ]
     },
@@ -622,7 +626,7 @@ export const notificationSubscriptionsApiDoc: DocSection = {
           'POST',
           '/api/notification-subscriptions',
           'Any user',
-          'Create subscription. Body: { collection, event_type, filter_field?, filter_value?, label? }.'
+          'Create subscription. Body: { collection, event_type, filter_field?, filter_value?, filters?, label? }. `filters` is the multi-dimension list shown above and applies to create, update, delete and workflow_transition alike.'
         ],
         ['PATCH', '/api/notification-subscriptions/:id', 'Owner / Admin', 'Update subscription.'],
         ['DELETE', '/api/notification-subscriptions/:id', 'Owner / Admin', 'Delete subscription.'],
@@ -648,7 +652,8 @@ export const notificationSubscriptionsApiDoc: DocSection = {
   "event_type": "create",
   "filter_field": "status",
   "filter_value": "approved",
-  "label": "New approved projects"
+  "filters": [{ "field": "divisions", "op": "intersects", "value": [2] }],
+  "label": "New approved projects in Zone 2"
 }`
     }
   ]

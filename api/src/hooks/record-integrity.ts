@@ -103,6 +103,18 @@ async function onWrite(
   }
 }
 
+/** A write that bypassed the items service (a cross-collection rule's raw
+ *  sync, #796) still moves the record's integrity: schedule the same checks
+ *  the after-hooks would have — the record and its parents, coalesced. */
+export function noteRawWrite(
+  collection: string,
+  id: string | number,
+  row: Record<string, unknown>
+): void {
+  if (/^nivaro_|^directus_/i.test(collection)) return
+  onWrite(collection, id, row).catch(() => {})
+}
+
 export function registerRecordIntegrityHooks(): void {
   for (const action of ['create', 'update', 'delete'] as const) {
     hooks.after('*', action, async (ctx) => {

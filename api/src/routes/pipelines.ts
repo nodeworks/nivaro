@@ -47,8 +47,7 @@ import {
 import {
   applyTransition,
   resolveTransitionTarget,
-  runAutoTransitions,
-  syncStateField
+  runAutoTransitions
 } from '../services/workflow-transitions.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1343,6 +1342,57 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       comment: `template:${id}`
     })
     return reply.code(201).send({ data: tx ? formatTransition(tx) : tx })
+  })
+
+  /**
+   * Rename a transition's button label across the template AND everything
+   * that names that label (#834): registry bulk actions of kind `transition`
+   * on the bound collections, saved bulk recipes, and flow `condition` ops
+   * keyed on `transition_label`. History rows FK the transition id, so they
+   * need nothing. `dry_run` answers what would change without writing.
+   */
+  app.post('/:id/transitions/rename', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as { from?: string; to?: string; dry_run?: boolean }
+    const from = String(body.from ?? '').trim()
+    const to = String(body.to ?? '').trim()
+    if (!from || !to) return reply.code(400).send({ error: 'from and to are required' })
+    const txs = (await db('nivaro_workflow_transitions')
+      .where({ template: id, label: from })
+      .select('id')) as Array<{ id: string }>
+    if (txs.length === 0)
+      return reply.code(404).send({ error: `No transition is labelled "${from}"` })
+    if (to !== from) {
+      const clash = await db('nivaro_workflow_transitions')
+        .where({ template: id, label: to })
+        .first('id')
+      if (clash)
+        return reply.code(409).send({
+          error: `"${to}" is already a button on this pipeline — renaming would merge the two groups`
+        })
+    }
+    const references = await findTransitionLabelReferences(id, from)
+    if (body.dry_run || to === from) {
+      return reply.send({ data: { transitions: txs.length, from, to, references, dry_run: true } })
+    }
+    await snapshotTemplateVersion(id, req.user?.id, `before renaming "${from}" → "${to}"`)
+    await db('nivaro_workflow_transitions')
+      .where({ template: id, label: from })
+      .update({ label: to })
+    const rewritten = await rewriteTransitionLabelReferences(references, from, to)
+    await logActivity({
+      action: 'transition-rename',
+      collection: 'nivaro_workflow_transitions',
+      item: id,
+      user: req.user?.id,
+      comment: `"${from}" → "${to}" on ${txs.length} route${txs.length === 1 ? '' : 's'}${
+        rewritten.length ? `; updated ${rewritten.map((r) => r.description).join(', ')}` : ''
+      }`,
+      req
+    })
+    return reply.send({
+      data: { transitions: txs.length, from, to, references: rewritten, dry_run: false }
+    })
   })
 
   app.patch('/transitions/:txId', { preHandler: requireAdmin }, async (req, reply) => {
@@ -4101,4 +4151,163 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       return reply.code(500).send({ error: 'Import failed' })
     }
   })
+}
+
+// ─── Transition label references (#834) ───────────────────────────────────
+
+type LabelReference = {
+  kind: 'bulk_action' | 'bulk_recipe' | 'flow_condition'
+  id: string
+  /** Where it lives — the collection for actions/recipes, the flow for ops. */
+  scope: string
+  name: string
+  /** One line for the confirm dialog and the activity comment. */
+  description: string
+  rewritten?: boolean
+}
+
+function parseLoose<T>(raw: unknown): T | null {
+  if (raw == null) return null
+  if (typeof raw !== 'string') return raw as T
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return null
+  }
+}
+
+/** Every stored configuration that names a transition by its LABEL on the
+ *  collections this template is bound to. Each lookup is independent and
+ *  best-effort — a table this deployment lacks contributes nothing. */
+async function findTransitionLabelReferences(
+  templateId: string,
+  label: string
+): Promise<LabelReference[]> {
+  const refs: LabelReference[] = []
+  const bound = (await db('nivaro_workflow_bindings')
+    .where({ template: templateId })
+    .pluck('collection')) as string[]
+  if (bound.length > 0) {
+    try {
+      const actions = (await db('nivaro_bulk_actions')
+        .whereIn('collection', bound)
+        .where({ kind: 'transition' })
+        .select('id', 'collection', 'label', 'key', 'config')) as Array<Record<string, unknown>>
+      for (const a of actions) {
+        const cfg = parseLoose<{ transition_label?: unknown }>(a.config)
+        if (String(cfg?.transition_label ?? '') !== label) continue
+        refs.push({
+          kind: 'bulk_action',
+          id: String(a.id),
+          scope: String(a.collection),
+          name: String(a.label ?? a.key),
+          description: `bulk action "${String(a.label ?? a.key)}" on ${String(a.collection)}`
+        })
+      }
+    } catch {
+      /* table absent on this deployment */
+    }
+    try {
+      const recipes = (await db('nivaro_bulk_recipes')
+        .whereIn('collection', bound)
+        .where({ action_type: 'transition' })
+        .select('id', 'collection', 'name', 'config')) as Array<Record<string, unknown>>
+      for (const r of recipes) {
+        const cfg = parseLoose<{ transition_label?: unknown }>(r.config)
+        if (String(cfg?.transition_label ?? '') !== label) continue
+        refs.push({
+          kind: 'bulk_recipe',
+          id: String(r.id),
+          scope: String(r.collection),
+          name: String(r.name),
+          description: `recipe "${String(r.name)}" on ${String(r.collection)}`
+        })
+      }
+    } catch {
+      /* table absent */
+    }
+  }
+  try {
+    const ops = (await db('nivaro_flow_operations as o')
+      .join('nivaro_flows as f', 'f.id', 'o.flow')
+      .where('o.type', 'condition')
+      .where('o.options', 'like', '%transition_label%')
+      .select('o.id', 'o.name', 'o.options', 'f.name as flow_name')) as Array<
+      Record<string, unknown>
+    >
+    for (const o of ops) {
+      const opts = parseLoose<{ field?: unknown; operator?: unknown; value?: unknown }>(o.options)
+      if (!opts || !/(^|\.)transition_label$/.test(String(opts.field ?? ''))) continue
+      const operator = String(opts.operator ?? 'eq')
+      const value = String(opts.value ?? '')
+      const names =
+        operator === 'in' || operator === 'notIn' ? value.split(',').map((v) => v.trim()) : [value]
+      if (!names.includes(label)) continue
+      refs.push({
+        kind: 'flow_condition',
+        id: String(o.id),
+        scope: String(o.flow_name),
+        name: String(o.name),
+        description: `flow "${String(o.flow_name)}" condition "${String(o.name)}"`
+      })
+    }
+  } catch {
+    /* table absent */
+  }
+  return refs
+}
+
+/** Point every reference at the new label. Each rewrite is its own
+ *  statement; one that fails is reported unrewritten, the rest still land. */
+async function rewriteTransitionLabelReferences(
+  refs: LabelReference[],
+  from: string,
+  to: string
+): Promise<LabelReference[]> {
+  const out: LabelReference[] = []
+  for (const ref of refs) {
+    let rewritten = false
+    try {
+      if (ref.kind === 'bulk_action' || ref.kind === 'bulk_recipe') {
+        const table = ref.kind === 'bulk_action' ? 'nivaro_bulk_actions' : 'nivaro_bulk_recipes'
+        const row = (await db(table).where({ id: ref.id }).first('config')) as
+          | { config?: unknown }
+          | undefined
+        const cfg = parseLoose<Record<string, unknown>>(row?.config) ?? {}
+        if (String(cfg.transition_label ?? '') === from) {
+          cfg.transition_label = to
+          await db(table)
+            .where({ id: ref.id })
+            .update({ config: JSON.stringify(cfg) })
+          rewritten = true
+        }
+      } else {
+        const row = (await db('nivaro_flow_operations').where({ id: ref.id }).first('options')) as
+          | { options?: unknown }
+          | undefined
+        const opts = parseLoose<Record<string, unknown>>(row?.options) ?? {}
+        const operator = String(opts.operator ?? 'eq')
+        if (operator === 'in' || operator === 'notIn') {
+          // Keep the author's spacing ("a, b") — the evaluator trims each
+          // entry, so only the matching token changes.
+          const parts = String(opts.value ?? '').split(',')
+          if (parts.some((v) => v.trim() === from)) {
+            opts.value = parts.map((v) => (v.trim() === from ? v.replace(from, to) : v)).join(',')
+            rewritten = true
+          }
+        } else if (String(opts.value ?? '') === from) {
+          opts.value = to
+          rewritten = true
+        }
+        if (rewritten)
+          await db('nivaro_flow_operations')
+            .where({ id: ref.id })
+            .update({ options: JSON.stringify(opts) })
+      }
+    } catch {
+      rewritten = false
+    }
+    out.push({ ...ref, rewritten })
+  }
+  return out
 }

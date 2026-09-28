@@ -448,7 +448,7 @@ export function SubscriptionForm({
         </div>
       )}
 
-      {isTransition && (
+      {
         <div className='space-y-1.5'>
           <Label htmlFor='nvr-sub-filters'>Record filters (JSON, optional)</Label>
           <Textarea
@@ -463,11 +463,11 @@ export function SubscriptionForm({
             }
           />
           <p className='text-[11px] text-slate-500 dark:text-slate-400'>
-            AND-evaluated against the record. Fields may be plain columns, dotted relation paths, or
-            M2M alias fields. Ops: eq, in, intersects, null, nnull.
+            AND-evaluated against the record on every event. Fields may be plain columns, dotted
+            relation paths, or M2M alias fields. Ops: eq, in, intersects, null, nnull.
           </p>
         </div>
-      )}
+      }
 
       <div className='space-y-1.5'>
         <Label htmlFor='nvr-sub-label'>Label (optional)</Label>

@@ -1839,6 +1839,7 @@ x-workspace: ws-uuid-here</code></pre>
             <li>required_roles: JSON array of role UUIDs that can execute this transition; empty = all authenticated users.</li>
             <li>condition_rules (optional): field conditions that must match to offer the transition.</li>
             <li>group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.</li>
+            <li>Renaming a button label (the pencil on a route group in the pipeline editor, or POST /api/pipelines/:id/transitions/rename { from, to, dry_run? }) renames every route carrying it and rewrites what names the old label — registry bulk actions of kind transition, saved bulk recipes and flow conditions on transition_label — after listing them for confirmation. A name another button already uses is refused.</li>
             <li>requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs, m2o pickers for FK columns, m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.</li>
             <li>optional_when (child_fields): waive a required field per row when a controlling field (a column or an m2m alias) holds one of a list of values — {"&lt;field&gt;": {"field": "&lt;controlling&gt;", "in": [..], "placeholder": "Auto-assigned"}}. Instead of typing ids, "in_query": {"collection", "filter": {col: value | [values] | null}, "value_field"} reads the list from a business collection at evaluation time (500 rows max) and can be combined with a static "in". A query that is malformed, fails, or matches nothing drops the rule — the field stays required, never accidentally waived.</li>
             <li>review_when (child_fields): {"field": "&lt;record field or one M2O hop, e.g. warehouse.ordering_system&gt;", "in": [..]} (or a list — any match) on the transitioning record brings the dialog back with EVERY row, filled or not, when e.g. the last partner push failed ("push_status": ["error"]) — so a line can be corrected before trying again; "review_message" sets the banner text. The dialog's own re-submit sends reviewed: true, which skips review_when (incomplete rows still block), so it asks once per attempt.</li>
@@ -8575,6 +8576,7 @@ const { data: created } = await cms.request(
               <tr><td>Event Type</td><td>One of: create, update, delete.</td></tr>
               <tr><td>Filter Field</td><td>Optional. Only notify if this field matches filter_value.</td></tr>
               <tr><td>Filter Value</td><td>Optional. The value to match against filter_field.</td></tr>
+              <tr><td>Record filters</td><td>Optional JSON list, AND-evaluated against the record on every event type: [{ field, op, value }] with ops eq, in, intersects, null, nnull. A field may be a plain column, a dotted relation path (project.project_type) or an M2M alias (divisions — matched with intersects against the linked ids).</td></tr>
               <tr><td>Label</td><td>Optional display name for the subscription.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">How it works</h3>
@@ -8676,7 +8678,7 @@ const { data: created } = await cms.request(
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>GET</td><td>/api/notification-subscriptions</td><td>Any user</td><td>List current user's subscriptions.</td></tr>
-              <tr><td>POST</td><td>/api/notification-subscriptions</td><td>Any user</td><td>Create subscription. Body: { collection, event_type, filter_field?, filter_value?, label? }.</td></tr>
+              <tr><td>POST</td><td>/api/notification-subscriptions</td><td>Any user</td><td>Create subscription. Body: { collection, event_type, filter_field?, filter_value?, filters?, label? }. <code class="doc-code">filters</code> is the multi-dimension list shown above and applies to create, update, delete and workflow_transition alike.</td></tr>
               <tr><td>PATCH</td><td>/api/notification-subscriptions/:id</td><td>Owner / Admin</td><td>Update subscription.</td></tr>
               <tr><td>DELETE</td><td>/api/notification-subscriptions/:id</td><td>Owner / Admin</td><td>Delete subscription.</td></tr>
               <tr><td>GET</td><td>/api/notification-subscriptions/admin/all</td><td>Admin</td><td>All subscriptions across all users.</td></tr>
@@ -8688,7 +8690,8 @@ const { data: created } = await cms.request(
   "event_type": "create",
   "filter_field": "status",
   "filter_value": "approved",
-  "label": "New approved projects"
+  "filters": [{ "field": "divisions", "op": "intersects", "value": [2] }],
+  "label": "New approved projects in Zone 2"
 }</code></pre>
           <!-- /SYNC:notification-subscriptions-api -->
         </div>
@@ -14013,6 +14016,7 @@ POST /api/workflows/instance/:id/split
 // Inspect configured triggers:
 GET /api/cross-triggers</code></pre>
           <div class="doc-note doc-warn">Cross-collection writes can themselves fire rules. A recursion guard caps the trigger chain depth — beyond it, further cross-collection actions are skipped and logged rather than looping forever.</div>
+          <div class="doc-note">The write itself bypasses hooks (that is what keeps the chain from looping), but it still leaves history: every row a cross-collection action creates or changes gets an activity row with origin <code class="doc-code">machine</code> and the comment "Rule: &lt;rule name&gt;", a revision with the delta (where the target collection keeps revisions), a stored-rollup recalculation and an integrity re-check. A sync that changes nothing writes nothing.</div>
           <!-- /SYNC:cross-collection-triggers -->
         </div>
 

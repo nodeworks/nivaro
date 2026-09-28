@@ -1,5 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { logActivity } from '../services/activity.js'
+import { computeDelta, writeRevision } from '../services/revisions.js'
+import { auditLevelOf } from './activity.js'
+import { noteRawWrite } from './record-integrity.js'
 import type { HookContext } from './registry.js'
 import { hooks } from './registry.js'
 
@@ -523,6 +527,73 @@ function logError(err: unknown, context: Record<string, unknown>) {
   else console.error({ err, ...context }, 'Cross-collection trigger failed')
 }
 
+/**
+ * History for a cross-collection rule's raw write (#796): an activity row
+ * (origin `machine`, comment = the rule's name) and — where the target's
+ * accountability keeps revisions — a revision carrying the re-read row and
+ * the delta against what stood before; stored rollups over the target are
+ * recomputed and its integrity re-checked. A row the write left unchanged
+ * gets nothing. Never throws — a failed history write must not fail the
+ * rule, and never the originating mutation.
+ */
+/** Columns a table moves on its own on every UPDATE — never a change worth
+ *  a revision on their own. */
+const AUDIT_STAMPS = ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at']
+
+async function recordSyncHistory(
+  ctx: HookContext,
+  rule: ParsedRule,
+  target: string,
+  action: 'create' | 'update',
+  before: Array<Record<string, unknown>>,
+  ids: unknown[]
+): Promise<void> {
+  if (ids.length === 0) return
+  try {
+    const level = await auditLevelOf(target)
+    if (level === 'none') return
+    const after = (await db(target)
+      .whereIn('id', ids as string[])
+      .select('*')) as Array<Record<string, unknown>>
+    const priorById = new Map(before.map((r) => [String(r.id), r]))
+    const comment = `Rule: ${rule.name}`
+    let rollups: typeof import('../services/rollups.js') | null = null
+    try {
+      rollups = await import('../services/rollups.js')
+    } catch {
+      rollups = null
+    }
+    for (const row of after) {
+      const id = String(row.id)
+      const prior = priorById.get(id) ?? null
+      const delta = action === 'update' && prior ? computeDelta(prior, row) : null
+      if (delta) for (const k of AUDIT_STAMPS) delete delta[k]
+      if (action === 'update' && delta && Object.keys(delta).length === 0) continue
+      const activityId = await logActivity({
+        action,
+        user: ctx.user?.id ?? null,
+        collection: target,
+        item: id,
+        comment,
+        origin: 'machine'
+      })
+      if (level === 'all') {
+        await writeRevision({
+          activity: activityId,
+          collection: target,
+          item: id,
+          data: row,
+          delta
+        })
+      }
+      if (rollups) await rollups.recalcAffectedRollups(target, row, prior)
+      noteRawWrite(target, id, row)
+    }
+  } catch (err) {
+    logError(err, { rule: rule.id, target, action, phase: 'history' })
+  }
+}
+
 async function processCrossTriggers(ctx: HookContext) {
   const { collection, action } = ctx
   if (collection.startsWith('nivaro_')) return
@@ -623,13 +694,32 @@ async function processCrossTriggers(ctx: HookContext) {
             }
             const patch = { ...record }
             for (const col of Object.keys(where)) delete patch[col]
-            if (Object.keys(patch).length > 0) await db(target).where(where).update(patch)
+            // The write stays RAW (no hooks — the recursion guard depends on
+            // it) but leaves history (#796): the rows as they were, the rows
+            // as they are, one activity + revision per row that changed.
+            const before = (await db(target).where(where).select('*')) as Array<
+              Record<string, unknown>
+            >
+            const targetIds = before.map((r) => r.id).filter((v) => v != null) as unknown[]
+            // A patch every matched row already holds is not written at all —
+            // an UPDATE that changes nothing still moves audit stamps and
+            // fires table triggers, and would read as a change in history.
+            const differs = before.some((r) =>
+              Object.entries(patch).some(([k, v]) => String(r[k] ?? '') !== String(v ?? ''))
+            )
+            if (Object.keys(patch).length > 0 && differs) {
+              await db(target).where(where).update(patch)
+              await recordSyncHistory(ctx, rule, target, 'update', before, targetIds)
+            }
             if (act.m2m_map && Object.keys(act.m2m_map).length > 0) {
-              const targetIds = (await db(target).where(where).pluck('id')) as unknown[]
               await runM2MSync(ctx, rule.id, act, collection, ctx.keys?.[0] ?? data.id, targetIds)
             }
           } else {
-            await db(target).insert(record)
+            const inserted = (await db(target).insert(record).returning('id')) as unknown[]
+            const raw = inserted[0]
+            const newId =
+              raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : (raw as unknown)
+            if (newId != null) await recordSyncHistory(ctx, rule, target, 'create', [], [newId])
           }
         }
       } catch (err) {

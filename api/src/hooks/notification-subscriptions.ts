@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
-import { deferEffect } from '../services/unit-of-work.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { getRelations } from '../services/collections.js'
@@ -11,6 +10,7 @@ import {
   renderNotificationTemplate
 } from '../services/notification-templates.js'
 import { computeDelta } from '../services/revisions.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { hooks } from './registry.js'
 
 /** A subscription that names ONE record (the per-record bell): filter_field
@@ -332,6 +332,27 @@ async function fireSubscriptionNotifications(
     }
     const by = actorName ? ` by ${actorName}` : ''
 
+    // Multi-dimension `filters` (#797): AND-evaluated against the record on
+    // EVERY event type, the way workflow_transition subscriptions always
+    // were. Values resolve once per path per write (plain columns off the
+    // row, M2M aliases and dotted paths through the DB), and a path that
+    // cannot be resolved reads as empty — a broken filter narrows to nothing
+    // rather than widening to everyone.
+    const filterRecord: Record<string, unknown> = data ?? { id: item }
+    const filterValueCache = new Map<string, Promise<unknown>>()
+    const recordValue = (path: string): Promise<unknown> => {
+      let p = filterValueCache.get(path)
+      if (!p) {
+        p = import('../services/workflow-transitions.js')
+          .then(({ resolveRecordValue }) =>
+            resolveRecordValue(collection, filterRecord, path, String(item), db)
+          )
+          .catch(() => undefined)
+        filterValueCache.set(path, p)
+      }
+      return p
+    }
+
     // The row's own labelled old → new list, computed once per write for
     // the stored detail (#27) and the email table. Bundles and child
     // roll-ups already carry theirs.
@@ -369,6 +390,19 @@ async function fireSubscriptionNotifications(
         const actualVal = String(data[sub.filter_field as string] ?? '')
         if (actualVal !== sub.filter_value) continue
       }
+
+      // The `filters` JSON (#797). A record watch's own `id eq <item>` entry
+      // passes by construction (the write IS on that record); anything else
+      // — a zone, a project type, a dotted parent value — must hold.
+      let filtersHold = true
+      for (const f of parseSubFilters(sub.filters)) {
+        const actual = await recordValue(f.field)
+        if (!filterMatches(f.op, actual, f.value)) {
+          filtersHold = false
+          break
+        }
+      }
+      if (!filtersHold) continue
 
       // Record watches speak in the record's friendly label ("CM26-79811"),
       // never the internal id or the label captured at subscribe time. A
@@ -606,6 +640,25 @@ export interface SubFilter {
   field: string
   op: SubFilterOp
   value?: unknown
+}
+
+/** The stored `filters` column as a list of well-formed entries — a
+ *  malformed row yields none (and therefore never narrows). */
+export function parseSubFilters(raw: unknown): SubFilter[] {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (f): f is SubFilter =>
+        !!f &&
+        typeof f === 'object' &&
+        typeof (f as SubFilter).field === 'string' &&
+        (f as SubFilter).field.length > 0 &&
+        typeof (f as SubFilter).op === 'string'
+    )
+  } catch {
+    return []
+  }
 }
 
 export function filterMatches(op: SubFilterOp, actual: unknown, expected: unknown): boolean {
@@ -892,58 +945,64 @@ async function rollUpToParents(
 }
 
 export function registerNotificationSubscriptionHooks() {
-  hooks.after('*', 'create', (ctx) => deferEffect('subscriptions:create', async () => {
-    if (ctx.collection.startsWith('nivaro_')) return
-    const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
-    const row = ctx.result as Record<string, unknown> | null
-    await fireSubscriptionNotifications(ctx.collection, 'create', item, row, ctx.user?.id)
-    await rollUpToParents(ctx.collection, 'create', item, row, ctx.user?.id)
-  }))
+  hooks.after('*', 'create', (ctx) =>
+    deferEffect('subscriptions:create', async () => {
+      if (ctx.collection.startsWith('nivaro_')) return
+      const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
+      const row = ctx.result as Record<string, unknown> | null
+      await fireSubscriptionNotifications(ctx.collection, 'create', item, row, ctx.user?.id)
+      await rollUpToParents(ctx.collection, 'create', item, row, ctx.user?.id)
+    })
+  )
 
-  hooks.after('*', 'update', (ctx) => deferEffect('subscriptions:update', async () => {
-    if (ctx.collection.startsWith('nivaro_')) return
-    const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
-    const row = ctx.result as Record<string, unknown> | null
-    const previous = (ctx.previousData as Record<string, unknown> | null) ?? null
-    // Collection-wide feeds fire per write; the record's own watchers get
-    // one coalesced message once the sitting's writes go quiet.
-    await fireSubscriptionNotifications(
-      ctx.collection,
-      'update',
-      item,
-      row,
-      ctx.user?.id,
-      undefined,
-      previous,
-      {
-        scope: 'wide'
+  hooks.after('*', 'update', (ctx) =>
+    deferEffect('subscriptions:update', async () => {
+      if (ctx.collection.startsWith('nivaro_')) return
+      const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
+      const row = ctx.result as Record<string, unknown> | null
+      const previous = (ctx.previousData as Record<string, unknown> | null) ?? null
+      // Collection-wide feeds fire per write; the record's own watchers get
+      // one coalesced message once the sitting's writes go quiet.
+      await fireSubscriptionNotifications(
+        ctx.collection,
+        'update',
+        item,
+        row,
+        ctx.user?.id,
+        undefined,
+        previous,
+        {
+          scope: 'wide'
+        }
+      )
+      if (row && previous) {
+        const delta = computeDelta(previous, row)
+        for (const k of ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at'])
+          delete delta[k]
+        if (Object.keys(delta).length > 0) {
+          const { labelledChanges } = await import('../services/mail-types.js')
+          const changes = await labelledChanges(ctx.collection, delta, previous).catch(() => [])
+          enqueueRecordChange(ctx.collection, item, ctx.user?.id, changes)
+        }
       }
-    )
-    if (row && previous) {
-      const delta = computeDelta(previous, row)
-      for (const k of ['updated_at', 'date_updated', 'user_updated', 'changed', 'modified_at'])
-        delete delta[k]
-      if (Object.keys(delta).length > 0) {
-        const { labelledChanges } = await import('../services/mail-types.js')
-        const changes = await labelledChanges(ctx.collection, delta, previous).catch(() => [])
-        enqueueRecordChange(ctx.collection, item, ctx.user?.id, changes)
-      }
-    }
-    await rollUpToParents(
-      ctx.collection,
-      'update',
-      item,
-      row,
-      ctx.user?.id,
-      (ctx.previousData as Record<string, unknown> | null) ?? null
-    )
-  }))
+      await rollUpToParents(
+        ctx.collection,
+        'update',
+        item,
+        row,
+        ctx.user?.id,
+        (ctx.previousData as Record<string, unknown> | null) ?? null
+      )
+    })
+  )
 
-  hooks.after('*', 'delete', (ctx) => deferEffect('subscriptions:delete', async () => {
-    if (ctx.collection.startsWith('nivaro_')) return
-    const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
-    const prev = ctx.previousData as Record<string, unknown> | null
-    await rollUpToParents(ctx.collection, 'delete', item, prev, ctx.user?.id)
-    await fireSubscriptionNotifications(ctx.collection, 'delete', item, prev, ctx.user?.id)
-  }))
+  hooks.after('*', 'delete', (ctx) =>
+    deferEffect('subscriptions:delete', async () => {
+      if (ctx.collection.startsWith('nivaro_')) return
+      const item = ctx.keys?.[0] != null ? String(ctx.keys[0]) : ''
+      const prev = ctx.previousData as Record<string, unknown> | null
+      await rollUpToParents(ctx.collection, 'delete', item, prev, ctx.user?.id)
+      await fireSubscriptionNotifications(ctx.collection, 'delete', item, prev, ctx.user?.id)
+    })
+  )
 }

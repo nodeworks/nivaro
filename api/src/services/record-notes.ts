@@ -497,9 +497,9 @@ export async function loadRecordNotes(
           /* fall through to the name-column label */
         }
       }
-      // Display templates with DOTTED tokens render those tokens empty
-      // here (renderTemplateLabels resolves direct columns only), leaving
-      // dangling separators ("· Line 4") — trim them.
+      // renderTemplateLabels walks dotted tokens through the M2O hops, but a
+      // parent row that is missing (a deleted line's workflow) still renders
+      // its token empty and leaves a dangling separator ("· Line 4") — trim.
       const cleanLabel = (v: string | null | undefined): string | null => {
         if (!v) return null
         const cleaned = v

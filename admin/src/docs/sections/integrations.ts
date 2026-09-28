@@ -176,6 +176,10 @@ GET /api/cross-triggers`
     {
       type: 'warn',
       text: 'Cross-collection writes can themselves fire rules. A recursion guard caps the trigger chain depth — beyond it, further cross-collection actions are skipped and logged rather than looping forever.'
+    },
+    {
+      type: 'note',
+      text: 'The write itself bypasses hooks (that is what keeps the chain from looping), but it still leaves history: every row a cross-collection action creates or changes gets an activity row with origin `machine` and the comment "Rule: <rule name>", a revision with the delta (where the target collection keeps revisions), a stored-rollup recalculation and an integrity re-check. A sync that changes nothing writes nothing.'
     }
   ]
 }

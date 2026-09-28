@@ -23,6 +23,7 @@ export async function activityRoutes(app: FastifyInstance) {
         'a.collection',
         'a.item',
         'a.comment',
+        'a.origin',
         'u.first_name',
         'u.last_name',
         'u.email as user_email'
@@ -94,6 +95,7 @@ export async function activityRoutes(app: FastifyInstance) {
         'a.collection',
         'a.item',
         'a.comment',
+        'a.origin',
         'u.first_name',
         'u.last_name',
         'u.email as user_email'

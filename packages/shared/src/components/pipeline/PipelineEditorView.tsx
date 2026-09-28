@@ -3041,15 +3041,59 @@ export function PipelineEditorView({
   // Nothing else keys on the label: history rows FK the transition id, bulk
   // actions match labels at RUN time (and are told below), MWF payloads use
   // the STATE's external_label. Notification wording lives in notify_text.
+  // Since #834 the server does the rename in ONE call and rewrites whatever
+  // names the old label (registry bulk actions, saved recipes, flow
+  // conditions). A dry run first: when references exist they are listed
+  // under the input and the person confirms before anything is written.
+  type RenameRef = {
+    kind: string
+    id: string
+    scope: string
+    name: string
+    description: string
+    rewritten?: boolean
+  }
+  const [renameRefs, setRenameRefs] = useState<{
+    from: string
+    to: string
+    references: RenameRef[]
+  } | null>(null)
   const renameGroup = useMutation({
-    mutationFn: async ({ ids, label }: { ids: string[]; label: string }) => {
-      for (const txId of ids)
-        await client.request(patch(`/pipelines/transitions/${txId}`, { label }))
+    mutationFn: async ({
+      from,
+      label,
+      confirmed
+    }: {
+      from: string
+      label: string
+      confirmed?: boolean
+    }) => {
+      if (!confirmed) {
+        const probe = await client.request<{
+          data: { references: RenameRef[] }
+        }>(post(`/pipelines/${templateId}/transitions/rename`, { from, to: label, dry_run: true }))
+        const references = probe.data?.references ?? []
+        if (references.length > 0) return { pending: { from, to: label, references } }
+      }
+      const res = await client.request<{ data: { references: RenameRef[] } }>(
+        post(`/pipelines/${templateId}/transitions/rename`, { from, to: label })
+      )
+      return { done: res.data?.references ?? [] }
     },
-    onSuccess: (_r, { label }) => {
+    onSuccess: (result, { label }) => {
+      if ('pending' in result && result.pending) {
+        setRenameRefs(result.pending)
+        return
+      }
+      const rewritten = 'done' in result ? result.done.filter((r) => r.rewritten).length : 0
       invalidate()
       setRenamingGroup(null)
-      toast.success(`Renamed to "${label}"`)
+      setRenameRefs(null)
+      toast.success(
+        rewritten
+          ? `Renamed to "${label}" · ${rewritten} reference${rewritten === 1 ? '' : 's'} updated`
+          : `Renamed to "${label}"`
+      )
     },
     onError: (err: unknown) => {
       const resp = (err as { response?: { error?: string } })?.response
@@ -3480,14 +3524,17 @@ export function PipelineEditorView({
                                       trimmed.length > 0 && trimmed !== grp.label && !clash
                                     const save = () => {
                                       if (!canSave || renameGroup.isPending) return
-                                      renameGroup.mutate({
-                                        ids: grp.routes.flatMap((r) => r.ids),
-                                        label: trimmed
-                                      })
+                                      if (renameRefs && renameRefs.to !== trimmed)
+                                        setRenameRefs(null)
+                                      renameGroup.mutate({ from: grp.label, label: trimmed })
                                     }
+                                    const pendingRefs =
+                                      renameRefs?.from === grp.label && renameRefs.to === trimmed
+                                        ? renameRefs.references
+                                        : null
                                     return (
                                       <div
-                                        className='flex flex-1 items-center gap-1.5'
+                                        className='flex flex-1 flex-wrap items-center gap-1.5'
                                         data-transition-rename={grp.label}
                                       >
                                         <Input
@@ -3525,12 +3572,49 @@ export function PipelineEditorView({
                                         </button>
                                         <button
                                           type='button'
-                                          onClick={() => setRenamingGroup(null)}
+                                          onClick={() => {
+                                            setRenamingGroup(null)
+                                            setRenameRefs(null)
+                                          }}
                                           title='Cancel (Esc)'
                                           className='rounded p-1 text-slate-400 hover:bg-slate-100'
                                         >
                                           <X className='h-3.5 w-3.5' />
                                         </button>
+                                        {pendingRefs && (
+                                          <div
+                                            className='basis-full rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11.5px] text-amber-900 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-100'
+                                            data-transition-rename-refs={pendingRefs.length}
+                                          >
+                                            <p className='font-medium'>
+                                              {pendingRefs.length} other{' '}
+                                              {pendingRefs.length === 1
+                                                ? 'thing names'
+                                                : 'things name'}{' '}
+                                              “{grp.label}” — they will be updated to “{trimmed}”:
+                                            </p>
+                                            <ul className='mt-1 list-disc pl-4'>
+                                              {pendingRefs.map((r) => (
+                                                <li key={`${r.kind}:${r.id}`}>{r.description}</li>
+                                              ))}
+                                            </ul>
+                                            <button
+                                              type='button'
+                                              onClick={() =>
+                                                renameGroup.mutate({
+                                                  from: grp.label,
+                                                  label: trimmed,
+                                                  confirmed: true
+                                                })
+                                              }
+                                              disabled={renameGroup.isPending}
+                                              data-transition-rename-confirm
+                                              className='mt-1.5 rounded bg-amber-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-amber-700 disabled:opacity-50'
+                                            >
+                                              Rename and update {pendingRefs.length}
+                                            </button>
+                                          </div>
+                                        )}
                                       </div>
                                     )
                                   })()
