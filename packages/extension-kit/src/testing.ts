@@ -49,6 +49,8 @@ import type {
   ItemActionDef,
   LinkRegistration,
   MachineMarkerSet,
+  OpsTaskDef,
+  OpsTaskOutcome,
   ReadinessCheck,
   RelatedNoteProvider,
   StorageAdapter,
@@ -384,6 +386,7 @@ export interface TestContext extends ExtensionContext {
     briefLines: Array<{ collection: string; fn: BriefLineProvider }>
     digestSections: DigestSectionProvider[]
     readinessChecks: ReadinessCheck[]
+    tasks: OpsTaskDef[]
     obligationKinds: ObligationKindDef[]
     signals: IntegrationSignal[]
     signalActions: SignalActionHandler[]
@@ -404,6 +407,8 @@ export interface TestContext extends ExtensionContext {
   ): Promise<ExtensionHookContext>
   /** Run one registered cron job by its (unscoped) id. */
   runCron(id: string): Promise<void>
+  /** Run a registered operational task; its log lines come back with the outcome. */
+  runTask(key: string, opts?: { execute?: boolean }): Promise<OpsTaskOutcome & { log: string[] }>
   /** Deliver an event to the registered handlers. */
   deliverEvent(eventType: string, payload: unknown): Promise<void>
   /** Call a registered route with a fake request; answers `{status, body}`. */
@@ -487,6 +492,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     briefLines: [],
     digestSections: [],
     readinessChecks: [],
+    tasks: [],
     obligationKinds: [],
     signals: [],
     signalActions: [],
@@ -654,6 +660,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     },
     digest: { registerSection: (fn) => registered.digestSections.push(fn) },
     readiness: { registerCheck: (c) => registered.readinessChecks.push(c) },
+    tasks: { register: (d) => registered.tasks.push(d) },
     chain: {
       begin: async (_root, fn) => fn(),
       current: () => null,
@@ -716,6 +723,27 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
           `no cron '${id}' registered (have: ${[...registered.crons.keys()].join(', ') || 'none'})`
         )
       await c.fn()
+    },
+    async runTask(key, o = {}) {
+      const def = registered.tasks.find((t) => t.key === key)
+      if (!def)
+        throw new Error(
+          `no task '${key}' registered (have: ${registered.tasks.map((t) => t.key).join(', ') || 'none'})`
+        )
+      const log: string[] = []
+      const rctx = {
+        log: (line: string) => {
+          log.push(line)
+        },
+        progress: () => {},
+        cancelled: () => false,
+        userId: user.id,
+        dryRun: !o.execute
+      }
+      if (!o.execute && !def.dryRun)
+        throw new Error(`task '${key}' has no dry run — pass {execute: true}`)
+      const out = o.execute ? await def.execute(rctx) : await def.dryRun!(rctx)
+      return { ...out, log }
     },
     async deliverEvent(eventType, payload) {
       let id = 0

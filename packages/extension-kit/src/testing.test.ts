@@ -14,6 +14,17 @@ const ext = defineExtension({
       const open = await ctx.database('orders').where({ status: 'open' }).count('id as n')
       ctx.flows.emit('orders-open', { n: (open[0] as { n: number }).n })
     })
+    ctx.tasks.register({
+      key: 'demo:count-open',
+      label: 'Count open orders',
+      description: '',
+      dryRun: async (rc) => {
+        const n = (await ctx.database('orders').where({ status: 'open' })).length
+        rc.log(`${n} open`)
+        return { summary: `${n} open`, counts: { open: n } }
+      },
+      execute: async () => ({ summary: 'closed them' })
+    })
     ctx.integrations.registerSignal({
       id: 'demo:stuck',
       label: 'Stuck',
@@ -55,6 +66,13 @@ describe('test context', () => {
       { userId: 'u1', opts: { subject: 'Order 1', message: 'created' } }
     ])
     expect(ctx.calls.activity[0]).toMatchObject({ action: 'seen', item: 1 })
+
+    expect(await ctx.runTask('demo:count-open')).toEqual({
+      summary: '1 open',
+      counts: { open: 1 },
+      log: ['1 open']
+    })
+    expect((await ctx.runTask('demo:count-open', { execute: true })).summary).toBe('closed them')
 
     await ctx.runCron('nightly')
     expect(ctx.calls.flowsEmitted).toEqual([{ type: 'orders-open', payload: { n: 1 } }])

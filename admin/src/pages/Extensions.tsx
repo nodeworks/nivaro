@@ -1245,6 +1245,7 @@ const GATE_LABELS: Record<string, string> = {
 }
 
 const REGISTRATION_LABELS: Record<string, string> = {
+  ops_tasks: 'Operational tasks',
   flow_operations: 'Flow operations',
   flow_triggers: 'Flow triggers',
   note_sources: 'Notes sources',

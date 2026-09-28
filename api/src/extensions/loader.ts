@@ -35,6 +35,7 @@ import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { type NotifyUserOptions, notifyUser } from '../services/notification-channels.js'
+import { registerOpsTask } from '../services/ops-tasks.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
@@ -700,6 +701,13 @@ export function registrationMembers(
         registerReadinessCheck(check)
       }
     },
+    tasks: {
+      register: (def) => {
+        note('tasks')
+        own('ops_tasks', `${def.key} · ${def.label}`)
+        registerOpsTask(def, extId)
+      }
+    },
     chain: buildChainContext(),
     integrations: {
       registerObligationKind: (def) => {
@@ -881,6 +889,7 @@ async function loadExtension(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'tasks'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1079,6 +1088,7 @@ export async function loadExtensions(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'tasks'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1227,6 +1237,7 @@ export async function loadCloudExtensions(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'tasks'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1408,6 +1419,7 @@ export async function scanNewExtensions(
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
+    | 'tasks'
     | 'integrations'
     | 'integrity'
     | 'mail'

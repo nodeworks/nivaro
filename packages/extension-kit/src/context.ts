@@ -33,6 +33,7 @@ import type {
   ItemActionDef,
   LinkRegistration,
   MachineMarkerSet,
+  OpsTaskDef,
   ReadinessCheck,
   RelatedNoteProvider,
   StorageAdapter,
@@ -208,6 +209,9 @@ export interface ExtensionContext {
     /** A scored check on the go-live readiness scorecard. */
     registerCheck(check: ReadinessCheck): void
   }
+  /** Operational tasks — repairs, backfills, migrations — run from the admin
+   *  console (dry run by default, one at a time, every run recorded). */
+  tasks: { register(def: OpsTaskDef): void }
   chain: {
     /** Start a chain for one feed event (e.g. one shipment) and run fn inside it. */
     begin<T>(root: { source: string; ref: string }, fn: () => Promise<T>): Promise<T>

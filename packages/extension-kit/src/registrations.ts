@@ -389,3 +389,58 @@ export interface BotToolDef {
   input_schema: Record<string, unknown>
   handler: (asker: ExtensionUser, input: Record<string, unknown>) => Promise<unknown>
 }
+
+// ─── Operational tasks ──────────────────────────────────────────────────────
+
+export interface OpsTaskRunContext {
+  /** A line of output the console shows as the task runs. */
+  log(line: string): void
+  /** Rows done so far, for a progress bar. */
+  progress(done: number, total?: number): void
+  /** True once an admin asked the run to stop; check it between chunks. */
+  cancelled(): boolean
+  /** Who started the run (null for a cron). */
+  userId: string | null
+  /** True on a dry run — the task must write nothing. */
+  dryRun: boolean
+}
+
+export interface OpsTaskOutcome {
+  /** One line the run list shows ('312 rows would move', '0 duplicates'). */
+  summary: string
+  /** Counts the console renders as tiles. */
+  counts?: Record<string, number>
+  /** Tables the run created and left behind (backups), by name. */
+  backup_tables?: string[]
+  /** What still needs a person after this run. */
+  follow_up?: string | null
+}
+
+/**
+ * A repair, backfill or migration an extension owns, run from the admin
+ * console: dry run by default, one run at a time per task, every run a
+ * job-runs row with its output kept. Registered with `ctx.tasks.register`.
+ */
+export interface OpsTaskDef {
+  /** `<extension>:<name>` — unique, kebab-case name. */
+  key: string
+  label: string
+  /** What it fixes or produces, in a sentence or two. */
+  description: string
+  /** Console grouping ('Data repairs', 'Backfills'). */
+  group?: string
+  /** What a real run leaves behind (a backup table, rows to review). */
+  leaves_behind?: string | null
+  /** What to do after a real run ('re-run the rollup backfill'). */
+  follow_up?: string | null
+  /** A shell command that does the same thing, for a host where the task
+   *  cannot run (a built image without its script sources). */
+  cli?: string | null
+  /** Whether the task can run on THIS host, and why not. Default: yes. */
+  available?(): { ok: boolean; reason?: string } | Promise<{ ok: boolean; reason?: string }>
+  /** The dry run: report what a real run would do, write nothing. Absent =
+   *  the console offers only the real run. */
+  dryRun?(ctx: OpsTaskRunContext): Promise<OpsTaskOutcome>
+  /** The real run. */
+  execute(ctx: OpsTaskRunContext): Promise<OpsTaskOutcome>
+}

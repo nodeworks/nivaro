@@ -19,6 +19,7 @@ export type JobRunKind =
   | 'export'
   | 'directory'
   | 'bulk'
+  | 'task'
 
 export interface JobRunHandle {
   /** DB row id, null when the insert failed (bookkeeping degraded). */

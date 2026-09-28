@@ -6488,7 +6488,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6509,6 +6509,30 @@ export default defineExtension({
   f.get('/partner/status', { preHandler: ctx.auth.requireAuth }, handler)
   f.post('/partner/webhook', { config: { public: true } }, webhookHandler) // deliberately open
 }, { prefix: '/api' })</code></pre>
+          <h3 class="doc-h3" id="ext-overview-tasks">Operational tasks</h3>
+          <p class="doc-p">A repair, backfill or migration an extension owns is registered with <code class="doc-code">ctx.tasks.register(...)</code> and run from the admin console at System → Ops Tasks instead of a laptop shell: a dry run reports what a real run would do and writes nothing, one run at a time per task, every run a row under Background Jobs with its output kept for the console, and an activity row naming who ran what and what it left behind. A task says whether it can run on THIS host (<code class="doc-code">available()</code>) — one that shells out to scripts a built image does not carry shows its CLI instead of a dead button.</p>
+          <pre class="doc-pre"><code>ctx.tasks.register({
+  key: 'my-extension:orphan-rows',
+  label: 'Orphan rows',
+  description: 'Removes child rows whose parent was deleted before the FK existed.',
+  group: 'Data repairs',
+  leaves_behind: 'zz_backup_orphans_&lt;stamp&gt;',
+  follow_up: 'Re-run the rollup backfill if totals look stale.',
+  dryRun: async (rc) =&gt; {
+    const n = await countOrphans(ctx.database)
+    rc.log(`${n} rows would be removed`)
+    return { summary: `${n} rows would be removed`, counts: { rows: n } }
+  },
+  execute: async (rc) =&gt; {
+    const { removed, backup } = await removeOrphans(ctx.database, rc)
+    return { summary: `${removed} rows removed`, backup_tables: [backup] }
+  }
+})</code></pre>
+          <ul class="doc-ul">
+            <li>Routes (admin only): <code class="doc-code">GET /api/ops-tasks</code> (catalog + last ten runs each), <code class="doc-code">POST /api/ops-tasks/:key/run</code> with <code class="doc-code">{ "execute": true }</code> for a real run (dry by default; <code class="doc-code">409</code> while one runs), <code class="doc-code">GET /api/ops-tasks/runs/:id</code> (status, progress, outcome, output tail), <code class="doc-code">POST /api/ops-tasks/runs/:id/cancel</code> (cooperative — the task checks <code class="doc-code">rc.cancelled()</code> between chunks).</li>
+            <li>The output tail lives in the process that ran the task; the run row itself is durable.</li>
+            <li>In a test, <code class="doc-code">createTestContext().runTask(key, { execute })</code> runs the task with a recording context.</li>
+          </ul>
           <h3 class="doc-h3" id="ext-overview-kit">The extension kit</h3>
           <p class="doc-p">An extension cannot import <code class="doc-code">api/src</code> — the API compiles with <code class="doc-code">rootDir: src</code>, and a mounted extension runs against a built image that ships no source. <code class="doc-code">@nivaro/extension-kit</code> is the contract instead: the extension context (<code class="doc-code">ExtensionContext</code>), the default export shape (<code class="doc-code">ExtensionDefinition</code>, checked by <code class="doc-code">defineExtension</code>), and every registration the context accepts — bulk and item actions, readiness and integrity checks, notes providers, mail types, digest sections, obligation kinds, signals, import processors, flow operations and triggers. The API imports its own extension contract from the same package, so the two cannot drift.</p>
           <ul class="doc-ul">

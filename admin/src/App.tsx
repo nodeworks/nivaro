@@ -189,6 +189,7 @@ const MailLog = lazy(() => import('@/pages/MailLog'))
 const NotificationBench = lazy(() => import('@/pages/NotificationBench'))
 const NotificationAnalytics = lazy(() => import('@/pages/NotificationAnalytics'))
 const DelegationConsole = lazy(() => import('@/pages/DelegationConsole'))
+const OpsTasks = lazy(() => import('@/pages/OpsTasks'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
 const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
@@ -624,6 +625,7 @@ export default function App() {
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />
                   <Route path='ops-console' element={<OpsConsolePage />} />
+                  <Route path='ops-tasks' element={<OpsTasks />} />
                   <Route path='ops-redis' element={<OpsRedisPage />} />
                   <Route path='cron-timeline' element={<CronTimelinePage />} />
                   <Route path='user-groups' element={<UserGroupsPage />} />

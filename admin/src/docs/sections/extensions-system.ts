@@ -42,6 +42,39 @@ export default defineExtension({
   f.post('/partner/webhook', { config: { public: true } }, webhookHandler) // deliberately open
 }, { prefix: '/api' })`
     },
+    { type: 'h3', id: 'ext-overview-tasks', text: 'Operational tasks' },
+    {
+      type: 'p',
+      text: 'A repair, backfill or migration an extension owns is registered with `ctx.tasks.register(...)` and run from the admin console at System → Ops Tasks instead of a laptop shell: a dry run reports what a real run would do and writes nothing, one run at a time per task, every run a row under Background Jobs with its output kept for the console, and an activity row naming who ran what and what it left behind. A task says whether it can run on THIS host (`available()`) — one that shells out to scripts a built image does not carry shows its CLI instead of a dead button.'
+    },
+    {
+      type: 'pre',
+      code: `ctx.tasks.register({
+  key: 'my-extension:orphan-rows',
+  label: 'Orphan rows',
+  description: 'Removes child rows whose parent was deleted before the FK existed.',
+  group: 'Data repairs',
+  leaves_behind: 'zz_backup_orphans_<stamp>',
+  follow_up: 'Re-run the rollup backfill if totals look stale.',
+  dryRun: async (rc) => {
+    const n = await countOrphans(ctx.database)
+    rc.log(\`\${n} rows would be removed\`)
+    return { summary: \`\${n} rows would be removed\`, counts: { rows: n } }
+  },
+  execute: async (rc) => {
+    const { removed, backup } = await removeOrphans(ctx.database, rc)
+    return { summary: \`\${removed} rows removed\`, backup_tables: [backup] }
+  }
+})`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Routes (admin only): `GET /api/ops-tasks` (catalog + last ten runs each), `POST /api/ops-tasks/:key/run` with `{ "execute": true }` for a real run (dry by default; `409` while one runs), `GET /api/ops-tasks/runs/:id` (status, progress, outcome, output tail), `POST /api/ops-tasks/runs/:id/cancel` (cooperative — the task checks `rc.cancelled()` between chunks).',
+        'The output tail lives in the process that ran the task; the run row itself is durable.',
+        'In a test, `createTestContext().runTask(key, { execute })` runs the task with a recording context.'
+      ]
+    },
     { type: 'h3', id: 'ext-overview-kit', text: 'The extension kit' },
     {
       type: 'p',

@@ -95,7 +95,8 @@ import {
   Video,
   Webhook,
   Wifi,
-  Workflow
+  Workflow,
+  Wrench
 } from 'lucide-react'
 import {
   Component,
@@ -347,6 +348,7 @@ export const navCategories: NavCategory[] = [
       { icon: HeartPulse, label: 'Health', to: '/health', section: 'Operations' },
       { icon: Database, label: 'DB & Runtime', to: '/db-health', section: 'Operations' },
       { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console', section: 'Operations' },
+      { icon: Wrench, label: 'Ops Tasks', to: '/ops-tasks', section: 'Operations' },
       { icon: Database, label: 'Redis Keys', to: '/ops-redis', section: 'Operations' },
       { icon: RotateCcw, label: 'Dead Letters', to: '/dead-letters', section: 'Operations' },
       {

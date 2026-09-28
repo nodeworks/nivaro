@@ -67,6 +67,7 @@ export { CommandCenterView } from './components/command-center/CommandCenterView
 export * from './components/DataTable'
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
+export { OpsTasksView, type OpsTaskRow, type OpsTaskRun } from './components/ops/OpsTasksView'
 export { EmptyState } from './components/EmptyState'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
