@@ -2143,6 +2143,7 @@ const { data: tx } = await nivaro.request(
             <tbody><tr><tr><td>GET</td><td>/api/items/:collection</td><td>List records. Supports filter, sort, fields, limit, offset, search.</td></tr>
               <tr><td>GET</td><td>/api/items/:collection/:id</td><td>Single record by primary key.</td></tr>
               <tr><td>GET</td><td>/api/items/:collection/aggregate</td><td>Counts, sums and averages over the rows a list read would match, optionally grouped.</td></tr>
+              <tr><td>any</td><td>/items/:collection[/:id]</td><td>The same routes at the host root, for callers written against the legacy base URL. Answered by the /api handler: one request-log row, same authentication, same body and query string.</td></tr>
               <tr><td>POST</td><td>/api/items/:collection</td><td>Create a record.</td></tr>
               <tr><td>PATCH</td><td>/api/items/:collection/:id</td><td>Update a record (partial).</td></tr>
               <tr><td>DELETE</td><td>/api/items/:collection/:id</td><td>Delete a record.</td></tr></tr></tbody>
@@ -2338,10 +2339,34 @@ Authorization: Bearer &lt;token&gt;
             <li>Each row is created through the same path as <code class="doc-code">POST /items/&lt;child&gt;</code>, as the same caller: permissions, validation, hooks, field rules and computed fields apply per row. The foreign key to the parent is set for you.</li>
             <li>Sets are written in the order they appear in the payload, rows in array order. List a set first when a later one depends on it (a cap on payments that reads the sum of lines).</li>
             <li>All or nothing on create: if any row is refused, the rows already written and the new record are removed and the error names the row, e.g. <code class="doc-code">lines[2]: … — nothing was created</code>.</li>
-            <li>On update the write is additive. Rows without an <code class="doc-code">id</code> are created; rows that carry an <code class="doc-code">id</code> are left untouched, and no existing row is removed. Update or delete child rows through their own collection.</li>
+            <li>On update, a row that carries an <code class="doc-code">id</code> is changed in place (the id must be a row of this record, else <code class="doc-code">422</code> <code class="doc-code">NESTED_ROW_NOT_OWNED</code>); a row without one is created. <code class="doc-code">{ "delete": [ids] }</code> removes rows, <code class="doc-code">{ "set": [...] }</code> makes the child set exactly the rows listed (rows with an id changed, rows without one created, every other child removed). A plain array on update never removes anything.</li>
+            <li>All or nothing on update too: changes land first, then creates, then removals. A refused row puts the rows already changed back to their earlier values and removes the rows already created.</li>
             <li>At most 500 rows per relation per request.</li>
           </ul>
+          <pre class="doc-pre"><code>PATCH /api/items/orders/41
+{
+  "lines": [
+    { "id": 900, "quantity": 3 },              // changed in place
+    { "product": 12, "quantity": 1, "price": 8 } // created
+  ],
+  "payments": { "delete": [77] }
+}
+
+PATCH /api/items/orders/41
+{ "lines": { "set": [{ "id": 900, "quantity": 3 }, { "product": 12, "quantity": 1, "price": 8 }] } }
+// order 41 now has exactly those two lines</code></pre>
           <div class="doc-note">Every row costs the same as a separate create, so a large set makes one long request. Raise client and proxy timeouts accordingly, or split very large sets.</div>
+          <h3 class="doc-h3">Links under a relation name</h3>
+          <p class="doc-p">A many-to-many relation takes its links under the relation's field name, on create and on update. Plain arrays add links and never remove one. <code class="doc-code">{ "delete": [ids] }</code> removes links, <code class="doc-code">{ "set": [ids] }</code> makes the record's links exactly the ids listed. Links are written through the junction collection as the caller, so its permissions, history and any limit apply.</p>
+          <pre class="doc-pre"><code>PATCH /api/items/articles/9
+{ "tags": [3, 4] }                    // adds 3 and 4
+{ "tags": { "delete": [3] } }         // removes 3
+{ "tags": { "set": [4, 5] } }         // the article is tagged 4 and 5, nothing else
+
+// a polymorphic link names the collection of each id
+PATCH /api/items/orders/41
+{ "contacts": { "set": [{ "collection": "nivaro_users", "id": "…" }] } }</code></pre>
+          <div class="doc-note">A polymorphic link (a relation that allows several collections) stores the collection beside the id. An entry that is a bare id takes the collection the record form would write: <code class="doc-code">directus_users</code> when the relation allows it, else the first allowed collection. A modern name is stored under its legacy spelling when only that is allowed.</div>
           <h3 class="doc-h3">Many rows in one request</h3>
           <p class="doc-p"><code class="doc-code">POST /api/items/&lt;collection&gt;/bulk</code> writes up to 500 rows and answers <code class="doc-code">207</code> with one result per row, in request order. A row that carries an <code class="doc-code">id</code> is an update; a row without one is a create. Every row goes through the same path as a single write, as the same caller, so permissions, validation, hooks and rules apply per row.</p>
           <pre class="doc-pre"><code>POST /api/items/orders/bulk
@@ -3856,7 +3881,7 @@ Authorization: Bearer &lt;admin-token&gt;
     payments { id amount }
   }
 }</code></pre>
-          <div class="doc-note">Rows are created in payload order through the normal create path, as the caller. A refused row undoes the whole create and the error names it (<code class="doc-code">lines[2]: …</code>). On update the write is additive: rows without an id are added, nothing is changed or removed. See Items API → Create with related rows for the full rules.</div>
+          <div class="doc-note">Rows are created in payload order through the normal create path, as the caller. A refused row undoes the whole create and the error names it (<code class="doc-code">lines[2]: …</code>). On update, rows with an id are changed in place, rows without one are added, <code class="doc-code">{delete: [ids]}</code> removes and <code class="doc-code">{set: [...]}</code> replaces the child set; a plain array never removes. Many-to-many links take the same <code class="doc-code">set</code> / <code class="doc-code">delete</code> forms under the relation name, and a polymorphic link names its collection. See Items API → Create with related rows and Links under a relation name.</div>
           <div class="doc-note">The <code class="doc-code">data</code> argument accepts the <code class="doc-code">JSON</code> scalar — pass a plain object with the fields you want to set. Unknown fields are ignored; field-level permission checks apply.</div>
           <h3 class="doc-h3">Safe retries</h3>
           <p class="doc-p">Send an <code class="doc-code">Idempotency-Key</code> header with a mutation request. A repeat of the same request under the same key returns the first answer and writes nothing. A mutation that answered with <code class="doc-code">errors</code> releases its key, so the retry runs again. Queries are never deduplicated. See Items API → Safe retries with Idempotency-Key for the full rules.</p>

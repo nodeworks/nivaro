@@ -233,6 +233,11 @@ export const apiItems: DocSection = {
           '/api/items/:collection/aggregate',
           'Counts, sums and averages over the rows a list read would match, optionally grouped.'
         ],
+        [
+          'any',
+          '/items/:collection[/:id]',
+          'The same routes at the host root, for callers written against the legacy base URL. Answered by the /api handler: one request-log row, same authentication, same body and query string.'
+        ],
         ['POST', '/api/items/:collection', 'Create a record.'],
         ['PATCH', '/api/items/:collection/:id', 'Update a record (partial).'],
         ['DELETE', '/api/items/:collection/:id', 'Delete a record.']
@@ -516,13 +521,49 @@ Authorization: Bearer <token>
         'Each row is created through the same path as `POST /items/<child>`, as the same caller: permissions, validation, hooks, field rules and computed fields apply per row. The foreign key to the parent is set for you.',
         'Sets are written in the order they appear in the payload, rows in array order. List a set first when a later one depends on it (a cap on payments that reads the sum of lines).',
         'All or nothing on create: if any row is refused, the rows already written and the new record are removed and the error names the row, e.g. `lines[2]: … — nothing was created`.',
-        'On update the write is additive. Rows without an `id` are created; rows that carry an `id` are left untouched, and no existing row is removed. Update or delete child rows through their own collection.',
+        'On update, a row that carries an `id` is changed in place (the id must be a row of this record, else `422` `NESTED_ROW_NOT_OWNED`); a row without one is created. `{ "delete": [ids] }` removes rows, `{ "set": [...] }` makes the child set exactly the rows listed (rows with an id changed, rows without one created, every other child removed). A plain array on update never removes anything.',
+        'All or nothing on update too: changes land first, then creates, then removals. A refused row puts the rows already changed back to their earlier values and removes the rows already created.',
         'At most 500 rows per relation per request.'
       ]
     },
     {
+      type: 'pre',
+      code: `PATCH /api/items/orders/41
+{
+  "lines": [
+    { "id": 900, "quantity": 3 },              // changed in place
+    { "product": 12, "quantity": 1, "price": 8 } // created
+  ],
+  "payments": { "delete": [77] }
+}
+
+PATCH /api/items/orders/41
+{ "lines": { "set": [{ "id": 900, "quantity": 3 }, { "product": 12, "quantity": 1, "price": 8 }] } }
+// order 41 now has exactly those two lines`
+    },
+    {
       type: 'note',
       text: 'Every row costs the same as a separate create, so a large set makes one long request. Raise client and proxy timeouts accordingly, or split very large sets.'
+    },
+    { type: 'h3', text: 'Links under a relation name' },
+    {
+      type: 'p',
+      text: 'A many-to-many relation takes its links under the relation\'s field name, on create and on update. Plain arrays add links and never remove one. `{ "delete": [ids] }` removes links, `{ "set": [ids] }` makes the record\'s links exactly the ids listed. Links are written through the junction collection as the caller, so its permissions, history and any limit apply.'
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/items/articles/9
+{ "tags": [3, 4] }                    // adds 3 and 4
+{ "tags": { "delete": [3] } }         // removes 3
+{ "tags": { "set": [4, 5] } }         // the article is tagged 4 and 5, nothing else
+
+// a polymorphic link names the collection of each id
+PATCH /api/items/orders/41
+{ "contacts": { "set": [{ "collection": "nivaro_users", "id": "…" }] } }`
+    },
+    {
+      type: 'note',
+      text: 'A polymorphic link (a relation that allows several collections) stores the collection beside the id. An entry that is a bare id takes the collection the record form would write: `directus_users` when the relation allows it, else the first allowed collection. A modern name is stored under its legacy spelling when only that is allowed.'
     },
     { type: 'h3', text: 'Many rows in one request' },
     {

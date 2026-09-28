@@ -3549,12 +3549,91 @@ async function coerceRelationObjects(
   return out
 }
 
+const ALIAS_WRITES = Symbol('aliasWrites')
+
+interface AliasLink {
+  id: string | number
+  /** Polymorphic link: the collection the id belongs to (the junction's discriminator value). */
+  collection?: string
+}
+
 interface AliasM2MWrite {
   field: string
   junction: string
   parentFk: string
   relatedFk: string
+  /** Polymorphic junction: the column that names the linked collection. */
+  discriminator?: string
+  /** Links to add (or, with `set`, the whole set the record should hold). */
+  links: AliasLink[]
+  /** Links to remove. */
+  removals: AliasLink[]
+  /** True: the junction set becomes exactly `links`. */
+  set: boolean
+  /** The related ids, for callers that read the draft (auto-id tokens, rules). */
   ids: Array<string | number>
+}
+
+/** The spelling of a linked collection the junction stores: the allowed list
+ *  wins (legacy rows say `directus_users`), and a modern name is mapped onto
+ *  its legacy twin when only that is allowed. */
+function allowedCollectionName(name: string, allowed: string[]): string | null {
+  if (allowed.length === 0) return name
+  const hit = allowed.find((a) => a.toLowerCase() === name.toLowerCase())
+  if (hit) return hit
+  const legacy: Record<string, string> = {
+    nivaro_users: 'directus_users',
+    nivaro_files: 'directus_files'
+  }
+  const twin = legacy[name.toLowerCase()]
+  if (twin) return allowed.find((a) => a.toLowerCase() === twin) ?? null
+  return null
+}
+
+/** The collection a bare id on a polymorphic alias is taken to name: what the
+ *  record form writes — the legacy users spelling when allowed, else the first
+ *  allowed collection. */
+function defaultM2ACollection(allowed: string[]): string | null {
+  if (allowed.length === 0) return null
+  return (
+    allowed.find((a) => a.toLowerCase() === 'directus_users') ??
+    allowed.find((a) => a.toLowerCase() === 'nivaro_users') ??
+    allowed[0]
+  )
+}
+
+function linkOf(
+  e: unknown,
+  jf: string,
+  m2a: { discriminator: string; allowed: string[] } | null
+): AliasLink | null {
+  if (e == null) return null
+  if (typeof e !== 'object') {
+    if (!m2a) return { id: e as string | number }
+    const collection = defaultM2ACollection(m2a.allowed)
+    return collection ? { id: e as string | number, collection } : null
+  }
+  const rec = e as Record<string, unknown>
+  if (m2a) {
+    // `{collection, id}`, `{collection, item}`, `{item: {id}, collection}`,
+    // or the junction's own column names.
+    const rawCollection = rec.collection ?? rec[m2a.discriminator]
+    const inner = jf in rec ? rec[jf] : 'item' in rec ? rec.item : rec.id
+    const id =
+      inner != null && typeof inner === 'object' ? (inner as Record<string, unknown>).id : inner
+    if (typeof id !== 'string' && typeof id !== 'number') return null
+    const collection =
+      typeof rawCollection === 'string'
+        ? allowedCollectionName(rawCollection, m2a.allowed)
+        : defaultM2ACollection(m2a.allowed)
+    if (!collection) return null
+    return { id, collection }
+  }
+  const inner = jf in rec ? rec[jf] : rec
+  if (inner == null) return null
+  if (typeof inner !== 'object') return { id: inner as string | number }
+  const id = (inner as Record<string, unknown>).id
+  return typeof id === 'string' || typeof id === 'number' ? { id } : null
 }
 
 /**
@@ -3564,13 +3643,18 @@ interface AliasM2MWrite {
  * clients write junction rows directly, so these keys used to be silently
  * stripped and the links were lost.
  *
- * This normalizes each M2M alias value in the payload to a plain array of
- * related ids (so auto-id templates and field rules can read it as a draft
- * value), and returns the junction writes to apply AFTER the record write.
- * Semantics are ADDITIVE — links present are kept, new ones created, nothing
- * is ever detached (legacy callers delete junction rows explicitly). M2A
- * aliases are skipped: their junction needs a discriminator column this
- * shape cannot express.
+ * This normalizes each alias value in the payload to a plain array of related
+ * ids (so auto-id templates and field rules can read it as a draft value),
+ * and returns the junction writes to apply AFTER the record write.
+ *
+ * Shapes:
+ *   [ids]              add these links (plain arrays stay ADDITIVE)
+ *   {create: [...]}    the same
+ *   {delete: [...]}    remove these links
+ *   {set: [...]}       the record's links become exactly these
+ * A polymorphic (M2A) alias takes `[{collection, id}]` entries; the junction's
+ * discriminator column is written from `collection`, spelled the way the
+ * relation's allowed list spells it.
  */
 async function extractAliasM2MWrites(
   collection: string,
@@ -3583,55 +3667,114 @@ async function extractAliasM2MWrites(
     return []
   }
   const writes: AliasM2MWrite[] = []
+  const stash =
+    ((payload as Record<PropertyKey, unknown>)[ALIAS_WRITES] as
+      | Map<string, { value: unknown; write: AliasM2MWrite | null }>
+      | undefined) ?? new Map<string, { value: unknown; write: AliasM2MWrite | null }>()
+  Object.defineProperty(payload, ALIAS_WRITES, { value: stash, enumerable: false })
   for (const r of rels) {
     if (r.one_collection !== collection || !r.one_field || r.junction_field == null) continue
-    if ((r as { one_allowed_collections?: unknown }).one_allowed_collections) continue // M2A
     const key = r.one_field
     if (!(key in payload)) continue
     const raw = payload[key]
     if (raw == null) continue
+    // Already read on this write and untouched since (the normalized draft
+    // value is the same array): keep the intent — a `set` or `delete` must
+    // not turn into an additive write on the second reading.
+    const prior = stash.get(key)
+    if (prior && prior.value === raw) {
+      if (prior.write) writes.push(prior.write)
+      continue
+    }
     const jf = String(r.junction_field)
+    // A polymorphic alias declares its allowed collections and discriminator
+    // on the junction's OTHER leg (the one that points at "anything").
+    const companion = rels.find(
+      (c) => c.many_collection === r.many_collection && c.many_field === jf && c !== r
+    )
+    const allowedRaw =
+      (r as { one_allowed_collections?: unknown }).one_allowed_collections ??
+      (companion as { one_allowed_collections?: unknown } | undefined)?.one_allowed_collections
+    const allowed = Array.isArray(allowedRaw)
+      ? allowedRaw.map(String)
+      : typeof allowedRaw === 'string'
+        ? allowedRaw
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : []
+    const m2a = allowedRaw
+      ? {
+          discriminator: String(
+            (r as { one_collection_field?: string | null }).one_collection_field ||
+              (companion as { one_collection_field?: string | null } | undefined)
+                ?.one_collection_field ||
+              'collection'
+          ),
+          allowed
+        }
+      : null
 
-    let entries: unknown[]
-    if (Array.isArray(raw)) entries = raw
-    else if (typeof raw === 'object' && Array.isArray((raw as { create?: unknown }).create)) {
-      entries = (raw as { create: unknown[] }).create
-    } else entries = [raw]
+    let adds: unknown[] = []
+    let removes: unknown[] = []
+    let set = false
+    if (Array.isArray(raw)) adds = raw
+    else if (typeof raw === 'object') {
+      const o = raw as Record<string, unknown>
+      if (Array.isArray(o.set)) {
+        adds = o.set
+        set = true
+      } else if (Array.isArray(o.create) || Array.isArray(o.delete)) {
+        adds = Array.isArray(o.create) ? o.create : []
+        removes = Array.isArray(o.delete) ? o.delete : []
+      } else adds = [raw]
+    } else adds = [raw]
 
-    const ids = entries
-      .map((e) => {
-        if (e == null) return null
-        if (typeof e !== 'object') return e as string | number
-        const rec = e as Record<string, unknown>
-        const inner = jf in rec ? rec[jf] : rec
-        if (inner == null) return null
-        if (typeof inner !== 'object') return inner as string | number
-        const id = (inner as Record<string, unknown>).id
-        return typeof id === 'string' || typeof id === 'number' ? id : null
-      })
-      .filter((v): v is string | number => v != null && v !== '')
+    const links = adds
+      .map((e) => linkOf(e, jf, m2a))
+      .filter((l): l is AliasLink => !!l && l.id !== '')
+    const removals = removes
+      .map((e) => linkOf(e, jf, m2a))
+      .filter((l): l is AliasLink => !!l && l.id !== '')
 
     // Normalized draft value — auto-id `{regions[0].short_code}` tokens and
     // rule contexts read this; filterToActualColumns strips it before write.
-    payload[key] = ids
-    if (ids.length > 0) {
-      writes.push({
+    const normalized: unknown = m2a
+      ? links.map((l) => ({ collection: l.collection, id: l.id }))
+      : links.map((l) => l.id)
+    payload[key] = normalized
+    let write: AliasM2MWrite | null = null
+    if (links.length > 0 || removals.length > 0 || set) {
+      write = {
         field: key,
         junction: r.many_collection,
         parentFk: r.many_field,
         relatedFk: jf,
-        ids
-      })
+        ...(m2a ? { discriminator: m2a.discriminator } : {}),
+        links,
+        removals,
+        set,
+        ids: links.map((l) => l.id)
+      }
+      writes.push(write)
     }
+    stash.set(key, { value: normalized, write })
   }
   return writes
 }
 
+// A stored link with no discriminator (rows written before it was set)
+// matches any collection: it must never be duplicated beside itself.
+const sameLink = (a: AliasLink, b: AliasLink) =>
+  String(a.id) === String(b.id) &&
+  (!a.collection || !b.collection || a.collection.toLowerCase() === b.collection.toLowerCase())
+
 /**
- * Create the junction rows an alias write asked for, through createOne so
- * every downstream contract holds — junction auto-id recompute (the record's
- * rendered name), stored rollups, activity, queue materialization. Additive:
- * pairs that already exist are skipped. Never throws — a failed link must not
+ * Write the junction rows an alias write asked for, through createOne and
+ * deleteOne so every downstream contract holds — junction auto-id recompute
+ * (the record's rendered name), stored rollups, activity, queue
+ * materialization. Adds skip pairs that exist; removals and `set` delete
+ * through deleteOne (trash, history). Never throws — a failed link must not
  * fail the record write that carried it.
  */
 async function applyAliasM2MWrites(
@@ -3642,14 +3785,34 @@ async function applyAliasM2MWrites(
 ): Promise<void> {
   for (const w of writes) {
     try {
+      const cols = [w.relatedFk, ...(w.discriminator ? [w.discriminator] : [])]
       const existing = (await db(w.junction)
         .where({ [w.parentFk]: recordId })
-        .select(w.relatedFk)) as Array<Record<string, unknown>>
-      const have = new Set(existing.map((row) => String(row[w.relatedFk])))
-      for (const rid of w.ids) {
-        if (have.has(String(rid))) continue
-        await createOne(user, w.junction, { [w.parentFk]: recordId, [w.relatedFk]: rid }, req)
+        .select('id', ...cols)) as Array<Record<string, unknown>>
+      const have = existing.map((row) => ({
+        junctionId: row.id as string | number,
+        link: {
+          id: row[w.relatedFk] as string | number,
+          ...(w.discriminator ? { collection: String(row[w.discriminator] ?? '') } : {})
+        } as AliasLink
+      }))
+      for (const link of w.links) {
+        if (have.some((h) => sameLink(h.link, link))) continue
+        await createOne(
+          user,
+          w.junction,
+          {
+            [w.parentFk]: recordId,
+            [w.relatedFk]: link.id,
+            ...(w.discriminator && link.collection ? { [w.discriminator]: link.collection } : {})
+          },
+          req
+        )
       }
+      const gone = w.set
+        ? have.filter((h) => !w.links.some((l) => sameLink(l, h.link)))
+        : have.filter((h) => w.removals.some((l) => sameLink(l, h.link)))
+      for (const h of gone) await deleteOne(user, w.junction, h.junctionId, req)
     } catch (err) {
       console.warn(`alias m2m write failed for ${w.junction}.${w.field}:`, err)
     }
@@ -3660,10 +3823,26 @@ interface AliasO2MWrite {
   field: string
   collection: string
   fk: string
+  /** Rows to create (no id). */
   rows: Array<Record<string, unknown>>
+  /** Rows to change in place (id + the fields to write). */
+  updates: Array<{ id: string | number; patch: Record<string, unknown> }>
+  /** Rows to remove. */
+  deletes: Array<string | number>
+  /** True: the parent's child set becomes exactly `rows` + `updates`. */
+  set: boolean
 }
 
 const NESTED_O2M_ROW_CAP = 500
+
+function idOf(e: unknown): string | number | null {
+  if (typeof e === 'string' || typeof e === 'number') return e === '' ? null : e
+  if (e && typeof e === 'object') {
+    const id = (e as Record<string, unknown>).id
+    if (typeof id === 'string' || typeof id === 'number') return id === '' ? null : id
+  }
+  return null
+}
 
 /**
  * Nested ONE-TO-MANY writes — the other half of the Directus payload shape:
@@ -3671,11 +3850,17 @@ const NESTED_O2M_ROW_CAP = 500
  * create or update. An integration that had to create the record, read its id
  * back and then post each child set in its own call sends ONE payload.
  *
- * Only rows WITHOUT an `id` are taken (each becomes a create with the parent
- * FK set by the server — whatever the caller put in that column is replaced).
- * Rows that carry an id, and bare ids, are ignored: a client echoing the
- * children it just read must never turn into a wave of child updates. Additive
- * like the M2M half — nothing is ever detached or deleted here.
+ * Shapes:
+ *   [rows]                          rows without an id are created; rows WITH
+ *                                   an id are changed in place (on an update
+ *                                   of the parent — ignored on its create)
+ *   {create: [...], update: [...],  the same, spelled out; `delete` takes
+ *    delete: [ids]}                 ids or `{id}` objects
+ *   {set: [...]}                    the child set becomes exactly these rows:
+ *                                   rows with an id are changed, rows without
+ *                                   one created, every other child removed
+ * Bare ids in a plain array are ignored: a client echoing the children it
+ * just read must never turn into a wave of child updates.
  *
  * The alias key is REMOVED from the payload (it is not a column, and rules or
  * validation must not judge an array as a field value).
@@ -3704,33 +3889,50 @@ async function extractAliasO2MWrites(
       continue
     const raw = payload[key]
     let entries: unknown[] = []
+    let explicitUpdates: unknown[] = []
+    let deleteEntries: unknown[] = []
+    let set = false
     if (Array.isArray(raw)) entries = raw
     else if (raw && typeof raw === 'object') {
-      const create = (raw as { create?: unknown }).create
-      if (Array.isArray(create)) entries = create
-      else if (
-        !('id' in (raw as object)) &&
-        !('update' in (raw as object)) &&
-        !('delete' in (raw as object))
-      )
-        entries = [raw]
+      const o = raw as Record<string, unknown>
+      if (Array.isArray(o.set)) {
+        entries = o.set
+        set = true
+      } else if (Array.isArray(o.create) || Array.isArray(o.update) || Array.isArray(o.delete)) {
+        entries = Array.isArray(o.create) ? o.create : []
+        explicitUpdates = Array.isArray(o.update) ? o.update : []
+        deleteEntries = Array.isArray(o.delete) ? o.delete : []
+      } else if (!('id' in o)) entries = [raw]
     }
-    const rows = entries.filter(
-      (e): e is Record<string, unknown> =>
-        !!e &&
-        typeof e === 'object' &&
-        !Array.isArray(e) &&
-        (e as Record<string, unknown>).id == null
-    )
+    const isRow = (e: unknown): e is Record<string, unknown> =>
+      !!e && typeof e === 'object' && !Array.isArray(e)
+    const rows = entries.filter((e): e is Record<string, unknown> => isRow(e) && idOf(e) == null)
+    const updates = [...entries, ...explicitUpdates]
+      .filter((e): e is Record<string, unknown> => isRow(e) && idOf(e) != null)
+      .map((e) => {
+        const { id, ...patch } = e
+        return { id: id as string | number, patch }
+      })
+    const deletes = deleteEntries.map(idOf).filter((v): v is string | number => v != null)
     delete payload[key]
-    if (rows.length === 0) continue
-    if (rows.length > NESTED_O2M_ROW_CAP) {
+    if (rows.length === 0 && updates.length === 0 && deletes.length === 0 && !set) continue
+    if (rows.length + updates.length + deletes.length > NESTED_O2M_ROW_CAP) {
       throw Object.assign(
-        new Error(`"${key}" carries ${rows.length} rows — at most ${NESTED_O2M_ROW_CAP} per write`),
+        new Error(
+          `"${key}" carries ${rows.length + updates.length + deletes.length} rows — at most ${NESTED_O2M_ROW_CAP} per write`
+        ),
         { statusCode: 400, code: 'NESTED_ROWS_LIMIT' }
       )
     }
-    writes.push({ field: key, collection: r.many_collection, fk: r.many_field, rows })
+    writes.push({
+      field: key,
+      collection: r.many_collection,
+      fk: r.many_field,
+      rows,
+      updates,
+      deletes,
+      set
+    })
   }
   return writes.sort((a, b) => order.indexOf(a.field) - order.indexOf(b.field))
 }
@@ -3740,8 +3942,12 @@ function mergeO2MWrites(a: AliasO2MWrite[], b: AliasO2MWrite[]): AliasO2MWrite[]
   const out = [...a]
   for (const w of b) {
     const hit = out.find((x) => x.field === w.field)
-    if (hit) hit.rows.push(...w.rows)
-    else out.push(w)
+    if (hit) {
+      hit.rows.push(...w.rows)
+      hit.updates.push(...w.updates)
+      hit.deletes.push(...w.deletes)
+      hit.set = hit.set || w.set
+    } else out.push(w)
   }
   return out
 }
@@ -3769,46 +3975,126 @@ async function applyAliasO2MWrites(
   isNewParent: boolean
 ): Promise<NestedCreated> {
   const created: NestedCreated = []
-  for (const w of writes) {
-    const preExisting = new Set<string>()
-    if (!isNewParent) {
-      const rows = (await db(w.collection)
-        .where({ [w.fk]: parentId })
-        .select('id')) as Array<{
-        id: string | number
-      }>
-      for (const r of rows) preExisting.add(String(r.id))
-    }
-    let last: Record<string, unknown> | null = null
-    for (let i = 0; i < w.rows.length; i++) {
+  // Rows changed in place, with what they held before, for the undo.
+  const changed: Array<{
+    collection: string
+    id: string | number
+    prior: Record<string, unknown>
+  }> = []
+  const nestedError = (err: unknown, w: AliasO2MWrite, where: string) => {
+    const e = err as Error & { nested?: unknown }
+    e.message = `${where}: ${nestedReason(e)}`
+    e.nested = { field: w.field, collection: w.collection }
+    return e
+  }
+  const undo = async (): Promise<string> => {
+    const stuck = await undoNestedCreates(user, created, req)
+    const stuckUpdates: string[] = []
+    for (const c of changed.reverse()) {
+      if (Object.keys(c.prior).length === 0) continue
       try {
-        const row = (await createOne(
+        await updateOne(
           user,
-          w.collection,
-          { ...w.rows[i], [w.fk]: parentId },
+          c.collection,
+          c.id,
+          { ...c.prior, _change_reason: 'Nested write undone: a later row was refused' },
           req,
-          workspaceId,
-          { skipRollupRecalc: true }
-        )) as Record<string, unknown> | null
-        const rid = row?.id as string | number | undefined
-        if (rid != null && !preExisting.has(String(rid)))
-          created.push({ collection: w.collection, id: rid })
-        if (row) last = row
-      } catch (err) {
-        const stuck = await undoNestedCreates(user, created, req)
-        const e = err as Error & { nested?: unknown }
-        const where = `${w.field}[${i}]`
-        e.message = `${where}: ${nestedReason(e)} — nothing was created${
-          stuck.length
-            ? ` (could not remove: ${stuck.map((x) => `${x.collection} ${x.id}`).join(', ')})`
-            : ''
-        }`
-        e.nested = { field: w.field, index: i, collection: w.collection }
-        throw e
+          workspaceId
+        )
+      } catch {
+        stuckUpdates.push(`${c.collection} ${c.id}`)
       }
     }
-    // One recalc for the whole set: every row shares the parent.
-    if (last) await recalcAffectedRollups(w.collection, last)
+    const left = [...stuck.map((x) => `${x.collection} ${x.id}`), ...stuckUpdates]
+    return left.length ? ` (could not put back: ${left.join(', ')})` : ''
+  }
+  try {
+    for (const w of writes) {
+      const preExisting = new Set<string>()
+      const owned = (await db(w.collection)
+        .where({ [w.fk]: parentId })
+        .select('id')) as Array<{ id: string | number }>
+      for (const r of owned) preExisting.add(String(r.id))
+      const ownedOrRefuse = (id: string | number, what: string) => {
+        if (isNewParent || !preExisting.has(String(id))) {
+          throw Object.assign(new Error(`${w.field}: ${what} ${id} is not a row of this record`), {
+            statusCode: 422,
+            code: 'NESTED_ROW_NOT_OWNED',
+            nested: { field: w.field, id }
+          })
+        }
+      }
+      // Changes first (a create that reads a sibling sees the change), then
+      // creates, then removals last — a refusal before them removes nothing.
+      const updates = isNewParent ? [] : w.updates
+      for (let i = 0; i < updates.length; i++) {
+        const u = updates[i]
+        ownedOrRefuse(u.id, 'row')
+        try {
+          const { [w.fk]: _fk, ...patch } = u.patch
+          if (Object.keys(patch).length === 0) continue
+          const before = (await db(w.collection).where({ id: u.id }).first()) as
+            | Record<string, unknown>
+            | undefined
+          const prior: Record<string, unknown> = {}
+          for (const k of Object.keys(patch))
+            if (before && !k.startsWith('_') && k in before) prior[k] = before[k]
+          await updateOne(user, w.collection, u.id, patch, req, workspaceId)
+          changed.push({ collection: w.collection, id: u.id, prior })
+        } catch (err) {
+          throw nestedError(err, w, `${w.field}[${u.id}]`)
+        }
+      }
+      let last: Record<string, unknown> | null = null
+      for (let i = 0; i < w.rows.length; i++) {
+        try {
+          const row = (await createOne(
+            user,
+            w.collection,
+            { ...w.rows[i], [w.fk]: parentId },
+            req,
+            workspaceId,
+            { skipRollupRecalc: true }
+          )) as Record<string, unknown> | null
+          const rid = row?.id as string | number | undefined
+          if (rid != null && !preExisting.has(String(rid)))
+            created.push({ collection: w.collection, id: rid })
+          if (row) last = row
+        } catch (err) {
+          throw nestedError(err, w, `${w.field}[${i}]`)
+        }
+      }
+      if (!isNewParent) {
+        const keep = new Set([
+          ...updates.map((u) => String(u.id)),
+          ...created.filter((c) => c.collection === w.collection).map((c) => String(c.id))
+        ])
+        const removals = w.set
+          ? [...preExisting].filter((id) => !keep.has(id))
+          : w.deletes.map(String)
+        for (const id of removals) {
+          ownedOrRefuse(id, 'row')
+          try {
+            await deleteOne(user, w.collection, id, req, workspaceId)
+          } catch (err) {
+            throw nestedError(err, w, `${w.field} delete ${id}`)
+          }
+        }
+      }
+      // One recalc for the whole set: every row shares the parent.
+      if (last) await recalcAffectedRollups(w.collection, last)
+      else if (updates.length > 0 || (w.deletes.length > 0 && !isNewParent)) {
+        const any = (await db(w.collection)
+          .where({ [w.fk]: parentId })
+          .first()) as Record<string, unknown> | undefined
+        if (any) await recalcAffectedRollups(w.collection, any)
+      }
+    }
+  } catch (err) {
+    const e = err as Error
+    const note = await undo()
+    e.message = `${e.message} — nothing was changed${note}`
+    throw e
   }
   return created
 }

@@ -632,7 +632,7 @@ export const graphqlMutations: DocSection = {
     },
     {
       type: 'note',
-      text: 'Rows are created in payload order through the normal create path, as the caller. A refused row undoes the whole create and the error names it (`lines[2]: …`). On update the write is additive: rows without an id are added, nothing is changed or removed. See Items API → Create with related rows for the full rules.'
+      text: 'Rows are created in payload order through the normal create path, as the caller. A refused row undoes the whole create and the error names it (`lines[2]: …`). On update, rows with an id are changed in place, rows without one are added, `{delete: [ids]}` removes and `{set: [...]}` replaces the child set; a plain array never removes. Many-to-many links take the same `set` / `delete` forms under the relation name, and a polymorphic link names its collection. See Items API → Create with related rows and Links under a relation name.'
     },
     {
       type: 'note',

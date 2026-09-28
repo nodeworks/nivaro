@@ -46,6 +46,58 @@ export async function legacyCompatRoutes(app: FastifyInstance) {
    * Directus: `POST /graphql`. Re-dispatched to the real handler so persisted
    * queries, auth and error shaping can never drift between the two paths.
    */
+  /**
+   * Directus: `/items/<collection>[/<id>]` at the host root. Re-dispatched to
+   * the same path under `/api` with the query string, headers the handler
+   * reads and the body, so a caller written against the legacy base URL
+   * changes nothing. One request-log row (the inner dispatch is marked), and
+   * the inner write adopts the outer request's chain.
+   */
+  const forwardItems = async (
+    req: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply
+  ) => {
+    await authenticate(req, reply).catch(() => undefined)
+    const headers: Record<string, string> = {}
+    for (const name of [
+      'authorization',
+      'cookie',
+      'content-type',
+      'idempotency-key',
+      'x-workspace',
+      'accept'
+    ]) {
+      const v = req.headers[name]
+      if (v) headers[name] = Array.isArray(v) ? v[0] : v
+    }
+    const dispatchToken = randomUUID()
+    headers[INTERNAL_DISPATCH_HEADER] = dispatchToken
+    internalDispatchTokens.add(dispatchToken)
+    const url = `/api${req.url}`
+    const hasBody = req.method !== 'GET' && req.method !== 'HEAD' && req.body !== undefined
+    let res: Awaited<ReturnType<typeof app.inject>>
+    try {
+      res = await app.inject({
+        method: req.method as 'GET' | 'POST' | 'PATCH' | 'DELETE' | 'PUT',
+        url,
+        headers,
+        ...(hasBody ? { payload: req.body as Record<string, unknown> } : {})
+      })
+    } finally {
+      internalDispatchTokens.delete(dispatchToken)
+    }
+    const out = reply.code(res.statusCode)
+    for (const name of ['content-type', 'x-nivaro-upserted', 'retry-after']) {
+      const v = res.headers[name]
+      if (v) out.header(name, String(v))
+    }
+    return out.send(res.body)
+  }
+  for (const method of ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] as const) {
+    app.route({ method, url: '/items/:collection', handler: forwardItems })
+    app.route({ method, url: '/items/:collection/*', handler: forwardItems })
+  }
+
   app.post('/graphql', async (req, reply) => {
     // Resolve the caller for the request log (auth/ip/user land on the OUTER
     // row); the real 401 shaping stays with the inner GraphQL handler, so an
