@@ -11,6 +11,7 @@ import {
   useOverlayState
 } from '../context'
 import { get, post } from '../lib/commands'
+import { initialFilterSelection } from '../lib/query-filter-seed'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -439,20 +440,17 @@ type QueryWidgetFilter = {
   /** Pre-selected values on load. '$current_year' resolves to the current
    *  calendar year (default-year behavior). */
   default_values?: Array<string | number>
+  /** Query-string key that pre-selects this filter when the page URL carries
+   *  it (`?fy=2026`, a comma list for several values, compared on
+   *  value_field). Beats default_values and the user-scope seeding; when the
+   *  URL lacks it, those apply as before. */
+  url_param?: string
 }
 
 function defaultFilterSelection(
   filters: QueryWidgetFilter[] | undefined
 ): Record<string, Array<Record<string, unknown>>> {
-  const out: Record<string, Array<Record<string, unknown>>> = {}
-  for (const f of filters ?? []) {
-    if (!f.default_values?.length) continue
-    const vf = f.value_field ?? 'id'
-    out[f.param] = f.default_values.map((v) => ({
-      [vf]: v === '$current_year' ? new Date().getFullYear() : v
-    }))
-  }
-  return out
+  return initialFilterSelection(filters, typeof window === 'undefined' ? '' : window.location.search)
 }
 
 type QueryRowClick = {
