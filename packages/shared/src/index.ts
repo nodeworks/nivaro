@@ -92,6 +92,7 @@ export type {
   UnsavedSummary
 } from './components/ItemEditForm'
 export { ItemEditForm } from './components/ItemEditForm'
+export { AutofillRunsChip } from './components/import/AutofillRunsChip'
 export {
   type DocumentApplySelection,
   DocumentAutofillButton,
@@ -312,6 +313,13 @@ export {
 } from './lib/api-version'
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
+export {
+  type AutofillRun,
+  dismissAutofillRun,
+  getAutofillRuns,
+  startAutofillRun,
+  useAutofillRuns
+} from './lib/autofill-runs'
 export * from './lib/catalog-item-open'
 export * from './lib/commands'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'

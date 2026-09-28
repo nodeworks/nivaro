@@ -1,4 +1,5 @@
 import {
+  AutofillRunsChip,
   ForceReloadBanner,
   parseThemeAccents,
   resolveAccentColor,
@@ -108,7 +109,7 @@ import {
   useState,
   useSyncExternalStore
 } from 'react'
-import { Link, Navigate, Outlet, useLocation } from 'react-router'
+import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { DevStaleBanner } from '@/components/dev-stale-banner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
@@ -1257,6 +1258,7 @@ export function AppLayout() {
         <CommandPalette />
         <KeyboardShortcuts />
         <ForceRefreshBanner />
+        <AutofillChips />
       </TooltipProvider>
     </RealtimeContext.Provider>
   )
@@ -1406,5 +1408,16 @@ function RecorderBadge() {
       <span className='h-2 w-2 animate-pulse rounded-full bg-red-500' />
       Recording · {rec.steps.length} step{rec.steps.length === 1 ? '' : 's'}
     </Link>
+  )
+}
+
+/** Document-autofill runs follow the person across pages; a click opens the
+ *  new-record form on the run (the form takes the dialog from there). */
+function AutofillChips() {
+  const navigate = useNavigate()
+  return (
+    <AutofillRunsChip
+      onOpen={(run) => navigate(`/collections/${run.collection}/new?autofill=${run.id}`)}
+    />
   )
 }

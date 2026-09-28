@@ -7,15 +7,18 @@ import {
   FileText,
   HelpCircle,
   Loader2,
-  Sparkles,
   Wand2
 } from 'lucide-react'
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useOptionalNivaroClient } from '../../context'
 import { type AskRelationInput, askPickerNarrowing } from '../../lib/autofill-ask-filter'
-import { pollProposal } from '../../lib/autofill-poll'
+import {
+  dismissAutofillRun,
+  setAutofillRunPresented,
+  startAutofillRun,
+  useAutofillRun
+} from '../../lib/autofill-runs'
 import { cn } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { Button } from '../ui/button'
@@ -340,11 +343,15 @@ export function DocumentAutofillButton({
   const { apiBase, authHeaders, credentials } = apiCfg
   const qc = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [pollId, setPollId] = useState<string | null>(null)
-  /** 'Tell me when it's ready': the waiting dialog folds into a floating chip
-   *  that keeps polling; a landed proposal turns it into a Review button. */
+  /** The file is on its way up — no run id yet. */
+  const [uploading, setUploading] = useState<string | null>(null)
+  /** The run this form is showing (the store polls it — see lib/autofill-runs). */
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const run = useAutofillRun(activeId)
+  /** 'Tell me when it's ready': the dialog closes, the run keeps going in the
+   *  store and the app shell's chip shows it on every page. */
   const [minimized, setMinimized] = useState(false)
+  const busy = uploading ?? (run?.status === 'reading' ? run.documentName : null)
   const [hint, setHint] = useState(0)
   const [proposal, setProposal] = useState<DocumentProposal | null>(null)
   const [fieldOn, setFieldOn] = useState<Set<string>>(new Set())
@@ -373,41 +380,38 @@ export function DocumentAutofillButton({
     setAnswers({})
   }, [])
 
-  // Poll a running proposal until it lands (or fails). A 202 keeps the
-  // waiting dialog up; only a landed or failed run clears busy/pollId.
+  // The run landed: present it (unless the person asked to be told later —
+  // then the shell chip offers it and a click brings us back with ?autofill=).
+  const shownRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!pollId) return
-    return pollProposal({
-      fetchResult: async () => {
-        const res = await fetch(`${apiBase}/ai/extract-record/result/${pollId}`, {
-          headers: authHeaders,
-          credentials
-        })
-        const json = await res.json().catch(() => ({}))
-        return { status: res.status, ok: res.ok, json }
-      },
-      onRunning: (name) => {
-        if (name) setBusy((b) => b ?? name)
-      },
-      onDone: (data) => {
-        showProposal(data as DocumentProposal)
-        void qc.invalidateQueries({ queryKey: ['nvr-ai-autofill-analytics'] })
-      },
-      onError: (message) => toast.error(message),
-      onSettled: () => {
-        setBusy(null)
-        setPollId(null)
-      }
-    })
-  }, [pollId, apiBase, authHeaders, credentials, showProposal, qc])
+    if (!run || minimized) return
+    if (run.status === 'ready' && shownRef.current !== run.id) {
+      shownRef.current = run.id
+      showProposal(run.proposal as DocumentProposal)
+      void qc.invalidateQueries({ queryKey: ['nvr-ai-autofill-analytics'] })
+    } else if (run.status === 'failed') {
+      toast.error(run.error ?? 'Document autofill failed')
+      dismissAutofillRun(run.id)
+      setActiveId(null)
+    }
+  }, [run, minimized, showProposal, qc])
 
-  // A proposal id handed in by the URL: open it once.
+  // While this form shows the run's dialog the shell chip stays out of the way.
+  useEffect(() => {
+    if (!activeId) return
+    setAutofillRunPresented(activeId, !minimized)
+    return () => setAutofillRunPresented(activeId, false)
+  }, [activeId, minimized])
+
+  // A proposal id handed in by the URL: watch it (the store already may be)
+  // and open it here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: consume the id once
   useEffect(() => {
     if (!initialProposalId || consumedRef.current === initialProposalId) return
     consumedRef.current = initialProposalId
-    setBusy('the document')
+    startAutofillRun(apiCfg, { id: initialProposalId, collection })
+    setActiveId(initialProposalId)
     setMinimized(false)
-    setPollId(initialProposalId)
     onProposalConsumed?.()
   }, [initialProposalId, onProposalConsumed])
 
@@ -444,24 +448,26 @@ export function DocumentAutofillButton({
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
-    setBusy(file.name)
+    setUploading(file.name)
     setMinimized(false)
     try {
       const id = await startDocumentExtraction(apiCfg, file, collection, { layoutId })
-      setPollId(id)
+      startAutofillRun(apiCfg, { id, collection, documentName: file.name, layoutId })
+      setActiveId(id)
     } catch (err) {
       toast.error((err as Error).message)
-      setBusy(null)
+    } finally {
+      setUploading(null)
     }
   }
 
   async function leaveRunning() {
-    if (!pollId) return
-    // Keep polling from here (the chip shows progress and opens the review);
-    // the notification still covers leaving the page before it lands.
+    if (!activeId) return
+    // The store keeps polling and the shell chip shows the run on every page;
+    // the notification covers closing the tab before it lands.
     setMinimized(true)
     try {
-      await fetch(`${apiBase}/ai/extract-record/${pollId}/notify`, {
+      await fetch(`${apiBase}/ai/extract-record/${activeId}/notify`, {
         method: 'POST',
         headers: authHeaders,
         credentials
@@ -469,6 +475,13 @@ export function DocumentAutofillButton({
     } catch {
       toast.error('Could not arrange the notification')
     }
+  }
+
+  /** The review is over (applied or closed): forget the run. */
+  function closeProposal() {
+    setProposal(null)
+    if (activeId) dismissAutofillRun(activeId)
+    setActiveId(null)
   }
 
   function toggle(set: Set<string>, key: string, setter: (s: Set<string>) => void) {
@@ -530,7 +543,7 @@ export function DocumentAutofillButton({
       toast.success(
         `Filled ${n} field${n === 1 ? '' : 's'}${lineCount ? ` and ${lineCount} line${lineCount === 1 ? '' : 's'}` : ''}${resolved ? ` (${resolved} answered by you)` : ''} from ${proposal.document.name} — review, then Create`
       )
-      setProposal(null)
+      closeProposal()
     } finally {
       setApplying(false)
     }
@@ -570,47 +583,13 @@ export function DocumentAutofillButton({
         </button>
       )}
 
-      {minimized &&
-        (busy || proposal) &&
-        createPortal(
-          <button
-            type='button'
-            onClick={() => setMinimized(false)}
-            data-autofill-chip={proposal ? 'ready' : 'reading'}
-            className={cn(
-              'fixed bottom-4 right-4 z-[110] flex max-w-[320px] items-center gap-2.5 rounded-full border px-3.5 py-2 text-left text-[12.5px] shadow-lg transition-colors',
-              proposal
-                ? 'border-nvr-cyan bg-nvr-cyan text-[#172940] hover:bg-[#00b8e0]'
-                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-[#334155] dark:bg-[#1e293b] dark:text-slate-200 dark:hover:bg-[#263449]'
-            )}
-            title={proposal ? 'Open what the document says' : 'Show progress'}
-          >
-            {proposal ? (
-              <Sparkles className='h-3.5 w-3.5 shrink-0' />
-            ) : (
-              <Loader2 className='h-3.5 w-3.5 shrink-0 animate-spin text-nvr-navy dark:text-nvr-cyan' />
-            )}
-            <span className='min-w-0'>
-              <span className='block truncate font-medium'>
-                {proposal ? 'Document read — review it' : `Reading ${busy}`}
-              </span>
-              {!proposal && (
-                <span className='block truncate text-[11px] text-slate-500 dark:text-slate-400'>
-                  {WAIT_HINTS[hint]}
-                </span>
-              )}
-            </span>
-          </button>,
-          document.body
-        )}
-
       {/* One dialog, two bodies: the waiting state (30–70s, say what it is
           doing) and the review. Two separate Radix dialogs swapping in the
           same tick sometimes left the second one unpresented. */}
       <Dialog
         open={!minimized && (!!busy || !!proposal)}
         onOpenChange={(o) => {
-          if (!o && !busy && !applying) setProposal(null)
+          if (!o && !busy && !applying) closeProposal()
         }}
       >
         {busy && !proposal ? (
@@ -622,7 +601,7 @@ export function DocumentAutofillButton({
               </DialogTitle>
               <DialogDescription>{WAIT_HINTS[hint]} Usually under a minute.</DialogDescription>
             </DialogHeader>
-            {pollId && (
+            {activeId && (
               <DialogFooter className='sm:justify-start'>
                 <Button
                   type='button'
@@ -927,7 +906,7 @@ export function DocumentAutofillButton({
                       type='button'
                       variant='ghost'
                       size='sm'
-                      onClick={() => setProposal(null)}
+                      onClick={closeProposal}
                       disabled={applying}
                     >
                       Cancel
