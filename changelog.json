@@ -1,10 +1,65 @@
 {
-  "generated_at": "2026-09-28T02:44:00.478Z",
+  "generated_at": "2026-09-28T03:32:08.763Z",
   "releases": [
+    {
+      "version": "0.1.351",
+      "tag": "v0.1.351",
+      "date": "2026-09-27T23:31:56-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "run the GraphQL playground as a partner key, with fixtures",
+              "hash": "96183cbf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the staging copy is opt-in and lands by plain inserts",
+              "hash": "ba3afc67"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "environment manifest per extension",
+              "hash": "68c61ea5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "copy a list or record request as curl, SDK or GraphQL",
+              "hash": "de3fb816"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release chain: tag the app after the react bump",
+              "hash": "6a507d1e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release chain: a registry request that never answers is a retry, not a stall",
+              "hash": "135d026b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SDK coverage check, three documented SDK commands answer again",
+              "hash": "eac8f1a1"
+            }
+          ]
+        }
+      ],
+      "count": 7
+    },
     {
       "version": "0.1.350",
       "tag": "v0.1.350",
-      "date": "2026-09-27T22:43:49-04:00",
+      "date": "2026-09-27T22:44:00-04:00",
       "sections": [
         {
           "label": "Other",
