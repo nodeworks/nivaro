@@ -1767,6 +1767,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const layoutId = /^\d+$/.test(layoutRaw) ? Number(layoutRaw) : null
     const background = /^(1|true|yes)$/i.test(fieldValue('background'))
     // Documents the previous proposal already stored, read again alongside.
+    // Only the caller's OWN uploads (that is what an earlier run stored as
+    // them) — any other id would let a caller read a stranger's file through
+    // the model's answer. Admins may name any file.
     const stored: ExtractInputFile[] = []
     for (const id of fieldValue('file_ids')
       .split(',')
@@ -1775,6 +1778,11 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       .slice(0, MAX_DOCUMENTS)) {
       const row = await getFile(id)
       if (!row) continue
+      if (
+        !req.isAdmin &&
+        String(row.uploaded_by ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()
+      )
+        continue
       try {
         stored.push({
           buffer: await readFileBuffer(row),
