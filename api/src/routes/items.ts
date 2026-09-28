@@ -22,6 +22,7 @@ import {
   createOne,
   deleteOne,
   ForbiddenError,
+  aggregateItems,
   readItems,
   readOne,
   updateOne,
@@ -100,13 +101,65 @@ export async function itemsRoutes(app: FastifyInstance) {
       offset: q.offset ? Number(q.offset) : undefined,
       page: q.page ? Number(q.page) : undefined,
       search: q.search,
-      filter: parsedFilter
+      filter: parsedFilter,
+      ...(q.after !== undefined ? { after: String(q.after) } : {}),
+      ...(q.count === '0' || q.count === 'false' ? { count: false } : {})
     }
     try {
       const result = await readItems(
         req.user!,
         collection,
         query,
+        req,
+        req.workspaceId ?? undefined
+      )
+      return reply.send(result)
+    } catch (err) {
+      return handleError(err, reply)
+    }
+  })
+
+  // Aggregates over the rows a list read would match.
+  //   GET /items/orders/aggregate?groupBy=status&sum=amount&countAll=1&sort=-sum.amount
+  app.get('/:collection/aggregate', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const q = req.query as Record<string, string>
+    let parsedFilter: Record<string, unknown> | undefined
+    if (q.filter) {
+      try {
+        parsedFilter = JSON.parse(q.filter) as Record<string, unknown>
+      } catch {
+        return reply.code(400).send({ error: 'Invalid filter: must be valid JSON' })
+      }
+    }
+    const list = (v: string | undefined) =>
+      v
+        ? String(v)
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : undefined
+    try {
+      const result = await aggregateItems(
+        req.user!,
+        collection,
+        {
+          filter: parsedFilter,
+          search: q.search,
+          aggregate: {
+            groupBy: list(q.groupBy ?? q.group_by),
+            countAll: q.countAll === '1' || q.countAll === 'true' || q.count_all === '1',
+            count: list(q.count),
+            countDistinct: list(q.countDistinct ?? q.count_distinct),
+            sum: list(q.sum),
+            avg: list(q.avg),
+            min: list(q.min),
+            max: list(q.max),
+            sort: list(q.sort),
+            limit: q.limit ? Number(q.limit) : undefined,
+            offset: q.offset ? Number(q.offset) : undefined
+          }
+        },
         req,
         req.workspaceId ?? undefined
       )
@@ -893,7 +946,10 @@ export async function itemsRoutes(app: FastifyInstance) {
         : 500
     // A driver error carries the statement in its message; callers get the
     // reason only.
-    const message = status === 500 ? reasonWithoutSql(String(e?.message ?? 'failed')) : String(e?.message ?? 'failed')
+    const message =
+      status === 500
+        ? reasonWithoutSql(String(e?.message ?? 'failed'))
+        : String(e?.message ?? 'failed')
     // Constraint refusals are the caller's data, not a server fault.
     const refusal = describeDbRefusal(err)
     if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }

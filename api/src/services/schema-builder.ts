@@ -12,6 +12,8 @@ import {
   GraphQLObjectType,
   type GraphQLOutputType,
   GraphQLSchema,
+  Kind,
+  type SelectionNode,
   GraphQLString
 } from 'graphql'
 import type { Knex } from 'knex'
@@ -28,6 +30,12 @@ import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
 import { applyNestedGate, narrowNestedRow, nestedGate } from './graphql-nested-access.js'
 import {
+  AGGREGATE_FUNCTIONS,
+  type AggregateFunction,
+  type AggregateSpec
+} from './item-aggregates.js'
+import {
+  aggregateItems,
   applyFilterToQuery,
   CollectionNotFoundError,
   createOne,
@@ -154,6 +162,11 @@ const StringFilterOps = new GraphQLInputObjectType({
     _ncontains: { type: GraphQLString },
     _starts_with: { type: GraphQLString },
     _ends_with: { type: GraphQLString },
+    _icontains: { type: GraphQLString },
+    _nstarts_with: { type: GraphQLString },
+    _nends_with: { type: GraphQLString },
+    _empty: { type: GraphQLBoolean },
+    _nempty: { type: GraphQLBoolean },
     _in: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
     _nin: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
     _null: { type: GraphQLBoolean },
@@ -170,6 +183,8 @@ const IntFilterOps = new GraphQLInputObjectType({
     _gte: { type: GraphQLInt },
     _lt: { type: GraphQLInt },
     _lte: { type: GraphQLInt },
+    _between: { type: new GraphQLList(new GraphQLNonNull(GraphQLInt)) },
+    _nbetween: { type: new GraphQLList(new GraphQLNonNull(GraphQLInt)) },
     _in: { type: new GraphQLList(new GraphQLNonNull(GraphQLInt)) },
     _nin: { type: new GraphQLList(new GraphQLNonNull(GraphQLInt)) },
     _null: { type: GraphQLBoolean },
@@ -186,6 +201,8 @@ const FloatFilterOps = new GraphQLInputObjectType({
     _gte: { type: GraphQLFloat },
     _lt: { type: GraphQLFloat },
     _lte: { type: GraphQLFloat },
+    _between: { type: new GraphQLList(new GraphQLNonNull(GraphQLFloat)) },
+    _nbetween: { type: new GraphQLList(new GraphQLNonNull(GraphQLFloat)) },
     _in: { type: new GraphQLList(new GraphQLNonNull(GraphQLFloat)) },
     _nin: { type: new GraphQLList(new GraphQLNonNull(GraphQLFloat)) },
     _null: { type: GraphQLBoolean },
@@ -213,6 +230,8 @@ const DateFilterOps = new GraphQLInputObjectType({
     _gte: { type: GraphQLString },
     _lt: { type: GraphQLString },
     _lte: { type: GraphQLString },
+    _between: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
+    _nbetween: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
     _null: { type: GraphQLBoolean },
     _nnull: { type: GraphQLBoolean }
   }
@@ -223,6 +242,11 @@ const IDFilterOps = new GraphQLInputObjectType({
   fields: {
     _eq: { type: GraphQLID },
     _neq: { type: GraphQLID },
+    // Keys are ordered: a reader walking a collection asks for ids after the last one.
+    _gt: { type: GraphQLID },
+    _gte: { type: GraphQLID },
+    _lt: { type: GraphQLID },
+    _lte: { type: GraphQLID },
     _in: { type: new GraphQLList(new GraphQLNonNull(GraphQLID)) },
     _nin: { type: new GraphQLList(new GraphQLNonNull(GraphQLID)) },
     _null: { type: GraphQLBoolean },
@@ -949,7 +973,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       },
       limit: { type: GraphQLInt },
       offset: { type: GraphQLInt },
-      search: { type: GraphQLString }
+      search: { type: GraphQLString },
+      after: {
+        type: GraphQLString,
+        description:
+          'Keyset paging: "start" for the first page, then next_cursor of the page before (read it from <collection>_metadata with the same arguments). Replaces offset.'
+      }
     }
     const listRead = (args: Record<string, unknown>, ctx: GQLContext, fields?: string[]) => {
       if (!ctx.user)
@@ -962,6 +991,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         limit: args.limit as number | undefined,
         offset: args.offset as number | undefined,
         search: args.search as string | undefined,
+        ...(typeof args.after === 'string' ? { after: args.after } : {}),
         ...(fields ? { fields } : {})
       })
     }
@@ -971,7 +1001,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       fields: {
         total: { type: new GraphQLNonNull(GraphQLInt) },
         limit: { type: new GraphQLNonNull(GraphQLInt) },
-        offset: { type: new GraphQLNonNull(GraphQLInt) }
+        offset: { type: new GraphQLNonNull(GraphQLInt) },
+        next_cursor: {
+          type: GraphQLString,
+          description: 'With `after`: the cursor of the next page, null on the last one.'
+        }
       }
     })
 
@@ -995,9 +1029,128 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       resolve: async (_root, args: Record<string, unknown>, ctx: GQLContext) => {
         try {
           const page = await listRead(args, ctx, ['id'])
-          return { total: page.total, limit: page.limit, offset: page.offset }
+          return {
+            total: page.total ?? 0,
+            limit: page.limit,
+            offset: page.offset,
+            next_cursor: (page as { next_cursor?: string | null }).next_cursor ?? null
+          }
         } catch (e) {
           wrapError(e)
+        }
+      }
+    }
+
+    // ── Aggregates: `<name>_aggregated(filter, groupBy) { countAll sum { amount } }`
+    // Which figures to compute is read off the selection, so a query pays for
+    // what it asks.
+    {
+      const linked = (f: string) => o2mMap.has(`${name}.${f}`) || m2mMap.has(`${name}.${f}`)
+      const stored = fields.filter((f) => !linked(f.field) && f.type !== 'alias')
+      const numeric = stored.filter(
+        (f) => f.field !== 'id' && ['integer', 'bigInteger', 'float', 'decimal'].includes(f.type)
+      )
+      const ordered = stored.filter((f) =>
+        [
+          'integer',
+          'bigInteger',
+          'float',
+          'decimal',
+          'datetime',
+          'date',
+          'time',
+          'string'
+        ].includes(f.type)
+      )
+      const bag = (
+        suffix: string,
+        list: typeof stored,
+        type: (f: (typeof stored)[number]) => GraphQLOutputType
+      ) =>
+        list.length === 0
+          ? null
+          : new GraphQLObjectType({
+              name: `${name}_aggregated_${suffix}`,
+              fields: Object.fromEntries(list.map((f) => [f.field, { type: type(f) }]))
+            })
+      const countBag = bag('count', stored, () => GraphQLInt)
+      const numberBag = bag('number', numeric, () => GraphQLFloat)
+      const fieldBag = bag('fields', ordered, (f) =>
+        f.field === 'id' ? GraphQLString : fieldType(f.field, f.type)
+      )
+      const aggregatedType = new GraphQLObjectType({
+        name: `${name}_aggregated`,
+        fields: {
+          group: { type: GraphQLJSON, description: 'The group-by values of this row.' },
+          countAll: { type: GraphQLInt, description: 'Rows in the group.' },
+          ...(countBag
+            ? {
+                count: { type: countBag, description: 'Rows that hold a value, per field.' },
+                countDistinct: { type: countBag, description: 'Different values, per field.' }
+              }
+            : {}),
+          ...(numberBag ? { sum: { type: numberBag }, avg: { type: numberBag } } : {}),
+          ...(fieldBag ? { min: { type: fieldBag }, max: { type: fieldBag } } : {})
+        }
+      })
+      queryFields[`${name}_aggregated`] = {
+        type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(aggregatedType))),
+        description: `Counts, sums and averages over ${col.display_name ?? name}, optionally grouped. The rows counted are the rows the same filter would list for the caller.`,
+        args: {
+          filter: { type: (filterRegistry.get(name) ?? GraphQLJSON) as GraphQLInputType },
+          search: { type: GraphQLString },
+          groupBy: { type: new GraphQLList(new GraphQLNonNull(GraphQLString)) },
+          sort: {
+            type: new GraphQLList(new GraphQLNonNull(GraphQLString)),
+            description: 'Group fields, countAll, or "<function>.<field>". Prefix - for desc.'
+          },
+          limit: { type: GraphQLInt },
+          offset: { type: GraphQLInt }
+        },
+        resolve: async (_root, args: Record<string, unknown>, ctx: GQLContext, info) => {
+          if (!ctx.user)
+            throw Object.assign(new Error('Unauthorized'), {
+              extensions: { code: 'UNAUTHENTICATED' }
+            })
+          const spec: AggregateSpec = {
+            groupBy: (args.groupBy as string[] | undefined) ?? [],
+            sort: args.sort as string[] | undefined,
+            limit: args.limit as number | undefined,
+            offset: args.offset as number | undefined
+          }
+          const visit = (
+            selections: readonly SelectionNode[] | undefined,
+            inside: string | null
+          ) => {
+            for (const sel of selections ?? []) {
+              if (sel.kind === Kind.FIELD) {
+                const n = sel.name.value
+                if (inside === null) {
+                  if (n === 'countAll') spec.countAll = true
+                  else if ((AGGREGATE_FUNCTIONS as readonly string[]).includes(n))
+                    visit(sel.selectionSet?.selections, n)
+                } else if (!n.startsWith('__')) {
+                  const key = inside as AggregateFunction
+                  spec[key] = [...(spec[key] ?? []), n]
+                }
+              } else if (sel.kind === Kind.INLINE_FRAGMENT) {
+                visit(sel.selectionSet.selections, inside)
+              } else if (sel.kind === Kind.FRAGMENT_SPREAD) {
+                visit(info.fragments[sel.name.value]?.selectionSet.selections, inside)
+              }
+            }
+          }
+          for (const node of info.fieldNodes) visit(node.selectionSet?.selections, null)
+          try {
+            const res = await aggregateItems(ctx.user, name, {
+              filter: translateVirtualKeys(args.filter) as Record<string, unknown> | undefined,
+              search: args.search as string | undefined,
+              aggregate: spec
+            })
+            return res.data
+          } catch (e) {
+            wrapError(e)
+          }
         }
       }
     }

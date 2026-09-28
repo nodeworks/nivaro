@@ -86,7 +86,7 @@ async function materializeViewIds(
       { fields: ['id'], limit: PAGE, page, sort: ['id'] },
       fakeReq
     )
-    total = res.total
+    total = res.total ?? 0
     for (const row of res.data as Array<{ id: unknown }>) ids.push(String(row.id))
     if (res.data.length < PAGE) break
   }

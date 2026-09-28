@@ -177,6 +177,13 @@ export interface ItemsQuery {
   offset?: number
   page?: number
   search?: string
+  /** Keyset paging: `start` (or empty) for the first page, then the
+   *  `next_cursor` of the page before. Replaces offset/page when given. */
+  after?: string
+  /** false = skip the count query; `total` answers null. */
+  count?: boolean
+  /** Answer grouped aggregates over the matching rows instead of the rows. */
+  aggregate?: import('./services/item-aggregates.js').AggregateSpec
 }
 
 // ─── Fastify augmentations ────────────────────────────────────────────────────

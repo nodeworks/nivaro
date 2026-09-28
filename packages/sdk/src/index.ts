@@ -155,13 +155,26 @@ export interface Query<T = Record<string, unknown>> {
   offset?: number
   page?: number
   search?: string
+  /**
+   * Keyset paging for walking a large collection: 'start' for the first page,
+   * then the `next_cursor` of the page before. Sort by the record's own fields
+   * only; `id` is added as the tie-break. Replaces offset/page.
+   */
+  after?: string
+  /** false = skip the count query; `total` answers null. */
+  count?: boolean
 }
 
 export interface ListResponse<T> {
   data: T[]
+  /** null when the read asked for no count (`count: false`). */
   total: number
   limit: number
   offset: number
+  /** Present on a keyset read: the cursor of the next page, null on the last. */
+  next_cursor?: string | null
+  /** To-many aliases whose lists were cut at the per-record limit. */
+  truncated_relations?: string[]
 }
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
@@ -550,7 +563,59 @@ export function readItems<T = Record<string, unknown>>(
   if (query?.offset != null) params.offset = query.offset
   if (query?.page != null) params.page = query.page
   if (query?.search) params.search = query.search
+  if (query?.after != null) params.after = query.after
+  if (query?.count === false) params.count = 0
   return cmd('GET', `/items/${collection}`, params)
+}
+
+export interface AggregateQuery {
+  filter?: Record<string, unknown>
+  search?: string
+  /** Up to 4 stored fields. Without it, one row for the whole set. */
+  groupBy?: string[]
+  countAll?: boolean
+  count?: string[]
+  countDistinct?: string[]
+  sum?: string[]
+  avg?: string[]
+  min?: string[]
+  max?: string[]
+  /** Group fields, `countAll`, or `<function>.<field>`; `-` first = descending. */
+  sort?: string[]
+  limit?: number
+  offset?: number
+}
+
+export interface AggregateRow {
+  group: Record<string, unknown>
+  countAll?: number
+  count?: Record<string, number>
+  countDistinct?: Record<string, number>
+  sum?: Record<string, number | null>
+  avg?: Record<string, number | null>
+  min?: Record<string, unknown>
+  max?: Record<string, unknown>
+}
+
+/**
+ * Counts, sums and averages over the rows a list read with the same filter
+ * would match for the caller.
+ */
+export function aggregateItems(
+  collection: string,
+  query: AggregateQuery
+): Command<{ data: AggregateRow[]; total: number; limit: number; offset: number }> {
+  const params: Record<string, unknown> = {}
+  if (query.filter) params.filter = JSON.stringify(query.filter)
+  if (query.search) params.search = query.search
+  if (query.countAll) params.countAll = 1
+  for (const key of ['groupBy', 'count', 'countDistinct', 'sum', 'avg', 'min', 'max', 'sort'] as const) {
+    const list = query[key]
+    if (list?.length) params[key] = list.join(',')
+  }
+  if (query.limit != null) params.limit = query.limit
+  if (query.offset != null) params.offset = query.offset
+  return cmd('GET', `/items/${collection}/aggregate`, params)
 }
 
 export function readItem<T = Record<string, unknown>>(

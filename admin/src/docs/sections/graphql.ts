@@ -179,8 +179,60 @@ export const graphqlQueries: DocSection = {
         ['sort', '[String]', 'Array of sort fields. Prefix with - for descending.'],
         ['limit', 'Int', 'Max items (server default: 25, max: 1000).'],
         ['offset', 'Int', 'Row offset for pagination.'],
-        ['search', 'String', 'Fulltext search across string/text fields.']
+        ['search', 'String', 'Fulltext search across string/text fields.'],
+        [
+          'after',
+          'String',
+          'Keyset paging: "start" for the first page, then the next_cursor of the page before. Replaces offset.'
+        ]
       ]
+    },
+    { type: 'h3', text: 'Walking a large collection' },
+    {
+      type: 'p',
+      text: "Ask for the rows and for `<collection>_metadata` with the same arguments. `next_cursor` is the `after` of the next page and null on the last one. Sort by the record's own stored fields; `id` is added as the tie-break."
+    },
+    {
+      type: 'pre',
+      code: `query Walk($after: String!) {
+  orders(sort: ["-amount"], limit: 500, after: $after) { id amount }
+  orders_metadata(sort: ["-amount"], limit: 500, after: $after) { next_cursor }
+}
+# first call: { "after": "start" }, then the next_cursor of each answer`
+    },
+    { type: 'h3', text: 'Nested lists take the list arguments' },
+    {
+      type: 'p',
+      text: 'A to-many field inside a record takes `filter`, `sort`, `limit` and `offset` of its own. The rows are the ones the caller may read in the related collection.'
+    },
+    { type: 'h3', text: 'Aggregates' },
+    {
+      type: 'p',
+      text: '`<collection>_aggregated(filter, search, groupBy, sort, limit, offset)` answers counts, sums and averages over the rows the same filter would list for the caller. Which figures are computed is read from the selection, so a query pays for what it asks.'
+    },
+    {
+      type: 'pre',
+      code: `query {
+  # one row for the whole set
+  orders_aggregated(filter: { status: { _eq: "open" } }) {
+    countAll
+    sum { amount }
+    avg { amount }
+    count { vendor }
+  }
+
+  # one row per group, largest first
+  byType: orders_aggregated(groupBy: ["order_type"], sort: ["-sum.amount"]) {
+    group
+    countAll
+    sum { amount }
+    max { created_at }
+  }
+}`
+    },
+    {
+      type: 'note',
+      text: '`group` is a JSON object of the group-by values. `sum` and `avg` list number fields; `min` and `max` list number, date and short text fields; `count` and `countDistinct` list every stored field. Up to 4 group fields and 1000 groups per page. A refusal carries `extensions.code` (`AGGREGATE_FIELD_INVALID`, `AGGREGATE_TOO_WIDE`, `AGGREGATE_SORT_INVALID`).'
     }
   ]
 }
@@ -270,6 +322,19 @@ query {
       code: `query {
   articles(filter: {
     tags: { _some: { name: { _eq: "featured" }, _link: { region_id: { _eq: 3 } } } }
+  }) { id }
+}`
+    },
+    { type: 'h3', text: 'Linked records inside `_some`' },
+    {
+      type: 'p',
+      text: "Inside `_some` and `_none` the filter of the related collection is typed in full, so it may follow that record's own links: a many-to-one field, a further to-many relation, or both. A part that cannot be compiled is refused with a code (`FILTER_OPERATOR_UNKNOWN`, `FILTER_PATH_UNSUPPORTED`, `UNKNOWN_FIELD`); it is never dropped."
+    },
+    {
+      type: 'pre',
+      code: `query {
+  orders(filter: {
+    lines: { _some: { product: { category: { name: { _eq: "cables" } } } } }
   }) { id }
 }`
     },

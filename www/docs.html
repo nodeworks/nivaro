@@ -2140,6 +2140,7 @@ const { data: tx } = await nivaro.request(
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>GET</td><td>/api/items/:collection</td><td>List records. Supports filter, sort, fields, limit, offset, search.</td></tr>
               <tr><td>GET</td><td>/api/items/:collection/:id</td><td>Single record by primary key.</td></tr>
+              <tr><td>GET</td><td>/api/items/:collection/aggregate</td><td>Counts, sums and averages over the rows a list read would match, optionally grouped.</td></tr>
               <tr><td>POST</td><td>/api/items/:collection</td><td>Create a record.</td></tr>
               <tr><td>PATCH</td><td>/api/items/:collection/:id</td><td>Update a record (partial).</td></tr>
               <tr><td>DELETE</td><td>/api/items/:collection/:id</td><td>Delete a record.</td></tr></tr></tbody>
@@ -2153,6 +2154,8 @@ const { data: tx } = await nivaro.request(
               <tr><td>limit</td><td>25</td><td>Max rows (hard cap 1000).</td></tr>
               <tr><td>offset</td><td>0</td><td>Row offset for pagination.</td></tr>
               <tr><td>page</td><td>1</td><td>Shorthand for offset. page=2&amp;limit=25 → offset=25.</td></tr>
+              <tr><td>after</td><td>none</td><td>Keyset paging. <code class="doc-code">start</code> for the first page, then the <code class="doc-code">next_cursor</code> of the page before. Replaces offset and page.</td></tr>
+              <tr><td>count</td><td>1</td><td>When 0, the count query is skipped and <code class="doc-code">total</code> answers null.</td></tr>
               <tr><td>search</td><td>none</td><td>Fulltext search across string/text fields.</td></tr>
               <tr><td>picker</td><td>0</td><td>When 1, applies picker filters and exclusions; used by relation pickers.</td></tr>
               <tr><td>translate</td><td>0</td><td>When 1, includes <code class="doc-code">_translations</code> map for each translatable field.</td></tr></tr></tbody>
@@ -2170,6 +2173,71 @@ const { data: tx } = await nivaro.request(
   "limit": 10,
   "offset": 0
 }</code></pre>
+          <h3 class="doc-h3">Related rows in <code class="doc-code">fields</code></h3>
+          <p class="doc-p">A field list may name a to-many relation and the fields wanted from it: <code class="doc-code">fields=id,lines.amount,tags.name</code>. Each record on the page answers with a list under that name. The related rows are read as the caller, so the permissions, field list, row filter and scopes of the related collection apply. A caller who may not read the related collection gets empty lists.</p>
+          <pre class="doc-pre"><code>GET /api/items/orders?limit=2&amp;fields=id,number,lines.amount,lines.line_number,tags.name
+
+{
+  "data": [
+    {
+      "id": 41,
+      "number": "SO-1041",
+      "lines": [
+        { "id": 900, "order": 41, "amount": 120, "line_number": 1 },
+        { "id": 901, "order": 41, "amount": 80, "line_number": 2 }
+      ],
+      "tags": [{ "id": 3, "name": "rush" }]
+    }
+  ],
+  "total": 127, "limit": 2, "offset": 0
+}</code></pre>
+          <div class="doc-note">A record lists 200 related rows per relation at most. When a list was cut, the response names the relation in <code class="doc-code">truncated_relations</code>. Related rows nest two levels deep. One read per relation per page is made, never one per record.</div>
+          <p class="doc-p">A field name the collection does not have answers 400 with code <code class="doc-code">UNKNOWN_FIELD</code> and the names in <code class="doc-code">fields</code>.</p>
+          <h3 class="doc-h3">Walking a large collection (<code class="doc-code">after</code>)</h3>
+          <p class="doc-p">Offset paging pays for every row it skips, and rows written during the walk shift the pages. A cursor names the last row of the page just read, so the next page costs the same however far the walk is, and a write elsewhere moves nothing. Send <code class="doc-code">after=start</code> for the first page and the <code class="doc-code">next_cursor</code> of each page for the next. <code class="doc-code">next_cursor</code> is null on the last page.</p>
+          <pre class="doc-pre"><code>GET /api/items/orders?limit=500&amp;sort=-amount&amp;fields=id,amount&amp;after=start&amp;count=0
+
+{
+  "data": [{ "id": 307072, "amount": 249387248 }, ...],
+  "total": null,
+  "limit": 500,
+  "offset": 0,
+  "next_cursor": "eyJjIjoib3JkZXJzIiwicyI6Ii1hbW91bnQsaWQiLCJ2IjpbMjA2NDE1ODg4LDMwNzA3M119.cpwlTAiHQtYYCTiyaoatX_"
+}
+
+GET /api/items/orders?limit=500&amp;sort=-amount&amp;fields=id,amount&amp;count=0&amp;after=eyJjIjoib3JkZXJz...</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Rule</th><th>Detail</th></tr></thead>
+            <tbody><tr><tr><td>Sort</td><td>By the record's own stored fields. <code class="doc-code">id</code> is added as the tie-break, so no two rows tie.</td></tr>
+              <tr><td>Same request</td><td>Keep <code class="doc-code">sort</code>, <code class="doc-code">filter</code> and <code class="doc-code">search</code> the same for the whole walk. The cursor is signed for one collection and one sort.</td></tr>
+              <tr><td><code class="doc-code">CURSOR_SORT_UNSUPPORTED</code></td><td>The sort names a linked record or a calculated field that is not stored.</td></tr>
+              <tr><td><code class="doc-code">CURSOR_MISMATCH</code></td><td>The cursor was made for another collection or another sort.</td></tr>
+              <tr><td><code class="doc-code">CURSOR_INVALID</code></td><td>The cursor was changed or cut.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3">Aggregates</h3>
+          <p class="doc-p"><code class="doc-code">GET /api/items/:collection/aggregate</code> answers figures over the rows a list read with the same <code class="doc-code">filter</code> and <code class="doc-code">search</code> would match for the caller. It never counts a row the caller could not list.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Param</th><th>Description</th></tr></thead>
+            <tbody><tr><tr><td>groupBy</td><td>Up to 4 stored fields, comma-separated. Without it, one row for the whole set.</td></tr>
+              <tr><td>countAll</td><td>When 1, the number of rows in each group.</td></tr>
+              <tr><td>count</td><td>Fields: rows that hold a value.</td></tr>
+              <tr><td>countDistinct</td><td>Fields: different values.</td></tr>
+              <tr><td>sum, avg</td><td>Number fields.</td></tr>
+              <tr><td>min, max</td><td>Number, date and short text fields.</td></tr>
+              <tr><td>sort</td><td>Group fields, <code class="doc-code">countAll</code>, or <code class="doc-code">&lt;function&gt;.&lt;field&gt;</code>. Prefix - for descending.</td></tr>
+              <tr><td>limit, offset</td><td>Groups per page. Default 100, 1000 at most.</td></tr></tr></tbody>
+          </table></div>
+          <pre class="doc-pre"><code>GET /api/items/orders/aggregate?groupBy=status&amp;sum=amount&amp;countAll=1&amp;sort=-sum.amount
+    &amp;filter={"created_at":{"_gte":"2026-01-01"}}
+
+{
+  "data": [
+    { "group": { "status": "open" }, "countAll": 329, "sum": { "amount": 33592071.85 } },
+    { "group": { "status": "closed" }, "countAll": 5, "sum": { "amount": 21633.18 } }
+  ],
+  "total": 2, "limit": 100, "offset": 0
+}</code></pre>
+          <div class="doc-note">Refusals answer 400 with a code: <code class="doc-code">AGGREGATE_FIELD_INVALID</code> (a sum over text, a field that is not stored), <code class="doc-code">AGGREGATE_TOO_WIDE</code> (more than 4 group fields or 24 figures), <code class="doc-code">AGGREGATE_SORT_INVALID</code> (a sort that is not part of the request).</div>
           <h3 class="doc-h3">Single record example</h3>
           <pre class="doc-pre"><code>GET /api/items/articles/uuid-1
 
@@ -2455,6 +2523,24 @@ Authorization: Bearer &lt;token&gt;
 // Items that have comments from a specific user
 ?filter={"comments":{"_some":{"author_id":{"_eq":"user-42"}}}}</code></pre>
           <div class="doc-note">Both <code class="doc-code">_some</code> and <code class="doc-code">_none</code> work on O2M virtual fields (one-to-many) and M2M junction relations. Use these operators to filter based on existence/non-existence of related records.</div>
+          <h3 class="doc-h3">Linked records inside <code class="doc-code">_some</code></h3>
+          <p class="doc-p">Inside <code class="doc-code">_some</code> and <code class="doc-code">_none</code> a filter may follow further links of the related record: a many-to-one field, another to-many relation, or both. Every hop compiles to SQL.</p>
+          <pre class="doc-pre"><code>// orders with a line whose product belongs to the "cables" category
+?filter={"lines":{"_some":{"product":{"category":{"name":{"_eq":"cables"}}}}}}
+
+// articles with a tag that is used by an article of one author
+?filter={"tags":{"_some":{"articles":{"_some":{"author":{"_eq":"&lt;user id&gt;"}}}}}}</code></pre>
+          <h3 class="doc-h3">Filters that cannot be compiled</h3>
+          <p class="doc-p">A filter is checked before it runs. A part that cannot be compiled is refused with 400 and a code. It is never dropped, because a dropped part answers more rows than were asked for.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">FILTER_OPERATOR_UNKNOWN</code></td><td>The operator does not exist. <code class="doc-code">operator</code> names it, <code class="doc-code">path</code> says where.</td></tr>
+              <tr><td><code class="doc-code">FILTER_PATH_UNSUPPORTED</code></td><td>A nested key under a field that links to no other record.</td></tr>
+              <tr><td><code class="doc-code">FILTER_VALUE_INVALID</code></td><td><code class="doc-code">_in</code> and <code class="doc-code">_nin</code> take a list, <code class="doc-code">_between</code> takes two values, <code class="doc-code">_and</code> and <code class="doc-code">_or</code> take a list of filters.</td></tr>
+              <tr><td><code class="doc-code">FILTER_TOO_DEEP</code></td><td>More than 8 levels of nesting.</td></tr>
+              <tr><td><code class="doc-code">UNKNOWN_FIELD</code></td><td>The collection has no such field. <code class="doc-code">fields</code> names it.</td></tr>
+              <tr><td><code class="doc-code">FIELD_NOT_FILTERABLE</code></td><td>A calculated field that cannot be expressed in SQL.</td></tr></tr></tbody>
+          </table></div>
           <h3 class="doc-h3">Filtering on the link itself (<code class="doc-code">_link</code>)</h3>
           <p class="doc-p">When an M2M junction row carries columns of its own — a membership that only applies in one region, a role on the link — put a <code class="doc-code">_link</code> filter inside <code class="doc-code">_some</code> / <code class="doc-code">_none</code>. Every other key filters the related record; <code class="doc-code">_link</code> filters the junction row, and both must hold on the SAME link.</p>
           <pre class="doc-pre"><code>// articles tagged "featured" through a link that is global or scoped to region 3
@@ -3594,8 +3680,38 @@ Authorization: Bearer &lt;admin-token&gt;
               <tr><td>sort</td><td>[String]</td><td>Array of sort fields. Prefix with - for descending.</td></tr>
               <tr><td>limit</td><td>Int</td><td>Max items (server default: 25, max: 1000).</td></tr>
               <tr><td>offset</td><td>Int</td><td>Row offset for pagination.</td></tr>
-              <tr><td>search</td><td>String</td><td>Fulltext search across string/text fields.</td></tr></tr></tbody>
+              <tr><td>search</td><td>String</td><td>Fulltext search across string/text fields.</td></tr>
+              <tr><td>after</td><td>String</td><td>Keyset paging: "start" for the first page, then the next_cursor of the page before. Replaces offset.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Walking a large collection</h3>
+          <p class="doc-p">Ask for the rows and for <code class="doc-code">&lt;collection&gt;_metadata</code> with the same arguments. <code class="doc-code">next_cursor</code> is the <code class="doc-code">after</code> of the next page and null on the last one. Sort by the record's own stored fields; <code class="doc-code">id</code> is added as the tie-break.</p>
+          <pre class="doc-pre"><code>query Walk($after: String!) {
+  orders(sort: ["-amount"], limit: 500, after: $after) { id amount }
+  orders_metadata(sort: ["-amount"], limit: 500, after: $after) { next_cursor }
+}
+# first call: { "after": "start" }, then the next_cursor of each answer</code></pre>
+          <h3 class="doc-h3">Nested lists take the list arguments</h3>
+          <p class="doc-p">A to-many field inside a record takes <code class="doc-code">filter</code>, <code class="doc-code">sort</code>, <code class="doc-code">limit</code> and <code class="doc-code">offset</code> of its own. The rows are the ones the caller may read in the related collection.</p>
+          <h3 class="doc-h3">Aggregates</h3>
+          <p class="doc-p"><code class="doc-code">&lt;collection&gt;_aggregated(filter, search, groupBy, sort, limit, offset)</code> answers counts, sums and averages over the rows the same filter would list for the caller. Which figures are computed is read from the selection, so a query pays for what it asks.</p>
+          <pre class="doc-pre"><code>query {
+  # one row for the whole set
+  orders_aggregated(filter: { status: { _eq: "open" } }) {
+    countAll
+    sum { amount }
+    avg { amount }
+    count { vendor }
+  }
+
+  # one row per group, largest first
+  byType: orders_aggregated(groupBy: ["order_type"], sort: ["-sum.amount"]) {
+    group
+    countAll
+    sum { amount }
+    max { created_at }
+  }
+}</code></pre>
+          <div class="doc-note"><code class="doc-code">group</code> is a JSON object of the group-by values. <code class="doc-code">sum</code> and <code class="doc-code">avg</code> list number fields; <code class="doc-code">min</code> and <code class="doc-code">max</code> list number, date and short text fields; <code class="doc-code">count</code> and <code class="doc-code">countDistinct</code> list every stored field. Up to 4 group fields and 1000 groups per page. A refusal carries <code class="doc-code">extensions.code</code> (<code class="doc-code">AGGREGATE_FIELD_INVALID</code>, <code class="doc-code">AGGREGATE_TOO_WIDE</code>, <code class="doc-code">AGGREGATE_SORT_INVALID</code>).</div>
           <!-- /SYNC:graphql-queries -->
         </div>
 
@@ -3903,6 +4019,13 @@ query {
           <pre class="doc-pre"><code>query {
   articles(filter: {
     tags: { _some: { name: { _eq: "featured" }, _link: { region_id: { _eq: 3 } } } }
+  }) { id }
+}</code></pre>
+          <h3 class="doc-h3">Linked records inside <code class="doc-code">_some</code></h3>
+          <p class="doc-p">Inside <code class="doc-code">_some</code> and <code class="doc-code">_none</code> the filter of the related collection is typed in full, so it may follow that record's own links: a many-to-one field, a further to-many relation, or both. A part that cannot be compiled is refused with a code (<code class="doc-code">FILTER_OPERATOR_UNKNOWN</code>, <code class="doc-code">FILTER_PATH_UNSUPPORTED</code>, <code class="doc-code">UNKNOWN_FIELD</code>); it is never dropped.</p>
+          <pre class="doc-pre"><code>query {
+  orders(filter: {
+    lines: { _some: { product: { category: { name: { _eq: "cables" } } } } }
   }) { id }
 }</code></pre>
           <h3 class="doc-h3">O2M / M2M filters</h3>
@@ -7547,7 +7670,7 @@ Authorization: Bearer &lt;token&gt;
           <!-- /SYNC:data-integrity -->
         </div>
 
-        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-processors","label":"Import processors"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>
+        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-processors","label":"Import processors"},{"id":"imports-run-detail","label":"Reading a run"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>
           <!-- SYNC:imports -->
           <h1 class="doc-h1" id="data-import-guide">Imports</h1>
           <p class="doc-p">The Import Console (Monitoring → Imports) covers two different importers behind one surface. Staged imports load a file into a staging table and optionally run a stored procedure over it. Collection imports map a CSV's columns onto a collection's fields and write each row through the item API. The console is the shared <code class="doc-code">ImportConsole</code> component, so the admin and any headless frontend built on @nivaro/react run exactly the same screen.</p>
@@ -7596,6 +7719,26 @@ ctx.importProcessors.register({
               <tr><td>db</td><td>Read access for batched comparisons.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">The staging table is still loaded before a processor runs, so it stays the record of the last file and post-run flows that read it keep working. The records a run changed are handed to those flows as <code class="doc-code">affected</code> in the payload. If the extension that owns the processor is not loaded on an instance, the definition falls back to its procedure and the run says so.</div>
+          <h3 class="doc-h3" id="imports-run-detail">Reading a run</h3>
+          <p class="doc-p">Click a run to open it. A run of an items-service import keeps a report and one item per record it touched, so the sheet answers in order: what happened (created, updated, unchanged, left out, failed), what needs a look (values in the file that match nothing, with the rows they sit on and what the import did instead), which records (filter by kind or collection, search, open a record, read each changed field as before → after), and where the time went. A run of a stored procedure keeps neither, because the procedure writes straight to the tables; it shows its timings and its log.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Action</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>All as CSV / Values as CSV</td><td>Every item of the run, or every unmatched value, as a file.</td></tr>
+              <tr><td>Run the file again</td><td>Queues the same file as a new run.</td></tr>
+              <tr><td>Revert…</td><td>Previews, then puts the run back: created records go to the trash, changed fields return to their earlier value. A record or field someone changed after the import is left alone and listed.</td></tr>
+              <tr><td>Revert one record</td><td>The same, for a single item in the list.</td></tr>
+              <tr><td>Rebuild from history</td><td>For a run made before reports existed: rebuilds the item list from the activity log (new values only).</td></tr>
+              <tr><td>Copy / Show as written</td><td>The log as plain text, for a ticket or a message.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">A processor reports through its return value: <code class="doc-code">report</code> carries <code class="doc-code">phases</code> (label, milliseconds, count, failed), <code class="doc-code">unmatched</code> (column, label, distinct, rows, values, effect), <code class="doc-code">notes</code> and <code class="doc-code">other</code> counts; <code class="doc-code">items</code> carries one entry per record with <code class="doc-code">kind</code> (created, updated, skipped, failed), <code class="doc-code">collection</code>, <code class="doc-code">item_id</code>, <code class="doc-code">label</code>, <code class="doc-code">file_row</code>, <code class="doc-code">message</code> and <code class="doc-code">changes</code> (field, from, to). Items are kept for 90 days, at most 50,000 per run.</p>
+          <pre class="doc-pre"><code>GET  /api/staged-imports/:id                  // the run, with its report
+GET  /api/staged-imports/:id/items            // ?kind=&amp;collection=&amp;search=&amp;page=&amp;limit=
+GET  /api/staged-imports/:id/items.csv
+GET  /api/staged-imports/:id/unmatched.csv
+POST /api/staged-imports/:id/report/rebuild   // admin
+POST /api/staged-imports/:id/revert/preview   // admin · { item_ids? }
+POST /api/staged-imports/:id/revert           // admin · { item_ids? }</code></pre>
+          <div class="doc-note">A revert reaches what the run wrote through the items service. It does not reach set-based fills, the procedures a run calls at its end, or rows the run removed; the preview says which records it will leave alone and why. Link to a run with <code class="doc-code">/imports?run=&lt;id&gt;</code>.</div>
           <h2 class="doc-h2" id="imports-collection">Collection imports</h2>
           <p class="doc-p">The row-by-row CSV importer. Rows go through the normal item API, so validation rules, hooks, row-level security and activity logging all apply. Jobs process in the background with live progress counters.</p>
           <div class="doc-table-wrap"><table class="doc-table">

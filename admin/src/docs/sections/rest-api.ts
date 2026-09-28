@@ -218,6 +218,11 @@ export const apiItems: DocSection = {
           'List records. Supports filter, sort, fields, limit, offset, search.'
         ],
         ['GET', '/api/items/:collection/:id', 'Single record by primary key.'],
+        [
+          'GET',
+          '/api/items/:collection/aggregate',
+          'Counts, sums and averages over the rows a list read would match, optionally grouped.'
+        ],
         ['POST', '/api/items/:collection', 'Create a record.'],
         ['PATCH', '/api/items/:collection/:id', 'Update a record (partial).'],
         ['DELETE', '/api/items/:collection/:id', 'Delete a record.']
@@ -234,6 +239,12 @@ export const apiItems: DocSection = {
         ['limit', '25', 'Max rows (hard cap 1000).'],
         ['offset', '0', 'Row offset for pagination.'],
         ['page', '1', 'Shorthand for offset. page=2&limit=25 → offset=25.'],
+        [
+          'after',
+          'none',
+          'Keyset paging. `start` for the first page, then the `next_cursor` of the page before. Replaces offset and page.'
+        ],
+        ['count', '1', 'When 0, the count query is skipped and `total` answers null.'],
         ['search', 'none', 'Fulltext search across string/text fields.'],
         ['picker', '0', 'When 1, applies picker filters and exclusions; used by relation pickers.'],
         ['translate', '0', 'When 1, includes `_translations` map for each translatable field.']
@@ -254,6 +265,116 @@ export const apiItems: DocSection = {
   "limit": 10,
   "offset": 0
 }`
+    },
+    { type: 'h3', text: 'Related rows in `fields`' },
+    {
+      type: 'p',
+      text: 'A field list may name a to-many relation and the fields wanted from it: `fields=id,lines.amount,tags.name`. Each record on the page answers with a list under that name. The related rows are read as the caller, so the permissions, field list, row filter and scopes of the related collection apply. A caller who may not read the related collection gets empty lists.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/items/orders?limit=2&fields=id,number,lines.amount,lines.line_number,tags.name
+
+{
+  "data": [
+    {
+      "id": 41,
+      "number": "SO-1041",
+      "lines": [
+        { "id": 900, "order": 41, "amount": 120, "line_number": 1 },
+        { "id": 901, "order": 41, "amount": 80, "line_number": 2 }
+      ],
+      "tags": [{ "id": 3, "name": "rush" }]
+    }
+  ],
+  "total": 127, "limit": 2, "offset": 0
+}`
+    },
+    {
+      type: 'note',
+      text: 'A record lists 200 related rows per relation at most. When a list was cut, the response names the relation in `truncated_relations`. Related rows nest two levels deep. One read per relation per page is made, never one per record.'
+    },
+    {
+      type: 'p',
+      text: 'A field name the collection does not have answers 400 with code `UNKNOWN_FIELD` and the names in `fields`.'
+    },
+    { type: 'h3', text: 'Walking a large collection (`after`)' },
+    {
+      type: 'p',
+      text: 'Offset paging pays for every row it skips, and rows written during the walk shift the pages. A cursor names the last row of the page just read, so the next page costs the same however far the walk is, and a write elsewhere moves nothing. Send `after=start` for the first page and the `next_cursor` of each page for the next. `next_cursor` is null on the last page.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/items/orders?limit=500&sort=-amount&fields=id,amount&after=start&count=0
+
+{
+  "data": [{ "id": 307072, "amount": 249387248 }, ...],
+  "total": null,
+  "limit": 500,
+  "offset": 0,
+  "next_cursor": "eyJjIjoib3JkZXJzIiwicyI6Ii1hbW91bnQsaWQiLCJ2IjpbMjA2NDE1ODg4LDMwNzA3M119.cpwlTAiHQtYYCTiyaoatX_"
+}
+
+GET /api/items/orders?limit=500&sort=-amount&fields=id,amount&count=0&after=eyJjIjoib3JkZXJz...`
+    },
+    {
+      type: 'table',
+      head: ['Rule', 'Detail'],
+      rows: [
+        [
+          'Sort',
+          "By the record's own stored fields. `id` is added as the tie-break, so no two rows tie."
+        ],
+        [
+          'Same request',
+          'Keep `sort`, `filter` and `search` the same for the whole walk. The cursor is signed for one collection and one sort.'
+        ],
+        [
+          '`CURSOR_SORT_UNSUPPORTED`',
+          'The sort names a linked record or a calculated field that is not stored.'
+        ],
+        ['`CURSOR_MISMATCH`', 'The cursor was made for another collection or another sort.'],
+        ['`CURSOR_INVALID`', 'The cursor was changed or cut.']
+      ]
+    },
+    { type: 'h3', text: 'Aggregates' },
+    {
+      type: 'p',
+      text: '`GET /api/items/:collection/aggregate` answers figures over the rows a list read with the same `filter` and `search` would match for the caller. It never counts a row the caller could not list.'
+    },
+    {
+      type: 'table',
+      head: ['Param', 'Description'],
+      rows: [
+        [
+          'groupBy',
+          'Up to 4 stored fields, comma-separated. Without it, one row for the whole set.'
+        ],
+        ['countAll', 'When 1, the number of rows in each group.'],
+        ['count', 'Fields: rows that hold a value.'],
+        ['countDistinct', 'Fields: different values.'],
+        ['sum, avg', 'Number fields.'],
+        ['min, max', 'Number, date and short text fields.'],
+        ['sort', 'Group fields, `countAll`, or `<function>.<field>`. Prefix - for descending.'],
+        ['limit, offset', 'Groups per page. Default 100, 1000 at most.']
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET /api/items/orders/aggregate?groupBy=status&sum=amount&countAll=1&sort=-sum.amount
+    &filter={"created_at":{"_gte":"2026-01-01"}}
+
+{
+  "data": [
+    { "group": { "status": "open" }, "countAll": 329, "sum": { "amount": 33592071.85 } },
+    { "group": { "status": "closed" }, "countAll": 5, "sum": { "amount": 21633.18 } }
+  ],
+  "total": 2, "limit": 100, "offset": 0
+}`
+    },
+    {
+      type: 'note',
+      text: 'Refusals answer 400 with a code: `AGGREGATE_FIELD_INVALID` (a sum over text, a field that is not stored), `AGGREGATE_TOO_WIDE` (more than 4 group fields or 24 figures), `AGGREGATE_SORT_INVALID` (a sort that is not part of the request).'
     },
     { type: 'h3', text: 'Single record example' },
     {
@@ -633,6 +754,42 @@ export const apiFilter: DocSection = {
     {
       type: 'note',
       text: 'Both `_some` and `_none` work on O2M virtual fields (one-to-many) and M2M junction relations. Use these operators to filter based on existence/non-existence of related records.'
+    },
+    { type: 'h3', text: 'Linked records inside `_some`' },
+    {
+      type: 'p',
+      text: 'Inside `_some` and `_none` a filter may follow further links of the related record: a many-to-one field, another to-many relation, or both. Every hop compiles to SQL.'
+    },
+    {
+      type: 'pre',
+      code: `// orders with a line whose product belongs to the "cables" category
+?filter={"lines":{"_some":{"product":{"category":{"name":{"_eq":"cables"}}}}}}
+
+// articles with a tag that is used by an article of one author
+?filter={"tags":{"_some":{"articles":{"_some":{"author":{"_eq":"<user id>"}}}}}}`
+    },
+    { type: 'h3', text: 'Filters that cannot be compiled' },
+    {
+      type: 'p',
+      text: 'A filter is checked before it runs. A part that cannot be compiled is refused with 400 and a code. It is never dropped, because a dropped part answers more rows than were asked for.'
+    },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        [
+          '`FILTER_OPERATOR_UNKNOWN`',
+          'The operator does not exist. `operator` names it, `path` says where.'
+        ],
+        ['`FILTER_PATH_UNSUPPORTED`', 'A nested key under a field that links to no other record.'],
+        [
+          '`FILTER_VALUE_INVALID`',
+          '`_in` and `_nin` take a list, `_between` takes two values, `_and` and `_or` take a list of filters.'
+        ],
+        ['`FILTER_TOO_DEEP`', 'More than 8 levels of nesting.'],
+        ['`UNKNOWN_FIELD`', 'The collection has no such field. `fields` names it.'],
+        ['`FIELD_NOT_FILTERABLE`', 'A calculated field that cannot be expressed in SQL.']
+      ]
     },
     { type: 'h3', text: 'Filtering on the link itself (`_link`)' },
     {

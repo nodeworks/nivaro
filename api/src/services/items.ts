@@ -1,9 +1,18 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Parser } from 'expr-eval'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
-import { db, dbRead } from '../db/index.js'
+import { config } from '../config.js'
+import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hooks } from '../hooks/registry.js'
+import {
+  decodeCursor,
+  encodeCursor,
+  type KeysetSort,
+  keysetBranches,
+  keysetSorts
+} from '../lib/keyset.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
@@ -17,10 +26,11 @@ import {
   resolveAutoIdPattern
 } from './auto-ids.js'
 import { getCollection, getFields, getRelations } from './collections.js'
-import { decryptItemFields, encryptItemFields } from './encryption.js'
+import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import { enforceContracts } from './integration-contracts.js'
+import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
@@ -293,6 +303,35 @@ export async function getActualColumns(table: string): Promise<Set<string>> {
   const set = new Set(rows.map((r) => r.COLUMN_NAME))
   columnCache.set(table, set)
   return set
+}
+
+/**
+ * A projection that names a column the table does not have used to reach the
+ * database and come back as a 500 carrying the statement. The caller is told
+ * which names are unknown instead. A name missing from the cached column set
+ * is looked up once more before it is refused (a column added since).
+ */
+async function assertKnownFields(collection: string, fields: string[]): Promise<void> {
+  if (fields.length === 0 || fields[0] === '*') return
+  const lookup = async () =>
+    new Set([...(await getActualColumns(collection))].map((c) => c.toLowerCase()))
+  let cols = await lookup()
+  // No columns at all: not a table this check can judge (a view-backed collection).
+  if (cols.size === 0) return
+  const missing = () =>
+    fields.filter((f) => typeof f === 'string' && f !== '*' && !cols.has(f.toLowerCase()))
+  if (missing().length === 0) return
+  columnCache.delete(collection)
+  cols = await lookup()
+  const unknown = missing()
+  if (unknown.length === 0) return
+  const names = unknown.map((f) => `"${f}"`).join(', ')
+  throw Object.assign(
+    new Error(
+      `${collection} has no field ${names}${unknown.length === 1 ? '' : ' (none of these exist)'}`
+    ),
+    { statusCode: 400, code: 'UNKNOWN_FIELD', fields: unknown }
+  )
 }
 
 /**
@@ -1309,6 +1348,232 @@ function applyOneFilterOp(
     case '_ends_with':
       q.where(ref, 'like', `%${val}`)
       break
+    case '_icontains':
+      q.where(ref, 'like', `%${val}%`)
+      break
+    case '_nstarts_with':
+      q.where(ref, 'not like', `${val}%`)
+      break
+    case '_nends_with':
+      q.where(ref, 'not like', `%${val}`)
+      break
+    case '_empty':
+      q.where((w) => w.whereNull(ref as unknown as string).orWhere(ref, '=', ''))
+      break
+    case '_nempty':
+      q.where((w) => w.whereNotNull(ref as unknown as string).where(ref, '!=', ''))
+      break
+    case '_between': {
+      const [lo, hi] = Array.isArray(val) ? val : []
+      q.where(ref, '>=', lo as Knex.Value).where(ref, '<=', hi as Knex.Value)
+      break
+    }
+    case '_nbetween': {
+      const [lo, hi] = Array.isArray(val) ? val : []
+      q.where((w) => w.where(ref, '<', lo as Knex.Value).orWhere(ref, '>', hi as Knex.Value))
+      break
+    }
+  }
+}
+
+/** Every operator applyOneFilterOp compiles. */
+const FILTER_OPS = new Set([
+  '_eq',
+  '_neq',
+  '_gt',
+  '_gte',
+  '_lt',
+  '_lte',
+  '_in',
+  '_nin',
+  '_null',
+  '_nnull',
+  '_contains',
+  '_ncontains',
+  '_icontains',
+  '_starts_with',
+  '_nstarts_with',
+  '_ends_with',
+  '_nends_with',
+  '_empty',
+  '_nempty',
+  '_between',
+  '_nbetween'
+])
+
+function filterRefusal(code: string, message: string, extra: Record<string, unknown> = {}) {
+  return Object.assign(new Error(message), { statusCode: 400, code, ...extra })
+}
+
+function assertOps(
+  ops: Record<string, unknown>,
+  collection: string,
+  key: string,
+  path: string[]
+): void {
+  const at = [...path, key].join('.')
+  for (const [op, val] of Object.entries(ops)) {
+    if (!op.startsWith('_')) {
+      throw filterRefusal(
+        'FILTER_PATH_UNSUPPORTED',
+        `"${key}" on ${collection} does not link to another record, so "${at}.${op}" cannot be filtered`,
+        { path: [...path, key, op], collection }
+      )
+    }
+    if (!FILTER_OPS.has(op)) {
+      throw filterRefusal(
+        'FILTER_OPERATOR_UNKNOWN',
+        `"${op}" is not a filter operator (at "${at}")`,
+        { path: [...path, key], operator: op }
+      )
+    }
+    if ((op === '_in' || op === '_nin') && !Array.isArray(val)) {
+      throw filterRefusal('FILTER_VALUE_INVALID', `"${op}" takes a list (at "${at}")`, {
+        path: [...path, key],
+        operator: op
+      })
+    }
+    if ((op === '_between' || op === '_nbetween') && !(Array.isArray(val) && val.length === 2)) {
+      throw filterRefusal('FILTER_VALUE_INVALID', `"${op}" takes two values (at "${at}")`, {
+        path: [...path, key],
+        operator: op
+      })
+    }
+  }
+}
+
+const FILTER_DEPTH = 8
+
+/**
+ * Walk a filter the way applyFilters will and refuse what it cannot compile:
+ * a nested key under a field that links to nothing, an operator that does not
+ * exist, a field the collection does not have. Before this, each of those was
+ * dropped without a word and the read answered MORE rows than asked for.
+ *
+ * It loads the relations of every collection the filter reaches on the way,
+ * so the synchronous compiler finds them whatever the nesting.
+ */
+async function assertFilterCompiles(
+  filter: Record<string, unknown>,
+  collection: string,
+  rels: CMSRelation[],
+  path: string[] = []
+): Promise<void> {
+  if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return
+  if (path.length > FILTER_DEPTH) {
+    throw filterRefusal('FILTER_TOO_DEEP', `A filter may nest ${FILTER_DEPTH} levels at most`, {
+      path
+    })
+  }
+  const relsOf = async (c: string) => {
+    const hit = relCache.get(c)
+    if (hit) return hit
+    const loaded = await getRelations(c)
+    relCache.set(c, loaded)
+    return loaded
+  }
+  for (const [key, value] of Object.entries(filter)) {
+    if (
+      key === STATE_FIELD ||
+      key === INTEGRATIONS_FIELD ||
+      key === ORIGIN_FIELD ||
+      key === ADDENDUMS_FIELD ||
+      key === AT_RISK_FIELD ||
+      key === '_exists_junction'
+    )
+      continue
+    if (key === '_and' || key === '_or') {
+      if (!Array.isArray(value)) {
+        throw filterRefusal('FILTER_VALUE_INVALID', `"${key}" takes a list of filters`, { path })
+      }
+      for (const clause of value)
+        await assertFilterCompiles(clause as Record<string, unknown>, collection, rels, path)
+      continue
+    }
+    const isObject = typeof value === 'object' && value !== null && !Array.isArray(value)
+
+    const m2o = findM2ORelation(key, collection, rels)
+    if (m2o && isObject) {
+      const nested = value as Record<string, unknown>
+      if (Object.keys(nested).every((k) => k.startsWith('_'))) {
+        assertOps(nested, collection, key, path)
+      } else {
+        const target = m2o.rel.one_collection as string
+        await primeVirtualSql(target)
+        await assertFilterCompiles(nested, target, await relsOf(target), [...path, key])
+      }
+      continue
+    }
+
+    const o2m = findO2MRelation(key, collection, rels)
+    if (o2m && isObject) {
+      const nested = implicitSome(value as Record<string, unknown>)
+      const inner = (nested._some ?? nested._none) as Record<string, unknown> | undefined
+      if (inner === undefined) assertOps(nested, collection, key, path)
+      else if (inner && typeof inner === 'object') {
+        await primeVirtualSql(o2m.many_collection)
+        await assertFilterCompiles(inner, o2m.many_collection, await relsOf(o2m.many_collection), [
+          ...path,
+          key
+        ])
+      }
+      continue
+    }
+
+    const m2m = findM2MRelation(key, collection, rels)
+    if (m2m && isObject) {
+      const nested = implicitSome(value as Record<string, unknown>)
+      const inner = (nested._some ?? nested._none) as Record<string, unknown> | undefined
+      if (inner === undefined) {
+        assertOps(nested, collection, key, path)
+      } else if (inner && typeof inner === 'object') {
+        const otherRels = await relsOf(m2m.otherCollection)
+        const { _link: link, ...rawTarget } = inner
+        const legIsOwnField = otherRels.some(
+          (r) => r.many_collection === m2m.otherCollection && r.many_field === m2m.fkToOther
+        )
+        const target = legIsOwnField ? rawTarget : unwrapJunctionLeg(rawTarget, m2m.fkToOther)
+        await primeVirtualSql(m2m.otherCollection)
+        await assertFilterCompiles(target, m2m.otherCollection, otherRels, [...path, key])
+        if (link && typeof link === 'object') {
+          await assertFilterCompiles(
+            link as Record<string, unknown>,
+            m2m.junction,
+            await relsOf(m2m.junction),
+            [...path, key, '_link']
+          )
+        }
+      }
+      continue
+    }
+
+    // A plain field.
+    if (key.startsWith('_')) {
+      throw filterRefusal(
+        'FILTER_OPERATOR_UNKNOWN',
+        `"${key}" is not a filter operator${path.length ? ` (at "${path.join('.')}")` : ''}`,
+        { path, operator: key }
+      )
+    }
+    if (isObject) assertOps(value as Record<string, unknown>, collection, key, path)
+    if (IDENT_RE.test(key)) {
+      const cols = await getActualColumns(collection)
+      if (cols.size > 0) {
+        const has = (set: Set<string>) =>
+          [...set].some((c) => c.toLowerCase() === key.toLowerCase())
+        const virtual = peekVirtualSql(collection)?.has(key) ?? false
+        if (!virtual && !has(cols)) {
+          columnCache.delete(collection)
+          if (!has(await getActualColumns(collection))) {
+            throw filterRefusal(
+              'UNKNOWN_FIELD',
+              `${collection} has no field "${key}"${path.length ? ` (at "${[...path, key].join('.')}")` : ''}`,
+              { fields: [key], path: [...path, key], collection }
+            )
+          }
+        }
+      }
+    }
   }
 }
 
@@ -1364,6 +1629,7 @@ export async function applyFilterToQuery(
   await primeRelCacheForFilter(filter, collection, rels)
   await primeVirtualSql(collection)
   await primeVirtualFilters(filter)
+  await assertFilterCompiles(filter, collection, rels)
   applyFilters(q, filter, collection, rels)
 }
 
@@ -2196,6 +2462,325 @@ export async function applyConditions(
 
 // ─── Public item service API ──────────────────────────────────────────────────
 
+// ── To-many aliases in `fields=` ─────────────────────────────────────────────
+// `fields=id,lines.amount,tags.name` — the related rows of each record on the
+// page, read AS THE CALLER through readItems (permission, field list, row
+// filter and user scopes of the related collection all apply). One read per
+// alias per page, never per record.
+const TO_MANY_PER_PARENT = Math.max(1, Number(process.env.TO_MANY_PER_PARENT) || 200)
+const TO_MANY_TOTAL = 5000
+const TO_MANY_DEPTH = 2
+
+type ToManyPlan =
+  | { kind: 'o2m'; alias: string; child: string; fk: string; fields: string[] }
+  | {
+      kind: 'm2m'
+      alias: string
+      junction: string
+      fkToParent: string
+      fkToOther: string
+      other: string
+      fields: string[]
+    }
+
+async function planToMany(
+  collection: string,
+  rels: CMSRelation[],
+  nested: Record<string, string[]>
+): Promise<ToManyPlan[]> {
+  const plans: ToManyPlan[] = []
+  for (const [alias, fields] of Object.entries(nested)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) continue
+    const o2m =
+      findO2MRelation(alias, collection, rels) ??
+      // The child-table-name form of an alias (`workflow_line_items`).
+      rels.find(
+        (r) =>
+          r.one_collection === collection &&
+          r.junction_field == null &&
+          r.many_collection === alias &&
+          r.one_field != null
+      ) ??
+      null
+    if (o2m?.many_collection && o2m.many_field) {
+      plans.push({ kind: 'o2m', alias, child: o2m.many_collection, fk: o2m.many_field, fields })
+      continue
+    }
+    const leg = rels.find(
+      (r) =>
+        r.one_collection === collection &&
+        r.junction_field != null &&
+        (r.one_field === alias || r.many_collection === alias)
+    )
+    if (!leg?.many_collection || !leg.junction_field) continue
+    const junctionRels = await getRelations(leg.many_collection)
+    const other = junctionRels.find(
+      (r) => r.many_collection === leg.many_collection && r.many_field === leg.junction_field
+    )
+    // A link to several collections names its target per row; not expanded here.
+    if (!other?.one_collection) continue
+    plans.push({
+      kind: 'm2m',
+      alias,
+      junction: leg.many_collection,
+      fkToParent: leg.many_field,
+      fkToOther: leg.junction_field,
+      other: other.one_collection,
+      fields
+    })
+  }
+  return plans
+}
+
+async function readAllAsCaller(
+  user: User,
+  collection: string,
+  fields: string[],
+  filter: Record<string, unknown>,
+  workspaceId: string | undefined,
+  depth: number
+): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = []
+  for (let offset = 0; offset < TO_MANY_TOTAL; offset += 1000) {
+    const page = (await readItemsAtDepth(
+      user,
+      collection,
+      { fields, filter, sort: ['id'], limit: 1000, offset },
+      workspaceId,
+      depth
+    )) as { data: Record<string, unknown>[] }
+    out.push(...page.data)
+    if (page.data.length < 1000) break
+  }
+  return out
+}
+
+/** Attach `row[alias] = [related rows]` for every planned alias. A caller who
+ *  may not read the related collection gets empty lists, not an error. */
+async function expandToMany(
+  user: User,
+  items: Record<string, unknown>[],
+  plans: ToManyPlan[],
+  workspaceId: string | undefined,
+  depth: number
+): Promise<string[]> {
+  const truncated: string[] = []
+  const ids = [...new Set(items.map((i) => i.id).filter((v) => v != null))] as Array<
+    string | number
+  >
+  for (const plan of plans) {
+    for (const it of items) it[plan.alias] = []
+    if (ids.length === 0 || depth >= TO_MANY_DEPTH) continue
+    const byParent = new Map<string, Record<string, unknown>[]>()
+    const push = (parent: unknown, row: Record<string, unknown>) => {
+      const k = String(parent)
+      const list = byParent.get(k) ?? []
+      if (list.length >= TO_MANY_PER_PARENT) {
+        if (!truncated.includes(plan.alias)) truncated.push(plan.alias)
+        return
+      }
+      list.push(row)
+      byParent.set(k, list)
+    }
+    const wantsAll = plan.fields.includes('*')
+    try {
+      if (plan.kind === 'o2m') {
+        const fields = wantsAll ? ['*'] : [...new Set(['id', plan.fk, ...plan.fields])]
+        for (let i = 0; i < ids.length; i += 500) {
+          const rows = await readAllAsCaller(
+            user,
+            plan.child,
+            fields,
+            { [plan.fk]: { _in: ids.slice(i, i + 500) } },
+            workspaceId,
+            depth + 1
+          )
+          for (const r of rows) {
+            // An expanded FK comes back as the related record.
+            const raw = r[plan.fk]
+            const parent =
+              raw && typeof raw === 'object' ? (raw as Record<string, unknown>).id : raw
+            push(parent, r)
+          }
+        }
+      } else {
+        const links: Array<{ parent: unknown; other: unknown }> = []
+        for (let i = 0; i < ids.length; i += 1000) {
+          const rows = (await db(plan.junction)
+            .whereIn(plan.fkToParent, ids.slice(i, i + 1000))
+            .whereNotNull(plan.fkToOther)
+            .orderBy('id')
+            .select({ parent: plan.fkToParent, other: plan.fkToOther })) as Array<{
+            parent: unknown
+            other: unknown
+          }>
+          links.push(...rows)
+        }
+        const otherIds = [...new Set(links.map((l) => String(l.other)))]
+        const fields = wantsAll ? ['*'] : [...new Set(['id', ...plan.fields])]
+        const found = new Map<string, Record<string, unknown>>()
+        for (let i = 0; i < otherIds.length && found.size < TO_MANY_TOTAL; i += 500) {
+          const rows = await readAllAsCaller(
+            user,
+            plan.other,
+            fields,
+            { id: { _in: otherIds.slice(i, i + 500) } },
+            workspaceId,
+            depth + 1
+          )
+          for (const r of rows) found.set(String(r.id), r)
+        }
+        for (const l of links) {
+          const row = found.get(String(l.other))
+          if (row) push(l.parent, { ...row })
+        }
+      }
+    } catch (err) {
+      // No read permission on the related collection: the lists stay empty.
+      if (!(err instanceof ForbiddenError) && !(err instanceof CollectionNotFoundError)) throw err
+    }
+    for (const it of items) it[plan.alias] = byParent.get(String(it.id)) ?? []
+  }
+  return truncated
+}
+
+// ── Keyset paging (`after=<cursor>`) ─────────────────────────────────────────
+interface KeysetPlan {
+  sorts: KeysetSort[]
+  values: unknown[] | null
+  /** SQL type of each sort column that holds a date or time, else null. */
+  dateTypes: Array<string | null>
+}
+
+const KEYSET_DATE_TYPES = new Set([
+  'date',
+  'datetime',
+  'datetime2',
+  'smalldatetime',
+  'datetimeoffset',
+  'time'
+])
+
+function keysetSecret(): string {
+  return config.SESSION_SECRET || process.env.ENCRYPTION_KEY || 'nivaro-keyset'
+}
+
+async function planKeyset(
+  collection: string,
+  sort: string[],
+  after: string,
+  allowedFields: string[] | null
+): Promise<KeysetPlan> {
+  const sorts = keysetSorts(sort)
+  const physical = await getActualColumns(collection)
+  const byLower = new Map([...physical].map((c) => [c.toLowerCase(), c]))
+  for (const s of sorts) {
+    const real = byLower.get(s.column.toLowerCase())
+    if (!real) {
+      throw Object.assign(
+        new Error(`"${s.column}" is not stored on ${collection}, so a cursor cannot walk by it`),
+        { statusCode: 400, code: 'CURSOR_SORT_UNSUPPORTED' }
+      )
+    }
+    // The cursor carries the sort values: never those of a field the caller cannot read.
+    if (allowedFields && real !== 'id' && !allowedFields.includes(real)) {
+      throw Object.assign(new Error(`"${s.column}" cannot be sorted with a cursor`), {
+        statusCode: 400,
+        code: 'CURSOR_SORT_UNSUPPORTED'
+      })
+    }
+    s.column = real
+  }
+  let dateTypes: Array<string | null> = sorts.map(() => null)
+  if (isMssql()) {
+    const rows = rawRows<{ c: string; t: string }>(
+      await db.raw(
+        `SELECT COLUMN_NAME AS c, DATA_TYPE AS t FROM information_schema.columns WHERE table_name = ?`,
+        [collection]
+      )
+    )
+    const typeOf = new Map(rows.map((r) => [String(r.c).toLowerCase(), String(r.t).toLowerCase()]))
+    dateTypes = sorts.map((s) => {
+      const t = typeOf.get(s.column.toLowerCase())
+      return t && KEYSET_DATE_TYPES.has(t) ? t : null
+    })
+  }
+  return { sorts, values: decodeCursor(after, collection, sorts, keysetSecret()), dateTypes }
+}
+
+/** Every row that sorts after the cursor's row. */
+function applyKeyset(q: QB, collection: string, plan: KeysetPlan): void {
+  if (!plan.values) return
+  const values = plan.values
+  const col = (i: number) => db.raw('??.??', [collection, plan.sorts[i].column])
+  // A date travels as the text SQL Server itself printed, and is read back
+  // into the column's own type: a JavaScript date holds milliseconds, the
+  // column holds more, and a rounded value would repeat or skip a row.
+  const val = (i: number): Knex.Value =>
+    plan.dateTypes[i] && typeof values[i] === 'string'
+      ? (db.raw(`CONVERT(${plan.dateTypes[i]}, ?, 126)`, [values[i] as string]) as never)
+      : (values[i] as Knex.Value)
+  const branches = keysetBranches(plan.sorts, values, isMssql())
+  if (branches.length === 0) {
+    q.whereRaw('1 = 0')
+    return
+  }
+  q.where((outer) => {
+    for (const terms of branches) {
+      outer.orWhere((branch) => {
+        for (const t of terms) {
+          const c = col(t.column)
+          if (t.test === 'eq') branch.where(c, '=', val(t.column))
+          else if (t.test === 'null') branch.whereNull(c as unknown as string)
+          else if (t.test === 'not_null') branch.whereNotNull(c as unknown as string)
+          else if (t.test === 'gt') branch.where(c, '>', val(t.column))
+          else if (t.test === 'lt') branch.where(c, '<', val(t.column))
+          else if (t.test === 'gt_or_null')
+            branch.where((w) => w.where(c, '>', val(t.column)).orWhereNull(c as unknown as string))
+          else if (t.test === 'lt_or_null')
+            branch.where((w) => w.where(c, '<', val(t.column)).orWhereNull(c as unknown as string))
+        }
+      })
+    }
+  })
+}
+
+const KEYSET_COL = (i: number) => `__ks_${i}`
+
+/**
+ * Grouped aggregates over the rows a list read would match — same filter,
+ * search, conditions, row filter and scopes, read as the caller.
+ */
+export async function aggregateItems(
+  user: User,
+  collection: string,
+  query: Omit<ItemsQuery, 'aggregate'> & { aggregate: AggregateSpec },
+  req?: FastifyRequest,
+  workspaceId?: string
+): Promise<{
+  data: AggregateRow[]
+  total: number
+  limit: number
+  offset: number
+  truncated?: boolean
+}> {
+  const { fields: _f, sort: _s, after: _a, ...rest } = query
+  return (await readItems(user, collection, { ...rest, fields: ['id'] }, req, workspaceId)) as never
+}
+
+/** readItems for a nested read: no request, a depth that stops the recursion. */
+async function readItemsAtDepth(
+  user: User,
+  collection: string,
+  query: ItemsQuery,
+  workspaceId: string | undefined,
+  depth: number
+) {
+  return toManyDepth.run(depth, () => readItems(user, collection, query, undefined, workspaceId))
+}
+
+const toManyDepth = new AsyncLocalStorage<number>()
+
 export async function readItems(
   user: User,
   collection: string,
@@ -2234,7 +2819,16 @@ export async function readItems(
     }
   }
 
-  const { fields = ['*'], filter = {}, sort = [], limit = 25, offset = 0, page, search } = query
+  const { fields = ['*'], filter = {}, limit = 25, offset = 0, page, search } = query
+  // A cursor walk sorts by the caller's columns and then by id; everything
+  // below reads `sort`, so it is settled here.
+  const keyset =
+    query.after !== undefined
+      ? await planKeyset(collection, query.sort ?? [], String(query.after), allowedFields)
+      : null
+  const sort = keyset
+    ? keyset.sorts.map((k) => `${k.desc ? '-' : ''}${k.column}`)
+    : (query.sort ?? [])
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
   const { direct: directFields0, nested: nestedFieldMap } = parseFieldExpansion(fields)
@@ -2248,7 +2842,7 @@ export async function readItems(
   delete nestedFieldMap[STATE_FIELD]
   if (stateSplit.wantsState && directFields.length === 0) directFields.push('id')
 
-  const effectiveOffset = page ? (page - 1) * limit : offset
+  const effectiveOffset = keyset ? 0 : page ? (page - 1) * limit : offset
   let selectFields =
     allowedFields === null
       ? directFields[0] === '*'
@@ -2276,6 +2870,19 @@ export async function readItems(
     selectFields = ['id', ...selectFields]
   }
 
+  // To-many aliases named with a dotted path (`lines.amount`) are read after
+  // the page, as the caller. Planned here, before the alias names are stripped.
+  const toMany = await planToMany(collection, rels, nestedFieldMap)
+  for (const plan of toMany) {
+    delete nestedFieldMap[plan.alias]
+    selectFields = selectFields.filter((f) => f !== plan.alias)
+  }
+  if (toMany.length > 0) {
+    if (selectFields.length === 0) selectFields = ['id']
+    else if (selectFields[0] !== '*' && !selectFields.includes('id'))
+      selectFields = ['id', ...selectFields]
+  }
+
   // Strip alias field names (O2M AND M2M) — they have no physical column
   // (e.g. 'report_widgets' on report_definitions, or an M2M alias a client
   // names with a dotted path). Selecting them causes MSSQL "Invalid column
@@ -2301,6 +2908,18 @@ export async function readItems(
   const virtualSplit = await splitVirtualFields(collection, selectFields as string[])
   selectFields = virtualSplit.select
   if (selectFields.length === 0) selectFields = ['id']
+  await assertKnownFields(collection, selectFields as string[])
+
+  // The cursor of the next page is made from the last row's sort values.
+  const keysetAdded: string[] = []
+  if (keyset && selectFields[0] !== '*') {
+    const have = new Set((selectFields as string[]).map((f) => f.toLowerCase()))
+    for (const k of keyset.sorts) {
+      if (have.has(k.column.toLowerCase())) continue
+      keysetAdded.push(k.column)
+      selectFields = [...(selectFields as string[]), k.column]
+    }
+  }
 
   // For each related collection referenced in the filter or sort, pre-load their
   // relations into the cache so the synchronous applyFilters can access them.
@@ -2308,6 +2927,7 @@ export async function readItems(
   await primeVirtualSql(collection)
   await primeVirtualFilters(filter)
   await assertFilterableFields(collection, filter, sort, conditions)
+  await assertFilterCompiles(filter, collection, rels)
 
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
   // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
@@ -2319,6 +2939,18 @@ export async function readItems(
     .select(selectFields as string[])
     .limit(effectiveLimit)
     .offset(effectiveOffset)
+  if (keyset) {
+    keyset.dateTypes.forEach((t, i) => {
+      if (t)
+        q.select(
+          db.raw(`CONVERT(varchar(40), ??.??, 126) as ??`, [
+            collection,
+            keyset.sorts[i].column,
+            KEYSET_COL(i)
+          ])
+        )
+    })
+  }
 
   if (Object.keys(filter).length) applyFilters(q, filter, collection, rels)
 
@@ -2349,6 +2981,8 @@ export async function readItems(
     await applyConditions(q, conditions, collection)
     await applyConditions(countQ, conditions, collection)
   }
+  // Rows after the cursor — the page only; the count is of the whole set.
+  if (keyset) applyKeyset(q, collection, keyset)
 
   if (search) {
     // Escape MSSQL LIKE special characters to prevent wildcard injection.
@@ -2457,10 +3091,54 @@ export async function readItems(
     }
   }
 
+  // Aggregates instead of rows: the count query already carries every gate
+  // of this read, so the figures describe exactly the rows a list would hold.
+  if (query.aggregate) {
+    const spec = query.aggregate
+    const agg = await span('aggregate', async () =>
+      runAggregate(countQ, collection, spec, {
+        allowedFields,
+        encrypted: await getEncryptedFields(collection)
+      })
+    )
+    return {
+      data: agg.data,
+      total: agg.data.length,
+      limit: agg.limit,
+      offset: agg.offset,
+      ...(agg.truncated ? { truncated: true } : {})
+    } as never
+  }
+
+  const skipCount = query.count === false
   const [rawData, countRows, sumRows] = await span('query+count', () =>
-    Promise.all([q, countQ, sumQ ?? Promise.resolve(null)])
+    Promise.all([
+      q,
+      skipCount ? Promise.resolve([{ count: null }]) : countQ,
+      sumQ ?? Promise.resolve(null)
+    ])
   )
-  const total = Number((countRows[0] as { count: string | number }).count)
+  const total = skipCount ? null : Number((countRows[0] as { count: string | number }).count)
+
+  let nextCursor: string | null = null
+  if (keyset) {
+    const rows = rawData as Record<string, unknown>[]
+    const last = rows.length >= effectiveLimit ? rows[rows.length - 1] : null
+    if (last) {
+      nextCursor = encodeCursor(
+        collection,
+        keyset.sorts,
+        keyset.sorts.map((k, i) =>
+          keyset.dateTypes[i] ? (last[KEYSET_COL(i)] ?? null) : last[k.column]
+        ),
+        keysetSecret()
+      )
+    }
+    for (const r of rows) {
+      keyset.sorts.forEach((_, i) => delete r[KEYSET_COL(i)])
+      for (const c of keysetAdded) delete r[c]
+    }
+  }
   const aggregates: Record<string, number> | undefined = sumRows
     ? Object.fromEntries(
         sumFields.map((f) => [f, Number((sumRows as Array<Record<string, unknown>>)[0]?.[f] ?? 0)])
@@ -2503,12 +3181,32 @@ export async function readItems(
     )
   }
 
+  // Related rows for the to-many aliases the projection named.
+  let truncatedRelations: string[] = []
+  if (toMany.length > 0 && data.length > 0) {
+    truncatedRelations = await span(
+      'expand-to-many',
+      () =>
+        expandToMany(
+          user,
+          data as Record<string, unknown>[],
+          toMany,
+          workspaceId,
+          toManyDepth.getStore() ?? 0
+        ),
+      toMany.map((t) => t.alias).join(',')
+    )
+  }
+
   const result = {
     data,
     total,
     limit,
     offset: effectiveOffset,
-    ...(aggregates ? { aggregates } : {})
+    ...(aggregates ? { aggregates } : {}),
+    ...(keyset ? { next_cursor: nextCursor } : {}),
+    // Aliases whose lists were cut at the per-record limit.
+    ...(truncatedRelations.length ? { truncated_relations: truncatedRelations } : {})
   }
 
   await span('hooks:after-read', () =>
@@ -2737,11 +3435,23 @@ export async function readOne(
     selectCols = ['id', ...selectCols]
   }
 
+  // To-many aliases named with a dotted path — see readItems.
+  const oneRels = await getRelsForCollection(collection)
+  const toMany = await planToMany(collection, oneRels, nestedFieldMap)
+  for (const plan of toMany) {
+    delete nestedFieldMap[plan.alias]
+    selectCols = selectCols.filter((f) => f !== plan.alias)
+  }
+  if (toMany.length > 0) {
+    if (selectCols.length === 0) selectCols = ['id']
+    else if (selectCols[0] !== '*' && !selectCols.includes('id')) selectCols = ['id', ...selectCols]
+  }
+
   // Strip O2M/M2M alias names from explicit selects — readItems has done this
   // for years, readOne didn't, so `?fields=id,<alias>` 500'd with "Invalid
   // column name" here while working on the list route.
   if (selectCols[0] !== '*') {
-    const rels = await getRelsForCollection(collection)
+    const rels = oneRels
     const aliasNames = new Set(
       rels
         .filter((r) => r.one_collection === collection && r.one_field != null)
@@ -2756,6 +3466,7 @@ export async function readOne(
   const virtualSplit = await splitVirtualFields(collection, selectCols as string[])
   selectCols = virtualSplit.select
   if (selectCols.length === 0) selectCols = ['id']
+  await assertKnownFields(collection, selectCols as string[])
 
   // An alias segment ("REQ-1234") is not a key. Resolve it first, and never
   // pass it to the id column: an int primary key raises a conversion error
@@ -2790,6 +3501,9 @@ export async function readOne(
     if (oneState.wantsState) await attachRecordState(collection, [item])
     if (Object.keys(nestedFieldMap).length > 0) {
       await expandRelations(user, [item], collection, nestedFieldMap, 0, workspaceId)
+    }
+    if (toMany.length > 0) {
+      await expandToMany(user, [item], toMany, workspaceId, toManyDepth.getStore() ?? 0)
     }
   }
 
