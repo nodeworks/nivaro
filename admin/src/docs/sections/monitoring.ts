@@ -290,7 +290,10 @@ ctx.importProcessors.register({
           'write',
           'items (every write through the items service), batch (set-based with per-record history), or auto with batch_over.'
         ],
-        ['keep_staging', 'Load the staging table as well, for a procedure or flow that reads it.']
+        [
+          'keep_staging',
+          'Also fill the staging table, for a post-run flow or procedure that reads it. Off by default — the items-service paths work from the parsed rows and never read the table.'
+        ]
       ]
     },
     {
@@ -377,7 +380,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
     { type: 'h2', id: 'imports-definitions', text: 'Definitions' },
     {
       type: 'p',
-      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (bulk file-share BULK INSERT, or batched inserts), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition\'s post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).'
+      text: 'Admin-only registry for staged imports: key, label, staging table, procedure, loader (batched inserts by default; bulk = a file on an SMB share plus BULK INSERT, which needs smbclient and SAMBA_* on the host), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition\'s post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).'
     },
     {
       type: 'warn',

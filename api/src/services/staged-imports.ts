@@ -248,10 +248,14 @@ async function pushToShare(localPath: string, remoteName: string): Promise<void>
         `put ${localPath} ${remoteName}`
       ])
     } catch (err) {
-      const stderr = (err as { stderr?: string })?.stderr
-      throw new Error(
-        `smbclient upload failed: ${scrubSecrets(String(stderr || 'unknown error')).trim()}`
-      )
+      const e = err as { stderr?: string; code?: string; message?: string }
+      // A missing binary is ENOENT with no stderr at all — the usual case on
+      // a deployed image, which never carries smbclient.
+      const reason =
+        e?.code === 'ENOENT'
+          ? 'smbclient is not installed on this host — set the definition loader to "insert" (the default) or install it'
+          : String(e?.stderr || e?.message || 'unknown error')
+      throw new Error(`smbclient upload failed: ${scrubSecrets(reason).trim()}`)
     }
   })
 }
@@ -373,6 +377,40 @@ function normalizeHeader(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
+}
+
+/** Whether a definition's service_config asks for a copy of the file in the
+ *  staging table. Only a follow-up that READS the table needs one (a post-run
+ *  flow op, a procedure); the items-service paths work from the parsed rows. */
+function keepsStaging(raw: unknown): boolean {
+  if (!raw) return false
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return !!(v && typeof v === 'object' && (v as { keep_staging?: unknown }).keep_staging === true)
+  } catch {
+    return false
+  }
+}
+
+/** Fill the staging table and return how long it took. Batched inserts are
+ *  the default — they need nothing outside the database. The bulk loader
+ *  (a file on an SMB share + BULK INSERT) runs only when a definition or
+ *  IMPORT_LOADER names it: it needs `smbclient` on the host and SAMBA_*
+ *  credentials, neither of which a deployed image carries. */
+async function loadStaging(
+  definition: Pick<ImportDefinition, 'loader'>,
+  table: string,
+  rows: Array<Record<string, string>>,
+  columns: string[],
+  declaredNames: string[] | null
+): Promise<number> {
+  const began = Date.now()
+  await ensureStagingTable(table, columns, declaredNames)
+  const loader: StagingLoader =
+    definition.loader ?? ((process.env.IMPORT_LOADER as StagingLoader) || 'insert')
+  if (loader === 'bulk') await loadViaShare(table, rows, columns)
+  else await loadChunked(table, rows, columns)
+  return Date.now() - began
 }
 
 async function loadViaShare(
@@ -616,7 +654,7 @@ export async function runStagedImport({
   // Service mode: the parsed, header-mapped rows are compared with the stored
   // records and only what differs is written. No procedure runs over a
   // staging table; the table is loaded only when the definition asks for a
-  // copy of the file there (a follow-up procedure reads it).
+  // copy of the file there (a follow-up procedure or flow reads it).
   if (definition.processor === 'service') {
     const cfg = parseServiceConfig(definition.service_config)
     if (!cfg)
@@ -624,13 +662,7 @@ export async function runStagedImport({
     let loadMs: number | null = null
     if (cfg.keep_staging) {
       await onProgress?.('preparing')
-      const loadBegan = Date.now()
-      await ensureStagingTable(table, columns, declaredNames)
-      const loader: StagingLoader =
-        definition.loader ?? ((process.env.IMPORT_LOADER as StagingLoader) || 'bulk')
-      if (loader === 'insert') await loadChunked(table, rows, columns)
-      else await loadViaShare(table, rows, columns)
-      loadMs = Date.now() - loadBegan
+      loadMs = await loadStaging(definition, table, rows, columns, declaredNames)
     }
     if (runId != null) await recordRanVia(runId, 'service')
     await onProgress?.('importing')
@@ -658,9 +690,10 @@ export async function runStagedImport({
   }
 
   // A registered processor: the rows are classified against live data and
-  // only real changes are written, through the items service. The staging
-  // table is still loaded first — it stays the record of the last file, and
-  // the post-run flows read it.
+  // only real changes are written, through the items service. The processor
+  // reads the parsed rows, never the staging table, so the table is loaded
+  // only when the definition asks for a copy (`keep_staging` — a post-run
+  // flow reads it). A procedure, by contrast, has nothing else to read.
   const wantsProcessor =
     !!definition.processor && definition.processor !== 'service' && definition.processor !== 'proc'
   const processor = wantsProcessor ? getImportProcessor(definition.processor) : null
@@ -670,15 +703,11 @@ export async function runStagedImport({
     )
   }
 
-  await onProgress?.('preparing')
-  const loadBegan = Date.now()
-  await ensureStagingTable(table, columns, declaredNames)
-
-  const loader: StagingLoader =
-    definition.loader ?? ((process.env.IMPORT_LOADER as StagingLoader) || 'bulk')
-  if (loader === 'insert') await loadChunked(table, rows, columns)
-  else await loadViaShare(table, rows, columns)
-  const loadMs = Date.now() - loadBegan
+  let loadMs: number | null = null
+  if (!processor || keepsStaging(definition.service_config)) {
+    await onProgress?.('preparing')
+    loadMs = await loadStaging(definition, table, rows, columns, declaredNames)
+  }
 
   if (runId != null) {
     await recordRanVia(
