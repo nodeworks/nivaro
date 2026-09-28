@@ -28,12 +28,16 @@ const CREATED_CAP = 5000
 // ── Pure helpers ────────────────────────────────────────────────────────────
 
 /** A send-back: the destination sorts before the origin on the template, or
- *  the transition says so in its label ('Send Back', 'sent back to …'). */
+ *  the transition says so in its label ('Send Back', 'sent back to …').
+ *  Leaving the canceled state (an uncancel) hops backwards but sends nothing
+ *  back to anyone, so a move FROM `canceled` never counts. */
 export function isSendBackEdge(
   fromSort: number | null | undefined,
   toSort: number | null | undefined,
-  label: string | null | undefined
+  label: string | null | undefined,
+  fromKey?: string | null
 ): boolean {
+  if (fromKey && String(fromKey).toLowerCase() === 'canceled') return false
   if (fromSort != null && toSort != null && Number(toSort) < Number(fromSort)) return true
   return !!label && SEND_BACK_LABEL.test(label)
 }
@@ -339,6 +343,7 @@ function historyQuery(since: Date) {
       'h.to_state',
       'fs.sort as from_sort',
       'ts.sort as to_sort',
+      'fs.key as from_key',
       'fs.label as from_label',
       'ts.label as to_label',
       't.label as transition_label',
@@ -411,7 +416,8 @@ export async function listSendBacks(opts: {
       isSendBackEdge(
         r.from_sort as number | null,
         r.to_sort as number | null,
-        r.transition_label as string | null
+        r.transition_label as string | null,
+        r.from_key as string | null
       )
     )
     .sort(
@@ -670,4 +676,1087 @@ export async function changedSince(opts: {
   }
   await Promise.all(Array.from({ length: 6 }, worker))
   return out
+}
+
+// ── Shared helpers (second batch) ───────────────────────────────────────────
+
+/** Median of a list; null when empty. */
+export function median(nums: number[]): number | null {
+  if (nums.length === 0) return null
+  const s = [...nums].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2
+}
+
+const round1 = (n: number | null): number | null => (n == null ? null : Math.round(n * 10) / 10)
+
+/** preferences is nvarchar JSON on the raw row, an object once parsed. */
+function parsePrefs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+  if (typeof raw !== 'string' || raw.trim() === '') return {}
+  try {
+    const v = JSON.parse(raw)
+    return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function titleCase(field: string): string {
+  return field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+const isEmptyValue = (v: unknown) => v == null || String(v).trim() === ''
+
+/** Run `fn` over `items` at most `n` at a time. */
+async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
+  const queue = [...items]
+  const worker = async () => {
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) await fn(next)
+  }
+  await Promise.all(Array.from({ length: Math.min(n, queue.length) }, worker))
+}
+
+async function physicalColumns(collection: string): Promise<Set<string>> {
+  const rows = (await db('information_schema.columns')
+    .where('table_name', collection)
+    .select('column_name')
+    .catch(() => [])) as Array<{ column_name: string }>
+  return new Set(rows.map((r) => String(r.column_name)))
+}
+
+// ── My integrity ────────────────────────────────────────────────────────────
+
+const LINE_FINDING = /^Line (#?\S+):\s*/
+
+/** 'Line 3: Category is empty' → { line: '3', message: 'Category is empty' };
+ *  a record-level message → null. */
+export function splitLineFinding(message: string): { line: string; message: string } | null {
+  const m = LINE_FINDING.exec(message ?? '')
+  if (!m) return null
+  return { line: m[1], message: message.slice(m[0].length) }
+}
+
+export interface IntegrityRecord {
+  collection: string
+  item: string
+  label: string
+  url: string
+  findings: Array<{ field: string | null; rule: string; message: string; fixable: boolean }>
+  line_findings: Array<{ line: string; field: string | null; message: string }>
+}
+
+const INTEGRITY_CAP = 200
+const INTEGRITY_SCAN = 2000
+
+/**
+ * Stored integrity findings (nivaro_record_integrity — the row the record
+ * banner reads) on records the viewer created, newest check first, capped at
+ * 200 records. On a pipeline-bound collection only records whose instance is
+ * still open count; an unbound collection counts every record. A finding
+ * worded 'Line N: …' is a line finding; the rest are record findings.
+ */
+export async function listMyIntegrity(opts: { user: User; isAdmin: boolean }): Promise<{
+  records: IntegrityRecord[]
+  totals: { records: number; findings: number; lines: number }
+}> {
+  const empty = { records: [], totals: { records: 0, findings: 0, lines: 0 } }
+  const userId = String(opts.user.id)
+  const found = (await db('nivaro_record_integrity')
+    .whereNot('findings', '[]')
+    .distinct('collection')
+    .catch(() => [])) as Array<{ collection: string }>
+  const readable = await readableFilter(
+    opts.user,
+    opts.isAdmin,
+    found.map((r) => String(r.collection))
+  )
+  if (readable.size === 0) return empty
+  const [creators, bound] = await Promise.all([
+    creatorColumns([...readable]),
+    boundCollections().then((b) => new Set(b))
+  ])
+
+  const kept: Array<{ collection: string; item: string; findings: string; at: number }> = []
+  await Promise.all(
+    [...creators.entries()].map(async ([collection, col]) => {
+      const rows = (await db('nivaro_record_integrity')
+        .where('collection', collection)
+        .whereNot('findings', '[]')
+        .orderBy('checked_at', 'desc')
+        .limit(INTEGRITY_SCAN)
+        .select('item_id', 'findings', 'checked_at')
+        .catch(() => [])) as Array<{ item_id: string; findings: string; checked_at: Date }>
+      if (rows.length === 0) return
+      const owned = new Set(
+        (
+          (await selectInChunks(
+            rows.map((r) => String(r.item_id)),
+            1000,
+            (chunk) => db(collection).whereIn('id', chunk).where(col, userId).pluck('id')
+          ).catch(() => [])) as unknown[]
+        ).map((id) => String(id).toUpperCase())
+      )
+      let mine = rows.filter((r) => owned.has(String(r.item_id).toUpperCase()))
+      if (mine.length === 0) return
+      if (bound.has(collection)) {
+        const open = (await selectInChunks(
+          mine.map((r) => String(r.item_id)),
+          1000,
+          (chunk) =>
+            db('nivaro_workflow_instances')
+              .where('collection', collection)
+              .whereIn('item', chunk)
+              .whereNull('completed_at')
+              .distinct('item')
+        ).catch(() => [])) as Array<{ item: string }>
+        const openSet = new Set(open.map((r) => String(r.item).toUpperCase()))
+        mine = mine.filter((r) => openSet.has(String(r.item_id).toUpperCase()))
+      }
+      for (const r of mine) {
+        kept.push({
+          collection,
+          item: String(r.item_id),
+          findings: r.findings,
+          at: new Date(r.checked_at).getTime() || 0
+        })
+      }
+    })
+  )
+
+  const parsed = kept
+    .sort((a, b) => b.at - a.at)
+    .map((k) => {
+      let list: Array<{ field?: string | null; rule?: string; message?: string }> = []
+      try {
+        const v = JSON.parse(k.findings)
+        if (Array.isArray(v)) list = v
+      } catch {
+        list = []
+      }
+      const findings: IntegrityRecord['findings'] = []
+      const lines: IntegrityRecord['line_findings'] = []
+      for (const f of list) {
+        const message = String(f.message ?? '')
+        const field = f.field ? String(f.field) : null
+        const split = splitLineFinding(message)
+        if (split) lines.push({ line: split.line, field, message: split.message })
+        else findings.push({ field, rule: String(f.rule ?? ''), message, fixable: !!field })
+      }
+      return { ...k, findings, lines }
+    })
+    .filter((k) => k.findings.length + k.lines.length > 0)
+    .slice(0, INTEGRITY_CAP)
+  if (parsed.length === 0) return empty
+
+  const labels = await labelRecords(parsed.map((p) => ({ collection: p.collection, item: p.item })))
+  const records = await Promise.all(
+    parsed.map(async (p) => ({
+      collection: p.collection,
+      item: p.item,
+      label: labels.get(`${p.collection}:${p.item}`) ?? `#${p.item}`,
+      url: await recordLink(p.collection, p.item, { app: 'portal' }),
+      findings: p.findings,
+      line_findings: p.lines
+    }))
+  )
+  return {
+    records,
+    totals: {
+      records: records.length,
+      findings: records.reduce((n, r) => n + r.findings.length, 0),
+      lines: records.reduce((n, r) => n + r.line_findings.length, 0)
+    }
+  }
+}
+
+// ── Submission readiness ────────────────────────────────────────────────────
+
+export interface ReadinessBlocker {
+  kind: 'field' | 'lines' | 'requirement'
+  field?: string
+  label: string
+  message: string
+}
+
+export const READINESS_ID_CAP = 50
+
+interface RelationRow {
+  many_collection: string | null
+  many_field: string | null
+  one_collection: string | null
+  one_field: string | null
+  junction_field: string | null
+}
+
+interface RequiredField {
+  field: string
+  label: string
+}
+
+/** The required fields a record must fill: on the active grouped layout, the
+ *  assigned fields whose layout override (else the field itself) says
+ *  required; without a layout, every field flagged required. */
+async function requiredFieldsFor(collection: string): Promise<RequiredField[]> {
+  const fields = (await db('nivaro_fields')
+    .where('collection', collection)
+    .select('field', 'label', 'required')
+    .catch(() => [])) as Array<{ field: string; label: string | null; required: unknown }>
+  const byField = new Map(fields.map((f) => [f.field, f]))
+  const layout = (await db('nivaro_collection_layouts')
+    .where({ collection, layout_type: 'grouped', is_active: true })
+    .first('id')
+    .catch(() => undefined)) as { id: number } | undefined
+  if (!layout?.id) {
+    return fields
+      .filter((f) => truthy(f.required))
+      .map((f) => ({ field: f.field, label: f.label || titleCase(f.field) }))
+  }
+  const assignments = (await db('nivaro_layout_field_assignments')
+    .where('layout_id', layout.id)
+    .select('field', 'label_override', 'overrides')
+    .catch(() => [])) as Array<{
+    field: string
+    label_override: string | null
+    overrides: string | null
+  }>
+  const out: RequiredField[] = []
+  for (const a of assignments) {
+    if (!a.field || a.field.startsWith('__') || a.field.includes('.')) continue
+    const o = parsePrefs(a.overrides)
+    const f = byField.get(a.field)
+    const required = 'required' in o ? truthy(o.required) : truthy(f?.required)
+    if (!required) continue
+    const label =
+      (typeof o.label === 'string' && o.label) || a.label_override || f?.label || titleCase(a.field)
+    out.push({ field: a.field, label })
+  }
+  return out
+}
+
+/** Field blockers (empty required columns / aliases) and empty required line sets. */
+async function fieldBlockers(
+  collection: string,
+  ids: string[]
+): Promise<Map<string, ReadinessBlocker[]>> {
+  const out = new Map<string, ReadinessBlocker[]>()
+  const push = (id: string, b: ReadinessBlocker) => {
+    const list = out.get(id) ?? []
+    list.push(b)
+    out.set(id, list)
+  }
+  const [required, physical, relations] = await Promise.all([
+    requiredFieldsFor(collection),
+    physicalColumns(collection),
+    db('nivaro_relations')
+      .where('one_collection', collection)
+      .orWhere('many_collection', collection)
+      .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
+      .catch(() => []) as Promise<RelationRow[]>
+  ])
+  if (required.length === 0) return out
+
+  const columns = required.filter((r) => physical.has(r.field))
+  if (columns.length > 0) {
+    const rows = (await db(collection)
+      .whereIn('id', ids)
+      .select(['id', ...columns.map((c) => c.field)])
+      .catch(() => [])) as Array<Record<string, unknown>>
+    for (const row of rows) {
+      for (const c of columns) {
+        if (!isEmptyValue(row[c.field])) continue
+        push(String(row.id), {
+          kind: 'field',
+          field: c.field,
+          label: c.label,
+          message: `${c.label} is required`
+        })
+      }
+    }
+  }
+
+  // Aliases: an O2M set of lines, or an M2M link set on a junction.
+  for (const r of required.filter((f) => !physical.has(f.field))) {
+    const alias = relations.find(
+      (rel) => rel.one_collection === collection && rel.one_field === r.field
+    )
+    const childTable =
+      alias ??
+      relations.find(
+        (rel) =>
+          rel.many_collection === r.field &&
+          rel.one_collection === collection &&
+          !rel.junction_field
+      )
+    const rel = childTable
+    if (!rel?.many_collection || !rel.many_field) continue
+    if (!IDENT.test(rel.many_collection) || !IDENT.test(rel.many_field)) continue
+    if (SYSTEM.test(rel.many_collection)) continue
+    const counts = (await db(rel.many_collection)
+      .whereIn(rel.many_field, ids)
+      .groupBy(rel.many_field)
+      .select(rel.many_field)
+      .count({ n: '*' })
+      .catch(() => [])) as Array<Record<string, unknown>>
+    const has = new Set(
+      counts
+        .filter((c) => Number(c.n) > 0)
+        .map((c) => String(c[rel.many_field as string]).toUpperCase())
+    )
+    const isLines = !rel.junction_field
+    for (const id of ids) {
+      if (has.has(id.toUpperCase())) continue
+      push(
+        id,
+        isLines
+          ? { kind: 'lines', field: r.field, label: r.label, message: 'No lines yet' }
+          : { kind: 'field', field: r.field, label: r.label, message: `${r.label} is required` }
+      )
+    }
+  }
+  return out
+}
+
+interface TransitionRow {
+  id: string
+  template: string
+  from_state: string | null
+  to_state: string
+  label: string
+  sort: number | null
+  auto_trigger: unknown
+  condition_rules: string | null
+  required_roles: string | null
+  requirements: string | null
+}
+
+/** Requirement blockers: the first manual forward transition the viewer could
+ *  take from each record's current state, evaluated through its requirements
+ *  gate exactly as the transition endpoint would. */
+async function requirementBlockers(
+  user: User,
+  isAdmin: boolean,
+  collection: string,
+  ids: string[]
+): Promise<Map<string, ReadinessBlocker[]>> {
+  const out = new Map<string, ReadinessBlocker[]>()
+  const instances = (await db('nivaro_workflow_instances')
+    .where('collection', collection)
+    .whereIn('item', ids)
+    .whereNull('completed_at')
+    .whereNotNull('current_state')
+    .orderBy('started_at', 'desc')
+    .select('id', 'item', 'template', 'current_state')
+    .catch(() => [])) as Array<{
+    id: string
+    item: string
+    template: string
+    current_state: string
+  }>
+  const latest = new Map<string, (typeof instances)[number]>()
+  for (const i of instances) if (!latest.has(String(i.item))) latest.set(String(i.item), i)
+  if (latest.size === 0) return out
+
+  const templates = [...new Set([...latest.values()].map((i) => String(i.template)))]
+  const [states, transitions] = await Promise.all([
+    db('nivaro_workflow_states')
+      .whereIn('template', templates)
+      .select('id', 'key', 'sort')
+      .catch(() => []) as Promise<Array<{ id: string; key: string; sort: number | null }>>,
+    db('nivaro_workflow_transitions')
+      .whereIn('template', templates)
+      .orderBy('sort')
+      .select(
+        'id',
+        'template',
+        'from_state',
+        'to_state',
+        'label',
+        'sort',
+        'auto_trigger',
+        'condition_rules',
+        'required_roles',
+        'requirements'
+      )
+      .catch(() => []) as Promise<TransitionRow[]>
+  ])
+  const stateById = new Map(states.map((s) => [String(s.id).toUpperCase(), s]))
+  const role = user.role ? String(user.role).toUpperCase() : null
+  const roleOk = (t: TransitionRow) => {
+    if (isAdmin || !t.required_roles) return true
+    const roles = parseJsonList(t.required_roles)
+    if (roles.length === 0) return true
+    return role != null && roles.some((r) => String(r).toUpperCase() === role)
+  }
+  const { evaluateConditionRules, fetchRecordForConditions } = await import(
+    './workflow-conditions.js'
+  )
+  const { evaluateTransitionRequirements } = await import('./transition-requirements.js')
+
+  await pool([...latest.values()], 6, async (inst) => {
+    const current = stateById.get(String(inst.current_state).toUpperCase())
+    const candidates = transitions.filter((t) => {
+      if (String(t.template) !== String(inst.template)) return false
+      if (truthy(t.auto_trigger)) return false
+      if (
+        t.from_state != null &&
+        String(t.from_state).toUpperCase() !== String(inst.current_state).toUpperCase()
+      )
+        return false
+      const to = stateById.get(String(t.to_state).toUpperCase())
+      if (!to || String(to.key).toLowerCase() === 'canceled') return false
+      if (isSendBackEdge(current?.sort, to.sort, t.label, current?.key)) return false
+      if (current?.sort != null && to.sort != null && Number(to.sort) <= Number(current.sort))
+        return false
+      return roleOk(t)
+    })
+    if (candidates.length === 0) return
+    let pick: TransitionRow | undefined
+    const withRules = candidates.filter((t) => t.condition_rules)
+    const record =
+      withRules.length > 0
+        ? await fetchRecordForConditions(
+            collection,
+            String(inst.item),
+            withRules.map((t) => t.condition_rules)
+          ).catch(() => ({}))
+        : {}
+    for (const t of candidates) {
+      if (t.condition_rules && !evaluateConditionRules(t.condition_rules, record)) continue
+      pick = t
+      break
+    }
+    if (!pick?.requirements) return
+    const blocks = await evaluateTransitionRequirements(
+      db,
+      pick.requirements,
+      String(inst.item),
+      undefined,
+      collection
+    ).catch(() => null)
+    if (!blocks) return
+    const list: ReadinessBlocker[] = []
+    for (const b of blocks) {
+      if (b.type === 'record_fields') {
+        if (b.optional) continue
+        const missing = b.fields.filter((f) => isEmptyValue(b.values[f.field]))
+        if (missing.length === 0) continue
+        list.push({
+          kind: 'requirement',
+          label: b.title,
+          message: `Before “${pick.label}”: ${missing.map((f) => f.label).join(', ')} needed`
+        })
+      } else {
+        const incomplete = b.rows.filter((r) => !r.complete).length
+        if (incomplete === 0) continue
+        list.push({
+          kind: 'requirement',
+          label: b.title,
+          message: `Before “${pick.label}”: ${incomplete} of ${b.rows.length} lines need ${b.fields
+            .map((f) => f.label)
+            .join(', ')}`
+        })
+      }
+    }
+    if (list.length > 0) out.set(String(inst.item), list)
+  })
+  return out
+}
+
+function parseJsonList(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw !== 'string') return []
+  try {
+    const v = JSON.parse(raw)
+    return Array.isArray(v) ? v : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * For each of the viewer's own records (admins: any record), what still
+ * stands between it and its next step: required fields left empty, a
+ * required line set with no lines, and the requirements gate of the first
+ * manual forward transition. Ids the viewer did not create are left out.
+ */
+export async function submissionReadiness(opts: {
+  user: User
+  isAdmin: boolean
+  collection: string
+  ids: string[]
+}): Promise<Record<string, { ready: boolean; blockers: ReadinessBlocker[] }>> {
+  const { collection } = opts
+  const out: Record<string, { ready: boolean; blockers: ReadinessBlocker[] }> = {}
+  if (!IDENT.test(collection) || SYSTEM.test(collection)) return out
+  const readable = await readableFilter(opts.user, opts.isAdmin, [collection])
+  if (!readable.has(collection)) return out
+  const ids = [...new Set(opts.ids.map(String).filter(Boolean))]
+  if (ids.length === 0) return out
+
+  let owned: string[]
+  if (opts.isAdmin) {
+    owned = (
+      (await db(collection)
+        .whereIn('id', ids)
+        .pluck('id')
+        .catch(() => [])) as unknown[]
+    ).map(String)
+  } else {
+    const col = (await creatorColumns([collection])).get(collection)
+    if (!col) return out
+    owned = (
+      (await db(collection)
+        .whereIn('id', ids)
+        .where(col, String(opts.user.id))
+        .pluck('id')
+        .catch(() => [])) as unknown[]
+    ).map(String)
+  }
+  // Answer in the caller's spelling of each id.
+  const ownedSet = new Set(owned.map((id) => id.toUpperCase()))
+  const mine = ids.filter((id) => ownedSet.has(id.toUpperCase()))
+  if (mine.length === 0) return out
+
+  const [fields, reqs] = await Promise.all([
+    fieldBlockers(collection, mine).catch(() => new Map<string, ReadinessBlocker[]>()),
+    requirementBlockers(opts.user, opts.isAdmin, collection, mine).catch(
+      () => new Map<string, ReadinessBlocker[]>()
+    )
+  ])
+  const pick = (m: Map<string, ReadinessBlocker[]>, id: string) =>
+    m.get(id) ?? [...m.entries()].find(([k]) => k.toUpperCase() === id.toUpperCase())?.[1] ?? []
+  for (const id of mine) {
+    const blockers = [...pick(fields, id), ...pick(reqs, id)]
+    out[id] = { ready: blockers.length === 0, blockers }
+  }
+  return out
+}
+
+// ── My throughput ───────────────────────────────────────────────────────────
+
+export interface ThroughputRow {
+  at: Date | string
+  send_back: boolean
+  completion: boolean
+  tta_hours: number | null
+}
+
+interface Counts {
+  transitions: number
+  send_backs: number
+  completions: number
+}
+
+export interface ThroughputSummary {
+  this_week: Counts
+  median: Counts
+  time_to_action_hours: { this_week: number | null; median: number | null }
+  send_back_ratio: number | null
+}
+
+/** Days since the epoch of `d`'s calendar date in `tz` (UTC when unreadable). */
+function localEpochDay(d: Date, tz: string): number {
+  let parts: Intl.DateTimeFormatPart[]
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(d)
+  } catch {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(d)
+  }
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value)
+  return Math.floor(Date.UTC(get('year'), get('month') - 1, get('day')) / 86_400_000)
+}
+
+/** The epoch day of the Monday that starts `d`'s week in `tz`. */
+function mondayOf(d: Date, tz: string): number {
+  const day = localEpochDay(d, tz)
+  const weekday = new Date(day * 86_400_000).getUTCDay() // 0 = Sunday
+  return day - ((weekday + 6) % 7)
+}
+
+/**
+ * Bucket a person's moves into Monday-based weeks in their own time zone:
+ * this week on its own, and the median of the `weeks` whole weeks before it
+ * (a week with nothing in it counts as a zero). Time to action = hours from
+ * the record's previous move to this one — this week's median beside the
+ * median over the earlier weeks. The send-back ratio is over the whole window.
+ */
+export function weekBuckets(
+  rows: ThroughputRow[],
+  weeks: number,
+  now: Date = new Date(),
+  tz = 'UTC'
+): ThroughputSummary {
+  const thisMonday = mondayOf(now, tz)
+  const zero = (): Counts => ({ transitions: 0, send_backs: 0, completions: 0 })
+  const buckets: Counts[] = Array.from({ length: weeks + 1 }, zero)
+  const ttaThis: number[] = []
+  const ttaPrior: number[] = []
+  for (const r of rows) {
+    const at = new Date(r.at)
+    if (!Number.isFinite(at.getTime())) continue
+    const idx = (thisMonday - mondayOf(at, tz)) / 7
+    if (idx < 0 || idx > weeks) continue
+    const b = buckets[idx]
+    b.transitions++
+    if (r.send_back) b.send_backs++
+    if (r.completion) b.completions++
+    if (r.tta_hours != null && Number.isFinite(r.tta_hours)) {
+      ;(idx === 0 ? ttaThis : ttaPrior).push(r.tta_hours)
+    }
+  }
+  const prior = buckets.slice(1)
+  const med = (k: keyof Counts) => median(prior.map((b) => b[k])) ?? 0
+  const total = buckets.reduce((n, b) => n + b.transitions, 0)
+  const sendBacks = buckets.reduce((n, b) => n + b.send_backs, 0)
+  return {
+    this_week: buckets[0],
+    median: {
+      transitions: med('transitions'),
+      send_backs: med('send_backs'),
+      completions: med('completions')
+    },
+    time_to_action_hours: {
+      this_week: round1(median(ttaThis)),
+      median: round1(median(ttaPrior))
+    },
+    send_back_ratio: total > 0 ? sendBacks / total : null
+  }
+}
+
+/** The viewer's own pipeline moves over the last `weeks` weeks plus this one. */
+export async function myThroughput(opts: {
+  user: User
+  weeks: number
+}): Promise<ThroughputSummary> {
+  const userId = String(opts.user.id)
+  const now = new Date()
+  const userRow = (await db('nivaro_users')
+    .where('id', userId)
+    .first('preferences')
+    .catch(() => undefined)) as { preferences?: unknown } | undefined
+  const tzPref = parsePrefs(userRow?.preferences).timezone
+  const tz = typeof tzPref === 'string' && tzPref.trim() !== '' ? tzPref : 'UTC'
+  // One spare day either side of the window absorbs any time-zone offset.
+  const since = new Date(now.getTime() - ((opts.weeks + 1) * 7 + 1) * 86_400_000)
+  const rows = (await db('nivaro_workflow_history as h')
+    .leftJoin('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
+    .leftJoin('nivaro_workflow_states as ts', 'ts.id', 'h.to_state')
+    .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
+    .leftJoin('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+    .where('h.user', userId)
+    .where('h.timestamp', '>=', since)
+    .whereNotNull('h.from_state')
+    .orderBy('h.timestamp', 'desc')
+    .limit(5000)
+    .select(
+      'h.timestamp',
+      'fs.sort as from_sort',
+      'ts.sort as to_sort',
+      'fs.key as from_key',
+      'ts.key as to_key',
+      'ts.is_terminal as to_terminal',
+      't.label as transition_label',
+      'i.started_at',
+      db.raw(
+        '(SELECT MAX(p.timestamp) FROM nivaro_workflow_history p WHERE p.instance = h.instance AND p.timestamp < h.timestamp) AS prev_at'
+      )
+    )
+    .catch(() => [])) as Array<Record<string, unknown>>
+  const history: ThroughputRow[] = rows.map((r) => {
+    const at = new Date(r.timestamp as string)
+    const prevRaw = (r.prev_at ?? r.started_at) as string | Date | null
+    const prev = prevRaw ? new Date(prevRaw) : null
+    const hours =
+      prev && Number.isFinite(prev.getTime()) ? (at.getTime() - prev.getTime()) / 3_600_000 : null
+    return {
+      at,
+      send_back: isSendBackEdge(
+        r.from_sort as number | null,
+        r.to_sort as number | null,
+        r.transition_label as string | null,
+        r.from_key as string | null
+      ),
+      // A cancel lands on a terminal state but finishes nothing.
+      completion: truthy(r.to_terminal) && String(r.to_key ?? '').toLowerCase() !== 'canceled',
+      tta_hours: hours != null && hours >= 0 ? hours : null
+    }
+  })
+  return weekBuckets(history, opts.weeks, now, tz)
+}
+
+// ── Onboarding ──────────────────────────────────────────────────────────────
+
+export interface OnboardingSteps {
+  scope_defaults: boolean
+  notification_rules: boolean
+  timezone: boolean
+  watching: boolean
+  delegate: boolean
+}
+
+/** Which first-week setup steps the person has done. */
+export function onboardingSteps(
+  prefs: Record<string, unknown> | null,
+  scopesCount: number,
+  subsCount: number,
+  user: { delegate_id?: string | null }
+): OnboardingSteps {
+  const p = prefs ?? {}
+  const np = p.notification_prefs as { matrix?: unknown } | undefined
+  const matrix = np?.matrix
+  return {
+    scope_defaults: scopesCount > 0,
+    notification_rules:
+      !!matrix && typeof matrix === 'object' && Object.keys(matrix as object).length > 0,
+    timezone: typeof p.timezone === 'string' && p.timezone.trim() !== '',
+    watching: subsCount > 0,
+    delegate: !!user.delegate_id
+  }
+}
+
+const NEW_WINDOW_MS = 7 * 86_400_000
+
+/** First-week guide state: when the person's role last changed (else when the
+ *  account was made), whether that makes them new, and the setup steps. */
+export async function onboardingState(opts: { user: User }): Promise<{
+  role_changed_at: string | null
+  is_new: boolean
+  dismissed: boolean
+  steps: OnboardingSteps
+}> {
+  const userId = String(opts.user.id)
+  const [row, roleChange, scopes, subs] = await Promise.all([
+    db('nivaro_users')
+      .where('id', userId)
+      .first('preferences', 'delegate_id', 'created_at')
+      .catch(() => undefined) as Promise<
+      { preferences?: unknown; delegate_id?: string | null; created_at?: Date | null } | undefined
+    >,
+    db('nivaro_activity as a')
+      .join('nivaro_revisions as r', 'r.activity', 'a.id')
+      .where('a.collection', 'nivaro_users')
+      .whereIn('a.item', [...new Set([userId, userId.toUpperCase(), userId.toLowerCase()])])
+      .where('r.delta', 'like', '%"role"%')
+      .orderBy('a.timestamp', 'desc')
+      .first('a.timestamp')
+      .catch(() => undefined) as Promise<{ timestamp?: Date | null } | undefined>,
+    import('./user-scopes.js').then((m) => m.getUserScopes(userId)).catch(() => []),
+    db('nivaro_notification_subscriptions')
+      .where('user', userId)
+      .where('is_active', true)
+      .count({ n: '*' })
+      .first()
+      .catch(() => undefined) as Promise<{ n?: number | string } | undefined>
+  ])
+  const prefs = parsePrefs(row?.preferences)
+  const created = row?.created_at ? new Date(row.created_at) : null
+  const changed = roleChange?.timestamp ? new Date(roleChange.timestamp) : created
+  const now = Date.now()
+  const recent = (d: Date | null) =>
+    !!d && Number.isFinite(d.getTime()) && now - d.getTime() <= NEW_WINDOW_MS
+  const defaults = scopes.filter((s) => s.mode === 'default' && s.values.length > 0).length
+  return {
+    role_changed_at: changed && Number.isFinite(changed.getTime()) ? changed.toISOString() : null,
+    is_new: recent(changed) || recent(created),
+    dismissed: truthy(prefs.onboarding_done),
+    steps: onboardingSteps(prefs, defaults, Number(subs?.n ?? 0), {
+      delegate_id: row?.delegate_id ?? null
+    })
+  }
+}
+
+// ── Integrations summary ────────────────────────────────────────────────────
+
+const PUSH_FAILED = new Set(['failed', 'rejected'])
+const PUSH_OK = new Set(['accepted', 'pending', 'submitted'])
+
+export interface IntegrationVerdict {
+  verdict: 'healthy' | 'failing' | 'idle'
+  failed_24h: number
+  last_failure_at: string | null
+}
+
+/** A partner's day at a glance: failing when the newest push failed, healthy
+ *  when a success landed after the last failure, idle when nothing was sent. */
+export function verdictOf(rows: Array<{ status: string; at: Date | string }>): IntegrationVerdict {
+  const sorted = [...rows]
+    .map((r) => ({ status: String(r.status).toLowerCase(), at: new Date(r.at) }))
+    .filter((r) => Number.isFinite(r.at.getTime()))
+    .sort((a, b) => b.at.getTime() - a.at.getTime())
+  const failures = sorted.filter((r) => PUSH_FAILED.has(r.status))
+  let verdict: IntegrationVerdict['verdict'] = 'idle'
+  for (const r of sorted) {
+    if (PUSH_FAILED.has(r.status)) {
+      verdict = 'failing'
+      break
+    }
+    if (PUSH_OK.has(r.status)) {
+      verdict = 'healthy'
+      break
+    }
+  }
+  return {
+    verdict,
+    failed_24h: failures.length,
+    last_failure_at: failures[0] ? failures[0].at.toISOString() : null
+  }
+}
+
+/** Every enabled external API with its last-24-hour verdict. Names only —
+ *  never hosts or credentials. */
+export async function integrationsSummary(): Promise<Array<{ name: string } & IntegrationVerdict>> {
+  const since = new Date(Date.now() - 86_400_000)
+  const [apis, subs] = await Promise.all([
+    db('nivaro_external_apis')
+      .where('enabled', true)
+      .orderBy('name')
+      .select('id', 'name')
+      .catch(() => []) as Promise<Array<{ id: number; name: string }>>,
+    db('nivaro_erp_submissions')
+      .where('updated_at', '>=', since)
+      .whereNotNull('external_api')
+      .orderBy('updated_at', 'desc')
+      .limit(5000)
+      .select('external_api', 'status', 'updated_at')
+      .catch(() => []) as Promise<Array<{ external_api: number; status: string; updated_at: Date }>>
+  ])
+  const byApi = new Map<number, Array<{ status: string; at: Date }>>()
+  for (const s of subs) {
+    const list = byApi.get(Number(s.external_api)) ?? []
+    list.push({ status: s.status, at: s.updated_at })
+    byApi.set(Number(s.external_api), list)
+  }
+  return apis.map((a) => ({ name: a.name, ...verdictOf(byApi.get(Number(a.id)) ?? []) }))
+}
+
+// ── Zone pulse ──────────────────────────────────────────────────────────────
+
+export interface ZonePulse {
+  dimension: {
+    name: string
+    label: string
+    target_collection: string
+    display_field: string | null
+  }
+  zones: Array<{
+    id: string
+    label: string
+    open: Record<string, number>
+    breached: number
+    linked_recent: number
+  }>
+}
+
+const PULSE_TTL = 5 * 60_000
+const PULSE_ZONES = 12
+const PULSE_SCAN = 20_000
+const PULSE_BREACH_CAP = 2000
+const RECENT_COLUMNS = ['date_updated', 'changed', 'updated_at']
+const pulseCache = new Map<string, { at: number; value: ZonePulse }>()
+interface CollectionTally {
+  open: Map<string, number>
+  breached: Map<string, number>
+  recent: Map<string, number>
+}
+const tallyCache = new Map<string, { at: number; value: CollectionTally }>()
+
+/** Tally each target id's open records, SLA breaches and recent updates in
+ *  one collection, as the viewer can see it. */
+async function tallyCollection(
+  user: User,
+  collection: string,
+  hops: import('./user-scopes.js').ScopeHop[],
+  cacheKey: string
+): Promise<CollectionTally> {
+  const hit = tallyCache.get(cacheKey)
+  if (hit && Date.now() - hit.at < PULSE_TTL) return hit.value
+  const scopes = await import('./user-scopes.js')
+  const enforcement = await scopes.getUserScopeEnforcement(user, collection)
+  const visible = (qb: import('knex').Knex.QueryBuilder) =>
+    scopes.applyScopeEnforcement(qb, collection, enforcement)
+  const needsRecord = enforcement.deny || enforcement.filters.length > 0
+
+  const instQ = db('nivaro_workflow_instances as i')
+    .where('i.collection', collection)
+    .whereNull('i.completed_at')
+    .whereNotNull('i.current_state')
+  if (needsRecord) {
+    void instQ.whereExists(function () {
+      void this.select(db.raw('1'))
+        .from(collection)
+        .whereRaw('CAST(??.?? AS NVARCHAR(255)) = i.item', [collection, 'id'])
+      visible(this)
+    })
+  }
+  const instances = (await instQ
+    .orderBy('i.started_at', 'desc')
+    .limit(PULSE_SCAN)
+    .select('i.id', 'i.item', 'i.current_state', 'i.template', 'i.started_at')
+    .catch(() => [])) as Array<{
+    id: string
+    item: string
+    current_state: string | null
+    template: string
+    started_at: Date
+  }>
+  const latest = new Map<string, (typeof instances)[number]>()
+  for (const i of instances) if (!latest.has(String(i.item))) latest.set(String(i.item), i)
+
+  const zonesOf = async (ids: string[]) => {
+    const map = new Map<string, string[]>()
+    for (let k = 0; k < ids.length; k += 1500) {
+      const part = await scopes
+        .resolveRecordDimensionIds(collection, ids.slice(k, k + 1500), hops)
+        .catch(() => new Map<string, string[]>())
+      for (const [id, zs] of part) map.set(id, zs)
+    }
+    return map
+  }
+  const bump = (m: Map<string, number>, z: string) =>
+    m.set(z.toUpperCase(), (m.get(z.toUpperCase()) ?? 0) + 1)
+
+  const open = new Map<string, number>()
+  const itemsByZone = new Map<string, string[]>()
+  const openZones = await zonesOf([...latest.keys()])
+  for (const [id, zs] of openZones) {
+    for (const z of zs) {
+      bump(open, z)
+      const list = itemsByZone.get(z.toUpperCase()) ?? []
+      if (list.length < PULSE_BREACH_CAP) list.push(id)
+      itemsByZone.set(z.toUpperCase(), list)
+    }
+  }
+
+  const breached = new Map<string, number>()
+  const statusIds = [...new Set([...itemsByZone.values()].flat())]
+  if (statusIds.length > 0) {
+    const { computeStatusBatch } = await import('../routes/sla.js')
+    const statuses = await computeStatusBatch(
+      collection,
+      statusIds,
+      statusIds.map((id) => latest.get(id)).filter((i) => i != null)
+    ).catch(() => ({}) as Record<string, { status: string | null }>)
+    for (const [z, list] of itemsByZone) {
+      breached.set(z, list.filter((id) => statuses[id]?.status === 'breached').length)
+    }
+  }
+
+  const recent = new Map<string, number>()
+  const cols = await physicalColumns(collection)
+  const recentCol = RECENT_COLUMNS.find((c) => cols.has(c))
+  if (recentCol) {
+    const q = db(collection).where(recentCol, '>=', new Date(Date.now() - 7 * 86_400_000))
+    visible(q)
+    const ids = (
+      (await q
+        .limit(PULSE_SCAN)
+        .pluck('id')
+        .catch(() => [])) as unknown[]
+    ).map(String)
+    for (const zs of (await zonesOf(ids)).values()) for (const z of zs) bump(recent, z)
+  }
+
+  const value = { open, breached, recent }
+  tallyCache.set(cacheKey, { at: Date.now(), value })
+  return value
+}
+
+/**
+ * Per zone (a scope dimension's target rows — the viewer's own restrictions,
+ * else every row, 12 at most): open pipeline records per bound collection,
+ * how many of those are past their SLA, and how many records changed in the
+ * last 7 days. Counts only what the viewer can read. Cached 5 minutes per
+ * viewer and dimension. Answers null for an unknown dimension.
+ */
+export async function zonePulse(opts: {
+  user: User
+  isAdmin: boolean
+  dimension?: string
+}): Promise<ZonePulse | null> {
+  const scopes = await import('./user-scopes.js')
+  const dims = await scopes.listScopeDimensions().catch(() => [])
+  const dim = opts.dimension ? dims.find((d) => d.name === opts.dimension) : dims[0]
+  if (!dim || !IDENT.test(dim.target_collection) || SYSTEM.test(dim.target_collection)) return null
+  const userId = String(opts.user.id)
+  const cacheKey = `${userId.toUpperCase()}|${dim.name}`
+  const hit = pulseCache.get(cacheKey)
+  if (hit && Date.now() - hit.at < PULSE_TTL) return hit.value
+
+  const target = dim.target_collection
+  const display = dim.display_field && IDENT.test(dim.display_field) ? dim.display_field : null
+  const restricted = opts.isAdmin
+    ? []
+    : (await scopes.getUserScopes(userId).catch(() => []))
+        .filter((s) => s.mode === 'restrict' && s.dimension === dim.name)
+        .flatMap((s) => s.values)
+  const cols = ['id', ...(display ? [display] : [])]
+  let zoneRows: Array<Record<string, unknown>>
+  if (restricted.length > 0) {
+    zoneRows = (await db(target)
+      .whereIn('id', restricted.slice(0, PULSE_ZONES) as never)
+      .select(cols)
+      .catch(() => [])) as Array<Record<string, unknown>>
+  } else {
+    const sortRaw = dim.options_sort ?? display ?? 'id'
+    const desc = sortRaw.startsWith('-')
+    const sortCol = desc ? sortRaw.slice(1) : sortRaw
+    zoneRows = (await db(target)
+      .orderBy(IDENT.test(sortCol) ? sortCol : 'id', desc ? 'desc' : 'asc')
+      .limit(PULSE_ZONES)
+      .select(cols)
+      .catch(() => [])) as Array<Record<string, unknown>>
+  }
+
+  const bound = await boundCollections()
+  const readable = await readableFilter(opts.user, opts.isAdmin, bound)
+  const tallies = new Map<string, CollectionTally>()
+  await pool([...readable], 3, async (collection) => {
+    const hops = await scopes.scopeHopsFor(dim, collection).catch(() => null)
+    if (!hops) return
+    const enforcement = await scopes.getUserScopeEnforcement(opts.user, collection)
+    const sig = JSON.stringify(enforcement)
+    const tally = await tallyCollection(
+      opts.user,
+      collection,
+      hops,
+      `${collection}|${dim.name}|${sig}`
+    ).catch(() => null)
+    if (tally) tallies.set(collection, tally)
+  })
+
+  const value: ZonePulse = {
+    dimension: {
+      name: dim.name,
+      label: dim.label,
+      target_collection: target,
+      display_field: dim.display_field
+    },
+    zones: zoneRows.map((z) => {
+      const id = String(z.id)
+      const key = id.toUpperCase()
+      const open: Record<string, number> = {}
+      let breached = 0
+      let linked = 0
+      for (const [collection, t] of tallies) {
+        open[collection] = t.open.get(key) ?? 0
+        breached += t.breached.get(key) ?? 0
+        linked += t.recent.get(key) ?? 0
+      }
+      const label = display && z[display] != null ? String(z[display]) : `#${id}`
+      return { id, label, open, breached, linked_recent: linked }
+    })
+  }
+  pulseCache.set(cacheKey, { at: Date.now(), value })
+  return value
 }

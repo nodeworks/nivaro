@@ -239,3 +239,63 @@ describe('POST /dashboard/changed-since', () => {
     expect(calls.some((c) => c.table === 'nivaro_record_views')).toBe(false)
   })
 })
+
+describe('GET /dashboard/submission-readiness', () => {
+  it('refuses a request without a collection', async () => {
+    const res = await inject('GET', '/dashboard/submission-readiness?ids=1')
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('refuses a system collection', async () => {
+    const res = await inject('GET', '/dashboard/submission-readiness?collection=nivaro_users&ids=1')
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('refuses more than 50 ids', async () => {
+    const ids = Array.from({ length: 51 }, (_, i) => String(i + 1)).join(',')
+    const res = await inject('GET', `/dashboard/submission-readiness?collection=orders&ids=${ids}`)
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('leaves out a record the viewer did not create (never a 403)', async () => {
+    fixtures = {
+      nivaro_fields: [],
+      'information_schema.columns': [
+        { table_name: 'orders', column_name: 'id' },
+        { table_name: 'orders', column_name: 'creator' }
+      ],
+      // Only record 1 is the viewer's — the ownership read returns it alone.
+      orders: ['1'],
+      nivaro_collection_layouts: [],
+      nivaro_relations: [],
+      nivaro_workflow_instances: []
+    }
+    const res = await inject('GET', '/dashboard/submission-readiness?collection=orders&ids=1,2')
+    expect(res.statusCode).toBe(200)
+    const data = res.json().data as Record<string, { ready: boolean; blockers: unknown[] }>
+    expect(Object.keys(data)).toEqual(['1'])
+    expect(data['1']).toEqual({ ready: true, blockers: [] })
+    const owned = calls.find(
+      (c) => c.table === 'orders' && c.method === 'where' && c.args[0] === 'creator'
+    )
+    expect(owned?.args[1]).toBe('USER-1')
+  })
+})
+
+describe('GET /dashboard/my-throughput', () => {
+  it('answers zeros on an empty history', async () => {
+    fixtures = { nivaro_users: [{ preferences: null }] }
+    const res = await inject('GET', '/dashboard/my-throughput?weeks=4')
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.this_week).toEqual({ transitions: 0, send_backs: 0, completions: 0 })
+    expect(res.json().data.send_back_ratio).toBeNull()
+  })
+})
+
+describe('GET /dashboard/zone-pulse', () => {
+  it('refuses an unknown dimension', async () => {
+    fixtures = { nivaro_scope_dimensions: [] }
+    const res = await inject('GET', '/dashboard/zone-pulse?dimension=nope')
+    expect(res.statusCode).toBe(400)
+  })
+})
