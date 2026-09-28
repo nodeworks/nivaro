@@ -76,6 +76,13 @@ const KIND: Record<
     bar: 'bg-[#cbd5e1] dark:bg-[#475569]',
     dot: 'bg-[#94a3b8]'
   },
+  removed: {
+    label: 'Removed',
+    one: 'removed',
+    text: 'text-[#6d28d9] dark:text-[#c4b5fd]',
+    bar: 'bg-[#8b5cf6]',
+    dot: 'bg-[#8b5cf6]'
+  },
   skipped: {
     label: 'Left out',
     one: 'left out',
@@ -519,9 +526,11 @@ function ItemRow({
   const [open, setOpen] = useState(false)
   const { urlFor, open: openItem } = useItemNavigation()
   const k = KIND[item.kind]
-  const hasRecord = !!item.collection && !!item.item_id && item.kind !== 'failed'
+  // a removed record is in the trash: nothing to open
+  const hasRecord =
+    !!item.collection && !!item.item_id && item.kind !== 'failed' && item.kind !== 'removed'
   const summary =
-    item.kind === 'skipped' || item.kind === 'failed'
+    item.kind === 'skipped' || item.kind === 'failed' || item.kind === 'removed'
       ? (item.message ?? '')
       : item.kind === 'created'
         ? `${item.changes.length} field${item.changes.length === 1 ? '' : 's'}`
@@ -734,7 +743,7 @@ function Records({
   const stored = report.items_stored ?? 0
   const tabs: Array<{ key: ImportRunItemKind | null; label: string; n: number }> = [
     { key: null, label: 'All', n: Object.values(facets.kind ?? {}).reduce((a, b) => a + b, 0) },
-    ...(['created', 'updated', 'skipped', 'failed'] as ImportRunItemKind[])
+    ...(['created', 'updated', 'removed', 'skipped', 'failed'] as ImportRunItemKind[])
       .map((key) => ({ key, label: KIND[key].label, n: facets.kind?.[key] ?? 0 }))
       .filter((t) => t.n > 0 || t.key === kind)
   ]

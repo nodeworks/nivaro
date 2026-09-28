@@ -642,7 +642,7 @@ export async function runStagedImport({
       stamp: runId != null ? `import:${definition.label || definition.key}:run-${runId}` : null
     })
     if (runId != null) await storeRunReport(runId, summary, rows.length, parseMs, loadMs)
-    if (summary.failed > 0 && summary.created + summary.updated === 0) {
+    if (summary.failed > 0 && summary.created + summary.updated + (summary.removed ?? 0) === 0) {
       // Nothing landed — surface as a failed run, not a quiet "completed".
       throw new Error(`Import wrote nothing:\n${summary.log}`)
     }

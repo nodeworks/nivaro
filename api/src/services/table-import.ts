@@ -101,7 +101,19 @@ export interface TableColumn extends Omit<ServiceColumnConfig, 'lookup'> {
   case?: 'upper' | 'lower'
   /** Rows of the file that share a key add their values up. */
   aggregate?: 'sum'
+  /** The column names the record (it feeds the key) and is never written —
+   *  another column may then write the same field with its NEW value,
+   *  which is how a file renames a key. */
+  match_only?: boolean
 }
+
+/** A stored value the rule looks at: a literal, or one operator. */
+export type ProtectCondition =
+  | string
+  | number
+  | boolean
+  | null
+  | { _eq?: unknown; _neq?: unknown; _null?: boolean; _nnull?: boolean; _in?: unknown[] }
 
 export type TableAfterStep =
   | string
@@ -155,6 +167,13 @@ export interface TableImportConfig extends Omit<ServiceImportConfig, 'columns'> 
   links?: Record<string, TableLink>
   /** Never update a stored record. */
   create_only?: boolean
+  /** remove: the file names records to remove (through the items service,
+   *  so they land in the trash); nothing is created or updated. */
+  mode?: 'upsert' | 'remove'
+  /** Stored records a run must leave alone: any one condition met (field →
+   *  literal or operator) keeps the record out of updates and removals, and
+   *  the run says so with `reason`. */
+  protect?: { when: Record<string, ProtectCondition>; reason?: string }
   /** Key fields that may be empty; an empty value matches an empty value. */
   match_optional?: string[]
   /** Stored records that share a key: write the first (lowest id), write
@@ -179,6 +198,8 @@ export interface TableImportConfig extends Omit<ServiceImportConfig, 'columns'> 
 export interface TableImportResult {
   created: number
   updated: number
+  /** Records a `mode: 'remove'` run removed (or a dry run would). */
+  removed?: number
   unchanged: number
   skipped: Record<string, number>
   failed: number
@@ -273,6 +294,11 @@ export function parseTableConfig(raw: unknown): TableImportConfig | null {
       }
     }
     for (const f of c.match_optional ?? []) if (!c.match_by.includes(f)) return null
+    if (c.mode && c.mode !== 'upsert' && c.mode !== 'remove') return null
+    if (c.protect) {
+      if (!c.protect.when || typeof c.protect.when !== 'object') return null
+      if (Object.keys(c.protect.when).some((f) => !IDENT.test(f))) return null
+    }
     return c
   } catch {
     return null
@@ -442,6 +468,9 @@ interface Built {
   key: string
   /** Fields the file gives a value for (null = clear). */
   values: Record<string, unknown>
+  /** Key fields read from match-only columns: what the row names, which
+   *  may differ from the value it writes to that field. */
+  keys: Record<string, unknown>
   /** Link name → related ids the file names; absent = the file says nothing. */
   links: Record<string, Array<string | number>>
   /** Links where a value the file named resolved to nothing: the file's set
@@ -460,6 +489,29 @@ interface Plan {
     stored: Record<string, unknown>
   }>
   unchanged: Array<{ built: Built; id: string | number }>
+  removes: Array<{ built: Built; id: string | number; stored: Record<string, unknown> }>
+}
+
+/** Whether a stored value meets one protect condition. */
+export function meetsCondition(value: unknown, spec: ProtectCondition): boolean {
+  const empty = value == null || value === ''
+  const same = (a: unknown, b: unknown) => {
+    if (a == null || b == null) return a == null && b == null
+    if (typeof b === 'boolean' || typeof a === 'boolean') {
+      const truthy = (x: unknown) =>
+        x === true || x === 1 || x === '1' || String(x).toLowerCase() === 'true'
+      return truthy(a) === truthy(b)
+    }
+    if (typeof a === 'number' || typeof b === 'number') return Number(a) === Number(b)
+    return String(a).trim().toLowerCase() === String(b).trim().toLowerCase()
+  }
+  if (spec === null || typeof spec !== 'object') return same(value, spec)
+  if (spec._null !== undefined) return spec._null ? empty : !empty
+  if (spec._nnull !== undefined) return spec._nnull ? !empty : empty
+  if (spec._in !== undefined) return spec._in.some((v) => same(value, v))
+  if (spec._neq !== undefined) return !same(value, spec._neq)
+  if (spec._eq !== undefined) return same(value, spec._eq)
+  return false
 }
 
 async function loadUser(userId: string | null): Promise<User> {
@@ -1007,10 +1059,13 @@ async function runOneTable({
     async () => {
       for (const [ri, r] of rows.entries()) {
         const rowNo = ri + 1
-        const values: Record<string, unknown> = {}
+        const written: Record<string, unknown> = {}
+        const keys: Record<string, unknown> = {}
         let drop: string | null = null
         let dropDetail: string | undefined
         for (const [col, cc] of Object.entries(config.columns)) {
+          // a match-only column names the record; its value never lands
+          const values = cc.match_only ? keys : written
           const raw = cellOf(col, cc, r)
           const mapped =
             cc.map && raw
@@ -1106,11 +1161,14 @@ async function runOneTable({
             m > 12
           ) {
             drop = 'invalid year/month'
-          } else values[config.month_from.field] = `${y}-${pad(m)}-01`
+          } else written[config.month_from.field] = `${y}-${pad(m)}-01`
         }
+        const values = written
+        // what the row NAMES: a match-only column's value, else the written one
+        const keyOf = (f: string) => (f in keys ? keys[f] : values[f])
         if (!drop) {
           for (const f of config.require_value ?? []) {
-            if (values[f] == null) {
+            if (keyOf(f) == null) {
               drop = `empty ${f}`
               break
             }
@@ -1118,17 +1176,17 @@ async function runOneTable({
         }
         if (!drop) {
           for (const f of config.match_by) {
-            if (values[f] == null && !(config.match_optional ?? []).includes(f)) {
+            if (keyOf(f) == null && !(config.match_optional ?? []).includes(f)) {
               drop = `empty ${f}`
               break
             }
           }
         }
-        const key = config.match_by.map((f) => keyPart(values[f])).join('|')
+        const key = config.match_by.map((f) => keyPart(keyOf(f))).join('|')
         const label = String(
-          (config.label_field ? values[config.label_field] : null) ??
+          (config.label_field ? keyOf(config.label_field) : null) ??
             config.match_by
-              .map((f) => values[f])
+              .map((f) => keyOf(f))
               .filter((v) => v != null)
               .join(' / ') ??
             ''
@@ -1169,7 +1227,15 @@ async function runOneTable({
           if (partial[link.via.link]) partial[name] = true
           links[name] = ids
         }
-        built.push({ row: rowNo, key, values, links, partial, label: label || `row ${rowNo}` })
+        built.push({
+          row: rowNo,
+          key,
+          values,
+          keys,
+          links,
+          partial,
+          label: label || `row ${rowNo}`
+        })
       }
     },
     () => rows.length
@@ -1293,7 +1359,14 @@ async function runOneTable({
     }
   }
   const selectFields = [
-    ...new Set(['id', ...config.match_by, ...compareFields, ...computeSources, ...touchedFields])
+    ...new Set([
+      'id',
+      ...config.match_by,
+      ...compareFields,
+      ...computeSources,
+      ...touchedFields,
+      ...Object.keys(config.protect?.when ?? {})
+    ])
   ].filter((f) => types.has(f))
   const existing = new Map<string, Array<Record<string, unknown>>>()
   await timed(
@@ -1309,7 +1382,7 @@ async function runOneTable({
       const firstValues = [
         ...new Set(
           [...byKey.values()]
-            .map((b) => b.values[first])
+            .map((b) => (first in b.keys ? b.keys[first] : b.values[first]))
             .filter((v) => v != null && !(typeof v === 'string' && v.startsWith('(new ')))
         )
       ] as Array<string | number>
@@ -1344,7 +1417,7 @@ async function runOneTable({
   if (heldTwice.length > 0) {
     const surplus = heldTwice.reduce((a, [, list]) => a + list.length - 1, 0)
     notes.push(
-      `${heldTwice.length.toLocaleString('en-US')} ${noun}${heldTwice.length === 1 ? '' : 's'} in the file ${heldTwice.length === 1 ? 'is' : 'are'} stored more than once (${surplus.toLocaleString('en-US')} extra cop${surplus === 1 ? 'y' : 'ies'}). ${config.duplicates === 'all' ? 'Every copy was brought up to date.' : config.duplicates === 'refuse' ? 'Those rows were left out: the file cannot say which record it means.' : 'The first copy (lowest id) was brought up to date; the others were not touched.'} For example: ${heldTwice
+      `${heldTwice.length.toLocaleString('en-US')} ${noun}${heldTwice.length === 1 ? '' : 's'} in the file ${heldTwice.length === 1 ? 'is' : 'are'} stored more than once (${surplus.toLocaleString('en-US')} extra cop${surplus === 1 ? 'y' : 'ies'}). ${config.duplicates === 'all' ? (config.mode === 'remove' ? 'Every copy is named for removal.' : 'Every copy was brought up to date.') : config.duplicates === 'refuse' ? 'Those rows were left out: the file cannot say which record it means.' : `The first copy (lowest id) was ${config.mode === 'remove' ? 'named for removal' : 'brought up to date'}; the others were not touched.`} For example: ${heldTwice
         .slice(0, 5)
         .map(([k]) => byKey.get(k)?.label ?? k)
         .join(', ')}.`
@@ -1370,12 +1443,26 @@ async function runOneTable({
     }
   }
 
-  const plan: Plan = { creates: [], updates: [], unchanged: [] }
+  const plan: Plan = { creates: [], updates: [], unchanged: [], removes: [] }
+  const removing = config.mode === 'remove'
+  const protectReason = config.protect?.reason ?? 'protected'
+  const protectedBy = (row: Record<string, unknown>): string | null => {
+    for (const [f, spec] of Object.entries(config.protect?.when ?? {})) {
+      if (meetsCondition(row[f], spec)) return `${protectReason} (${f.replace(/_/g, ' ')})`
+    }
+    return null
+  }
+  let kept = 0
   for (const [k, b] of byKey) {
     const stored = existing.get(k) ?? []
     if (stored.length === 0) {
-      if (config.update_only) {
-        skip(`no stored ${noun} matches (this import only updates)`, b.row, b.key, b.label)
+      if (config.update_only || removing) {
+        skip(
+          `no stored ${noun} matches (this import only ${removing ? 'removes' : 'updates'})`,
+          b.row,
+          b.key,
+          b.label
+        )
         continue
       }
       evaluate(b.values)
@@ -1404,20 +1491,39 @@ async function runOneTable({
     }
     const targets = config.duplicates === 'all' ? stored : stored.slice(0, 1)
     for (const row of targets) {
+      const id = row.id as string | number
+      if (removing) {
+        const why = protectedBy(row)
+        if (why) {
+          kept++
+          skip(`kept: ${why}`, b.row, b.key, b.label)
+        } else plan.removes.push({ built: b, id, stored: row })
+        continue
+      }
       const values: Record<string, unknown> = { ...b.values, ...(config.set_on_update ?? {}) }
       evaluate(values, row)
       const patch: Record<string, unknown> = {}
       const changes: ImportRunChange[] = []
       for (const f of compareFields) {
-        if (config.match_by.includes(f) || !(f in values)) continue
+        // a key field is written only when a column other than the
+        // match-only one gives it a value (a rename)
+        if ((config.match_by.includes(f) && !(f in b.keys)) || !(f in values)) continue
         if (sameValue(row[f], values[f], types.get(f)?.sql)) continue
         patch[f] = values[f]
         changes.push({ field: f, from: row[f] ?? null, to: values[f] ?? null })
         if (values[f] == null && row[f] != null && !(f in (config.set_on_update ?? {}))) cleared++
       }
-      const id = row.id as string | number
-      if (changes.length === 0) plan.unchanged.push({ built: b, id })
-      else plan.updates.push({ built: b, id, patch, changes, stored: row })
+      if (changes.length === 0) {
+        plan.unchanged.push({ built: b, id })
+        continue
+      }
+      const why = protectedBy(row)
+      if (why) {
+        kept++
+        skip(`kept: ${why}`, b.row, b.key, b.label)
+        continue
+      }
+      plan.updates.push({ built: b, id, patch, changes, stored: row })
     }
   }
   if (cleared > 0) {
@@ -1425,11 +1531,60 @@ async function runOneTable({
       `${cleared.toLocaleString('en-US')} stored value${cleared === 1 ? ' was' : 's were'} cleared because the file's cell is empty.`
     )
   }
+  if (kept > 0) {
+    notes.push(
+      `${kept.toLocaleString('en-US')} ${noun}${kept === 1 ? '' : 's'} the file names ${kept === 1 ? 'was' : 'were'} left alone: ${protectReason}.`
+    )
+  }
+
+  // a change to a key field must not land on a key another record holds
+  const renames = plan.updates.filter((u) => config.match_by.some((f) => f in u.patch))
+  if (renames.length > 0) {
+    const first =
+      config.match_by.find((f) => !(config.match_optional ?? []).includes(f)) ?? config.match_by[0]
+    const newKey = (u: (typeof renames)[number]) =>
+      config.match_by.map((f) => keyPart(f in u.patch ? u.patch[f] : u.stored[f])).join('|')
+    const firstValues = [
+      ...new Set(renames.map((u) => (first in u.patch ? u.patch[first] : u.stored[first])))
+    ].filter((v) => v != null) as Array<string | number>
+    const held = new Set<string>()
+    for (let i = 0; i < firstValues.length; i += CHUNK) {
+      const found = (await db(config.collection)
+        .whereIn(first, firstValues.slice(i, i + CHUNK))
+        .select(cols(...config.match_by))) as Array<Record<string, unknown>>
+      for (const row of found) held.add(config.match_by.map((f) => keyPart(row[f])).join('|'))
+    }
+    const claimed = new Set<string>(plan.creates.map((c) => c.key))
+    let collided = 0
+    plan.updates = plan.updates.filter((u) => {
+      if (!renames.includes(u)) return true
+      const target = newKey(u)
+      if (held.has(target) || claimed.has(target)) {
+        collided++
+        skip(
+          `another ${noun} already holds the new key`,
+          u.built.row,
+          u.built.key,
+          u.built.label,
+          target
+        )
+        return false
+      }
+      claimed.add(target)
+      return true
+    })
+    if (collided > 0) {
+      notes.push(
+        `${collided.toLocaleString('en-US')} ${noun}${collided === 1 ? '' : 's'} could not take ${collided === 1 ? 'its' : 'their'} new key: another ${noun} already holds it. Those rows were left out.`
+      )
+    }
+  }
 
   // ── 4. write what differs ─────────────────────────────────────────────────
   const total = plan.creates.length + plan.updates.length
   let created = 0
   let updated = 0
+  let removed = 0
   let failed = 0
   const failures: string[] = []
   const idOfKey = new Map<string, string | number>()
@@ -1447,8 +1602,20 @@ async function runOneTable({
   if (dryRun) {
     created = plan.creates.length
     updated = plan.updates.length
+    removed = plan.removes.length
     for (const c of plan.creates.slice(0, sampleLimit)) {
       samples.creates.push({ key: c.key, values: c.values })
+    }
+    for (const r of plan.removes) {
+      addItem({
+        kind: 'removed',
+        collection: config.collection,
+        item_id: String(r.id),
+        label: r.built.label,
+        row: r.built.row,
+        message: 'Would be removed',
+        changes: []
+      })
     }
     if (dryCreated) {
       // what a later step may look up as if it were on file
@@ -1488,7 +1655,7 @@ async function runOneTable({
       void Promise.resolve(onProgress?.(done, total)).catch(() => {})
 
     const record = (
-      kind: 'created' | 'updated',
+      kind: 'created' | 'updated' | 'removed',
       b: Built,
       id: string | number | null,
       changes: ImportRunChange[],
@@ -1510,6 +1677,7 @@ async function runOneTable({
         return
       }
       if (kind === 'created') created++
+      else if (kind === 'removed') removed++
       else updated++
       noteTouched(stored, b.values)
       if (id != null) {
@@ -1662,6 +1830,82 @@ async function runOneTable({
         phases[phases.length - 1].failed = failed - before
       }
     }
+  }
+
+  // ── 4b. remove what the file names (mode: remove) ─────────────────────────
+  if (!dryRun && plan.removes.length > 0) {
+    const before = failed
+    const bulk =
+      config.write?.mode === 'batch' ||
+      (config.write?.mode === 'auto' &&
+        plan.removes.length > (config.write?.batch_over ?? DEFAULT_BATCH_OVER))
+    const refusal = bulk ? await batchRefusal(user, 'delete', config.collection, []) : null
+    if (refusal) notes.push(`Removed one record at a time: ${refusal}.`)
+    const noteRemoved = (r: Plan['removes'][number], error?: string) => {
+      if (error) {
+        failed++
+        if (failures.length < 10) failures.push(`${r.built.label}: ${error}`)
+        addItem({
+          kind: 'failed',
+          collection: config.collection,
+          item_id: String(r.id),
+          label: r.built.label,
+          row: r.built.row,
+          message: error,
+          changes: []
+        })
+        return
+      }
+      removed++
+      touched.push(r.id)
+      noteTouched(r.stored)
+      addItem({
+        kind: 'removed',
+        collection: config.collection,
+        item_id: String(r.id),
+        label: r.built.label,
+        row: r.built.row,
+        message: 'Removed',
+        changes: []
+      })
+    }
+    await timed(
+      'remove',
+      `Removed ${noun}s`,
+      async () => {
+        if (bulk && !refusal) {
+          const out = await batchDelete(
+            config.collection,
+            plan.removes.map((r) => r.id),
+            { user, stamp }
+          )
+          const bad = new Set(out.rows.filter((row) => !row.ok).map((row) => String(row.id)))
+          for (const r of plan.removes) {
+            noteRemoved(r, bad.has(String(r.id)) ? 'could not be removed' : undefined)
+          }
+          return
+        }
+        await inParallel(
+          plan.removes.map((r) => async () => {
+            try {
+              await deleteOne(user, config.collection, String(r.id))
+              noteRemoved(r)
+            } catch (err) {
+              noteRemoved(r, reasonOf(err))
+            }
+          }),
+          config.write?.width ?? 8
+        )
+      },
+      () => plan.removes.length
+    )
+    phases[phases.length - 1].failed = failed - before
+  }
+  if (plan.removes.length > 0) {
+    other.push({
+      label: `${noun}s ${dryRun ? 'would be removed' : 'removed'}`,
+      count: dryRun ? plan.removes.length : removed
+    })
   }
 
   // ── 5. links ──────────────────────────────────────────────────────────────
@@ -1870,6 +2114,7 @@ async function runOneTable({
   const head = [
     `${n(created)} created`,
     `${n(updated)} updated`,
+    removed ? `${n(removed)} removed` : null,
     `${n(plan.unchanged.length)} unchanged`,
     skippedTotal ? `${n(skippedTotal)} skipped` : null,
     failed ? `${n(failed)} FAILED` : null
@@ -1907,6 +2152,7 @@ async function runOneTable({
   return {
     created,
     updated,
+    ...(removed || removing ? { removed } : {}),
     unchanged: plan.unchanged.length,
     skipped,
     failed,
@@ -1960,6 +2206,7 @@ export async function runTableImport(opts: RunTableImportOptions): Promise<Table
     out.updated += r.updated
     out.unchanged += r.unchanged
     out.failed += r.failed
+    if (r.removed != null) out.removed = (out.removed ?? 0) + r.removed
     for (const [reason, count] of Object.entries(r.skipped)) {
       const key = `${title}: ${reason}`
       out.skipped[key] = (out.skipped[key] ?? 0) + count
@@ -1993,6 +2240,7 @@ export async function runTableImport(opts: RunTableImportOptions): Promise<Table
     [
       `${n(out.created)} created`,
       `${n(out.updated)} updated`,
+      out.removed ? `${n(out.removed)} removed` : null,
       `${n(out.unchanged)} unchanged`,
       skippedTotal ? `${n(skippedTotal)} skipped` : null,
       out.failed ? `${n(out.failed)} FAILED` : null

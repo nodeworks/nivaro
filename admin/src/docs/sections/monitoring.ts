@@ -193,10 +193,22 @@ ctx.importProcessors.register({
       type: 'table',
       head: ['Tool', 'What it does'],
       rows: [
-        ['lookup(table, column, values)', 'One batched read: value → id, case-insensitive, lowest id wins.'],
-        ['create / update / remove', 'Items-service writes as the queuing user, stamped with the run.'],
-        ['runWrites(jobs)', 'Runs write jobs eight at a time. A failed job never stops the others.'],
-        ['recalcStoredRollups(collection, ids)', 'Every stored rollup on those records, once each.'],
+        [
+          'lookup(table, column, values)',
+          'One batched read: value → id, case-insensitive, lowest id wins.'
+        ],
+        [
+          'create / update / remove',
+          'Items-service writes as the queuing user, stamped with the run.'
+        ],
+        [
+          'runWrites(jobs)',
+          'Runs write jobs eight at a time. A failed job never stops the others.'
+        ],
+        [
+          'recalcStoredRollups(collection, ids)',
+          'Every stored rollup on those records, once each.'
+        ],
         ['runProcedure(name)', 'EXEC on its own long-running request; returns the time taken.'],
         ['db', 'Read access for batched comparisons.']
       ]
@@ -233,16 +245,51 @@ ctx.importProcessors.register({
       type: 'table',
       head: ['Key', 'Meaning'],
       rows: [
-        ['match_by / match_optional', 'The fields that identify one record; an optional key field may be empty, and an empty value matches an empty value.'],
-        ['duplicates', 'A key the collection already holds more than once: write the first, write all, or refuse the row and name the records.'],
-        ['columns.<file column>', 'field, type (string, int, number, boolean, date, datetime), from (read another column), blank (clear or keep), default, map + map_else, case, aggregate: sum.'],
-        ['lookup', 'collection + match_field (or match_label for a display label); scope narrows by more columns; match_lookup resolves the file text first when the match field holds a reference; ambiguous decides a name held twice (first or unmatched); fallback tries a second collection; create_with fills a created record.'],
-        ['unmatched', 'A name that matches nothing: drop the row, store nothing, keep what the record holds, or create the record. A name that matches several records is never created.'],
-        ['links.<name>', 'A junction set the file states: column + separator + lookup, or via ({link, column}) to follow a column of the records another link resolved. mode replace brings the record to the file\'s set — only on a row whose every value matched; add only adds. per_row: the rows of a key add up.'],
-        ['compute / set / set_on_update / where', 'A field from an expression over the row; constants on created records; constants on every stored record the file names; the stored records the file may touch.'],
+        [
+          'match_by / match_optional',
+          'The fields that identify one record; an optional key field may be empty, and an empty value matches an empty value.'
+        ],
+        [
+          'duplicates',
+          'A key the collection already holds more than once: write the first, write all, or refuse the row and name the records.'
+        ],
+        [
+          'columns.<file column>',
+          'field, type (string, int, number, boolean, date, datetime), from (read another column), blank (clear or keep), default, map + map_else, case, aggregate: sum.'
+        ],
+        [
+          'lookup',
+          'collection + match_field (or match_label for a display label); scope narrows by more columns; match_lookup resolves the file text first when the match field holds a reference; ambiguous decides a name held twice (first or unmatched); fallback tries a second collection; create_with fills a created record.'
+        ],
+        [
+          'unmatched',
+          'A name that matches nothing: drop the row, store nothing, keep what the record holds, or create the record. A name that matches several records is never created.'
+        ],
+        [
+          'links.<name>',
+          "A junction set the file states: column + separator + lookup, or via ({link, column}) to follow a column of the records another link resolved. mode replace brings the record to the file's set — only on a row whose every value matched; add only adds. per_row: the rows of a key add up."
+        ],
+        [
+          'compute / set / set_on_update / where',
+          'A field from an expression over the row; constants on created records; constants on every stored record the file names; the stored records the file may touch.'
+        ],
         ['update_only / create_only', 'Never create, or never update.'],
-        ['after', 'Procedures run once after the rows landed; $touched.<field> passes the distinct values the run wrote.'],
-        ['write', 'items (every write through the items service), batch (set-based with per-record history), or auto with batch_over.'],
+        [
+          'mode: remove',
+          "The file names records to remove; each goes to the trash through the items service. A column with match_only names the record without writing its field, so a second column may write that field's new value — a rename; a new key another record already holds is refused."
+        ],
+        [
+          'protect',
+          'Stored records the run must leave alone: {when: {field: literal | {_eq, _neq, _null, _nnull, _in}}, reason} — any one condition met keeps the record out of updates and removals, and the run names the reason.'
+        ],
+        [
+          'after',
+          'Procedures run once after the rows landed; $touched.<field> passes the distinct values the run wrote.'
+        ],
+        [
+          'write',
+          'items (every write through the items service), batch (set-based with per-record history), or auto with batch_over.'
+        ],
         ['keep_staging', 'Load the staging table as well, for a procedure or flow that reads it.']
       ]
     },
@@ -259,14 +306,20 @@ ctx.importProcessors.register({
       type: 'table',
       head: ['Action', 'What it does'],
       rows: [
-        ['All as CSV / Values as CSV', 'Every item of the run, or every unmatched value, as a file.'],
+        [
+          'All as CSV / Values as CSV',
+          'Every item of the run, or every unmatched value, as a file.'
+        ],
         ['Run the file again', 'Queues the same file as a new run.'],
         [
           'Revert…',
           'Previews, then puts the run back: created records go to the trash, changed fields return to their earlier value. A record or field someone changed after the import is left alone and listed.'
         ],
         ['Revert one record', 'The same, for a single item in the list.'],
-        ['Rebuild from history', 'For a run made before reports existed: rebuilds the item list from the activity log (new values only).'],
+        [
+          'Rebuild from history',
+          'For a run made before reports existed: rebuilds the item list from the activity log (new values only).'
+        ],
         ['Copy / Show as written', 'The log as plain text, for a ticket or a message.']
       ]
     },

@@ -129,7 +129,11 @@ export interface ImportDryRun {
   log: string
   samples?: {
     creates: Array<{ key: string; values: Record<string, unknown> }>
-    updates: Array<{ key: string; id: unknown; changes: Array<{ field: string; from: unknown; to: unknown }> }>
+    updates: Array<{
+      key: string
+      id: unknown
+      changes: Array<{ field: string; from: unknown; to: unknown }>
+    }>
     skipped_rows: Array<{ row: number; key: string | null; reason: string }>
     would_create_lookups: Array<{ column: string; collection: string; values: string[] }>
   }
@@ -213,7 +217,7 @@ export interface ImportRunReport {
   items_truncated?: boolean
 }
 
-export type ImportRunItemKind = 'created' | 'updated' | 'skipped' | 'failed'
+export type ImportRunItemKind = 'created' | 'updated' | 'removed' | 'skipped' | 'failed'
 
 export interface ImportRunItemChange {
   field: string
@@ -287,7 +291,10 @@ export function runMode(run: {
  */
 export type ImportMode = 'procedure' | 'processor' | 'service' | 'load'
 
-export function importMode(d: { processor?: string | null; procedure?: string | null }): ImportMode {
+export function importMode(d: {
+  processor?: string | null
+  procedure?: string | null
+}): ImportMode {
   const p = (d.processor ?? '').trim()
   if (p === 'service') return 'service'
   if (p && p !== 'proc') return 'processor'

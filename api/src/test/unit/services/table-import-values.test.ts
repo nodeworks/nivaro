@@ -17,9 +17,25 @@ vi.mock('../../../services/batch-writes.js', () => ({
 }))
 vi.mock('../../../services/run-long.js', () => ({ runLongSql: vi.fn() }))
 
-const { parseTableConfig, readCell, readDate, sameValue } = await import(
+const { meetsCondition, parseTableConfig, readCell, readDate, sameValue } = await import(
   '../../../services/table-import.js'
 )
+
+describe('meetsCondition', () => {
+  it('reads a literal loosely and an operator exactly', () => {
+    expect(meetsCondition(1, true)).toBe(true)
+    expect(meetsCondition('0', true)).toBe(false)
+    expect(meetsCondition(null, true)).toBe(false)
+    expect(meetsCondition('Approved', 'approved')).toBe(true)
+    expect(meetsCondition(null, null)).toBe(true)
+    expect(meetsCondition('x', { _nnull: true })).toBe(true)
+    expect(meetsCondition('', { _nnull: true })).toBe(false)
+    expect(meetsCondition(null, { _null: true })).toBe(true)
+    expect(meetsCondition(3, { _in: [1, 2, 3] })).toBe(true)
+    expect(meetsCondition('b', { _neq: 'B' })).toBe(false)
+    expect(meetsCondition('b', { _eq: 'c' })).toBe(false)
+  })
+})
 
 const day = (d: Date | null) => d?.toISOString().slice(0, 10) ?? null
 
@@ -110,7 +126,11 @@ describe('sameValue', () => {
 })
 
 describe('parseTableConfig', () => {
-  const base = { collection: 'units', match_by: ['system_id'], columns: { system_id: { field: 'system_id' } } }
+  const base = {
+    collection: 'units',
+    match_by: ['system_id'],
+    columns: { system_id: { field: 'system_id' } }
+  }
 
   it('accepts a plain definition', () => {
     expect(parseTableConfig(JSON.stringify(base))?.collection).toBe('units')
@@ -121,6 +141,11 @@ describe('parseTableConfig', () => {
     expect(parseTableConfig({ ...base, collection: 'units; DROP' })).toBe(null)
     expect(parseTableConfig({ ...base, match_by: ['a b'] })).toBe(null)
     expect(parseTableConfig({ ...base, after: ['update_unit_spend; DROP TABLE x'] })).toBe(null)
+    expect(parseTableConfig({ ...base, mode: 'delete' })).toBe(null)
+    expect(parseTableConfig({ ...base, protect: { when: { 'a b': true } } })).toBe(null)
+    expect(parseTableConfig({ ...base, mode: 'remove', protect: { when: { a: true } } })).not.toBe(
+      null
+    )
     expect(
       parseTableConfig({
         ...base,

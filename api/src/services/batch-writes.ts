@@ -159,7 +159,7 @@ export async function columnTypes(collection: string): Promise<Map<string, Colum
  */
 export async function batchRefusal(
   user: User,
-  action: 'create' | 'update',
+  action: 'create' | 'update' | 'delete',
   collection: string,
   fields: string[]
 ): Promise<string | null> {

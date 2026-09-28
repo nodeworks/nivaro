@@ -12,7 +12,7 @@ import { db } from '../db/index.js'
  * run whether or not its report could be stored.
  */
 
-export type ImportRunItemKind = 'created' | 'updated' | 'skipped' | 'failed'
+export type ImportRunItemKind = 'created' | 'updated' | 'removed' | 'skipped' | 'failed'
 
 export interface ImportRunChange {
   field: string

@@ -95,6 +95,8 @@ export interface ServiceImportSamples {
 export interface ServiceImportSummary {
   created: number
   updated: number
+  /** Records a `mode: 'remove'` run removed. */
+  removed?: number
   unchanged: number
   /** Rows dropped before writing, with per-reason counts. */
   skipped: Record<string, number>
