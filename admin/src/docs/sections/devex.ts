@@ -1409,6 +1409,11 @@ export const devexDevTooling: DocSection = {
   label: 'Recorder, Contrast Audit & Release Notes',
   content: [
     { type: 'h1', id: 'dev-tooling', text: 'Golden-path Recorder, Contrast Audit & Release Notes' },
+    { type: 'h2', id: 'dev-tooling-sdk-coverage', text: 'SDK coverage check' },
+    {
+      type: 'p',
+      text: '`pnpm --filter @nivaro/api run sdk:coverage` registers the route tree in process, reads every command the SDK declares, and lists the routes no command reaches (by family, with browser-only and operator-only families counted apart) and the commands that reach no route. Report only, one line with `--summary`, the whole report with `--json`; the release preflight prints the summary. Run it before an SDK release.'
+    },
     { type: 'h2', id: 'dev-tooling-recorder', text: 'Golden-path e2e recorder' },
     {
       type: 'p',

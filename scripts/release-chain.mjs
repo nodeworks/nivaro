@@ -303,6 +303,22 @@ async function main() {
           })
         )
       )
+      // Report only: which routes the published SDK cannot reach, and which
+      // of its commands reach nothing. A gap never blocks a release.
+      try {
+        const { stdout } = sh('npx', ['tsx', 'src/scripts/sdk-coverage.ts', '--summary'], {
+          cwd: resolve(ROOT, 'api'),
+          quiet: true
+        })
+        log(
+          String(stdout)
+            .split('\n')
+            .filter((l) => l.startsWith('sdk coverage'))
+            .pop() ?? 'sdk coverage: no summary'
+        )
+      } catch (err) {
+        log(`sdk coverage: not run (${err.message})`)
+      }
       emit('preflight', 'ok')
     } else emit('preflight', 'skip', `resumed from ${FROM}`)
 

@@ -104,3 +104,13 @@ run's log is `.release-runs/<id>.log`; resume it from a terminal with
 `node scripts/release-chain.mjs --go --from <stage>`.
 A chain started from a terminal is invisible to the card's lock — do not click
 Release while one runs.
+
+## SDK coverage
+
+`pnpm --filter @nivaro/api run sdk:coverage` registers the route tree in
+process, reads every `cmd('METHOD', '/path')` under `packages/sdk/src`, and
+lists the routes no command reaches (grouped by family, with the browser-only
+and operator-only families counted apart) and the commands that reach no
+route. Report only; the preflight stage prints its one-line summary. Run it
+after adding routes a script should be able to call, and before an SDK
+release — the first run found three documented commands that answered 404.

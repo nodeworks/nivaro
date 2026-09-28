@@ -1347,6 +1347,50 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
   })
 
+  // The one record of a singleton collection (the SDK's updateSingleton):
+  // updated when it exists, created when the collection is empty. A
+  // collection holding several records is not a singleton and says so.
+  app.patch('/:collection', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    if (req.user?.api_key_sandbox) {
+      const sim = await simulateSandboxWrite(req, collection, 'update', 'singleton')
+      return reply.code(sim.code).send(sim.body)
+    }
+    try {
+      const page = await readItems(
+        req.user!,
+        collection,
+        { fields: ['id'], limit: 2 },
+        req,
+        req.workspaceId ?? undefined
+      )
+      const rows = (page.data ?? []) as Array<{ id: string | number }>
+      if (rows.length > 1) {
+        return reply.code(409).send({
+          statusCode: 409,
+          error: 'Conflict',
+          code: 'NOT_A_SINGLETON',
+          message: `${collection} holds more than one record; update one by its id`
+        })
+      }
+      const body = req.body as Record<string, unknown>
+      const item =
+        rows.length === 1
+          ? await updateOne(
+              req.user!,
+              collection,
+              String(rows[0].id),
+              body,
+              req,
+              req.workspaceId ?? undefined
+            )
+          : await createOne(req.user!, collection, body, req, req.workspaceId ?? undefined)
+      return reply.send({ data: item })
+    } catch (err) {
+      return handleError(err, reply)
+    }
+  })
+
   app.delete('/:collection/:id', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
     // `DELETE /items/<collection>/` used to answer 204 and log a delete of ''

@@ -16,6 +16,7 @@ import { revokeSessions } from '../auth/session.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api-logger.js'
 import { logActivity } from '../services/activity.js'
 import { recordLogin } from '../services/security.js'
 import { canSignIn, findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
@@ -710,6 +711,32 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   // Current user
+  // The caller's own profile (the SDK's updateMe) — the users route judges
+  // which fields a person may change on themselves, so this goes through it.
+  app.patch('/me', { preHandler: authenticate }, async (req, reply) => {
+    const headers: Record<string, string> = {}
+    for (const name of ['authorization', 'cookie', 'x-workspace']) {
+      const v = req.headers[name]
+      if (v) headers[name] = Array.isArray(v) ? v[0] : v
+    }
+    const token = randomUUID()
+    headers[INTERNAL_DISPATCH_HEADER] = token
+    internalDispatchTokens.add(token)
+    try {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/users/${req.user!.id}`,
+        headers,
+        payload: (req.body ?? {}) as Record<string, unknown>
+      })
+      const type = res.headers['content-type']
+      if (typeof type === 'string') reply.header('content-type', type)
+      return reply.code(res.statusCode).send(res.body)
+    } finally {
+      internalDispatchTokens.delete(token)
+    }
+  })
+
   app.get('/me', { preHandler: authenticate }, async (req, reply) => {
     // Never expose the TOTP secret
     const { totp_secret: _totpSecret, ...safeUser } = req.user as UserWithTotp

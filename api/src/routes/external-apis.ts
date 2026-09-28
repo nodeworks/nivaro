@@ -947,6 +947,19 @@ export async function externalApisRoutes(app: FastifyInstance) {
     }
   )
 
+  // Read one endpoint (the SDK's getExternalApiEndpoint)
+  app.get<{ Params: { id: string; eid: string } }>(
+    '/:id/endpoints/:eid',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = (await db('nivaro_external_api_endpoints')
+        .where({ api_id: Number(req.params.id), id: Number(req.params.eid) })
+        .first()) as EndpointRow | undefined
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      return { data: serializeEndpoint(row) }
+    }
+  )
+
   // Create endpoint
   app.post<{
     Params: { id: string }
