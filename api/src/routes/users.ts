@@ -8,6 +8,7 @@ import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import { writeRevision } from '../services/revisions.js'
 import {
   buildUserProfile,
+  buildTeamLoad,
   buildWorkingOn,
   computeOooExposure,
   computeUserStats
@@ -339,6 +340,24 @@ export async function usersRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const id = req.params.id === 'me' ? req.user!.id : req.params.id
       const data = await buildWorkingOn(id, {
+        id: req.user!.id,
+        isAdmin: !!req.isAdmin,
+        role: (req.user as { role?: string | null } | undefined)?.role ?? null,
+        ...(req.user as object)
+      } as never)
+      return reply.send({ data })
+    }
+  )
+
+  // GET /users/:id/team-load — a manager's direct reports with what waits on
+  // each (open records, past/near SLA, out-of-office and cover), counted as
+  // the VIEWER may read — the Working on rule, one row per report.
+  app.get<{ Params: { id: string } }>(
+    '/:id/team-load',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.id === 'me' ? req.user!.id : req.params.id
+      const data = await buildTeamLoad(id, {
         id: req.user!.id,
         isAdmin: !!req.isAdmin,
         role: (req.user as { role?: string | null } | undefined)?.role ?? null,

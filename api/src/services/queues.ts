@@ -1742,8 +1742,7 @@ export async function resolveCollectionSource(
   if (!source.collection) return empty
   if (!(await can(user, 'read', source.collection))) return empty
   // The viewer's row filter and user scopes — null when nothing applies.
-  const gate =
-    opts.enforceAccess === false ? null : await queueGateFor(user, source.collection)
+  const gate = opts.enforceAccess === false ? null : await queueGateFor(user, source.collection)
   const conditions = (parseJson(source.filters) as QueueCondition[] | null) ?? []
   const stateValues = parseJson(source.state_values) as string[] | null
 
@@ -2393,6 +2392,22 @@ export async function resolveOwnedByMeSource(
   userId: string,
   ceiling: number = QUEUE_SANITY_CEILING
 ): Promise<SourceResult> {
+  const one = await resolveOwnedBySource([userId], ceiling)
+  return one.get(userId) ?? { items: [], matchedCount: 0, truncated: false }
+}
+
+/**
+ * resolveOwnedByMeSource for several people at once: ONE scan of the open
+ * instances and ONE owner resolution, split per person afterwards. Owner
+ * resolution over every open instance costs seconds, so a team view that
+ * asked person by person paid that once per report.
+ */
+export async function resolveOwnedBySource(
+  userIds: string[],
+  ceiling: number = QUEUE_SANITY_CEILING
+): Promise<Map<string, SourceResult>> {
+  const result = new Map<string, SourceResult>()
+  const wanted = new Map(userIds.map((u) => [u.toUpperCase(), u]))
   // Bound collections' instances PLUS addendum instances (an addendum runs its
   // own instance on a collection that is never bound — pipeline-subject.ts).
   const instances = (await db('nivaro_workflow_instances as wi')
@@ -2416,7 +2431,10 @@ export async function resolveOwnedByMeSource(
     state_key: string | null
     state_color: string | null
   }>
-  if (instances.length === 0) return { items: [], matchedCount: 0, truncated: false }
+  if (instances.length === 0) {
+    for (const u of userIds) result.set(u, { items: [], matchedCount: 0, truncated: false })
+    return result
+  }
 
   // matchedCount here is the count of ALL active workflow instances scanned,
   // BEFORE the "is this user an owner" filter below is applied — so `truncated`
@@ -2447,10 +2465,13 @@ export async function resolveOwnedByMeSource(
     .map((i) => String(i.item))
   const addendumInfos = addendumIds.length > 0 ? await loadAddendums(addendumIds) : new Map()
 
-  const items: QueueItem[] = []
+  const itemsByUser = new Map<string, QueueItem[]>(userIds.map((u) => [u, []]))
   for (const inst of scoped) {
     const owners = ownersByKey.get(`${inst.collection}:${inst.item}`) ?? []
-    if (!owners.some((o) => o.id === userId)) continue
+    const mine = owners
+      .map((o) => wanted.get(String(o.id).toUpperCase()))
+      .filter((u): u is string => !!u)
+    if (mine.length === 0) continue
     const addendumPath =
       inst.collection === ADDENDUM_COLLECTION
         ? (() => {
@@ -2458,7 +2479,7 @@ export async function resolveOwnedByMeSource(
             return info ? addendumRecordPath(info) : null
           })()
         : null
-    items.push({
+    const item: QueueItem = {
       collection: inst.collection,
       item_id: inst.item,
       label: labels[`${inst.collection}:${inst.item}`] ?? inst.item,
@@ -2470,21 +2491,25 @@ export async function resolveOwnedByMeSource(
       aging_hours: null,
       claimed_by: null,
       url: addendumPath ?? `/collections/${inst.collection}/${inst.item}`
+    }
+    for (const u of mine) itemsByUser.get(u)?.push(item)
+  }
+  for (const [u, items] of itemsByUser) {
+    result.set(u, {
+      items,
+      matchedCount,
+      truncated,
+      // owned_by_me's matched set is defined by owner resolution, which only ran
+      // for the capped scan — best-effort meta from the resolved items.
+      idMeta: items.map((i) => ({
+        collection: i.collection,
+        item_id: i.item_id,
+        state: i.state,
+        sla_status: i.sla_status
+      }))
     })
   }
-  return {
-    items,
-    matchedCount,
-    truncated,
-    // owned_by_me's matched set is defined by owner resolution, which only ran
-    // for the capped scan — best-effort meta from the resolved items.
-    idMeta: items.map((i) => ({
-      collection: i.collection,
-      item_id: i.item_id,
-      state: i.state,
-      sla_status: i.sla_status
-    }))
-  }
+  return result
 }
 
 // ─── Orchestrator ───────────────────────────────────────────────────────────────

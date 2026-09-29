@@ -36,6 +36,7 @@ import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/t
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
 import { DelegationCard } from './profile/DelegationCard'
+import { TeamLoadCard } from './profile/PersonExtras'
 
 export { DelegationCard }
 
@@ -1764,6 +1765,8 @@ function OwnProfile({ className, extra }: { className?: string; extra?: React.Re
           <div className='space-y-4'>
             {/* The full picture — every notification source in the app,
                 superseding the old subscriptions-only card. */}
+            {/* Renders nothing for someone with no direct reports. */}
+            <TeamLoadCard userId='me' />
             <NotificationSourcesCard />
             <SecurityCard />
             {extra}

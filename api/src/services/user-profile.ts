@@ -616,24 +616,37 @@ export async function buildWorkingOn(
 }
 
 async function resolveWorkingOn(userId: string): Promise<WorkingOnRaw> {
-  const { resolveOwnedByMeSource } = await import('./queues.js')
+  return (await resolveWorkingOnMany([userId])).get(userId) ?? []
+}
+
+/**
+ * Working-on for several people from ONE owner resolution: the owned-by
+ * resolver is split per person, and SLA + state labels are read once per
+ * collection for everyone's records together.
+ */
+async function resolveWorkingOnMany(userIds: string[]): Promise<Map<string, WorkingOnRaw>> {
+  const { resolveOwnedBySource } = await import('./queues.js')
   const { computeStatusBatch } = await import('../routes/sla.js')
   const { selectInChunks } = await import('./db-batch.js')
-  const owned = await resolveOwnedByMeSource(userId).catch(() => ({ items: [] }))
-  const kept = (owned as { items: Array<Record<string, unknown>> }).items
-  // The owned-by-me resolver carries no SLA or aging (it is a membership
+  const owned = await resolveOwnedBySource(userIds).catch(
+    () => new Map<string, { items: Array<Record<string, unknown>> }>()
+  )
+  // The owned-by resolver carries no SLA or aging (it is a membership
   // answer); both come from the SLA batch per collection, which also gives the
   // hours since the record entered its state. State labels ride one instance
   // read per collection.
-  const byCollection = new Map<string, string[]>()
-  for (const it of kept) {
-    const c = String(it.collection)
-    if (!byCollection.has(c)) byCollection.set(c, [])
-    byCollection.get(c)!.push(String(it.item_id))
+  const byCollection = new Map<string, Set<string>>()
+  for (const u of userIds) {
+    for (const it of (owned.get(u)?.items ?? []) as Array<Record<string, unknown>>) {
+      const c = String(it.collection)
+      if (!byCollection.has(c)) byCollection.set(c, new Set())
+      byCollection.get(c)!.add(String(it.item_id))
+    }
   }
   const sla = new Map<string, { status: string | null; elapsed_hours: number }>()
   const labels = new Map<string, string>()
-  for (const [c, ids] of byCollection) {
+  for (const [c, idSet] of byCollection) {
+    const ids = [...idSet]
     const batch = await computeStatusBatch(c, ids).catch(
       () => ({}) as Record<string, { status: string | null; elapsed_hours: number }>
     )
@@ -650,25 +663,46 @@ async function resolveWorkingOn(userId: string): Promise<WorkingOnRaw> {
       labels.set(`${c}:${r.item}`, r.label)
     }
   }
-  const enriched = kept.map((it) => {
-    const key = `${it.collection}:${it.item_id}`
-    const e = sla.get(key)
-    return {
-      collection: String(it.collection),
-      item_id: String(it.item_id),
-      label: String(it.label ?? it.item_id),
-      state: (it.state as string | null) ?? null,
-      state_label: labels.get(key) ?? null,
-      state_color: (it.state_color as string | null) ?? null,
-      sla_status: (e?.status as 'ok' | 'warning' | 'breached' | null) ?? null,
-      aging_hours: e?.elapsed_hours == null ? null : Math.round(e.elapsed_hours * 10) / 10
-    }
-  })
   const rank = (v: string | null) => (v === 'breached' ? 0 : v === 'warning' ? 1 : 2)
-  enriched.sort(
-    (a, b) => rank(a.sla_status) - rank(b.sla_status) || (b.aging_hours ?? 0) - (a.aging_hours ?? 0)
-  )
-  return enriched
+  const out = new Map<string, WorkingOnRaw>()
+  for (const u of userIds) {
+    const enriched = ((owned.get(u)?.items ?? []) as Array<Record<string, unknown>>).map((it) => {
+      const key = `${it.collection}:${it.item_id}`
+      const e = sla.get(key)
+      return {
+        collection: String(it.collection),
+        item_id: String(it.item_id),
+        label: String(it.label ?? it.item_id),
+        state: (it.state as string | null) ?? null,
+        state_label: labels.get(key) ?? null,
+        state_color: (it.state_color as string | null) ?? null,
+        sla_status: (e?.status as 'ok' | 'warning' | 'breached' | null) ?? null,
+        aging_hours: e?.elapsed_hours == null ? null : Math.round(e.elapsed_hours * 10) / 10
+      }
+    })
+    enriched.sort(
+      (a, b) =>
+        rank(a.sla_status) - rank(b.sla_status) || (b.aging_hours ?? 0) - (a.aging_hours ?? 0)
+    )
+    out.set(u, enriched)
+  }
+  return out
+}
+
+/** Fill the working-on cache for everyone in `userIds` not already cached, in one resolution. */
+function primeWorkingOn(userIds: string[]): void {
+  const now = Date.now()
+  const cold = userIds.filter((u) => {
+    const c = workingOnCache.get(u)
+    return !c || now - c.at >= WORKING_ON_TTL_MS
+  })
+  if (cold.length === 0) return
+  const all = resolveWorkingOnMany(cold)
+  for (const u of cold) {
+    const value = all.then((m) => m.get(u) ?? [])
+    workingOnCache.set(u, { at: now, value })
+    value.catch(() => workingOnCache.delete(u))
+  }
 }
 
 /** Open records + SLA escalation rules that would go uncovered if this person is out with no delegate. */
@@ -686,4 +720,151 @@ export async function computeOooExposure(userId: string) {
       .catch(() => 0)
   ])
   return { owned_open_records: owned, sla_escalations: slaRules }
+}
+
+/**
+ * A manager's team at a glance: one row per direct report with the open
+ * records waiting on them, how many are past or near SLA, and whether they
+ * are out (and who covers). Counts ride the shared per-person working-on
+ * answer (two-minute cache), narrowed to what the VIEWER may read — so two
+ * viewers can see different numbers for the same person, the same rule the
+ * Working on card follows.
+ */
+export async function buildTeamLoad(
+  managerId: string,
+  viewer: { id: string; isAdmin: boolean; role?: string | null },
+  cap = 50
+): Promise<{
+  reports: Array<{
+    id: string
+    name: string
+    email: string | null
+    title: string | null
+    status: string
+    out: boolean
+    ooo_start: string | null
+    ooo_end: string | null
+    delegate: { id: string; name: string } | null
+    open: number
+    breached: number
+    warning: number
+    hidden: number
+    oldest_hours: number | null
+    uncovered: boolean
+  }>
+  total_reports: number
+  truncated: boolean
+}> {
+  const rows = (await db('nivaro_users as u')
+    .leftJoin('nivaro_users as d', 'd.id', 'u.delegate_id')
+    .where('u.manager_id', managerId)
+    .where((w) => w.where('u.is_redacted', false).orWhereNull('u.is_redacted'))
+    // The same people the profile's direct-reports list shows a colleague
+    // (active, human); an admin also sees suspended reports still holding work.
+    .modify((q) => {
+      if (!viewer.isAdmin) {
+        q.where((w) => w.where('u.status', 'active').orWhereNull('u.status')).whereNull(
+          'u.account_kind'
+        )
+      }
+    })
+    .orderBy('u.first_name')
+    .select(
+      'u.id',
+      'u.first_name',
+      'u.last_name',
+      'u.email',
+      'u.title',
+      'u.status',
+      'u.is_out_of_office',
+      'u.ooo_start',
+      'u.ooo_end',
+      'u.delegate_id',
+      'u.delegate_expires_at',
+      'd.first_name as d_first',
+      'd.last_name as d_last',
+      'd.status as d_status',
+      'd.is_out_of_office as d_out'
+    )) as Array<{
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+    title: string | null
+    status: string | null
+    is_out_of_office: boolean | number | null
+    ooo_start: Date | null
+    ooo_end: Date | null
+    delegate_id: string | null
+    delegate_expires_at: Date | null
+    d_first: string | null
+    d_last: string | null
+    d_status: string | null
+    d_out: boolean | number | null
+  }>
+  const now = Date.now()
+  const shown = rows.slice(0, cap)
+  // One owner resolution for the whole team, not one per report.
+  primeWorkingOn(shown.map((r) => r.id))
+  const reports: Awaited<ReturnType<typeof buildTeamLoad>>['reports'] = []
+  for (let i = 0; i < shown.length; i += 10) {
+    const batch = await Promise.all(
+      shown.slice(i, i + 10).map(async (r) => {
+        const load = await buildWorkingOn(r.id, viewer, Number.MAX_SAFE_INTEGER).catch(() => null)
+        const items = load?.items ?? []
+        const breached = items.filter((x) => x.sla_status === 'breached').length
+        const warning = items.filter((x) => x.sla_status === 'warning').length
+        const oldest = items.reduce<number | null>(
+          (m, x) =>
+            x.aging_hours == null ? m : m == null ? x.aging_hours : Math.max(m, x.aging_hours),
+          null
+        )
+        const windowOut =
+          !!r.ooo_start &&
+          new Date(r.ooo_start).getTime() <= now &&
+          (!r.ooo_end || new Date(r.ooo_end).getTime() >= now)
+        const out = !!r.is_out_of_office || windowOut
+        const delegateLive =
+          !!r.delegate_id &&
+          r.d_status !== 'suspended' &&
+          !r.d_out &&
+          (!r.delegate_expires_at || new Date(r.delegate_expires_at).getTime() > now)
+        const name = [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || r.id
+        return {
+          id: r.id,
+          name,
+          email: r.email,
+          title: r.title,
+          status: r.status ?? 'active',
+          out,
+          ooo_start: r.ooo_start ? new Date(r.ooo_start).toISOString() : null,
+          ooo_end: r.ooo_end ? new Date(r.ooo_end).toISOString() : null,
+          delegate:
+            r.delegate_id && delegateLive
+              ? {
+                  id: r.delegate_id,
+                  name: [r.d_first, r.d_last].filter(Boolean).join(' ') || 'Delegate'
+                }
+              : null,
+          open: load?.total ?? 0,
+          breached,
+          warning,
+          hidden: load?.hidden ?? 0,
+          oldest_hours: oldest,
+          // Out (or suspended) with work waiting and nobody covering: the
+          // records stall until they are back.
+          uncovered: (out || r.status === 'suspended') && !delegateLive && (load?.total ?? 0) > 0
+        }
+      })
+    )
+    reports.push(...batch)
+  }
+  reports.sort(
+    (a, b) =>
+      Number(b.uncovered) - Number(a.uncovered) ||
+      b.breached - a.breached ||
+      b.open - a.open ||
+      a.name.localeCompare(b.name)
+  )
+  return { reports, total_reports: rows.length, truncated: rows.length > shown.length }
 }

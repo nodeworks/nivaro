@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Bell, ClipboardList, Loader2, ScanSearch, Send } from 'lucide-react'
+import { Bell, ClipboardList, Loader2, ScanSearch, Send, Users } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
@@ -7,7 +7,7 @@ import { get, post } from '../../lib/commands'
 import { cn, humanHours } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
-import { EmptyLine, Pill, SectionCard } from './primitives'
+import { EmptyLine, PersonChip, Pill, SectionCard } from './primitives'
 import { errorText, type PersonProfile } from './types'
 
 // ─── Working on ──────────────────────────────────────────────────────────────
@@ -117,6 +117,186 @@ export function WorkingOnCard({ profile: p }: { profile: PersonProfile }) {
           {data.total > data.items.length && (
             <li className='pt-2 text-[11.5px] text-slate-400'>
               +{data.total - data.items.length} more
+            </li>
+          )}
+        </ul>
+      )}
+    </SectionCard>
+  )
+}
+
+// ─── Team load ───────────────────────────────────────────────────────────────
+
+interface TeamLoadRow {
+  id: string
+  name: string
+  email: string | null
+  title: string | null
+  status: string
+  out: boolean
+  ooo_end: string | null
+  delegate: { id: string; name: string } | null
+  open: number
+  breached: number
+  warning: number
+  hidden: number
+  oldest_hours: number | null
+  uncovered: boolean
+}
+
+const shortDay = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : null
+
+/**
+ * A manager's team at a glance: one row per direct report — what waits on
+ * them, how much of it is past SLA, and whether they are out with nobody
+ * covering. `userId` may be 'me'. Renders nothing for someone with no reports.
+ */
+export function TeamLoadCard({
+  userId,
+  firstName,
+  expectedRows = 3
+}: {
+  userId: string
+  firstName?: string | null
+  /** How many skeleton rows to show while it loads (the known report count). */
+  expectedRows?: number
+}) {
+  const client = useNivaroClient()
+  const { data, isLoading, isError } = useQuery<{
+    reports: TeamLoadRow[]
+    total_reports: number
+    truncated: boolean
+  }>({
+    queryKey: ['nvr-person-team-load', userId],
+    queryFn: () =>
+      client
+        .request<{ data: { reports: TeamLoadRow[]; total_reports: number; truncated: boolean } }>(
+          get(`/users/${userId}/team-load`)
+        )
+        .then((r) => r.data),
+    staleTime: 60_000
+  })
+  if (!isLoading && (isError || !data || data.total_reports === 0)) return null
+  const rows = data?.reports ?? []
+  const open = rows.reduce((n, r) => n + r.open, 0)
+  const breached = rows.reduce((n, r) => n + r.breached, 0)
+  const uncovered = rows.filter((r) => r.uncovered).length
+  const whose = userId === 'me' ? 'your' : firstName ? `${firstName}'s` : 'their'
+  return (
+    <SectionCard
+      icon={<Users className='h-4 w-4' />}
+      title='Team load'
+      hint={
+        data
+          ? [
+              `${data.total_reports} direct report${data.total_reports === 1 ? '' : 's'}`,
+              `${open} open`,
+              breached ? `${breached} past SLA` : null,
+              uncovered ? `${uncovered} out with no cover` : null
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : `What waits on ${whose} team`
+      }
+      testId='team-load'
+    >
+      {isLoading ? (
+        <div className='space-y-2.5' aria-busy>
+          {[0, 1, 2, 3, 4, 5].slice(0, Math.min(6, Math.max(1, expectedRows))).map((n) => (
+            <div key={n} className='flex items-center gap-3'>
+              <div className='h-5 w-5 animate-pulse rounded-full bg-slate-100 dark:bg-muted' />
+              <div className='h-4 flex-1 animate-pulse rounded bg-slate-100 dark:bg-muted' />
+              <div className='h-4 w-16 animate-pulse rounded bg-slate-100 dark:bg-muted' />
+            </div>
+          ))}
+          <p className='text-[11px] text-slate-400'>Working out who owns what…</p>
+        </div>
+      ) : (
+        <ul className='divide-y divide-slate-100 dark:divide-border/60' data-person-team-load>
+          {rows.map((r) => {
+            const ooo = r.out || r.status === 'suspended'
+            return (
+              <li
+                key={r.id}
+                className='flex items-center gap-3 py-2'
+                data-team-load-row={r.id}
+                data-team-load-uncovered={r.uncovered ? 'true' : undefined}
+              >
+                <div className='min-w-0 flex-1'>
+                  <PersonChip person={{ id: r.id, name: r.name, email: r.email }} meta={r.title} />
+                  {ooo && (
+                    <p
+                      className={cn(
+                        'mt-0.5 pl-7 text-[11px]',
+                        r.uncovered
+                          ? 'font-semibold text-red-700 dark:text-red-400'
+                          : 'text-amber-700 dark:text-amber-400'
+                      )}
+                      data-team-load-ooo
+                    >
+                      {r.status === 'suspended'
+                        ? 'Suspended'
+                        : `Out${r.ooo_end ? ` until ${shortDay(r.ooo_end)}` : ''}`}
+                      {r.delegate
+                        ? ` · ${r.delegate.name} covers`
+                        : r.open > 0
+                          ? ' · nobody covers their records'
+                          : ''}
+                    </p>
+                  )}
+                </div>
+                <div className='flex shrink-0 items-center gap-1.5'>
+                  {r.breached > 0 && (
+                    <span
+                      className={cn(
+                        'rounded-full px-1.5 py-px text-[10.5px] font-semibold',
+                        SLA_TONE.breached
+                      )}
+                      data-team-load-breached={r.breached}
+                    >
+                      {r.breached} past SLA
+                    </span>
+                  )}
+                  {r.warning > 0 && (
+                    <span
+                      className={cn(
+                        'rounded-full px-1.5 py-px text-[10.5px] font-semibold',
+                        SLA_TONE.warning
+                      )}
+                    >
+                      {r.warning} SLA soon
+                    </span>
+                  )}
+                  <span
+                    className={cn(
+                      'w-16 text-right text-[12px] tabular-nums',
+                      r.open > 0
+                        ? 'font-semibold text-slate-700 dark:text-slate-200'
+                        : 'text-slate-400'
+                    )}
+                    data-team-load-open={r.open}
+                    title={
+                      r.hidden > 0
+                        ? `${r.hidden} more in collections your role cannot read`
+                        : undefined
+                    }
+                  >
+                    {r.open} open
+                  </span>
+                  <span
+                    className='w-14 text-right text-[11px] tabular-nums text-slate-400'
+                    title='Longest a record of theirs has sat in its current state'
+                  >
+                    {r.oldest_hours != null ? humanHours(r.oldest_hours) : ''}
+                  </span>
+                </div>
+              </li>
+            )
+          })}
+          {data?.truncated && (
+            <li className='pt-2 text-[11.5px] text-slate-400'>
+              Showing the first {rows.length} of {data.total_reports}.
             </li>
           )}
         </ul>

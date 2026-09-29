@@ -13,7 +13,7 @@ import {
 } from './PersonAccess'
 import { ActivityFeedCard, JourneyCard, SignInsCard, StatsCard } from './PersonActivity'
 import { ForceReloadCard, MergeCard, OffboardingCard } from './PersonAdminTools'
-import { WhyCard, WorkingOnCard } from './PersonExtras'
+import { TeamLoadCard, WhyCard, WorkingOnCard } from './PersonExtras'
 import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
 import { useInvalidatePerson, usePersonProfile } from './types'
@@ -66,6 +66,13 @@ export function PersonProfile({
       <div className='space-y-4'>
         <AboutCard profile={profile} isAdmin={isAdmin} />
         <WorkingOnCard profile={profile} />
+        {profile.direct_reports.length > 0 && (
+          <TeamLoadCard
+            userId={profile.id}
+            firstName={profile.first_name ?? profile.name}
+            expectedRows={profile.direct_reports.length}
+          />
+        )}
         <PeopleCard profile={profile} />
       </div>
       <div className='space-y-4'>
