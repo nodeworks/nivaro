@@ -1280,12 +1280,28 @@ export async function submissionReadiness(opts: {
   if (mine.length === 0) return out
 
   const [fields, reqs] = await Promise.all([
-    fieldBlockers(collection, mine).catch(() => new Map<string, ReadinessBlocker[]>()),
-    requirementBlockers(collection, mine).catch(() => new Map<string, ReadinessBlocker[]>())
+    fieldBlockers(collection, mine).catch(() => null),
+    requirementBlockers(collection, mine).catch(() => null)
   ])
+  return assembleReadiness(mine, fields, reqs)
+}
+
+/**
+ * One readiness entry per id from the two blocker lookups. A lookup that
+ * failed is `null`, and then no id is answered at all: an empty blocker list
+ * reads as "ready", which a failure must never claim. The client shows no
+ * chips for an id it did not get back.
+ */
+export function assembleReadiness(
+  ids: string[],
+  fields: Map<string, ReadinessBlocker[]> | null,
+  reqs: Map<string, ReadinessBlocker[]> | null
+): Record<string, { ready: boolean; blockers: ReadinessBlocker[] }> {
+  const out: Record<string, { ready: boolean; blockers: ReadinessBlocker[] }> = {}
+  if (!fields || !reqs) return out
   const pick = (m: Map<string, ReadinessBlocker[]>, id: string) =>
     m.get(id) ?? [...m.entries()].find(([k]) => k.toUpperCase() === id.toUpperCase())?.[1] ?? []
-  for (const id of mine) {
+  for (const id of ids) {
     const blockers = [...pick(fields, id), ...pick(reqs, id)]
     out[id] = { ready: blockers.length === 0, blockers }
   }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import {
+  assembleReadiness,
   creatorColumnFor,
   daysBetween,
   describeConditionRule,
@@ -321,5 +322,32 @@ describe('describeConditionRule', () => {
     expect(
       describeConditionRule({ field: 'unit.schedule_date', op: 'within_days', value: 45 })
     ).toBe('Unit › Schedule Date must be within 45 days')
+  })
+})
+
+describe('assembleReadiness', () => {
+  const vendor = {
+    kind: 'field' as const,
+    field: 'vendor',
+    label: 'Vendor',
+    message: 'Vendor is required'
+  }
+  const gate = { kind: 'requirement' as const, label: 'Submit', message: 'Enter REQ ids' }
+
+  it('marks an id ready only when both lookups answered and neither blocks it', () => {
+    const out = assembleReadiness(['1', '2'], new Map([['1', [vendor]]]), new Map([['1', [gate]]]))
+    expect(out['1']).toEqual({ ready: false, blockers: [vendor, gate] })
+    expect(out['2']).toEqual({ ready: true, blockers: [] })
+  })
+
+  it('matches ids case-insensitively', () => {
+    const out = assembleReadiness(['ab-1'], new Map([['AB-1', [vendor]]]), new Map())
+    expect(out['ab-1']).toEqual({ ready: false, blockers: [vendor] })
+  })
+
+  it('omits every id when a lookup failed — a failure is never "ready"', () => {
+    expect(assembleReadiness(['1', '2'], null, new Map())).toEqual({})
+    expect(assembleReadiness(['1'], new Map([['1', [vendor]]]), null)).toEqual({})
+    expect(assembleReadiness(['1'], null, null)).toEqual({})
   })
 })
