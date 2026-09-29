@@ -2492,8 +2492,29 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         's.key as state_key',
         's.label as state_label',
         's.color as state_color',
-        'i.completed_at'
+        'i.completed_at',
+        'i.id as instance_id',
+        'i.current_state',
+        'i.started_at'
       )
+
+    // When each record entered its current state (the list's Aging column):
+    // the newest history row into that state, else the instance start (a
+    // record that started in it). Page-scoped reads only.
+    const enteredAt = new Map<string, Date>()
+    if (ids && rows.length > 0) {
+      const hist = (await selectInChunks(
+        rows.map((r: { instance_id: unknown }) => String(r.instance_id)),
+        2000,
+        (chunk) =>
+          db('nivaro_workflow_history')
+            .whereIn('instance', chunk)
+            .select('instance', 'to_state')
+            .max('timestamp as at')
+            .groupBy('instance', 'to_state')
+      ).catch(() => [])) as Array<{ instance: string; to_state: string; at: Date }>
+      for (const h of hist) enteredAt.set(`${h.instance}::${h.to_state}`, h.at)
+    }
 
     const byItem: Record<
       string,
@@ -2502,6 +2523,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         state_label: string | null
         state_color: string | null
         completed_at: Date | null
+        entered_at?: Date | null
       }
     > = {}
     for (const r of rows)
@@ -2509,7 +2531,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         state_key: r.state_key as string | null,
         state_label: r.state_label as string | null,
         state_color: r.state_color as string | null,
-        completed_at: r.completed_at as Date | null
+        completed_at: r.completed_at as Date | null,
+        entered_at: ids
+          ? (enteredAt.get(`${r.instance_id}::${r.current_state}`) ??
+            (r.started_at as Date | null) ??
+            null)
+          : undefined
       }
 
     // A record with an addendum in flight shows the ADDENDUM's state — that is

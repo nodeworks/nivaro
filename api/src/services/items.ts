@@ -39,6 +39,7 @@ import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
 import {
+  applyAgingFilter,
   applyStateFilter,
   attachRecordState,
   STATE_FIELD,
@@ -2325,6 +2326,11 @@ export async function applyConditions(
       // narrow is a wrong list, a state filter that fails to narrow is every
       // record in the collection.
       applyStateFilter(q, collection, { [cond.op || '_in']: cond.value })
+      continue
+    }
+    // Virtual path: hours in the current pipeline state — see applyAgingFilter.
+    if (cond.path[0] === '$aging' && cond.path.length === 1) {
+      applyAgingFilter(q, collection, cond.op, cond.value)
       continue
     }
     // Virtual path: addendum presence — 'active' = an addendum still in flight

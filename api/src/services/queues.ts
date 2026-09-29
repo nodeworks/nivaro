@@ -218,6 +218,9 @@ export interface QueueDisplayConfig {
    *  for viewers with no saved column prefs; null = the computed default
    *  (base columns + first two extra fields). Array order IS the column order. */
   default_columns: string[] | null
+  /** Column keys shown to admins only (curation — the value still rides the
+   *  read); null = none. */
+  admin_only_columns: string[] | null
   /** Builder-set default column pins ({columnKey: 'left'|'right'}) applied when
    *  a viewer has no saved-view pins; null = the historic first-column-left. */
   default_pins: Record<string, 'left' | 'right'> | null
@@ -251,6 +254,7 @@ export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
   item_layout: null,
   sheet_width: null,
   default_columns: null,
+  admin_only_columns: null,
   default_pins: null,
   priority_weights: null,
   formula_columns: null
@@ -336,6 +340,17 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
     item_layout,
     sheet_width: normalizeSheetWidth(src.sheet_width),
     default_columns: default_columns && default_columns.length > 0 ? default_columns : null,
+    admin_only_columns: (() => {
+      if (!Array.isArray(src.admin_only_columns)) return null
+      const keys = [
+        ...new Set(
+          src.admin_only_columns.filter(
+            (c): c is string => typeof c === 'string' && c.trim() !== ''
+          )
+        )
+      ]
+      return keys.length > 0 ? keys : null
+    })(),
     default_pins,
     priority_weights: (() => {
       const w = src.priority_weights as Record<string, unknown> | null | undefined

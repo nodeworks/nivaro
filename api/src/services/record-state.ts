@@ -218,3 +218,53 @@ export function applyStateFilter(q: Knex.QueryBuilder, collection: string, value
   if (excludeNone) q.whereExists(exists(null))
   if (exclude.length) q.whereNotExists(exists(exclude))
 }
+
+/**
+ * `$aging` — hours a record has sat in its current pipeline state (the queue's
+ * Aging, for list surfaces). `_gte`/`_lte` take hours; `_between` takes
+ * [min, max] or 'min..max' (either side may be blank). Entered = the newest
+ * history row into the current state, else the instance start; completed
+ * instances and records running no pipeline never match. A value that is not
+ * a number narrows to nothing rather than widening.
+ */
+export function applyAgingFilter(
+  q: Knex.QueryBuilder,
+  collection: string,
+  op: string,
+  value: unknown
+): void {
+  const num = (v: unknown) => (v === '' || v == null ? null : Number(v))
+  let min: number | null = null
+  let max: number | null = null
+  if (op === '_gte' || op === '_gt') min = num(value)
+  else if (op === '_lte' || op === '_lt') max = num(value)
+  else if (op === '_between') {
+    const parts = Array.isArray(value) ? value : String(value ?? '').split('..')
+    min = num(parts[0])
+    max = num(parts[1])
+  }
+  if (
+    (min != null && !Number.isFinite(min)) ||
+    (max != null && !Number.isFinite(max)) ||
+    (min == null && max == null)
+  ) {
+    q.whereRaw('1 = 0')
+    return
+  }
+  const now = Date.now()
+  // Older than `min` hours = entered at or before now − min; younger than
+  // `max` hours = entered at or after now − max.
+  const enteredBefore = min != null ? new Date(now - min * 3_600_000) : null
+  const enteredAfter = max != null ? new Date(now - max * 3_600_000) : null
+  q.whereExists(function (this: Knex.QueryBuilder) {
+    this.select(db.raw('1'))
+      .from('nivaro_workflow_instances as agi')
+      .where('agi.collection', collection)
+      .whereNull('agi.completed_at')
+      .whereRaw('agi.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+    const entered =
+      '(COALESCE((SELECT MAX(agh.timestamp) FROM nivaro_workflow_history agh WHERE agh.instance = agi.id AND agh.to_state = agi.current_state), agi.started_at))'
+    if (enteredBefore) this.whereRaw(`${entered} <= ?`, [enteredBefore])
+    if (enteredAfter) this.whereRaw(`${entered} >= ?`, [enteredAfter])
+  })
+}

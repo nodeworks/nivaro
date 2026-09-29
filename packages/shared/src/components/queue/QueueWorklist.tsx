@@ -245,6 +245,8 @@ interface QueueMeta {
     item_layout: string | null
     sheet_width: number | string | null
     default_columns?: string[] | null
+    /** Columns only admins see (Lines Ready). */
+    admin_only_columns?: string[] | null
     default_pins?: Record<string, 'left' | 'right'> | null
     priority_weights?: {
       sla_warning: number
@@ -2228,6 +2230,10 @@ export function QueueWorklist({
   // builder column set saved before it existed would hide it forever (Rob,
   // 2026-09-23: "doesn't seem to be enabled by default").
   if (sendBacksEnabled && !hiddenByUser.has('send_backs')) effectiveVisible.add('send_backs')
+  // Admin-only columns (display_config.admin_only_columns) never show for
+  // anyone else, whatever the defaults or a saved view say.
+  const adminOnlyColumns = new Set(isAdmin ? [] : (displayConfig?.admin_only_columns ?? []))
+  for (const k of adminOnlyColumns) effectiveVisible.delete(k)
 
   // Render order of the middle (toggleable) columns follows visible_columns'
   // actual array order (the viewer's saved drag-reorder), falling back to

@@ -61,7 +61,7 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
-import { cn } from '../lib/utils'
+import { cn, humanHours } from '../lib/utils'
 import {
   type AvailableBulkAction,
   BulkActionButtons,
@@ -82,6 +82,7 @@ import { MapView } from './MapView'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
+import { FilterControl } from './DataTable'
 import { TipLayer } from './TipLayer'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
 
@@ -210,6 +211,9 @@ interface PipelineInstancesMap {
       /** State/owners belong to this in-flight addendum, not the record itself. */
       via_addendum?: { id: string; title: string | null } | null
       record_state_label?: string | null
+      /** When the record entered its current state (page-scoped reads). */
+      entered_at?: string | null
+      completed_at?: string | null
     }
   >
 }
@@ -242,6 +246,8 @@ type SavedViewColumn =
       width?: number
       /** Footer aggregate — server-computed SUM over the whole filtered set. */
       agg?: 'sum'
+      /** Shown to admins only (curation: the value still rides the read). */
+      admin_only?: boolean
     }
 
 interface SavedView {
@@ -1780,6 +1786,8 @@ type ColFilterVal =
   | { kind: 'state'; value: string[] }
   | { kind: 'fulfilment'; value: 'none' | 'partial' | 'complete' }
   | { kind: 'integrations'; value: 'danger' | 'warning' | 'positive' | 'none' }
+  /** Hours in the current pipeline state, 'min:max' (either side blank). */
+  | { kind: 'aging'; value: string }
 
 // ─── FilterBar (admin components/filter-bar.tsx port) ─────────────────────────
 
@@ -4287,7 +4295,10 @@ export function CollectionBrowserView({
         }
       } else if (f.kind === 'integrations')
         conds.push({ path: ['$integrations'], op: '_eq', value: f.value })
-      else if (f.kind === 'text' && f.value.trim())
+      else if (f.kind === 'aging' && f.value.replace(':', '') !== '') {
+        const [min, max] = f.value.split(':')
+        conds.push({ path: ['$aging'], op: '_between', value: `${min ?? ''}..${max ?? ''}` })
+      } else if (f.kind === 'text' && f.value.trim())
         conds.push({ path: f.path, op: '_contains', value: f.value.trim() })
       else if (f.kind === 'num' && f.value !== '' && !Number.isNaN(Number(f.value)))
         conds.push({ path: [key], op: f.op, value: Number(f.value) })
@@ -4919,12 +4930,18 @@ export function CollectionBrowserView({
     staleTime: 30_000
   })
   const invalidateViews = () => qc.invalidateQueries({ queryKey: ['cbv-views', collection] })
+  // Columns a view marks admin-only (Lines Ready): hidden from everyone else.
+  const [columnAdminOnly, setColumnAdminOnly] = useState<Set<string>>(() => new Set())
   const applyView = (v: SavedView) => {
     setActiveViewId(v.id)
     setFilters(v.filters ?? [])
     setSort(v.sort ?? '')
     if (v.columns?.length) {
-      const keys = v.columns.map(viewColumnKey)
+      const adminOnly = new Set(
+        v.columns.filter((c) => typeof c !== 'string' && c.admin_only).map(viewColumnKey)
+      )
+      setColumnAdminOnly(adminOnly)
+      const keys = v.columns.map(viewColumnKey).filter((k) => isAdmin || !adminOnly.has(k))
       const valid = keys.filter((k) => k.includes('.') || fieldByName.has(k))
       if (valid.length > 0) setDisplayColumns(valid)
       const labels: Record<string, string> = {}
@@ -4990,7 +5007,8 @@ export function CollectionBrowserView({
         const tint = columnTints[k]
         const width = columnWidths[k]
         const agg = columnAggs[k]
-        if (!label && !format && !pin && !tint?.length && !width && !agg) return k
+        if (!label && !format && !pin && !tint?.length && !width && !agg && !columnAdminOnly.has(k))
+          return k
         return {
           key: k,
           ...(label ? { label } : {}),
@@ -4998,13 +5016,15 @@ export function CollectionBrowserView({
           ...(pin ? { pin } : {}),
           ...(tint?.length ? { tint } : {}),
           ...(width ? { width } : {}),
-          ...(agg ? { agg } : {})
+          ...(agg ? { agg } : {}),
+          ...(columnAdminOnly.has(k) ? { admin_only: true } : {})
         }
       }),
       // Synthetic columns (State/Owners/Actions) persist pins as pin-only
       // entries; applyView drops them from the display-column list.
       ...[
         '__state__',
+        '__aging__',
         '__owners__',
         '__addendums__',
         '__fulfilment__',
@@ -5337,13 +5357,23 @@ export function CollectionBrowserView({
   // last; sticky offsets come from live header-cell width measurement.
   type CbvColDesc = {
     key: string
-    kind: 'data' | 'state' | 'owners' | 'addendums' | 'fulfilment' | 'integrations' | 'actions'
+    kind:
+      | 'data'
+      | 'state'
+      | 'aging'
+      | 'owners'
+      | 'addendums'
+      | 'fulfilment'
+      | 'integrations'
+      | 'actions'
   }
   const baseColDescs: CbvColDesc[] = [
     ...effectiveColumns.map((k) => ({ key: k, kind: 'data' as const })),
     ...(hasPipeline
       ? [
           { key: '__state__', kind: 'state' as const },
+          // How long the record has sat in its current state (the queue's Aging).
+          { key: '__aging__', kind: 'aging' as const },
           { key: '__owners__', kind: 'owners' as const }
         ]
       : []),
@@ -6954,17 +6984,19 @@ export function CollectionBrowserView({
                         const label =
                           col.kind === 'state'
                             ? 'State'
-                            : col.kind === 'owners'
-                              ? 'Owners'
-                              : col.kind === 'addendums'
-                                ? 'Addendums'
-                                : col.kind === 'fulfilment'
-                                  ? bcFulfilment?.label
-                                    ? `${bcFulfilment.label} shipped`
-                                    : 'Shipped'
-                                  : col.kind === 'integrations'
-                                    ? 'Integrations'
-                                    : ''
+                            : col.kind === 'aging'
+                              ? 'Aging'
+                              : col.kind === 'owners'
+                                ? 'Owners'
+                                : col.kind === 'addendums'
+                                  ? 'Addendums'
+                                  : col.kind === 'fulfilment'
+                                    ? bcFulfilment?.label
+                                      ? `${bcFulfilment.label} shipped`
+                                      : 'Shipped'
+                                    : col.kind === 'integrations'
+                                      ? 'Integrations'
+                                      : ''
                         return (
                           <th
                             key={key}
@@ -7091,6 +7123,35 @@ export function CollectionBrowserView({
                                       : null
                                   )
                                 }
+                              />
+                            </th>
+                          )
+                        }
+                        if (col.kind === 'aging') {
+                          const cur = colFilters.__aging__
+                          return (
+                            <th
+                              key={key}
+                              style={pinStyle(key)}
+                              className={baseTh}
+                              data-aging-filter
+                            >
+                              <FilterControl
+                                layout='cell'
+                                def={{
+                                  key: '__aging__',
+                                  placeholder: 'Aging (hours)',
+                                  type: 'range',
+                                  range_unit: 'h'
+                                }}
+                                value={cur?.kind === 'aging' ? cur.value : ''}
+                                onChange={(v) => {
+                                  const val = typeof v === 'string' ? v : ''
+                                  setColFilter(
+                                    '__aging__',
+                                    val.replace(':', '') ? { kind: 'aging', value: val } : null
+                                  )
+                                }}
                               />
                             </th>
                           )
@@ -7360,6 +7421,34 @@ export function CollectionBrowserView({
                                     </span>
                                   ) : (
                                     <span className='text-[12px] text-slate-300'>—</span>
+                                  )}
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'aging') {
+                              const inst = pipelineData?.instances?.[String(id)]
+                              const at = inst?.entered_at
+                                ? new Date(inst.entered_at).getTime()
+                                : NaN
+                              const hours =
+                                inst?.completed_at || !Number.isFinite(at)
+                                  ? null
+                                  : (Date.now() - at) / 3_600_000
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  data-tip={
+                                    hours != null && inst?.entered_at
+                                      ? `In ${inst.state_label ?? 'this state'} since ${new Date(inst.entered_at).toLocaleString()}`
+                                      : undefined
+                                  }
+                                  className={`whitespace-nowrap px-3 py-1.5 text-[12px] tabular-nums text-slate-600 dark:text-slate-300 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  {hours == null ? (
+                                    <span className='text-slate-300 dark:text-slate-600'>—</span>
+                                  ) : (
+                                    humanHours(hours)
                                   )}
                                 </td>
                               )
