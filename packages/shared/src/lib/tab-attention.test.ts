@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { faviconBadgeText, tabTitlePrefix, withTitlePrefix } from './tab-attention'
+import { tabTitlePrefix, withTitlePrefix } from './tab-attention'
 
 describe('tab attention', () => {
   it('prefixes the count, caps at 99+ and shows nothing at zero', () => {
@@ -17,10 +17,5 @@ describe('tab attention', () => {
 
   it('leaves a title that only looks like a count elsewhere alone', () => {
     expect(withTitlePrefix('Budget (2026) · Nivaro', 1)).toBe('(1) Budget (2026) · Nivaro')
-  })
-
-  it('keeps the favicon badge to two characters', () => {
-    expect(faviconBadgeText(4)).toBe('4')
-    expect(faviconBadgeText(12)).toBe('9+')
   })
 })

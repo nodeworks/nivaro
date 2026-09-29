@@ -91,7 +91,7 @@ export interface NotificationBellProps {
    *  positions it beside the trigger — for a sidebar rail whose overflow
    *  would clip an inline panel. */
   panelPlacement?: 'below' | 'right'
-  /** Put the attention count in the browser tab title and favicon (default true). */
+  /** Put the attention count in front of the browser tab title (default true). */
   tabBadge?: boolean
 }
 
@@ -149,7 +149,7 @@ export function NotificationBell({
   const badge = unread + extraBadge
   // The browser tab carries what needs the person (not every FYI), so a
   // glance at another tab says whether to come back.
-  useTabAttention(attention + extraBadge, { critical: lanes.critical > 0, enabled: tabBadge })
+  useTabAttention(attention + extraBadge, { enabled: tabBadge })
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications', 'bell', app ?? null, tab],
