@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../db/index.js', () => ({ db: Object.assign(() => ({}), { raw: () => '' }) }))
+vi.mock('../../../db/index.js', () => ({
+  db: Object.assign(
+    vi.fn(() => ({})),
+    { raw: () => '' }
+  )
+}))
 
+import { db } from '../../../db/index.js'
 import {
   compileRelatedFilter,
   evalConditionRule,
+  fetchRecordForConditions,
   relatedCountKey
 } from '../../../services/workflow-conditions.js'
 
@@ -69,5 +76,66 @@ describe('evalConditionRule related ops read the pre-resolved count', () => {
     expect(evalConditionRule({ field, op: 'related_some', value }, { [key]: 0 })).toBe(false)
     expect(evalConditionRule({ field, op: 'related_none', value }, { [key]: 0 })).toBe(true)
     expect(evalConditionRule({ field, op: 'related_none', value }, {})).toBe(true)
+  })
+})
+
+describe('fetchRecordForConditions — strict mode', () => {
+  /** Point the mocked db at a knex-shaped fake whose reads of the listed tables reject. */
+  function useDb(rows: Record<string, unknown[]>, fail: string[]) {
+    vi.mocked(db).mockImplementation(((table: string) => {
+      const chain: Record<string, unknown> = {}
+      const settle = () =>
+        fail.includes(table)
+          ? Promise.reject(new Error(`read failed: ${table}`))
+          : Promise.resolve(rows[table] ?? [])
+      for (const m of ['where', 'whereIn', 'whereNull', 'whereNotNull', 'count', 'join']) {
+        chain[m] = () => chain
+      }
+      chain.select = () => settle()
+      chain.first = () => settle().then((r) => (r as unknown[])[0])
+      return chain
+    }) as never)
+  }
+
+  it('rethrows a failed record read under strict, and answers {} without it', async () => {
+    useDb({}, ['workflows'])
+    await expect(fetchRecordForConditions('workflows', '1', [], { strict: true })).rejects.toThrow(
+      'read failed: workflows'
+    )
+    await expect(fetchRecordForConditions('workflows', '1')).resolves.toEqual({})
+  })
+
+  it('rethrows a failed related-count read under strict, and answers 0 without it', async () => {
+    useDb({ workflows: [{ id: '1' }] }, ['workflow_line_items'])
+    const rules = JSON.stringify([
+      { field: 'workflow_line_items:workflow', op: 'related_some', value: null }
+    ])
+    await expect(
+      fetchRecordForConditions('workflows', '1', [rules], { strict: true })
+    ).rejects.toThrow('read failed: workflow_line_items')
+    const lax = await fetchRecordForConditions('workflows', '1', [rules])
+    expect(Object.values(lax)).toContain(0)
+  })
+
+  it('rethrows a failed children-in-state read under strict', async () => {
+    useDb({ workflows: [{ id: '1' }] }, ['workflow_line_items'])
+    const rules = JSON.stringify([
+      { field: 'workflow_line_items:workflow', op: 'children_in_state', value: 'done' }
+    ])
+    await expect(
+      fetchRecordForConditions('workflows', '1', [rules], { strict: true })
+    ).rejects.toThrow('read failed: workflow_line_items')
+    const lax = await fetchRecordForConditions('workflows', '1', [rules])
+    expect(Object.values(lax)).toContainEqual({ total: 0, matched: 0 })
+  })
+
+  it('rethrows a failed dotted-path read under strict, and answers null without it', async () => {
+    useDb({ workflows: [{ id: '1', project: 7 }] }, ['nivaro_relations'])
+    const rules = JSON.stringify([{ field: 'project.name', op: 'eq', value: 'x' }])
+    await expect(
+      fetchRecordForConditions('workflows', '1', [rules], { strict: true })
+    ).rejects.toThrow('read failed: nivaro_relations')
+    const lax = await fetchRecordForConditions('workflows', '1', [rules])
+    expect(lax['project.name']).toBeNull()
   })
 })

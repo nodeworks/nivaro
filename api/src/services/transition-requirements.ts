@@ -239,6 +239,13 @@ export interface EvaluateRequirementsOptions {
   /** The caller already reviewed the rows this attempt (the dialog's own
    *  re-submit) — `review_when` entries no longer block; incomplete rows still do. */
   reviewed?: boolean
+  /** Fail CLOSED: a failed record_fields record read or child_fields row read
+   *  rethrows instead of reading as "nothing to require". Off by default, since
+   *  the transition endpoint must never be blocked by bad config; the dashboard's
+   *  readiness check turns it on, because "ready" must never be claimed on a read
+   *  that failed. A misconfigured child_fields `fk_field` therefore reads as
+   *  "unknown" on the dashboard for that record while the transition still passes. */
+  strict?: boolean
 }
 
 export async function evaluateTransitionRequirements(
@@ -269,7 +276,8 @@ export async function evaluateTransitionRequirements(
         entry,
         itemId,
         recordCollection,
-        logger
+        logger,
+        options.strict === true
       )
       if (block) {
         blocking.push(block)
@@ -551,6 +559,7 @@ export async function evaluateTransitionRequirements(
         .limit(2000)
         .select(selectFields)) as Array<Record<string, unknown>>
     } catch (err) {
+      if (options.strict) throw err
       // Misconfigured requirement (e.g. fk_field doesn't exist on the child
       // collection) — fail open rather than blocking every transition, but
       // log loudly so the misconfiguration gets noticed and fixed.
@@ -803,7 +812,8 @@ async function evaluateRecordFieldsEntry(
   entry: Record<string, unknown>,
   itemId: string,
   recordCollection: string | null | undefined,
-  logger: Logger
+  logger: Logger,
+  strict = false
 ): Promise<RecordFieldsBlockResult | null> {
   const { fields } = entry
   if (
@@ -837,6 +847,7 @@ async function evaluateRecordFieldsEntry(
       .where({ id: itemId })
       .first(['id', ...requiredFields])) as Record<string, unknown> | undefined
   } catch (err) {
+    if (strict) throw err
     logger.warn(
       { err, recordCollection },
       'transition requirements: record_fields query failed, ignoring'

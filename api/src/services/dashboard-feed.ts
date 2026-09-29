@@ -1133,7 +1133,8 @@ export async function requirementBlockers(
         ? await fetchRecordForConditions(
             collection,
             String(inst.item),
-            withRules.map((t) => t.condition_rules)
+            withRules.map((t) => t.condition_rules),
+            { strict: true }
           )
         : {}
     let firstFailing: { transition: TransitionRow; rule: ConditionRuleLike | null } | null = null
@@ -1171,7 +1172,10 @@ export async function requirementBlockers(
       pick.requirements,
       String(inst.item),
       undefined,
-      collection
+      collection,
+      // Fail closed: a read that fails inside the check throws, so the
+      // per-instance catch marks the record unknown instead of "ready".
+      { strict: true }
     )
     if (!blocks) return
     const list: ReadinessBlocker[] = []

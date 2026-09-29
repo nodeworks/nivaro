@@ -387,11 +387,18 @@ export function evaluateConditionRules(
  * Fetch the record for condition evaluation, resolving any DOTTED fields the
  * rule set references by walking M2O relations (each hop one query, values
  * merged under the dotted key). Missing tables/hops resolve to null.
+ *
+ * `strict` fails CLOSED: a failed record read, related-count read or
+ * dotted-path read rethrows instead of reading as an empty value. Off by
+ * default (transition paths must not be blocked by a missing table); the
+ * dashboard's readiness check turns it on, since an empty record can flip
+ * which forward step looks available and so claim "ready" on a failed read.
  */
 export async function fetchRecordForConditions(
   collection: string,
   itemId: string,
-  ruleSets: Array<string | null | undefined> = []
+  ruleSets: Array<string | null | undefined> = [],
+  opts: { strict?: boolean } = {}
 ): Promise<Record<string, unknown>> {
   // Conditions read the subject record — an addendum's parent, whose lines
   // and columns the rules actually name (pipeline-subject.ts).
@@ -404,7 +411,8 @@ export async function fetchRecordForConditions(
       | Record<string, unknown>
       | undefined
     record = row ?? {}
-  } catch {
+  } catch (err) {
+    if (opts.strict) throw err
     return {}
   }
 
@@ -460,7 +468,8 @@ export async function fetchRecordForConditions(
           matched = new Set((instRows as Array<{ item: unknown }>).map((r) => String(r.item))).size
         }
         record[key] = { total, matched }
-      } catch {
+      } catch (err) {
+        if (opts.strict) throw err
         record[key] = { total: 0, matched: 0 }
       }
       continue
@@ -470,7 +479,8 @@ export async function fetchRecordForConditions(
       await applyRelatedFilter(q, rule.value, child, record)
       const row = (await q.first()) as { c?: number | string } | undefined
       record[key] = Number(row?.c ?? 0)
-    } catch {
+    } catch (err) {
+      if (opts.strict) throw err
       record[key] = 0
     }
   }
@@ -505,7 +515,8 @@ export async function fetchRecordForConditions(
         value = row?.[nextCol]
       }
       record[path] = value ?? null
-    } catch {
+    } catch (err) {
+      if (opts.strict) throw err
       record[path] = null
     }
   }

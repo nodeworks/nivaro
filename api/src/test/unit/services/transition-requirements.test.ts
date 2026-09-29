@@ -585,3 +585,89 @@ describe('evaluateTransitionRequirements — review_when through one M2O hop', (
     expect(await run({ field: 'warehouse.region.code', in: ['x'] })).toBeNull()
   })
 })
+
+/** A knex-shaped fake: every builder call chains; awaiting it answers the
+ *  table's rows, or rejects when the table is listed in `fail`. */
+function chainDb(rows: Record<string, unknown[]>, fail: string[] = []) {
+  return vi.fn((table: string) => {
+    const chain: Record<string, unknown> = {}
+    const settle = () =>
+      fail.includes(table)
+        ? Promise.reject(new Error(`read failed: ${table}`))
+        : Promise.resolve(rows[table] ?? [])
+    for (const m of ['where', 'whereIn', 'whereNull', 'whereNotNull', 'limit', 'orderBy']) {
+      chain[m] = () => chain
+    }
+    chain.select = () => settle()
+    chain.first = () => settle().then((r) => (r as unknown[])[0])
+    return chain
+  }) as unknown as Parameters<typeof evaluateTransitionRequirements>[0]
+}
+
+describe('evaluateTransitionRequirements — strict mode', () => {
+  const recordFields = JSON.stringify([{ type: 'record_fields', fields: ['vendor'] }])
+  const childFields = JSON.stringify([
+    {
+      type: 'child_fields',
+      collection: 'workflow_line_items',
+      fk_field: 'workflow',
+      fields: ['req_id']
+    }
+  ])
+
+  it('rethrows a failed record_fields record read under strict', async () => {
+    const database = chainDb({}, ['workflows'])
+    await expect(
+      evaluateTransitionRequirements(database, recordFields, '1', makeLogger(), 'workflows', {
+        strict: true
+      })
+    ).rejects.toThrow('read failed: workflows')
+  })
+
+  it('still fails open on a failed record_fields read without strict', async () => {
+    const database = chainDb({}, ['workflows'])
+    const result = await evaluateTransitionRequirements(
+      database,
+      recordFields,
+      '1',
+      makeLogger(),
+      'workflows'
+    )
+    expect(result).toBeNull()
+  })
+
+  it('rethrows a failed child_fields row read under strict', async () => {
+    const database = chainDb({}, ['workflow_line_items'])
+    await expect(
+      evaluateTransitionRequirements(database, childFields, '1', makeLogger(), 'workflows', {
+        strict: true
+      })
+    ).rejects.toThrow('read failed: workflow_line_items')
+  })
+
+  it('still fails open on a failed child_fields row read without strict', async () => {
+    const database = chainDb({}, ['workflow_line_items'])
+    const result = await evaluateTransitionRequirements(
+      database,
+      childFields,
+      '1',
+      makeLogger(),
+      'workflows'
+    )
+    expect(result).toBeNull()
+  })
+
+  it('strict changes nothing when the reads succeed', async () => {
+    const database = chainDb({ workflows: [{ id: '1', vendor: null }] })
+    const result = await evaluateTransitionRequirements(
+      database,
+      recordFields,
+      '1',
+      makeLogger(),
+      'workflows',
+      { strict: true }
+    )
+    expect(result).toHaveLength(1)
+    expect(result?.[0]).toMatchObject({ type: 'record_fields' })
+  })
+})
