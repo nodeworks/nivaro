@@ -7,8 +7,8 @@ import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import { writeRevision } from '../services/revisions.js'
 import {
-  buildUserProfile,
   buildTeamLoad,
+  buildUserProfile,
   buildWorkingOn,
   computeOooExposure,
   computeUserStats
@@ -346,6 +346,27 @@ export async function usersRoutes(app: FastifyInstance) {
         ...(req.user as object)
       } as never)
       return reply.send({ data })
+    }
+  )
+
+  // Role dashboard defaults, the people side (admin): per role, how many
+  // people saved their own layout; and a reset that clears those layouts so
+  // the published role default shows again. Static paths — they must stay
+  // ahead of the /:id routes that share the prefix.
+  app.get('/dashboard-layouts/summary', { preHandler: requireAdmin }, async (_req, reply) => {
+    const { dashboardLayoutSummary } = await import('../services/dashboard-role-reset.js')
+    return reply.send({ data: await dashboardLayoutSummary() })
+  })
+  app.post<{ Body: { role_ids?: unknown } }>(
+    '/dashboard-layouts/reset',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const ids = Array.isArray(req.body?.role_ids)
+        ? req.body.role_ids.filter((v): v is string => typeof v === 'string' && v !== '')
+        : []
+      if (ids.length === 0) return reply.code(400).send({ error: 'role_ids is required' })
+      const { resetDashboardLayouts } = await import('../services/dashboard-role-reset.js')
+      return reply.send({ data: await resetDashboardLayouts(ids, req.user!.id) })
     }
   )
 
