@@ -386,6 +386,18 @@ describe('GET /dashboard/my-throughput', () => {
     expect(res.json().data.this_week).toEqual({ transitions: 0, send_backs: 0, completions: 0 })
     expect(res.json().data.send_back_ratio).toBeNull()
   })
+
+  it("reads each move's previous one with LAG over one scan, not a subquery per row", async () => {
+    fixtures = { nivaro_users: [{ preferences: null }] }
+    await inject('GET', '/dashboard/my-throughput?weeks=4')
+    const joins = calls.filter((c) => c.table === 'nivaro_workflow_history as h')
+    expect(joins.some((c) => c.method === 'leftJoin' && String(c.args[0]).includes('LAG('))).toBe(
+      true
+    )
+    expect(
+      joins.some((c) => c.method === 'select' && String(c.args).includes('MAX(p.timestamp)'))
+    ).toBe(false)
+  })
 })
 
 describe('GET /dashboard/zone-pulse', () => {

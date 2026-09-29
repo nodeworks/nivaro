@@ -1638,7 +1638,20 @@ export async function myThroughput(opts: {
   const tz = typeof tzPref === 'string' && tzPref.trim() !== '' ? tzPref : 'UTC'
   // One spare day either side of the window absorbs any time-zone offset.
   const since = new Date(now.getTime() - ((opts.weeks + 1) * 7 + 1) * 86_400_000)
+  // Time to action needs each move's previous move on the same record. One
+  // LAG over the viewer's instances (a single scan) instead of a correlated
+  // MAX() per row: the history index leads on (instance, to_state), with
+  // timestamp only INCLUDEd, so the per-row form re-read every instance.
+  const previous = db.raw(
+    `(SELECT x.id, LAG(x.[timestamp]) OVER (PARTITION BY x.instance ORDER BY x.[timestamp], x.id) AS prev_at
+      FROM nivaro_workflow_history x
+      WHERE x.instance IN (
+        SELECT m.instance FROM nivaro_workflow_history m WHERE m.[user] = ? AND m.[timestamp] >= ?
+      )) AS lg`,
+    [userId, since]
+  )
   const rows = (await db('nivaro_workflow_history as h')
+    .leftJoin(previous, 'lg.id', 'h.id')
     .leftJoin('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
     .leftJoin('nivaro_workflow_states as ts', 'ts.id', 'h.to_state')
     .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
@@ -1657,9 +1670,7 @@ export async function myThroughput(opts: {
       'ts.is_terminal as to_terminal',
       't.label as transition_label',
       'i.started_at',
-      db.raw(
-        '(SELECT MAX(p.timestamp) FROM nivaro_workflow_history p WHERE p.instance = h.instance AND p.timestamp < h.timestamp) AS prev_at'
-      )
+      'lg.prev_at'
     )) as Array<Record<string, unknown>>
   const history: ThroughputRow[] = rows.map((r) => {
     const at = new Date(r.timestamp as string)
