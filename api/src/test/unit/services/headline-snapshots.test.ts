@@ -349,6 +349,37 @@ describe('headlineZoneAllowance', () => {
   })
 })
 
+describe('headlineZoneAllowance — no dimension covers the zone collection', () => {
+  const REGION_DIM = { ...AREA_DIM, id: 2, name: 'region', target_collection: 'regions' }
+
+  it('a restricted person reads no history (deny, never widen)', async () => {
+    allowanceDb([{ label: 'Zone 1' }])
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([REGION_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([
+      { dimension: 'region', mode: 'restrict', values: ['7'] }
+    ] as never)
+    expect(await headlineZoneAllowance({ id: 'U1', role: 'R' } as never, false)).toEqual(new Set())
+  })
+
+  it('an admin-owned key with restrictions reads no history', async () => {
+    allowanceDb([{ label: 'Zone 1' }])
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([REGION_DIM] as never)
+    const keyUser = {
+      id: 'U1',
+      role: 'R',
+      api_key_scope_restrictions: [{ dimension: 'region', values: ['7'] }]
+    } as never
+    expect(await headlineZoneAllowance(keyUser, true)).toEqual(new Set())
+  })
+
+  it('an unrestricted person is unrestricted', async () => {
+    allowanceDb([{ label: 'Zone 1' }])
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([REGION_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([] as never)
+    expect(await headlineZoneAllowance({ id: 'U1', role: 'R' } as never, false)).toBeNull()
+  })
+})
+
 describe('runHeadlineSnapshot', () => {
   const log = { info: vi.fn(), warn: vi.fn() }
 

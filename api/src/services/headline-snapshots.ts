@@ -369,9 +369,10 @@ function isoDay(v: unknown): string {
  *
  * An admin-owned API key with `scope_restrictions` is held to them, the same
  * rule getUserScopeEnforcement applies: the key's restrictions bind, the
- * admin's own (empty) scopes do not. With no zone configured, anyone carrying
- * a restriction reads nothing — only the all-zones row exists then, and
- * handing it to a restricted viewer would widen their scope on a config gap.
+ * admin's own (empty) scopes do not. With no zone configured, or no scope
+ * dimension targeting the zone collection, anyone carrying a restriction reads
+ * nothing — their restriction cannot be mapped to zones, and handing them the
+ * all-zones row would widen their scope on a config gap.
  * A failed read throws — widening the allowance on a failure would leak other
  * zones' totals.
  */
@@ -396,6 +397,9 @@ export async function headlineZoneAllowance(
   const zoneDims = new Set(
     dims.filter((d) => d.target_collection === settings.zone_collection).map((d) => d.name)
   )
+  // No dimension covers the zone collection: a restriction cannot be mapped
+  // to zones, so the viewer reads nothing rather than every zone's totals.
+  if (zoneDims.size === 0) return new Set()
   const onZone = restricts.filter((r) => zoneDims.has(r.dimension))
   if (onZone.length === 0) return null
   // Several restrictions on the zone collection narrow each other.
