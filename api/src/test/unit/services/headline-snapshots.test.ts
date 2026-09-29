@@ -14,6 +14,7 @@ import {
   parseHeadlineSettings,
   planHeadlineSnapshot,
   recordHeadlineSnapshot,
+  runHeadlineSnapshot,
   upsertHeadlineSnapshot
 } from '../../../services/headline-snapshots.js'
 import { getUserScopes, listScopeDimensions } from '../../../services/user-scopes.js'
@@ -234,16 +235,20 @@ describe('upsertHeadlineSnapshot', () => {
 })
 
 /** Settings + zone rows for the allowance reads. */
-function allowanceDb(zoneRows: Array<Record<string, unknown>>, fail: string[] = []) {
+function allowanceDb(
+  zoneRows: Array<Record<string, unknown>>,
+  fail: string[] = [],
+  settings: Record<string, unknown> = SETTINGS
+) {
   vi.mocked(db).mockImplementation(((table: string) => {
     const chain: Record<string, unknown> = {}
     const rows =
-      table === 'nivaro_settings' ? [{ dashboard_headline: JSON.stringify(SETTINGS) }] : zoneRows
+      table === 'nivaro_settings' ? [{ dashboard_headline: JSON.stringify(settings) }] : zoneRows
     const settle = () =>
       fail.includes(table)
         ? Promise.reject(new Error(`read failed: ${table}`))
         : Promise.resolve(rows)
-    for (const m of ['where', 'whereIn', 'whereNotNull', 'orderBy', 'select'])
+    for (const m of ['where', 'whereIn', 'whereNotNull', 'orderBy', 'select', 'distinct', 'limit'])
       chain[m] = () => chain
     chain.first = () => settle().then((r) => (r as unknown[])[0])
     chain.pluck = (col: string) =>
@@ -297,5 +302,70 @@ describe('headlineZoneAllowance', () => {
   it('a failed read throws rather than widening the allowance', async () => {
     allowanceDb([], ['nivaro_settings'])
     await expect(headlineZoneAllowance(user, false)).rejects.toThrow('read failed')
+  })
+
+  const NO_ZONES = { ...SETTINGS, zone_collection: null, zone_field: null }
+  const REGION_DIM = { ...AREA_DIM, id: 2, name: 'region', target_collection: 'regions' }
+
+  it('with no zone configured, a restricted person reads no history (deny, never widen)', async () => {
+    allowanceDb([], [], NO_ZONES)
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([REGION_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([
+      { dimension: 'region', mode: 'restrict', values: ['7'] }
+    ] as never)
+    expect(await headlineZoneAllowance(user, false)).toEqual(new Set())
+  })
+
+  it('with no zone configured, an unrestricted person is unrestricted', async () => {
+    allowanceDb([], [], NO_ZONES)
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([REGION_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([] as never)
+    expect(await headlineZoneAllowance(user, false)).toBeNull()
+  })
+
+  it('an admin-owned API key is held to its own zone restrictions', async () => {
+    allowanceDb([{ label: 'Zone 1' }])
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([AREA_DIM] as never)
+    vi.mocked(getUserScopes).mockClear()
+    const keyUser = {
+      id: 'U1',
+      role: 'R',
+      api_key_scope_restrictions: [{ dimension: 'area', values: ['1'] }]
+    } as never
+    expect(await headlineZoneAllowance(keyUser, true)).toEqual(new Set(['Zone 1']))
+    // The admin's own (empty) scopes are not what binds the key.
+    expect(getUserScopes).not.toHaveBeenCalled()
+  })
+
+  it('an admin-owned API key restricted on another dimension reads nothing when no zone is configured', async () => {
+    allowanceDb([], [], NO_ZONES)
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([REGION_DIM] as never)
+    const keyUser = {
+      id: 'U1',
+      role: 'R',
+      api_key_scope_restrictions: [{ dimension: 'region', values: ['7'] }]
+    } as never
+    expect(await headlineZoneAllowance(keyUser, true)).toEqual(new Set())
+  })
+})
+
+describe('runHeadlineSnapshot', () => {
+  const log = { info: vi.fn(), warn: vi.fn() }
+
+  it('a failed settings read fails the run instead of reading as "not configured"', async () => {
+    allowanceDb([], ['nivaro_settings'])
+    await expect(runHeadlineSnapshot(log, NOW)).rejects.toThrow('read failed: nivaro_settings')
+  })
+
+  it('a failed zone list fails the run instead of writing only the all-zones row', async () => {
+    const tables: string[] = []
+    allowanceDb([], ['areas'])
+    const inner = vi.mocked(db).getMockImplementation()!
+    vi.mocked(db).mockImplementation(((t: string) => {
+      tables.push(t)
+      return (inner as (t: string) => unknown)(t)
+    }) as never)
+    await expect(runHeadlineSnapshot(log, NOW)).rejects.toThrow('read failed: areas')
+    expect(tables).not.toContain('nivaro_dashboard_snapshots')
   })
 })

@@ -29,6 +29,7 @@ import {
   pickUnavailable,
   requirementBlockers,
   splitLineFinding,
+  tallyCollection,
   verdictOf,
   weekBuckets
 } from '../../../services/dashboard-feed.js'
@@ -590,5 +591,44 @@ describe('fieldBlockers', () => {
       [table]
     )
     await expect(fieldBlockers('workflows', ['1'])).rejects.toThrow('read failed')
+  })
+})
+
+describe('tallyCollection', () => {
+  it('counts breaches with the SLA reader it is handed, never its own import', async () => {
+    const instances = [
+      { id: 'I1', item: '1', current_state: 'S', template: 'T', started_at: new Date() },
+      { id: 'I2', item: '2', current_state: 'S', template: 'T', started_at: new Date() }
+    ]
+    vi.mocked(db).mockImplementation(((table: string) => {
+      const rows = table.startsWith('nivaro_workflow_instances') ? instances : []
+      const chain: Record<string, unknown> = {}
+      for (const m of ['where', 'whereNull', 'whereNotNull', 'orderBy', 'limit', 'select'])
+        chain[m] = () => chain
+      // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
+      chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+        Promise.resolve(rows).then(res, rej)
+      return chain
+    }) as never)
+    const scopes = {
+      applyScopeEnforcement: () => {},
+      resolveRecordDimensionIds: async (_c: string, ids: string[]) =>
+        new Map(ids.map((id) => [id, ['z1']]))
+    } as never
+    const computeStatusBatch = vi.fn(async () => ({
+      '1': { status: 'breached' },
+      '2': { status: 'ok' }
+    })) as never
+    const tally = await tallyCollection(
+      scopes,
+      'tally_probe',
+      [],
+      `tally-probe|${Math.random()}`,
+      { filters: [], deny: false },
+      computeStatusBatch
+    )
+    expect(computeStatusBatch).toHaveBeenCalledTimes(1)
+    expect(tally.open.get('Z1')).toBe(2)
+    expect(tally.breached.get('Z1')).toBe(1)
   })
 })

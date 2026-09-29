@@ -42,11 +42,12 @@ export interface RecordRecap {
 /**
  * What OTHER people did to one record after `since`: field changes (revision
  * deltas of create/update activity), comments, workflow transitions, and the
- * names of whoever edited. Read-only — it never moves a watermark. Shared by
- * the /touch recap and the dashboard's changed-since read.
+ * names of whoever edited. Read-only — it never moves a watermark. Used by the
+ * /touch recap.
  *
- * Every source is best-effort — a missing table or column degrades to zero,
- * never a 500.
+ * A failed activity, comment or history read throws, and /touch answers 503
+ * rather than reporting "nothing changed". Only the field-label lookup is
+ * best-effort: without it the machine names are titlecased.
  */
 export async function recordRecapSince(
   collection: string,

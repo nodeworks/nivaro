@@ -1877,13 +1877,16 @@ const tallyCache = new Map<string, { at: number; value: CollectionTally }>()
 
 /** Tally each target id's open records, SLA breaches and recent updates in
  *  one collection, as the viewer can see it (`enforcement` = the viewer's
- *  User Scopes on it). A failed read throws, so nothing is cached for it. */
-async function tallyCollection(
+ *  User Scopes on it). A failed read throws, so nothing is cached for it.
+ *  `computeStatusBatch` is handed in: zonePulse imports it once, rather than
+ *  each of its concurrent tallies importing it on its own. */
+export async function tallyCollection(
   scopes: typeof import('./user-scopes.js'),
   collection: string,
   hops: import('./user-scopes.js').ScopeHop[],
   cacheKey: string,
-  enforcement: import('./user-scopes.js').ScopeEnforcement
+  enforcement: import('./user-scopes.js').ScopeEnforcement,
+  computeStatusBatch: typeof import('../routes/sla.js').computeStatusBatch
 ): Promise<CollectionTally> {
   const hit = tallyCache.get(cacheKey)
   if (hit && Date.now() - hit.at < PULSE_TTL) return hit.value
@@ -1945,7 +1948,6 @@ async function tallyCollection(
   const breached = new Map<string, number>()
   const statusIds = [...new Set([...itemsByZone.values()].flat())]
   if (statusIds.length > 0) {
-    const { computeStatusBatch } = await import('../routes/sla.js')
     const statuses = await computeStatusBatch(
       collection,
       statusIds,
@@ -2024,6 +2026,7 @@ export async function zonePulse(opts: {
   const tallies = new Map<string, CollectionTally>()
   let partial = false
   let truncated = false
+  const { computeStatusBatch } = await import('../routes/sla.js')
   await pool([...readable], 3, async (collection) => {
     try {
       // A row-filtered read policy (RLS) cannot be honoured by raw counts —
@@ -2043,7 +2046,8 @@ export async function zonePulse(opts: {
         collection,
         hops,
         `${collection}|${dim.name}|${JSON.stringify(enforcement)}`,
-        enforcement
+        enforcement,
+        computeStatusBatch
       )
       tallies.set(collection, tally)
       if (tally.truncated) truncated = true

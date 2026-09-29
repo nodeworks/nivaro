@@ -235,7 +235,7 @@ function isUniqueViolation(err: unknown): boolean {
 export const HEADLINE_TABLE = 'nivaro_dashboard_snapshots'
 
 /** `strict` lets a failed read throw; the default reads a failure as "not
- *  configured", which only suits the cron (it simply skips). */
+ *  configured", which only suits the dry-run preview. */
 export async function loadHeadlineSettings(
   opts: { strict?: boolean } = {}
 ): Promise<HeadlineSettings | null> {
@@ -300,15 +300,14 @@ export async function runHeadlineSnapshot(
   log: { info: (o: unknown, m?: string) => void; warn: (o: unknown, m?: string) => void },
   now = new Date()
 ): Promise<HeadlineRunResult> {
-  const settings = await loadHeadlineSettings()
+  // Strict: a failed settings read is a failed run, never "not configured";
+  // a failed zone list fails the run rather than writing only the all-zones row.
+  const settings = await loadHeadlineSettings({ strict: true })
   if (!settings) {
     log.info('dashboard-headline-snapshot: not configured')
     return { skipped: 'not configured' }
   }
-  const zones = await listHeadlineZones(settings).catch((err) => {
-    log.warn({ err }, 'dashboard-headline-snapshot: zone list failed')
-    return [] as string[]
-  })
+  const zones = await listHeadlineZones(settings)
   const { runCustomQueryBySlug } = await import('./custom-query-exec.js')
   const t0 = Date.now()
   const result = await recordHeadlineSnapshot(
@@ -366,28 +365,41 @@ function isoDay(v: unknown): string {
  * (admins, and anyone without a restriction on the dimension whose target is
  * the configured zone collection), else the zone-field values of the zones
  * they are restricted to. The figures were written by a cron with no user, so
- * this is the only scope check they get. A failed read throws — widening the
- * allowance on a failure would leak other zones' totals.
+ * this is the only scope check they get.
+ *
+ * An admin-owned API key with `scope_restrictions` is held to them, the same
+ * rule getUserScopeEnforcement applies: the key's restrictions bind, the
+ * admin's own (empty) scopes do not. With no zone configured, anyone carrying
+ * a restriction reads nothing — only the all-zones row exists then, and
+ * handing it to a restricted viewer would widen their scope on a config gap.
+ * A failed read throws — widening the allowance on a failure would leak other
+ * zones' totals.
  */
 export async function headlineZoneAllowance(
   user: User,
   isAdmin: boolean
 ): Promise<Set<string> | null> {
-  if (isAdmin) return null
+  const keyRestricts = (user.api_key_scope_restrictions ?? []).filter((r) => r.values.length > 0)
+  if (isAdmin && keyRestricts.length === 0) return null
   const settings = await loadHeadlineSettings({ strict: true })
-  if (!settings?.zone_collection || !settings.zone_field) return null
   const { getUserScopes, listScopeDimensions } = await import('./user-scopes.js')
-  const dims = (await listScopeDimensions()).filter(
-    (d) => d.target_collection === settings.zone_collection
-  )
-  if (dims.length === 0) return null
-  const names = new Set(dims.map((d) => d.name))
-  const restricts = (await getUserScopes(String(user.id))).filter(
-    (s) => s.mode === 'restrict' && names.has(s.dimension) && s.values.length > 0
-  )
+  const own = isAdmin
+    ? []
+    : (await getUserScopes(String(user.id))).filter(
+        (s) => s.mode === 'restrict' && s.values.length > 0
+      )
+  const dims = await listScopeDimensions()
+  const known = new Set(dims.map((d) => d.name))
+  const restricts = [...own, ...keyRestricts].filter((r) => known.has(r.dimension))
   if (restricts.length === 0) return null
+  if (!settings?.zone_collection || !settings.zone_field) return new Set()
+  const zoneDims = new Set(
+    dims.filter((d) => d.target_collection === settings.zone_collection).map((d) => d.name)
+  )
+  const onZone = restricts.filter((r) => zoneDims.has(r.dimension))
+  if (onZone.length === 0) return null
   // Several restrictions on the zone collection narrow each other.
-  const sets = restricts.map((r) => new Set(r.values.map((v) => String(v).toUpperCase())))
+  const sets = onZone.map((r) => new Set(r.values.map((v) => String(v).toUpperCase())))
   const ids = sets.reduce((acc, mine) => new Set([...acc].filter((v) => mine.has(v))))
   if (ids.size === 0) return new Set()
   const col = settings.zone_field
