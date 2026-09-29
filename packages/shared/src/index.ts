@@ -385,6 +385,7 @@ export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
 export * from './lib/summary-mode'
+export * from './lib/tab-attention'
 export {
   BRAND_ACCENT,
   DEFAULT_THEME_ACCENTS,

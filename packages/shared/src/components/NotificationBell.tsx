@@ -21,6 +21,7 @@ import {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from '../lib/notification-target'
+import { useTabAttention } from '../lib/tab-attention'
 import { formatRelative } from '../lib/utils'
 import { DeliveryChips } from './notifications/DeliveryChips'
 import { NotificationActions } from './notifications/NotificationActions'
@@ -90,6 +91,8 @@ export interface NotificationBellProps {
    *  positions it beside the trigger — for a sidebar rail whose overflow
    *  would clip an inline panel. */
   panelPlacement?: 'below' | 'right'
+  /** Put the attention count in the browser tab title and favicon (default true). */
+  tabBadge?: boolean
 }
 
 /**
@@ -115,7 +118,8 @@ export function NotificationBell({
   allPath,
   subscriptionsPath,
   onActionError,
-  panelPlacement = 'below'
+  panelPlacement = 'below',
+  tabBadge = true
 }: NotificationBellProps) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -143,6 +147,9 @@ export function NotificationBell({
   // The badge is EVERY unread row — an FYI you have not seen is still unread.
   // Red when a critical one is among them; `attention` only sizes the tab.
   const badge = unread + extraBadge
+  // The browser tab carries what needs the person (not every FYI), so a
+  // glance at another tab says whether to come back.
+  useTabAttention(attention + extraBadge, { critical: lanes.critical > 0, enabled: tabBadge })
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications', 'bell', app ?? null, tab],
