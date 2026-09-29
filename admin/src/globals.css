@@ -100,8 +100,13 @@
   to   { background-position:  200% 0; }
 }
 
+/* `backwards`, never `both`: a finished transform animation stays applied
+   (translateY(0) — even `none` — computes to an identity matrix) and makes the
+   wrapper the containing block for every position:fixed descendant, which then
+   anchors to the wrapper instead of the viewport. With `backwards` nothing is
+   applied once it ends. */
 .animate-page-enter {
-  animation: page-enter 200ms var(--ease-out-quint) both;
+  animation: page-enter 200ms var(--ease-out-quint) backwards;
 }
 
 .skeleton {
