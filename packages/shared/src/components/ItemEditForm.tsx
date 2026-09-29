@@ -10763,7 +10763,8 @@ export function ItemEditForm({
                                         renderSlot={(key) =>
                                           key === '__comments__' ||
                                           key === '__tasks__' ||
-                                          key === '__pipeline__'
+                                          key === '__pipeline__' ||
+                                          key === '__addendums__'
                                             ? renderSentinel(key)
                                             : null
                                         }

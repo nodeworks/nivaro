@@ -202,3 +202,59 @@ export async function buildAddendumRenderOverlay(
   }
   return { item: merged, childRowsOverride, title: info.title }
 }
+
+/**
+ * What an addendum changes in money terms: the first rollup on the parent
+ * (field sort order) whose value the proposed rows move, before and after.
+ * A PO addendum that closes out lines moves Requisition Amount; nothing else
+ * it proposes is a sum. Null when the proposal moves no rollup (a scalar-only
+ * addendum), so a hand-entered cost_impact is never overwritten by a guess.
+ */
+export async function computeAddendumImpact(
+  collection: string,
+  parentId: string,
+  addendumId: string
+): Promise<{ field: string; previous: number; next: number; delta: number } | null> {
+  const item = (await db(collection).where({ id: parentId }).first()) as
+    | Record<string, unknown>
+    | undefined
+  if (!item) return null
+  const overlay = await buildAddendumRenderOverlay(collection, item, addendumId)
+  if (!overlay) return null
+  const rollups = (await db('nivaro_fields')
+    .where({ collection, computed_type: 'rollup' })
+    .orderBy('sort')
+    .select('field')) as Array<{ field: string }>
+  for (const { field } of rollups) {
+    if (!(field in overlay.item)) continue
+    const previous = Number(item[field] ?? 0)
+    const next = Number(overlay.item[field] ?? 0)
+    if (!Number.isFinite(previous) || !Number.isFinite(next)) continue
+    const delta = Math.round((next - previous) * 100) / 100
+    if (delta === 0) continue
+    return { field, previous, next, delta }
+  }
+  return null
+}
+
+/** Store the computed change on the addendum (cost_impact + before/after
+ *  amounts) unless the caller supplied its own cost_impact. Never throws. */
+export async function storeAddendumImpact(
+  collection: string,
+  parentId: string,
+  addendumId: string,
+  opts: { keepCostImpact?: boolean } = {}
+): Promise<void> {
+  try {
+    const impact = await computeAddendumImpact(collection, parentId, addendumId)
+    if (!impact) return
+    const patch: Record<string, unknown> = {
+      previous_amount: impact.previous,
+      new_amount: impact.next
+    }
+    if (!opts.keepCostImpact) patch.cost_impact = impact.delta
+    await db('nivaro_addendums').where({ id: addendumId }).update(patch)
+  } catch (err) {
+    console.warn('[addendums] impact not stored:', (err as Error).message)
+  }
+}

@@ -1111,7 +1111,10 @@ export function RecordReadView({
   // owners, approval chain) LEADS the board — where the record stands is the
   // first thing a reader wants — while the conversation slots (notes, tasks)
   // follow the facts.
-  const LEADING_SLOTS = new Set(['__pipeline__'])
+  // The addendums slot follows the pipeline: an addendum in approval is the
+  // other half of "where the record stands".
+  const LEADING_ORDER = ['__pipeline__', '__addendums__']
+  const LEADING_SLOTS = new Set(LEADING_ORDER)
   const liveNodes = (groupKey: string | null, position: 'leading' | 'trailing' = 'trailing') =>
     renderSlot
       ? liveSlots
@@ -1119,6 +1122,11 @@ export function RecordReadView({
             groupKey === null
               ? a.group_key == null && (position === 'leading') === LEADING_SLOTS.has(a.field)
               : a.group_key === groupKey
+          )
+          .sort((a, b) =>
+            position === 'leading' && groupKey === null
+              ? LEADING_ORDER.indexOf(a.field) - LEADING_ORDER.indexOf(b.field)
+              : 0
           )
           .map((a) => ({ key: a.field, node: renderSlot(a.field, a) }))
           .filter((s) => s.node != null)

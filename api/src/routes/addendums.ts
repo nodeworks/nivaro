@@ -159,9 +159,26 @@ export async function addendumsRoutes(app: FastifyInstance) {
     if (!(await can(req.user!, 'read', collection)))
       return reply.code(403).send({ error: 'Forbidden' })
 
-    const rows = (await db('nivaro_addendums')
-      .where({ parent_collection: collection, parent_id: itemId })
-      .orderBy('created_at', 'desc')) as Record<string, unknown>[]
+    const listRows = () =>
+      db('nivaro_addendums')
+        .where({ parent_collection: collection, parent_id: itemId })
+        .orderBy('created_at', 'desc') as Promise<Record<string, unknown>[]>
+    let rows = await listRows()
+    // Open addendums saved before their money change was computed get it now,
+    // once (the next read finds cost_impact set and skips this).
+    const unpriced = rows.filter(
+      (r) =>
+        r.legacy_id == null &&
+        r.cost_impact == null &&
+        r.data != null &&
+        r.status !== 'approved' &&
+        r.status !== 'rejected'
+    )
+    if (unpriced.length > 0) {
+      const { storeAddendumImpact } = await import('../services/addendum-render.js')
+      for (const r of unpriced) await storeAddendumImpact(collection, itemId, String(r.id))
+      rows = await listRows()
+    }
 
     // An addendum on a workflow template lives in the PIPELINE — its own
     // status column ('draft') is the legacy fallback. Attach the instance's
@@ -296,6 +313,20 @@ export async function addendumsRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
+    // What the proposal changes in money terms (a close-out lowers Requisition
+    // Amount): computed from the proposed rows so the card, the list pill and
+    // the lists show it without the author typing a number.
+    {
+      const { storeAddendumImpact } = await import('../services/addendum-render.js')
+      await storeAddendumImpact(
+        body.parent_collection,
+        String(body.parent_id),
+        String(insertedId),
+        {
+          keepCostImpact: body.cost_impact != null
+        }
+      )
+    }
     const created = (await db('nivaro_addendums').where({ id: insertedId }).first()) as Record<
       string,
       unknown
@@ -423,6 +454,17 @@ export async function addendumsRoutes(app: FastifyInstance) {
       patch.timeline_impact_days = body.timeline_impact_days ?? null
 
     await db('nivaro_addendums').where({ id }).update(patch)
+    if ('data' in body) {
+      const { storeAddendumImpact } = await import('../services/addendum-render.js')
+      await storeAddendumImpact(
+        String(existing.parent_collection),
+        String(existing.parent_id),
+        id,
+        {
+          keepCostImpact: body.cost_impact != null
+        }
+      )
+    }
     const updated = (await db('nivaro_addendums').where({ id }).first()) as Record<string, unknown>
 
     await logActivity({
