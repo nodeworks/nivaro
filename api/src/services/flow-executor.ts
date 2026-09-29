@@ -1091,7 +1091,7 @@ const runningFlows = new Set<string>()
 // At most one notification per flow per hour, in-process.
 const lastErrorNotifyAt = new Map<string, number>()
 
-async function resolveFlowCreator(flowId: string): Promise<string | null> {
+export async function resolveFlowCreator(flowId: string): Promise<string | null> {
   // nivaro_flows carries no creator column (base schema) — read one off the
   // row defensively in case a deployment added it, then fall back to the
   // EARLIEST flow-version snapshot's author (routes/flows.ts stamps created_by
@@ -1131,10 +1131,15 @@ function notifyFlowError(ctx: ExecutionContext, err: unknown): void {
     const { getIo } = await import('./io-holder.js')
     const appShim = { io: getIo() ?? undefined } as unknown as Parameters<typeof notifyUser>[0]
     const snippet = errorText(err, 200)
+    const { buildFlowFailedMail } = await import('./mail-builders.js')
+    const built = await buildFlowFailedMail(ctx.flowId, { error: errorText(err, 1000) }).catch(
+      () => null
+    )
     await notifyUser(appShim, creator, {
       subject: `Flow "${ctx.flowName}" failed`,
       category: 'system',
-      message: `${snippet} — /flows/${ctx.flowId}`.slice(0, 500)
+      message: `${snippet} — /flows/${ctx.flowId}`.slice(0, 500),
+      ...(built ? { template: built.template, template_data: built.data } : {})
     })
   })().catch((notifyErr) =>
     ctx.log.warn({ err: notifyErr, flowId: ctx.flowId }, 'Flow error notification failed')

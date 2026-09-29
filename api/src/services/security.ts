@@ -29,14 +29,17 @@ export async function recordLogin(
         .first('id')
       newIp = !seen
     }
-    await db('nivaro_login_events').insert({
-      user: userId,
-      method,
-      ip: ip || null,
-      user_agent: agent || null,
-      new_ip: newIp,
-      created_at: new Date()
-    })
+    const inserted = (await db('nivaro_login_events')
+      .insert({
+        user: userId,
+        method,
+        ip: ip || null,
+        user_agent: agent || null,
+        new_ip: newIp,
+        created_at: new Date()
+      })
+      .returning('id')) as Array<{ id: number } | number>
+    const eventId = typeof inserted[0] === 'object' ? inserted[0]?.id : inserted[0]
     // Masquerade "logins" are an admin acting deliberately — notifying the
     // target that "you" signed in would be confusing, not protective.
     if (newIp && app && method !== 'masquerade') {
@@ -47,10 +50,14 @@ export async function recordLogin(
       // A user's very FIRST login is always a new IP — don't greet them with
       // a security alert.
       if (Number((priorLogins as { c?: number } | undefined)?.c ?? 0) > 1) {
+        const { buildSignInMail } = await import('./mail-builders.js')
+        const built =
+          eventId != null ? await buildSignInMail(eventId, userId).catch(() => null) : null
         await notifyUser(app, userId, {
           subject: 'New sign-in to your account',
           category: 'system',
-          message: `A sign-in from a new location (${ip || 'unknown IP'}) just occurred. If this was you, no action is needed — otherwise contact an administrator.`
+          message: `A sign-in from a new location (${ip || 'unknown IP'}) just occurred. If this was you, no action is needed — otherwise contact an administrator.`,
+          ...(built ? { template: built.template, template_data: built.data } : {})
         }).catch(() => {})
       }
     }

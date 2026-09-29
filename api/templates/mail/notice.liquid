@@ -1,0 +1,25 @@
+{% layout 'base' %}
+{% block content %}
+{%- comment -%}
+Structured notice — for system/report/monitoring emails that have facts to
+show rather than a record to open. Context: eyebrow, eyebrow_tone, heading
+(falls back to subject), lead, facts [{label, value, tone?}], quote,
+quote_label, action_url / action_label, secondary_url / secondary_label,
+footnote, record_card.
+{%- endcomment -%}
+{%- if eyebrow -%}{% render 'partials/eyebrow', text: eyebrow, tone: eyebrow_tone %}{%- endif -%}
+{% render 'partials/heading', text: heading | default: subject %}
+{%- if lead and lead != '' -%}
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.55;color:#475569;">{% if first_name %}Hi {{ first_name }}, {% endif %}{{ lead }}</p>
+{%- endif -%}
+{% render 'partials/facts', rows: facts %}
+{%- if quote and quote != '' -%}
+{%- if quote_label -%}<p style="margin:0 0 6px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:600;color:#64748b;">{{ quote_label }}</p>{%- endif -%}
+{% render 'partials/quote', text: quote %}
+{%- endif -%}
+{% render 'partials/button', url: action_url, label: action_label, secondary_url: secondary_url, secondary_label: secondary_label %}
+{%- if footnote and footnote != '' -%}
+<p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#7a90a6;">{{ footnote }}</p>
+{%- endif -%}
+{% render 'partials/record-card', card: record_card %}
+{% endblock %}

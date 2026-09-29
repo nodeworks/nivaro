@@ -1,3 +1,5 @@
+import { adminBaseUrl } from '../admin-base.js'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { type LinkSpec, linkTo, recordLink } from './app-links.js'
 import { buildRecordCard, type RecordCard } from './mail-record-card.js'
@@ -496,6 +498,401 @@ export async function buildLineSlaMail(f: {
       _links: {
         record_url: { kind: 'record', collection: f.parentCollection, id: f.parentId }
       } satisfies Record<string, LinkSpec>
+    }
+  }
+}
+
+// ── Structured notices (template `notice`) ──────────────────────────────────
+// System, monitoring and report emails that have FACTS to show rather than a
+// record to open. Each builder reads its own row, so the sender and the mail
+// harness render the same thing.
+
+type Fact = { label: string; value: string | null; tone?: 'danger' | 'warn' | 'ok' }
+
+const when = (d: Date | string | null | undefined): string | null => {
+  if (!d) return null
+  const dt = new Date(d)
+  if (Number.isNaN(dt.getTime())) return null
+  return dt.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+    timeZoneName: 'short'
+  })
+}
+
+const seconds = (s: number | null | undefined): string | null => {
+  if (s == null || !Number.isFinite(Number(s))) return null
+  const n = Math.round(Number(s))
+  if (n < 60) return `${n}s`
+  const m = Math.floor(n / 60)
+  return m < 60 ? `${m}m ${n % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+const bytes = (b: number | string | null | undefined): string | null => {
+  const n = Number(b)
+  if (!Number.isFinite(n) || n <= 0) return null
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+const titleWords = (s: string) =>
+  s
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+
+/** A browser + OS description from a user-agent string; null when it says nothing useful. */
+export function describeUserAgent(ua: string | null | undefined): string | null {
+  if (!ua) return null
+  const browser = /Edg\//.test(ua)
+    ? 'Edge'
+    : /OPR\//.test(ua)
+      ? 'Opera'
+      : /Chrome\//.test(ua)
+        ? 'Chrome'
+        : /Firefox\//.test(ua)
+          ? 'Firefox'
+          : /Safari\//.test(ua)
+            ? 'Safari'
+            : null
+  const os = /Windows/.test(ua)
+    ? 'Windows'
+    : /iPhone|iPad/.test(ua)
+      ? 'iOS'
+      : /Mac OS X|Macintosh/.test(ua)
+        ? 'macOS'
+        : /Android/.test(ua)
+          ? 'Android'
+          : /Linux/.test(ua)
+            ? 'Linux'
+            : null
+  if (browser && os) return `${browser} on ${os}`
+  return browser ?? os ?? ua.slice(0, 80)
+}
+
+const SIGN_IN_METHODS: Record<string, string> = {
+  oidc: 'Microsoft single sign-on',
+  saml: 'SAML single sign-on',
+  password: 'Password',
+  static_token: 'Access token',
+  totp: 'Password + authenticator code'
+}
+
+export async function buildSignInMail(
+  eventId: number | string,
+  recipientUserId?: string | null
+): Promise<BuiltMail | null> {
+  const e = (await db('nivaro_login_events').where({ id: eventId }).first()) as
+    | {
+        id: number
+        user: string
+        method: string | null
+        ip: string | null
+        user_agent: string | null
+        created_at: Date
+      }
+    | undefined
+  if (!e) return null
+  const facts: Fact[] = [
+    { label: 'When', value: when(e.created_at) },
+    {
+      label: 'From',
+      value: e.ip ? `${e.ip} (not seen on your account in 90 days)` : 'Unknown address'
+    },
+    { label: 'Device', value: describeUserAgent(e.user_agent) },
+    {
+      label: 'Signed in with',
+      value: e.method ? (SIGN_IN_METHODS[e.method] ?? titleWords(e.method)) : null
+    }
+  ]
+  return {
+    template: 'notice',
+    subject: 'New sign-in to your account',
+    data: {
+      eyebrow: 'Security',
+      eyebrow_tone: 'warn',
+      heading: 'New sign-in to your account',
+      lead: 'Someone just signed in to your account from an address it has not used before.',
+      facts,
+      action_url: await linkTo('profile', {}, { recipientUserId: recipientUserId ?? e.user }),
+      action_label: 'Review your sessions',
+      footnote:
+        'If this was you, there is nothing to do. If it was not, sign out your other sessions from your profile and tell an administrator.',
+      why: 'this is a security notice about your own account'
+    }
+  }
+}
+
+export async function buildFlowFailedMail(
+  flowId: string,
+  opts: { error?: string | null; runId?: number | string | null } = {}
+): Promise<BuiltMail | null> {
+  const flow = (await db('nivaro_flows').where({ id: flowId }).first()) as
+    | { id: string; name: string; trigger: string | null; status: string | null }
+    | undefined
+  if (!flow) return null
+  const run = (await (opts.runId != null
+    ? db('nivaro_flow_runs').where({ id: opts.runId }).first()
+    : db('nivaro_flow_runs').where({ flow: flowId }).orderBy('id', 'desc').first())) as
+    | {
+        id: number
+        trigger: string | null
+        status: string
+        started_at: Date | null
+        duration_ms: number | null
+        error_message: string | null
+        halted_at: string | null
+      }
+    | undefined
+  const error = opts.error ?? run?.error_message ?? null
+  const base = adminBaseUrl() ?? config.PUBLIC_URL
+  return {
+    template: 'notice',
+    subject: `Flow "${flow.name}" failed`,
+    data: {
+      eyebrow: 'Automation',
+      eyebrow_tone: 'danger',
+      heading: `Flow "${flow.name}" failed`,
+      lead: 'A run of this flow stopped with an error. Runs after it are not held back, but whatever this run was meant to do did not happen.',
+      facts: [
+        { label: 'Flow', value: flow.name },
+        { label: 'Triggered by', value: run?.trigger ?? flow.trigger ?? null },
+        { label: 'Started', value: when(run?.started_at) },
+        {
+          label: 'Ran for',
+          value: run?.duration_ms != null ? seconds(run.duration_ms / 1000) : null
+        },
+        { label: 'Stopped at step', value: run?.halted_at ?? null, tone: 'danger' }
+      ] satisfies Fact[],
+      quote: error,
+      quote_label: error ? 'Error' : null,
+      action_url: `${base}/flows/${flow.id}`,
+      action_label: 'Open the flow',
+      footnote: 'You get this at most once an hour per flow while it keeps failing.',
+      why: 'you created this flow'
+    }
+  }
+}
+
+export async function buildImportRunMail(
+  queueId: number | string,
+  recipientUserId?: string | null
+): Promise<BuiltMail | null> {
+  const q = (await db('nivaro_import_queue as q')
+    .leftJoin('nivaro_import_definitions as d', 'd.id', 'q.definition')
+    .leftJoin('nivaro_files as f', 'f.id', 'q.file')
+    .where('q.id', queueId)
+    .first(
+      'q.id',
+      'q.import_key',
+      'q.status',
+      'q.row_count',
+      'q.duration',
+      'q.logs',
+      'q.started_at',
+      'q.finished_at',
+      'q.created_by',
+      'd.label as definition_label',
+      'f.filename_download as file_name'
+    )) as
+    | {
+        id: number
+        import_key: string
+        status: string
+        row_count: number | null
+        duration: number | null
+        logs: string | null
+        started_at: Date | null
+        finished_at: Date | null
+        created_by: string | null
+        definition_label: string | null
+        file_name: string | null
+      }
+    | undefined
+  if (!q) return null
+  const name = q.definition_label || titleWords(q.import_key)
+  const failed = q.status === 'error'
+  const logLines = (q.logs ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const url = await linkTo('imports', {}, { recipientUserId: recipientUserId ?? q.created_by })
+  return {
+    template: 'notice',
+    subject: `${name} import ${failed ? 'failed' : 'completed'}`,
+    data: {
+      eyebrow: 'Import',
+      eyebrow_tone: failed ? 'danger' : 'ok',
+      heading: `${name} import ${failed ? 'failed' : 'completed'}`,
+      lead: failed
+        ? 'The file you queued did not finish importing. Nothing after the failing step was applied.'
+        : logLines[0] && !/^\s*\d/.test(logLines[0])
+          ? logLines[0]
+          : 'The file you queued finished importing.',
+      facts: [
+        { label: 'File', value: q.file_name },
+        { label: 'Status', value: failed ? 'Failed' : 'Completed', tone: failed ? 'danger' : 'ok' },
+        {
+          label: 'Rows in the file',
+          value: q.row_count != null ? q.row_count.toLocaleString('en-US') : null
+        },
+        { label: 'Finished', value: when(q.finished_at) },
+        { label: 'Took', value: seconds(q.duration) },
+        { label: 'Run', value: `#${q.id}` }
+      ] satisfies Fact[],
+      quote: failed
+        ? logLines.slice(0, 6).join(' · ').slice(0, 600)
+        : logLines.slice(1, 5).join(' · ').slice(0, 600),
+      quote_label: failed ? 'What went wrong' : logLines.length > 1 ? 'Summary' : null,
+      action_url: `${url}${url.includes('?') ? '&' : '?'}run=${q.id}`,
+      action_label: 'Open the run',
+      why: 'you queued this import'
+    }
+  }
+}
+
+export async function buildExportReadyMail(fileId: string): Promise<BuiltMail | null> {
+  const f = (await db('nivaro_files').where({ id: fileId }).first()) as
+    | {
+        id: string
+        filename_download: string | null
+        title: string | null
+        type: string | null
+        filesize: number | string | null
+        uploaded_on: Date | null
+        expires_at: Date | null
+      }
+    | undefined
+  if (!f) return null
+  const name = f.filename_download || f.title || 'export'
+  return {
+    template: 'notice',
+    subject: `Export ready: ${name}`,
+    data: {
+      eyebrow: 'Export',
+      eyebrow_tone: 'ok',
+      heading: 'Your export is ready',
+      lead: 'The export you started has finished and is saved to Files.',
+      facts: [
+        { label: 'File', value: name },
+        { label: 'Size', value: bytes(f.filesize) },
+        { label: 'Created', value: when(f.uploaded_on) },
+        { label: 'Available until', value: when(f.expires_at) }
+      ] satisfies Fact[],
+      action_url: `${config.PUBLIC_URL.replace(/\/$/, '')}/api/files/${f.id}?download=1`,
+      action_label: 'Download',
+      footnote: 'The download link needs you to be signed in.',
+      why: 'you started this export'
+    }
+  }
+}
+
+export async function buildAnomalyMail(
+  logId: number | string,
+  recipientUserId?: string | null
+): Promise<BuiltMail | null> {
+  const row = (await db('nivaro_anomaly_log as l')
+    .join('nivaro_anomaly_rules as r', 'r.id', 'l.rule_id')
+    .leftJoin('nivaro_anomaly_definitions as d', 'd.id', 'r.definition_id')
+    .where('l.id', logId)
+    .first(
+      'l.id',
+      'l.detected_at',
+      'l.subject_id',
+      'l.stats_snapshot',
+      'l.ai_explanation',
+      'l.status',
+      'r.name as rule_name',
+      'r.sensitivity',
+      'r.created_by',
+      'd.name as def_name',
+      'd.key as def_key'
+    )) as
+    | {
+        id: number
+        detected_at: Date | null
+        subject_id: string
+        stats_snapshot: string | null
+        ai_explanation: string | null
+        status: string
+        rule_name: string
+        sensitivity: string | null
+        created_by: string | null
+        def_name: string | null
+        def_key: string | null
+      }
+    | undefined
+  if (!row) return null
+  let s: Record<string, unknown> = {}
+  try {
+    s = JSON.parse(row.stats_snapshot ?? '{}') as Record<string, unknown>
+  } catch {
+    s = {}
+  }
+  const num = (v: unknown, digits = 0) =>
+    v == null || v === '' || !Number.isFinite(Number(v))
+      ? null
+      : Number(v).toLocaleString('en-US', { maximumFractionDigits: digits })
+  const group = s.group && typeof s.group === 'object' ? (s.group as Record<string, unknown>) : {}
+  const facts: Fact[] = [
+    { label: 'What', value: String(s.subject_label ?? row.subject_id) },
+    ...Object.entries(group)
+      .filter(([, v]) => v != null && v !== '')
+      .map(([k, v]) => ({ label: titleWords(k), value: String(v) })),
+    { label: 'Detected', value: when(row.detected_at) },
+    { label: 'Value', value: num(s.value ?? s.amount, 2), tone: 'warn' },
+    { label: 'Typical', value: num(s.mean ?? s.expected, 2) },
+    { label: 'Deviation', value: s.z_score != null ? `${num(s.z_score, 1)}σ` : null },
+    { label: 'This period', value: num(s.current_count) },
+    { label: 'Same period before', value: num(s.prior_count) },
+    {
+      label: 'Change',
+      value: s.pct_increase != null ? `+${num(s.pct_increase)}%` : null,
+      tone: 'warn'
+    },
+    { label: 'Similar entries', value: num(s.match_count) },
+    { label: 'Within', value: s.window_days != null ? `${num(s.window_days)} days` : null },
+    {
+      label: 'Amounts',
+      value:
+        s.min_amount != null && s.max_amount != null
+          ? `${num(s.min_amount, 2)} to ${num(s.max_amount, 2)}`
+          : null
+    },
+    { label: 'Sensitivity', value: row.sensitivity ? titleWords(row.sensitivity) : null }
+  ]
+  // The model writes Markdown; mail shows it as plain sentences.
+  const explanation = (row.ai_explanation ?? '')
+    .replace(/^#+\s.*$/gm, '') // a Markdown heading repeats the subject — drop it
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\s*\n+\s*/g, ' ')
+    .trim()
+  return {
+    template: 'notice',
+    subject: `Anomaly detected: ${row.rule_name}`,
+    data: {
+      eyebrow: row.def_name ?? 'Anomaly',
+      eyebrow_tone: 'warn',
+      heading: `${String(s.subject_label ?? row.subject_id)} looks unusual`,
+      lead: `Your rule "${row.rule_name}" flagged this during its last check.`,
+      facts,
+      quote: explanation.slice(0, 900) || null,
+      quote_label: explanation ? 'Why it stands out' : null,
+      action_url: await linkTo(
+        'alerts',
+        {},
+        { recipientUserId: recipientUserId ?? row.created_by }
+      ),
+      action_label: 'Review in Alerts',
+      footnote:
+        'Acknowledge or resolve it there; the same thing is not flagged again while it is open.',
+      why: 'you own this anomaly rule'
     }
   }
 }

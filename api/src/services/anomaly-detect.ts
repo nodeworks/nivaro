@@ -403,28 +403,26 @@ export async function runAnomalyChecks(
             ? ` (${Object.values(detection.group).filter(Boolean).join(', ')})`
             : '')
 
+      const { buildAnomalyMail } = await import('./mail-builders.js')
+      const built = await buildAnomalyMail(logId, rule.created_by).catch(() => null)
       if (rule.delivery_in_app && rule.created_by) {
         await notifyUser(app, rule.created_by, {
           subject,
           category: 'anomaly',
           message,
           collection: 'nivaro_anomaly_log',
-          item: String(logId)
+          item: String(logId),
+          ...(built ? { template: built.template, template_data: built.data } : {})
         }).catch(() => undefined)
       }
       if (rule.delivery_email && rule.creator_email) {
         await sendMail({
           to: rule.creator_email,
-          subject,
+          subject: built?.subject ?? subject,
           category: 'anomaly',
-          template: 'alert',
-          data: {
-            rule_name: rule.name,
-            metric_name: rule.def_name,
-            metric_value: message,
-            threshold_value: '',
-            operator: ''
-          }
+          template: built?.template ?? 'notification',
+          ...(built ? { why: String(built.data.why) } : {}),
+          data: built ? { ...built.data, subject: built.subject } : { subject, message }
         }).catch((e) => console.warn('[anomaly] email failed:', (e as Error).message))
       }
     }

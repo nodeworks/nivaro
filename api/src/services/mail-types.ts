@@ -1191,6 +1191,262 @@ export function registerCoreMailTypes(): void {
     }
   })
 
+  // ── Structured notices (template `notice`) ──
+  const like = (q: string) => `%${q.trim().replace(/[%_[]/g, (c) => `[${c}]`)}%`
+
+  registerMailType({
+    key: 'sign_in_alert',
+    label: 'New sign-in to your account',
+    group: 'System',
+    description:
+      'Sent to a person when their account signs in from an address it has not used in 90 days (never on the first sign-in, never for masquerade).',
+    template: 'notice',
+    category: 'system',
+    sample: { kind: 'record', collection: 'nivaro_login_events' },
+    samples: async (q) => {
+      let qb = db('nivaro_login_events as e')
+        .leftJoin('nivaro_users as u', 'u.id', 'e.user')
+        .where('e.new_ip', true)
+        .orderBy('e.id', 'desc')
+        .limit(30)
+        .select('e.id', 'e.ip', 'e.method', 'e.created_at', 'u.email')
+      if (q.trim()) qb = qb.where('u.email', 'like', like(q))
+      const rows = (await qb) as Array<{
+        id: number
+        ip: string | null
+        method: string | null
+        created_at: Date
+        email: string | null
+      }>
+      return rows.map((r) => ({
+        id: String(r.id),
+        label: r.email ?? `sign-in #${r.id}`,
+        hint: `${r.ip ?? 'unknown IP'} · ${r.method ?? ''} · ${new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ')}`
+      }))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildSignInMail } = await B()
+      const b = await buildSignInMail(id, recipientUserId)
+      if (!b) throw new Error('Sign-in event not found')
+      const e = (await db('nivaro_login_events').where({ id }).first('user')) as
+        | { user: string }
+        | undefined
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
+        recipients: await emailOf(e?.user, 'account owner'),
+        category: 'system'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'flow_failed',
+    label: 'Flow failed',
+    group: 'Alerts & monitoring',
+    description:
+      "Sent to a flow's creator when a run stops with an error; at most once an hour per flow.",
+    template: 'notice',
+    category: 'system',
+    sample: { kind: 'record', collection: 'nivaro_flows' },
+    samples: async (q) => {
+      // Failed runs first; a database with none still lets you preview any flow.
+      let runs = db('nivaro_flow_runs as r')
+        .join('nivaro_flows as f', 'f.id', 'r.flow')
+        .whereIn('r.status', ['error', 'failed'])
+        .orderBy('r.id', 'desc')
+        .limit(20)
+        .select('r.id', 'r.started_at', 'r.error_message', 'f.name')
+      if (q.trim()) runs = runs.where('f.name', 'like', like(q))
+      let flows = db('nivaro_flows').orderBy('name').limit(30).select('id', 'name', 'status')
+      if (q.trim()) flows = flows.where('name', 'like', like(q))
+      const [r1, r2] = (await Promise.all([runs, flows])) as [
+        Array<{ id: number; started_at: Date | null; error_message: string | null; name: string }>,
+        Array<{ id: string; name: string; status: string | null }>
+      ]
+      return [
+        ...r1.map((r) => ({
+          id: `run:${r.id}`,
+          label: r.name,
+          hint: `failed run #${r.id} · ${(r.error_message ?? '').slice(0, 60)}`
+        })),
+        ...r2.map((f) => ({
+          id: `flow:${f.id}`,
+          label: f.name,
+          hint: `${f.status ?? ''} · sample error (no failed run)`
+        }))
+      ]
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildFlowFailedMail } = await B()
+      let flowId = id.replace(/^flow:/, '')
+      let runId: string | null = null
+      let error: string | null = null
+      if (id.startsWith('run:')) {
+        runId = id.slice(4)
+        const r = (await db('nivaro_flow_runs').where({ id: runId }).first('flow')) as
+          | { flow: string }
+          | undefined
+        if (!r) throw new Error('Run not found')
+        flowId = r.flow
+      } else {
+        error = 'Sample error: the external API answered 401 Unauthorized.'
+      }
+      const b = await buildFlowFailedMail(flowId, { runId, error })
+      if (!b) throw new Error('Flow not found')
+      const { resolveFlowCreator } = await import('./flow-executor.js')
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
+        recipients: await emailOf(await resolveFlowCreator(flowId), 'flow creator'),
+        category: 'system'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'import_run',
+    label: 'Staged import completed / failed',
+    group: 'System',
+    description:
+      'Sent to whoever queued a staged import (Import Console) when its run finishes or fails.',
+    template: 'notice',
+    category: 'system',
+    sample: { kind: 'record', collection: 'nivaro_import_queue' },
+    samples: async (q) => {
+      let qb = db('nivaro_import_queue')
+        .whereIn('status', ['error', 'completed'])
+        .whereNotNull('created_by')
+        .orderBy('id', 'desc')
+        .limit(30)
+        .select('id', 'import_key', 'status', 'row_count', 'finished_at')
+      if (q.trim()) qb = qb.where('import_key', 'like', like(q))
+      const rows = (await qb) as Array<{
+        id: number
+        import_key: string
+        status: string
+        row_count: number | null
+        finished_at: Date | null
+      }>
+      return rows.map((r) => ({
+        id: String(r.id),
+        label: `${r.import_key} #${r.id}`,
+        hint: `${r.status} · ${r.row_count ?? 0} rows`
+      }))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildImportRunMail } = await B()
+      const b = await buildImportRunMail(id, recipientUserId)
+      if (!b) throw new Error('Import run not found')
+      const r = (await db('nivaro_import_queue').where({ id }).first('created_by')) as
+        | { created_by: string | null }
+        | undefined
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
+        recipients: await emailOf(r?.created_by, 'queued the import'),
+        category: 'system'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'export_ready',
+    label: 'Export ready',
+    group: 'Digests',
+    description:
+      'Sent when a background export (Export presets) has finished and is saved to Files.',
+    template: 'notice',
+    category: 'reports',
+    sample: { kind: 'record', collection: 'nivaro_files' },
+    samples: async (q) => {
+      let qb = db('nivaro_files')
+        .orderBy('uploaded_on', 'desc')
+        .limit(30)
+        .select('id', 'filename_download', 'type', 'filesize')
+      qb = q.trim()
+        ? qb.where('filename_download', 'like', like(q))
+        : qb.where((w) =>
+            w
+              .where('filename_download', 'like', '%.xlsx')
+              .orWhere('filename_download', 'like', '%.csv')
+          )
+      const rows = (await qb) as Array<{
+        id: string
+        filename_download: string | null
+        type: string | null
+        filesize: number | null
+      }>
+      return rows.map((r) => ({
+        id: r.id,
+        label: r.filename_download ?? r.id,
+        hint: `${r.type ?? ''} · ${r.filesize ?? 0} bytes`
+      }))
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildExportReadyMail } = await B()
+      const b = await buildExportReadyMail(id)
+      if (!b) throw new Error('File not found')
+      const f = (await db('nivaro_files').where({ id }).first('uploaded_by')) as
+        | { uploaded_by: string | null }
+        | undefined
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
+        recipients: await emailOf(f?.uploaded_by, 'started the export'),
+        category: 'reports'
+      }
+    }
+  })
+
+  registerMailType({
+    key: 'anomaly_detected',
+    label: 'Anomaly detected',
+    group: 'Alerts & monitoring',
+    description:
+      "Sent to an anomaly rule's owner when a check flags something unusual; one open finding per subject.",
+    template: 'notice',
+    category: 'anomaly',
+    sample: { kind: 'record', collection: 'nivaro_anomaly_log' },
+    samples: async (q) => {
+      let qb = db('nivaro_anomaly_log as l')
+        .join('nivaro_anomaly_rules as r', 'r.id', 'l.rule_id')
+        .orderBy('l.id', 'desc')
+        .limit(30)
+        .select('l.id', 'l.subject_id', 'l.status', 'l.stats_snapshot', 'r.name')
+      if (q.trim()) qb = qb.where('r.name', 'like', like(q))
+      const rows = (await qb) as Array<{
+        id: number
+        subject_id: string
+        status: string
+        stats_snapshot: string | null
+        name: string
+      }>
+      return rows.map((r) => {
+        let label = r.subject_id
+        try {
+          label = String(
+            (JSON.parse(r.stats_snapshot ?? '{}') as { subject_label?: string }).subject_label ??
+              label
+          )
+        } catch {
+          /* keep the id */
+        }
+        return { id: String(r.id), label: `${r.name}: ${label}`, hint: r.status }
+      })
+    },
+    render: async (id, { recipientUserId }) => {
+      const { buildAnomalyMail } = await B()
+      const b = await buildAnomalyMail(id, recipientUserId)
+      if (!b) throw new Error('Anomaly not found')
+      const r = (await db('nivaro_anomaly_log as l')
+        .join('nivaro_anomaly_rules as r', 'r.id', 'l.rule_id')
+        .where('l.id', id)
+        .first('r.created_by')) as { created_by: string | null } | undefined
+      return {
+        ...(await renderBuilt(b, await firstName(recipientUserId), recipientUserId)),
+        recipients: await emailOf(r?.created_by, 'rule owner'),
+        category: 'anomaly'
+      }
+    }
+  })
+
   // Generic notification emails — everything still routed through the plain
   // `notification` template, sampled from real inbox rows of that category so
   // each one is previewable exactly as it went out.
@@ -1217,13 +1473,6 @@ export function registerCoreMailTypes(): void {
       description: 'Metric alert rules, per-record alert definitions, report alerts.'
     },
     {
-      key: 'notification_anomaly',
-      label: 'Anomaly detected',
-      group: 'Alerts & monitoring',
-      category: 'anomaly',
-      description: 'Anomaly detection rules.'
-    },
-    {
       key: 'notification_sla',
       label: 'SLA escalation',
       group: 'Alerts & monitoring',
@@ -1242,7 +1491,7 @@ export function registerCoreMailTypes(): void {
       label: 'Report ready',
       group: 'Digests',
       category: 'reports',
-      description: 'Report Studio / scheduled report / export ready notices.'
+      description: 'Report Studio / scheduled report notices (exports have their own template).'
     },
     {
       key: 'notification_system',
@@ -1250,7 +1499,7 @@ export function registerCoreMailTypes(): void {
       group: 'System',
       category: 'system',
       description:
-        'Sign-in alerts, access requests, edit locks, data-integrity, monitors, flow failures.'
+        'Edit locks, data-integrity, monitors, API changelog and other system notices (sign-in alerts, flow failures and imports have their own templates).'
     }
   ]
   for (const g of generic) {

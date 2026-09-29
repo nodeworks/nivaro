@@ -288,16 +288,20 @@ function label(row: { import_key?: unknown }): string {
 
 async function notifyCreator(
   app: FastifyInstance,
-  row: { created_by?: unknown },
+  row: { id?: unknown; created_by?: unknown },
   subject: string,
   message: string
 ): Promise<void> {
   const recipient = row.created_by ? String(row.created_by) : null
   if (!recipient) return
   try {
+    const { buildImportRunMail } = await import('./mail-builders.js')
+    const built =
+      row.id != null ? await buildImportRunMail(String(row.id), recipient).catch(() => null) : null
     await notifyUser(app, recipient, {
       subject,
       message,
+      ...(built ? { template: built.template, template_data: built.data } : {}),
       // Clients resolve nivaro_import_queue into the imports console.
       collection: 'nivaro_import_queue',
       item: null

@@ -1,0 +1,15 @@
+{%- comment -%} Label / value rows. Usage: {% render 'partials/facts', rows: facts %} where rows = [{label, value, tone?: 'danger'|'warn'|'ok'}] — rows with an empty value are skipped. {%- endcomment -%}
+{%- assign shown = 0 -%}
+{%- for r in rows -%}{%- if r.value and r.value != '' -%}{%- assign shown = shown | plus: 1 -%}{%- endif -%}{%- endfor -%}
+{%- if shown > 0 -%}
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;border:1px solid #dde3ea;border-radius:8px;border-collapse:separate;">
+{%- for r in rows -%}{%- if r.value and r.value != '' -%}
+  {%- assign vc = '#172940' -%}
+  {%- if r.tone == 'danger' -%}{%- assign vc = '#b91c1c' -%}{%- elsif r.tone == 'warn' -%}{%- assign vc = '#b45309' -%}{%- elsif r.tone == 'ok' -%}{%- assign vc = '#15803d' -%}{%- endif -%}
+  <tr>
+    <td style="padding:9px 14px;{% unless forloop.first %}border-top:1px solid #eef2f6;{% endunless %}width:34%;vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#64748b;">{{ r.label }}</td>
+    <td style="padding:9px 14px;{% unless forloop.first %}border-top:1px solid #eef2f6;{% endunless %}vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:600;color:{{ vc }};">{{ r.value }}</td>
+  </tr>
+{%- endif -%}{%- endfor -%}
+</table>
+{%- endif -%}

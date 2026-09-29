@@ -363,12 +363,15 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
         )
         await run.complete(`${result.filename} → file ${stored.id}`)
         const { notifyUser } = await import('../services/notification-channels.js')
+        const { buildExportReadyMail } = await import('../services/mail-builders.js')
+        const built = await buildExportReadyMail(String(stored.id)).catch(() => null)
         await notifyUser(app, user.id, {
           subject: `Export ready: ${result.filename}`,
           category: 'reports',
           message: 'Your export finished — open Files to download it.',
           collection: 'nivaro_files',
-          item: String(stored.id)
+          item: String(stored.id),
+          ...(built ? { template: built.template, template_data: built.data } : {})
         }).catch(() => {})
       } catch (err) {
         await run.fail(err)
