@@ -7,6 +7,7 @@ import {
   integrityChecksFor
 } from './integrity-checks.js'
 import { getLabels } from './queues.js'
+import { reachableGroupedLayouts } from './reachable-layouts.js'
 import { failingLints } from './row-lints.js'
 import {
   type GridLintConfig,
@@ -228,28 +229,10 @@ async function resolveAlias(
 async function layoutPresence(
   collection: string
 ): Promise<{ layouts: Array<{ id: number; name: string }>; visibleOn: Map<string, Set<number>> }> {
-  // Only layouts a record can actually OPEN as its form gate the checks:
-  // the active layout, plus slugged variants (Unit/Non-Unit/Sparing orders).
-  // Excluded: inactive slugless layouts (unreachable — nothing resolves
-  // them) and create_hidden ones (special-purpose sub-forms like the
-  // warehouse-submission line-entry layout) — counting those gated EVERY
-  // required field out of collections that use per-record layout variants.
-  const layouts = (
-    (await db('nivaro_collection_layouts')
-      .where({ collection, layout_type: 'grouped' })
-      .select('id', 'name', 'is_active', 'slug', 'create_hidden')) as Array<{
-      id: number
-      name: string
-      is_active: unknown
-      slug: string | null
-      create_hidden: unknown
-    }>
-  ).filter(
-    (l) =>
-      l.is_active === true ||
-      l.is_active === 1 ||
-      (l.slug && !(l.create_hidden === true || l.create_hidden === 1))
-  )
+  // Only layouts a record can actually OPEN as its form gate the checks
+  // (reachable-layouts.ts): counting unreachable or create_hidden ones gated
+  // EVERY required field out of collections that use per-record variants.
+  const layouts = await reachableGroupedLayouts(collection)
   const visibleOn = new Map<string, Set<number>>()
   if (layouts.length === 0) return { layouts, visibleOn }
   const assignments = (await db('nivaro_layout_field_assignments')
@@ -689,7 +672,7 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
     >,
     db('nivaro_collection_layouts')
       .where('layout_type', 'grouped')
-      // Same reachability rule as layoutPresence — the two must not drift.
+      // Same reachability rule as reachable-layouts.ts — the two must not drift.
       .where((qb) =>
         qb
           .where('is_active', true)

@@ -5,6 +5,7 @@ import { parseSpecial } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { can, getRowFilter } from './permissions.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
+import { reachableGroupedLayouts } from './reachable-layouts.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
 
 /**
@@ -1040,10 +1041,13 @@ interface RequiredField {
   label: string
 }
 
-/** The required fields a record must fill: on the active grouped layout, the
- *  assigned fields whose layout override (else the field itself) says
- *  required; without a layout, every field flagged required. A failed read
- *  throws: "no required fields" would read as ready. */
+/** The required fields a record must fill. With grouped layouts, a field
+ *  binds only when it is assigned and required (layout override, else the
+ *  field itself) on EVERY layout a record can open — a CAR on the PUB form
+ *  has no vendor, so "Vendor is required" from the default layout would be
+ *  a false blocker (config conformance's rule, reachable-layouts.ts).
+ *  Without a layout, every field flagged required. A failed read throws:
+ *  "no required fields" would read as ready. */
 async function requiredFieldsFor(collection: string): Promise<RequiredField[]> {
   const fields = (await db('nivaro_fields')
     .where('collection', collection)
@@ -1053,22 +1057,29 @@ async function requiredFieldsFor(collection: string): Promise<RequiredField[]> {
     required: unknown
   }>
   const byField = new Map(fields.map((f) => [f.field, f]))
-  const layout = (await db('nivaro_collection_layouts')
-    .where({ collection, layout_type: 'grouped', is_active: true })
-    .first('id')) as { id: number } | undefined
-  if (!layout?.id) {
+  const layouts = await reachableGroupedLayouts(collection)
+  if (layouts.length === 0) {
     return fields
       .filter((f) => truthy(f.required))
       .map((f) => ({ field: f.field, label: f.label || titleCase(f.field) }))
   }
+  // Active layout first: its order and labels are the ones people know.
+  const order = [...layouts].sort(
+    (a, b) => Number(truthy(b.is_active)) - Number(truthy(a.is_active))
+  )
   const assignments = (await db('nivaro_layout_field_assignments')
-    .where('layout_id', layout.id)
-    .select('field', 'label_override', 'overrides')) as Array<{
+    .whereIn(
+      'layout_id',
+      order.map((l) => l.id)
+    )
+    .where('is_visible', true)
+    .select('layout_id', 'field', 'label_override', 'overrides')) as Array<{
+    layout_id: number
     field: string
     label_override: string | null
     overrides: string | null
   }>
-  const out: RequiredField[] = []
+  const requiredOn = new Map<string, Map<number, string>>()
   for (const a of assignments) {
     if (!a.field || a.field.startsWith('__') || a.field.includes('.')) continue
     const o = parsePrefs(a.overrides)
@@ -1077,7 +1088,14 @@ async function requiredFieldsFor(collection: string): Promise<RequiredField[]> {
     if (!required) continue
     const label =
       (typeof o.label === 'string' && o.label) || a.label_override || f?.label || titleCase(a.field)
-    out.push({ field: a.field, label })
+    const per = requiredOn.get(a.field) ?? new Map<number, string>()
+    if (!per.has(Number(a.layout_id))) per.set(Number(a.layout_id), label)
+    requiredOn.set(a.field, per)
+  }
+  const out: RequiredField[] = []
+  for (const [field, per] of requiredOn) {
+    if (!order.every((l) => per.has(Number(l.id)))) continue
+    out.push({ field, label: per.get(Number(order[0].id)) as string })
   }
   return out
 }

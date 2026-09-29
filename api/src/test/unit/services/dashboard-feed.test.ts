@@ -496,6 +496,82 @@ describe('fieldBlockers', () => {
     expect(out.get('2')).toBeUndefined()
   })
 
+  // Two grouped layouts a record can open: the active default and a slugged
+  // variant (the CAR / PUB case) that has no vendor at all.
+  const twoLayouts = [
+    { id: 1, name: 'Default', is_active: true, slug: null, create_hidden: false },
+    { id: 2, name: 'PUB', is_active: false, slug: 'pub', create_hidden: false }
+  ]
+  const base = {
+    nivaro_fields: required,
+    nivaro_collection_layouts: twoLayouts,
+    'information_schema.columns': [{ column_name: 'id' }, { column_name: 'vendor' }],
+    nivaro_relations: [],
+    workflows: [{ id: 1, vendor: null }]
+  }
+
+  it('a field required on one layout but absent from another is not a blocker', async () => {
+    fakeDb({
+      ...base,
+      nivaro_layout_field_assignments: [
+        { layout_id: 1, field: 'vendor', label_override: null, overrides: null, is_visible: true }
+      ]
+    })
+    const out = await fieldBlockers('workflows', ['1'])
+    expect(out.get('1')).toBeUndefined()
+  })
+
+  it('a field required on every reachable layout is a blocker', async () => {
+    fakeDb({
+      ...base,
+      nivaro_layout_field_assignments: [
+        { layout_id: 1, field: 'vendor', label_override: null, overrides: null, is_visible: true },
+        {
+          layout_id: 2,
+          field: 'vendor',
+          label_override: null,
+          overrides: '{"label":"Supplier"}',
+          is_visible: true
+        }
+      ]
+    })
+    const out = await fieldBlockers('workflows', ['1'])
+    expect(out.get('1')?.map((b) => b.message)).toEqual(['Vendor is required'])
+  })
+
+  it('a layout that makes the field optional unbinds it', async () => {
+    fakeDb({
+      ...base,
+      nivaro_layout_field_assignments: [
+        { layout_id: 1, field: 'vendor', label_override: null, overrides: null, is_visible: true },
+        {
+          layout_id: 2,
+          field: 'vendor',
+          label_override: null,
+          overrides: '{"required":false}',
+          is_visible: true
+        }
+      ]
+    })
+    const out = await fieldBlockers('workflows', ['1'])
+    expect(out.get('1')).toBeUndefined()
+  })
+
+  it('an unreachable layout (inactive, no slug) does not gate the check', async () => {
+    fakeDb({
+      ...base,
+      nivaro_collection_layouts: [
+        twoLayouts[0],
+        { id: 3, name: 'Old', is_active: false, slug: null, create_hidden: false }
+      ],
+      nivaro_layout_field_assignments: [
+        { layout_id: 1, field: 'vendor', label_override: null, overrides: null, is_visible: true }
+      ]
+    })
+    const out = await fieldBlockers('workflows', ['1'])
+    expect(out.get('1')?.[0]?.field).toBe('vendor')
+  })
+
   it.each([
     'nivaro_fields',
     'nivaro_collection_layouts',

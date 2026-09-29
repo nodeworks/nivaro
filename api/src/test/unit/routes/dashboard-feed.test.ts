@@ -358,6 +358,26 @@ describe('GET /dashboard/submission-readiness', () => {
   })
 })
 
+describe('GET /dashboard/submission-readiness — record access', () => {
+  it("leaves out the viewer's own record when its row filter or scopes hide it", async () => {
+    fixtures = {
+      nivaro_fields: [],
+      'information_schema.columns': [
+        { table_name: 'orders', column_name: 'id' },
+        { table_name: 'orders', column_name: 'creator' }
+      ],
+      orders: ['1'],
+      nivaro_collection_layouts: [],
+      nivaro_relations: [],
+      nivaro_workflow_instances: []
+    }
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    const res = await inject('GET', '/dashboard/submission-readiness?collection=orders&ids=1')
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ data: {} })
+  })
+})
+
 describe('GET /dashboard/my-throughput', () => {
   it('answers zeros on an empty history', async () => {
     fixtures = { nivaro_users: [{ preferences: null }] }
