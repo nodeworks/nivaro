@@ -254,10 +254,12 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
 }
 
 /**
- * `hour` (0-23, America/New_York) filters recipients to those whose
- * preferences.digest_hour matches — the hourly cron passes the current ET
- * hour; a manual run passes nothing and sends to everyone due (#75). Users
- * without the pref default to 7 (the historic 07:45 send).
+ * `hour` (0-23, America/New_York) is the current ET hour the hourly cron
+ * passes; a manual run passes nothing and sends to everyone due (#75). A
+ * recipient is kept when preferences.digest_hour matches the current hour in
+ * their preferences.timezone (#117), or `hour` itself when that is unset or
+ * not a zone Intl knows. Users without the pref default to 7 (the historic
+ * 07:45 send).
  */
 export async function runDailyActionDigest(
   hour?: number,

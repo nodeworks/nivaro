@@ -466,7 +466,8 @@ export async function usersRoutes(app: FastifyInstance) {
       bustAppCache(req.user!.id)
     }
     if ('digest_hour' in body) {
-      // Which hour (America/New_York) the daily digest lands (#75).
+      // Which hour the daily digest lands (#75), in the person's own
+      // preferences.timezone, else America/New_York (#117, daily-digest.ts).
       const h = Number(body.digest_hour)
       if (!Number.isInteger(h) || h < 0 || h > 23) {
         return reply.code(400).send({ error: 'digest_hour must be 0-23' })
