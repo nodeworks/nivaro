@@ -1295,7 +1295,12 @@ export async function requirementBlockers(
       // draft waiting on an approver-only step still has its gaps listed.
       return !(current?.sort != null && to.sort != null && Number(to.sort) <= Number(current.sort))
     })
-    if (candidates.length === 0) return
+    // No manual step leads on from here, so the record cannot be submitted;
+    // an empty list would read as "Ready to submit". Leave it out instead.
+    if (candidates.length === 0) {
+      out.set(String(inst.item), null)
+      return
+    }
     let pick: TransitionRow | undefined
     const withRules = candidates.filter((t) => t.condition_rules)
     const record =

@@ -476,6 +476,23 @@ describe('requirementBlockers', () => {
     conditions.evaluateTransitionRequirements.mockResolvedValue([])
     await expect(requirementBlockers('workflows', ['1', '2', '3'])).rejects.toThrow('read failed')
   })
+
+  it('leaves out a record whose current state has no manual way forward', async () => {
+    fakeDb({
+      nivaro_workflow_instances: [
+        ...instances.slice(0, 2),
+        { id: 'i3', item: '3', template: 'T', current_state: 'S2' }
+      ],
+      nivaro_workflow_states: states,
+      nivaro_workflow_transitions: transitions
+    })
+    conditions.fetchRecordForConditions.mockResolvedValue({ vendor: 5 })
+    conditions.evaluateTransitionRequirements.mockResolvedValue([])
+    const reqs = await requirementBlockers('workflows', ['1', '2', '3'])
+    expect(reqs.get('3')).toBeNull()
+    const out = assembleReadiness(['1', '2', '3'], new Map(), reqs)
+    expect(Object.keys(out)).toEqual(['1', '2'])
+  })
 })
 
 describe('fieldBlockers', () => {
