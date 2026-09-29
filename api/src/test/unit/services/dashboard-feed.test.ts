@@ -2,14 +2,32 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
+// requirementBlockers imports these lazily; the tests drive them per record.
+const conditions = vi.hoisted(() => ({
+  fetchRecordForConditions: vi.fn(),
+  evaluateTransitionRequirements: vi.fn()
+}))
+vi.mock('../../../services/workflow-conditions.js', () => ({
+  evaluateConditionRules: () => true,
+  evalConditionRule: () => true,
+  fetchRecordForConditions: conditions.fetchRecordForConditions,
+  parseConditionRules: () => []
+}))
+vi.mock('../../../services/transition-requirements.js', () => ({
+  evaluateTransitionRequirements: conditions.evaluateTransitionRequirements
+}))
+
+import { db } from '../../../db/index.js'
 import {
   assembleReadiness,
   creatorColumnFor,
   daysBetween,
   describeConditionRule,
+  fieldBlockers,
   isSendBackEdge,
   onboardingSteps,
   pickUnavailable,
+  requirementBlockers,
   splitLineFinding,
   verdictOf,
   weekBuckets
@@ -349,5 +367,152 @@ describe('assembleReadiness', () => {
     expect(assembleReadiness(['1', '2'], null, new Map())).toEqual({})
     expect(assembleReadiness(['1'], new Map([['1', [vendor]]]), null)).toEqual({})
     expect(assembleReadiness(['1'], null, null)).toEqual({})
+  })
+
+  it('omits only an id whose own lookup could not be answered', () => {
+    const out = assembleReadiness(
+      ['1', '2', '3'],
+      new Map([['1', [vendor]]]),
+      new Map<string, (typeof gate)[] | null>([['2', null]])
+    )
+    expect(out['1']).toEqual({ ready: false, blockers: [vendor] })
+    expect(out['2']).toBeUndefined()
+    expect(out['3']).toEqual({ ready: true, blockers: [] })
+  })
+})
+
+/** A knex-shaped fake: every builder call chains, and awaiting it answers the
+ *  table's rows (or rejects when the table is listed in `fail`). */
+function fakeDb(rows: Record<string, unknown[]>, fail: string[] = []) {
+  vi.mocked(db).mockImplementation(((table: string) => {
+    const chain: Record<string, unknown> = {}
+    const settle = () =>
+      fail.includes(table)
+        ? Promise.reject(new Error(`read failed: ${table}`))
+        : Promise.resolve(rows[table] ?? [])
+    for (const m of [
+      'where',
+      'orWhere',
+      'whereIn',
+      'whereNull',
+      'whereNotNull',
+      'orderBy',
+      'select',
+      'groupBy',
+      'count'
+    ]) {
+      chain[m] = () => chain
+    }
+    chain.first = () => settle().then((r) => (r as unknown[])[0])
+    // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
+    chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+      settle().then(res, rej)
+    chain.catch = (rej: (e: unknown) => unknown) => settle().catch(rej)
+    return chain
+  }) as never)
+}
+
+describe('requirementBlockers', () => {
+  const instances = ['1', '2', '3'].map((item) => ({
+    id: `i${item}`,
+    item,
+    template: 'T',
+    current_state: 'S1'
+  }))
+  const states = [
+    { id: 'S1', key: 'started', sort: 1 },
+    { id: 'S2', key: 'review', sort: 2 }
+  ]
+  const transitions = [
+    {
+      id: 'x',
+      template: 'T',
+      from_state: 'S1',
+      to_state: 'S2',
+      label: 'Submit',
+      sort: 1,
+      auto_trigger: false,
+      condition_rules: '[{"field":"vendor","op":"nnull","value":null}]',
+      required_roles: null,
+      requirements: '[{"type":"record_fields","fields":["vendor"]}]'
+    }
+  ]
+
+  it('marks only the record whose own read failed as unknown; the others still answer', async () => {
+    fakeDb({
+      nivaro_workflow_instances: instances,
+      nivaro_workflow_states: states,
+      nivaro_workflow_transitions: transitions
+    })
+    conditions.fetchRecordForConditions.mockImplementation(async (_c: string, item: string) => {
+      if (item === '2') throw new Error('record read failed')
+      return {}
+    })
+    conditions.evaluateTransitionRequirements.mockImplementation(
+      async (_db: unknown, _r: unknown, item: string) => {
+        if (item === '3') throw new Error('requirements read failed')
+        return []
+      }
+    )
+    const reqs = await requirementBlockers('workflows', ['1', '2', '3'])
+    expect(reqs.get('2')).toBeNull()
+    expect(reqs.get('3')).toBeNull()
+    const out = assembleReadiness(['1', '2', '3'], new Map(), reqs)
+    expect(Object.keys(out)).toEqual(['1'])
+    expect(out['1']).toEqual({ ready: true, blockers: [] })
+  })
+
+  it('fails the whole lookup when a read covering every record fails', async () => {
+    fakeDb(
+      {
+        nivaro_workflow_instances: instances,
+        nivaro_workflow_states: states,
+        nivaro_workflow_transitions: transitions
+      },
+      ['nivaro_workflow_transitions']
+    )
+    conditions.fetchRecordForConditions.mockResolvedValue({})
+    conditions.evaluateTransitionRequirements.mockResolvedValue([])
+    await expect(requirementBlockers('workflows', ['1', '2', '3'])).rejects.toThrow('read failed')
+  })
+})
+
+describe('fieldBlockers', () => {
+  const required = [{ field: 'vendor', label: 'Vendor', required: true }]
+
+  it('answers when every read succeeds', async () => {
+    fakeDb({
+      nivaro_fields: required,
+      nivaro_collection_layouts: [],
+      'information_schema.columns': [{ column_name: 'id' }, { column_name: 'vendor' }],
+      nivaro_relations: [],
+      workflows: [
+        { id: 1, vendor: null },
+        { id: 2, vendor: 5 }
+      ]
+    })
+    const out = await fieldBlockers('workflows', ['1', '2'])
+    expect(out.get('1')?.[0]?.field).toBe('vendor')
+    expect(out.get('2')).toBeUndefined()
+  })
+
+  it.each([
+    'nivaro_fields',
+    'nivaro_collection_layouts',
+    'information_schema.columns',
+    'nivaro_relations',
+    'workflows'
+  ])('rejects instead of answering "no blockers" when %s cannot be read', async (table) => {
+    fakeDb(
+      {
+        nivaro_fields: required,
+        nivaro_collection_layouts: [],
+        'information_schema.columns': [{ column_name: 'id' }, { column_name: 'vendor' }],
+        nivaro_relations: [],
+        workflows: [{ id: 1, vendor: null }]
+      },
+      [table]
+    )
+    await expect(fieldBlockers('workflows', ['1'])).rejects.toThrow('read failed')
   })
 })

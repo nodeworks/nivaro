@@ -717,11 +717,15 @@ async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): P
   await Promise.all(Array.from({ length: Math.min(n, queue.length) }, worker))
 }
 
-async function physicalColumns(collection: string): Promise<Set<string>> {
-  const rows = (await db('information_schema.columns')
-    .where('table_name', collection)
-    .select('column_name')
-    .catch(() => [])) as Array<{ column_name: string }>
+/** A collection's physical columns. `strict` lets a failed read throw; the
+ *  default reads a failure as "no columns", which only suits callers that
+ *  skip work on an empty set. */
+async function physicalColumns(
+  collection: string,
+  opts: { strict?: boolean } = {}
+): Promise<Set<string>> {
+  const q = db('information_schema.columns').where('table_name', collection).select('column_name')
+  const rows = (await (opts.strict ? q : q.catch(() => []))) as Array<{ column_name: string }>
   return new Set(rows.map((r) => String(r.column_name)))
 }
 
@@ -886,17 +890,20 @@ interface RequiredField {
 
 /** The required fields a record must fill: on the active grouped layout, the
  *  assigned fields whose layout override (else the field itself) says
- *  required; without a layout, every field flagged required. */
+ *  required; without a layout, every field flagged required. A failed read
+ *  throws: "no required fields" would read as ready. */
 async function requiredFieldsFor(collection: string): Promise<RequiredField[]> {
   const fields = (await db('nivaro_fields')
     .where('collection', collection)
-    .select('field', 'label', 'required')
-    .catch(() => [])) as Array<{ field: string; label: string | null; required: unknown }>
+    .select('field', 'label', 'required')) as Array<{
+    field: string
+    label: string | null
+    required: unknown
+  }>
   const byField = new Map(fields.map((f) => [f.field, f]))
   const layout = (await db('nivaro_collection_layouts')
     .where({ collection, layout_type: 'grouped', is_active: true })
-    .first('id')
-    .catch(() => undefined)) as { id: number } | undefined
+    .first('id')) as { id: number } | undefined
   if (!layout?.id) {
     return fields
       .filter((f) => truthy(f.required))
@@ -904,8 +911,7 @@ async function requiredFieldsFor(collection: string): Promise<RequiredField[]> {
   }
   const assignments = (await db('nivaro_layout_field_assignments')
     .where('layout_id', layout.id)
-    .select('field', 'label_override', 'overrides')
-    .catch(() => [])) as Array<{
+    .select('field', 'label_override', 'overrides')) as Array<{
     field: string
     label_override: string | null
     overrides: string | null
@@ -924,8 +930,17 @@ async function requiredFieldsFor(collection: string): Promise<RequiredField[]> {
   return out
 }
 
-/** Field blockers (empty required columns / aliases) and empty required line sets. */
-async function fieldBlockers(
+/**
+ * Readiness blockers per record id. A `null` entry means that record's own
+ * lookup failed: it is unknown, and `assembleReadiness` leaves it out rather
+ * than call it ready.
+ */
+export type BlockerLookup = Map<string, ReadinessBlocker[] | null>
+
+/** Field blockers (empty required columns / aliases) and empty required line
+ *  sets. Every read here covers all the ids at once, so a failed read throws
+ *  and the caller answers none of them. Exported for tests. */
+export async function fieldBlockers(
   collection: string,
   ids: string[]
 ): Promise<Map<string, ReadinessBlocker[]>> {
@@ -937,12 +952,17 @@ async function fieldBlockers(
   }
   const [required, physical, relations] = await Promise.all([
     requiredFieldsFor(collection),
-    physicalColumns(collection),
+    physicalColumns(collection, { strict: true }),
     db('nivaro_relations')
       .where('one_collection', collection)
       .orWhere('many_collection', collection)
-      .select('many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field')
-      .catch(() => []) as Promise<RelationRow[]>
+      .select(
+        'many_collection',
+        'many_field',
+        'one_collection',
+        'one_field',
+        'junction_field'
+      ) as Promise<RelationRow[]>
   ])
   if (required.length === 0) return out
 
@@ -950,8 +970,7 @@ async function fieldBlockers(
   if (columns.length > 0) {
     const rows = (await db(collection)
       .whereIn('id', ids)
-      .select(['id', ...columns.map((c) => c.field)])
-      .catch(() => [])) as Array<Record<string, unknown>>
+      .select(['id', ...columns.map((c) => c.field)])) as Array<Record<string, unknown>>
     for (const row of rows) {
       for (const c of columns) {
         if (!isEmptyValue(row[c.field])) continue
@@ -986,8 +1005,7 @@ async function fieldBlockers(
       .whereIn(rel.many_field, ids)
       .groupBy(rel.many_field)
       .select(rel.many_field)
-      .count({ n: '*' })
-      .catch(() => [])) as Array<Record<string, unknown>>
+      .count({ n: '*' })) as Array<Record<string, unknown>>
     const has = new Set(
       counts
         .filter((c) => Number(c.n) > 0)
@@ -1024,20 +1042,21 @@ interface TransitionRow {
  *  record's current state whose conditions hold (whoever may press it),
  *  evaluated through its requirements gate exactly as the transition
  *  endpoint would. When every forward step is closed by its conditions, one
- *  blocker names the first failing condition. */
-async function requirementBlockers(
+ *  blocker names the first failing condition. A read covering every record
+ *  (instances, states, transitions) throws; a read for one record that fails
+ *  marks just that record unknown (`null`). Exported for tests. */
+export async function requirementBlockers(
   collection: string,
   ids: string[]
-): Promise<Map<string, ReadinessBlocker[]>> {
-  const out = new Map<string, ReadinessBlocker[]>()
+): Promise<BlockerLookup> {
+  const out: BlockerLookup = new Map()
   const instances = (await db('nivaro_workflow_instances')
     .where('collection', collection)
     .whereIn('item', ids)
     .whereNull('completed_at')
     .whereNotNull('current_state')
     .orderBy('started_at', 'desc')
-    .select('id', 'item', 'template', 'current_state')
-    .catch(() => [])) as Array<{
+    .select('id', 'item', 'template', 'current_state')) as Array<{
     id: string
     item: string
     template: string
@@ -1051,8 +1070,9 @@ async function requirementBlockers(
   const [states, transitions] = await Promise.all([
     db('nivaro_workflow_states')
       .whereIn('template', templates)
-      .select('id', 'key', 'sort')
-      .catch(() => []) as Promise<Array<{ id: string; key: string; sort: number | null }>>,
+      .select('id', 'key', 'sort') as Promise<
+      Array<{ id: string; key: string; sort: number | null }>
+    >,
     db('nivaro_workflow_transitions')
       .whereIn('template', templates)
       .orderBy('sort')
@@ -1067,8 +1087,7 @@ async function requirementBlockers(
         'condition_rules',
         'required_roles',
         'requirements'
-      )
-      .catch(() => []) as Promise<TransitionRow[]>
+      ) as Promise<TransitionRow[]>
   ])
   const stateById = new Map(states.map((s) => [String(s.id).toUpperCase(), s]))
   const {
@@ -1080,6 +1099,15 @@ async function requirementBlockers(
   const { evaluateTransitionRequirements } = await import('./transition-requirements.js')
 
   await pool([...latest.values()], 6, async (inst) => {
+    try {
+      await blockersForInstance(inst)
+    } catch {
+      out.set(String(inst.item), null)
+    }
+  })
+  return out
+
+  async function blockersForInstance(inst: (typeof instances)[number]): Promise<void> {
     const current = stateById.get(String(inst.current_state).toUpperCase())
     const candidates = transitions.filter((t) => {
       if (String(t.template) !== String(inst.template)) return false
@@ -1106,7 +1134,7 @@ async function requirementBlockers(
             collection,
             String(inst.item),
             withRules.map((t) => t.condition_rules)
-          ).catch(() => ({}))
+          )
         : {}
     let firstFailing: { transition: TransitionRow; rule: ConditionRuleLike | null } | null = null
     for (const t of candidates) {
@@ -1144,7 +1172,7 @@ async function requirementBlockers(
       String(inst.item),
       undefined,
       collection
-    ).catch(() => null)
+    )
     if (!blocks) return
     const list: ReadinessBlocker[] = []
     for (const b of blocks) {
@@ -1170,8 +1198,7 @@ async function requirementBlockers(
       }
     }
     if (list.length > 0) out.set(String(inst.item), list)
-  })
-  return out
+  }
 }
 
 export interface ConditionRuleLike {
@@ -1288,21 +1315,28 @@ export async function submissionReadiness(opts: {
 
 /**
  * One readiness entry per id from the two blocker lookups. A lookup that
- * failed is `null`, and then no id is answered at all: an empty blocker list
- * reads as "ready", which a failure must never claim. The client shows no
- * chips for an id it did not get back.
+ * failed is `null`, and then no id is answered at all; an id whose own entry
+ * is `null` (its record could not be read) is left out on its own. An empty
+ * blocker list reads as "ready", which a failure must never claim. The
+ * client shows no chips for an id it did not get back.
  */
 export function assembleReadiness(
   ids: string[],
-  fields: Map<string, ReadinessBlocker[]> | null,
-  reqs: Map<string, ReadinessBlocker[]> | null
+  fields: BlockerLookup | null,
+  reqs: BlockerLookup | null
 ): Record<string, { ready: boolean; blockers: ReadinessBlocker[] }> {
   const out: Record<string, { ready: boolean; blockers: ReadinessBlocker[] }> = {}
   if (!fields || !reqs) return out
-  const pick = (m: Map<string, ReadinessBlocker[]>, id: string) =>
-    m.get(id) ?? [...m.entries()].find(([k]) => k.toUpperCase() === id.toUpperCase())?.[1] ?? []
+  const pick = (m: BlockerLookup, id: string): ReadinessBlocker[] | null => {
+    if (m.has(id)) return m.get(id) ?? null
+    const hit = [...m.entries()].find(([k]) => k.toUpperCase() === id.toUpperCase())
+    return hit ? hit[1] : []
+  }
   for (const id of ids) {
-    const blockers = [...pick(fields, id), ...pick(reqs, id)]
+    const f = pick(fields, id)
+    const r = pick(reqs, id)
+    if (!f || !r) continue
+    const blockers = [...f, ...r]
     out[id] = { ready: blockers.length === 0, blockers }
   }
   return out
