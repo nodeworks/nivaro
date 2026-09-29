@@ -241,3 +241,75 @@ export function storeVirtualSql(collection: string, fields: Map<string, VirtualS
 export function clearVirtualSqlCache(): void {
   cache.clear()
 }
+
+/**
+ * A virtual rollup as a correlated subquery, so it can be filtered and sorted
+ * without a stored copy (which would go stale whenever the rows it sums change
+ * underneath it). One source only; sum/count/avg/min/max; the aggregated value
+ * is a column of the related row or ONE hop through its link (`{{fk.col}}`).
+ * Recursive rollups, row filters, parent filters and anything else decline —
+ * the field stays readable, just not filterable.
+ */
+export function compileRollupToSql(
+  cfg: {
+    sources: Array<{
+      related_collection: string
+      fk_field: string
+      aggregate: string
+      value_field: string
+      value_formula?: string
+      recursive?: boolean
+      filter?: Record<string, unknown>
+    }>
+    parent_filter?: unknown
+  },
+  table: string,
+  ctx: {
+    columnsOf: (collection: string) => Set<string> | undefined
+    linkTarget: (collection: string, field: string) => string | null
+  }
+): VirtualSql | null {
+  if (cfg.sources.length !== 1 || cfg.parent_filter) return null
+  const src = cfg.sources[0]
+  if (src.recursive || (src.filter && Object.keys(src.filter).length > 0)) return null
+  const agg = src.aggregate
+  if (!['sum', 'count', 'avg', 'min', 'max'].includes(agg)) return null
+  const relCols = ctx.columnsOf(src.related_collection)
+  if (!relCols?.has(src.fk_field)) return null
+  const where = 'rs0.?? = ??.??'
+  const whereBind = [src.fk_field, table, 'id']
+  if (agg === 'count')
+    return {
+      sql: `SELECT COUNT(*) FROM ?? AS rs0 WHERE ${where}`,
+      bindings: [src.related_collection, ...whereBind],
+      kind: 'number'
+    }
+  let value: { sql: string; bindings: string[]; join: string; joinBind: string[] } | null = null
+  const formula = src.value_formula?.trim()
+  if (formula) {
+    const m = /^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\s*\}\}$/.exec(formula)
+    if (!m) return null
+    if (!m[2]) {
+      if (!relCols.has(m[1])) return null
+      value = { sql: 'rs0.??', bindings: [m[1]], join: '', joinBind: [] }
+    } else {
+      const target = ctx.linkTarget(src.related_collection, m[1])
+      if (!target || !relCols.has(m[1]) || !ctx.columnsOf(target)?.has(m[2])) return null
+      value = {
+        sql: 'rs1.??',
+        bindings: [m[2]],
+        join: ' LEFT JOIN ?? AS rs1 ON rs1.id = rs0.??',
+        joinBind: [target, m[1]]
+      }
+    }
+  } else {
+    if (!relCols.has(src.value_field)) return null
+    value = { sql: 'rs0.??', bindings: [src.value_field], join: '', joinBind: [] }
+  }
+  const fn = agg.toUpperCase()
+  return {
+    sql: `SELECT ${fn}(CAST(${value.sql} AS float)) FROM ?? AS rs0${value.join} WHERE ${where}`,
+    bindings: [...value.bindings, src.related_collection, ...value.joinBind, ...whereBind],
+    kind: 'number'
+  }
+}

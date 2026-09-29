@@ -81,6 +81,7 @@ import {
 import {
   cachedVirtualSql,
   compileFormulaToSql,
+  compileRollupToSql,
   peekVirtualSql,
   storeVirtualSql,
   type VirtualSql
@@ -1274,6 +1275,56 @@ export async function primeVirtualSql(collection: string): Promise<Map<string, V
       for (const f of computed) {
         if (physical.has(f.field)) continue
         const compiled = compileFormulaToSql(String(f.computed_formula), collection, physical)
+        if (compiled) fields.set(f.field, compiled)
+      }
+    }
+    // Virtual rollups that translate into a correlated subquery (see
+    // compileRollupToSql) filter and sort too.
+    const rollups = (await getComputedFields(collection)).filter(
+      (f) =>
+        f.computed_type === 'rollup' &&
+        f.computed_formula &&
+        !(f.computed_store === true || f.computed_store === 1)
+    )
+    if (rollups.length > 0) {
+      const physical = await getActualColumns(collection)
+      const colsCache = new Map<string, Set<string>>()
+      const relsCache = new Map<string, Awaited<ReturnType<typeof getRelations>>>()
+      const configs = rollups
+        .filter((f) => !physical.has(f.field))
+        .map((f) => ({ f, cfg: parseRollupFormula(String(f.computed_formula)) }))
+      for (const { cfg } of configs) {
+        for (const src of cfg?.sources ?? []) {
+          const c = src.related_collection
+          if (!colsCache.has(c)) colsCache.set(c, await getActualColumns(c).catch(() => new Set<string>()))
+          if (!relsCache.has(c)) relsCache.set(c, await getRelations(c).catch(() => []))
+        }
+      }
+      // Link targets of the related rows, and those targets' columns.
+      for (const [c, rels] of relsCache) {
+        for (const r of rels as Array<{ many_collection: string; one_collection: string | null }>) {
+          if (r.many_collection === c && r.one_collection && !colsCache.has(r.one_collection))
+            colsCache.set(
+              r.one_collection,
+              await getActualColumns(r.one_collection).catch(() => new Set<string>())
+            )
+        }
+      }
+      for (const { f, cfg } of configs) {
+        if (!cfg) continue
+        const compiled = compileRollupToSql(cfg, collection, {
+          columnsOf: (c) => colsCache.get(c),
+          linkTarget: (c, field) => {
+            const r = (
+              (relsCache.get(c) ?? []) as Array<{
+                many_collection: string
+                many_field: string
+                one_collection: string | null
+              }>
+            ).find((x) => x.many_collection === c && x.many_field === field)
+            return r?.one_collection ?? null
+          }
+        })
         if (compiled) fields.set(f.field, compiled)
       }
     }

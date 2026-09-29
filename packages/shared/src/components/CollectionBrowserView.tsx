@@ -8,11 +8,13 @@ import {
 import {
   Bell,
   BellOff,
+  Check,
   ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   FileDiff,
   FileText,
+  Loader2,
   Map as MapIcon,
   Pin,
   RotateCw,
@@ -5094,9 +5096,19 @@ export function CollectionBrowserView({
       invalidateViews()
     }
   })
+  // The ↺ on a view pill overwrites it with what is on screen: spinner while
+  // it saves, a check for a moment after, and a toast naming the view.
+  const [viewJustSaved, setViewJustSaved] = useState<number | null>(null)
   const updateView = useMutation({
     mutationFn: (id: number) => client.request(patch(`/saved-views/${id}`, viewState())),
-    onSuccess: invalidateViews
+    onSuccess: (_r, id) => {
+      invalidateViews()
+      setViewJustSaved(id)
+      setTimeout(() => setViewJustSaved((cur) => (cur === id ? null : cur)), 2000)
+      const name = views.find((v) => v.id === id)?.name
+      toast.success(name ? `Saved "${name}" with the current columns and filters` : 'View saved')
+    },
+    onError: (err) => toast.error(`Could not save the view: ${(err as Error).message}`)
   })
   const setDefaultView = useMutation({
     mutationFn: ({ id, on }: { id: number; on: boolean }) =>
@@ -6797,10 +6809,35 @@ export function CollectionBrowserView({
                 <button
                   type='button'
                   onClick={() => updateView.mutate(v.id)}
-                  title='Update with current state'
+                  disabled={updateView.isPending && updateView.variables === v.id}
+                  title={
+                    updateView.isPending && updateView.variables === v.id
+                      ? 'Saving…'
+                      : viewJustSaved === v.id
+                        ? 'Saved'
+                        : 'Update with current state'
+                  }
                   aria-label={`Update ${v.name}`}
+                  data-view-update={v.id}
+                  data-view-update-state={
+                    updateView.isPending && updateView.variables === v.id
+                      ? 'saving'
+                      : viewJustSaved === v.id
+                        ? 'saved'
+                        : 'idle'
+                  }
+                  className='inline-flex h-3.5 w-3.5 items-center justify-center'
                 >
-                  ↺
+                  {updateView.isPending && updateView.variables === v.id ? (
+                    <Loader2 className='h-3 w-3 animate-spin' />
+                  ) : viewJustSaved === v.id ? (
+                    <Check
+                      className='h-3 w-3 text-emerald-600 dark:text-emerald-400'
+                      strokeWidth={3}
+                    />
+                  ) : (
+                    '↺'
+                  )}
                 </button>
                 {isAdmin && (
                   <button

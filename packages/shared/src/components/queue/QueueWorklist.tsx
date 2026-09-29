@@ -18,12 +18,14 @@ import {
   AlertTriangle,
   BarChart3,
   Bell,
+  Check,
   ChevronDown,
   Eye,
   FileDiff,
   Flame,
   GripVertical,
   Inbox,
+  Loader2,
   Pin,
   Play,
   Plus,
@@ -1764,6 +1766,7 @@ export function QueueWorklist({
   })
 
   // Overwrite an existing saved view with the current scope/filters/sort/etc.
+  const [viewJustSaved, setViewJustSaved] = useState<number | null>(null)
   const updateViewMut = useMutation({
     mutationFn: (v: QueueView) =>
       client.request(
@@ -1779,9 +1782,11 @@ export function QueueWorklist({
           }
         })
       ),
-    onSuccess: () => {
+    onSuccess: (_r, v) => {
       qc.invalidateQueries({ queryKey: ['queue-views', queueId] })
-      toast.success('View updated')
+      setViewJustSaved(v.id)
+      setTimeout(() => setViewJustSaved((cur) => (cur === v.id ? null : cur)), 2000)
+      toast.success(`Saved "${v.name}" with the current filters, scope and sort`)
     },
     onError: () => toast.error('Failed to update view')
   })
@@ -3459,8 +3464,20 @@ export function QueueWorklist({
                   title='Update this view with the current filters, scope and sort'
                   className='shrink-0 text-slate-400 hover:text-nvr-navy disabled:opacity-50 dark:hover:text-nvr-cyan'
                   aria-label={`Update view ${v.name}`}
+                  data-view-update-state={
+                    updateViewMut.isPending ? 'saving' : viewJustSaved === v.id ? 'saved' : 'idle'
+                  }
                 >
-                  <Save className='h-3 w-3' />
+                  {updateViewMut.isPending && updateViewMut.variables?.id === v.id ? (
+                    <Loader2 className='h-3 w-3 animate-spin' />
+                  ) : viewJustSaved === v.id ? (
+                    <Check
+                      className='h-3 w-3 text-emerald-600 dark:text-emerald-400'
+                      strokeWidth={3}
+                    />
+                  ) : (
+                    <Save className='h-3 w-3' />
+                  )}
                 </button>
               )}
               {activeViewId === v.id && (
