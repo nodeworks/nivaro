@@ -5026,6 +5026,7 @@ export function CollectionBrowserView({
       // entries; applyView drops them from the display-column list.
       ...[
         '__state__',
+        '__entered__',
         '__aging__',
         '__owners__',
         '__addendums__',
@@ -5372,6 +5373,7 @@ export function CollectionBrowserView({
     kind:
       | 'data'
       | 'state'
+      | 'entered'
       | 'aging'
       | 'owners'
       | 'addendums'
@@ -5384,7 +5386,9 @@ export function CollectionBrowserView({
     ...(hasPipeline
       ? [
           { key: '__state__', kind: 'state' as const },
-          // How long the record has sat in its current state (the queue's Aging).
+          // When the record entered its current state, and how long it has
+          // sat there (the queue's Last State Change and Aging).
+          { key: '__entered__', kind: 'entered' as const },
           { key: '__aging__', kind: 'aging' as const },
           { key: '__owners__', kind: 'owners' as const }
         ]
@@ -7021,19 +7025,21 @@ export function CollectionBrowserView({
                         const label =
                           col.kind === 'state'
                             ? 'State'
-                            : col.kind === 'aging'
-                              ? 'Aging'
-                              : col.kind === 'owners'
-                                ? 'Owners'
-                                : col.kind === 'addendums'
-                                  ? 'Addendums'
-                                  : col.kind === 'fulfilment'
-                                    ? bcFulfilment?.label
-                                      ? `${bcFulfilment.label} shipped`
-                                      : 'Shipped'
-                                    : col.kind === 'integrations'
-                                      ? 'Integrations'
-                                      : ''
+                            : col.kind === 'entered'
+                              ? 'Last State Change'
+                              : col.kind === 'aging'
+                                ? 'Aging'
+                                : col.kind === 'owners'
+                                  ? 'Owners'
+                                  : col.kind === 'addendums'
+                                    ? 'Addendums'
+                                    : col.kind === 'fulfilment'
+                                      ? bcFulfilment?.label
+                                        ? `${bcFulfilment.label} shipped`
+                                        : 'Shipped'
+                                      : col.kind === 'integrations'
+                                        ? 'Integrations'
+                                        : ''
                         return (
                           <th
                             key={key}
@@ -7458,6 +7464,25 @@ export function CollectionBrowserView({
                                     </span>
                                   ) : (
                                     <span className='text-[12px] text-slate-300'>—</span>
+                                  )}
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'entered') {
+                              const inst = pipelineData?.instances?.[String(id)]
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  className={`whitespace-nowrap px-3 py-1.5 text-[12px] tabular-nums text-slate-600 dark:text-slate-300 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  {inst?.entered_at ? (
+                                    formatValue(inst.entered_at, {
+                                      type: 'datetime',
+                                      template: 'MM/DD/YYYY - h:mmA'
+                                    })
+                                  ) : (
+                                    <span className='text-slate-300 dark:text-slate-600'>—</span>
                                   )}
                                 </td>
                               )

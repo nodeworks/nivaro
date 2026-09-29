@@ -841,6 +841,7 @@ export async function fetchMaterializedQueueItems(
       predicted_risk: prediction.predicted,
       predicted_note: prediction.note,
       aging_hours: sla.aging_hours,
+      state_entered_at: r.entered_state_at ? new Date(r.entered_state_at).toISOString() : null,
       claimed_by: r.claimed_by
         ? { id: r.claimed_by, name: claimantNameById.get(r.claimed_by) ?? '' }
         : null,

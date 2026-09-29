@@ -52,7 +52,7 @@ import { useDebounced } from '../../hooks/useDebounced'
 import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
-import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
+import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
@@ -134,6 +134,8 @@ export interface QueueItemRow {
   predicted_risk?: boolean
   predicted_note?: string | null
   aging_hours: number | null
+  /** When the record entered its current state (ISO; absent on older servers). */
+  state_entered_at?: string | null
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
   extra_ids?: Record<string, string[]>
@@ -1011,7 +1013,14 @@ export function QueueWorklist({
       client.request(
         get(`/queues/${queueId}/items`, {
           scope,
-          sort,
+          // Last State Change is Aging read the other way round: the newest
+          // move is the least aged.
+          sort:
+            sort === 'state_entered'
+              ? '-aging_hours'
+              : sort === '-state_entered'
+                ? 'aging_hours'
+                : sort,
           filters: JSON.stringify(apiFilters),
           // Grouping renders the full matching set (kanban's existing path) —
           // groups are derived client-side, so pagination pauses while grouped.
@@ -1967,6 +1976,19 @@ export function QueueWorklist({
       render: (row) => formatAging(row.aging_hours)
     },
     {
+      // When the record entered its current state — the same moment Aging
+      // counts from (the pipeline history, not the legacy column).
+      key: 'state_entered',
+      header: aliasFor('state_entered', 'Last State Change'),
+      sortable: true,
+      render: (row) =>
+        row.state_entered_at ? (
+          formatValue(row.state_entered_at, { type: 'datetime', template: 'MM/DD/YYYY - h:mmA' })
+        ) : (
+          <span className='text-slate-300 dark:text-slate-600'>—</span>
+        )
+    },
+    {
       key: 'sla_status',
       header: aliasFor('sla_status', 'SLA'),
       sortable: true,
@@ -2190,6 +2212,7 @@ export function QueueWorklist({
     'state',
     'owners',
     'aging_hours',
+    'state_entered',
     'sla_status',
     'at_risk',
     ...(addendumsEnabled ? ['addendums'] : []),

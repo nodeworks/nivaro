@@ -416,6 +416,9 @@ export interface QueueItem {
   predicted_risk?: boolean
   predicted_note?: string | null
   aging_hours: number | null
+  /** When the record entered its current state (ISO); aging_hours may count
+   *  business hours only, so this is the real moment. */
+  state_entered_at?: string | null
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
   /** Related-record ids per relation extra-field path — powers drill-down. */
@@ -2213,6 +2216,9 @@ export async function resolveCollectionSource(
       predicted_risk: prediction.predicted,
       predicted_note: prediction.note,
       aging_hours: slaMap[id]?.elapsed_hours ?? null,
+      state_entered_at: slaMap[id]?.entered_at
+        ? new Date(slaMap[id].entered_at as unknown as string).toISOString()
+        : null,
       claimed_by: null,
       via_addendum: viaAddendum.get(id) ?? null,
       addendums: (() => {
