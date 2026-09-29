@@ -1,10 +1,220 @@
 {
-  "generated_at": "2026-09-28T16:50:21.274Z",
+  "generated_at": "2026-09-29T12:54:02.753Z",
   "releases": [
+    {
+      "version": "0.1.353",
+      "tag": "v0.1.353",
+      "date": "2026-09-29T08:53:49-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "masquerade is visible in the Online list and chat",
+              "hash": "92b79bfa"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: readiness leaves out a record with no way forward",
+              "hash": "99354d13"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: headline history denies when no scope dimension covers the zone",
+              "hash": "9816726e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: headline history denies on a config gap and holds API keys to their scopes",
+              "hash": "3496320e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: my-throughput reads previous moves with one LAG scan",
+              "hash": "858d74b9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: readiness binds only fields required on every layout",
+              "hash": "bbd7a602"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: a failed read answers 503, never \"nothing\" or \"0\"",
+              "hash": "22e5c09b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: headline history honours User Scopes; snapshots never record a missing column as 0",
+              "hash": "5e645a88"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the comments say the hour is read in the person's own zone",
+              "hash": "fdee97c7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: readiness asks the shared checks to fail closed",
+              "hash": "4f3df3dc"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "own-profile cards carry their scroll anchors",
+              "hash": "268e77ed"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: a failed read inside a readiness check is not \"ready\"",
+              "hash": "743a3ef0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard-feed: a failed readiness lookup is not \"ready\"",
+              "hash": "1fe310b5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the page-enter animation leaves no transform behind",
+              "hash": "e0a016ae"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a masquerade shows who is really there",
+              "hash": "4d8d4ead"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the Allocate button takes the brand tokens",
+              "hash": "4ee82761"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "headline snapshots (migration 366), cron and history route (#851)",
+              "hash": "54f58761"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "page renderer: query-widget filters can seed from a URL param",
+              "hash": "3fd3b220"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard feed: readiness ignores who may press, zone pulse skips row-filtered collections",
+              "hash": "c6e5b26e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard feed: integrity, submission readiness, throughput, onboarding, integrations, zone pulse",
+              "hash": "30683c24"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "my-work: time-to-breach chips and a warning filter (#853)",
+              "hash": "9b8ea65c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard feed: to_me leaves out your own send-backs, batch friendly ids",
+              "hash": "7346ab7c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard feed: send-backs, owner absence, changed-since",
+              "hash": "3b90c694"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "file_ids may only name the caller's own uploads",
+              "hash": "fd06178f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dashboard_scope and dashboard_density preferences",
+              "hash": "3fa97c2e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "read several documents as one record",
+              "hash": "0db83237"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the run follows the person across pages",
+              "hash": "7c31e1a2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "\"Tell me when it's ready\" folds into a floating chip",
+              "hash": "3f45d200"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a relation ask narrows the way the field's own picker does",
+              "hash": "131b3a88"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "users, settings: dashboard layout preferences and role defaults",
+              "hash": "a9e316e7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the waiting dialog survives a 202 poll",
+              "hash": "d5f95268"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "document autofill honours cascades and field rules; hints, thresholds, background runs, corrections memory, scorecard; per-feature models, chat cache and charts",
+              "hash": "7dae8ced"
+            }
+          ]
+        }
+      ],
+      "count": 32
+    },
     {
       "version": "0.1.352",
       "tag": "v0.1.352",
-      "date": "2026-09-28T12:50:09-04:00",
+      "date": "2026-09-28T12:50:21-04:00",
       "sections": [
         {
           "label": "Other",
