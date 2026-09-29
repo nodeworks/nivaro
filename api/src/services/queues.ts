@@ -2530,6 +2530,9 @@ export async function fetchQueueItems(
   stats: QueueStats
   /** Stats over the column-filtered set; null when no column filters are active. */
   filteredStats: QueueStats | null
+  /** Rows per state under every active filter except State itself — the
+   *  counts beside the State filter's options. */
+  stateCounts: Record<string, number>
   availableValues: {
     collection: string[]
     state: string[]
@@ -2646,6 +2649,14 @@ export async function fetchQueueItems(
     (options.filters ?? undefined) as Record<string, string | string[]> | undefined
   )
   const filtered = options.filters ? applyColumnFilters(scoped, options.filters) : scoped
+  const stateCounts: Record<string, number> = {}
+  const { state: _stateFilter, ...nonStateFilters } = options.filters ?? {}
+  for (const item of hasActiveColumnFilters(nonStateFilters)
+    ? applyColumnFilters(scoped, nonStateFilters)
+    : scoped) {
+    const k = item.state ?? 'none'
+    stateCounts[k] = (stateCounts[k] ?? 0) + 1
+  }
   const sorted = options.sort ? sortItems(filtered, options.sort, priorityWeights) : filtered
   // Each resolver's `matchedCount` feeds only the `truncated` flag above — it is
   // intentionally NOT summed into stats.total, since that would double-count
@@ -2681,6 +2692,7 @@ export async function fetchQueueItems(
     items: paged,
     stats: exact?.stats ?? liveExact ?? computeStats(scoped),
     filteredStats: hasActiveColumnFilters(options.filters) ? computeStats(filtered) : null,
+    stateCounts,
     availableValues: { ...(exact?.availableValues ?? availableValues), extra: extraValues },
     truncated,
     total

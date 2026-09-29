@@ -1257,6 +1257,7 @@ export async function queuesRoutes(app: FastifyInstance) {
       data: result.items,
       stats: result.stats,
       filtered_stats: result.filteredStats,
+      state_counts: result.stateCounts,
       available_values: result.availableValues,
       truncated: result.truncated,
       total: result.total,

@@ -58,7 +58,8 @@ export interface FilterDef {
   /** Defaults to 'select' — every existing FilterDef without this field keeps its current dropdown behavior unchanged. */
   type?: 'select' | 'text' | 'range' | 'combobox' | 'date' | 'number'
   /** Required when type is 'select' or omitted; static options for 'combobox'; ignored for 'text'/'range'. */
-  options?: { label: string; value: string }[]
+  /** `count` (optional) shows beside the option in facet dropdowns. */
+  options?: { label: string; value: string; count?: number }[]
   /** 'combobox' only: server-backed autocomplete. Called (debounced) with the search
    *  text; overrides `options` when provided. */
   loadOptions?: (search: string) => Promise<{ label: string; value: string }[]>
@@ -129,6 +130,9 @@ export interface DataTableProps<T = Record<string, unknown>> {
    *  instead of sitting below a page-tall table. Parent must give the card a
    *  definite height (flex chain with min-h-0). */
   fillHeight?: boolean
+  /** Rendered inside the card, under the rows and the scroll proxy, above
+   *  pagination — e.g. the row-colour legend (CollectionBrowserView parity). */
+  footer?: React.ReactNode
   selectedIds?: string[]
   onSelectionChange?: (ids: string[]) => void
   /** Optional per-row class — e.g. at-risk background tinting. */
@@ -822,6 +826,7 @@ export function DataTable<T = Record<string, unknown>>({
   emptyMessage = 'No records found.',
   minBodyHeight,
   fillHeight = false,
+  footer,
   hideFilterRow = false,
   nowrapCells = false,
   density = 'comfortable',
@@ -866,6 +871,21 @@ export function DataTable<T = Record<string, unknown>>({
   const headCellRefs = useRef<Record<string, HTMLTableCellElement | null>>({})
   const hScrollRef = useRef<HTMLDivElement | null>(null)
   const checkboxHeadRef = useRef<HTMLTableCellElement | null>(null)
+  // The empty message spans every column, so on a wide table centring it in
+  // the cell puts it right of the visible middle. It is pinned to the visible
+  // width of the table instead, and stays put when the columns scroll.
+  const isEmpty = !isLoading && (rowGroups ? rowGroups.length === 0 : rows.length === 0)
+  const [emptyViewport, setEmptyViewport] = useState<number | null>(null)
+  useEffect(() => {
+    const el = hScrollRef.current
+    if (!isEmpty || !el) return
+    const measure = () => setEmptyViewport(el.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [isEmpty])
   const [pinPos, setPinPos] = useState<
     Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }>
   >({})
@@ -874,12 +894,9 @@ export function DataTable<T = Record<string, unknown>>({
     if (!pinsActive || !columnPins) return
     const left = orderedColumns.filter((c) => columnPins[c.key] === 'left')
     const right = orderedColumns.filter((c) => columnPins[c.key] === 'right')
-    const widthOf = (key: string) =>
-      headCellRefs.current[key]?.getBoundingClientRect().width ?? 120
+    const widthOf = (key: string) => headCellRefs.current[key]?.getBoundingClientRect().width ?? 120
     const next: Record<string, { side: 'left' | 'right'; offset: number; seam: boolean }> = {}
-    let acc = onSelectionChange
-      ? (checkboxHeadRef.current?.getBoundingClientRect().width ?? 40)
-      : 0
+    let acc = onSelectionChange ? (checkboxHeadRef.current?.getBoundingClientRect().width ?? 40) : 0
     // Floor so adjacent pinned cells overlap by a sub-pixel instead of meeting
     // exactly on a fractional boundary — an exact meeting leaves a hairline for
     // the scrolling content to show through (see CollectionBrowserView).
@@ -1084,187 +1101,196 @@ export function DataTable<T = Record<string, unknown>>({
               style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
             >
               <Table data-copy-cells=''>
-              <TableHeader>
-                <TableRow className='border-b border-slate-200 hover:bg-transparent'>
-                  {onSelectionChange && (
-                    <TableHead
-                      ref={checkboxHeadRef}
-                      className={cn(
-                        'h-9 w-9 bg-slate-50 px-3 py-0',
-                        (pinFirstColumn || pinsActive) && 'sticky left-0 z-[2] min-w-[40px]'
-                      )}
-                    >
-                      <Checkbox
-                        checked={
-                          rows.length > 0 &&
-                          rows.every((row, i) => {
-                            const id = rowKey ? rowKey(row, i) : String(i)
-                            return selectedIds?.includes(id)
-                          })
-                        }
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            onSelectionChange(
-                              rows.map((row, i) => (rowKey ? rowKey(row, i) : String(i)))
-                            )
-                          } else {
-                            onSelectionChange([])
-                          }
-                        }}
-                        aria-label='Select all'
-                      />
-                    </TableHead>
-                  )}
-                  {orderedColumns.map((col, colIdx) => (
-                    <TableHead
-                      key={col.key}
-                      ref={(el) => {
-                        headCellRefs.current[col.key] = el
-                      }}
-                      style={pinStyle(col.key)}
-                      className={cn(
-                        'group/th h-9 whitespace-nowrap bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
-                        col.sortable &&
-                          onSortChange &&
-                          'cursor-pointer select-none hover:text-slate-600',
-                        !pinsActive &&
-                          pinFirstColumn &&
-                          colIdx === 0 &&
-                          cn(
-                            'sticky z-[2] border-r border-slate-200 dark:border-border',
-                            onSelectionChange ? 'left-[39px]' : 'left-0'
-                          ),
-                        pinsActive && 'bg-slate-50 dark:bg-muted',
-                        pinCls(col.key, true),
-                        col.headerClassName
-                      )}
-                      onClick={() => handleHeaderClick(col)}
-                    >
-                      <span className='inline-flex items-center'>
-                        {col.header}
-                        {col.sortable && onSortChange && <SortIcon field={col.key} sort={sort} />}
-                        {pinsActive && onColumnPinChange && col.key !== 'claim' && (
-                          <button
-                            type='button'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              cyclePin(col.key)
-                            }}
-                            aria-label={`Pin column ${col.key}`}
-                            title={
-                              columnPins?.[col.key] === 'left'
-                                ? 'Pinned left — click to pin right'
-                                : columnPins?.[col.key] === 'right'
-                                  ? 'Pinned right — click to unpin'
-                                  : 'Pin column'
-                            }
-                            className={cn(
-                              'ml-1 rounded p-0.5 transition-opacity',
-                              columnPins?.[col.key]
-                                ? 'text-nvr-cyan opacity-100'
-                                : 'text-slate-300 opacity-0 hover:text-slate-500 group-hover/th:opacity-100'
-                            )}
-                          >
-                            <Pin
-                              className={cn(
-                                'h-3 w-3',
-                                columnPins?.[col.key] === 'right' && 'rotate-90'
-                              )}
-                            />
-                          </button>
-                        )}
-                      </span>
-                    </TableHead>
-                  ))}
-                </TableRow>
-                {showColumnFilterRow && (
+                <TableHeader>
                   <TableRow className='border-b border-slate-200 hover:bg-transparent'>
                     {onSelectionChange && (
                       <TableHead
+                        ref={checkboxHeadRef}
                         className={cn(
-                          'h-9 w-9 bg-slate-50 px-3 py-1',
+                          'h-9 w-9 bg-slate-50 px-3 py-0',
                           (pinFirstColumn || pinsActive) && 'sticky left-0 z-[2] min-w-[40px]'
                         )}
-                      />
+                      >
+                        <Checkbox
+                          checked={
+                            rows.length > 0 &&
+                            rows.every((row, i) => {
+                              const id = rowKey ? rowKey(row, i) : String(i)
+                              return selectedIds?.includes(id)
+                            })
+                          }
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              onSelectionChange(
+                                rows.map((row, i) => (rowKey ? rowKey(row, i) : String(i)))
+                              )
+                            } else {
+                              onSelectionChange([])
+                            }
+                          }}
+                          aria-label='Select all'
+                        />
+                      </TableHead>
                     )}
-                    {orderedColumns.map((col) => {
-                      const def = filterDefByKey.get(col.key)
-                      return (
-                        <TableHead
-                          key={col.key}
-                          style={pinStyle(col.key)}
-                          className={cn(
-                            'h-9 bg-slate-50 px-1.5 py-1 align-middle',
-                            pinsActive && 'bg-slate-50 dark:bg-muted',
-                            pinCls(col.key, true)
-                          )}
-                        >
-                          {def && onFilterChange ? (
-                            <FilterControl
-                              def={def}
-                              value={filterValues[def.key] ?? ''}
-                              onChange={(v) => onFilterChange(def.key, v)}
-                              layout='cell'
-                            />
-                          ) : null}
-                        </TableHead>
-                      )
-                    })}
-                  </TableRow>
-                )}
-              </TableHeader>
-              {/* Tabular figures: DM Sans is proportional by default, which
-                  leaves numeric columns visibly ragged. Letters are unaffected. */}
-              <TableBody key={enterKey} className='tabular-nums'>
-                {rowGroups
-                  ? rowGroups.map((group) => {
-                      const collapsed = collapsedGroups?.has(group.key) ?? false
-                      return (
-                        <React.Fragment key={group.key}>
-                          <TableRow
-                            className='nvr-row-enter cursor-pointer border-slate-200 bg-slate-50/80 transition-colors hover:bg-slate-100/80 dark:bg-muted/40'
-                            onClick={() => onToggleGroup?.(group.key)}
-                          >
-                            <TableCell
-                              colSpan={columns.length + (onSelectionChange ? 1 : 0)}
-                              className='px-3 py-1.5'
+                    {orderedColumns.map((col, colIdx) => (
+                      <TableHead
+                        key={col.key}
+                        ref={(el) => {
+                          headCellRefs.current[col.key] = el
+                        }}
+                        style={pinStyle(col.key)}
+                        className={cn(
+                          'group/th h-9 whitespace-nowrap bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500',
+                          col.sortable &&
+                            onSortChange &&
+                            'cursor-pointer select-none hover:text-slate-600',
+                          !pinsActive &&
+                            pinFirstColumn &&
+                            colIdx === 0 &&
+                            cn(
+                              'sticky z-[2] border-r border-slate-200 dark:border-border',
+                              onSelectionChange ? 'left-[39px]' : 'left-0'
+                            ),
+                          pinsActive && 'bg-slate-50 dark:bg-muted',
+                          pinCls(col.key, true),
+                          col.headerClassName
+                        )}
+                        onClick={() => handleHeaderClick(col)}
+                      >
+                        <span className='inline-flex items-center'>
+                          {col.header}
+                          {col.sortable && onSortChange && <SortIcon field={col.key} sort={sort} />}
+                          {pinsActive && onColumnPinChange && col.key !== 'claim' && (
+                            <button
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                cyclePin(col.key)
+                              }}
+                              aria-label={`Pin column ${col.key}`}
+                              title={
+                                columnPins?.[col.key] === 'left'
+                                  ? 'Pinned left — click to pin right'
+                                  : columnPins?.[col.key] === 'right'
+                                    ? 'Pinned right — click to unpin'
+                                    : 'Pin column'
+                              }
+                              className={cn(
+                                'ml-1 rounded p-0.5 transition-opacity',
+                                columnPins?.[col.key]
+                                  ? 'text-nvr-cyan opacity-100'
+                                  : 'text-slate-300 opacity-0 hover:text-slate-500 group-hover/th:opacity-100'
+                              )}
                             >
-                              <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-foreground'>
-                                <ChevronDown
-                                  className={cn(
-                                    'h-3.5 w-3.5 text-slate-400 transition-transform duration-200',
-                                    collapsed && '-rotate-90'
-                                  )}
-                                />
-                                {group.header}
-                              </span>
-                            </TableCell>
-                          </TableRow>
-                          {!collapsed && group.rows.map((row, i) => renderRow(row, i))}
-                        </React.Fragment>
-                      )
-                    })
-                  : rows.map((row, i) => renderRow(row, i))}
-
-                {(rowGroups ? rowGroups.length === 0 : rows.length === 0) && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={columns.length + (onSelectionChange ? 1 : 0)}
-                      className='nvr-fade-in py-12 text-center align-middle text-[13px] text-slate-400'
-                      style={minBodyHeight ? { height: Math.max(96, minBodyHeight - 56) } : undefined}
-                    >
-                      {typeof emptyMessage === 'string' ? (
-                        <EmptyState icon={Inbox} title={emptyMessage} />
-                      ) : (
-                        emptyMessage
-                      )}
-                    </TableCell>
+                              <Pin
+                                className={cn(
+                                  'h-3 w-3',
+                                  columnPins?.[col.key] === 'right' && 'rotate-90'
+                                )}
+                              />
+                            </button>
+                          )}
+                        </span>
+                      </TableHead>
+                    ))}
                   </TableRow>
-                )}
-              </TableBody>
+                  {showColumnFilterRow && (
+                    <TableRow className='border-b border-slate-200 hover:bg-transparent'>
+                      {onSelectionChange && (
+                        <TableHead
+                          className={cn(
+                            'h-9 w-9 bg-slate-50 px-3 py-1',
+                            (pinFirstColumn || pinsActive) && 'sticky left-0 z-[2] min-w-[40px]'
+                          )}
+                        />
+                      )}
+                      {orderedColumns.map((col) => {
+                        const def = filterDefByKey.get(col.key)
+                        return (
+                          <TableHead
+                            key={col.key}
+                            style={pinStyle(col.key)}
+                            className={cn(
+                              'h-9 bg-slate-50 px-1.5 py-1 align-middle',
+                              pinsActive && 'bg-slate-50 dark:bg-muted',
+                              pinCls(col.key, true)
+                            )}
+                          >
+                            {def && onFilterChange ? (
+                              <FilterControl
+                                def={def}
+                                value={filterValues[def.key] ?? ''}
+                                onChange={(v) => onFilterChange(def.key, v)}
+                                layout='cell'
+                              />
+                            ) : null}
+                          </TableHead>
+                        )
+                      })}
+                    </TableRow>
+                  )}
+                </TableHeader>
+                {/* Tabular figures: DM Sans is proportional by default, which
+                  leaves numeric columns visibly ragged. Letters are unaffected. */}
+                <TableBody key={enterKey} className='tabular-nums'>
+                  {rowGroups
+                    ? rowGroups.map((group) => {
+                        const collapsed = collapsedGroups?.has(group.key) ?? false
+                        return (
+                          <React.Fragment key={group.key}>
+                            <TableRow
+                              className='nvr-row-enter cursor-pointer border-slate-200 bg-slate-50/80 transition-colors hover:bg-slate-100/80 dark:bg-muted/40'
+                              onClick={() => onToggleGroup?.(group.key)}
+                            >
+                              <TableCell
+                                colSpan={columns.length + (onSelectionChange ? 1 : 0)}
+                                className='px-3 py-1.5'
+                              >
+                                <span className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 dark:text-foreground'>
+                                  <ChevronDown
+                                    className={cn(
+                                      'h-3.5 w-3.5 text-slate-400 transition-transform duration-200',
+                                      collapsed && '-rotate-90'
+                                    )}
+                                  />
+                                  {group.header}
+                                </span>
+                              </TableCell>
+                            </TableRow>
+                            {!collapsed && group.rows.map((row, i) => renderRow(row, i))}
+                          </React.Fragment>
+                        )
+                      })
+                    : rows.map((row, i) => renderRow(row, i))}
+
+                  {(rowGroups ? rowGroups.length === 0 : rows.length === 0) && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={columns.length + (onSelectionChange ? 1 : 0)}
+                        className='nvr-fade-in p-0 text-center align-middle text-[13px] text-slate-400'
+                        style={
+                          minBodyHeight ? { height: Math.max(96, minBodyHeight - 56) } : undefined
+                        }
+                      >
+                        <div
+                          className='sticky left-0 py-12'
+                          style={emptyViewport ? { width: emptyViewport } : undefined}
+                          data-table-empty
+                        >
+                          {typeof emptyMessage === 'string' ? (
+                            <EmptyState icon={Inbox} title={emptyMessage} />
+                          ) : (
+                            emptyMessage
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
               </Table>
             </div>
             {hScrollProxy && <HScrollProxy scrollerRef={hScrollRef} />}
+            {footer}
 
             {/* Pagination */}
             {!rowGroups && total > limit && (

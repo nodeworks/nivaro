@@ -1172,7 +1172,7 @@ function CellValue({
 
 // ─── Multi-select + column-filter primitives ─────────────────────────────────
 
-function MultiPick({
+export function MultiPick({
   label,
   options,
   selected,
@@ -1184,7 +1184,8 @@ function MultiPick({
   onSearch
 }: {
   label: string
-  options: Array<{ value: string | number; label: string }>
+  /** `count` shows right-aligned beside the option (how many rows hold it). */
+  options: Array<{ value: string | number; label: string; count?: number }>
   selected: Array<string | number>
   onChange: (vals: Array<string | number>) => void
   loading?: boolean
@@ -1282,7 +1283,7 @@ function MultiPick({
         <ChevronDown aria-hidden className='h-3 w-3 shrink-0 text-slate-400' />
       </button>
       {open && (
-        <div className='nvr-pop-in absolute left-0 top-full z-50 mt-1 flex max-h-72 w-52 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-lg dark:border-slate-700 dark:bg-slate-900'>
+        <div className='nvr-pop-in absolute left-0 top-full z-50 mt-1 flex max-h-72 w-max min-w-[13rem] max-w-[22rem] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-lg dark:border-slate-700 dark:bg-slate-900'>
           <input
             autoFocus
             value={q}
@@ -1312,7 +1313,12 @@ function MultiPick({
                       )
                     }
                   />
-                  <span className='truncate'>{o.label}</span>
+                  <span className='min-w-0 flex-1 truncate'>{o.label}</span>
+                  {o.count != null && (
+                    <span className='shrink-0 pl-2 text-[10.5px] tabular-nums text-slate-400 dark:text-slate-500'>
+                      {o.count.toLocaleString()}
+                    </span>
+                  )}
                 </label>
               ))
             )}

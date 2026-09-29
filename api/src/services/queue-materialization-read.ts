@@ -482,6 +482,9 @@ export async function fetchMaterializedQueueItems(
   items: QueueItem[]
   stats: QueueStats
   filteredStats: QueueStats | null
+  /** Rows per state under every active filter except State itself — the
+   *  counts beside the State filter's options. */
+  stateCounts: Record<string, number>
   availableValues: {
     collection: string[]
     state: string[]
@@ -515,19 +518,20 @@ export async function fetchMaterializedQueueItems(
   // those requests around this function entirely, so in practice this function
   // should never receive them, but the code must not silently pretend to
   // support them either.
-  const base = scopeBase.clone()
+  // baseNoState = everything except the State filter (feeds the state counts);
+  // base adds it.
+  const baseNoState = scopeBase.clone()
   const asList = (v: unknown): string[] =>
     Array.isArray(v) ? v.map(String) : v == null || v === '' ? [] : [String(v)]
   const collectionList = asList(filters.collection)
-  if (collectionList.length > 0) base.whereIn('qi.collection', collectionList)
+  if (collectionList.length > 0) baseNoState.whereIn('qi.collection', collectionList)
   const stateList = asList(filters.state)
-  if (stateList.length > 0) base.whereIn('qi.state', stateList)
   for (const [key, raw] of Object.entries(filters)) {
     if (!key.startsWith('extra.')) continue
     const values = asList(raw)
     if (values.length === 0) continue
     const path = extraJsonPath(key.slice('extra.'.length))
-    base.where(function () {
+    baseNoState.where(function () {
       for (const v of values) {
         this.orWhereRaw('JSON_VALUE(qi.extra, ?) LIKE ?', [path, `%${v}%`])
       }
@@ -535,7 +539,7 @@ export async function fetchMaterializedQueueItems(
   }
   const labelList = asList(filters.label)
   if (labelList.length > 0) {
-    base.where(function () {
+    baseNoState.where(function () {
       for (const v of labelList) {
         this.orWhereRaw('LOWER(qi.label) LIKE ?', [`%${v.toLowerCase()}%`])
       }
@@ -547,7 +551,7 @@ export async function fetchMaterializedQueueItems(
     if (Array.isArray(filters.owners)) {
       const ids = filters.owners.map(String).filter(Boolean)
       if (ids.length > 0) {
-        base.whereExists(function () {
+        baseNoState.whereExists(function () {
           this.select('*')
             .from('nivaro_queue_item_owners as qio')
             .whereRaw('qio.queue_item_id = qi.id')
@@ -555,10 +559,16 @@ export async function fetchMaterializedQueueItems(
         })
       }
     } else {
-      base.whereRaw('LOWER(qi.owner_names) LIKE ?', [`%${String(filters.owners).toLowerCase()}%`])
+      baseNoState.whereRaw('LOWER(qi.owner_names) LIKE ?', [
+        `%${String(filters.owners).toLowerCase()}%`
+      ])
     }
   }
-  if (filters.at_risk) base.where('qi.at_risk', filters.at_risk === 'yes')
+  if (filters.at_risk) baseNoState.where('qi.at_risk', filters.at_risk === 'yes')
+  const base = baseNoState.clone()
+  if (stateList.length > 0) base.whereIn('qi.state', stateList)
+  const inStateFilter = (state: string | null) =>
+    stateList.length === 0 || (state != null && stateList.includes(state))
 
   const sort = options.sort ?? ''
   const desc = sort.startsWith('-')
@@ -615,9 +625,12 @@ export async function fetchMaterializedQueueItems(
   let rows: FullRow[]
   let total: number
   let jsFilteredStats: QueueStats | null = null
+  let stateCounts: Record<string, number> = {}
 
   if (useJsPath) {
-    const narrowQuery = base
+    // Scanned without the State filter so the state counts see every state;
+    // State is applied in JS below.
+    const narrowQuery = baseNoState
       .clone()
       .select(
         'qi.id',
@@ -669,7 +682,12 @@ export async function fetchMaterializedQueueItems(
         sort_val: r.sort_val ?? null
       }
     })
-    const ordered = filterAndOrderNarrowRows(narrow, filters, sort, displayCfgWeights)
+    const orderedAll = filterAndOrderNarrowRows(narrow, filters, sort, displayCfgWeights)
+    for (const r of orderedAll) {
+      const k = r.state ?? 'none'
+      stateCounts[k] = (stateCounts[k] ?? 0) + 1
+    }
+    const ordered = orderedAll.filter((r) => inStateFilter(r.state))
     total = ordered.length
     jsFilteredStats = statsFromNarrowRows(ordered)
 
@@ -688,6 +706,12 @@ export async function fetchMaterializedQueueItems(
   } else {
     const countRow = (await base.clone().count('* as n').first()) as { n: number }
     total = Number(countRow.n)
+    const stateRows = (await baseNoState
+      .clone()
+      .select('qi.state')
+      .count('* as n')
+      .groupBy('qi.state')) as Array<{ state: string | null; n: number }>
+    stateCounts = Object.fromEntries(stateRows.map((r) => [r.state ?? 'none', Number(r.n)]))
 
     let idOrdered = false
     if (sortKey === 'label' || sortKey === 'state' || sortKey === 'collection') {
@@ -842,6 +866,7 @@ export async function fetchMaterializedQueueItems(
     items,
     stats,
     filteredStats,
+    stateCounts,
     availableValues,
     truncated: false,
     total
