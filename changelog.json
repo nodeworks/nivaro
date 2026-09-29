@@ -1,10 +1,53 @@
 {
-  "generated_at": "2026-09-29T18:32:25.690Z",
+  "generated_at": "2026-09-29T23:08:04.392Z",
   "releases": [
+    {
+      "version": "0.2.2",
+      "tag": "v0.2.2",
+      "date": "2026-09-29T19:07:53-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Last State Change from the pipeline, not the legacy column",
+              "hash": "e0d34a80"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "filter and sort virtual rollups; saving feedback on view update",
+              "hash": "0b2cf515"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Aging column and filter, admin-only columns",
+              "hash": "e270e014"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "store the money change; show the slot in Summary mode",
+              "hash": "82431823"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "inline filter bar, quieter header, State filter with counts",
+              "hash": "9962c8fd"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.2.1",
       "tag": "v0.2.1",
-      "date": "2026-09-29T14:32:14-04:00",
+      "date": "2026-09-29T14:32:25-04:00",
       "sections": [
         {
           "label": "Other",
