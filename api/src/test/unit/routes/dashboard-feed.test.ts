@@ -46,13 +46,23 @@ vi.mock('../../../services/workflow-transitions.js', () => ({
     async (c: string, ids: string[]) => new Map(ids.map((i) => [i, `${c.toUpperCase()}-${i}`]))
   )
 }))
+vi.mock('../../../services/record-access.js', () => ({
+  compileAccessGates: vi.fn(async (_u: unknown, collection: string) => ({ collection })),
+  visibleIds: vi.fn(async (_g: unknown, ids: string[]) => new Set(ids))
+}))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../../../db/index.js'
+import { requireAuth } from '../../../middleware/authenticate.js'
 import { dashboardFeedRoutes } from '../../../routes/dashboard-feed.js'
 import { getRowFilter } from '../../../services/permissions.js'
+import { visibleIds } from '../../../services/record-access.js'
 import { evaluateTransitionRequirements } from '../../../services/transition-requirements.js'
-import { listScopeDimensions, resolveRecordDimensionIds } from '../../../services/user-scopes.js'
+import {
+  getUserScopes,
+  listScopeDimensions,
+  resolveRecordDimensionIds
+} from '../../../services/user-scopes.js'
 import { evaluateConditionRules } from '../../../services/workflow-conditions.js'
 import { resolveFriendlyIds } from '../../../services/workflow-transitions.js'
 
@@ -62,20 +72,30 @@ const calls: Call[] = []
  *  silently — every suite asserts none was touched. */
 const unexpected: string[] = []
 
+/** Tables whose reads reject in this test (a failed DB read). */
+let failing: string[] = []
+
 /** A knex-shaped chain for one allowed table: every builder method records
- *  itself and returns the chain; awaiting it yields `rows`. */
+ *  itself and returns the chain; awaiting it yields `rows` (the first row
+ *  after `.first()`), or rejects when the table is listed in `failing`. */
 function chain(table: string, rows: unknown[]) {
   const target: Record<string, unknown> = {}
+  let firstOnly = false
+  const settle = () =>
+    failing.includes(table)
+      ? Promise.reject(new Error(`read failed: ${table}`))
+      : Promise.resolve(firstOnly ? rows[0] : rows)
   const proxy: Record<string, unknown> = new Proxy(target, {
     get(_t, prop: string) {
       if (prop === 'then') {
         return (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-          Promise.resolve(rows).then(resolve, reject)
+          settle().then(resolve, reject)
       }
       if (prop === 'catch') {
-        return (fn: (e: unknown) => unknown) => Promise.resolve(rows).catch(fn)
+        return (fn: (e: unknown) => unknown) => settle().catch(fn)
       }
       return (...args: unknown[]) => {
+        if (prop === 'first') firstOnly = true
         calls.push({ table, method: prop, args })
         // Run where/join callbacks against the same chain so nested builder
         // calls are recorded too.
@@ -122,6 +142,7 @@ afterEach(() => {
   unexpected.length = 0
   calls.length = 0
   fixtures = {}
+  failing = []
   vi.clearAllMocks()
 })
 
@@ -445,5 +466,97 @@ describe('GET /dashboard/zone-pulse — row-filtered collections', () => {
     expect(zones).toHaveLength(1)
     expect(zones[0]?.open).toEqual({ tasks: 1 })
     expect(Object.keys(zones[0]?.open ?? {})).not.toContain('orders')
+  })
+})
+
+const UNAVAILABLE = { error: 'Could not load this right now', code: 'DASHBOARD_FEED_UNAVAILABLE' }
+
+describe('GET /dashboard/headline-history — User Scopes', () => {
+  const AREA_DIM = {
+    id: 1,
+    name: 'area',
+    label: 'Area',
+    target_collection: 'areas',
+    display_field: 'label',
+    options_sort: null,
+    overrides: null,
+    exclusions: null,
+    strict: false,
+    is_active: true
+  }
+  const settings = {
+    dashboard_headline: JSON.stringify({
+      query: 'budget',
+      year_param: 'years',
+      zone_param: 'zones',
+      zone_collection: 'areas',
+      zone_field: 'label',
+      fields: { pubd: 'p', spend: 's', committed: 'c', remaining: 'r' }
+    })
+  }
+  const point = {
+    snapshot_date: '2026-09-27',
+    pubd: 10,
+    spend: 4,
+    committed: 1,
+    remaining: 5,
+    projects: 2
+  }
+  const restrictToZone1 = () => {
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([AREA_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([
+      { dimension: 'area', mode: 'restrict', values: ['1'] }
+    ] as never)
+    fixtures = {
+      nivaro_settings: [settings],
+      areas: ['Zone 1'],
+      nivaro_dashboard_snapshots: [point]
+    }
+  }
+  const snapshotsRead = () => calls.some((c) => c.table === 'nivaro_dashboard_snapshots')
+
+  it('an admin reads any zone', async () => {
+    vi.mocked(requireAuth).mockImplementationOnce((async (req: {
+      user?: unknown
+      isAdmin?: boolean
+    }) => {
+      req.user = { id: 'ADMIN', role: 'admin' }
+      req.isAdmin = true
+    }) as never)
+    fixtures = { nivaro_dashboard_snapshots: [point] }
+    const res = await inject('GET', '/dashboard/headline-history?year=2026&zone=Zone%202')
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toHaveLength(1)
+  })
+
+  it('a restricted person reads their own zone', async () => {
+    restrictToZone1()
+    const res = await inject('GET', '/dashboard/headline-history?year=2026&zone=Zone%201')
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toHaveLength(1)
+  })
+
+  it('a zone outside the allowance answers an empty history, unread', async () => {
+    restrictToZone1()
+    const res = await inject('GET', '/dashboard/headline-history?year=2026&zone=Zone%202')
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ data: [] })
+    expect(snapshotsRead()).toBe(false)
+  })
+
+  it('the all-zones row is empty for a restricted person', async () => {
+    restrictToZone1()
+    const res = await inject('GET', '/dashboard/headline-history?year=2026')
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ data: [] })
+    expect(snapshotsRead()).toBe(false)
+  })
+
+  it('a failed read answers 503, never an empty history', async () => {
+    restrictToZone1()
+    failing = ['nivaro_settings']
+    const res = await inject('GET', '/dashboard/headline-history?year=2026&zone=Zone%201')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
   })
 })

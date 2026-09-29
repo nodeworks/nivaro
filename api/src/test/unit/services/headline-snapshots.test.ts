@@ -1,10 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../services/user-scopes.js', () => ({
+  listScopeDimensions: vi.fn(async () => []),
+  getUserScopes: vi.fn(async () => [])
+}))
+
+import { db } from '../../../db/index.js'
 import {
+  assertHeadlineRun,
   type HeadlineSnapshotRow,
+  headlineZoneAllowance,
   parseHeadlineSettings,
   planHeadlineSnapshot,
-  recordHeadlineSnapshot
+  recordHeadlineSnapshot,
+  upsertHeadlineSnapshot
 } from '../../../services/headline-snapshots.js'
+import { getUserScopes, listScopeDimensions } from '../../../services/user-scopes.js'
 
 const SETTINGS = {
   query: 'budget-rollup',
@@ -103,6 +115,28 @@ describe('recordHeadlineSnapshot', () => {
     expect(out).toEqual({ written: 2, failed: [{ zone: 'A', error: 'timeout' }] })
   })
 
+  it('refuses to record a zero for a configured column the query no longer returns', async () => {
+    const runQuery = vi.fn(async (_slug: string, params: Record<string, string>) =>
+      params.zones === 'A'
+        ? [{ pub: 1, spent: 1, left: 1 }] // `held` renamed away
+        : [{ pub: 1, spent: 1, held: 1, left: 1 }]
+    )
+    const insert = vi.fn(async () => {})
+    const out = await recordHeadlineSnapshot(SETTINGS, runQuery, insert, ['A', 'B'], NOW)
+    expect(insert).toHaveBeenCalledTimes(2)
+    expect(out).toEqual({
+      written: 2,
+      failed: [{ zone: 'A', error: 'The query did not return the column held' }]
+    })
+  })
+
+  it('an empty result is still a valid (zero-project) row', async () => {
+    const runQuery = vi.fn(async () => [])
+    const insert = vi.fn(async () => {})
+    const out = await recordHeadlineSnapshot(SETTINGS, runQuery, insert, [], NOW)
+    expect(out).toEqual({ written: 1, failed: [] })
+  })
+
   it('writes only the all-zones row when no zone parameter is configured', async () => {
     const { zone_param: _p, zone_collection: _c, zone_field: _f, ...noZones } = SETTINGS
     const runQuery = vi.fn(async () => [{ pub: 2, spent: 1, held: 0, left: 1 }])
@@ -127,5 +161,141 @@ describe('parseHeadlineSettings', () => {
     expect(parseHeadlineSettings({ ...SETTINGS, zone_collection: 'nivaro_users' })).toBeNull()
     expect(parseHeadlineSettings({ ...SETTINGS, zone_field: 'x; drop' })).toBeNull()
     expect(parseHeadlineSettings({ ...SETTINGS, fields: { pubd: 'pub' } })).toBeNull()
+  })
+})
+
+describe('assertHeadlineRun', () => {
+  it('throws when every entry failed, so the cron run reads as failed', () => {
+    expect(() =>
+      assertHeadlineRun({ written: 0, failed: [{ zone: null, error: 'timeout' }] })
+    ).toThrow('timeout')
+  })
+
+  it('passes a partial or clean run and an unconfigured one', () => {
+    expect(() =>
+      assertHeadlineRun({ written: 1, failed: [{ zone: 'A', error: 'x' }] })
+    ).not.toThrow()
+    expect(() => assertHeadlineRun({ written: 0, failed: [] })).not.toThrow()
+    expect(() => assertHeadlineRun({ skipped: 'not configured' })).not.toThrow()
+  })
+})
+
+/** A knex-shaped fake whose update / insert results are scripted per call. */
+function scriptedDb(script: { update: unknown[]; insert: unknown[] }) {
+  const calls: string[] = []
+  vi.mocked(db).mockImplementation(((_table: string) => {
+    const chain: Record<string, unknown> = {}
+    for (const m of ['where', 'whereNull']) chain[m] = () => chain
+    const next = (kind: 'update' | 'insert') => {
+      calls.push(kind)
+      const v = script[kind].shift()
+      return v instanceof Error || (v && typeof v === 'object' && 'number' in v)
+        ? Promise.reject(v)
+        : Promise.resolve(v)
+    }
+    chain.update = () => next('update')
+    chain.insert = () => next('insert')
+    return chain
+  }) as never)
+  return calls
+}
+
+const ROW: HeadlineSnapshotRow = {
+  snapshot_date: '2026-09-28',
+  year: 2026,
+  zone: 'A',
+  pubd: 1,
+  spend: 1,
+  committed: 1,
+  remaining: 1,
+  projects: 1
+}
+
+describe('upsertHeadlineSnapshot', () => {
+  it('a replica that loses the insert race updates the row the other one wrote', async () => {
+    const calls = scriptedDb({ update: [0, 1], insert: [{ number: 2627 }] })
+    await expect(upsertHeadlineSnapshot(ROW)).resolves.toBeUndefined()
+    expect(calls).toEqual(['update', 'insert', 'update'])
+  })
+
+  it('reads a wrapped duplicate-key error (AggregateError) the same way', async () => {
+    const calls = scriptedDb({
+      update: [0, 1],
+      insert: [{ number: undefined, errors: [{ number: 2601 }] }]
+    })
+    await expect(upsertHeadlineSnapshot(ROW)).resolves.toBeUndefined()
+    expect(calls).toEqual(['update', 'insert', 'update'])
+  })
+
+  it('any other insert failure still fails', async () => {
+    scriptedDb({ update: [0], insert: [new Error('disk full')] })
+    await expect(upsertHeadlineSnapshot(ROW)).rejects.toThrow('disk full')
+  })
+})
+
+/** Settings + zone rows for the allowance reads. */
+function allowanceDb(zoneRows: Array<Record<string, unknown>>, fail: string[] = []) {
+  vi.mocked(db).mockImplementation(((table: string) => {
+    const chain: Record<string, unknown> = {}
+    const rows =
+      table === 'nivaro_settings' ? [{ dashboard_headline: JSON.stringify(SETTINGS) }] : zoneRows
+    const settle = () =>
+      fail.includes(table)
+        ? Promise.reject(new Error(`read failed: ${table}`))
+        : Promise.resolve(rows)
+    for (const m of ['where', 'whereIn', 'whereNotNull', 'orderBy', 'select'])
+      chain[m] = () => chain
+    chain.first = () => settle().then((r) => (r as unknown[])[0])
+    chain.pluck = (col: string) =>
+      settle().then((r) => (r as Array<Record<string, unknown>>).map((x) => x[col]))
+    // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
+    chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+      settle().then(res, rej)
+    return chain
+  }) as never)
+}
+
+const AREA_DIM = {
+  id: 1,
+  name: 'area',
+  label: 'Area',
+  target_collection: 'areas',
+  display_field: 'label',
+  options_sort: null,
+  overrides: null,
+  exclusions: null,
+  strict: false,
+  is_active: true
+}
+
+describe('headlineZoneAllowance', () => {
+  const user = { id: 'U1', role: 'R' } as never
+
+  it('admins are unrestricted', async () => {
+    allowanceDb([])
+    expect(await headlineZoneAllowance(user, true)).toBeNull()
+  })
+
+  it('a person with no restriction on the zone dimension is unrestricted', async () => {
+    allowanceDb([])
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([AREA_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([
+      { dimension: 'area', mode: 'default', values: ['1'] }
+    ] as never)
+    expect(await headlineZoneAllowance(user, false)).toBeNull()
+  })
+
+  it('a restricted person gets their allowed zones as the zone field values', async () => {
+    allowanceDb([{ label: 'Zone 1' }])
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([AREA_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([
+      { dimension: 'area', mode: 'restrict', values: ['1'] }
+    ] as never)
+    expect(await headlineZoneAllowance(user, false)).toEqual(new Set(['Zone 1']))
+  })
+
+  it('a failed read throws rather than widening the allowance', async () => {
+    allowanceDb([], ['nivaro_settings'])
+    await expect(headlineZoneAllowance(user, false)).rejects.toThrow('read failed')
   })
 })

@@ -13,9 +13,13 @@ import {
   submissionReadiness,
   zonePulse
 } from '../services/dashboard-feed.js'
-import { readHeadlineHistory } from '../services/headline-snapshots.js'
+import { headlineZoneAllowance, readHeadlineHistory } from '../services/headline-snapshots.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** A failed read is never an empty or zero answer: the client shows its
+ *  error state instead of telling the viewer "nothing here". */
+const UNAVAILABLE = { error: 'Could not load this right now', code: 'DASHBOARD_FEED_UNAVAILABLE' }
 const SYSTEM = /^(nivaro_|directus_)/i
 
 /**
@@ -177,11 +181,18 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
       if (zone && zone.length > 80) return reply.code(400).send({ error: 'zone is too long' })
       const rawDays = Number(req.query.days ?? 30)
       const days = Number.isFinite(rawDays) ? Math.min(366, Math.max(1, Math.floor(rawDays))) : 30
-      const data = await readHeadlineHistory({ year: rawYear, zone, days }).catch((err) => {
+      try {
+        // The figures were written by a cron with no user — the viewer's
+        // zone restriction is applied here: a zone outside it, or the
+        // all-zones row for a restricted person, reads as no history.
+        const allowed = await headlineZoneAllowance(req.user!, !!req.isAdmin)
+        if (allowed && (zone == null || !allowed.has(zone))) return reply.send({ data: [] })
+        const data = await readHeadlineHistory({ year: rawYear, zone, days })
+        return reply.send({ data })
+      } catch (err) {
         req.log.warn({ err }, 'dashboard headline-history failed')
-        return []
-      })
-      return reply.send({ data })
+        return reply.code(503).send(UNAVAILABLE)
+      }
     }
   )
 

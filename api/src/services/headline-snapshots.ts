@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
 
 /**
  * Headline snapshots (#851) — one row a day of a deployment's budget headline
@@ -180,6 +181,12 @@ export async function recordHeadlineSnapshot(
   for (const entry of planHeadlineSnapshot(settings, zones, now)) {
     try {
       const rows = await runQuery(settings.query, entry.params)
+      // A configured column the query no longer returns (renamed in the
+      // proc) would sum to 0 every night — refuse the row instead.
+      if (rows.length > 0) {
+        const missing = FIELD_KEYS.map((k) => settings.fields[k]).find((c) => !(c in rows[0]))
+        if (missing) throw new Error(`The query did not return the column ${missing}`)
+      }
       const sum = (col: string) => cents(rows.reduce((s, r) => s + num(r[col]), 0))
       await insert({
         snapshot_date: snapshotDate,
@@ -199,15 +206,43 @@ export async function recordHeadlineSnapshot(
   return { written, failed }
 }
 
+/** A run where every query failed is a failed run — throws, so the cron
+ *  roster reports it instead of a silent success. */
+export function assertHeadlineRun(result: HeadlineRunResult): void {
+  if ('written' in result && result.written === 0 && result.failed.length > 0) {
+    throw new Error(
+      `dashboard-headline-snapshot: nothing written — ${result.failed
+        .map((f) => `${f.zone ?? '(all)'}: ${f.error}`)
+        .join('; ')}`
+    )
+  }
+}
+
+/** MSSQL 2627 / 2601 (duplicate key), also when knex wraps it in an
+ *  AggregateError whose own `.number` is unset. */
+function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const isCode = (n: unknown) => n === 2627 || n === 2601
+  const top = err as { number?: unknown; errors?: unknown }
+  if (isCode(top.number)) return true
+  return (
+    Array.isArray(top.errors) && top.errors.some((e) => isCode((e as { number?: unknown })?.number))
+  )
+}
+
 // ── DB side ──────────────────────────────────────────────────────────────────
 
 export const HEADLINE_TABLE = 'nivaro_dashboard_snapshots'
 
-export async function loadHeadlineSettings(): Promise<HeadlineSettings | null> {
-  const row = (await db('nivaro_settings')
-    .orderBy('id', 'asc')
-    .first('dashboard_headline')
-    .catch(() => undefined)) as { dashboard_headline?: string | null } | undefined
+/** `strict` lets a failed read throw; the default reads a failure as "not
+ *  configured", which only suits the cron (it simply skips). */
+export async function loadHeadlineSettings(
+  opts: { strict?: boolean } = {}
+): Promise<HeadlineSettings | null> {
+  const q = db('nivaro_settings').orderBy('id', 'asc').first('dashboard_headline')
+  const row = (await (opts.strict ? q : q.catch(() => undefined))) as
+    | { dashboard_headline?: string | null }
+    | undefined
   return parseHeadlineSettings(row?.dashboard_headline ?? null)
 }
 
@@ -239,16 +274,25 @@ export async function upsertHeadlineSnapshot(row: HeadlineSnapshotRow): Promise<
     else q.where('zone', row.zone)
     return q
   }
-  const updated = await match(db(HEADLINE_TABLE)).update(figures)
-  const count = Array.isArray(updated) ? updated.length : Number(updated)
-  if (count > 0) return
-  await db(HEADLINE_TABLE).insert({
-    snapshot_date: row.snapshot_date,
-    year: row.year,
-    zone: row.zone,
-    ...figures,
-    created_at: new Date()
-  })
+  const update = async () => {
+    const updated = await match(db(HEADLINE_TABLE)).update(figures)
+    return Array.isArray(updated) ? updated.length : Number(updated)
+  }
+  if ((await update()) > 0) return
+  try {
+    await db(HEADLINE_TABLE).insert({
+      snapshot_date: row.snapshot_date,
+      year: row.year,
+      zone: row.zone,
+      ...figures,
+      created_at: new Date()
+    })
+  } catch (err) {
+    // Another replica ticked at the same moment and inserted first: its row
+    // is this row — update it once instead of reporting a failed zone.
+    if (!isUniqueViolation(err)) throw err
+    await update()
+  }
 }
 
 /** The cron tick. */
@@ -281,6 +325,7 @@ export async function runHeadlineSnapshot(
       'dashboard-headline-snapshot done'
     )
   }
+  assertHeadlineRun(result)
   return result
 }
 
@@ -314,6 +359,50 @@ function isoDay(v: unknown): string {
     return v.toISOString().slice(0, 10)
   }
   return String(v ?? '').slice(0, 10)
+}
+
+/**
+ * The zones a viewer may read headline figures for: null = unrestricted
+ * (admins, and anyone without a restriction on the dimension whose target is
+ * the configured zone collection), else the zone-field values of the zones
+ * they are restricted to. The figures were written by a cron with no user, so
+ * this is the only scope check they get. A failed read throws — widening the
+ * allowance on a failure would leak other zones' totals.
+ */
+export async function headlineZoneAllowance(
+  user: User,
+  isAdmin: boolean
+): Promise<Set<string> | null> {
+  if (isAdmin) return null
+  const settings = await loadHeadlineSettings({ strict: true })
+  if (!settings?.zone_collection || !settings.zone_field) return null
+  const { getUserScopes, listScopeDimensions } = await import('./user-scopes.js')
+  const dims = (await listScopeDimensions()).filter(
+    (d) => d.target_collection === settings.zone_collection
+  )
+  if (dims.length === 0) return null
+  const names = new Set(dims.map((d) => d.name))
+  const restricts = (await getUserScopes(String(user.id))).filter(
+    (s) => s.mode === 'restrict' && names.has(s.dimension) && s.values.length > 0
+  )
+  if (restricts.length === 0) return null
+  // Several restrictions on the zone collection narrow each other.
+  const sets = restricts.map((r) => new Set(r.values.map((v) => String(v).toUpperCase())))
+  const ids = sets.reduce((acc, mine) => new Set([...acc].filter((v) => mine.has(v))))
+  if (ids.size === 0) return new Set()
+  const col = settings.zone_field
+  const values = (await db(settings.zone_collection)
+    .whereIn('id', [...ids] as never)
+    .pluck(col)) as unknown[]
+  return new Set(
+    values
+      .map((v) =>
+        String(v ?? '')
+          .trim()
+          .slice(0, 80)
+      )
+      .filter(Boolean)
+  )
 }
 
 /** Oldest first, the last `days` days, for one year and one zone (null = all). */
