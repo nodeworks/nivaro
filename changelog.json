@@ -1,10 +1,53 @@
 {
-  "generated_at": "2026-09-29T12:54:02.753Z",
+  "generated_at": "2026-09-29T15:26:30.436Z",
   "releases": [
+    {
+      "version": "0.2.0",
+      "tag": "v0.2.0",
+      "date": "2026-09-29T11:26:19-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "manager's team load card",
+              "hash": "dcdd5bd4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "detailed templates for sign-in, flow failure, import runs, exports, anomalies",
+              "hash": "66ee8645"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "tab count in the title only; picker presence reads the right path",
+              "hash": "b45b3ac4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "attention count in the browser tab title and favicon",
+              "hash": "ae4039a9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "scheduled jobs tick only on deployed instances",
+              "hash": "d91239a1"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.1.353",
       "tag": "v0.1.353",
-      "date": "2026-09-29T08:53:49-04:00",
+      "date": "2026-09-29T08:54:02-04:00",
       "sections": [
         {
           "label": "Documentation",
