@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { cronTicksEnabled } from '../plugins/cron.js'
 
 /**
  * Background Jobs console reads. One source of truth (nivaro_job_runs, fed by
@@ -123,6 +124,7 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
           last: strip(latestByJob.get(`cron:${c.id}`)),
           errors_7d: errByJob.get(`cron:${c.id}`) ?? 0
         })),
+        ticks_enabled: cronTicksEnabled(),
         running: await db('nivaro_job_runs')
           .where('status', 'running')
           .orderBy('id', 'desc')

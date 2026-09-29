@@ -75,7 +75,7 @@ export const obsApiAnalytics: DocSection = {
     },
     {
       type: 'note',
-      text: '`TRACE_TOP_SQL` sets how many statement shapes a slow-request trace keeps (default 8). `CRON_TICKS=off` keeps scheduled jobs registered but never fires them on the clock, for a second process started against the same database; run-now still works.'
+      text: '`TRACE_TOP_SQL` sets how many statement shapes a slow-request trace keeps (default 8). `CRON_TICKS` decides whether scheduled jobs fire on the clock in a process. Unset, a development process (NODE_ENV=development) keeps every schedule registered but never ticks, because it usually shares its database with a deployed instance that already runs them; a production process ticks. `CRON_TICKS=on` makes a development process tick (your own database), `CRON_TICKS=off` stops a production-mode process ticking (a throwaway boot). Run-now and dry runs work either way.'
     },
     { type: 'h2', id: 'api-analytics-index-advisor', text: 'Index advisor' },
     {

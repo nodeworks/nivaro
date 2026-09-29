@@ -6,6 +6,26 @@ import { startJobRun } from '../services/job-runs.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+/**
+ * Whether scheduled jobs fire on the clock in THIS process.
+ *
+ * A development process shares its database with a deployed instance (the
+ * dev laptop and staging both point at one database), so every clock-driven
+ * job — digests, escalations, partner polls, the import worker, scheduled
+ * flows — would run twice and mail people twice. Development processes
+ * therefore keep their schedules registered (the roster, dry runs and
+ * run-now all still work) but never tick; deployed instances tick.
+ *
+ * CRON_TICKS=on|off overrides either way (a self-hosted developer with their
+ * own database sets `on`; a throwaway production-mode boot sets `off`).
+ */
+export function cronTicksEnabled(): boolean {
+  const raw = (process.env.CRON_TICKS ?? '').trim().toLowerCase()
+  if (['on', 'true', '1', 'yes'].includes(raw)) return true
+  if (['off', 'false', '0', 'no'].includes(raw)) return false
+  return process.env.NODE_ENV !== 'development'
+}
+
 export interface CronEntry {
   id: string
   /** The EFFECTIVE schedule (override when one is set). */
@@ -314,11 +334,10 @@ export class CronManager {
         // Paused (#198): the schedule stays registered (so resume needs no
         // deploy) but ticks return without running or recording anything.
         if (this.pausedIds.has(id)) return
-        // CRON_TICKS=off: a second process on the same database (a throwaway
-        // boot used to verify a change) keeps its schedules registered and
-        // its run-now routes working, but never fires on the clock — the
-        // primary process already does, and every tick would run twice.
-        if (process.env.CRON_TICKS === 'off') return
+        // Ticks off on this process (development by default, or CRON_TICKS=off):
+        // schedules stay registered and run-now still works, but only the
+        // deployed instance fires on the clock — see cronTicksEnabled().
+        if (!cronTicksEnabled()) return
         // Chained (#54): this job runs after another one completes, not on
         // its own clock — the tick is a no-op while the chain stands.
         if (this.chains.has(id)) return
@@ -520,5 +539,9 @@ export const cronPlugin = fp(async (app: FastifyInstance) => {
     manager.stopAll()
   })
 
-  app.log.info('Cron manager ready')
+  app.log.info(
+    cronTicksEnabled()
+      ? 'Cron manager ready — scheduled jobs tick on this instance'
+      : 'Cron manager ready — scheduled ticks OFF on this instance (development default; CRON_TICKS=on to enable). Run-now still works.'
+  )
 })

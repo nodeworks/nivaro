@@ -591,6 +591,16 @@ export default function BackgroundJobs() {
       </header>
 
       <div className='flex-1 space-y-4 overflow-y-auto p-6'>
+        {registry.data?.ticks_enabled === false && (
+          <div
+            data-cron-ticks='off'
+            className='rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[12.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
+          >
+            <span className='font-semibold'>Scheduled jobs don't fire on this instance.</span> This
+            is a development process sharing its database with a deployed instance, which runs them.
+            Run now and dry runs still work here. Set CRON_TICKS=on to change that.
+          </div>
+        )}
         {/* stat strip */}
         <div className='flex flex-wrap gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
           {[
