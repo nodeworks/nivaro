@@ -383,7 +383,10 @@ export function NotificationRulesCard() {
   )
 
   return (
-    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+    <div
+      data-profile-card='notifications'
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+    >
       <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
           Notification rules
@@ -798,7 +801,10 @@ export function TimezoneCard() {
       : []
 
   return (
-    <div className='rounded-xl border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
+    <div
+      data-profile-card='timezone'
+      className='rounded-xl border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'
+    >
       <p className='text-[13.5px] font-semibold text-slate-800 dark:text-slate-100'>Timezone</p>
       <p className='mt-0.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
         Dates and times render in this zone. Your browser reports{' '}
@@ -861,6 +867,7 @@ function ScopeDefaultsCard() {
   if (!scopes || scopes.dimensions.length === 0) return null
   return (
     <SectionCard
+      testId='scopes'
       icon={<FilterIcon className='h-4 w-4' />}
       title='Default filters'
       hint='Pre-selected in browsers and reports — clear anytime'
@@ -2251,7 +2258,10 @@ export function DisplayPrefsCard() {
   })
   const accentPick = typeof prefs?.theme_accent === 'string' ? prefs.theme_accent : 'brand'
   return (
-    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+    <div
+      data-profile-card='display'
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+    >
       <header className='border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
         <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>Display</h3>
         <p className='mt-0.5 text-[11px] text-slate-400'>
