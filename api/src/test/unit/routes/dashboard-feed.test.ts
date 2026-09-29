@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // /api/dashboard/* answers for the signed-in person only. These suites pin the
 // route contract: a bad `dir` is refused, `days` is clamped to 1–90, an empty
@@ -234,6 +234,36 @@ describe("GET /dashboard/send-backs?dir=to_me on the viewer's own records", () =
     // Friendly ids are read once per collection, not per record.
     expect(vi.mocked(resolveFriendlyIds)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(resolveFriendlyIds)).toHaveBeenCalledWith('orders', ['42'])
+    // No state-entry moment could be read: unknown, never "arrived today".
+    expect((data[0] as { days_in_state?: number | null }).days_in_state).toBeNull()
+  })
+
+  it("leaves out a record the viewer's row filter or scopes hide", async () => {
+    fixtures = {
+      nivaro_workflow_bindings: [{ collection: 'orders' }],
+      nivaro_fields: [],
+      'information_schema.columns': [{ table_name: 'orders', column_name: 'creator' }],
+      orders: ['42'],
+      nivaro_users: [],
+      'nivaro_workflow_history as h': [sendBack(2, 'OTHER')]
+    }
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    const res = await inject('GET', '/dashboard/send-backs?dir=to_me')
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ data: [] })
+  })
+
+  it('a failed history read answers 503, never "nothing sent back"', async () => {
+    fixtures = {
+      nivaro_workflow_bindings: [{ collection: 'orders' }],
+      nivaro_fields: [],
+      'information_schema.columns': [{ table_name: 'orders', column_name: 'creator' }],
+      orders: ['42']
+    }
+    failing = ['nivaro_workflow_history as h']
+    const res = await inject('GET', '/dashboard/send-backs?dir=to_me')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
   })
 })
 
@@ -553,10 +583,205 @@ describe('GET /dashboard/headline-history — User Scopes', () => {
   })
 
   it('a failed read answers 503, never an empty history', async () => {
-    restrictToZone1()
+    fixtures = { nivaro_settings: [settings] }
     failing = ['nivaro_settings']
     const res = await inject('GET', '/dashboard/headline-history?year=2026&zone=Zone%201')
     expect(res.statusCode).toBe(503)
     expect(res.json()).toEqual(UNAVAILABLE)
+  })
+})
+
+describe('failed reads are never an empty or zero answer', () => {
+  it('send-backs by_me', async () => {
+    failing = ['nivaro_workflow_history as h']
+    const res = await inject('GET', '/dashboard/send-backs?dir=by_me')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
+  })
+
+  it('owner-absence', async () => {
+    failing = ['nivaro_workflow_bindings']
+    const res = await inject('GET', '/dashboard/owner-absence')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
+  })
+
+  it('changed-since when the watermarks cannot be read', async () => {
+    failing = ['nivaro_record_views']
+    const res = await inject('POST', '/dashboard/changed-since', {
+      items: [{ collection: 'orders', item: 7 }]
+    })
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
+  })
+
+  it('my-integrity', async () => {
+    fixtures = { nivaro_record_integrity: [] }
+    failing = ['nivaro_record_integrity']
+    const res = await inject('GET', '/dashboard/my-integrity')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
+  })
+
+  it('my-throughput', async () => {
+    fixtures = { nivaro_users: [{ preferences: null }] }
+    failing = ['nivaro_workflow_history as h']
+    const res = await inject('GET', '/dashboard/my-throughput?weeks=4')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
+  })
+
+  it('integrations', async () => {
+    fixtures = { nivaro_external_apis: [], nivaro_erp_submissions: [] }
+    failing = ['nivaro_erp_submissions']
+    const res = await inject('GET', '/dashboard/integrations')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
+  })
+
+  it('zone-pulse when the scope dimensions cannot be read (never "unknown dimension")', async () => {
+    vi.mocked(listScopeDimensions).mockRejectedValueOnce(new Error('read failed'))
+    const res = await inject('GET', '/dashboard/zone-pulse?dimension=division')
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual(UNAVAILABLE)
+  })
+})
+
+describe('POST /dashboard/changed-since — batched per collection', () => {
+  const since = new Date(Date.now() - 86_400_000)
+  const watermarks = [{ collection: 'orders', item_id: '7', last_viewed_at: since }]
+
+  it('counts edits, comments and moves by others since the watermark', async () => {
+    fixtures = {
+      nivaro_record_views: watermarks,
+      'nivaro_activity as a': [
+        {
+          item: '7',
+          timestamp: new Date(),
+          first_name: 'Kim',
+          last_name: 'Diaz',
+          email: null,
+          delta: '{"vendor":1,"amount":2}'
+        }
+      ],
+      nivaro_comments: [{ item: '7', c: 2 }],
+      'nivaro_workflow_history as h': [{ item: '7', c: 1 }]
+    }
+    const res = await inject('POST', '/dashboard/changed-since', {
+      items: [
+        { collection: 'orders', item: 7 },
+        { collection: 'orders', item: 8 }
+      ]
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data['orders:7']).toEqual({
+      changed: true,
+      since: since.toISOString(),
+      editors: ['Kim Diaz'],
+      field_changes: 2,
+      comments: 2,
+      transitions: 1
+    })
+    expect(res.json().data['orders:8'].changed).toBe(false)
+    // One read of each source for the whole collection, never one per record.
+    expect(
+      calls.filter((c) => c.table === 'nivaro_comments' && c.method === 'groupBy')
+    ).toHaveLength(1)
+  })
+
+  it('a failed record read omits its key rather than answering "unchanged"', async () => {
+    fixtures = {
+      nivaro_record_views: watermarks,
+      'nivaro_activity as a': [],
+      nivaro_comments: []
+    }
+    failing = ['nivaro_comments']
+    const res = await inject('POST', '/dashboard/changed-since', {
+      items: [
+        { collection: 'orders', item: 7 },
+        { collection: 'orders', item: 8 }
+      ]
+    })
+    expect(res.statusCode).toBe(200)
+    const data = res.json().data as Record<string, unknown>
+    expect(data['orders:7']).toBeUndefined()
+    expect(data['orders:8']).toEqual({
+      changed: false,
+      since: null,
+      editors: [],
+      field_changes: 0,
+      comments: 0,
+      transitions: 0
+    })
+  })
+})
+
+describe('GET /dashboard/zone-pulse — partial and truncated answers', () => {
+  const dim = (name: string) => ({
+    id: 2,
+    name,
+    label: 'Region',
+    target_collection: 'regions',
+    display_field: 'short_name',
+    options_sort: null,
+    overrides: null,
+    exclusions: null,
+    strict: false,
+    is_active: true
+  })
+
+  beforeEach(() => {
+    vi.mocked(getRowFilter).mockImplementation(async () => null)
+  })
+
+  it('drops a collection whose reads fail, says so, and caches nothing for it', async () => {
+    vi.mocked(listScopeDimensions).mockResolvedValue([dim('region_partial')] as never)
+    vi.mocked(resolveRecordDimensionIds).mockImplementation(async (c: string) => {
+      if (c === 'orders') throw new Error('read failed')
+      return new Map([['5', ['1']]])
+    })
+    fixtures = {
+      regions: [{ id: 1, short_name: 'R1' }],
+      nivaro_workflow_bindings: [{ collection: 'orders' }, { collection: 'tasks' }],
+      'nivaro_workflow_instances as i': [
+        { id: 'I1', item: '5', current_state: 'S', template: 'T', started_at: '2026-09-01' }
+      ],
+      'information_schema.columns': []
+    }
+    const res = await inject('GET', '/dashboard/zone-pulse?dimension=region_partial')
+    expect(res.statusCode).toBe(200)
+    const data = res.json().data
+    expect(data.partial).toBe(true)
+    expect(data.zones[0].open).toEqual({ tasks: 1 })
+    // The next request tries the failed collection again.
+    vi.mocked(resolveRecordDimensionIds).mockClear()
+    await inject('GET', '/dashboard/zone-pulse?dimension=region_partial')
+    expect(vi.mocked(resolveRecordDimensionIds).mock.calls.some((c) => c[0] === 'orders')).toBe(
+      true
+    )
+    vi.mocked(listScopeDimensions).mockReset()
+    vi.mocked(resolveRecordDimensionIds).mockReset()
+  })
+
+  it('says when a scan hit its cap', async () => {
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([dim('region_cap')] as never)
+    vi.mocked(resolveRecordDimensionIds).mockResolvedValue(new Map([['0', ['1']]]))
+    fixtures = {
+      regions: [{ id: 1, short_name: 'R1' }],
+      nivaro_workflow_bindings: [{ collection: 'orders' }],
+      'nivaro_workflow_instances as i': Array.from({ length: 20_000 }, (_, n) => ({
+        id: `I${n}`,
+        item: String(n),
+        current_state: 'S',
+        template: 'T',
+        started_at: '2026-09-01'
+      })),
+      'information_schema.columns': []
+    }
+    const res = await inject('GET', '/dashboard/zone-pulse?dimension=region_cap')
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.truncated).toBe(true)
+    expect(res.json().data.partial).toBe(false)
+    vi.mocked(resolveRecordDimensionIds).mockReset()
   })
 })

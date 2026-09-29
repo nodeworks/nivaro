@@ -63,15 +63,13 @@ export async function recordRecapSince(
       .whereIn('a.action', ['create', 'update'])
       .where('a.timestamp', '>', since)
       .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
-      .select('a.user', 'u.first_name', 'u.last_name', 'u.email', 'r.delta')
-      .catch(() => [] as never[]),
+      .select('a.user', 'u.first_name', 'u.last_name', 'u.email', 'r.delta'),
     db('nivaro_comments')
       .where({ collection, item: id })
       .where('created_at', '>', since)
       .whereNot('user', userId)
       .count({ c: '*' })
-      .first()
-      .catch(() => ({ c: 0 })),
+      .first(),
     db('nivaro_workflow_history as h')
       .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
       .where({ 'i.collection': collection, 'i.item': id })
@@ -79,7 +77,6 @@ export async function recordRecapSince(
       .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
       .count({ c: '*' })
       .first()
-      .catch(() => ({ c: 0 }))
   ])
 
   const fields = new Set<string>()
@@ -246,37 +243,54 @@ export async function recordViewRoutes(app: FastifyInstance) {
         .where({ user: userId, collection, item_id: String(id) })
         .first()) as { id: number; last_viewed_at: Date; prev_viewed_at: Date | null } | undefined
 
+      // Decide the baseline first, recap against it, and only then roll the
+      // watermark: a recap that cannot be read answers 503 and leaves the
+      // baseline where it was, so the next open still has it.
       let since: Date | null = null
+      let roll: (() => Promise<unknown>) | null = null
       if (!existing) {
-        try {
-          await db('nivaro_record_views').insert({
-            user: userId,
-            collection,
-            item_id: String(id),
-            last_viewed_at: now,
-            prev_viewed_at: null
-          })
-        } catch {
-          // Insert race (two tabs opening at once) — the other tab's row wins.
-        }
+        roll = () =>
+          db('nivaro_record_views')
+            .insert({
+              user: userId,
+              collection,
+              item_id: String(id),
+              last_viewed_at: now,
+              prev_viewed_at: null
+            })
+            // Insert race (two tabs opening at once) — the other tab's row wins.
+            .catch(() => undefined)
       } else {
         const last = new Date(existing.last_viewed_at)
         if (now.getTime() - last.getTime() > SESSION_GRACE_MS) {
           // A genuinely new visit: yesterday's open becomes the diff baseline.
-          await db('nivaro_record_views')
-            .where('id', existing.id)
-            .update({ last_viewed_at: now, prev_viewed_at: last })
           since = last
+          roll = () =>
+            db('nivaro_record_views')
+              .where('id', existing.id)
+              .update({ last_viewed_at: now, prev_viewed_at: last })
         } else {
           // Same session (refresh, tab bounce): keep the baseline stable.
-          await db('nivaro_record_views').where('id', existing.id).update({ last_viewed_at: now })
           since = existing.prev_viewed_at ? new Date(existing.prev_viewed_at) : null
+          roll = () =>
+            db('nivaro_record_views').where('id', existing.id).update({ last_viewed_at: now })
         }
       }
 
-      if (!since) return reply.send({ data: null })
+      let recap: RecordRecap | null = null
+      if (since) {
+        try {
+          recap = await recordRecapSince(collection, String(id), userId, since)
+        } catch (err) {
+          req.log.warn({ err }, 'record recap failed')
+          return reply
+            .code(503)
+            .send({ error: 'Could not load this right now', code: 'RECORD_RECAP_UNAVAILABLE' })
+        }
+      }
+      await roll()
 
-      const recap = await recordRecapSince(collection, String(id), userId, since)
+      if (!since || !recap) return reply.send({ data: null })
       if (recap.field_changes === 0 && recap.comments === 0 && recap.transitions === 0) {
         return reply.send({ data: null })
       }

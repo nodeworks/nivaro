@@ -38,27 +38,24 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
       }
       const raw = Number(req.query.days ?? 14)
       const days = Number.isFinite(raw) ? Math.min(90, Math.max(1, Math.floor(raw))) : 14
-      const data = await listSendBacks({
-        user: req.user!,
-        isAdmin: !!req.isAdmin,
-        dir,
-        days
-      }).catch((err) => {
+      try {
+        const data = await listSendBacks({ user: req.user!, isAdmin: !!req.isAdmin, dir, days })
+        return reply.send({ data })
+      } catch (err) {
         req.log.warn({ err }, 'dashboard send-backs failed')
-        return []
-      })
-      return reply.send({ data })
+        return reply.code(503).send(UNAVAILABLE)
+      }
     }
   )
 
   app.get('/owner-absence', { preHandler: requireAuth }, async (req, reply) => {
-    const data = await listOwnerAbsence({ user: req.user!, isAdmin: !!req.isAdmin }).catch(
-      (err) => {
-        req.log.warn({ err }, 'dashboard owner-absence failed')
-        return []
-      }
-    )
-    return reply.send({ data })
+    try {
+      const data = await listOwnerAbsence({ user: req.user!, isAdmin: !!req.isAdmin })
+      return reply.send({ data })
+    } catch (err) {
+      req.log.warn({ err }, 'dashboard owner-absence failed')
+      return reply.code(503).send(UNAVAILABLE)
+    }
   })
 
   app.post<{ Body: { items?: unknown } }>(
@@ -80,24 +77,24 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
         }
         parsed.push({ collection: row.collection, item: String(row.item) })
       }
-      const data = await changedSince({
-        user: req.user!,
-        isAdmin: !!req.isAdmin,
-        items: parsed
-      }).catch((err) => {
+      try {
+        const data = await changedSince({ user: req.user!, isAdmin: !!req.isAdmin, items: parsed })
+        return reply.send({ data })
+      } catch (err) {
         req.log.warn({ err }, 'dashboard changed-since failed')
-        return {}
-      })
-      return reply.send({ data })
+        return reply.code(503).send(UNAVAILABLE)
+      }
     }
   )
 
   app.get('/my-integrity', { preHandler: requireAuth }, async (req, reply) => {
-    const data = await listMyIntegrity({ user: req.user!, isAdmin: !!req.isAdmin }).catch((err) => {
+    try {
+      const data = await listMyIntegrity({ user: req.user!, isAdmin: !!req.isAdmin })
+      return reply.send({ data })
+    } catch (err) {
       req.log.warn({ err }, 'dashboard my-integrity failed')
-      return { records: [], totals: { records: 0, findings: 0, lines: 0 } }
-    })
-    return reply.send({ data })
+      return reply.code(503).send(UNAVAILABLE)
+    }
   })
 
   app.get<{ Querystring: { collection?: string; ids?: string } }>(
@@ -138,16 +135,13 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const raw = Number(req.query.weeks ?? 4)
       const weeks = Number.isFinite(raw) ? Math.min(12, Math.max(1, Math.floor(raw))) : 4
-      const data = await myThroughput({ user: req.user!, weeks }).catch((err) => {
+      try {
+        const data = await myThroughput({ user: req.user!, weeks })
+        return reply.send({ data })
+      } catch (err) {
         req.log.warn({ err }, 'dashboard my-throughput failed')
-        return {
-          this_week: { transitions: 0, send_backs: 0, completions: 0 },
-          median: { transitions: 0, send_backs: 0, completions: 0 },
-          time_to_action_hours: { this_week: null, median: null },
-          send_back_ratio: null
-        }
-      })
-      return reply.send({ data })
+        return reply.code(503).send(UNAVAILABLE)
+      }
     }
   )
 
@@ -160,11 +154,13 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
   })
 
   app.get('/integrations', { preHandler: requireAuth }, async (req, reply) => {
-    const data = await integrationsSummary().catch((err) => {
+    try {
+      const data = await integrationsSummary()
+      return reply.send({ data })
+    } catch (err) {
       req.log.warn({ err }, 'dashboard integrations failed')
-      return []
-    })
-    return reply.send({ data })
+      return reply.code(503).send(UNAVAILABLE)
+    }
   })
 
   // Headline snapshots (#851): the recorded daily figures for one year and
@@ -201,14 +197,14 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const dimension = req.query.dimension?.trim() || undefined
-      const data = await zonePulse({ user: req.user!, isAdmin: !!req.isAdmin, dimension }).catch(
-        (err) => {
-          req.log.warn({ err }, 'dashboard zone-pulse failed')
-          return undefined
-        }
-      )
-      if (data === null) return reply.code(400).send({ error: 'Unknown scope dimension' })
-      return reply.send({ data: data ?? null })
+      try {
+        const data = await zonePulse({ user: req.user!, isAdmin: !!req.isAdmin, dimension })
+        if (data === null) return reply.code(400).send({ error: 'Unknown scope dimension' })
+        return reply.send({ data })
+      } catch (err) {
+        req.log.warn({ err }, 'dashboard zone-pulse failed')
+        return reply.code(503).send(UNAVAILABLE)
+      }
     }
   )
 }

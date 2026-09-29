@@ -1,11 +1,11 @@
 import { db } from '../db/index.js'
-import { recordRecapSince } from '../routes/record-views.js'
 import type { User } from '../types.js'
 import { recordLink } from './app-links.js'
 import { parseSpecial } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { can, getRowFilter } from './permissions.js'
-import { type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
+import { resolveStateOwnersBatch } from './pipeline-engine.js'
+import { compileAccessGates, visibleIds } from './record-access.js'
 
 /**
  * Per-viewer reads behind the dashboard canvas (/api/dashboard/*): what was
@@ -13,9 +13,13 @@ import { type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.j
  * and which records changed since I last opened them.
  *
  * Every read is scoped to the VIEWER (records they created, send-backs they
- * made, watermarks they hold) and every record is re-checked with can(read)
- * before it leaves — a row the viewer cannot open never appears. Each part is
- * best-effort: a failed collection degrades to nothing, never a 500.
+ * made, watermarks they hold) and every record passes the same gates as its
+ * record page (role, row filter, User Scopes) before it leaves — a row the
+ * viewer cannot open never appears.
+ *
+ * A read that decides the answer THROWS: a failure must never read as
+ * "nothing sent back", "everyone can act" or "0". The routes turn it into a
+ * 503. Only decorations (labels, names, links) fall back quietly.
  */
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -152,9 +156,9 @@ export function pickUnavailable(
 
 /** Business collections a pipeline is bound to. */
 async function boundCollections(): Promise<string[]> {
-  const rows = (await db('nivaro_workflow_bindings')
-    .distinct('collection')
-    .catch(() => [])) as Array<{ collection: string }>
+  const rows = (await db('nivaro_workflow_bindings').distinct('collection')) as Array<{
+    collection: string
+  }>
   return [
     ...new Set(
       rows.map((r) => String(r.collection)).filter((c) => IDENT.test(c) && !SYSTEM.test(c))
@@ -170,12 +174,14 @@ async function creatorColumns(collections: string[]): Promise<Map<string, string
     db('nivaro_fields')
       .whereIn('collection', collections)
       .whereNotNull('special')
-      .select('collection', 'field', 'special')
-      .catch(() => []) as Promise<Array<{ collection: string; field: string; special: unknown }>>,
+      .select('collection', 'field', 'special') as Promise<
+      Array<{ collection: string; field: string; special: unknown }>
+    >,
     db('information_schema.columns')
       .whereIn('table_name', collections)
-      .select('table_name', 'column_name')
-      .catch(() => []) as Promise<Array<{ table_name: string; column_name: string }>>
+      .select('table_name', 'column_name') as Promise<
+      Array<{ table_name: string; column_name: string }>
+    >
   ])
   for (const c of collections) {
     const lc = c.toLowerCase()
@@ -199,8 +205,7 @@ async function createdIds(userId: string): Promise<Map<string, string[]>> {
         .where(col, userId)
         .orderBy('id', 'desc')
         .limit(CREATED_CAP)
-        .pluck('id')
-        .catch(() => [])) as unknown[]
+        .pluck('id')) as unknown[]
       if (ids.length > 0)
         out.set(
           collection,
@@ -220,9 +225,38 @@ async function readableFilter(
   const ok = new Set<string>()
   for (const c of new Set(collections)) {
     if (SYSTEM.test(c) || !IDENT.test(c)) continue
-    if (isAdmin || (await can(user, 'read', c).catch(() => false))) ok.add(c)
+    if (isAdmin || (await can(user, 'read', c))) ok.add(c)
   }
   return ok
+}
+
+/**
+ * The records (of those given) the viewer can open — the record page's own
+ * gates: role, row filter and User Scopes. One query per collection. A failed
+ * read throws: dropping the record would read as "nothing to see".
+ */
+async function visibleRecords<T extends { collection: string; item: string }>(
+  user: User,
+  isAdmin: boolean,
+  records: T[]
+): Promise<T[]> {
+  if (isAdmin || records.length === 0) return records
+  const byCollection = new Map<string, string[]>()
+  for (const r of records) {
+    const list = byCollection.get(r.collection) ?? []
+    list.push(r.item)
+    byCollection.set(r.collection, list)
+  }
+  const allowed = new Set<string>()
+  await Promise.all(
+    [...byCollection.entries()].map(async ([collection, ids]) => {
+      const gates = await compileAccessGates(user, collection)
+      for (const id of await visibleIds(gates, [...new Set(ids)])) {
+        allowed.add(`${collection}:${String(id).toUpperCase()}`)
+      }
+    })
+  )
+  return records.filter((r) => allowed.has(`${r.collection}:${r.item.toUpperCase()}`))
 }
 
 /** `collection:id` → friendly label (friendly id, else display label, else #id). */
@@ -274,10 +308,11 @@ async function userNames(ids: string[]): Promise<Map<string, string>> {
   return out
 }
 
-/** Instance id → newest moment it entered its CURRENT state (else started_at). */
+/** Instance id → newest moment it entered its CURRENT state (else started_at).
+ *  null when the read failed: every entry is then unknown, never "today". */
 async function stateEntries(
   instances: Array<{ instance_id: string; started_at: Date | string | null }>
-): Promise<Map<string, Date | string | null>> {
+): Promise<Map<string, Date | string | null> | null> {
   const out = new Map<string, Date | string | null>()
   for (const i of instances) out.set(String(i.instance_id), i.started_at)
   const ids = [...out.keys()]
@@ -291,7 +326,8 @@ async function stateEntries(
       .groupBy('h.instance')
       .select('h.instance')
       .max({ at: 'h.timestamp' })
-  ).catch(() => [])) as Array<{ instance: string; at: Date | string | null }>
+  ).catch(() => null)) as Array<{ instance: string; at: Date | string | null }> | null
+  if (!rows) return null
   for (const r of rows) if (r.at) out.set(String(r.instance), r.at)
   return out
 }
@@ -310,7 +346,8 @@ export interface SendBackRow {
   to_label: string | null
   current_state_key: string | null
   current_state_label: string | null
-  days_in_state: number
+  /** null when the moment it entered its state could not be read. */
+  days_in_state: number | null
   instance_id: string
 }
 
@@ -385,7 +422,7 @@ export async function listSendBacks(opts: {
               void qb.whereNull('h.user').orWhereNot('h.user', userId)
             })
             .limit(SEND_BACK_CAP * 4)
-        ).catch(() => [] as Array<Record<string, unknown>>)
+        )
       )
     )
     const me = userId.toUpperCase()
@@ -406,8 +443,7 @@ export async function listSendBacks(opts: {
             })
           })
       })
-      .limit(SEND_BACK_CAP * 4)
-      .catch(() => [])) as Array<Record<string, unknown>>
+      .limit(SEND_BACK_CAP * 4)) as Array<Record<string, unknown>>
   }
 
   // The label regex is the authority (LIKE is only a coarse prefilter).
@@ -430,7 +466,16 @@ export async function listSendBacks(opts: {
     opts.isAdmin,
     rows.map((r) => String(r.collection))
   )
-  rows = rows.filter((r) => readable.has(String(r.collection))).slice(0, SEND_BACK_CAP)
+  rows = rows.filter((r) => readable.has(String(r.collection)))
+  rows = (
+    await visibleRecords(
+      opts.user,
+      opts.isAdmin,
+      rows.map((r) => ({ collection: String(r.collection), item: String(r.item), r }))
+    )
+  )
+    .map((v) => v.r)
+    .slice(0, SEND_BACK_CAP)
   if (rows.length === 0) return []
 
   const records = rows.map((r) => ({ collection: String(r.collection), item: String(r.item) }))
@@ -450,7 +495,7 @@ export async function listSendBacks(opts: {
       const collection = String(r.collection)
       const item = String(r.item)
       const by = r.user ? String(r.user) : null
-      const entered = entries.get(String(r.instance))
+      const entered = entries ? entries.get(String(r.instance)) : null
       const comment =
         r.comment != null && String(r.comment).trim() !== '' ? String(r.comment) : null
       return {
@@ -465,7 +510,7 @@ export async function listSendBacks(opts: {
         to_label: (r.to_label as string) ?? null,
         current_state_key: (r.current_key as string) ?? null,
         current_state_label: (r.current_label as string) ?? null,
-        days_in_state: entered ? daysBetween(entered, now) : 0,
+        days_in_state: entered ? daysBetween(entered, now) : null,
         instance_id: String(r.instance)
       }
     })
@@ -528,10 +573,16 @@ export async function listOwnerAbsence(opts: {
               'i.started_at',
               's.label as state_label'
             )
-        ).catch(() => [] as Array<Record<string, unknown>>)
+        )
       )
   )
-  const instances = (parts.flat() as Array<Record<string, unknown>>)
+  const found = (parts.flat() as Array<Record<string, unknown>>).map((i) => ({
+    collection: String(i.collection),
+    item: String(i.item),
+    i
+  }))
+  const instances = (await visibleRecords(opts.user, opts.isAdmin, found))
+    .map((v) => v.i)
     .sort(
       (a, b) =>
         new Date(String(b.started_at ?? 0)).getTime() -
@@ -551,14 +602,14 @@ export async function listOwnerAbsence(opts: {
     })),
     db,
     { skipDelegation: true }
-  ).catch(() => new Map<string, ResolvedOwner[]>())
+  )
 
   const ownerIds = new Set<string>()
   for (const list of owners.values()) for (const o of list) ownerIds.add(String(o.id))
   if (ownerIds.size === 0) return []
   const userRows = (await selectInChunks([...ownerIds], 2000, (chunk) =>
     db('nivaro_users').whereIn('id', chunk).select(AVAILABILITY_COLS)
-  ).catch(() => [])) as AvailabilityUserRow[]
+  )) as AvailabilityUserRow[]
   const known = new Set(userRows.map((u) => String(u.id).toUpperCase()))
   const delegateIds = [
     ...new Set(
@@ -570,7 +621,7 @@ export async function listOwnerAbsence(opts: {
   if (delegateIds.length > 0) {
     const delegates = (await selectInChunks(delegateIds, 2000, (chunk) =>
       db('nivaro_users').whereIn('id', chunk).select(AVAILABILITY_COLS)
-    ).catch(() => [])) as AvailabilityUserRow[]
+    )) as AvailabilityUserRow[]
     userRows.push(...delegates)
   }
 
@@ -616,8 +667,10 @@ const NOTHING: Omit<ChangedSince, 'since'> = {
 /**
  * For each record: did OTHER people change it after the viewer last opened
  * it? Reads the viewer's watermark (nivaro_record_views.last_viewed_at) and
- * never moves it. A record the viewer never opened (or cannot read) answers
- * changed:false with since:null.
+ * never moves it. A record the viewer never opened (or cannot open) answers
+ * changed:false with since:null — there is nothing to compare against. A
+ * failed watermark read throws; a failed change read for one collection
+ * leaves its records OUT of the answer, never "unchanged".
  */
 export async function changedSince(opts: {
   user: User
@@ -635,7 +688,11 @@ export async function changedSince(opts: {
     opts.isAdmin,
     items.map((i) => i.collection)
   )
-  const visible = items.filter((i) => readable.has(i.collection))
+  const visible = await visibleRecords(
+    opts.user,
+    opts.isAdmin,
+    items.filter((i) => readable.has(i.collection))
+  )
   if (visible.length === 0) return out
 
   const views = (await db('nivaro_record_views')
@@ -645,36 +702,132 @@ export async function changedSince(opts: {
         void qb.orWhere((q2) => q2.where('collection', v.collection).where('item_id', v.item))
       }
     })
-    .select('collection', 'item_id', 'last_viewed_at')
-    .catch(() => [])) as Array<{ collection: string; item_id: string; last_viewed_at: Date }>
+    .select('collection', 'item_id', 'last_viewed_at')) as Array<{
+    collection: string
+    item_id: string
+    last_viewed_at: Date
+  }>
   const sinceByKey = new Map(
-    views.map((v) => [`${v.collection}:${v.item_id}`, new Date(v.last_viewed_at)])
+    views.map((v) => [
+      `${v.collection}:${String(v.item_id).toUpperCase()}`,
+      new Date(v.last_viewed_at)
+    ])
   )
 
-  // Three reads per record — run a few at a time, never 180 at once.
-  const queue = visible.filter((v) => sinceByKey.has(`${v.collection}:${v.item}`))
-  const worker = async () => {
-    for (let next = queue.shift(); next; next = queue.shift()) {
-      const key = `${next.collection}:${next.item}`
-      const since = sinceByKey.get(key) as Date
+  const byCollection = new Map<string, WatermarkedItem[]>()
+  for (const v of visible) {
+    const since = sinceByKey.get(`${v.collection}:${v.item.toUpperCase()}`)
+    if (!since) continue
+    const list = byCollection.get(v.collection) ?? []
+    list.push({ item: v.item, since, key: `${v.collection}:${v.item}` })
+    byCollection.set(v.collection, list)
+  }
+  await Promise.all(
+    [...byCollection.entries()].map(async ([collection, list]) => {
       try {
-        const recap = await recordRecapSince(next.collection, next.item, userId, since, {
-          labels: false
-        })
-        out[key] = {
-          changed: recap.field_changes > 0 || recap.comments > 0 || recap.transitions > 0,
-          since: since.toISOString(),
-          editors: recap.editors,
-          field_changes: recap.field_changes,
-          comments: recap.comments,
-          transitions: recap.transitions
+        const recaps = await recapBatch(collection, list, userId)
+        for (const l of list) {
+          const r = recaps.get(l.item.toUpperCase()) ?? {
+            editors: [],
+            field_changes: 0,
+            comments: 0,
+            transitions: 0
+          }
+          out[l.key] = {
+            changed: r.field_changes > 0 || r.comments > 0 || r.transitions > 0,
+            since: l.since.toISOString(),
+            ...r
+          }
         }
       } catch {
-        out[key] = { ...NOTHING, since: since.toISOString() }
+        for (const l of list) delete out[l.key]
       }
+    })
+  )
+  return out
+}
+
+interface WatermarkedItem {
+  item: string
+  since: Date
+  key: string
+}
+
+/**
+ * The since-you-last-looked counts for several records of one collection,
+ * each against its own watermark: one activity read, one comments count and
+ * one history count, whatever the number of records. Keys are upper-cased
+ * item ids. Reads throw.
+ */
+async function recapBatch(
+  collection: string,
+  list: WatermarkedItem[],
+  userId: string
+): Promise<Map<string, Omit<ChangedSince, 'changed' | 'since'>>> {
+  const window = (itemCol: string, tsCol: string) => (qb: import('knex').Knex.QueryBuilder) => {
+    for (const l of list) {
+      void qb.orWhere((q2) => q2.where(itemCol, l.item).where(tsCol, '>', l.since))
     }
   }
-  await Promise.all(Array.from({ length: 6 }, worker))
+  const [activity, comments, transitions] = await Promise.all([
+    db('nivaro_activity as a')
+      .leftJoin('nivaro_revisions as r', 'r.activity', 'a.id')
+      .leftJoin('nivaro_users as u', 'u.id', 'a.user')
+      .where('a.collection', collection)
+      .whereIn('a.action', ['create', 'update'])
+      .where(window('a.item', 'a.timestamp'))
+      .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
+      .select('a.item', 'u.first_name', 'u.last_name', 'u.email', 'r.delta') as Promise<
+      Array<Record<string, unknown>>
+    >,
+    db('nivaro_comments')
+      .where('collection', collection)
+      .where(window('item', 'created_at'))
+      .whereNot('user', userId)
+      .groupBy('item')
+      .select('item')
+      .count({ c: '*' }) as Promise<Array<{ item: unknown; c: unknown }>>,
+    db('nivaro_workflow_history as h')
+      .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+      .where('i.collection', collection)
+      .where(window('i.item', 'h.timestamp'))
+      .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
+      .groupBy('i.item')
+      .select('i.item as item')
+      .count({ c: '*' }) as Promise<Array<{ item: unknown; c: unknown }>>
+  ])
+  const out = new Map<string, Omit<ChangedSince, 'changed' | 'since'>>()
+  const entry = (item: unknown) => {
+    const k = String(item).toUpperCase()
+    let e = out.get(k)
+    if (!e) {
+      e = { editors: [], field_changes: 0, comments: 0, transitions: 0 }
+      out.set(k, e)
+    }
+    return e
+  }
+  const fields = new Map<string, Set<string>>()
+  for (const row of activity) {
+    const e = entry(row.item)
+    const name =
+      [row.first_name, row.last_name].filter(Boolean).join(' ') ||
+      (row.email as string | null) ||
+      null
+    if (name && !e.editors.includes(name) && e.editors.length < 5) e.editors.push(name)
+    const k = String(row.item).toUpperCase()
+    const set = fields.get(k) ?? new Set<string>()
+    let delta: unknown = null
+    try {
+      delta = typeof row.delta === 'string' ? JSON.parse(row.delta) : row.delta
+    } catch {
+      delta = null
+    }
+    if (delta && typeof delta === 'object') for (const f of Object.keys(delta)) set.add(f)
+    fields.set(k, set)
+    e.field_changes = set.size
+  }
+  for (const r of comments) entry(r.item).comments = Number(r.c ?? 0)
+  for (const r of transitions) entry(r.item).transitions = Number(r.c ?? 0)
   return out
 }
 
@@ -717,15 +870,12 @@ async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): P
   await Promise.all(Array.from({ length: Math.min(n, queue.length) }, worker))
 }
 
-/** A collection's physical columns. `strict` lets a failed read throw; the
- *  default reads a failure as "no columns", which only suits callers that
- *  skip work on an empty set. */
-async function physicalColumns(
-  collection: string,
-  opts: { strict?: boolean } = {}
-): Promise<Set<string>> {
-  const q = db('information_schema.columns').where('table_name', collection).select('column_name')
-  const rows = (await (opts.strict ? q : q.catch(() => []))) as Array<{ column_name: string }>
+/** A collection's physical columns. A failed read throws — "no columns"
+ *  would read as nothing to check. */
+async function physicalColumns(collection: string): Promise<Set<string>> {
+  const rows = (await db('information_schema.columns')
+    .where('table_name', collection)
+    .select('column_name')) as Array<{ column_name: string }>
   return new Set(rows.map((r) => String(r.column_name)))
 }
 
@@ -767,8 +917,7 @@ export async function listMyIntegrity(opts: { user: User; isAdmin: boolean }): P
   const userId = String(opts.user.id)
   const found = (await db('nivaro_record_integrity')
     .whereNot('findings', '[]')
-    .distinct('collection')
-    .catch(() => [])) as Array<{ collection: string }>
+    .distinct('collection')) as Array<{ collection: string }>
   const readable = await readableFilter(
     opts.user,
     opts.isAdmin,
@@ -805,8 +954,11 @@ export async function listMyIntegrity(opts: { user: User; isAdmin: boolean }): P
       const mine = (await q
         .orderBy('ri.checked_at', 'desc')
         .limit(INTEGRITY_CAP)
-        .select('ri.item_id', 'ri.findings', 'ri.checked_at')
-        .catch(() => [])) as Array<{ item_id: string; findings: string; checked_at: Date }>
+        .select('ri.item_id', 'ri.findings', 'ri.checked_at')) as Array<{
+        item_id: string
+        findings: string
+        checked_at: Date
+      }>
       for (const r of mine) {
         kept.push({
           collection,
@@ -818,7 +970,7 @@ export async function listMyIntegrity(opts: { user: User; isAdmin: boolean }): P
     })
   )
 
-  const parsed = kept
+  const parsed = (await visibleRecords(opts.user, opts.isAdmin, kept))
     .sort((a, b) => b.at - a.at)
     .map((k) => {
       let list: Array<{ field?: string | null; rule?: string; message?: string }> = []
@@ -952,7 +1104,7 @@ export async function fieldBlockers(
   }
   const [required, physical, relations] = await Promise.all([
     requiredFieldsFor(collection),
-    physicalColumns(collection, { strict: true }),
+    physicalColumns(collection),
     db('nivaro_relations')
       .where('one_collection', collection)
       .orWhere('many_collection', collection)
@@ -1307,7 +1459,13 @@ export async function submissionReadiness(opts: {
   }
   // Answer in the caller's spelling of each id.
   const ownedSet = new Set(owned.map((id) => id.toUpperCase()))
-  const mine = ids.filter((id) => ownedSet.has(id.toUpperCase()))
+  const mine = (
+    await visibleRecords(
+      opts.user,
+      opts.isAdmin,
+      ids.filter((id) => ownedSet.has(id.toUpperCase())).map((item) => ({ collection, item }))
+    )
+  ).map((r) => r.item)
   if (mine.length === 0) return out
 
   const [fields, reqs] = await Promise.all([
@@ -1484,8 +1642,7 @@ export async function myThroughput(opts: {
       db.raw(
         '(SELECT MAX(p.timestamp) FROM nivaro_workflow_history p WHERE p.instance = h.instance AND p.timestamp < h.timestamp) AS prev_at'
       )
-    )
-    .catch(() => [])) as Array<Record<string, unknown>>
+    )) as Array<Record<string, unknown>>
   const history: ThroughputRow[] = rows.map((r) => {
     const at = new Date(r.timestamp as string)
     const prevRaw = (r.prev_at ?? r.started_at) as string | Date | null
@@ -1634,15 +1791,15 @@ export async function integrationsSummary(): Promise<Array<{ name: string } & In
     db('nivaro_external_apis')
       .where('enabled', true)
       .orderBy('name')
-      .select('id', 'name')
-      .catch(() => []) as Promise<Array<{ id: number; name: string }>>,
+      .select('id', 'name') as Promise<Array<{ id: number; name: string }>>,
     db('nivaro_erp_submissions')
       .where('updated_at', '>=', since)
       .whereNotNull('external_api')
       .orderBy('updated_at', 'desc')
       .limit(5000)
-      .select('external_api', 'status', 'updated_at')
-      .catch(() => []) as Promise<Array<{ external_api: number; status: string; updated_at: Date }>>
+      .select('external_api', 'status', 'updated_at') as Promise<
+      Array<{ external_api: number; status: string; updated_at: Date }>
+    >
   ])
   const byApi = new Map<number, Array<{ status: string; at: Date }>>()
   for (const s of subs) {
@@ -1669,6 +1826,10 @@ export interface ZonePulse {
     breached: number
     linked_recent: number
   }>
+  /** A readable collection was left out because its reads failed. */
+  partial: boolean
+  /** A scan stopped at its cap: the counts are a lower bound. */
+  truncated: boolean
 }
 
 const PULSE_TTL = 5 * 60_000
@@ -1681,21 +1842,23 @@ interface CollectionTally {
   open: Map<string, number>
   breached: Map<string, number>
   recent: Map<string, number>
+  truncated: boolean
 }
 const tallyCache = new Map<string, { at: number; value: CollectionTally }>()
 
 /** Tally each target id's open records, SLA breaches and recent updates in
- *  one collection, as the viewer can see it. */
+ *  one collection, as the viewer can see it (`enforcement` = the viewer's
+ *  User Scopes on it). A failed read throws, so nothing is cached for it. */
 async function tallyCollection(
-  user: User,
+  scopes: typeof import('./user-scopes.js'),
   collection: string,
   hops: import('./user-scopes.js').ScopeHop[],
-  cacheKey: string
+  cacheKey: string,
+  enforcement: import('./user-scopes.js').ScopeEnforcement
 ): Promise<CollectionTally> {
   const hit = tallyCache.get(cacheKey)
   if (hit && Date.now() - hit.at < PULSE_TTL) return hit.value
-  const scopes = await import('./user-scopes.js')
-  const enforcement = await scopes.getUserScopeEnforcement(user, collection)
+  let truncated = false
   const visible = (qb: import('knex').Knex.QueryBuilder) =>
     scopes.applyScopeEnforcement(qb, collection, enforcement)
   const needsRecord = enforcement.deny || enforcement.filters.length > 0
@@ -1715,23 +1878,21 @@ async function tallyCollection(
   const instances = (await instQ
     .orderBy('i.started_at', 'desc')
     .limit(PULSE_SCAN)
-    .select('i.id', 'i.item', 'i.current_state', 'i.template', 'i.started_at')
-    .catch(() => [])) as Array<{
+    .select('i.id', 'i.item', 'i.current_state', 'i.template', 'i.started_at')) as Array<{
     id: string
     item: string
     current_state: string | null
     template: string
     started_at: Date
   }>
+  if (instances.length >= PULSE_SCAN) truncated = true
   const latest = new Map<string, (typeof instances)[number]>()
   for (const i of instances) if (!latest.has(String(i.item))) latest.set(String(i.item), i)
 
   const zonesOf = async (ids: string[]) => {
     const map = new Map<string, string[]>()
     for (let k = 0; k < ids.length; k += 1500) {
-      const part = await scopes
-        .resolveRecordDimensionIds(collection, ids.slice(k, k + 1500), hops)
-        .catch(() => new Map<string, string[]>())
+      const part = await scopes.resolveRecordDimensionIds(collection, ids.slice(k, k + 1500), hops)
       for (const [id, zs] of part) map.set(id, zs)
     }
     return map
@@ -1747,6 +1908,7 @@ async function tallyCollection(
       bump(open, z)
       const list = itemsByZone.get(z.toUpperCase()) ?? []
       if (list.length < PULSE_BREACH_CAP) list.push(id)
+      else truncated = true
       itemsByZone.set(z.toUpperCase(), list)
     }
   }
@@ -1759,7 +1921,7 @@ async function tallyCollection(
       collection,
       statusIds,
       statusIds.map((id) => latest.get(id)).filter((i) => i != null)
-    ).catch(() => ({}) as Record<string, { status: string | null }>)
+    )
     for (const [z, list] of itemsByZone) {
       breached.set(z, list.filter((id) => statuses[id]?.status === 'breached').length)
     }
@@ -1771,16 +1933,12 @@ async function tallyCollection(
   if (recentCol) {
     const q = db(collection).where(recentCol, '>=', new Date(Date.now() - 7 * 86_400_000))
     visible(q)
-    const ids = (
-      (await q
-        .limit(PULSE_SCAN)
-        .pluck('id')
-        .catch(() => [])) as unknown[]
-    ).map(String)
+    const ids = ((await q.limit(PULSE_SCAN).pluck('id')) as unknown[]).map(String)
+    if (ids.length >= PULSE_SCAN) truncated = true
     for (const zs of (await zonesOf(ids)).values()) for (const z of zs) bump(recent, z)
   }
 
-  const value = { open, breached, recent }
+  const value = { open, breached, recent, truncated }
   tallyCache.set(cacheKey, { at: Date.now(), value })
   return value
 }
@@ -1790,8 +1948,10 @@ async function tallyCollection(
  * else every row, 12 at most): open pipeline records per bound collection,
  * how many of those are past their SLA, and how many records changed in the
  * last 7 days. Counts only what the viewer can read; a collection whose read
- * policy carries a row filter is left out entirely. Cached 5 minutes per
- * viewer and dimension. Answers null for an unknown dimension.
+ * policy carries a row filter is left out entirely; one whose reads fail is
+ * left out too and the answer says `partial`. Cached 5 minutes per viewer and
+ * dimension (a partial answer is not cached). Answers null for an unknown
+ * dimension; a failed dimension, restriction or zone read throws.
  */
 export async function zonePulse(opts: {
   user: User
@@ -1799,7 +1959,7 @@ export async function zonePulse(opts: {
   dimension?: string
 }): Promise<ZonePulse | null> {
   const scopes = await import('./user-scopes.js')
-  const dims = await scopes.listScopeDimensions().catch(() => [])
+  const dims = await scopes.listScopeDimensions()
   const dim = opts.dimension ? dims.find((d) => d.name === opts.dimension) : dims[0]
   if (!dim || !IDENT.test(dim.target_collection) || SYSTEM.test(dim.target_collection)) return null
   const userId = String(opts.user.id)
@@ -1811,7 +1971,7 @@ export async function zonePulse(opts: {
   const display = dim.display_field && IDENT.test(dim.display_field) ? dim.display_field : null
   const restricted = opts.isAdmin
     ? []
-    : (await scopes.getUserScopes(userId).catch(() => []))
+    : (await scopes.getUserScopes(userId))
         .filter((s) => s.mode === 'restrict' && s.dimension === dim.name)
         .flatMap((s) => s.values)
   const cols = ['id', ...(display ? [display] : [])]
@@ -1819,8 +1979,7 @@ export async function zonePulse(opts: {
   if (restricted.length > 0) {
     zoneRows = (await db(target)
       .whereIn('id', restricted.slice(0, PULSE_ZONES) as never)
-      .select(cols)
-      .catch(() => [])) as Array<Record<string, unknown>>
+      .select(cols)) as Array<Record<string, unknown>>
   } else {
     const sortRaw = dim.options_sort ?? display ?? 'id'
     const desc = sortRaw.startsWith('-')
@@ -1828,34 +1987,41 @@ export async function zonePulse(opts: {
     zoneRows = (await db(target)
       .orderBy(IDENT.test(sortCol) ? sortCol : 'id', desc ? 'desc' : 'asc')
       .limit(PULSE_ZONES)
-      .select(cols)
-      .catch(() => [])) as Array<Record<string, unknown>>
+      .select(cols)) as Array<Record<string, unknown>>
   }
 
   const bound = await boundCollections()
   const readable = await readableFilter(opts.user, opts.isAdmin, bound)
   const tallies = new Map<string, CollectionTally>()
+  let partial = false
+  let truncated = false
   await pool([...readable], 3, async (collection) => {
-    // A row-filtered read policy (RLS) cannot be honoured by raw counts — the
-    // collection is left out rather than over-counted (the ai-chat aggregate
-    // precedent). A failed policy read counts as filtered.
-    const rowFiltered = opts.isAdmin
-      ? false
-      : await getRowFilter(opts.user, 'read', collection)
-          .then((rf) => Array.isArray(rf) && rf.length > 0)
-          .catch(() => true)
-    if (rowFiltered) return
-    const hops = await scopes.scopeHopsFor(dim, collection).catch(() => null)
-    if (!hops) return
-    const enforcement = await scopes.getUserScopeEnforcement(opts.user, collection)
-    const sig = JSON.stringify(enforcement)
-    const tally = await tallyCollection(
-      opts.user,
-      collection,
-      hops,
-      `${collection}|${dim.name}|rf${rowFiltered ? 1 : 0}|${sig}`
-    ).catch(() => null)
-    if (tally) tallies.set(collection, tally)
+    try {
+      // A row-filtered read policy (RLS) cannot be honoured by raw counts —
+      // the collection is left out rather than over-counted (the ai-chat
+      // aggregate precedent).
+      const rowFiltered = opts.isAdmin
+        ? false
+        : await getRowFilter(opts.user, 'read', collection).then(
+            (rf) => Array.isArray(rf) && rf.length > 0
+          )
+      if (rowFiltered) return
+      const hops = await scopes.scopeHopsFor(dim, collection)
+      if (!hops) return
+      const enforcement = await scopes.getUserScopeEnforcement(opts.user, collection)
+      const tally = await tallyCollection(
+        scopes,
+        collection,
+        hops,
+        `${collection}|${dim.name}|${JSON.stringify(enforcement)}`,
+        enforcement
+      )
+      tallies.set(collection, tally)
+      if (tally.truncated) truncated = true
+    } catch {
+      // Left out, and said so — never counted as zero.
+      partial = true
+    }
   })
 
   const value: ZonePulse = {
@@ -1878,8 +2044,10 @@ export async function zonePulse(opts: {
       }
       const label = display && z[display] != null ? String(z[display]) : `#${id}`
       return { id, label, open, breached, linked_recent: linked }
-    })
+    }),
+    partial,
+    truncated
   }
-  pulseCache.set(cacheKey, { at: Date.now(), value })
+  if (!partial) pulseCache.set(cacheKey, { at: Date.now(), value })
   return value
 }
