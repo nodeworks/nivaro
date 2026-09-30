@@ -6737,12 +6737,15 @@ export function ItemEditForm({
                 (r) => r.one_collection === rc && r.one_field === field
               )
               const ops = opsVal as NestedOps
-              if (!grandRel?.many_collection || !grandRel.many_field) {
+              // A matched drawer relation (#735) names its own collection and
+              // its created rows carry their match seed — no FK to add.
+              const many_collection = ops.collection ?? grandRel?.many_collection ?? null
+              const many_field = ops.collection ? null : (grandRel?.many_field ?? null)
+              if (!many_collection || (!ops.collection && !many_field)) {
                 nestedFailures += ops.created.length + ops.updated.length + ops.deleted.length
                 remainingChanges[opsKey] = ops
                 continue
               }
-              const { many_collection, many_field } = grandRel
               const failedCreated: Record<string, unknown>[] = []
               const failedUpdated: { id: string; changes: Record<string, unknown> }[] = []
               const failedDeleted: string[] = []
@@ -6750,7 +6753,10 @@ export function ItemEditForm({
                 ops.created.map((draftRow) =>
                   client
                     .request(
-                      post(`/items/${many_collection}`, { ...draftRow, [many_field]: rowId })
+                      post(
+                        `/items/${many_collection}`,
+                        many_field ? { ...draftRow, [many_field]: rowId } : draftRow
+                      )
                     )
                     .catch(() => {
                       nestedFailures++
@@ -6782,7 +6788,8 @@ export function ItemEditForm({
                 remainingChanges[opsKey] = {
                   created: failedCreated,
                   updated: failedUpdated,
-                  deleted: failedDeleted
+                  deleted: failedDeleted,
+                  ...(ops.collection ? { collection: ops.collection } : {})
                 }
               }
             }

@@ -50,6 +50,10 @@ export interface NestedOps {
   created: Record<string, unknown>[]
   updated: { id: string; changes: Record<string, unknown> }[]
   deleted: string[]
+  /** Matched drawer relations (#735): the collection the ops write to. Their
+   *  rows are selected by a filter, not an FK to the line, so created rows
+   *  already carry the match seed and the flush adds no FK. */
+  collection?: string
 }
 
 export interface FieldGroup {

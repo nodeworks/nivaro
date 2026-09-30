@@ -6637,7 +6637,19 @@ export function InlineTableField({
                 ? {
                     matchCollection: relMatch.collection,
                     matchQuery: matched?.query ?? null,
-                    matchSeed: matched?.seed ?? {}
+                    matchSeed: matched?.seed ?? {},
+                    // #735 — a saved line in a pending grid stages its matched
+                    // rows with the line's queued edit, like the FK mode.
+                    ...(rowId && isPendingMode
+                      ? {
+                          deferred: true,
+                          stagedOps:
+                            (draft[`__nested_ops_${relField}`] as NestedOps | undefined) ??
+                            EMPTY_NESTED_OPS,
+                          onStagedOpsChange: (ops: NestedOps) =>
+                            setDraftField(`__nested_ops_${relField}`, ops)
+                        }
+                      : {})
                   }
                 : !rowId
                   ? {

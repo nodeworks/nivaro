@@ -44,7 +44,8 @@ interface NestedRelationEditorProps {
   onStagedOpsChange?: (ops: NestedOps) => void
   /** Match mode: rows come from an arbitrary collection selected by a filter
    *  instead of an FK to this row (e.g. allocations matched by item number).
-   *  Live-write only; creates are seeded with matchSeed. */
+   *  Creates are seeded with matchSeed; with `deferred` they stage like the
+   *  FK mode's ops (#735), carrying the seed and the collection. */
   matchCollection?: string
   matchQuery?: Record<string, unknown> | null
   matchSeed?: Record<string, unknown>
@@ -249,7 +250,7 @@ export function NestedRelationEditor({
 
   async function save() {
     if (!editingKey) return
-    if (parentRowId != null && grandCollection && fkField) {
+    if (parentRowId != null && grandCollection && (fkField || matchCollection)) {
       // draft starts from the full API row on edit (id, fkField, system fields, etc.) —
       // only send back the fields this editor actually renders.
       const writableKeys = new Set(displayCols.map((c) => c.field))
@@ -257,13 +258,17 @@ export function NestedRelationEditor({
         Object.entries(draft).filter(([k]) => writableKeys.has(k))
       )
       if (deferred) {
-        const ops = stagedOps ?? EMPTY_NESTED_OPS
+        const base = stagedOps ?? EMPTY_NESTED_OPS
+        // Matched rows: the ops say where they go, and a created row carries
+        // the seed that makes the match find it (#735).
+        const ops = matchCollection ? { ...base, collection: matchCollection } : base
+        const seeded = matchCollection ? { ...rowPayload, ...(matchSeed ?? {}) } : rowPayload
         if (editingKey === 'new') {
-          onStagedOpsChange?.({ ...ops, created: [...ops.created, rowPayload] })
+          onStagedOpsChange?.({ ...ops, created: [...ops.created, seeded] })
         } else if (editingKey.startsWith('created:')) {
           const idx = parseInt(editingKey.slice('created:'.length), 10)
           const nextCreated = [...ops.created]
-          nextCreated[idx] = rowPayload
+          nextCreated[idx] = seeded
           onStagedOpsChange?.({ ...ops, created: nextCreated })
         } else {
           const original = grandRows.find((r) => String(r.id) === editingKey)
@@ -314,7 +319,8 @@ export function NestedRelationEditor({
   async function confirmedDelete(key: string) {
     if (parentRowId != null && grandCollection) {
       if (deferred) {
-        const ops = stagedOps ?? EMPTY_NESTED_OPS
+        const base = stagedOps ?? EMPTY_NESTED_OPS
+        const ops = matchCollection ? { ...base, collection: matchCollection } : base
         if (key.startsWith('created:')) {
           const idx = parseInt(key.slice('created:'.length), 10)
           onStagedOpsChange?.({ ...ops, created: ops.created.filter((_, i) => i !== idx) })
