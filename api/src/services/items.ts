@@ -1296,7 +1296,8 @@ export async function primeVirtualSql(collection: string): Promise<Map<string, V
       for (const { cfg } of configs) {
         for (const src of cfg?.sources ?? []) {
           const c = src.related_collection
-          if (!colsCache.has(c)) colsCache.set(c, await getActualColumns(c).catch(() => new Set<string>()))
+          if (!colsCache.has(c))
+            colsCache.set(c, await getActualColumns(c).catch(() => new Set<string>()))
           if (!relsCache.has(c)) relsCache.set(c, await getRelations(c).catch(() => []))
         }
       }
@@ -2437,7 +2438,13 @@ export async function applyConditions(
           this.select(db.raw('1'))
             .from('nivaro_tasks as tsk')
             .where('tsk.collection', collection)
+            // Open tasks only (#1017): a record whose tasks are all done has
+            // nothing left to do.
+            .whereIn('tsk.status', ['open', 'in_progress'])
             .whereRaw('tsk.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+          // 'overdue' narrows to a task past its due date.
+          if (cond.value === 'overdue')
+            this.whereRaw('CAST(tsk.due_date AS date) < CAST(GETUTCDATE() AS date)')
         })
         continue
       }
@@ -5266,6 +5273,14 @@ export async function deleteOne(
 
   // Trash safety net — full-row snapshot, restorable for 30 days
   if (previousData) void writeTrashRow(collection, previousData, user.id)
+
+  // The record's open tasks are cancelled with it, and reopen on restore
+  // (#1006). Deferred, so a unit of work that rolls back touches nothing.
+  if (previousData)
+    void deferEffect('tasks:record-deleted', async () => {
+      const { onRecordDeleted } = await import('./tasks.js')
+      await onRecordDeleted(collection, id, user.id).catch(() => 0)
+    })
 
   // Recalc any stored rollups the deleted row contributed to (never throws)
   await recalcAffectedRollups(collection, null, previousData)

@@ -42,6 +42,10 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly re-evaluation of per-record alert definitions (thresholds and anomalies on nivaro_alert_definitions) so time-based conditions fire without a write.',
   'sla-escalations':
     'Every 30 minutes — finds breached SLA records whose escalation ladder has a tier due and notifies the tier target (owner, manager, named user) once per episode.',
+  'task-reminders':
+    'Tasks due tomorrow get one reminder to their assignee; tasks 3+ days overdue tell the requester and the assignee’s manager once.',
+  'task-done-when-sweep':
+    'Closes open tasks whose “done when” condition the record now meets (catches writes the after-save check never sees).',
   'line-sla-sweep':
     'Daily — records with grid lines still missing a required id past their line-SLA window; notifies current owners once per day and feeds the digest.',
   'queue-entry-notify':

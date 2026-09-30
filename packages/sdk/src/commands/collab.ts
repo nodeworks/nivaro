@@ -7,61 +7,126 @@ import type { ISODate, UUID } from '../index.js'
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
-export type TaskStatus = 'open' | 'done' | 'cancelled'
+export type TaskStatus = 'open' | 'in_progress' | 'done' | 'cancelled'
+export type TaskPriority = 'low' | 'normal' | 'urgent'
+
+/** One `[{field, op, value}]` rule: the task closes itself when the record
+ *  meets every rule (op: eq, neq, in, nnull, null, gt, gte, lt, lte, or
+ *  related_some / related_none with field `<child collection>:<fk>`). */
+export interface TaskDoneWhenRule {
+  field: string
+  op: string
+  value?: string | number | null
+}
 
 export interface Task {
   id: number
-  collection: string
-  item: string
+  /** null = an ordinary task, 'support' = a support ticket. */
+  kind?: string | null
+  collection: string | null
+  item: string | null
   title: string
   description: string | null
-  assignee: UUID
+  /** null while a team task waits for someone to pick it up. */
+  assignee: UUID | null
+  team_id?: number | null
   due_date: ISODate | null
   status: TaskStatus
+  priority?: TaskPriority
   created_by: UUID
   completed_at: ISODate | null
+  completed_by?: UUID | null
+  /** JSON condition list, when the task closes itself. */
+  done_when?: string | null
   created_at: ISODate
   updated_at: ISODate
   assignee_name?: string | null
   created_by_name?: string | null
+  completed_by_name?: string | null
+  team_name?: string | null
+  /** The record's human id (TP26-80366). */
+  item_label?: string | null
 }
 
 export interface MyTask extends Task {
   item_label: string | null
 }
 
-/** List tasks. `assignee: 'me'` resolves to the current user. */
+/** List tasks. `assignee: 'me'` resolves to the current user. Without a
+ *  record, non-admins get their own tasks (assigned, requested, their team's);
+ *  a record's list shows only to people who can read the record. */
 export function listTasks(query?: {
   collection?: string
   item?: string
   assignee?: string
-  status?: TaskStatus
+  created_by?: string
+  /** 'active' = open + in progress. */
+  status?: TaskStatus | 'active'
+  priority?: TaskPriority
+  due?: 'overdue' | 'today' | 'week' | 'none'
+  search?: string
+  limit?: number
 }): Command<{ data: Task[] }> {
   const params: Record<string, unknown> = {}
-  if (query?.collection) params.collection = query.collection
-  if (query?.item) params.item = query.item
-  if (query?.assignee) params.assignee = query.assignee
-  if (query?.status) params.status = query.status
+  for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== '') params[k] = v
   return cmd('GET', '/tasks', params)
 }
 
-/** Open tasks assigned to the current user, with best-effort item labels. */
+/** Open tasks assigned to the current user, with the record's human id. */
 export function listMyTasks(): Command<{ data: MyTask[] }> {
   return cmd('GET', '/tasks/mine')
+}
+
+/** Open, unclaimed tasks waiting with one of my teams. */
+export function listTeamTasks(): Command<{ data: MyTask[] }> {
+  return cmd('GET', '/tasks/team')
+}
+
+/** Tasks I asked others to do: open, plus the ones finished in the last `days`. */
+export function listRequestedTasks(days?: number): Command<{ data: MyTask[] }> {
+  return cmd('GET', '/tasks/requested', days ? { days } : undefined)
 }
 
 export function readTask(id: number): Command<{ data: Task }> {
   return cmd('GET', `/tasks/${id}`)
 }
 
+/** The task's plain-language history ("Reassigned to Beth", "Done by Kim"). */
+export function readTaskHistory(id: number): Command<{
+  data: Array<{
+    id: number
+    action: string
+    text: string
+    at: ISODate
+    user: UUID | null
+    user_name: string | null
+  }>
+}> {
+  return cmd('GET', `/tasks/${id}/history`)
+}
+
+/** Open and overdue task counts per record for one page of a list. */
+export function readTaskCounts(
+  collection: string,
+  ids: Array<string | number>
+): Command<{ data: Record<string, { open: number; overdue: number }> }> {
+  return cmd('POST', '/tasks/counts', undefined, { collection, ids })
+}
+
+/** Create a task for a person (`assignee`) or a team (`team_id`). A person
+ *  who is out of office with a delegate hands it to the delegate — the
+ *  response's `delegated_from` says so. */
 export function createTask(body: {
   collection: string
   item: string
   title: string
-  assignee: string
+  assignee?: string | null
+  team_id?: number | null
   description?: string | null
   due_date?: string | null
-}): Command<{ data: Task }> {
+  priority?: TaskPriority
+  done_when?: TaskDoneWhenRule[] | null
+}): Command<{ data: Task & { delegated_from: UUID | null } }> {
   return cmd('POST', '/tasks', undefined, body)
 }
 
@@ -70,9 +135,11 @@ export function updateTask(
   body: Partial<{
     title: string
     description: string | null
-    assignee: string
+    assignee: string | null
     due_date: string | null
     status: TaskStatus
+    priority: TaskPriority
+    done_when: TaskDoneWhenRule[] | null
   }>
 ): Command<{ data: Task }> {
   return cmd('PATCH', `/tasks/${id}`, undefined, body)
@@ -80,6 +147,16 @@ export function updateTask(
 
 export function completeTask(id: number): Command<{ data: Task }> {
   return cmd('POST', `/tasks/${id}/complete`)
+}
+
+/** A team member picks up an unclaimed team task (409 when someone was faster). */
+export function claimTask(id: number): Command<{ data: Task }> {
+  return cmd('POST', `/tasks/${id}/claim`)
+}
+
+/** The requester reminds the assignee (at most once per 20 hours; 429 NUDGE_TOO_SOON). */
+export function nudgeTask(id: number, note?: string): Command<{ data: { nudged: number } }> {
+  return cmd('POST', `/tasks/${id}/nudge`, undefined, note ? { note } : {})
 }
 
 export function deleteTask(id: number): Command<void> {

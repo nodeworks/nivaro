@@ -131,6 +131,14 @@ export async function restoreTrashRow(user: User, trashId: number): Promise<{ it
     /* a rollup miss must never fail a restore — the drift sweep reports it */
   }
 
+  // Tasks the deletion cancelled are open again (#1006).
+  try {
+    const { onRecordRestored } = await import('./tasks.js')
+    await onRecordRestored(row.collection, row.item_id, user.id)
+  } catch {
+    /* never fail a restore over its tasks */
+  }
+
   await db('nivaro_trash').where({ id: trashId }).del()
   return { item_id: row.item_id }
 }

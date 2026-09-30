@@ -9,6 +9,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   Clock,
   Code,
   Database,
@@ -141,7 +142,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   'external-api': PlugZap,
   'item-read': Database,
   'workflow-auto-sweep': GitBranch,
-  'chat-post': MessageSquare
+  'chat-post': MessageSquare,
+  task: ClipboardCheck
 }
 
 const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string }> = {
@@ -204,6 +206,11 @@ const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string
     cls: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 dark:bg-fuchsia-900/20 dark:text-fuchsia-400 dark:border-fuchsia-800',
     label: 'Chat',
     color: '#c026d3'
+  },
+  task: {
+    cls: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-900/20 dark:text-teal-400 dark:border-teal-800',
+    label: 'Task',
+    color: '#0d9488'
   }
 }
 
@@ -1363,6 +1370,138 @@ function EditOperationDialog({
                   </div>
                 </>
               )}
+              {op.type === 'task' && (
+                <>
+                  <div className='rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-[11px] text-teal-800 dark:border-teal-800 dark:bg-teal-900/20 dark:text-teal-300'>
+                    <ClipboardCheck className='mr-1 inline h-3 w-3' />
+                    Creates a task on a record. Assign it to a person (their id or email, e.g.{' '}
+                    <code className='font-mono'>{'{{record.creator.email}}'}</code>), to everyone
+                    who owns the record's current state (one task each), or to a team. The person
+                    who triggered the flow is recorded as the one who asked for it.
+                  </div>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <div className='space-y-1.5'>
+                      <Label>
+                        Collection <span className='text-red-500'>*</span>
+                      </Label>
+                      <Input
+                        value={(optsState.collection as string) ?? ''}
+                        onChange={(e) => setOpt('collection', e.target.value)}
+                        placeholder='{{collection}}'
+                        className='font-mono text-[13px]'
+                      />
+                    </div>
+                    <div className='space-y-1.5'>
+                      <Label>
+                        Record id <span className='text-red-500'>*</span>
+                      </Label>
+                      <Input
+                        value={(optsState.item as string) ?? ''}
+                        onChange={(e) => setOpt('item', e.target.value)}
+                        placeholder='{{item}}'
+                        className='font-mono text-[13px]'
+                      />
+                    </div>
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Title <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.title as string) ?? ''}
+                      onChange={(e) => setOpt('title', e.target.value)}
+                      placeholder='Enter the REQ IDs for {{friendly_id}}'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Details</Label>
+                    <Textarea
+                      value={(optsState.description as string) ?? ''}
+                      onChange={(e) => setOpt('description', e.target.value)}
+                      rows={3}
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 dark:border-border'>
+                    <div>
+                      <p className='text-[13px] font-medium'>Assign to the current owners</p>
+                      <p className='text-[11px] text-muted-foreground'>
+                        One task for each person who owns the record's state right now.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={optsState.assign_to_owners === true}
+                      onCheckedChange={(v) => setOpt('assign_to_owners', v)}
+                    />
+                  </div>
+                  {optsState.assign_to_owners !== true && (
+                    <div className='grid grid-cols-2 gap-3'>
+                      <div className='space-y-1.5'>
+                        <Label>Assignee (id or email)</Label>
+                        <Input
+                          value={(optsState.assignee as string) ?? ''}
+                          onChange={(e) => setOpt('assignee', e.target.value)}
+                          placeholder='{{record.creator.email}}'
+                          className='font-mono text-[13px]'
+                        />
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label>Or a team (id)</Label>
+                        <Input
+                          value={(optsState.team_id as string) ?? ''}
+                          onChange={(e) => setOpt('team_id', e.target.value)}
+                          placeholder='3'
+                          className='font-mono text-[13px]'
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className='grid grid-cols-2 gap-3'>
+                    <div className='space-y-1.5'>
+                      <Label>Due in (days)</Label>
+                      <Input
+                        value={(optsState.due_in_days as string) ?? ''}
+                        onChange={(e) => setOpt('due_in_days', e.target.value)}
+                        placeholder='3'
+                        className='font-mono text-[13px]'
+                      />
+                    </div>
+                    <div className='space-y-1.5'>
+                      <Label>Priority</Label>
+                      <Input
+                        value={(optsState.priority as string) ?? ''}
+                        onChange={(e) => setOpt('priority', e.target.value)}
+                        placeholder='normal | urgent | low'
+                        className='font-mono text-[13px]'
+                      />
+                    </div>
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Closes itself when (JSON, optional)</Label>
+                    <Textarea
+                      value={
+                        typeof optsState.done_when === 'string'
+                          ? (optsState.done_when as string)
+                          : optsState.done_when
+                            ? JSON.stringify(optsState.done_when)
+                            : ''
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value
+                        try {
+                          setOpt('done_when', v.trim() ? JSON.parse(v) : null)
+                        } catch {
+                          setOpt('done_when', v)
+                        }
+                      }}
+                      placeholder='[{"field": "requisition_id", "op": "nnull"}]'
+                      rows={2}
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                </>
+              )}
               {op.type === 'item-read' && (
                 <>
                   <div className='rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-[11px] text-indigo-700 dark:text-indigo-400'>
@@ -2124,6 +2263,9 @@ function AddOperationDialog({
                     </SelectItem>
                     <SelectItem value='chat-post'>
                       Chat — post a message into a channel or record room
+                    </SelectItem>
+                    <SelectItem value='task'>
+                      Task — ask someone to do something on a record
                     </SelectItem>
                     {(registeredOpsForAdd ?? []).length > 0 && (
                       <>

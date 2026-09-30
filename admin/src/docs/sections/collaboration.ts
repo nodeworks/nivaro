@@ -2,106 +2,104 @@ import type { DocSection } from '../types.js'
 
 export const collabTasks: DocSection = {
   id: 'tasks',
-  label: 'Task Assignments',
+  label: 'Tasks',
   content: [
-    { type: 'h1', id: 'tasks', text: 'Task Assignments' },
+    { type: 'h1', id: 'tasks', text: 'Tasks' },
     {
       type: 'p',
-      text: 'Attach lightweight tasks to any record to coordinate work. Assign a user, set a due date, add a description, and track completion. Tasks live in `nivaro_tasks` and render in a dedicated TaskPanel on the item edit page. Assignees receive in-app notifications and tasks appear in their "My Tasks" dashboard.'
+      text: 'A task is a piece of work on one record: a title, optional details, a person or a team, a due date and a priority. Tasks live in `nivaro_tasks`, show in the Tasks slot of the record form, in My Work, on the admin Tasks page, as a column in collection browsers and queues, and in the daily summary. Every change writes a plain sentence to the task history ("Reassigned to Sam Lee", "Due moved to Oct 3", "Marked done").'
     },
+    { type: 'h3', id: 'tasks-who-sees', text: 'Who can see a task' },
     {
-      type: 'h3',
-      id: 'tasks-creating',
-      text: 'Creating and Managing Tasks'
+      type: 'ul',
+      items: [
+        'A task is readable by anyone who can open its record: role permission, row filters and User Scopes all apply. A task on a record outside your scope answers 404.',
+        'Without a record filter, a non-admin lists only tasks they were given, asked for, or that sit with one of their teams.',
+        'Support requests (kind `support`) stay private to the person who asked and the administrators working them.'
+      ]
     },
+    { type: 'h3', id: 'tasks-creating', text: 'Creating a task' },
     {
       type: 'pre',
       code: `POST /api/tasks
 {
   "collection": "orders",
-  "item": "order-42",
-  "title": "Confirm pricing with customer",
-  "description": "Call to verify final unit cost",
-  "assignee": "user-123",
-  "due_at": "2026-06-20T17:00:00Z",
-  "priority": "high"
-}
-
-// Response
-{
-  "id": "task-999",
-  "collection": "orders",
-  "item": "order-42",
-  "title": "Confirm pricing with customer",
-  "assignee": {
-    "id": "user-123",
-    "name": "Sarah Chen",
-    "email": "sarah@example.com"
-  },
-  "due_at": "2026-06-20T17:00:00Z",
-  "status": "open",
-  "created_at": "2026-06-15T10:30:00Z",
-  "created_by": "user-456"
+  "item": "42",
+  "title": "Attach the vendor quote",
+  "description": "The PDF from the supplier",
+  "assignee": "<user uuid>",        // or "team_id": 12 for a team task
+  "due_date": "2026-10-09",
+  "priority": "urgent",             // low | normal | urgent
+  "done_when": [{ "field": "signed_quote", "op": "nnull" }]
 }`
     },
     {
-      type: 'h3',
-      id: 'tasks-api',
-      text: 'API Reference'
+      type: 'ul',
+      items: [
+        'An assignee who is out of office with a working delegate is swapped for the delegate; the history says so.',
+        'A team task has no assignee. Everyone on the team is told, it shows in their My Work "Your teams" lane, and the first person to press Pick it up (`POST /api/tasks/:id/claim`) takes it. A second claim answers 409.',
+        '`done_when` closes the task by itself once the record matches every condition (ops eq, neq, in, nnull, null, gt, gte, lt, lte, plus related_some / related_none for child rows). It is checked after each write to the record and by an hourly sweep; the history reads "Closed automatically — Signed quote was entered".'
+      ]
     },
+    { type: 'h3', id: 'tasks-api', text: 'API' },
     {
       type: 'pre',
-      code: `GET /api/tasks?collection=orders&item=order-42
-  # All tasks on a specific record
-
-GET /api/tasks?assignee=me
-  # My open tasks (current user)
-
-GET /api/tasks?assignee=me&status=open
-  # My open tasks (filter by status)
-
-GET /api/tasks/my-tasks
-  # Current user's dashboard with counts by status
-
-PATCH /api/tasks/task-999
-  { "status": "done" }  # Mark complete (records completed_by + completed_at)
-  { "assignee": "user-456" }  # Reassign
-  { "due_at": "2026-06-25T17:00:00Z" }  # Update due date
-  { "title": "...", "description": "..." }  # Edit
-
-DELETE /api/tasks/task-999  # Delete (permission: creator, assignee, or admin)`
+      code: `GET  /api/tasks?collection=&item=&assignee=me&status=active|open|in_progress|done|cancelled|all
+                &priority=&due=overdue|today|week|none&search=&limit=
+GET  /api/tasks/mine                 # open tasks assigned to you
+GET  /api/tasks/team                 # unclaimed tasks on your teams
+GET  /api/tasks/requested            # tasks you asked for, still open (and recently finished)
+GET  /api/tasks/people?collection=&item=   # "On this record": current owners + people fields
+POST /api/tasks/counts { collection, ids }  # { id: { open, overdue } } for a page of records
+GET  /api/tasks/:id
+GET  /api/tasks/:id/history
+PATCH /api/tasks/:id   { title, description, assignee, due_date, priority, status, done_when }
+POST /api/tasks/:id/complete
+POST /api/tasks/:id/claim
+POST /api/tasks/:id/nudge { note? }   # once a day; a second nudge answers 429 NUDGE_TOO_SOON
+DELETE /api/tasks/:id`
     },
     {
-      type: 'h3',
-      id: 'tasks-ui',
-      text: 'UI Components'
+      type: 'p',
+      text: 'The SDK carries the same set (`listTasks`, `listTeamTasks`, `listRequestedTasks`, `readTaskHistory`, `readTaskCounts`, `createTask`, `updateTask`, `claimTask`, `nudgeTask`). In GraphQL every collection type has a `tasks(status: String)` field.'
     },
+    { type: 'h3', id: 'tasks-record', text: 'Following the record' },
     {
       type: 'ul',
       items: [
-        'TaskPanel on item edit: shows all tasks for the record, create/edit inline',
-        'Overdue badge: red "OVERDUE" pill when due_at < now',
-        'Assignee avatar: user picture with name tooltip',
-        'Quick filters: "Open", "My Tasks", "Overdue" pills above the task list',
-        'My Tasks dashboard: tasks.tsx page with search, filters (assignee, collection, priority, status), and bulk actions'
+        'Deleting a record cancels its open tasks; restoring it from trash reopens them.',
+        "Merging two records moves the duplicate's tasks onto the record that stays.",
+        'Filter any list by `$has_tasks` (open tasks) or `$has_tasks: "overdue"`; the collection browser and queue tables offer an Open tasks column with the same filter.'
       ]
     },
-    {
-      type: 'h3',
-      id: 'tasks-status-workflow',
-      text: 'Status Workflow'
-    },
+    { type: 'h3', id: 'tasks-reminders', text: 'Reminders and escalation' },
     {
       type: 'ul',
       items: [
-        'open: default state; task is active and assigned',
-        'done: assignee marks complete; system records who completed it and when',
-        'deleted: soft-delete via DELETE endpoint; only creator/assignee/admin can delete'
+        'At 07:30 each open task due tomorrow reminds its assignee once.',
+        "A task overdue by `TASK_OVERDUE_ESCALATE_DAYS` (default 3) tells the person who asked for it and the assignee's manager, once.",
+        'The daily summary lists your overdue and due-today tasks.',
+        'From My Work, the "Waiting on others" lane lists tasks you asked for; Nudge reminds the assignee.'
       ]
     },
+    { type: 'h3', id: 'tasks-automation', text: 'Automation' },
     {
-      type: 'note',
-      text: 'Tasks are collection-scoped — a task cannot be shared across records. Each task is tied to exactly one collection + item pair.'
+      type: 'ul',
+      items: [
+        'Flow triggers `task-created`, `task-reassigned` and `task-completed` carry the task, the record and the people involved.',
+        'Webhooks can subscribe to `nivaro_tasks` for the same three events.',
+        'The flow op `task` and the rule action "Create a task" create one: a named assignee (id or email), the record\'s current owners (one task each), or a team; with a due offset in days, a priority and an optional `done_when`.',
+        'Ask AI can propose a task ("remind Sam to attach the signed quote on order 42 by Friday"); nothing is created until you approve the card. Ask AI can also list your open tasks.'
+      ]
+    },
+    { type: 'h3', id: 'tasks-status-workflow', text: 'Statuses' },
+    {
+      type: 'ul',
+      items: [
+        '`open` and `in_progress` are active: they count toward the open-task column, reminders and `$has_tasks`.',
+        '`done` records who finished it (`completed_by`) and when.',
+        '`cancelled` is what a deleted record does to its open tasks.'
+      ]
     }
   ]
 }
@@ -536,7 +534,7 @@ Content-Type: application/json
   "recipient": "<user uuid>",
   "subject": "Jane mentioned you in General chat",
   "message": "optional body, max 500 chars",
-  "collection": "workflows",   // optional record link
+  "collection": "orders",   // optional record link
   "item": "123"                // optional record link
 }
 
@@ -759,19 +757,19 @@ export const collabSupportRequests: DocSection = {
     {
       type: 'ul',
       items: [
-        '**Raise one** from a record\'s ⋯ menu (Request a change — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.',
+        "**Raise one** from a record's ⋯ menu (Request a change — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.",
         '**Follow it** on the Support page (`/support`) under My requests, in the "Tasks I\'ve requested" dashboard widget, and through notifications on every status change and reply.',
         '**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.',
         '**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.',
         '**Request types** (`nivaro_task_categories`, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.',
-        '**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague\'s record task list.'
+        "**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list."
       ]
     },
     {
       type: 'pre',
       code: `POST /api/support/tickets
-{ "title": "Move to funding year 2027", "description": "…", "category_id": 3,
-  "collection": "workflows", "item": "371431", "attachments": ["<file id>"] }
+{ "title": "Change the ship-to address", "description": "…", "category_id": 3,
+  "collection": "orders", "item": "42", "attachments": ["<file id>"] }
 
 GET   /api/support/tickets?scope=mine|desk&status=open|closed&assignee=me|unassigned&q=
 GET   /api/support/tickets/:id           // thread + history
@@ -779,7 +777,7 @@ POST  /api/support/tickets/:id/comments  { "text": "…" }
 POST  /api/support/tickets/:id/claim
 PATCH /api/support/tickets/:id           { "status": "done" }
 GET   /api/support/summary               // badge counts
-GET   /api/support/categories?collection=workflows
+GET   /api/support/categories?collection=orders
 GET   /api/tasks/requested               // tasks I asked others to do`
     }
   ]

@@ -269,6 +269,9 @@ export async function listUsers(
      *  (redacted flag, anonymised 'Redacted_…' emails, 'legacy-…' import
      *  placeholders). Suspended rows ride along — most hidden rows are. */
     hiddenOnly?: boolean
+    /** People only — drop integration/bot/service/placeholder accounts even
+     *  from an admin's listing (assignee pickers). The directory always does. */
+    peopleOnly?: boolean
     /** Column subset (intersected with the caller's projection; id always
      *  rides). A banner that needs three columns of 500 users should not
      *  pull 300 KB of the full projection. */
@@ -284,6 +287,7 @@ export async function listUsers(
     directory,
     includeSuspended,
     hiddenOnly,
+    peopleOnly,
     fields
   } = opts
 
@@ -294,7 +298,7 @@ export async function listUsers(
     // The person directory is for picking PEOPLE: an integration identity or a
     // placeholder is never a valid assignee, contact or mention. Admin listings
     // keep them (that is where they are managed).
-    if (directory) qb.whereNull('account_kind')
+    if (directory || peopleOnly) qb.whereNull('account_kind')
     if (includeSuspended || hiddenOnly) return
     qb.where((inner) => {
       inner.where('status', '!=', 'suspended').orWhereNull('status')

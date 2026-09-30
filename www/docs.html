@@ -6542,8 +6542,8 @@ export default defineExtension({
   collection: 'warehouses',
   match_by: ['name'],
   rows: [
-    { name: 'PAE77', ordering_system: 'mdsi' },
-    { name: 'WAPUY', ordering_system: 'fusion_transfer' }
+    { name: 'North DC', ordering_system: 'api' },
+    { name: 'South DC', ordering_system: 'manual' }
   ],
   mode: 'fill-only' // creates missing rows, fills empty columns, never overwrites a value someone set
 })</code></pre>
@@ -12651,7 +12651,7 @@ cms.request(getTypes())</code></pre>
             <li>Passwords are never captured; the spec signs in through <code class="doc-code">POST /api/auth/login/token</code> with <code class="doc-code">NIVARO_E2E_TOKEN</code>, and the origin comes from <code class="doc-code">NIVARO_E2E_ORIGIN</code>.</li>
             <li>Consecutive typing into one field collapses into one <code class="doc-code">fill</code>; back-to-back navigations (a redirect chain) keep only the last <code class="doc-code">goto</code>.</li>
           </ul>
-          <pre class="doc-pre"><code>NIVARO_E2E_TOKEN=&lt;static token&gt; npx playwright test -c api/extensions/efp-ops/tests/playwright.config.ts golden-path.spec.ts</code></pre>
+          <pre class="doc-pre"><code>NIVARO_E2E_TOKEN=&lt;static token&gt; npx playwright test -c api/extensions/my-extension/tests/playwright.config.ts golden-path.spec.ts</code></pre>
           <h2 class="doc-h2" id="dev-tooling-contrast">Contrast audit page</h2>
           <p class="doc-p">Data Tools → Contrast Audit renders a fixed showcase of the shared and admin components in BOTH themes side by side and measures every text node against WCAG (4.5:1 body, 3:1 large), listing offenders with ratio, selector and the exact foreground/background it measured. Rerun it after any shared className change; "Audit this page" measures whatever page you are on instead (the same auditor the command palette exposes).</p>
           <h2 class="doc-h2" id="dev-tooling-release-notes">What changed in this release</h2>
@@ -14096,77 +14096,101 @@ GET /api/cross-triggers</code></pre>
         <!-- ════ COLLABORATION ════ -->
 
         <!-- TASK ASSIGNMENTS -->
-        <div class="doc-section" id="s-tasks" data-toc='[{"id":"tasks","label":"Task Assignments"},{"id":"tasks-creating","label":"Creating and Managing Tasks"},{"id":"tasks-api","label":"API Reference"},{"id":"tasks-ui","label":"UI Components"},{"id":"tasks-status-workflow","label":"Status Workflow"}]'>
+        <div class="doc-section" id="s-tasks" data-toc='[{"id":"tasks","label":"Tasks"},{"id":"tasks-who-sees","label":"Who can see a task"},{"id":"tasks-creating","label":"Creating a task"},{"id":"tasks-api","label":"API"},{"id":"tasks-record","label":"Following the record"},{"id":"tasks-reminders","label":"Reminders and escalation"},{"id":"tasks-automation","label":"Automation"},{"id":"tasks-status-workflow","label":"Statuses"}]'>
           <!-- SYNC:tasks -->
-          <h1 class="doc-h1" id="tasks">Task Assignments</h1>
-          <p class="doc-p">Attach lightweight tasks to any record to coordinate work. Assign a user, set a due date, add a description, and track completion. Tasks live in <code class="doc-code">nivaro_tasks</code> and render in a dedicated TaskPanel on the item edit page. Assignees receive in-app notifications and tasks appear in their "My Tasks" dashboard.</p>
-          <h3 class="doc-h3" id="tasks-creating">Creating and Managing Tasks</h3>
+          <h1 class="doc-h1" id="tasks">Tasks</h1>
+          <p class="doc-p">A task is a piece of work on one record: a title, optional details, a person or a team, a due date and a priority. Tasks live in <code class="doc-code">nivaro_tasks</code>, show in the Tasks slot of the record form, in My Work, on the admin Tasks page, as a column in collection browsers and queues, and in the daily summary. Every change writes a plain sentence to the task history ("Reassigned to Sam Lee", "Due moved to Oct 3", "Marked done").</p>
+          <h3 class="doc-h3" id="tasks-who-sees">Who can see a task</h3>
+          <ul class="doc-ul">
+            <li>A task is readable by anyone who can open its record: role permission, row filters and User Scopes all apply. A task on a record outside your scope answers 404.</li>
+            <li>Without a record filter, a non-admin lists only tasks they were given, asked for, or that sit with one of their teams.</li>
+            <li>Support requests (kind <code class="doc-code">support</code>) stay private to the person who asked and the administrators working them.</li>
+          </ul>
+          <h3 class="doc-h3" id="tasks-creating">Creating a task</h3>
           <pre class="doc-pre"><code>POST /api/tasks
 {
   "collection": "orders",
-  "item": "order-42",
-  "title": "Confirm pricing with customer",
-  "description": "Call to verify final unit cost",
-  "assignee": "user-123",
-  "due_at": "2026-06-20T17:00:00Z",
-  "priority": "high"
-}
-
-// Response
-{
-  "id": "task-999",
-  "collection": "orders",
-  "item": "order-42",
-  "title": "Confirm pricing with customer",
-  "assignee": {
-    "id": "user-123",
-    "name": "Sarah Chen",
-    "email": "sarah@example.com"
-  },
-  "due_at": "2026-06-20T17:00:00Z",
-  "status": "open",
-  "created_at": "2026-06-15T10:30:00Z",
-  "created_by": "user-456"
+  "item": "42",
+  "title": "Attach the vendor quote",
+  "description": "The PDF from the supplier",
+  "assignee": "&lt;user uuid&gt;",        // or "team_id": 12 for a team task
+  "due_date": "2026-10-09",
+  "priority": "urgent",             // low | normal | urgent
+  "done_when": [{ "field": "signed_quote", "op": "nnull" }]
 }</code></pre>
-          <h3 class="doc-h3" id="tasks-api">API Reference</h3>
-          <pre class="doc-pre"><code>GET /api/tasks?collection=orders&amp;item=order-42
-  # All tasks on a specific record
-
-GET /api/tasks?assignee=me
-  # My open tasks (current user)
-
-GET /api/tasks?assignee=me&amp;status=open
-  # My open tasks (filter by status)
-
-GET /api/tasks/my-tasks
-  # Current user's dashboard with counts by status
-
-PATCH /api/tasks/task-999
-  { "status": "done" }  # Mark complete (records completed_by + completed_at)
-  { "assignee": "user-456" }  # Reassign
-  { "due_at": "2026-06-25T17:00:00Z" }  # Update due date
-  { "title": "...", "description": "..." }  # Edit
-
-DELETE /api/tasks/task-999  # Delete (permission: creator, assignee, or admin)</code></pre>
-          <h3 class="doc-h3" id="tasks-ui">UI Components</h3>
           <ul class="doc-ul">
-            <li>TaskPanel on item edit: shows all tasks for the record, create/edit inline</li>
-            <li>Overdue badge: red "OVERDUE" pill when due_at &lt; now</li>
-            <li>Assignee avatar: user picture with name tooltip</li>
-            <li>Quick filters: "Open", "My Tasks", "Overdue" pills above the task list</li>
-            <li>My Tasks dashboard: tasks.tsx page with search, filters (assignee, collection, priority, status), and bulk actions</li>
+            <li>An assignee who is out of office with a working delegate is swapped for the delegate; the history says so.</li>
+            <li>A team task has no assignee. Everyone on the team is told, it shows in their My Work "Your teams" lane, and the first person to press Pick it up (<code class="doc-code">POST /api/tasks/:id/claim</code>) takes it. A second claim answers 409.</li>
+            <li><code class="doc-code">done_when</code> closes the task by itself once the record matches every condition (ops eq, neq, in, nnull, null, gt, gte, lt, lte, plus related_some / related_none for child rows). It is checked after each write to the record and by an hourly sweep; the history reads "Closed automatically — Signed quote was entered".</li>
           </ul>
-          <h3 class="doc-h3" id="tasks-status-workflow">Status Workflow</h3>
+          <h3 class="doc-h3" id="tasks-api">API</h3>
+          <pre class="doc-pre"><code>GET  /api/tasks?collection=&amp;item=&amp;assignee=me&amp;status=active|open|in_progress|done|cancelled|all
+                &amp;priority=&amp;due=overdue|today|week|none&amp;search=&amp;limit=
+GET  /api/tasks/mine                 # open tasks assigned to you
+GET  /api/tasks/team                 # unclaimed tasks on your teams
+GET  /api/tasks/requested            # tasks you asked for, still open (and recently finished)
+GET  /api/tasks/people?collection=&amp;item=   # "On this record": current owners + people fields
+POST /api/tasks/counts { collection, ids }  # { id: { open, overdue } } for a page of records
+GET  /api/tasks/:id
+GET  /api/tasks/:id/history
+PATCH /api/tasks/:id   { title, description, assignee, due_date, priority, status, done_when }
+POST /api/tasks/:id/complete
+POST /api/tasks/:id/claim
+POST /api/tasks/:id/nudge { note? }   # once a day; a second nudge answers 429 NUDGE_TOO_SOON
+DELETE /api/tasks/:id</code></pre>
+          <p class="doc-p">The SDK carries the same set (<code class="doc-code">listTasks</code>, <code class="doc-code">listTeamTasks</code>, <code class="doc-code">listRequestedTasks</code>, <code class="doc-code">readTaskHistory</code>, <code class="doc-code">readTaskCounts</code>, <code class="doc-code">createTask</code>, <code class="doc-code">updateTask</code>, <code class="doc-code">claimTask</code>, <code class="doc-code">nudgeTask</code>). In GraphQL every collection type has a <code class="doc-code">tasks(status: String)</code> field.</p>
+          <h3 class="doc-h3" id="tasks-record">Following the record</h3>
           <ul class="doc-ul">
-            <li>open: default state; task is active and assigned</li>
-            <li>done: assignee marks complete; system records who completed it and when</li>
-            <li>deleted: soft-delete via DELETE endpoint; only creator/assignee/admin can delete</li>
+            <li>Deleting a record cancels its open tasks; restoring it from trash reopens them.</li>
+            <li>Merging two records moves the duplicate's tasks onto the record that stays.</li>
+            <li>Filter any list by <code class="doc-code">$has_tasks</code> (open tasks) or <code class="doc-code">$has_tasks: "overdue"</code>; the collection browser and queue tables offer an Open tasks column with the same filter.</li>
           </ul>
-          <div class="doc-note">Tasks are collection-scoped — a task cannot be shared across records. Each task is tied to exactly one collection + item pair.</div>
+          <h3 class="doc-h3" id="tasks-reminders">Reminders and escalation</h3>
+          <ul class="doc-ul">
+            <li>At 07:30 each open task due tomorrow reminds its assignee once.</li>
+            <li>A task overdue by <code class="doc-code">TASK_OVERDUE_ESCALATE_DAYS</code> (default 3) tells the person who asked for it and the assignee's manager, once.</li>
+            <li>The daily summary lists your overdue and due-today tasks.</li>
+            <li>From My Work, the "Waiting on others" lane lists tasks you asked for; Nudge reminds the assignee.</li>
+          </ul>
+          <h3 class="doc-h3" id="tasks-automation">Automation</h3>
+          <ul class="doc-ul">
+            <li>Flow triggers <code class="doc-code">task-created</code>, <code class="doc-code">task-reassigned</code> and <code class="doc-code">task-completed</code> carry the task, the record and the people involved.</li>
+            <li>Webhooks can subscribe to <code class="doc-code">nivaro_tasks</code> for the same three events.</li>
+            <li>The flow op <code class="doc-code">task</code> and the rule action "Create a task" create one: a named assignee (id or email), the record's current owners (one task each), or a team; with a due offset in days, a priority and an optional <code class="doc-code">done_when</code>.</li>
+            <li>Ask AI can propose a task ("remind Sam to attach the signed quote on order 42 by Friday"); nothing is created until you approve the card. Ask AI can also list your open tasks.</li>
+          </ul>
+          <h3 class="doc-h3" id="tasks-status-workflow">Statuses</h3>
+          <ul class="doc-ul">
+            <li><code class="doc-code">open</code> and <code class="doc-code">in_progress</code> are active: they count toward the open-task column, reminders and <code class="doc-code">$has_tasks</code>.</li>
+            <li><code class="doc-code">done</code> records who finished it (<code class="doc-code">completed_by</code>) and when.</li>
+            <li><code class="doc-code">cancelled</code> is what a deleted record does to its open tasks.</li>
+          </ul>
           <!-- /SYNC:tasks -->
         </div>
         <div class="doc-section" id="s-support-requests" data-toc='[{"id":"support-requests","label":"Support Requests"}]'>
           <!-- SYNC:support-requests -->
+          <h1 class="doc-h1" id="support-requests">Support Requests</h1>
+          <p class="doc-p">People ask the administrators for help or for a change to a record, and follow the request until it is done. A support request is a task (<code class="doc-code">nivaro_tasks.kind = support</code>) that points at a record, or at nothing for General Support, and waits unassigned until someone picks it up.</p>
+          <ul class="doc-ul">
+            <li>**Raise one** from a record's ⋯ menu (Request a change — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.</li>
+            <li>**Follow it** on the Support page (<code class="doc-code">/support</code>) under My requests, in the "Tasks I've requested" dashboard widget, and through notifications on every status change and reply.</li>
+            <li>**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.</li>
+            <li>**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.</li>
+            <li>**Request types** (<code class="doc-code">nivaro_task_categories</code>, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.</li>
+            <li>**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list.</li>
+          </ul>
+          <pre class="doc-pre"><code>POST /api/support/tickets
+{ "title": "Change the ship-to address", "description": "…", "category_id": 3,
+  "collection": "orders", "item": "42", "attachments": ["&lt;file id&gt;"] }
+
+GET   /api/support/tickets?scope=mine|desk&amp;status=open|closed&amp;assignee=me|unassigned&amp;q=
+GET   /api/support/tickets/:id           // thread + history
+POST  /api/support/tickets/:id/comments  { "text": "…" }
+POST  /api/support/tickets/:id/claim
+PATCH /api/support/tickets/:id           { "status": "done" }
+GET   /api/support/summary               // badge counts
+GET   /api/support/categories?collection=orders
+GET   /api/tasks/requested               // tasks I asked others to do</code></pre>
           <!-- /SYNC:support-requests -->
         </div>
 
@@ -14481,7 +14505,7 @@ Content-Type: application/json
   "recipient": "&lt;user uuid&gt;",
   "subject": "Jane mentioned you in General chat",
   "message": "optional body, max 500 chars",
-  "collection": "workflows",   // optional record link
+  "collection": "orders",   // optional record link
   "item": "123"                // optional record link
 }
 

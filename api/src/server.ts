@@ -15,7 +15,6 @@ import { describeDbRefusal, errorText } from './lib/db-refusal.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
-import { bootPhase } from './services/boot-phases.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { chainPlugin } from './plugins/chain.js'
 import { cronPlugin } from './plugins/cron.js'
@@ -36,6 +35,7 @@ import { sharePublicRoutes } from './routes/share-links.js'
 import { statusPublicRoutes } from './routes/status.js'
 import { setPulseApp } from './services/activity.js'
 import { pruneAiCalls } from './services/ai-log.js'
+import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
@@ -1551,6 +1551,32 @@ export async function buildServer() {
           const r = await runLineSlaSweep(app)
           if (r.findings > 0)
             app.log.info(`line-sla: ${r.findings} record(s) overdue, ${r.notified} notified`)
+        })
+      }
+
+      // Tasks (#1007, #1016): due-tomorrow reminders + overdue escalation
+      // once a day, the self-closing check every hour, and a daily-summary
+      // section of what is due or overdue.
+      {
+        const { registerTaskDigest, runTaskReminders, sweepDoneWhen } = await import(
+          './services/tasks.js'
+        )
+        await registerTaskDigest()
+        app.cron.schedule(
+          'task-reminders',
+          '30 7 * * *',
+          async () => {
+            const r = await runTaskReminders(app)
+            if (r.due_tomorrow || r.escalated)
+              app.log.info(
+                `task-reminders: ${r.due_tomorrow} due tomorrow, ${r.escalated} escalated, ${r.notified} notified`
+              )
+          },
+          { dryRun: async () => runTaskReminders(app, { dryRun: true }) }
+        )
+        app.cron.schedule('task-done-when-sweep', '40 * * * *', async () => {
+          const n = await sweepDoneWhen(app)
+          if (n) app.log.info(`task-done-when-sweep: ${n} task(s) closed`)
         })
       }
 

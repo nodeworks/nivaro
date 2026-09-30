@@ -132,7 +132,19 @@ export function WebhookEditPage() {
     queryKey: ['collections', 'tables_only'],
     queryFn: () => api.get('/collections?tables_only=true').then((r) => r.data.data as Collection[])
   })
-  const allCollections = collectionsData ?? []
+  // Task events (#1008) are offered as their own source: a webhook left on
+  // "All collections" never receives them — it has to name Tasks.
+  const allCollections = [
+    ...(collectionsData ?? []),
+    ...((collectionsData ?? []).some((c) => c.collection === 'nivaro_tasks')
+      ? []
+      : [
+          {
+            collection: 'nivaro_tasks',
+            display_name: 'Tasks (created, reassigned, completed)'
+          } as Collection
+        ])
+  ]
 
   const { data, isLoading } = useQuery({
     queryKey: ['webhooks', id],

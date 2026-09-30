@@ -633,6 +633,10 @@ export async function supportRoutes(app: FastifyInstance) {
       }
       patch.status = b.status
       patch.completed_at = b.status === 'done' || b.status === 'cancelled' ? new Date() : null
+      // Who closed it (#1001), where the column exists.
+      const { taskColumns } = await import('../services/tasks.js')
+      if ((await taskColumns()).completedBy)
+        patch.completed_by = b.status === 'done' ? viewer.id : null
       events.push(
         `${STATUS_LABELS[t.status as TicketStatus] ?? t.status} → ${STATUS_LABELS[b.status as TicketStatus]}`
       )

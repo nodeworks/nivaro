@@ -25,7 +25,6 @@ import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
 import { can } from './permissions.js'
-import { applyQueueGate, queueGateFor } from './queue-access.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -33,6 +32,7 @@ import {
   addendumRecordPath,
   loadAddendums
 } from './pipeline-subject.js'
+import { applyQueueGate, queueGateFor } from './queue-access.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
 
@@ -2272,6 +2272,8 @@ export async function resolveTasksSource(
       't.item as target_item',
       't.created_at',
       't.assignee',
+      't.due_date',
+      't.priority',
       'u.first_name as assignee_first',
       'u.last_name as assignee_last',
       'u.email as assignee_email'
@@ -2282,10 +2284,26 @@ export async function resolveTasksSource(
     target_item: string | null
     created_at: Date
     assignee: string | null
+    due_date: Date | string | null
+    priority: string | null
     assignee_first: string | null
     assignee_last: string | null
     assignee_email: string
   }>
+
+  // A task's due date is its SLA (#1011): past due = breached, due within a
+  // day = warning; urgent carries the at-risk tint.
+  const slaOf = (due: Date | string | null): 'ok' | 'warning' | 'breached' | null => {
+    if (!due) return null
+    const d = new Date(due)
+    if (Number.isNaN(d.getTime())) return null
+    const today = new Date()
+    const dueDay = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    const todayDay = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+    if (dueDay < todayDay) return 'breached'
+    if (dueDay - todayDay <= 86_400_000) return 'warning'
+    return 'ok'
+  }
 
   const matchedCount = rows.length
   const truncated = matchedCount > ceiling
@@ -2293,7 +2311,7 @@ export async function resolveTasksSource(
     collection: 'tasks',
     item_id: String(r.id),
     state: null,
-    sla_status: null
+    sla_status: slaOf(r.due_date)
   }))
   const scoped = truncated ? rows.slice(0, ceiling) : rows
 
@@ -2317,8 +2335,10 @@ export async function resolveTasksSource(
           }
         ]
       : [],
-    sla_status: null,
-    at_risk: false,
+    sla_status: slaOf(r.due_date),
+    at_risk: r.priority === 'urgent',
+    at_risk_color: r.priority === 'urgent' ? 'red' : null,
+    at_risk_rule: r.priority === 'urgent' ? { id: 0, name: 'Urgent task' } : null,
     aging_hours: Math.max(0, (now - new Date(r.created_at).getTime()) / (1000 * 60 * 60)),
     claimed_by: null,
     url:

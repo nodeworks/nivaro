@@ -97,7 +97,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Integrations Console** — a ranked "what's broken" list with snooze/dismiss/retry/rerun and per-row drill-down, per-partner health cards with full request/response call logs, an events feed, staged-import staleness monitoring, and opt-in real-time or daily-summary alerts, all built on an extensible signal registry any integration can register against
 - **Parallel Workflow Branches** — split/join with auto-join when all branches complete
 - **Cross-Collection Triggers** — rule-driven writes into other collections with `{{field}}` templates and a recursion guard
-- **Tasks & Approval Chains** — per-record assignments and sequential sign-off with decision log
+- **Tasks & Approval Chains** — per-record tasks for a person or a team (claim to pick up), due dates and priority, plain-sentence history, reminders and overdue escalation, close-by-condition (`done_when`), tasks that follow their record through delete/restore/merge, flow/rule/webhook/Ask AI/GraphQL hooks; sequential sign-off with a decision log
 - **Support Requests** — people raise requests about a record or for general help; administrators work them from a desk (pick up, reply, close) with request types, team routing and a full history
 - **Item Locking & Presence** — soft edit locks with heartbeat; live viewer indicators
 - **Notifications Center & SMS/Push Channels** — full inbox page; Twilio SMS delivery; Slack/Teams Adaptive Card actions with signed Approve/Reject buttons

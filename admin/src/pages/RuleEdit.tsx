@@ -59,6 +59,14 @@ export interface RuleAction {
   match_field?: string
   match_map?: Record<string, string>
   m2m_map?: Record<string, string>
+  // create_task (#1009)
+  title?: string
+  description?: string
+  assignee?: string
+  assign_to_owners?: boolean
+  team_id?: string
+  due_in_days?: string | number
+  priority?: 'low' | 'normal' | 'urgent'
 }
 
 type Rule = {
@@ -701,6 +709,11 @@ const ACTION_TYPES: { value: string; label: string; desc: string }[] = [
     value: 'cross_collection',
     label: 'Cross-collection',
     desc: 'Create or update a record in another collection'
+  },
+  {
+    value: 'create_task',
+    label: 'Create a task',
+    desc: 'Ask someone to do something on this record'
   }
 ]
 
@@ -840,6 +853,69 @@ function ActionCard({
           onChange={(e) => onChange({ ...action, message: e.target.value })}
           className='h-8 text-[12.5px]'
         />
+      )}
+
+      {action.type === 'create_task' && (
+        <div className='space-y-2' data-rule-create-task>
+          <Input
+            placeholder='Task title — {{field}} templates allowed'
+            value={action.title ?? ''}
+            onChange={(e) => onChange({ ...action, title: e.target.value })}
+            className='h-8 text-[12.5px]'
+          />
+          <Input
+            placeholder='Details (optional)'
+            value={action.description ?? ''}
+            onChange={(e) => onChange({ ...action, description: e.target.value })}
+            className='h-8 text-[12.5px]'
+          />
+          <div className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+            <Switch
+              checked={action.assign_to_owners === true}
+              onCheckedChange={(v) => onChange({ ...action, assign_to_owners: v })}
+              aria-label='Assign to the current owners'
+            />
+            Assign to everyone who owns the record's current state (one task each)
+          </div>
+          {!action.assign_to_owners && (
+            <div className='grid grid-cols-2 gap-2'>
+              <Input
+                placeholder='Assignee id or email, e.g. {{creator}}'
+                value={action.assignee ?? ''}
+                onChange={(e) => onChange({ ...action, assignee: e.target.value })}
+                className='h-8 text-[12.5px]'
+              />
+              <Input
+                placeholder='…or a team id'
+                value={String(action.team_id ?? '')}
+                onChange={(e) => onChange({ ...action, team_id: e.target.value })}
+                className='h-8 text-[12.5px]'
+              />
+            </div>
+          )}
+          <div className='grid grid-cols-2 gap-2'>
+            <Input
+              placeholder='Due in N days'
+              value={String(action.due_in_days ?? '')}
+              onChange={(e) => onChange({ ...action, due_in_days: e.target.value })}
+              className='h-8 text-[12.5px]'
+            />
+            <SmallCombobox
+              value={action.priority ?? 'normal'}
+              onChange={(v) => onChange({ ...action, priority: v as 'low' | 'normal' | 'urgent' })}
+              options={[
+                { value: 'low', label: 'Low priority' },
+                { value: 'normal', label: 'Normal priority' },
+                { value: 'urgent', label: 'Urgent' }
+              ]}
+              placeholder='priority'
+              className='w-full'
+            />
+          </div>
+          <p className='text-[11px] text-slate-400'>
+            The person whose save fired the rule is recorded as the one who asked.
+          </p>
+        </div>
       )}
 
       {action.type === 'reject' && (

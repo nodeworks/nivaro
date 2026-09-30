@@ -1803,6 +1803,8 @@ type ColFilterVal =
   | { kind: 'integrations'; value: 'danger' | 'warning' | 'positive' | 'none' }
   /** Hours in the current pipeline state, 'min:max' (either side blank). */
   | { kind: 'aging'; value: string }
+  /** Open tasks on the record (#1017). */
+  | { kind: 'tasks'; value: 'open' | 'overdue' | 'none' }
 
 // ─── FilterBar (admin components/filter-bar.tsx port) ─────────────────────────
 
@@ -4310,6 +4312,12 @@ export function CollectionBrowserView({
         }
       } else if (f.kind === 'integrations')
         conds.push({ path: ['$integrations'], op: '_eq', value: f.value })
+      else if (f.kind === 'tasks')
+        conds.push({
+          path: ['$has_tasks'],
+          op: '_eq',
+          value: f.value === 'none' ? false : f.value === 'overdue' ? 'overdue' : true
+        })
       else if (f.kind === 'aging' && f.value.replace(':', '') !== '') {
         const [min, max] = f.value.split(':')
         conds.push({ path: ['$aging'], op: '_between', value: `${min ?? ''}..${max ?? ''}` })
@@ -4541,6 +4549,32 @@ export function CollectionBrowserView({
         )
         .then((r) => r.data ?? {}),
     enabled: !!collection && addendumsEnabled && pageIdsKey.length > 0,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+    retry: false
+  })
+  // Open tasks per record (#1017) — the column shows once the collection has
+  // ever carried a task (one cheap probe), then one batched count per page.
+  const { data: tasksUsed = false } = useQuery({
+    queryKey: ['cbv-tasks-used', collection],
+    queryFn: () =>
+      client
+        .request<{ data: unknown[] }>(get('/tasks', { collection, limit: 1 }))
+        .then((r) => (r.data ?? []).length > 0)
+        .catch(() => false),
+    enabled: !!collection && !collection.startsWith('nivaro_'),
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  const { data: taskCounts } = useQuery({
+    queryKey: ['cbv-task-counts', collection, pageIdsKey],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, { open: number; overdue: number }> }>(
+          post('/tasks/counts', { collection, ids: pageIdsKey.split(',') })
+        )
+        .then((r) => r.data ?? {}),
+    enabled: !!collection && tasksUsed && pageIdsKey.length > 0,
     placeholderData: (prev) => prev,
     staleTime: 30_000,
     retry: false
@@ -5045,6 +5079,7 @@ export function CollectionBrowserView({
         '__addendums__',
         '__fulfilment__',
         '__integrations__',
+        '__tasks__',
         '__actions__'
       ]
         .filter((k) => effectivePins[k])
@@ -5392,6 +5427,7 @@ export function CollectionBrowserView({
       | 'addendums'
       | 'fulfilment'
       | 'integrations'
+      | 'tasks'
       | 'actions'
   }
   const baseColDescs: CbvColDesc[] = [
@@ -5409,6 +5445,7 @@ export function CollectionBrowserView({
     ...(addendumsEnabled ? [{ key: '__addendums__', kind: 'addendums' as const }] : []),
     ...(bcFulfilment ? [{ key: '__fulfilment__', kind: 'fulfilment' as const }] : []),
     ...(integrationsEnabled ? [{ key: '__integrations__', kind: 'integrations' as const }] : []),
+    ...(tasksUsed ? [{ key: '__tasks__', kind: 'tasks' as const }] : []),
     ...(enableActions ? [{ key: '__actions__', kind: 'actions' as const }] : [])
   ]
   const orderedCols: CbvColDesc[] = [
@@ -7052,7 +7089,9 @@ export function CollectionBrowserView({
                                         : 'Shipped'
                                       : col.kind === 'integrations'
                                         ? 'Integrations'
-                                        : ''
+                                        : col.kind === 'tasks'
+                                          ? 'Tasks'
+                                          : ''
                         return (
                           <th
                             key={key}
@@ -7237,6 +7276,37 @@ export function CollectionBrowserView({
                                           kind: 'integrations',
                                           value: v as 'danger' | 'warning' | 'positive' | 'none'
                                         }
+                                      : null
+                                  )
+                                }
+                              />
+                            </th>
+                          )
+                        }
+                        if (col.kind === 'tasks') {
+                          const cur = colFilters.__tasks__
+                          const curVal = cur?.kind === 'tasks' ? cur.value : ''
+                          return (
+                            <th
+                              key={key}
+                              style={pinStyle(key)}
+                              className={baseTh}
+                              data-cbv-tasks-filter={curVal}
+                            >
+                              <SimpleSelectXs
+                                ariaLabel='Tasks filter'
+                                value={curVal}
+                                options={[
+                                  { value: '', label: 'All' },
+                                  { value: 'open', label: 'Has open tasks' },
+                                  { value: 'overdue', label: 'Overdue tasks' },
+                                  { value: 'none', label: 'No open tasks' }
+                                ]}
+                                onChange={(v: string) =>
+                                  setColFilter(
+                                    '__tasks__',
+                                    v
+                                      ? { kind: 'tasks', value: v as 'open' | 'overdue' | 'none' }
                                       : null
                                   )
                                 }
@@ -7583,6 +7653,37 @@ export function CollectionBrowserView({
                                   className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
                                 >
                                   <IntegrationDots rows={integrationsSummary?.[String(id)]} />
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'tasks') {
+                              const tc = taskCounts?.[String(id)]
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  className={`whitespace-nowrap px-3 py-1.5 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                  data-cbv-task-count={tc?.open ?? 0}
+                                >
+                                  {tc && tc.open > 0 ? (
+                                    <span
+                                      className={
+                                        tc.overdue > 0
+                                          ? 'rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-red-600 dark:text-red-400'
+                                          : 'rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-slate-600 dark:text-slate-300'
+                                      }
+                                      data-tip={
+                                        tc.overdue > 0
+                                          ? `${tc.open} open task${tc.open === 1 ? '' : 's'}, ${tc.overdue} overdue`
+                                          : `${tc.open} open task${tc.open === 1 ? '' : 's'}`
+                                      }
+                                    >
+                                      {tc.open}
+                                      {tc.overdue > 0 ? ` · ${tc.overdue} overdue` : ''}
+                                    </span>
+                                  ) : (
+                                    <span className='text-[11px] text-slate-400'>—</span>
+                                  )}
                                 </td>
                               )
                             }

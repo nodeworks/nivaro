@@ -120,6 +120,16 @@ export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // Tasks on the duplicate move to the survivor before its delete would
+    // cancel them (#1006).
+    try {
+      const { onRecordMerged } = await import('../services/tasks.js')
+      const moved = await onRecordMerged(collection, merged_id, survivor_id, req.user!.id)
+      if (moved) applied['nivaro_tasks.item'] = { repointed: moved, deleted_duplicates: 0 }
+    } catch {
+      /* the merge itself stands */
+    }
+
     // The duplicate deletes through the items service — trash snapshot,
     // hooks, activity, delete guards all apply. A guard blocking the delete
     // leaves the repoint DONE (references already moved) and reports it.

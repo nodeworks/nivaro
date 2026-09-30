@@ -57,6 +57,23 @@ export interface CreateRecordRuleAction {
   [key: string]: unknown
 }
 
+/** Create a task on the record that fired the rule (#1009). String values
+ *  are {{field}} templates over the record. */
+export interface CreateTaskRuleAction {
+  type: 'create_task'
+  title: string
+  description?: string
+  /** A user id or email, templated ({{creator}}). */
+  assignee?: string
+  /** One task per current owner of the record's pipeline state. */
+  assign_to_owners?: boolean
+  team_id?: number | string
+  due_in_days?: number | string
+  priority?: 'low' | 'normal' | 'urgent'
+  /** [{field, op, value}] — the task closes itself when the record meets it. */
+  done_when?: unknown
+}
+
 export interface CrossTriggerAction {
   type: 'cross_collection'
   target_collection: string
@@ -94,7 +111,9 @@ interface ParsedRule {
   name: string
   trigger: string
   conditions: CrossTriggerCondition[]
-  actions: Array<CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction>
+  actions: Array<
+    CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction | CreateTaskRuleAction
+  >
 }
 
 // ─── Rule cache (60s per source collection) ──────────────────────────────────
@@ -123,12 +142,18 @@ const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 function extractCrossActions(
   raw: string | null
-): Array<CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction> {
+): Array<CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction | CreateTaskRuleAction> {
   const parsed = parseJson<unknown>(raw)
   if (!parsed) return []
   const list = Array.isArray(parsed) ? parsed : [parsed]
   return list.filter(
-    (a): a is CrossTriggerAction | ExecProcedureAction | CreateRecordRuleAction => {
+    (
+      a
+    ): a is
+      | CrossTriggerAction
+      | ExecProcedureAction
+      | CreateRecordRuleAction
+      | CreateTaskRuleAction => {
       if (!a || typeof a !== 'object') return false
       const t = (a as { type?: string }).type
       if (t === 'cross_collection') {
@@ -140,6 +165,10 @@ function extractCrossActions(
       if (t === 'exec_procedure') {
         const proc = (a as { procedure?: unknown }).procedure
         return typeof proc === 'string' && IDENT_RE.test(proc)
+      }
+      if (t === 'create_task') {
+        const title = (a as { title?: unknown }).title
+        return typeof title === 'string' && title.trim() !== ''
       }
       if (t === 'create_record') {
         const target = (a as { target_collection?: unknown }).target_collection
@@ -653,6 +682,35 @@ async function processCrossTriggers(ctx: HookContext) {
             continue
           }
 
+          if (act.type === 'create_task') {
+            try {
+              const item = String(ctx.keys?.[0] ?? (data as Record<string, unknown>).id ?? '')
+              const createdBy = ctx.user?.id ? String(ctx.user.id) : null
+              if (!item || !createdBy) continue
+              const r = (v: unknown) => (v == null ? '' : renderTemplate(String(v), data).trim())
+              const { createTasksFromAutomation } = await import('../services/tasks.js')
+              const { getApp } = await import('../services/io-holder.js')
+              const out = await createTasksFromAutomation(getApp() ?? null, {
+                collection,
+                item,
+                title: r(act.title),
+                description: r(act.description) || null,
+                assignee: act.assign_to_owners ? null : r(act.assignee) || null,
+                assign_to_owners: !!act.assign_to_owners,
+                team_id: r(act.team_id) || null,
+                due_in_days: act.due_in_days ?? null,
+                priority: act.priority ?? 'normal',
+                done_when: act.done_when ?? null,
+                created_by: createdBy,
+                via: `rule ${rule.name}`
+              })
+              if (out.skipped)
+                logError(new Error(out.skipped), { rule: rule.id, action: 'create_task' })
+            } catch (err) {
+              logError(err, { rule: rule.id, action: 'create_task' })
+            }
+            continue
+          }
           if (act.type === 'create_record') {
             // Full create_record semantics (junctions, link-back, idempotent
             // skip_if_exists) via the transition-action engine — lazy import

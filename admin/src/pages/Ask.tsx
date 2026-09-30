@@ -17,7 +17,7 @@ interface TraceEntry {
 
 interface Proposal {
   proposal_id: string
-  action_type: 'bulk_update' | 'create_record' | 'create_dashboard'
+  action_type: 'bulk_update' | 'create_record' | 'create_dashboard' | 'create_task'
   collection: string
   count: number
   changes: Record<string, unknown> | null
@@ -65,9 +65,11 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
       setResultText(
         proposal.action_type === 'create_dashboard'
           ? `Created dashboard — open /dashboards/${String(res.dashboard_id ?? '')}`
-          : proposal.action_type === 'create_record'
-            ? `Created record ${String(res.id ?? '')}`
-            : `Updated ${String(res.updated)} record(s)${Number(res.failed) > 0 ? `, ${String(res.failed)} failed` : ''}`
+          : proposal.action_type === 'create_task'
+            ? `Task created on ${proposal.sample[0]?.label ?? 'the record'}`
+            : proposal.action_type === 'create_record'
+              ? `Created record ${String(res.id ?? '')}`
+              : `Updated ${String(res.updated)} record(s)${Number(res.failed) > 0 ? `, ${String(res.failed)} failed` : ''}`
       )
       setStatus('executed')
     } catch (err) {
@@ -82,9 +84,11 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
       <p className='text-[12px] font-semibold text-amber-800 dark:text-amber-300'>
         {proposal.action_type === 'create_dashboard'
           ? `Proposed: create dashboard “${String(proposal.changes?.name ?? '')}” with ${proposal.count} widget${proposal.count !== 1 ? 's' : ''}`
-          : proposal.action_type === 'create_record'
-            ? `Proposed: create a ${proposal.collection} record`
-            : `Proposed: update ${proposal.count} ${proposal.collection} record${proposal.count !== 1 ? 's' : ''}`}
+          : proposal.action_type === 'create_task'
+            ? `Proposed: a task on ${proposal.sample[0]?.label ?? 'the record'}`
+            : proposal.action_type === 'create_record'
+              ? `Proposed: create a ${proposal.collection} record`
+              : `Proposed: update ${proposal.count} ${proposal.collection} record${proposal.count !== 1 ? 's' : ''}`}
       </p>
       {proposal.widgets && proposal.widgets.length > 0 && (
         <div className='mt-1.5 space-y-0.5'>
@@ -109,7 +113,7 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
           ))}
         </div>
       )}
-      {proposal.sample.length > 0 && (
+      {proposal.action_type !== 'create_task' && proposal.sample.length > 0 && (
         <p className='mt-1.5 truncate text-[11px] text-amber-700/80 dark:text-amber-400/80'>
           e.g.{' '}
           {proposal.sample

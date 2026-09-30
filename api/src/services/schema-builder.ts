@@ -12,13 +12,12 @@ import {
   GraphQLObjectType,
   type GraphQLOutputType,
   GraphQLSchema,
+  GraphQLString,
   GraphQLUnionType,
   Kind,
-  type SelectionNode,
-  GraphQLString
+  type SelectionNode
 } from 'graphql'
 import type { Knex } from 'knex'
-import { runUnit } from './unit-of-work.js'
 import { db } from '../db/index.js'
 import {
   domainMutationFields,
@@ -41,14 +40,15 @@ import {
   applyFilterToQuery,
   CollectionNotFoundError,
   createOne,
-  rehearseCreate,
   deleteOne,
   ForbiddenError,
   readItems,
   readOne,
+  rehearseCreate,
   updateOne,
   upsertInfoOf
 } from './items.js'
+import { runUnit } from './unit-of-work.js'
 import { RECORD_ORIGINS, translateVirtualKeys } from './virtual-filters.js'
 import {
   executeWorkflowTransition,
@@ -715,6 +715,81 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     return t
   }
 
+  // Tasks on a record (#1013): every collection type carries `tasks`, the
+  // open (or all) tasks on that record. The parent row was read as the viewer,
+  // so the record gate already held; support tickets stay private to their
+  // own people.
+  const RecordTaskType = new GraphQLObjectType({
+    name: 'RecordTask',
+    fields: {
+      id: { type: new GraphQLNonNull(GraphQLInt) },
+      title: { type: GraphQLString },
+      description: { type: GraphQLString },
+      status: { type: GraphQLString },
+      priority: { type: GraphQLString },
+      due_date: { type: GraphQLString },
+      assignee: { type: GraphQLID },
+      assignee_name: { type: GraphQLString },
+      team_id: { type: GraphQLInt },
+      created_by: { type: GraphQLID },
+      created_by_name: { type: GraphQLString },
+      completed_at: { type: GraphQLString },
+      created_at: { type: GraphQLString }
+    }
+  })
+  const tasksField = (colName: string): GraphQLFieldConfig<unknown, GQLContext> => ({
+    type: new GraphQLList(new GraphQLNonNull(RecordTaskType)),
+    description: 'Tasks on this record (open ones unless status says otherwise).',
+    args: {
+      status: {
+        type: GraphQLString,
+        description: "'active' (default: open + in progress), 'done', 'cancelled' or 'all'"
+      }
+    },
+    resolve: async (parent, args: { status?: string }, ctx) => {
+      const id = (parent as { id?: unknown } | null)?.id
+      if (!ctx.user || id == null) return []
+      const q = db('nivaro_tasks as t')
+        .leftJoin('nivaro_users as a', 'a.id', 't.assignee')
+        .leftJoin('nivaro_users as c', 'c.id', 't.created_by')
+        .where('t.collection', colName)
+        .where('t.item', String(id))
+        .orderBy('t.created_at', 'desc')
+        .limit(200)
+        .select(
+          't.*',
+          'a.first_name as af',
+          'a.last_name as al',
+          'c.first_name as cf',
+          'c.last_name as cl'
+        )
+      const status = args.status ?? 'active'
+      if (status === 'active') q.whereIn('t.status', ['open', 'in_progress'])
+      else if (status !== 'all') q.where('t.status', status)
+      if (!ctx.isAdmin) {
+        const me = ctx.user.id
+        q.where((w) =>
+          w
+            .whereNull('t.kind')
+            .orWhereNot('t.kind', 'support')
+            .orWhere('t.created_by', me)
+            .orWhere('t.assignee', me)
+        )
+      }
+      const rows = (await q) as Array<Record<string, unknown>>
+      const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null)
+      const nm = (f: unknown, l: unknown) => [f, l].filter(Boolean).join(' ') || null
+      return rows.map((r) => ({
+        ...r,
+        due_date: r.due_date ? new Date(r.due_date as string).toISOString().slice(0, 10) : null,
+        completed_at: iso(r.completed_at),
+        created_at: iso(r.created_at),
+        assignee_name: nm(r.af, r.al),
+        created_by_name: nm(r.cf, r.cl)
+      }))
+    }
+  })
+
   for (const col of visible) {
     const colName = col.collection
     const fields = allFields.get(colName) ?? []
@@ -977,6 +1052,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             gqlFields[f.field].deprecationReason =
               (f.deprecation_note?.trim() || 'Being removed from the API') + day
           }
+
+          if (!gqlFields.tasks && !colName.startsWith('nivaro_'))
+            gqlFields.tasks = tasksField(colName)
 
           return gqlFields
         }

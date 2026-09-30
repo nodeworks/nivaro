@@ -87,8 +87,8 @@ export default defineExtension({
   collection: 'warehouses',
   match_by: ['name'],
   rows: [
-    { name: 'PAE77', ordering_system: 'mdsi' },
-    { name: 'WAPUY', ordering_system: 'fusion_transfer' }
+    { name: 'North DC', ordering_system: 'api' },
+    { name: 'South DC', ordering_system: 'manual' }
   ],
   mode: 'fill-only' // creates missing rows, fills empty columns, never overwrites a value someone set
 })`

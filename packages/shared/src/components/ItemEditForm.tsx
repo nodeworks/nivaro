@@ -1689,6 +1689,9 @@ export function ItemEditForm({
 
   // ── Pending tasks (new records) ────────────────────────────────────────────
   const [pendingTasks, setPendingTasks] = useState<PendingTask[]>([])
+  const handleRemoveQueuedTask = useCallback((index: number) => {
+    setPendingTasks((prev) => prev.filter((_, i) => i !== index))
+  }, [])
   const handleQueueTask = useCallback((task: PendingTask) => {
     setPendingTasks((prev) => [...prev, task])
   }, [])
@@ -6277,7 +6280,18 @@ export function ItemEditForm({
             detail: `${n} row${n !== 1 ? 's' : ''} deleted`,
             progress: { done: 0, total: n }
           }
-        })
+        }),
+        ...(isNew && pendingTasks.length > 0
+          ? [
+              {
+                id: 'tasks',
+                label: 'Create tasks',
+                status: 'pending' as SaveStepStatus,
+                detail: `${pendingTasks.length} task${pendingTasks.length !== 1 ? 's' : ''}`,
+                progress: { done: 0, total: pendingTasks.length }
+              }
+            ]
+          : [])
       ]
       setSaveSteps(steps)
       remainingO2MRowsRef.current = new Map()
@@ -6818,22 +6832,37 @@ export function ItemEditForm({
       setPendingO2MDeletes(nextDels)
 
       // ── Tasks (new only) ──────────────────────────────────────────────────
+      // Every queued field rides along (#1004); a task that fails to create
+      // is named on the save step and in a toast, never dropped silently.
       if (isNew && pendingTasks.length > 0) {
-        await Promise.all(
-          pendingTasks.map((t) =>
-            client
-              .request(
-                post('/tasks', {
-                  collection,
-                  item: savedId,
-                  title: t.title,
-                  assignee: t.assignee,
-                  due_date: t.due_date || undefined
-                })
-              )
-              .catch(() => {})
-          )
-        )
+        updateStep('tasks', { status: 'running' })
+        const failed: string[] = []
+        for (const t of pendingTasks) {
+          await client
+            .request(
+              post('/tasks', {
+                collection,
+                item: savedId,
+                title: t.title,
+                description: t.description || undefined,
+                assignee: t.assignee || undefined,
+                team_id: t.team_id ?? undefined,
+                due_date: t.due_date || undefined,
+                priority: t.priority || undefined
+              })
+            )
+            .catch((err) => {
+              failed.push(`“${t.title}”: ${errMsg(err)}`)
+            })
+          updateStep('tasks', (st) => ({
+            progress: { done: (st.progress?.done ?? 0) + 1, total: pendingTasks.length }
+          }))
+        }
+        if (failed.length) {
+          const msg = `${failed.length} task${failed.length !== 1 ? 's' : ''} not created — ${failed.join('; ')}`
+          updateStep('tasks', { status: 'error', error: msg })
+          toast.error(msg)
+        } else updateStep('tasks', { status: 'done' })
         invalidateRecordTasks(qc, collection, savedId)
       }
 
@@ -7444,6 +7473,7 @@ export function ItemEditForm({
           defaultExpanded={tasksSlot?.default_expanded ?? false}
           queuedTasks={isNew ? pendingTasks : undefined}
           onQueueTask={isNew ? handleQueueTask : undefined}
+          onRemoveQueuedTask={isNew ? handleRemoveQueuedTask : undefined}
         />
       )
     }
@@ -8122,6 +8152,7 @@ export function ItemEditForm({
             item={itemId}
             queuedTasks={isNew ? pendingTasks : undefined}
             onQueueTask={isNew ? handleQueueTask : undefined}
+            onRemoveQueuedTask={isNew ? handleRemoveQueuedTask : undefined}
           />
         )}
         {!isNew && itemId && (
@@ -8390,6 +8421,7 @@ export function ItemEditForm({
             item={itemId}
             queuedTasks={isNew ? pendingTasks : undefined}
             onQueueTask={isNew ? handleQueueTask : undefined}
+            onRemoveQueuedTask={isNew ? handleRemoveQueuedTask : undefined}
           />
         )}
         {!isNew && itemId && (
@@ -8563,6 +8595,7 @@ export function ItemEditForm({
             defaultExpanded={false}
             queuedTasks={isNew ? pendingTasks : undefined}
             onQueueTask={isNew ? handleQueueTask : undefined}
+            onRemoveQueuedTask={isNew ? handleRemoveQueuedTask : undefined}
           />
         )}
         {!commentsSlot && effectiveShowComments && (

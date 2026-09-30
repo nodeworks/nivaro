@@ -136,11 +136,14 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   {
     name: 'propose_action',
     description:
-      'PROPOSE a mutation for the user to approve — never executes directly. bulk_update: filter (query_items shape) + changes (field:value). create_record: data (field:value). create_dashboard: dashboard {name, widgets:[{type: count|sum|avg|latest|bar_chart|line_chart, title, collection, field (the value/group field; optional for count/latest), filters?}]}. Returns a preview the user approves or rejects in the UI. After calling this, tell the user to review the proposal card; do NOT claim anything was changed or created.',
+      'PROPOSE a mutation for the user to approve — never executes directly. bulk_update: filter (query_items shape) + changes (field:value). create_record: data (field:value). create_dashboard: dashboard {name, widgets:[{type: count|sum|avg|latest|bar_chart|line_chart, title, collection, field (the value/group field; optional for count/latest), filters?}]}. create_task: task {collection, id, title, assignee, due_date, priority} — a task on one record for one person ("task Beth to chase the vendor on CM26-79811"). Returns a preview the user approves or rejects in the UI. After calling this, tell the user to review the proposal card; do NOT claim anything was changed or created.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        action_type: { type: 'string', enum: ['bulk_update', 'create_record', 'create_dashboard'] },
+        action_type: {
+          type: 'string',
+          enum: ['bulk_update', 'create_record', 'create_dashboard', 'create_task']
+        },
         collection: {
           type: 'string',
           description: 'bulk_update/create_record target (omit for create_dashboard)'
@@ -158,6 +161,11 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
           type: 'object',
           description:
             'create_dashboard: {name, widgets:[{type,title,collection,field,filters?}]} (max 12 widgets)'
+        },
+        task: {
+          type: 'object',
+          description:
+            "create_task: {collection, id (the record id), title, description?, assignee (a person's email or full name; omit = the asker), due_date? (YYYY-MM-DD), priority? (low|normal|urgent)}"
         }
       },
       required: ['action_type']
@@ -220,6 +228,25 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
         id: { type: 'string', description: 'A record id; omit for the collection sweep.' }
       },
       required: ['collection']
+    }
+  },
+  {
+    name: 'my_tasks',
+    description:
+      'Open tasks: the asker\'s own (assigned to them), overdue ones first, plus what they asked others to do. Administrators may pass another person\'s email or full name. Use for "what\'s overdue for me", "what am I waiting on", "what does Beth have open". To create a task, use propose_action with action_type create_task.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person: {
+          type: 'string',
+          description: "Administrators only: someone else's email or full name. Omit for the asker."
+        },
+        overdue_only: { type: 'boolean' },
+        include_requested: {
+          type: 'boolean',
+          description: 'Also list open tasks the person asked others to do (default true).'
+        }
+      }
     }
   },
   {
@@ -990,6 +1017,95 @@ export async function executeChatTool(
       return {
         result: preview,
         summary: `proposed ${preview.action_type} on ${preview.count} record(s) in ${preview.collection}`
+      }
+    }
+
+    case 'my_tasks': {
+      let personId = user.id
+      let personName = 'you'
+      if (input.person) {
+        if (!(await askerIsAdmin(user)))
+          throw new Error("Only administrators can list someone else's tasks")
+        const ref = String(input.person).trim()
+        const rows = (await db('nivaro_users')
+          .where((q) =>
+            q
+              .whereRaw('LOWER(email) = ?', [ref.toLowerCase()])
+              .orWhereRaw("LOWER(CONCAT(first_name, ' ', last_name)) = ?", [ref.toLowerCase()])
+          )
+          .limit(3)
+          .select('id', 'first_name', 'last_name')) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+        }>
+        if (rows.length !== 1)
+          throw new Error(
+            rows.length
+              ? `"${ref}" matches several people — use their email`
+              : `No one matches "${ref}"`
+          )
+        personId = rows[0].id
+        personName = [rows[0].first_name, rows[0].last_name].filter(Boolean).join(' ')
+      }
+      const base = () =>
+        db('nivaro_tasks as t')
+          .leftJoin('nivaro_users as a', 'a.id', 't.assignee')
+          .whereIn('t.status', ['open', 'in_progress'])
+          .select(
+            't.id',
+            't.title',
+            't.collection',
+            't.item',
+            't.due_date',
+            't.priority',
+            't.status',
+            'a.first_name',
+            'a.last_name'
+          )
+          .orderByRaw('CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END')
+          .orderBy('t.due_date', 'asc')
+          .limit(50)
+      const overdueSql = 'CAST(t.due_date AS date) < CAST(GETUTCDATE() AS date)'
+      const mineQ = base().where('t.assignee', personId)
+      if (input.overdue_only) mineQ.whereRaw(overdueSql)
+      const mine = (await mineQ) as Array<Record<string, unknown>>
+      const requested =
+        input.include_requested === false
+          ? []
+          : ((await base()
+              .where('t.created_by', personId)
+              .where((q) => q.whereNull('t.assignee').orWhereNot('t.assignee', personId))
+              .modify((q) => {
+                if (input.overdue_only) q.whereRaw(overdueSql)
+              })) as Array<Record<string, unknown>>)
+      const { resolveFriendlyId } = await import('./workflow-transitions.js')
+      const today = new Date().toISOString().slice(0, 10)
+      const shape = async (r: Record<string, unknown>) => {
+        const due = r.due_date ? new Date(r.due_date as string).toISOString().slice(0, 10) : null
+        return {
+          id: r.id,
+          title: r.title,
+          record:
+            r.collection && r.item
+              ? `${await resolveFriendlyId(String(r.collection), String(r.item)).catch(() => r.item)} (${r.collection}/${r.item})`
+              : null,
+          due,
+          overdue: !!due && due < today,
+          priority: r.priority,
+          status: r.status,
+          assignee: [r.first_name, r.last_name].filter(Boolean).join(' ') || null
+        }
+      }
+      const out = {
+        person: personName,
+        assigned: await Promise.all(mine.map(shape)),
+        waiting_on_others: await Promise.all(requested.map(shape))
+      }
+      const overdue = out.assigned.filter((t) => t.overdue).length
+      return {
+        result: out,
+        summary: `${out.assigned.length} open task(s) for ${personName} (${overdue} overdue), ${out.waiting_on_others.length} waiting on others`
       }
     }
 

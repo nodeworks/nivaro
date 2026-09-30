@@ -16,10 +16,10 @@ import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerSlaHooks, setApp as setSlaApp } from './hooks/sla.js'
+import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
-import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import {
   bootPhase,
   bootReport,
@@ -27,6 +27,7 @@ import {
   markBootReady,
   storeBoot
 } from './services/boot-phases.js'
+import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { NIVARO_VERSION } from './version.js'
 
 async function main() {
@@ -45,6 +46,7 @@ async function main() {
     registerAggregateCapHooks()
     registerQueueMaterializationHooks()
     registerRecordIntegrityHooks()
+    registerTaskDoneWhenHooks()
     registerWorkflowAutoHooks()
     registerCoreTriggers()
   }

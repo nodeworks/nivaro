@@ -47,6 +47,14 @@ interface TaskRow {
   title: string
   due_date: string | null
   status: string
+  priority?: string | null
+  /** The record's human id (TP26-80366). */
+  item_label?: string | null
+  assignee?: string | null
+  assignee_name?: string | null
+  team_id?: number | null
+  team_name?: string | null
+  nudged_at?: string | null
 }
 
 interface NotificationRow {
@@ -63,6 +71,11 @@ interface MyWorkData {
   owned: OwnedRow[]
   owned_total: number
   tasks: TaskRow[]
+  /** Team tasks nobody has picked up yet (#1014). */
+  team_tasks?: TaskRow[]
+  /** What I asked others to do (#1015). */
+  requested?: TaskRow[]
+  on_a_team?: boolean
   approvals: Array<Record<string, unknown>>
   notifications: NotificationRow[]
   counts: {
@@ -74,6 +87,18 @@ interface MyWorkData {
     notifications: number
   }
 }
+
+const MY_WORK_SECTIONS = ['records', 'tasks', 'team', 'waiting', 'notifications']
+const SECTION_LABEL: Record<string, string> = {
+  records: 'Waiting on you',
+  tasks: 'My tasks',
+  team: 'Team tasks',
+  waiting: 'Waiting on others',
+  notifications: 'Notifications'
+}
+
+const todayIso = () => new Date().toISOString().slice(0, 10)
+const isOverdue = (d: string | null | undefined) => !!d && String(d).slice(0, 10) < todayIso()
 
 const SLA_TONE_CLASS: Record<'ok' | 'warn' | 'alert' | 'neutral', string> = {
   alert: 'bg-red-500/10 text-red-600 dark:text-red-400',
@@ -159,16 +184,20 @@ export function MyWorkView({
       if (raw) {
         const p = JSON.parse(raw)
         if (Array.isArray(p?.order) && Array.isArray(p?.hidden)) {
-          const order = ['records', 'tasks', 'notifications'].sort(
-            (a, b) => p.order.indexOf(a) - p.order.indexOf(b)
-          )
+          // Keys added since the pref was saved keep their default place.
+          const order = MY_WORK_SECTIONS.map((k, i) => ({
+            k,
+            at: p.order.indexOf(k) >= 0 ? p.order.indexOf(k) : i - 0.5
+          }))
+            .sort((a, b) => a.at - b.at)
+            .map((x) => x.k)
           return { order, hidden: p.hidden.filter((h: string) => order.includes(h)) }
         }
       }
     } catch {
       /* fresh defaults */
     }
-    return { order: ['records', 'tasks', 'notifications'], hidden: [] }
+    return { order: [...MY_WORK_SECTIONS], hidden: [] }
   })
   const updateSectionPrefs = (next: { order: string[]; hidden: string[] }) => {
     setSectionPrefs(next)
@@ -219,6 +248,31 @@ export function MyWorkView({
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['my-work'] })
   })
+
+  const taskAction = useMutation({
+    mutationFn: async ({ id, action }: { id: number; action: 'claim' | 'nudge' }) => {
+      const res = await fetch(`${apiBase}/tasks/${id}/${action}`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'content-type': 'application/json' },
+        credentials,
+        body: '{}'
+      })
+      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(body.error ?? 'Failed')
+      return action
+    },
+    onSuccess: (action) => {
+      setTaskNote(action === 'claim' ? 'It’s yours — it moved to My tasks.' : 'Reminder sent.')
+      qc.invalidateQueries({ queryKey: ['my-work'] })
+    },
+    onError: (e) => setTaskNote(e instanceof Error ? e.message : 'Failed')
+  })
+  const [taskNote, setTaskNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (!taskNote) return
+    const t = setTimeout(() => setTaskNote(null), 4000)
+    return () => clearTimeout(t)
+  }, [taskNote])
 
   const markRead = useMutation({
     mutationFn: (ids: number[]) =>
@@ -324,8 +378,7 @@ export function MyWorkView({
             <div className='absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-border dark:bg-card'>
               <p className='px-1 pb-1.5 text-[11px] font-semibold text-slate-500'>Sections</p>
               {sectionPrefs.order.map((k, idx) => {
-                const label =
-                  k === 'records' ? 'Waiting on you' : k === 'tasks' ? 'My tasks' : 'Notifications'
+                const label = SECTION_LABEL[k] ?? k
                 const hidden = sectionPrefs.hidden.includes(k)
                 const move = (dir: -1 | 1) => {
                   const order = [...sectionPrefs.order]
@@ -379,6 +432,16 @@ export function MyWorkView({
           )}
         </div>
       </div>
+
+      {taskNote && (
+        <p
+          className='rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] dark:border-border dark:bg-card'
+          role='status'
+          data-my-work-task-note
+        >
+          {taskNote}
+        </p>
+      )}
 
       {/* My Work customization (#368): the three sections render in the
           user's saved order; hidden ones are skipped; consecutive card
@@ -501,16 +564,21 @@ export function MyWorkView({
                         className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                       >
                         {t.title}
+                        {t.item_label && (
+                          <span className='ml-1.5 text-[11px] text-muted-foreground'>
+                            {t.item_label}
+                          </span>
+                        )}
                       </button>
                       {t.due_date && (
                         <span
                           className={`text-[11px] tabular-nums ${
-                            new Date(t.due_date) < new Date()
+                            isOverdue(t.due_date)
                               ? 'font-medium text-red-600 dark:text-red-400'
                               : 'text-muted-foreground'
                           }`}
                         >
-                          {new Date(t.due_date).toLocaleDateString()}
+                          {new Date(t.due_date).toLocaleDateString(undefined, { timeZone: 'UTC' })}
                         </span>
                       )}
                     </li>
@@ -519,6 +587,155 @@ export function MyWorkView({
               )}
             </section>
           ),
+          team: () =>
+            !data.on_a_team && !(data.team_tasks ?? []).length ? null : (
+              <section
+                className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+                data-my-work-team
+              >
+                <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+                  <h2 className='text-[13px] font-medium'>Team tasks</h2>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Waiting with a team you are on — pick one up to make it yours.
+                  </p>
+                </div>
+                {(data.team_tasks ?? []).length === 0 ? (
+                  <p className='px-4 py-5 text-center text-[12.5px] text-muted-foreground'>
+                    Nothing waiting with your teams.
+                  </p>
+                ) : (
+                  <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                    {(data.team_tasks ?? []).map((t) => (
+                      <li
+                        key={t.id}
+                        className='flex items-center gap-2.5 px-4 py-2'
+                        data-my-work-team-task={t.id}
+                      >
+                        {t.priority === 'urgent' && (
+                          <span className='shrink-0 rounded bg-red-500/10 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-red-600 dark:text-red-400'>
+                            urgent
+                          </span>
+                        )}
+                        <button
+                          type='button'
+                          onClick={() => open(t.collection, t.item)}
+                          className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
+                        >
+                          {t.title}
+                          <span className='ml-1.5 text-[11px] text-muted-foreground'>
+                            {[t.team_name, t.item_label].filter(Boolean).join(' · ')}
+                          </span>
+                        </button>
+                        {t.due_date && (
+                          <span
+                            className={`text-[11px] tabular-nums ${isOverdue(t.due_date) ? 'font-medium text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
+                          >
+                            {new Date(t.due_date).toLocaleDateString(undefined, {
+                              timeZone: 'UTC'
+                            })}
+                          </span>
+                        )}
+                        <button
+                          type='button'
+                          onClick={() => taskAction.mutate({ id: t.id, action: 'claim' })}
+                          disabled={taskAction.isPending}
+                          className='shrink-0 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] font-medium hover:bg-muted dark:border-border'
+                          data-my-work-claim={t.id}
+                        >
+                          Pick it up
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ),
+          waiting: () => {
+            const rows = data.requested ?? []
+            const overdue = rows.filter((t) => isOverdue(t.due_date)).length
+            return (
+              <section
+                className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+                data-my-work-waiting
+              >
+                <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+                  <h2 className='text-[13px] font-medium'>
+                    Waiting on others
+                    {overdue > 0 && (
+                      <span className='ml-2 rounded bg-red-500/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-red-600 dark:text-red-400'>
+                        {overdue} overdue
+                      </span>
+                    )}
+                  </h2>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Tasks you asked someone else to do.
+                  </p>
+                </div>
+                {rows.length === 0 ? (
+                  <p className='px-4 py-5 text-center text-[12.5px] text-muted-foreground'>
+                    You are not waiting on anyone.
+                  </p>
+                ) : (
+                  <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                    {rows.map((t) => {
+                      const late = isOverdue(t.due_date)
+                      const nudgedRecently =
+                        !!t.nudged_at &&
+                        Date.now() - new Date(t.nudged_at).getTime() < 20 * 3600_000
+                      return (
+                        <li
+                          key={t.id}
+                          className='flex items-center gap-2.5 px-4 py-2'
+                          data-my-work-requested={t.id}
+                        >
+                          <button
+                            type='button'
+                            onClick={() =>
+                              t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item)
+                            }
+                            className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
+                          >
+                            {t.title}
+                            <span className='ml-1.5 text-[11px] text-muted-foreground'>
+                              {[
+                                t.assignee_name ??
+                                  (t.team_name ? `${t.team_name} team` : 'Unassigned'),
+                                t.item_label
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </span>
+                          </button>
+                          {t.due_date && (
+                            <span
+                              className={`text-[11px] tabular-nums ${late ? 'font-medium text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
+                            >
+                              {late ? 'Overdue · ' : ''}
+                              {new Date(t.due_date).toLocaleDateString(undefined, {
+                                timeZone: 'UTC'
+                              })}
+                            </span>
+                          )}
+                          {t.kind !== 'support' && (
+                            <button
+                              type='button'
+                              onClick={() => taskAction.mutate({ id: t.id, action: 'nudge' })}
+                              disabled={taskAction.isPending || nudgedRecently}
+                              title={nudgedRecently ? 'Already nudged today' : 'Send a reminder'}
+                              className='shrink-0 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] font-medium hover:bg-muted disabled:opacity-50 dark:border-border'
+                              data-my-work-nudge={t.id}
+                            >
+                              {nudgedRecently ? 'Nudged' : 'Nudge'}
+                            </button>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </section>
+            )
+          },
           notifications: () => (
             <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
               <div className='flex items-center justify-between border-b border-slate-200 px-4 py-2.5 dark:border-border'>
@@ -579,13 +796,19 @@ export function MyWorkView({
             </section>
           )
         }
-        const visible = sectionPrefs.order.filter((k) => !sectionPrefs.hidden.includes(k))
+        const built = new Map(
+          sectionPrefs.order
+            .filter((k) => !sectionPrefs.hidden.includes(k) && renderers[k])
+            .map((k) => [k, renderers[k]()] as const)
+            .filter(([, node]) => node != null)
+        )
+        const visible = [...built.keys()]
         const out: React.ReactNode[] = []
         let i = 0
         while (i < visible.length) {
           const k = visible[i]
           if (k === 'records') {
-            out.push(<div key={k}>{renderers[k]()}</div>)
+            out.push(<div key={k}>{built.get(k)}</div>)
             i++
           } else {
             const pair = [k]
@@ -593,7 +816,7 @@ export function MyWorkView({
             out.push(
               <div key={pair.join('+')} className='grid gap-5 lg:grid-cols-2'>
                 {pair.map((pk) => (
-                  <div key={pk}>{renderers[pk]()}</div>
+                  <div key={pk}>{built.get(pk)}</div>
                 ))}
               </div>
             )

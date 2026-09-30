@@ -322,7 +322,13 @@ export async function fireWebhooks(
   collection: string,
   event: 'create' | 'update' | 'delete' | string,
   data: unknown,
-  meta: { origin?: string | null; changed_fields?: string[] } = {}
+  meta: {
+    origin?: string | null
+    changed_fields?: string[]
+    /** Deliver only to webhooks that name this collection — platform tables
+     *  (task events, #1008) never reach a webhook left on "all collections". */
+    explicitOnly?: boolean
+  } = {}
 ): Promise<void> {
   try {
     const webhooks = (await db('nivaro_webhooks')
@@ -349,6 +355,7 @@ export async function fireWebhooks(
 
       const collections = parseJson<string[]>(wh.collections ?? null) ?? []
       if (collections.length > 0 && !collections.includes(collection)) continue
+      if (meta.explicitOnly && !collections.includes(collection)) continue
 
       // Conditions narrow a webhook to the records its receiver asked for.
       // A condition set that cannot be judged does NOT fire: sending a

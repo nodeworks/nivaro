@@ -1378,6 +1378,42 @@ export function QueueWorklist({
     })
     return out
   }, [integrationsSummaryStamp])
+  // Open tasks per rendered row (#1017): one count query per source
+  // collection present on the page. Tasks-source rows are tasks themselves.
+  const taskIdsByCollection = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const it of items) {
+      if (!it.collection || it.collection === 'tasks' || it.collection.startsWith('nivaro_'))
+        continue
+      const bucket = (map[it.collection] ??= [])
+      if (bucket.length < 500) bucket.push(it.item_id)
+    }
+    return map
+  }, [items])
+  const taskQueryCollections = Object.keys(taskIdsByCollection)
+  const taskCountQueries = useQueries({
+    queries: taskQueryCollections.map((col) => ({
+      queryKey: ['queue-task-counts', col, taskIdsByCollection[col].join(',')],
+      queryFn: () =>
+        client
+          .request<{ data: Record<string, { open: number; overdue: number }> }>(
+            post('/tasks/counts', { collection: col, ids: taskIdsByCollection[col] })
+          )
+          .then((r) => r.data ?? {})
+          .catch(() => ({}) as Record<string, { open: number; overdue: number }>),
+      staleTime: 30_000
+    }))
+  })
+  const taskCountStamp = taskCountQueries.map((q) => q.dataUpdatedAt).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the stamp string is the dependency (useQueries results are a fresh array each render)
+  const taskCounts = useMemo(() => {
+    const out: Record<string, { open: number; overdue: number }> = {}
+    taskQueryCollections.forEach((col, i) => {
+      for (const [id, c] of Object.entries(taskCountQueries[i]?.data ?? {})) out[`${col}:${id}`] = c
+    })
+    return out
+  }, [taskCountStamp])
+  const tasksColumnEnabled = taskQueryCollections.length > 0
   // Active highlight rules across the source collections — a "Highlight rule"
   // filter (On hold / Sent back) that pairs with the row tint.
   const riskRuleQueries = useQueries({
@@ -2047,6 +2083,32 @@ export function QueueWorklist({
           } satisfies Column<QueueItemRow>
         ]
       : []),
+    ...(tasksColumnEnabled
+      ? [
+          {
+            key: 'tasks',
+            header: aliasFor('tasks', 'Tasks'),
+            sortable: false,
+            render: (row: QueueItemRow) => {
+              const tc = taskCounts[`${row.collection}:${row.item_id}`]
+              if (!tc || tc.open === 0) return <span className='text-[11px] text-slate-400'>—</span>
+              return (
+                <span
+                  data-queue-task-count={tc.open}
+                  className={
+                    tc.overdue > 0
+                      ? 'rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-red-600 dark:text-red-400'
+                      : 'rounded-full bg-slate-500/10 px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-slate-600 dark:text-slate-300'
+                  }
+                >
+                  {tc.open}
+                  {tc.overdue > 0 ? ` · ${tc.overdue} overdue` : ''}
+                </span>
+              )
+            }
+          } satisfies Column<QueueItemRow>
+        ]
+      : []),
     ...(sendBacksEnabled
       ? [
           {
@@ -2219,6 +2281,7 @@ export function QueueWorklist({
     ...(fulfilmentEnabled ? ['fulfilment'] : []),
     ...(integrationsEnabled ? ['integrations'] : []),
     ...(sendBacksEnabled ? ['send_backs'] : []),
+    ...(tasksColumnEnabled ? ['tasks'] : []),
     ...extraFieldKeys.map((f) => `extra.${f}`)
   ]
 

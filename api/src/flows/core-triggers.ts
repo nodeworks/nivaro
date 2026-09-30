@@ -46,4 +46,36 @@ export function registerCoreTriggers(): void {
       'Filter with a Condition operation (e.g. room eq ch:ops, text contains "outage").',
     fields: []
   })
+  const taskPayload =
+    'Payload: task_id, title, description, status, priority, due_date (YYYY-MM-DD), collection, item, ' +
+    'friendly_id, team_id, assignee + assignee_name + assignee_email, created_by + creator_name + ' +
+    'creator_email, completed_by + completed_by_name, actor. '
+  registerTrigger({
+    type: 'task-created',
+    label: 'Task Created',
+    description:
+      'Fires when a task is created on a record (from the Tasks section, a flow, a rule or Ask AI). ' +
+      taskPayload +
+      'Filter with a Condition operation (e.g. collection eq workflows, priority eq urgent).',
+    fields: []
+  })
+  registerTrigger({
+    type: 'task-reassigned',
+    label: 'Task Reassigned',
+    description:
+      'Fires when a task moves to another person, or a team member picks it up. ' +
+      taskPayload +
+      'Also previous_assignee.',
+    fields: []
+  })
+  registerTrigger({
+    type: 'task-completed',
+    label: 'Task Completed',
+    description:
+      'Fires when a task is marked done — by a person, or automatically when the record met the ' +
+      'task\'s "done when" condition. ' +
+      taskPayload +
+      'Also auto (done-when | null).',
+    fields: []
+  })
 }

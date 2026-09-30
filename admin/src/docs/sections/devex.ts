@@ -1429,7 +1429,7 @@ export const devexDevTooling: DocSection = {
     },
     {
       type: 'pre',
-      code: `NIVARO_E2E_TOKEN=<static token> npx playwright test -c api/extensions/efp-ops/tests/playwright.config.ts golden-path.spec.ts`
+      code: `NIVARO_E2E_TOKEN=<static token> npx playwright test -c api/extensions/my-extension/tests/playwright.config.ts golden-path.spec.ts`
     },
     { type: 'h2', id: 'dev-tooling-contrast', text: 'Contrast audit page' },
     {

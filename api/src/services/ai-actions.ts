@@ -21,7 +21,7 @@ const EXPIRY_MS = 60 * 60 * 1000
 
 export interface ProposalPreview {
   proposal_id: string
-  action_type: 'bulk_update' | 'create_record' | 'create_dashboard'
+  action_type: 'bulk_update' | 'create_record' | 'create_dashboard' | 'create_task'
   collection: string
   count: number
   changes: Record<string, unknown> | null
@@ -64,11 +64,15 @@ export async function proposeAction(
         filters?: unknown
       }>
     }
+    task?: TaskProposalInput
   }
 ): Promise<ProposalPreview> {
   // Dashboards validate per-widget collections instead of a single one
   if (input.action_type === 'create_dashboard') {
     return proposeDashboard(user, input.dashboard ?? {})
+  }
+  if (input.action_type === 'create_task') {
+    return proposeTask(user, input.task ?? {})
   }
   const collection = String(input.collection ?? '')
   if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
@@ -151,6 +155,116 @@ export async function proposeAction(
     ...preview,
     expires_note:
       'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
+  }
+}
+
+interface TaskProposalInput {
+  collection?: string
+  id?: string | number
+  title?: string
+  description?: string
+  /** A user id, an email, or a full name that matches exactly one active person. */
+  assignee?: string
+  due_date?: string
+  priority?: string
+}
+
+/** A person by id, email, or an unambiguous full name among active people. */
+async function findPerson(ref: string): Promise<{ id: string; name: string }> {
+  const v = ref.trim()
+  const people = (await db('nivaro_users')
+    .where('status', 'active')
+    .whereNull('account_kind')
+    .where((q) => q.where('is_redacted', false).orWhereNull('is_redacted'))
+    .where((q) => {
+      if (/^[0-9a-f-]{36}$/i.test(v)) q.orWhere('id', v)
+      if (v.includes('@')) q.orWhereRaw('LOWER(email) = ?', [v.toLowerCase()])
+      q.orWhereRaw("LOWER(CONCAT(first_name, ' ', last_name)) = ?", [v.toLowerCase()])
+      q.orWhereRaw('LOWER(first_name) = ?', [v.toLowerCase()])
+    })
+    .limit(6)
+    .select('id', 'first_name', 'last_name', 'email')) as Array<{
+    id: string
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+  }>
+  const name = (p: (typeof people)[number]) =>
+    [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || p.id
+  const exact = people.filter(
+    (p) =>
+      p.id.toLowerCase() === v.toLowerCase() ||
+      (p.email ?? '').toLowerCase() === v.toLowerCase() ||
+      name(p).toLowerCase() === v.toLowerCase()
+  )
+  const pick = exact.length === 1 ? exact : people
+  if (pick.length === 0) throw new Error(`No active person matches "${v}"`)
+  if (pick.length > 1)
+    throw new Error(
+      `"${v}" matches ${pick.length} people (${pick.map(name).join(', ')}) — ask the user which one, or use their email`
+    )
+  return { id: pick[0].id, name: name(pick[0]) }
+}
+
+async function proposeTask(user: User, t: TaskProposalInput): Promise<ProposalPreview> {
+  const collection = String(t.collection ?? '')
+  if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_'))
+    throw new Error('Invalid collection')
+  const item = String(t.id ?? '').trim()
+  if (!item) throw new Error('task.id (the record id) is required')
+  const title = String(t.title ?? '').trim()
+  if (!title) throw new Error('task.title is required')
+  if (!(await can(user, 'read', collection))) throw new Error(`You cannot read ${collection}`)
+  const { canReadTaskRecord } = await import('./tasks.js')
+  if (!(await canReadTaskRecord(user, collection, item))) throw new Error('Record not found')
+  const assignee = t.assignee ? await findPerson(String(t.assignee)) : { id: user.id, name: 'you' }
+  const priority = ['low', 'normal', 'urgent'].includes(String(t.priority))
+    ? String(t.priority)
+    : 'normal'
+  let due: string | null = null
+  if (t.due_date) {
+    const d = new Date(String(t.due_date))
+    if (Number.isNaN(d.getTime())) throw new Error('task.due_date must be a date (YYYY-MM-DD)')
+    due = d.toISOString().slice(0, 10)
+  }
+  const { resolveFriendlyId } = await import('./workflow-transitions.js')
+  const label = await resolveFriendlyId(collection, item).catch(() => item)
+  const payload = {
+    collection,
+    item,
+    title: title.slice(0, 500),
+    description: t.description ? String(t.description).slice(0, 4000) : null,
+    assignee: assignee.id,
+    due_date: due,
+    priority
+  }
+  const changes: Record<string, unknown> = {
+    Task: payload.title,
+    'Assign to': assignee.name,
+    ...(due ? { Due: due } : {}),
+    ...(priority !== 'normal' ? { Priority: priority } : {}),
+    On: label
+  }
+  const id = randomUUID()
+  await db('nivaro_ai_proposals').insert({
+    id,
+    user: user.id,
+    action_type: 'create_task',
+    collection,
+    payload: JSON.stringify(payload),
+    preview: JSON.stringify({ action_type: 'create_task', count: 1, changes }),
+    status: 'proposed',
+    created_at: new Date()
+  })
+  return {
+    proposal_id: id,
+    action_type: 'create_task',
+    collection,
+    count: 1,
+    changes,
+    sample: [{ id: item, label }],
+    expires_note:
+      'The user must approve this proposal in the UI within 1 hour; the task is NOT created until then.'
   }
 }
 
@@ -262,7 +376,14 @@ export async function executeProposal(
   const collection = String(row.collection)
   let result: Record<string, unknown> = {}
 
-  if (row.action_type === 'create_dashboard') {
+  if (row.action_type === 'create_task') {
+    const { createTask } = await import('./tasks.js')
+    const { getApp } = await import('./io-holder.js')
+    const { task } = await createTask(getApp() ?? null, user.id, payload as never, {
+      via: 'Ask AI'
+    })
+    result = { task_id: task.id, collection: task.collection, item: task.item }
+  } else if (row.action_type === 'create_dashboard') {
     const name = String((payload.name as string) ?? 'AI Dashboard')
     const widgets = (payload.widgets as Array<Record<string, unknown>>) ?? []
     const dashId = randomUUID()

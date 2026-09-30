@@ -992,6 +992,62 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
 }
 
 /**
+ * task (#1009): create a task on a record — for a named person (id or email,
+ * templated), for every current owner of the record's pipeline state, or for
+ * a team. The task is "asked for" by whoever triggered the flow, else the
+ * flow's author. Never on a system collection.
+ */
+async function runTaskOp(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+  const opts = parseOpts(op)
+  const t = (k: string) => resolveTemplate(String(opts[k] ?? ''), data).trim()
+  const collection = t('collection')
+  const item = t('item')
+  const title = t('title')
+  const resultKey = (opts.result_key as string) || 'task'
+  const reject = (why: string) => ({
+    status: 'reject' as const,
+    output: { ...data, $error: `task: ${why}` }
+  })
+  if (!collection || !item || !title) return reject('collection, item and title are required')
+  if (/^nivaro_/i.test(collection)) return reject('tasks cannot target system collections')
+  const assignToOwners = opts.assign_to_owners === true || opts.assign_to_owners === 'true'
+  const spec = {
+    collection,
+    item,
+    title,
+    description: t('description') || null,
+    assignee: assignToOwners ? null : t('assignee') || null,
+    assign_to_owners: assignToOwners,
+    team_id: t('team_id') || null,
+    due_in_days: t('due_in_days') || null,
+    due_date: t('due_date') || null,
+    priority: t('priority') || 'normal',
+    done_when: opts.done_when ?? null
+  }
+  if (ctx.dryRun) {
+    return {
+      status: 'resolve' as const,
+      output: { ...data, [`$preview_${op.key}`]: { op: 'task', ...spec } }
+    }
+  }
+  try {
+    const createdBy = ctx.userId ?? (await resolveFlowCreator(ctx.flowId))
+    if (!createdBy) return reject('no one to record as the requester (the flow has no author)')
+    const { getApp } = await import('./io-holder.js')
+    const { createTasksFromAutomation } = await import('./tasks.js')
+    const r = await createTasksFromAutomation(getApp() ?? null, {
+      ...spec,
+      created_by: createdBy,
+      via: `flow ${ctx.flowName}`
+    })
+    if (r.skipped) return reject(r.skipped)
+    return { status: 'resolve' as const, output: { ...data, [resultKey]: { ids: r.created } } }
+  } catch (err) {
+    return reject(err instanceof Error ? err.message : 'could not create the task')
+  }
+}
+
+/**
  * chat-post (#970): post a message into a chat room as the assistant (or as a
  * platform line when the instance has no assistant). Channels, General and
  * record rooms only — a flow never writes into someone's direct messages.
@@ -1113,6 +1169,8 @@ async function runOperationInner(
       return runWorkflowAutoSweep(op, data, ctx)
     case 'chat-post':
       return runChatPost(op, data, ctx)
+    case 'task':
+      return runTaskOp(op, data, ctx)
     default: {
       const { getOp } = await import('../flows/registry.js')
       const customOp = getOp(op.type)
