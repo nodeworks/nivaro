@@ -14,6 +14,7 @@ import {
 } from './hooks/notification-subscriptions.js'
 import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
+import { registerSnoozeWakeHooks } from './hooks/notification-snooze.js'
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
@@ -44,6 +45,7 @@ async function main() {
     registerAggregateCapHooks()
     registerQueueMaterializationHooks()
     registerRecordIntegrityHooks()
+    registerSnoozeWakeHooks()
     registerTaskDoneWhenHooks()
     registerWorkflowAutoHooks()
     registerCoreTriggers()

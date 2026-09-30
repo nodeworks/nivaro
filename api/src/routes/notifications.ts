@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { clearUntilChange, snoozeUntilChange, UNTIL_CHANGE } from '../services/notification-snooze.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
 import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
@@ -80,6 +81,7 @@ function serialize(row: Record<string, unknown>) {
     sender: row.sender ?? null,
     data: null,
     snoozed_until: row.snoozed_until ?? null,
+    snooze_until_change: row.snooze_until_change === true || row.snooze_until_change === 1,
     created_at: row.timestamp,
     target,
     kind: target?.kind ?? null,
@@ -601,7 +603,20 @@ export async function notificationsRoutes(app: FastifyInstance) {
   })
 
   app.post('/:id/snooze', async (req, reply) => {
-    const b = req.body as { until?: string | null }
+    const b = req.body as { until?: string | null; until_change?: boolean }
+    const nid = (req.params as { id: string }).id
+    // #647: sleep until the record it names moves (a field write or a state
+    // change by someone else), not until a time.
+    if (b.until_change === true) {
+      const r = await snoozeUntilChange(nid, req.user!.id)
+      if (r === 'not-found') return reply.code(404).send({ error: 'Notification not found' })
+      if (r === 'no-record')
+        return reply.code(400).send({ error: 'This notification is not about a record' })
+      if (r === 'unsupported')
+        return reply.code(409).send({ error: 'This database has not run migration 380 yet' })
+      return { data: { snoozed_until: UNTIL_CHANGE, snooze_until_change: true } }
+    }
+    await clearUntilChange(nid, req.user!.id)
     const until = b.until == null ? null : new Date(String(b.until))
     if (until !== null && (Number.isNaN(until.getTime()) || until <= new Date())) {
       return reply.code(400).send({ error: 'until must be a future timestamp (or null to wake)' })

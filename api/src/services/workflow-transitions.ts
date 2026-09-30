@@ -1102,6 +1102,11 @@ export async function applyTransition(opts: {
   await syncMaterializedQueueItem(instance.collection, instance.item)
 
   await syncStateField(instance.collection, instance.item, newStateObj)
+  // #647: a state move wakes notifications snoozed until the record changes
+  // (an addendum instance wakes its own row; subject resolution is the reader's).
+  void import('./notification-snooze.js')
+    .then((m) => m.wakeOnChange(instance.collection, instance.item, opts.userId ?? null, 'moved'))
+    .catch(() => {})
 
   const updatedInstance = (await db<WorkflowInstance>('nivaro_workflow_instances')
     .where({ id: instance.id })

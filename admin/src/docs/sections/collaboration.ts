@@ -490,6 +490,10 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&category=workflow`
     { type: 'h3', text: 'Channel fallback chain (if it stays unread)' },
     {
       type: 'p',
+      text: 'Snooze: a notification can sleep for an hour, until tomorrow 8am, until next week — or, when it is about a record, until the record changes. "Until the record changes" wakes it the moment someone else writes a field on that record or moves it to another pipeline state (your own edits do not wake it); it returns unread in the inbox and the bell. `POST /api/notifications/:id/snooze` with `{ "until": "<iso>" }`, `{ "until_change": true }`, or `{ "until": null }` to wake it now.'
+    },
+    {
+      type: 'p',
       text: 'Profile → Notification rules → "If it stays unread": per category, how long an in-app notification may sit unread before it climbs to a browser push, then to an email — one notification escalating channels, stopping the moment it is read or snoozed. Each step fires once, and a channel that already delivered the row at send time is not repeated (an email sent immediately is never re-sent as an escalation). Only rows from the last 7 days are considered, so switching the rule on does not replay an old inbox. Runs every 5 minutes (`notification-escalation` cron); the escalation shows as an extra chip on the row.'
     },
     {

@@ -69,6 +69,8 @@ interface NotificationRow {
   sender?: string | null
   sender_name?: string | null
   snoozed_until?: string | null
+  /** #647 — asleep until its record changes, not until a time. */
+  snooze_until_change?: boolean
   target?: NotificationTargetSpec | null
   kind?: string | null
   target_label?: string | null
@@ -236,14 +238,31 @@ export function NotificationCenterView({
     onError: () => onError?.('Failed to mark all read')
   })
   const snoozeMut = useMutation({
-    mutationFn: ({ id, until }: { id: number; until: Date | null }) =>
+    mutationFn: ({
+      id,
+      until,
+      untilChange
+    }: {
+      id: number
+      until: Date | null
+      untilChange?: boolean
+    }) =>
       client.request(
-        post(`/notifications/${id}/snooze`, { until: until ? until.toISOString() : null })
+        post(
+          `/notifications/${id}/snooze`,
+          untilChange ? { until_change: true } : { until: until ? until.toISOString() : null }
+        )
       ),
     onSuccess: (_d, vars) => {
       invalidate()
       setSnoozeMenuId(null)
-      onNotice?.(vars.until ? 'Snoozed — it will return unread' : 'Snooze cleared')
+      onNotice?.(
+        vars.untilChange
+          ? 'Snoozed — it comes back when someone changes the record'
+          : vars.until
+            ? 'Snoozed — it will return unread'
+            : 'Snooze cleared'
+      )
     },
     onError: () => onError?.('Failed to snooze')
   })
@@ -612,13 +631,14 @@ export function NotificationCenterView({
                           data-tip='Click to wake now'
                         >
                           <AlarmClock className='h-3 w-3' />
-                          Until{' '}
-                          {new Date(n.snoozed_until).toLocaleString([], {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit'
-                          })}
+                          {n.snooze_until_change
+                            ? 'Until it changes'
+                            : `Until ${new Date(n.snoozed_until).toLocaleString([], {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit'
+                              })}`}
                         </button>
                       ) : (
                         <button
@@ -643,6 +663,19 @@ export function NotificationCenterView({
                               {pset.label}
                             </button>
                           ))}
+                          {n.collection && n.item != null && (
+                            <button
+                              type='button'
+                              disabled={snoozeMut.isPending}
+                              onClick={() =>
+                                snoozeMut.mutate({ id: n.id, until: null, untilChange: true })
+                              }
+                              className='block w-full border-t border-slate-100 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:border-border dark:text-foreground'
+                              data-snooze-until-change
+                            >
+                              Until the record changes
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
