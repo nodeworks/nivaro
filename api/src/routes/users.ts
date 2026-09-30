@@ -773,6 +773,39 @@ export async function usersRoutes(app: FastifyInstance) {
         }
       }
     }
+    if ('presence_override' in body) {
+      // "Appear away": presence reports this person as away whatever their
+      // activity, until switched off or until `until`. null = back to normal.
+      const raw = body.presence_override
+      if (raw === null) {
+        patch.presence_override = null
+      } else if (typeof raw !== 'object' || Array.isArray(raw)) {
+        return reply.code(400).send({ error: 'presence_override must be an object or null' })
+      } else {
+        const po = raw as Record<string, unknown>
+        if (po.mode !== 'away') {
+          return reply.code(400).send({ error: "presence_override.mode must be 'away'" })
+        }
+        let until: string | null = null
+        if (po.until != null) {
+          const d = new Date(String(po.until))
+          if (Number.isNaN(d.getTime())) {
+            return reply.code(400).send({ error: 'presence_override.until must be a timestamp' })
+          }
+          until = d.toISOString()
+        }
+        patch.presence_override = { mode: 'away', until }
+      }
+    }
+    if ('chat_sidebar_sort' in body) {
+      const v = body.chat_sidebar_sort
+      if (v !== null && v !== 'recent' && v !== 'unread' && v !== 'alpha') {
+        return reply
+          .code(400)
+          .send({ error: "chat_sidebar_sort must be 'recent', 'unread', 'alpha' or null" })
+      }
+      patch.chat_sidebar_sort = v
+    }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })
     }

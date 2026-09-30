@@ -1,5 +1,6 @@
 import {
   type ChannelMeta,
+  ChatAppearAwayRow,
   ChatChannelBrowser,
   ChatChannelSettings,
   type ChatOnlineUser,
@@ -56,13 +57,17 @@ function OnlineList({ onOpenDm }: { onOpenDm: (u: ChatOnlineUser) => void }) {
   const users = cfg.onlineUsers
   if (users.length === 0) {
     return (
-      <p className='px-3 py-8 text-center text-[12px] text-slate-400'>
-        No one else is online right now.
-      </p>
+      <div className='p-2'>
+        <ChatAppearAwayRow />
+        <p className='px-3 py-8 text-center text-[12px] text-slate-400'>
+          No one else is online right now.
+        </p>
+      </div>
     )
   }
   return (
     <div className='p-2'>
+      <ChatAppearAwayRow />
       {users.map((u) => {
         const role = u.role_name?.trim()
         const subtitle =

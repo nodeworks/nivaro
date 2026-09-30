@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpDown,
   Bell,
   BellOff,
   Bookmark,
@@ -34,8 +35,9 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
+import { ChannelLookPicker, ChannelTile } from './ChannelLook'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -59,6 +61,8 @@ import {
   useChannelDirectory,
   useChannelMembers,
   useChatBotInfo,
+  useMyPreferences,
+  useSetMyPreferences,
   useChatBotName,
   useChatConfig,
   useChatMessages,
@@ -208,13 +212,84 @@ function useTheme(): ChatTheme {
   return ChatThemeContext.current
 }
 
-type PresenceState = 'online' | 'idle' | 'offline'
+type PresenceState = 'online' | 'idle' | 'away' | 'offline'
+
+/** Last seen + own time zone for one person (GET /presence/people). */
+interface PersonInfo {
+  user_id: string
+  last_seen: string | null
+  timezone: string | null
+  away: boolean
+}
+
+// Every badge and header that needs last seen in one render asks together:
+// ids collected over one tick go out as a single request (100 per call).
+const personBatch = new WeakMap<
+  object,
+  {
+    ids: Map<string, Array<(v: PersonInfo | null) => void>>
+    timer: ReturnType<typeof setTimeout> | null
+  }
+>()
+
+function loadPersonInfo(
+  client: ReturnType<typeof useNivaroClient>,
+  id: string
+): Promise<PersonInfo | null> {
+  const key = String(id).toUpperCase()
+  let batch = personBatch.get(client)
+  if (!batch) {
+    batch = { ids: new Map(), timer: null }
+    personBatch.set(client, batch)
+  }
+  const b = batch
+  return new Promise((resolve) => {
+    const waiters = b.ids.get(key) ?? []
+    waiters.push(resolve)
+    b.ids.set(key, waiters)
+    if (b.timer) return
+    b.timer = setTimeout(async () => {
+      const pending = new Map(b.ids)
+      b.ids.clear()
+      b.timer = null
+      const ids = [...pending.keys()]
+      const found = new Map<string, PersonInfo>()
+      for (let i = 0; i < ids.length; i += 100) {
+        try {
+          const res = await client.request<{ data: PersonInfo[] }>(
+            get('/presence/people', { ids: ids.slice(i, i + 100).join(',') })
+          )
+          for (const p of res.data ?? []) found.set(String(p.user_id).toUpperCase(), p)
+        } catch {
+          /* last seen is decoration — a failed read just leaves it out */
+        }
+      }
+      for (const [k, list] of pending) for (const r of list) r(found.get(k) ?? null)
+    }, 0)
+  })
+}
+
+function usePersonInfo(id: string | null, enabled = true): PersonInfo | null {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['nvr-person-info', id ? String(id).toUpperCase() : null],
+    queryFn: () => loadPersonInfo(client, id as string),
+    enabled: !!id && enabled,
+    staleTime: 60_000
+  })
+  return data ?? null
+}
+
+/** "last seen 3h ago" — or null when nothing is known. */
+function lastSeenText(info: PersonInfo | null): string | null {
+  return info?.last_seen ? `last seen ${formatRelative(info.last_seen)}` : null
+}
 
 /**
  * One person's presence as the Online tab reads it: /presence/online is the
- * classifier (it weighs last_active against the row's is_idle bit and decides
- * who this viewer may see); the host's online list only stands in until that
- * query has answered.
+ * classifier (it weighs last_active against the row's is_idle bit, honours
+ * "appear away", and decides who this viewer may see); the host's online list
+ * only stands in until that query has answered.
  */
 function usePresenceOf(id: string): { state: PresenceState; title: string } {
   const cfg = useContext(ChatConfigContext)
@@ -223,6 +298,7 @@ function usePresenceOf(id: string): { state: PresenceState; title: string } {
   if (extras.loaded) {
     const px = extras.byUser.get(uid)
     if (!px) return { state: 'offline', title: 'Offline' }
+    if (px.away) return { state: 'away', title: 'Away' }
     return px.is_idle
       ? { state: 'idle', title: idleLabel(px) }
       : { state: 'online', title: 'Online' }
@@ -232,10 +308,13 @@ function usePresenceOf(id: string): { state: PresenceState; title: string } {
   return u.is_idle ? { state: 'idle', title: idleLabel(u) } : { state: 'online', title: 'Online' }
 }
 
-/** Online = solid green; idle = hollow amber (a weaker state, so it reads
- *  weaker than online rather than competing with it); offline = grey. */
+/** Online = solid green; idle and away = hollow amber (a weaker state, so it
+ *  reads weaker than online rather than competing with it); offline = grey,
+ *  with when they were last seen on hover. */
 function PresenceBadge({ id, size }: { id: string; size: number }) {
   const { state, title } = usePresenceOf(id)
+  const info = usePersonInfo(id, state === 'offline')
+  const seen = state === 'offline' ? lastSeenText(info) : null
   const dot = size >= 30 ? 10 : 8
   return (
     <span
@@ -243,12 +322,12 @@ function PresenceBadge({ id, size }: { id: string; size: number }) {
         'absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-white dark:border-card',
         state === 'online'
           ? 'bg-emerald-400'
-          : state === 'idle'
+          : state === 'idle' || state === 'away'
             ? 'border-amber-400 bg-white dark:border-amber-400 dark:bg-card'
             : 'bg-slate-300 dark:bg-slate-600'
       )}
       style={{ width: dot, height: dot }}
-      title={title}
+      title={seen ? `Offline · ${seen}` : title}
       data-chat-presence={state}
     />
   )
@@ -674,6 +753,72 @@ function EntityRoomCard({ room }: { room: string }) {
   )
 }
 
+/** "It's 7:40 PM for Beth" — only when their own zone differs from the viewer's. */
+function localTimeFor(zone: string | null, name: string): string | null {
+  if (!zone) return null
+  const mine = getDisplayTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  const now = new Date()
+  let theirs: string
+  let ours: string
+  try {
+    const fmt = (tz: string) =>
+      new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(
+        now
+      )
+    theirs = fmt(zone)
+    ours = fmt(mine)
+  } catch {
+    return null
+  }
+  if (theirs === ours) return null
+  const first = name.split(/\s+/)[0] || name
+  return `${theirs} for ${first}`
+}
+
+/** Minute ticker, so a header clock and "last seen 3m ago" keep moving. */
+function useMinuteTick(): number {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setN((x) => x + 1), 60_000)
+    return () => clearInterval(t)
+  }, [])
+  return n
+}
+
+/** The second header line of a 1:1 DM: what the other person is doing (or
+ *  when they were last here) and, when it differs from yours, their time. */
+function DmPeerLine({ peerId, name }: { peerId: string; name: string }) {
+  useMinuteTick()
+  const { state, title } = usePresenceOf(peerId)
+  const info = usePersonInfo(peerId)
+  const status =
+    state === 'online'
+      ? 'Active now'
+      : state === 'offline'
+        ? (() => {
+            const seen = lastSeenText(info)
+            return seen ? seen.charAt(0).toUpperCase() + seen.slice(1) : 'Offline'
+          })()
+        : title
+  const local = localTimeFor(info?.timezone ?? null, name)
+  return (
+    <p
+      className='flex min-w-0 items-center gap-1.5 truncate text-[11px] text-slate-500 dark:text-slate-400'
+      data-chat-dm-peer-line={state}
+    >
+      <span className='truncate'>{status}</span>
+      {local && (
+        <>
+          <span aria-hidden>·</span>
+          <span className='shrink-0' data-chat-dm-local-time title={info?.timezone ?? undefined}>
+            {local}
+          </span>
+        </>
+      )}
+    </p>
+  )
+}
+
 export function ChatRoomView({
   room,
   label,
@@ -816,23 +961,57 @@ export function ChatRoomView({
   const mentionMapRef = useRef(new Map<string, ChatOnlineUser>())
   const inputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const endRef = useRef<HTMLDivElement>(null)
   const dividerRef = useRef<HTMLDivElement>(null)
   // Frozen at mount — markRead fires immediately, so the live rooms query
   // can't be the divider's source of truth.
   const initialUnreadRef = useRef(Math.max(0, initialUnread ?? 0))
   const firstScrollRef = useRef(false)
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  // True while the reader sits at the bottom. Content that grows AFTER the
+  // room opens (record chips resolving their state, "Seen by", images) keeps
+  // the view on the newest message only while this holds — someone reading
+  // history is never pulled down.
+  const pinnedRef = useRef(true)
+  // Scroll the CONTAINER to its end: scrollIntoView on a marker aligns the
+  // marker and leaves the container's bottom padding below the fold.
+  const toBottom = () => {
+    const el = scrollerRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }
 
   useEffect(() => {
     if (!firstScrollRef.current && messages.length > 0) {
       firstScrollRef.current = true
       // Land the reader AT the "New messages" line, not past it.
-      if (dividerRef.current) dividerRef.current.scrollIntoView({ block: 'center' })
-      else endRef.current?.scrollIntoView({ block: 'end' })
+      if (dividerRef.current) {
+        dividerRef.current.scrollIntoView({ block: 'center' })
+        pinnedRef.current = false
+      } else {
+        toBottom()
+        pinnedRef.current = true
+      }
       return
     }
-    endRef.current?.scrollIntoView({ block: 'end' })
+    const last = messages[messages.length - 1]
+    const mine = !!last?.sender && last.sender.toLowerCase() === me?.id?.toLowerCase()
+    if (pinnedRef.current || mine) {
+      toBottom()
+      pinnedRef.current = true
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: runs per new message
   }, [messages.length])
+
+  // Keep the newest message in view while the content settles.
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (pinnedRef.current) toBottom()
+    })
+    ro.observe(content)
+    return () => ro.disconnect()
+  }, [])
 
   // Bot "thinking" clears when a message FROM the bot lands after the ask,
   // or after 90s (model down, no key — the failure reply also clears it).
@@ -1022,9 +1201,17 @@ export function ChatRoomView({
         >
           <ChevronLeft className='h-4 w-4' strokeWidth={2} />
         </button>
-        <p className='min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
-          {label}
-        </p>
+        {roomInfo?.kind === 'channel' && !roomInfo.channel?.is_direct && (
+          <ChannelTile icon={roomInfo.channel?.icon} color={roomInfo.channel?.color} size={24} />
+        )}
+        <div className='min-w-0 flex-1'>
+          <p className='truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            {label}
+          </p>
+          {me && dmPeer(room, me.id) && (
+            <DmPeerLine peerId={dmPeer(room, me.id) as string} name={label} />
+          )}
+        </div>
         {recordLink && (
           <button
             type='button'
@@ -1298,396 +1485,405 @@ export function ChatRoomView({
           )}
         </div>
       )}
-      <div className='min-h-0 flex-1 space-y-2.5 overflow-y-auto px-3 py-3' data-chat-messages>
-        {loading ? (
-          <p className='py-6 text-center text-[12px] text-slate-400'>Loading…</p>
-        ) : visibleMessages.length === 0 ? (
-          <div className='py-6 text-center text-[12px] text-slate-400'>
-            {searching ? (
-              'No messages match.'
-            ) : (
-              <>
-                <p>No messages yet — say hello.</p>
-                <p className='mt-1 text-[11px]'>
-                  Tip: @ mentions someone{botName ? `, @${botName} asks the AI` : ''}, and a record
-                  ID like AB26-12345 becomes a live link.
-                </p>
-              </>
-            )}
-          </div>
-        ) : (
-          visibleMessages.map((m, idx) => {
-            const mine = m.sender?.toLowerCase() === myId
-            const prev = visibleMessages[idx - 1]
-            const newDay =
-              idx === 0 ||
-              (prev &&
-                new Date(prev.date_created).toDateString() !==
-                  new Date(m.date_created).toDateString())
-            const isLastMine = mine && idx === lastMineIndex
-            const wasRead =
-              isLastMine && readTime > 0 && new Date(m.date_created).getTime() <= readTime
-            const deleted = !!m.deleted_at
-            const editable =
-              mine && !deleted && Date.now() - new Date(m.date_created).getTime() < 15 * 60_000
-            // Delete has no time window: own messages always, any message for
-            // admins (matches the server's own-or-admin rule).
-            const deletable = !deleted && (mine || isAdmin)
-            const isEditing = editingId === m.id
-            // "New messages" — anchored to the unread count frozen at open.
-            const showUnreadDivider =
-              !searching &&
-              initialUnreadRef.current > 0 &&
-              idx === Math.max(0, visibleMessages.length - initialUnreadRef.current)
-            const reactionGroups = new Map<
-              string,
-              { count: number; mine: boolean; names: string[] }
-            >()
-            for (const r of m.reactions ?? []) {
-              const g = reactionGroups.get(r.emoji) ?? { count: 0, mine: false, names: [] }
-              g.count++
-              if (r.user?.toLowerCase() === myId) g.mine = true
-              if (r.user_name) g.names.push(r.user_name)
-              reactionGroups.set(r.emoji, g)
-            }
-            return (
-              <div key={m.id}>
-                {newDay && (
-                  <div className='my-2 flex items-center gap-2'>
-                    <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
-                    <span className='text-[10px] font-medium text-slate-400'>
-                      {dateDivider(m.date_created)}
-                    </span>
-                    <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
-                  </div>
-                )}
-                {showUnreadDivider && (
-                  <div
-                    ref={dividerRef}
-                    className='my-2 flex items-center gap-2'
-                    data-chat-unread-divider
-                  >
-                    <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
-                    <span className='text-[10px] font-semibold uppercase tracking-wide text-red-400'>
-                      New messages
-                    </span>
-                    {initialUnreadRef.current > 20 && (
-                      <button
-                        type='button'
-                        disabled={catchupMut.isPending}
-                        onClick={() => catchupMut.mutate()}
-                        className='rounded-full border border-red-200 px-1.5 py-px text-[9.5px] font-medium text-red-400 hover:text-red-600 disabled:opacity-50 dark:border-red-500/40'
-                      >
-                        {catchupMut.isPending ? 'Summarizing…' : '✨ What did I miss?'}
-                      </button>
-                    )}
-                    <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
-                  </div>
-                )}
-                {showUnreadDivider && catchup && (
-                  <div className='my-1 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
-                    {catchup}
-                  </div>
-                )}
-                <div className={cn('group/msg flex gap-2', mine && 'flex-row-reverse')}>
-                  {!mine && <Avatar id={m.sender} name={m.sender_name} size={26} />}
-                  <div className={cn('relative max-w-[78%]', mine && 'text-right')}>
-                    {!mine && (
-                      <p className='mb-0.5 text-[10.5px] font-medium text-slate-400'>
-                        {m.sender_name ?? 'Unknown'}
-                        {m.masquerade_admin_name && (
-                          <span
-                            className='ml-1 font-normal text-violet-600 dark:text-violet-300'
-                            title={`Sent by ${m.masquerade_admin_name} while masquerading as ${m.sender_name ?? 'this person'}`}
-                            data-chat-message-masquerade
-                          >
-                            · via {m.masquerade_admin_name}
-                          </span>
-                        )}
-                      </p>
-                    )}
-                    {/* Hover toolbar: react, and (own, in-window) edit/delete */}
-                    {!deleted && !isEditing && (
-                      <div
-                        className={cn(
-                          'absolute -top-3 z-10 hidden items-center gap-0.5 rounded-full border px-1 py-0.5 shadow-sm group-hover/msg:flex',
-                          th.surface,
-                          'border-slate-200 dark:border-border',
-                          // Anchor at the screen-edge side so the toolbar grows
-                          // INWARD: own bubbles hug the right edge (pin right,
-                          // extend left), others hug the left (pin left, extend
-                          // right). The old inverse pinning pushed the toolbar
-                          // off-screen whenever it was wider than the bubble.
-                          mine ? 'right-0' : 'left-0'
-                        )}
-                        data-chat-msg-actions
-                      >
-                        {REACTION_EMOJI.map((e) => (
-                          <button
-                            key={e}
-                            type='button'
-                            onClick={() => toggleReaction.mutate({ messageId: m.id, emoji: e })}
-                            className='rounded-full px-0.5 text-[13px] leading-none transition-transform hover:scale-125'
-                            title={`React ${e}`}
-                          >
-                            {e}
-                          </button>
-                        ))}
-                        {roomRecord && (
-                          <button
-                            type='button'
-                            title='Make a task from this message'
-                            onClick={() => makeTask.mutate(m)}
-                            className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                          >
-                            <ClipboardPlus className='h-3 w-3' />
-                          </button>
-                        )}
+      <div
+        ref={scrollerRef}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+        }}
+        className='min-h-0 flex-1 overflow-y-auto px-3 py-3'
+        data-chat-messages
+      >
+        <div ref={contentRef} className='space-y-2.5'>
+          {loading ? (
+            <p className='py-6 text-center text-[12px] text-slate-400'>Loading…</p>
+          ) : visibleMessages.length === 0 ? (
+            <div className='py-6 text-center text-[12px] text-slate-400'>
+              {searching ? (
+                'No messages match.'
+              ) : (
+                <>
+                  <p>No messages yet — say hello.</p>
+                  <p className='mt-1 text-[11px]'>
+                    Tip: @ mentions someone{botName ? `, @${botName} asks the AI` : ''}, and a
+                    record ID like AB26-12345 becomes a live link.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            visibleMessages.map((m, idx) => {
+              const mine = m.sender?.toLowerCase() === myId
+              const prev = visibleMessages[idx - 1]
+              const newDay =
+                idx === 0 ||
+                (prev &&
+                  new Date(prev.date_created).toDateString() !==
+                    new Date(m.date_created).toDateString())
+              const isLastMine = mine && idx === lastMineIndex
+              const wasRead =
+                isLastMine && readTime > 0 && new Date(m.date_created).getTime() <= readTime
+              const deleted = !!m.deleted_at
+              const editable =
+                mine && !deleted && Date.now() - new Date(m.date_created).getTime() < 15 * 60_000
+              // Delete has no time window: own messages always, any message for
+              // admins (matches the server's own-or-admin rule).
+              const deletable = !deleted && (mine || isAdmin)
+              const isEditing = editingId === m.id
+              // "New messages" — anchored to the unread count frozen at open.
+              const showUnreadDivider =
+                !searching &&
+                initialUnreadRef.current > 0 &&
+                idx === Math.max(0, visibleMessages.length - initialUnreadRef.current)
+              const reactionGroups = new Map<
+                string,
+                { count: number; mine: boolean; names: string[] }
+              >()
+              for (const r of m.reactions ?? []) {
+                const g = reactionGroups.get(r.emoji) ?? { count: 0, mine: false, names: [] }
+                g.count++
+                if (r.user?.toLowerCase() === myId) g.mine = true
+                if (r.user_name) g.names.push(r.user_name)
+                reactionGroups.set(r.emoji, g)
+              }
+              return (
+                <div key={m.id}>
+                  {newDay && (
+                    <div className='my-2 flex items-center gap-2'>
+                      <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
+                      <span className='text-[10px] font-medium text-slate-400'>
+                        {dateDivider(m.date_created)}
+                      </span>
+                      <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
+                    </div>
+                  )}
+                  {showUnreadDivider && (
+                    <div
+                      ref={dividerRef}
+                      className='my-2 flex items-center gap-2'
+                      data-chat-unread-divider
+                    >
+                      <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
+                      <span className='text-[10px] font-semibold uppercase tracking-wide text-red-400'>
+                        New messages
+                      </span>
+                      {initialUnreadRef.current > 20 && (
                         <button
                           type='button'
-                          title={pins.some((p) => p.id === m.id) ? 'Unpin' : 'Pin'}
-                          onClick={() => togglePin.mutate(m.id)}
-                          className={cn(
-                            'rounded-full p-0.5',
-                            pins.some((p) => p.id === m.id)
-                              ? th.accentText
-                              : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                          )}
+                          disabled={catchupMut.isPending}
+                          onClick={() => catchupMut.mutate()}
+                          className='rounded-full border border-red-200 px-1.5 py-px text-[9.5px] font-medium text-red-400 hover:text-red-600 disabled:opacity-50 dark:border-red-500/40'
                         >
-                          <Pin className='h-3 w-3' />
+                          {catchupMut.isPending ? 'Summarizing…' : '✨ What did I miss?'}
                         </button>
-                        <button
-                          type='button'
-                          title={
-                            savedIds.has(m.id)
-                              ? 'Remove from saved'
-                              : 'Save for later (personal bookmark)'
-                          }
-                          onClick={() => toggleSave.mutate(m.id)}
-                          className={cn(
-                            'rounded-full p-0.5',
-                            savedIds.has(m.id)
-                              ? th.accentText
-                              : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                      )}
+                      <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
+                    </div>
+                  )}
+                  {showUnreadDivider && catchup && (
+                    <div className='my-1 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+                      {catchup}
+                    </div>
+                  )}
+                  <div className={cn('group/msg flex gap-2', mine && 'flex-row-reverse')}>
+                    {!mine && <Avatar id={m.sender} name={m.sender_name} size={26} />}
+                    <div className={cn('relative max-w-[78%]', mine && 'text-right')}>
+                      {!mine && (
+                        <p className='mb-0.5 text-[10.5px] font-medium text-slate-400'>
+                          {m.sender_name ?? 'Unknown'}
+                          {m.masquerade_admin_name && (
+                            <span
+                              className='ml-1 font-normal text-violet-600 dark:text-violet-300'
+                              title={`Sent by ${m.masquerade_admin_name} while masquerading as ${m.sender_name ?? 'this person'}`}
+                              data-chat-message-masquerade
+                            >
+                              · via {m.masquerade_admin_name}
+                            </span>
                           )}
+                        </p>
+                      )}
+                      {/* Hover toolbar: react, and (own, in-window) edit/delete */}
+                      {!deleted && !isEditing && (
+                        <div
+                          className={cn(
+                            'absolute -top-3 z-10 hidden items-center gap-0.5 rounded-full border px-1 py-0.5 shadow-sm group-hover/msg:flex',
+                            th.surface,
+                            'border-slate-200 dark:border-border',
+                            // Anchor at the screen-edge side so the toolbar grows
+                            // INWARD: own bubbles hug the right edge (pin right,
+                            // extend left), others hug the left (pin left, extend
+                            // right). The old inverse pinning pushed the toolbar
+                            // off-screen whenever it was wider than the bubble.
+                            mine ? 'right-0' : 'left-0'
+                          )}
+                          data-chat-msg-actions
                         >
-                          <Bookmark className='h-3 w-3' />
-                        </button>
-                        {editable && (
-                          <button
-                            type='button'
-                            title='Edit'
-                            onClick={() => {
-                              setEditingId(m.id)
-                              setEditDraft(m.message)
-                              setConfirmDeleteId(null)
-                            }}
-                            className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                          >
-                            <Pencil className='h-3 w-3' />
-                          </button>
-                        )}
-                        {deletable && (
-                          <>
-                            {confirmDeleteId === m.id ? (
-                              <button
-                                type='button'
-                                title='Confirm delete'
-                                onClick={() => {
-                                  deleteMessage.mutate(m.id)
-                                  setConfirmDeleteId(null)
-                                }}
-                                className='rounded-full px-1 text-[10px] font-semibold text-red-500'
-                              >
-                                Sure?
-                              </button>
-                            ) : (
-                              <button
-                                type='button'
-                                title={mine ? 'Delete' : 'Delete (admin)'}
-                                onClick={() => setConfirmDeleteId(m.id)}
-                                className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
-                              >
-                                <Trash2 className='h-3 w-3' />
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                    {deleted ? (
-                      <div className='inline-block rounded-2xl border border-dashed border-slate-200 px-3 py-1.5 text-left text-[11.5px] italic text-slate-400 dark:border-border'>
-                        Message removed
-                      </div>
-                    ) : isEditing ? (
-                      <form
-                        className='flex items-center gap-1'
-                        onSubmit={(e) => {
-                          e.preventDefault()
-                          const text = editDraft.trim()
-                          if (text && text !== m.message) {
-                            editMessage.mutate({ messageId: m.id, text })
-                          }
-                          setEditingId(null)
-                        }}
-                      >
-                        <input
-                          autoFocus
-                          value={editDraft}
-                          onChange={(e) => setEditDraft(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Escape') setEditingId(null)
-                          }}
-                          className={cn(
-                            'h-8 w-[240px] rounded-lg border px-2 text-[12px] outline-none',
-                            th.input
-                          )}
-                          aria-label='Edit message'
-                        />
-                        <button
-                          type='submit'
-                          className={cn(
-                            'rounded-md px-1.5 py-1 text-[11px] font-medium',
-                            th.accentText
-                          )}
-                        >
-                          Save
-                        </button>
-                      </form>
-                    ) : (
-                      <div
-                        className={cn(
-                          'inline-block rounded-2xl px-3 py-1.5 text-left text-[12.5px] leading-snug',
-                          mine
-                            ? cn('rounded-br-md', th.bubbleMine)
-                            : cn('rounded-bl-md', th.bubbleOther)
-                        )}
-                      >
-                        {m.message &&
-                          (renderMessageBody ? (
-                            renderMessageBody(m, { mine })
-                          ) : (
-                            <MessageBody text={m.message} mine={mine} />
+                          {REACTION_EMOJI.map((e) => (
+                            <button
+                              key={e}
+                              type='button'
+                              onClick={() => toggleReaction.mutate({ messageId: m.id, emoji: e })}
+                              className='rounded-full px-0.5 text-[13px] leading-none transition-transform hover:scale-125'
+                              title={`React ${e}`}
+                            >
+                              {e}
+                            </button>
                           ))}
-                        {(m.attachments ?? []).length > 0 && (
-                          <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
-                            {(m.attachments ?? []).map((aid) => {
-                              const meta = attachmentMeta?.get(aid)
-                              const name = meta?.title || meta?.filename_download || 'Attachment'
-                              const url = client.fileUrl(aid)
-                              const isImg = (meta?.type ?? '').startsWith('image/')
-                              const openPreview = () =>
-                                setPreview({
-                                  id: aid,
-                                  url,
-                                  name,
-                                  type: meta?.type ?? null,
-                                  size: meta?.filesize ?? null
-                                })
-                              return isImg ? (
+                          {roomRecord && (
+                            <button
+                              type='button'
+                              title='Make a task from this message'
+                              onClick={() => makeTask.mutate(m)}
+                              className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                            >
+                              <ClipboardPlus className='h-3 w-3' />
+                            </button>
+                          )}
+                          <button
+                            type='button'
+                            title={pins.some((p) => p.id === m.id) ? 'Unpin' : 'Pin'}
+                            onClick={() => togglePin.mutate(m.id)}
+                            className={cn(
+                              'rounded-full p-0.5',
+                              pins.some((p) => p.id === m.id)
+                                ? th.accentText
+                                : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                            )}
+                          >
+                            <Pin className='h-3 w-3' />
+                          </button>
+                          <button
+                            type='button'
+                            title={
+                              savedIds.has(m.id)
+                                ? 'Remove from saved'
+                                : 'Save for later (personal bookmark)'
+                            }
+                            onClick={() => toggleSave.mutate(m.id)}
+                            className={cn(
+                              'rounded-full p-0.5',
+                              savedIds.has(m.id)
+                                ? th.accentText
+                                : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                            )}
+                          >
+                            <Bookmark className='h-3 w-3' />
+                          </button>
+                          {editable && (
+                            <button
+                              type='button'
+                              title='Edit'
+                              onClick={() => {
+                                setEditingId(m.id)
+                                setEditDraft(m.message)
+                                setConfirmDeleteId(null)
+                              }}
+                              className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                            >
+                              <Pencil className='h-3 w-3' />
+                            </button>
+                          )}
+                          {deletable && (
+                            <>
+                              {confirmDeleteId === m.id ? (
                                 <button
-                                  key={aid}
                                   type='button'
-                                  onClick={openPreview}
-                                  className='block cursor-zoom-in'
+                                  title='Confirm delete'
+                                  onClick={() => {
+                                    deleteMessage.mutate(m.id)
+                                    setConfirmDeleteId(null)
+                                  }}
+                                  className='rounded-full px-1 text-[10px] font-semibold text-red-500'
                                 >
-                                  <img
-                                    src={url}
-                                    alt={name}
-                                    className='max-h-40 max-w-[220px] rounded-lg object-cover'
-                                    loading='lazy'
-                                  />
+                                  Sure?
                                 </button>
                               ) : (
                                 <button
-                                  key={aid}
                                   type='button'
-                                  onClick={openPreview}
-                                  className={cn(
-                                    'inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px]',
-                                    mine
-                                      ? 'border-white/30 bg-white/10'
-                                      : 'border-slate-200 bg-white dark:border-border dark:bg-card'
-                                  )}
+                                  title={mine ? 'Delete' : 'Delete (admin)'}
+                                  onClick={() => setConfirmDeleteId(m.id)}
+                                  className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
                                 >
-                                  <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
-                                  <span className='truncate'>{name}</span>
+                                  <Trash2 className='h-3 w-3' />
                                 </button>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {reactionGroups.size > 0 && (
-                      <div
-                        className={cn('mt-0.5 flex flex-wrap gap-1', mine && 'justify-end')}
-                        data-chat-reactions
-                      >
-                        {[...reactionGroups.entries()].map(([emoji, g]) => (
-                          <button
-                            key={emoji}
-                            type='button'
-                            title={g.names.join(', ')}
-                            onClick={() => toggleReaction.mutate({ messageId: m.id, emoji })}
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {deleted ? (
+                        <div className='inline-block rounded-2xl border border-dashed border-slate-200 px-3 py-1.5 text-left text-[11.5px] italic text-slate-400 dark:border-border'>
+                          Message removed
+                        </div>
+                      ) : isEditing ? (
+                        <form
+                          className='flex items-center gap-1'
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            const text = editDraft.trim()
+                            if (text && text !== m.message) {
+                              editMessage.mutate({ messageId: m.id, text })
+                            }
+                            setEditingId(null)
+                          }}
+                        >
+                          <input
+                            autoFocus
+                            value={editDraft}
+                            onChange={(e) => setEditDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') setEditingId(null)
+                            }}
                             className={cn(
-                              'inline-flex items-center gap-0.5 rounded-full border px-1.5 py-px text-[10.5px] leading-tight transition-colors',
-                              g.mine
-                                ? cn('font-semibold', th.accentSoft, 'border-transparent')
-                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
+                              'h-8 w-[240px] rounded-lg border px-2 text-[12px] outline-none',
+                              th.input
                             )}
-                          >
-                            <span>{emoji}</span>
-                            <span className='tabular-nums'>{g.count}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <p className='mt-0.5 flex items-center justify-end gap-1 text-[10px] text-slate-400'>
-                      {!mine && <span className='mr-auto' />}
-                      {m.edited_at && !deleted && <span className='italic'>(edited)</span>}
-                      {new Date(m.date_created).toLocaleTimeString('en-US', {
-                        hour: 'numeric',
-                        minute: '2-digit'
-                      })}
-                      {mine &&
-                        isGroupRoom &&
-                        !deleted &&
-                        (() => {
-                          const seen = seenBy(m)
-                          if (seen.length === 0) return null
-                          return (
-                            <SeenByPopover
-                              seen={seen}
-                              channelId={roomInfo?.channel?.id ?? null}
-                              senderId={String(m.sender ?? '')}
-                            />
-                          )
-                        })()}
-                      {isLastMine &&
-                        room.startsWith('dm:') &&
-                        (wasRead ? (
-                          <span
+                            aria-label='Edit message'
+                          />
+                          <button
+                            type='submit'
                             className={cn(
-                              'inline-flex items-center gap-0.5 font-medium',
+                              'rounded-md px-1.5 py-1 text-[11px] font-medium',
                               th.accentText
                             )}
                           >
-                            <CheckCheck className='h-3 w-3' strokeWidth={2.4} /> Read
-                          </span>
-                        ) : (
-                          <span className='inline-flex items-center gap-0.5'>
-                            <Check className='h-3 w-3' strokeWidth={2.2} /> Sent
-                          </span>
-                        ))}
-                    </p>
+                            Save
+                          </button>
+                        </form>
+                      ) : (
+                        <div
+                          className={cn(
+                            'inline-block rounded-2xl px-3 py-1.5 text-left text-[12.5px] leading-snug',
+                            mine
+                              ? cn('rounded-br-md', th.bubbleMine)
+                              : cn('rounded-bl-md', th.bubbleOther)
+                          )}
+                        >
+                          {m.message &&
+                            (renderMessageBody ? (
+                              renderMessageBody(m, { mine })
+                            ) : (
+                              <MessageBody text={m.message} mine={mine} />
+                            ))}
+                          {(m.attachments ?? []).length > 0 && (
+                            <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
+                              {(m.attachments ?? []).map((aid) => {
+                                const meta = attachmentMeta?.get(aid)
+                                const name = meta?.title || meta?.filename_download || 'Attachment'
+                                const url = client.fileUrl(aid)
+                                const isImg = (meta?.type ?? '').startsWith('image/')
+                                const openPreview = () =>
+                                  setPreview({
+                                    id: aid,
+                                    url,
+                                    name,
+                                    type: meta?.type ?? null,
+                                    size: meta?.filesize ?? null
+                                  })
+                                return isImg ? (
+                                  <button
+                                    key={aid}
+                                    type='button'
+                                    onClick={openPreview}
+                                    className='block cursor-zoom-in'
+                                  >
+                                    <img
+                                      src={url}
+                                      alt={name}
+                                      className='max-h-40 max-w-[220px] rounded-lg object-cover'
+                                      loading='lazy'
+                                    />
+                                  </button>
+                                ) : (
+                                  <button
+                                    key={aid}
+                                    type='button'
+                                    onClick={openPreview}
+                                    className={cn(
+                                      'inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px]',
+                                      mine
+                                        ? 'border-white/30 bg-white/10'
+                                        : 'border-slate-200 bg-white dark:border-border dark:bg-card'
+                                    )}
+                                  >
+                                    <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
+                                    <span className='truncate'>{name}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {reactionGroups.size > 0 && (
+                        <div
+                          className={cn('mt-0.5 flex flex-wrap gap-1', mine && 'justify-end')}
+                          data-chat-reactions
+                        >
+                          {[...reactionGroups.entries()].map(([emoji, g]) => (
+                            <button
+                              key={emoji}
+                              type='button'
+                              title={g.names.join(', ')}
+                              onClick={() => toggleReaction.mutate({ messageId: m.id, emoji })}
+                              className={cn(
+                                'inline-flex items-center gap-0.5 rounded-full border px-1.5 py-px text-[10.5px] leading-tight transition-colors',
+                                g.mine
+                                  ? cn('font-semibold', th.accentSoft, 'border-transparent')
+                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
+                              )}
+                            >
+                              <span>{emoji}</span>
+                              <span className='tabular-nums'>{g.count}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <p className='mt-0.5 flex items-center justify-end gap-1 text-[10px] text-slate-400'>
+                        {!mine && <span className='mr-auto' />}
+                        {m.edited_at && !deleted && <span className='italic'>(edited)</span>}
+                        {new Date(m.date_created).toLocaleTimeString('en-US', {
+                          hour: 'numeric',
+                          minute: '2-digit'
+                        })}
+                        {mine &&
+                          isGroupRoom &&
+                          !deleted &&
+                          (() => {
+                            const seen = seenBy(m)
+                            if (seen.length === 0) return null
+                            return (
+                              <SeenByPopover
+                                seen={seen}
+                                channelId={roomInfo?.channel?.id ?? null}
+                                senderId={String(m.sender ?? '')}
+                              />
+                            )
+                          })()}
+                        {isLastMine &&
+                          room.startsWith('dm:') &&
+                          (wasRead ? (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-0.5 font-medium',
+                                th.accentText
+                              )}
+                            >
+                              <CheckCheck className='h-3 w-3' strokeWidth={2.4} /> Read
+                            </span>
+                          ) : (
+                            <span className='inline-flex items-center gap-0.5'>
+                              <Check className='h-3 w-3' strokeWidth={2.2} /> Sent
+                            </span>
+                          ))}
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-          })
-        )}
-        <div ref={endRef} />
+              )
+            })
+          )}
+        </div>
       </div>
       <div className='min-h-[18px] shrink-0 px-3.5'>
         {botAskedAt && botName ? (
@@ -1844,7 +2040,9 @@ function channelMeta(c: DirectoryChannel): ChannelMeta {
     visibility: c.visibility,
     role: c.role,
     topic: c.topic,
-    created_by: (c as { created_by?: string | null }).created_by ?? null
+    created_by: (c as { created_by?: string | null }).created_by ?? null,
+    icon: c.icon ?? null,
+    color: c.color ?? null
   }
 }
 
@@ -2165,6 +2363,10 @@ export function ChatChannelSettings({
   const [topic, setTopic] = useState(channel.topic ?? '')
   const [visibility, setVisibility] = useState(channel.visibility)
   const [role, setRole] = useState(channel.role ?? '')
+  const [look, setLook] = useState<{ icon: string | null; color: string | null }>({
+    icon: channel.icon ?? null,
+    color: channel.color ?? null
+  })
   const [memberSearch, setMemberSearch] = useState('')
   const debounced = useDebouncedValue(memberSearch, 250)
   const { users } = useUserSearch(debounced, visibility === 'private')
@@ -2175,6 +2377,8 @@ export function ChatChannelSettings({
     name !== label ||
     topic !== (channel.topic ?? '') ||
     visibility !== channel.visibility ||
+    look.icon !== (channel.icon ?? null) ||
+    look.color !== (channel.color ?? null) ||
     (visibility === 'role' && role !== (channel.role ?? ''))
 
   return (
@@ -2204,6 +2408,14 @@ export function ChatChannelSettings({
                 className={cn('h-8 w-full rounded-md px-2 text-[12.5px] outline-none', th.input)}
               />
             </label>
+            {!channel.is_direct && (
+              <div className='flex items-start gap-3'>
+                <ChannelTile icon={look.icon} color={look.color} size={40} />
+                <div className='min-w-0 flex-1'>
+                  <ChannelLookPicker icon={look.icon} color={look.color} onChange={setLook} />
+                </div>
+              </div>
+            )}
             <label className='block'>
               <span className='mb-1 block text-[11px] font-medium text-slate-400'>Topic</span>
               <input
@@ -2269,7 +2481,9 @@ export function ChatChannelSettings({
                     name: name.trim() || label,
                     topic: topic.trim() || null,
                     visibility,
-                    role: visibility === 'role' ? role : null
+                    role: visibility === 'role' ? role : null,
+                    icon: look.icon,
+                    color: look.color
                   })
                 }
                 className={cn(
@@ -2392,6 +2606,76 @@ function canArchive(r: RoomInfo | null): boolean {
   return r.kind === 'dm' || r.kind === 'entity' || (r.kind === 'channel' && !!r.channel?.is_direct)
 }
 
+type SidebarSort = 'recent' | 'unread' | 'alpha'
+
+const SIDEBAR_SORTS: Array<{ value: SidebarSort; label: string }> = [
+  { value: 'recent', label: 'Recent activity' },
+  { value: 'unread', label: 'Unread first' },
+  { value: 'alpha', label: 'A–Z' }
+]
+
+function lastAt(r: RoomInfo): number {
+  return r.lastMessage?.date_created ? new Date(r.lastMessage.date_created).getTime() : 0
+}
+
+/** Order within each sidebar group; ties fall back to the name. */
+function sortRooms(rooms: RoomInfo[], mode: SidebarSort): RoomInfo[] {
+  const byName = (a: RoomInfo, b: RoomInfo) => a.label.localeCompare(b.label)
+  const byRecent = (a: RoomInfo, b: RoomInfo) => lastAt(b) - lastAt(a) || byName(a, b)
+  const list = [...rooms]
+  if (mode === 'alpha') return list.sort(byName)
+  if (mode === 'unread')
+    return list.sort((a, b) => Number(b.unread > 0) - Number(a.unread > 0) || byRecent(a, b))
+  return list.sort(byRecent)
+}
+
+/** How the room list is ordered — remembered on the person, across devices. */
+function SidebarSortButton({
+  value,
+  onChange
+}: {
+  value: SidebarSort
+  onChange: (v: SidebarSort) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const current = SIDEBAR_SORTS.find((o) => o.value === value) ?? SIDEBAR_SORTS[0]
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          title={`Sort: ${current.label}`}
+          aria-label={`Sort rooms: ${current.label}`}
+          className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-border dark:text-slate-400 dark:hover:bg-muted'
+          data-chat-sort={value}
+        >
+          <ArrowUpDown className='h-3.5 w-3.5' strokeWidth={2} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-44 p-1'>
+        <p className='px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400'>
+          Sort rooms
+        </p>
+        {SIDEBAR_SORTS.map((o) => (
+          <button
+            key={o.value}
+            type='button'
+            onClick={() => {
+              onChange(o.value)
+              setOpen(false)
+            }}
+            className='flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+            data-chat-sort-option={o.value}
+          >
+            {o.label}
+            {o.value === value && <Check className='h-3.5 w-3.5' strokeWidth={2} />}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 export function ChatRoomList({
   rooms,
   onOpen,
@@ -2427,9 +2711,16 @@ export function ChatRoomList({
   // MESSAGES appear under the filtered room list.
   const { hits, loading: searching } = useChatSearch(q)
   const roomByKey = useMemo(() => new Map(rooms.map((r) => [r.room, r])), [rooms])
-  const filteredRooms = q
-    ? rooms.filter((r) => r.label.toLowerCase().includes(q.toLowerCase()))
-    : rooms
+  const prefs = useMyPreferences()
+  const setPrefs = useSetMyPreferences()
+  const sortMode: SidebarSort =
+    prefs.chat_sidebar_sort === 'unread' || prefs.chat_sidebar_sort === 'alpha'
+      ? prefs.chat_sidebar_sort
+      : 'recent'
+  const filteredRooms = sortRooms(
+    q ? rooms.filter((r) => r.label.toLowerCase().includes(q.toLowerCase())) : rooms,
+    sortMode
+  )
   // Group DMs are private channels flagged is_direct — they belong with
   // conversations, not #channels.
   const isGroupDm = (r: RoomInfo) => r.kind === 'channel' && r.channel?.is_direct
@@ -2446,6 +2737,10 @@ export function ChatRoomList({
           )}
           aria-label='Search rooms and messages'
           data-chat-global-search
+        />
+        <SidebarSortButton
+          value={sortMode}
+          onChange={(v) => setPrefs.mutate({ chat_sidebar_sort: v === 'recent' ? null : v })}
         />
         {onNewGroup && (
           <button
@@ -2575,20 +2870,24 @@ export function ChatRoomList({
                       </span>
                     )
                   })()}
-                  <span
-                    className={cn(
-                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400',
-                      r.kind === 'dm' && cfg.me && dmPeer(r.room, cfg.me.id) && 'hidden'
-                    )}
-                  >
-                    {r.kind === 'dm' ? (
-                      <MessageCircle className='h-4 w-4' strokeWidth={1.8} />
-                    ) : r.channel?.is_direct ? (
-                      <Users className='h-4 w-4' strokeWidth={1.8} />
-                    ) : (
-                      <Hash className='h-4 w-4' strokeWidth={1.8} />
-                    )}
-                  </span>
+                  {r.kind === 'channel' && !r.channel?.is_direct ? (
+                    <ChannelTile icon={r.channel?.icon} color={r.channel?.color} size={32} />
+                  ) : (
+                    <span
+                      className={cn(
+                        'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400',
+                        r.kind === 'dm' && cfg.me && dmPeer(r.room, cfg.me.id) && 'hidden'
+                      )}
+                    >
+                      {r.kind === 'dm' ? (
+                        <MessageCircle className='h-4 w-4' strokeWidth={1.8} />
+                      ) : r.channel?.is_direct ? (
+                        <Users className='h-4 w-4' strokeWidth={1.8} />
+                      ) : (
+                        <Hash className='h-4 w-4' strokeWidth={1.8} />
+                      )}
+                    </span>
+                  )}
                   <span className='min-w-0 flex-1'>
                     <span className='flex items-center gap-1.5'>
                       <span className='truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
@@ -2697,6 +2996,10 @@ export function ChatChannelBrowser({
   const [name, setName] = useState('')
   const [visibility, setVisibility] = useState<'open' | 'role' | 'private'>('open')
   const [role, setRole] = useState('')
+  const [look, setLook] = useState<{ icon: string | null; color: string | null }>({
+    icon: null,
+    color: null
+  })
   const roles = useChatRoles()
   const { channels, loading } = useChannelDirectory(search)
   const { join } = useRoomMembership()
@@ -2734,22 +3037,36 @@ export function ChatChannelBrowser({
             if (!name.trim()) return
             if (visibility === 'role' && !role) return
             create.mutate(
-              { name: name.trim(), visibility, role: visibility === 'role' ? role : null },
+              {
+                name: name.trim(),
+                visibility,
+                role: visibility === 'role' ? role : null,
+                icon: look.icon,
+                color: look.color
+              },
               {
                 onSuccess: () => {
                   setName('')
+                  setLook({ icon: null, color: null })
                   setCreating(false)
                 }
               }
             )
           }}
         >
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder='Channel name'
-            className={cn('h-8 rounded-md px-2 text-[12.5px] outline-none', th.input)}
-          />
+          <div className='flex items-center gap-2'>
+            <ChannelTile icon={look.icon} color={look.color} size={32} />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder='Channel name'
+              className={cn(
+                'h-8 min-w-0 flex-1 rounded-md px-2 text-[12.5px] outline-none',
+                th.input
+              )}
+            />
+          </div>
+          <ChannelLookPicker icon={look.icon} color={look.color} onChange={setLook} />
           <div className='flex items-center gap-2'>
             {(
               [
@@ -2819,13 +3136,12 @@ export function ChatChannelBrowser({
             key={c.key}
             className='flex items-center gap-2.5 rounded-lg px-2.5 py-2 hover:bg-slate-50 dark:hover:bg-muted/50'
           >
-            <span className='flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'>
-              {c.visibility === 'private' ? (
-                <Lock className='h-3.5 w-3.5' strokeWidth={1.8} />
-              ) : (
-                <Hash className='h-4 w-4' strokeWidth={1.8} />
-              )}
-            </span>
+            <ChannelTile
+              icon={c.icon}
+              color={c.color}
+              size={32}
+              fallback={c.visibility === 'private' ? Lock : Hash}
+            />
             <span className='min-w-0 flex-1'>
               <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                 {c.name}
@@ -2886,6 +3202,108 @@ interface PresenceExtra {
   custom_status?: { text: string; emoji: string | null } | null
   /** An admin is masquerading as this person right now. */
   masquerade?: { admin_id: string | null; admin_name: string } | null
+  /** The person chose "appear away" — reads as away whatever they are doing. */
+  away?: boolean
+}
+
+/** End of today in the viewer's clock, for "until tomorrow". */
+function endOfToday(): Date {
+  const d = new Date()
+  d.setHours(23, 59, 59, 999)
+  return d
+}
+
+/**
+ * "Appear away" (#952): the Online list, badges and DM headers show you as
+ * away whatever you are doing, until you switch it off or the time runs out.
+ */
+export function ChatAppearAwayRow() {
+  const prefs = useMyPreferences()
+  const setPrefs = useSetMyPreferences()
+  const [open, setOpen] = useState(false)
+  const po = prefs.presence_override as { mode?: string; until?: string | null } | null | undefined
+  const active =
+    !!po && po.mode === 'away' && !(po.until && new Date(po.until).getTime() < Date.now())
+  const set = (until: Date | null | 'off') => {
+    setPrefs.mutate({
+      presence_override:
+        until === 'off' ? null : { mode: 'away', until: until?.toISOString() ?? null }
+    })
+    setOpen(false)
+  }
+  const untilText =
+    active && po?.until
+      ? `until ${new Date(po.until).toLocaleString('en-US', {
+          weekday: 'short',
+          hour: 'numeric',
+          minute: '2-digit',
+          timeZone: getDisplayTimezone() ?? undefined
+        })}`
+      : active
+        ? 'until you switch it off'
+        : null
+  return (
+    <div
+      className='mb-1.5 flex items-center gap-2 px-1 text-[12px]'
+      data-chat-appear-away={active ? 'on' : 'off'}
+    >
+      <span
+        className={cn(
+          'h-2.5 w-2.5 shrink-0 rounded-full border-2',
+          active ? 'border-amber-400 bg-white dark:bg-card' : 'border-emerald-400 bg-emerald-400'
+        )}
+        aria-hidden
+      />
+      <span className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'>
+        {active ? `Appearing away ${untilText}` : 'You appear online'}
+      </span>
+      {active ? (
+        <button
+          type='button'
+          onClick={() => set('off')}
+          className='shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
+          data-chat-appear-away-off
+        >
+          Back online
+        </button>
+      ) : (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              className='shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
+              data-chat-appear-away-open
+            >
+              Appear away
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align='end' className='w-48 p-1'>
+            <p className='px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400'>
+              Appear away for
+            </p>
+            {(
+              [
+                ['1 hour', () => new Date(Date.now() + 3600_000)],
+                ['4 hours', () => new Date(Date.now() + 4 * 3600_000)],
+                ['The rest of today', endOfToday],
+                ['Until I switch it off', () => null]
+              ] as Array<[string, () => Date | null]>
+            ).map(([label, until]) => (
+              <button
+                key={label}
+                type='button'
+                onClick={() => set(until())}
+                className='flex w-full rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                data-chat-appear-away-option={label}
+              >
+                {label}
+              </button>
+            ))}
+          </PopoverContent>
+        </Popover>
+      )}
+    </div>
+  )
 }
 
 /** Set-your-status control (#33): free text + emoji, self-clearing. Saved in
@@ -3388,6 +3806,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                   : null
               }
             />
+            <ChatAppearAwayRow />
             {users.length > 0 && (
               <div className='mb-1.5 flex items-center gap-1.5 px-1'>
                 <span className='text-[11px] text-slate-400'>Group by</span>
@@ -3451,7 +3870,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                             {u.display_name ?? 'Unknown user'}
                             {isIdle && (
                               <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
-                                {idleLabel(idleSrc)}
+                                {px?.away ? 'Away' : idleLabel(idleSrc)}
                               </span>
                             )}
                             {(() => {

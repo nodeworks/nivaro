@@ -74,6 +74,67 @@ export interface ChatChannel {
   is_archived: boolean
   /** Group DM — a private channel rendered like a conversation, not a #channel. */
   is_direct: boolean
+  /** One of CHANNEL_ICONS; null = the plain "#" tile. */
+  icon?: string | null
+  /** #rrggbb from CHANNEL_COLORS; null = neutral. */
+  color?: string | null
+}
+
+/** The icons a channel may carry — the client draws exactly these names. */
+export const CHANNEL_ICONS = [
+  'hash',
+  'megaphone',
+  'users',
+  'briefcase',
+  'wrench',
+  'truck',
+  'package',
+  'dollar',
+  'building',
+  'map',
+  'zap',
+  'shield',
+  'bug',
+  'lightbulb',
+  'calendar',
+  'star'
+] as const
+
+/** Mid-tone colours that read on both light and dark surfaces. */
+export const CHANNEL_COLORS = [
+  '#0ea5e9',
+  '#14b8a6',
+  '#10b981',
+  '#f59e0b',
+  '#f97316',
+  '#ef4444',
+  '#ec4899',
+  '#8b5cf6',
+  '#6366f1',
+  '#64748b'
+] as const
+
+/**
+ * Validate an icon/colour pair from a request body. Returns the columns to
+ * write (only the keys that were sent), or an error sentence.
+ */
+export function channelLookPatch(
+  b: Record<string, unknown>
+): { patch: Record<string, string | null> } | { error: string } {
+  const patch: Record<string, string | null> = {}
+  if (b.icon !== undefined) {
+    if (b.icon === null || b.icon === '') patch.icon = null
+    else if ((CHANNEL_ICONS as readonly string[]).includes(String(b.icon)))
+      patch.icon = String(b.icon)
+    else return { error: `icon must be one of: ${CHANNEL_ICONS.join(', ')}` }
+  }
+  if (b.color !== undefined) {
+    if (b.color === null || b.color === '') patch.color = null
+    else if ((CHANNEL_COLORS as readonly string[]).includes(String(b.color).toLowerCase()))
+      patch.color = String(b.color).toLowerCase()
+    else return { error: `color must be one of: ${CHANNEL_COLORS.join(', ')}` }
+  }
+  return { patch }
 }
 
 const TTL_MS = 30_000
@@ -219,6 +280,8 @@ export interface RoomSummary {
     topic: string | null
     created_by: string | null
     is_direct: boolean
+    icon: string | null
+    color: string | null
   } | null
   last_message: {
     id: number
@@ -323,7 +386,9 @@ export async function listRooms(
             role: channel.role,
             topic: channel.topic,
             created_by: channel.created_by,
-            is_direct: channel.is_direct
+            is_direct: channel.is_direct,
+            icon: channel.icon ?? null,
+            color: channel.color ?? null
           }
         : null,
       unread: unreadRows.get(room) ?? 0,

@@ -271,6 +271,12 @@ export const navCategories: NavCategory[] = [
         section: 'Activity & Insight'
       },
       {
+        icon: MessagesSquare,
+        label: 'Chat Analytics',
+        to: '/chat-analytics',
+        section: 'Activity & Insight'
+      },
+      {
         icon: FileSearch,
         label: 'History Search',
         to: '/revision-search',

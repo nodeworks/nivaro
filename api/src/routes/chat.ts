@@ -6,6 +6,7 @@ import { logActivity } from '../services/activity.js'
 import {
   type ChatChannel,
   canSeeRoom,
+  channelLookPatch,
   channels,
   clearChatCaches,
   listDirectory,
@@ -818,9 +819,15 @@ export async function chatRoutes(app: FastifyInstance) {
       topic?: string
       visibility?: ChatChannel['visibility']
       role?: string | null
+      icon?: string | null
+      color?: string | null
     }
     const name = String(b.name ?? '').trim()
     if (!name) return reply.code(400).send({ error: 'name is required' })
+    const look = channelLookPatch(b as Record<string, unknown>)
+    if ('error' in look) return reply.code(400).send({ error: look.error })
+    // A database behind migration 369 has no look columns — create without them.
+    const lookCols = (await hasColumn('nivaro_chat_channels', 'icon')) ? look.patch : {}
     const key =
       String(b.key ?? '')
         .trim()
@@ -843,7 +850,8 @@ export async function chatRoutes(app: FastifyInstance) {
       topic: b.topic ?? null,
       visibility,
       role: visibility === 'role' ? b.role : null,
-      created_by: req.user?.id ?? null
+      created_by: req.user?.id ?? null,
+      ...lookCols
     })
     clearChatCaches()
     // The creator is a member — otherwise a private channel would be invisible
@@ -872,6 +880,11 @@ export async function chatRoutes(app: FastifyInstance) {
       if (b[f] !== undefined) patch[f] = b[f]
     }
     if (b.is_archived !== undefined) patch.is_archived = !!b.is_archived
+    if (b.icon !== undefined || b.color !== undefined) {
+      const look = channelLookPatch(b)
+      if ('error' in look) return reply.code(400).send({ error: look.error })
+      if (await hasColumn('nivaro_chat_channels', 'icon')) Object.assign(patch, look.patch)
+    }
     if (patch.visibility === 'role' && !(patch.role ?? row.role)) {
       return reply.code(400).send({ error: 'A role-scoped channel needs a role' })
     }

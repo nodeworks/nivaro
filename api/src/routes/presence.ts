@@ -395,6 +395,105 @@ async function resolveRecordLabels(
   return out
 }
 
+/**
+ * Who a viewer may see in presence (the Online list, chat badges, last seen).
+ * A restricted user sees only people restricted the SAME way, plus admins
+ * (visible to everyone). Each dimension the VIEWER restricts must overlap: a
+ * Zone-1 viewer sees Zone-1 people; a Zone-1 + BLT viewer sees only people who
+ * are both. Someone with NO restriction on a dimension the viewer restricts is
+ * broader than the viewer and is therefore not shown — that is what makes more
+ * restrictions mean a narrower view. Returns upper-cased ids.
+ *
+ * Enforced on the server because it is a visibility boundary. (The raw
+ * user_presence collection is still readable through /items for anyone with
+ * read permission — sealing that needs a row filter on the collection.)
+ */
+export async function visibleToViewer(
+  viewer: { id: string },
+  isAdmin: boolean,
+  ids: string[]
+): Promise<Set<string>> {
+  const all = new Set(ids.map((i) => String(i).toUpperCase()))
+  if (isAdmin || all.size === 0) return all
+  const viewerRestrictions = new Map<string, Set<string>>()
+  const own = (await db('nivaro_user_scopes')
+    .where({ user: viewer.id, mode: 'restrict' })
+    .select('dimension', 'values')) as Array<Record<string, unknown>>
+  for (const r of own) {
+    const vals = parseScopeValues(r.values)
+    if (vals.length > 0) viewerRestrictions.set(String(r.dimension), new Set(vals))
+  }
+  if (viewerRestrictions.size === 0) return all
+  const listedIds = [...all]
+  const [adminRows, scopeRows] = await Promise.all([
+    db('nivaro_users as u')
+      .join('nivaro_roles as ro', 'ro.id', 'u.role')
+      .whereIn('u.id', listedIds)
+      .where('ro.admin_access', true)
+      .select('u.id') as Promise<Array<{ id: string }>>,
+    db('nivaro_user_scopes')
+      .whereIn('user', listedIds)
+      .where({ mode: 'restrict' })
+      .select('user', 'dimension', 'values') as Promise<Array<Record<string, unknown>>>
+  ])
+  const admins = new Set(adminRows.map((a) => String(a.id).toUpperCase()))
+  const theirs = new Map<string, Map<string, Set<string>>>()
+  for (const r of scopeRows) {
+    const key = String(r.user).toUpperCase()
+    const perDim = theirs.get(key) ?? new Map<string, Set<string>>()
+    perDim.set(String(r.dimension), new Set(parseScopeValues(r.values)))
+    theirs.set(key, perDim)
+  }
+  const me = String(viewer.id).toUpperCase()
+  const out = new Set<string>()
+  for (const uid of listedIds) {
+    if (uid === me || admins.has(uid)) {
+      out.add(uid)
+      continue
+    }
+    const perDim = theirs.get(uid)
+    if (!perDim) continue
+    let ok = true
+    for (const [dim, allowed] of viewerRestrictions) {
+      const mine = perDim.get(dim)
+      if (!mine || mine.size === 0 || ![...mine].some((v) => allowed.has(v))) {
+        ok = false
+        break
+      }
+    }
+    if (ok) out.add(uid)
+  }
+  return out
+}
+
+function parseScopeValues(raw: unknown): string[] {
+  try {
+    const parsed = raw ? JSON.parse(String(raw)) : []
+    return Array.isArray(parsed) ? parsed.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+/** preferences JSON → object, tolerant of the nvarchar shape and bad blobs. */
+function parsePrefs(raw: unknown): Record<string, unknown> {
+  try {
+    return typeof raw === 'string'
+      ? ((JSON.parse(raw) as Record<string, unknown>) ?? {})
+      : ((raw as Record<string, unknown>) ?? {})
+  } catch {
+    return {}
+  }
+}
+
+/** "Appear away" (preferences.presence_override) in force right now? */
+function awayOverride(prefs: Record<string, unknown>): boolean {
+  const po = prefs.presence_override as { mode?: string; until?: string | null } | null | undefined
+  if (!po || po.mode !== 'away') return false
+  if (po.until && new Date(po.until).getTime() < Date.now()) return false
+  return true
+}
+
 export async function presenceOnlineRoutes(app: FastifyInstance) {
   app.get('/online', { preHandler: requireAuth }, async (req, reply) => {
     // A live socket is the authoritative signal: it ends the moment the tab
@@ -427,73 +526,14 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
     // (The raw user_presence collection is still readable through /items for
     // anyone with read permission — sealing that needs a row filter on the
     // collection, which this does not attempt.)
-    const viewerRestrictions = new Map<string, Set<string>>()
-    if (!req.isAdmin) {
-      const own = (await db('nivaro_user_scopes')
-        .where({ user: req.user!.id, mode: 'restrict' })
-        .select('dimension', 'values')) as Array<Record<string, unknown>>
-      for (const r of own) {
-        let vals: string[] = []
-        try {
-          const parsed = r.values ? JSON.parse(String(r.values)) : []
-          vals = Array.isArray(parsed) ? parsed.map(String) : []
-        } catch {
-          vals = []
-        }
-        if (vals.length > 0) viewerRestrictions.set(String(r.dimension), new Set(vals))
-      }
-    }
-
-    let visibleRows = rows
-    if (viewerRestrictions.size > 0) {
-      const listedIds = rows.map((r) => String(r.user_id)).filter(Boolean)
-      const [adminRows, scopeRows] = await Promise.all([
-        db('nivaro_users as u')
-          .join('nivaro_roles as ro', 'ro.id', 'u.role')
-          .whereIn('u.id', listedIds)
-          .where('ro.admin_access', true)
-          .select('u.id') as Promise<Array<{ id: string }>>,
-        db('nivaro_user_scopes')
-          .whereIn('user', listedIds)
-          .where({ mode: 'restrict' })
-          .select('user', 'dimension', 'values') as Promise<Array<Record<string, unknown>>>
-      ])
-      const admins = new Set(adminRows.map((a) => String(a.id).toUpperCase()))
-      const theirs = new Map<string, Map<string, Set<string>>>()
-      for (const r of scopeRows) {
-        let vals: string[] = []
-        try {
-          const parsed = r.values ? JSON.parse(String(r.values)) : []
-          vals = Array.isArray(parsed) ? parsed.map(String) : []
-        } catch {
-          vals = []
-        }
-        const key = String(r.user).toUpperCase()
-        const perDim = theirs.get(key) ?? new Map<string, Set<string>>()
-        perDim.set(String(r.dimension), new Set(vals))
-        theirs.set(key, perDim)
-      }
-      visibleRows = rows.filter((row) => {
-        const uid = String(row.user_id ?? '').toUpperCase()
-        if (uid === String(req.user!.id).toUpperCase()) return true
-        if (admins.has(uid)) return true
-        const perDim = theirs.get(uid)
-        if (!perDim) return false
-        for (const [dim, allowed] of viewerRestrictions) {
-          const mine = perDim.get(dim)
-          if (!mine || mine.size === 0) return false
-          let overlaps = false
-          for (const v of mine) {
-            if (allowed.has(v)) {
-              overlaps = true
-              break
-            }
-          }
-          if (!overlaps) return false
-        }
-        return true
-      })
-    }
+    const visibleIds = await visibleToViewer(
+      req.user!,
+      !!req.isAdmin,
+      rows.map((r) => String(r.user_id)).filter(Boolean)
+    )
+    const visibleRows = rows.filter((row) =>
+      visibleIds.has(String(row.user_id ?? '').toUpperCase())
+    )
 
     let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
     try {
@@ -549,32 +589,28 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       }
     }
 
-    // Custom statuses (#33): from user preferences, expired ones dropped.
+    // Custom statuses (#33) and "appear away", from user preferences.
     const statusByUser = new Map<string, { text: string; emoji: string | null }>()
+    const awayByUser = new Set<string>()
     if (userIds.length > 0) {
       try {
         const prefRows = (await db('nivaro_users')
           .whereIn('id', userIds)
           .select('id', 'preferences')) as Array<{ id: string; preferences: unknown }>
         for (const pr of prefRows) {
-          try {
-            const prefs =
-              typeof pr.preferences === 'string'
-                ? JSON.parse(pr.preferences)
-                : ((pr.preferences as Record<string, unknown>) ?? {})
-            const cs = prefs?.custom_status as
-              | { text?: string; emoji?: string | null; expires_at?: string | null }
-              | null
-              | undefined
-            if (!cs?.text) continue
-            if (cs.expires_at && new Date(cs.expires_at).getTime() < Date.now()) continue
-            statusByUser.set(String(pr.id).toUpperCase(), {
-              text: String(cs.text),
-              emoji: cs.emoji ? String(cs.emoji) : null
-            })
-          } catch {
-            /* one bad prefs blob never breaks the roster */
-          }
+          const prefs = parsePrefs(pr.preferences)
+          const uid = String(pr.id).toUpperCase()
+          if (awayOverride(prefs)) awayByUser.add(uid)
+          const cs = prefs.custom_status as
+            | { text?: string; emoji?: string | null; expires_at?: string | null }
+            | null
+            | undefined
+          if (!cs?.text) continue
+          if (cs.expires_at && new Date(cs.expires_at).getTime() < Date.now()) continue
+          statusByUser.set(uid, {
+            text: String(cs.text),
+            emoji: cs.emoji ? String(cs.emoji) : null
+          })
         }
       } catch {
         /* decoration only */
@@ -629,7 +665,10 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           // input. Trusting the flag alone left people idle forever whenever a
           // client wrote presence without reporting it — the row said idle and
           // nothing ever said otherwise. Recent activity wins.
+          // "Appear away" beats activity: the person asked to read as away.
+          away: awayByUser.has(uid),
           is_idle: (() => {
+            if (awayByUser.has(uid)) return true
             const flag = r.is_idle === true || r.is_idle === 1
             const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
             // Idle when the client says so OR its last real input is stale —
@@ -642,6 +681,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           // How long they've been away from the keyboard, for the "Idle · 12m"
           // label — null while active or unknown.
           idle_minutes: (() => {
+            if (awayByUser.has(uid)) return null
             const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
             if (!active) return null
             const mins = Math.floor((Date.now() - active) / 60_000)
@@ -680,6 +720,56 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
         dimensions: dimensionMeta
       }
     })
+  })
+  /**
+   * Last seen + time zone for chosen people (#950, #951), under the same
+   * visibility rule as /online — someone the viewer may not see is simply
+   * absent from the answer. `timezone` is the person's own setting only (null
+   * when they never chose one), so a header never claims a zone they didn't.
+   */
+  app.get('/people', { preHandler: requireAuth }, async (req, reply) => {
+    const raw = String((req.query as { ids?: string }).ids ?? '')
+    const ids = [
+      ...new Set(
+        raw
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => /^[0-9a-f-]{36}$/i.test(s))
+      )
+    ].slice(0, 100)
+    if (ids.length === 0) return reply.send({ data: [] })
+    const visible = [...(await visibleToViewer(req.user!, !!req.isAdmin, ids))]
+    if (visible.length === 0) return reply.send({ data: [] })
+    const [presenceRows, userRows] = await Promise.all([
+      db('user_presence').whereIn('user_id', visible).select('user_id', 'last_seen') as Promise<
+        Array<{ user_id: string; last_seen: Date | null }>
+      >,
+      db('nivaro_users')
+        .whereIn('id', visible)
+        .select('id', 'last_access', 'preferences') as Promise<
+        Array<{ id: string; last_access: Date | null; preferences: unknown }>
+      >
+    ])
+    const seen = new Map<string, number>()
+    for (const r of presenceRows) {
+      const t = r.last_seen ? new Date(r.last_seen).getTime() : 0
+      const k = String(r.user_id).toUpperCase()
+      if (t > (seen.get(k) ?? 0)) seen.set(k, t)
+    }
+    const data = userRows.map((u) => {
+      const k = String(u.id).toUpperCase()
+      const prefs = parsePrefs(u.preferences)
+      const access = u.last_access ? new Date(u.last_access).getTime() : 0
+      const last = Math.max(seen.get(k) ?? 0, access)
+      const tz = typeof prefs.timezone === 'string' && prefs.timezone ? prefs.timezone : null
+      return {
+        user_id: u.id,
+        last_seen: last ? new Date(last).toISOString() : null,
+        timezone: tz,
+        away: awayOverride(prefs)
+      }
+    })
+    return reply.send({ data })
   })
 }
 

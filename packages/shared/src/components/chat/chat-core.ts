@@ -254,6 +254,10 @@ export interface ChannelMeta {
   topic: string | null
   created_by: string | null
   is_direct?: boolean
+  /** One of the fixed channel icons (ChannelLook.tsx); null = plain "#". */
+  icon?: string | null
+  /** #rrggbb from the fixed palette; null = neutral tile. */
+  color?: string | null
 }
 
 interface ServerRoom {
@@ -378,6 +382,8 @@ export interface DirectoryChannel {
   role: string | null
   joined: boolean
   members: number
+  icon?: string | null
+  color?: string | null
 }
 
 /** Browsable channels — what keeps the sidebar to joined rooms only. */
@@ -475,6 +481,8 @@ export function useChannelAdmin(channelId: number | null) {
       visibility?: 'open' | 'role' | 'private'
       role?: string | null
       is_archived?: boolean
+      icon?: string | null
+      color?: string | null
     }) => client.request(patch2(`/chat/channels/${channelId}`, patch)),
     onSuccess: refresh
   })
@@ -549,6 +557,8 @@ export function useCreateChannel() {
       topic?: string
       visibility?: 'open' | 'role' | 'private'
       role?: string | null
+      icon?: string | null
+      color?: string | null
     }) => client.request(post('/chat/channels', input)),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-chat-rooms'] })
@@ -617,6 +627,15 @@ function isReading(room: string): boolean {
  * to chat at once. Unset reads as off, which is what the profile shows.
  */
 export function useNotificationSoundPreference(): string {
+  const raw = useMyPreferences().notification_sound
+  return typeof raw === 'string' ? raw : 'off'
+}
+
+/**
+ * The signed-in person's own preferences (`/users/me`), on the same query key
+ * and shape the profile page uses, so a change in either place shows in both.
+ */
+export function useMyPreferences(): Record<string, unknown> {
   const client = useNivaroClient()
   const { data } = useQuery({
     queryKey: ['nvr-profile-prefs'],
@@ -626,8 +645,29 @@ export function useNotificationSoundPreference(): string {
         .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>),
     staleTime: 60_000
   })
-  const raw = data?.notification_sound
-  return typeof raw === 'string' ? raw : 'off'
+  return data ?? {}
+}
+
+/** Write one or more preference keys; the cached copy updates at once. */
+export function useSetMyPreferences() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (patch: Record<string, unknown>) =>
+      client.request(patch2('/users/me/preferences', patch)),
+    onMutate: (patch) => {
+      const prev = qc.getQueryData<Record<string, unknown>>(['nvr-profile-prefs'])
+      qc.setQueryData(['nvr-profile-prefs'], { ...(prev ?? {}), ...patch })
+      return { prev }
+    },
+    onError: (_e, _p, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['nvr-profile-prefs'], ctx.prev)
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+      void qc.invalidateQueries({ queryKey: ['presence-online'] })
+    }
+  })
 }
 
 export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
