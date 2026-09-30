@@ -393,7 +393,7 @@ async function describeTable(table: string): Promise<TargetColumn[]> {
  * order and bulk-load into that, so alignment is correct by construction and
  * the identity column simply isn't in it.
  */
-function normalizeHeader(name: string): string {
+export function normalizeHeader(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')

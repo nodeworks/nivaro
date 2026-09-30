@@ -24,10 +24,10 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import {
+  definitionTitle,
   type ImportDefinition,
   type ImportDryRun,
   type ImportPreview,
-  definitionTitle,
   importMode
 } from './types'
 
@@ -245,7 +245,8 @@ export function NewImportDialog({
   const previewData = preview.data
   const selectedMode = selected ? importMode(selected) : null
   const hasWarnings =
-    !!previewData && (previewData.unknown_columns.length > 0 || previewData.missing_columns.length > 0)
+    !!previewData &&
+    (previewData.unknown_columns.length > 0 || previewData.missing_columns.length > 0)
 
   return (
     <Dialog
@@ -259,8 +260,8 @@ export function NewImportDialog({
         <DialogHeader className='shrink-0'>
           <DialogTitle className='text-[17px] dark:text-foreground'>New import</DialogTitle>
           <DialogDescription className='text-[12.5px]'>
-            Choose an import and a file. The file is checked first, and nothing is queued until
-            you confirm.
+            Choose an import and a file. The file is checked first, and nothing is queued until you
+            confirm.
           </DialogDescription>
         </DialogHeader>
 
@@ -389,8 +390,8 @@ export function NewImportDialog({
               <div className='mt-3 min-h-[120px]'>
                 {preview.isPending && (
                   <p className='flex items-center gap-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
-                    <Loader2 className='h-3.5 w-3.5 animate-spin' /> Checking the file for errors and
-                    warnings — duplicates, missing values, and unmatched references…
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' /> Checking the file for errors
+                    and warnings — duplicates, missing values, and unmatched references…
                   </p>
                 )}
 
@@ -453,6 +454,15 @@ export function NewImportDialog({
                       </div>
                     )}
                     {previewData.dry_run && <DryRunSummary run={previewData.dry_run} />}
+                    {!previewData.dry_run && selected && file && selectedMode === 'procedure' && (
+                      <ProcedureRehearsal
+                        key={`${selected.key}:${file.name}:${file.lastModified}`}
+                        importKey={selected.key}
+                        procedure={selected.procedure ?? ''}
+                        file={file}
+                        post={postMultipart}
+                      />
+                    )}
                     {!previewData.dry_run &&
                       previewData.validation &&
                       (previewData.validation.stats.new_rows != null ||
@@ -467,7 +477,10 @@ export function NewImportDialog({
                           </span>{' '}
                           already exist
                           {previewData.validation.truncated && (
-                            <span className='text-slate-400'> · counts cover the first 20,000 rows</span>
+                            <span className='text-slate-400'>
+                              {' '}
+                              · counts cover the first 20,000 rows
+                            </span>
                           )}
                         </p>
                       )}
@@ -525,7 +538,10 @@ export function NewImportDialog({
                         <tbody>
                           {previewData.rows.slice(0, 8).map((row, i) => (
                             // eslint-disable-next-line react/no-array-index-key
-                            <tr key={i} className='border-b border-slate-100 last:border-b-0 dark:border-border/60'>
+                            <tr
+                              key={i}
+                              className='border-b border-slate-100 last:border-b-0 dark:border-border/60'
+                            >
                               {previewData.columns.map((c) => (
                                 <td
                                   key={c}
@@ -627,10 +643,139 @@ export function NewImportDialog({
   )
 }
 
-const fmtVal = (v: unknown) => (v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+const fmtVal = (v: unknown) =>
+  v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v)
 
 /** What a service-mode run would do — the same code path as the worker with
  *  nothing written. Every skipped row says which rule dropped it. */
+interface RehearsalResult {
+  procedure: string
+  staging_table: string
+  rows_loaded: number
+  procedures: string[]
+  tables: Array<{ table: string; before: number; after: number; delta: number }>
+  dynamic_sql: boolean
+  duration_ms: number
+  error?: string
+  refused?: string
+}
+
+/** #717 — load + EXEC inside one transaction, count what changed, roll back.
+ *  An explicit click: it holds locks on those tables while the procedure runs. */
+function ProcedureRehearsal({
+  importKey,
+  procedure,
+  file,
+  post
+}: {
+  importKey: string
+  procedure: string
+  file: File
+  post: <T>(path: string, form: FormData) => Promise<T>
+}) {
+  const run = useMutation({
+    mutationFn: () => {
+      const form = new FormData()
+      form.append('import_key', importKey)
+      form.append('file', file, file.name)
+      return post<RehearsalResult>('/staged-imports/rehearse', form)
+    }
+  })
+  const r = run.data
+  const moved = r?.tables.filter((t) => t.delta !== 0) ?? []
+  return (
+    <div
+      data-import-rehearsal
+      className='space-y-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-border dark:bg-muted/40'
+    >
+      <div className='flex items-center gap-2'>
+        <p className='min-w-0 flex-1 text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+          Rehearse <span className='font-mono'>{procedure}</span>: load this file and run the
+          procedure inside a transaction, count what it changes, then roll everything back. Other
+          writers to those tables wait while it runs.
+        </p>
+        <Button
+          size='sm'
+          variant='outline'
+          className='h-7 shrink-0 text-[12px]'
+          disabled={run.isPending}
+          onClick={() => run.mutate()}
+          data-import-rehearse
+        >
+          {run.isPending && <Loader2 className='h-3 w-3 animate-spin' />}
+          {r ? 'Rehearse again' : 'Rehearse'}
+        </Button>
+      </div>
+      {run.isError && (
+        <p className='text-[11.5px] text-red-700 dark:text-red-300'>
+          {(run.error as Error).message}
+        </p>
+      )}
+      {r?.refused && (
+        <p
+          data-import-rehearsal-refused
+          className='text-[11.5px] text-amber-800 dark:text-amber-300'
+        >
+          {r.refused}
+        </p>
+      )}
+      {r && !r.refused && (
+        <div data-import-rehearsal-result className='space-y-1'>
+          <p className='text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+            Rehearsal — rolled back · {formatNumber(r.rows_loaded)} rows ·{' '}
+            {(r.duration_ms / 1000).toFixed(1)}s
+          </p>
+          {r.error && (
+            <p className='text-[11.5px] text-red-700 dark:text-red-300'>
+              The procedure raised an error: {r.error}
+            </p>
+          )}
+          {moved.length === 0 ? (
+            <p className='text-[12px] text-slate-600 dark:text-muted-foreground'>
+              No row count changed in the {r.tables.length} table(s) it writes — a run would only
+              update existing rows (or nothing).
+            </p>
+          ) : (
+            <ul className='flex flex-wrap gap-1'>
+              {moved.map((t) => (
+                <li
+                  key={t.table}
+                  data-import-rehearsal-table={t.table}
+                  data-tip={`${formatNumber(t.before)} → ${formatNumber(t.after)} rows`}
+                  className='rounded-full border border-slate-200 bg-white px-2 py-px font-mono text-[11px] tabular-nums dark:border-border dark:bg-card'
+                >
+                  {t.table}{' '}
+                  <b
+                    className={cn(
+                      'font-semibold',
+                      t.delta > 0
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-red-700 dark:text-red-400'
+                    )}
+                  >
+                    {t.delta > 0 ? '+' : ''}
+                    {formatNumber(t.delta)}
+                  </b>
+                </li>
+              ))}
+            </ul>
+          )}
+          {r.procedures.length > 1 && (
+            <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+              Includes the procedures it calls: {r.procedures.slice(1).join(', ')}.
+            </p>
+          )}
+          {r.dynamic_sql && (
+            <p className='text-[11px] text-amber-700 dark:text-amber-300'>
+              It builds some SQL at run time — tables written that way are not counted.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DryRunSummary({ run }: { run: ImportDryRun }) {
   const [open, setOpen] = useState<'skipped' | 'updates' | 'creates' | null>(null)
   const skippedTotal = Object.values(run.skipped).reduce((a, b) => a + b, 0)
@@ -653,7 +798,10 @@ function DryRunSummary({ run }: { run: ImportDryRun }) {
     </button>
   )
   return (
-    <div data-import-dry-run className='space-y-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-border dark:bg-muted/40'>
+    <div
+      data-import-dry-run
+      className='space-y-1.5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-border dark:bg-muted/40'
+    >
       <p className='text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400'>
         Dry run — nothing written yet
       </p>
@@ -661,7 +809,12 @@ function DryRunSummary({ run }: { run: ImportDryRun }) {
         <p className='text-[11.5px] text-red-700 dark:text-red-300'>{run.log}</p>
       ) : (
         <div className='flex flex-wrap items-center gap-1'>
-          {chip('creates', run.created, 'would be created', 'text-emerald-700 dark:text-emerald-400')}
+          {chip(
+            'creates',
+            run.created,
+            'would be created',
+            'text-emerald-700 dark:text-emerald-400'
+          )}
           {chip('updates', run.updated, 'would change', 'text-sky-700 dark:text-sky-300')}
           <span className='rounded-full px-2 py-px text-[11px] tabular-nums text-slate-600 dark:text-slate-300'>
             <b className='font-semibold'>{formatNumber(run.unchanged)}</b> unchanged
@@ -670,38 +823,56 @@ function DryRunSummary({ run }: { run: ImportDryRun }) {
         </div>
       )}
       {open === 'skipped' && s && (
-        <ul data-import-dry-run-skipped className='max-h-40 space-y-0.5 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'>
+        <ul
+          data-import-dry-run-skipped
+          className='max-h-40 space-y-0.5 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'
+        >
           {s.skipped_rows.map((r) => (
             <li key={`${r.row}-${r.reason}`}>
               <span className='font-mono text-[10.5px] text-slate-400'>row {r.row}</span>
-              {r.key && <span className='ml-1 font-mono text-[10.5px] text-slate-500'>{r.key}</span>}
+              {r.key && (
+                <span className='ml-1 font-mono text-[10.5px] text-slate-500'>{r.key}</span>
+              )}
               <span className='ml-1.5'>{r.reason}</span>
             </li>
           ))}
           {skippedTotal > s.skipped_rows.length && (
-            <li className='text-slate-400'>… {formatNumber(skippedTotal - s.skipped_rows.length)} more</li>
+            <li className='text-slate-400'>
+              … {formatNumber(skippedTotal - s.skipped_rows.length)} more
+            </li>
           )}
         </ul>
       )}
       {open === 'updates' && s && (
-        <ul data-import-dry-run-updates className='max-h-40 space-y-1 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'>
+        <ul
+          data-import-dry-run-updates
+          className='max-h-40 space-y-1 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'
+        >
           {s.updates.map((u) => (
             <li key={u.key}>
               <span className='font-mono text-[10.5px] text-slate-500'>{u.key}</span>
               <span className='ml-1.5'>
                 {u.changes.map((c) => (
                   <span key={c.field} className='mr-2'>
-                    {c.field}: <span className='text-slate-400 line-through'>{fmtVal(c.from)}</span> → {fmtVal(c.to)}
+                    {c.field}: <span className='text-slate-400 line-through'>{fmtVal(c.from)}</span>{' '}
+                    → {fmtVal(c.to)}
                   </span>
                 ))}
               </span>
             </li>
           ))}
-          {run.updated > s.updates.length && <li className='text-slate-400'>… {formatNumber(run.updated - s.updates.length)} more</li>}
+          {run.updated > s.updates.length && (
+            <li className='text-slate-400'>
+              … {formatNumber(run.updated - s.updates.length)} more
+            </li>
+          )}
         </ul>
       )}
       {open === 'creates' && s && (
-        <ul data-import-dry-run-creates className='max-h-40 space-y-0.5 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'>
+        <ul
+          data-import-dry-run-creates
+          className='max-h-40 space-y-0.5 overflow-y-auto text-[11.5px] text-slate-700 dark:text-slate-200'
+        >
           {s.creates.map((c) => (
             <li key={c.key} className='truncate'>
               <span className='font-mono text-[10.5px] text-slate-500'>{c.key}</span>
@@ -713,13 +884,19 @@ function DryRunSummary({ run }: { run: ImportDryRun }) {
               </span>
             </li>
           ))}
-          {run.created > s.creates.length && <li className='text-slate-400'>… {formatNumber(run.created - s.creates.length)} more</li>}
+          {run.created > s.creates.length && (
+            <li className='text-slate-400'>
+              … {formatNumber(run.created - s.creates.length)} more
+            </li>
+          )}
         </ul>
       )}
       {s && s.would_create_lookups.length > 0 && (
         <p className='text-[11px] text-slate-500 dark:text-slate-400'>
           New lookup rows a real run creates:{' '}
-          {s.would_create_lookups.map((l) => `${l.values.length} ${l.collection} from ${l.column}`).join(' · ')}
+          {s.would_create_lookups
+            .map((l) => `${l.values.length} ${l.collection} from ${l.column}`)
+            .join(' · ')}
         </p>
       )}
     </div>

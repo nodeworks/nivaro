@@ -15,6 +15,7 @@ import { parseRecalcRollups } from '../services/import-rollups.js'
 import { hasRunReports, parseRunReport, rebuildRunReport } from '../services/import-run-report.js'
 import { executeRevert, planRevert } from '../services/import-run-revert.js'
 import { describeStagingTables, purgeStagingTable } from '../services/staged-import-purge.js'
+import { rehearseProcedureImport } from '../services/staged-import-rehearsal.js'
 import {
   parseServiceConfig,
   runServiceImport,
@@ -26,6 +27,7 @@ import {
   validateStagedRows
 } from '../services/staged-import-validation.js'
 import {
+  describeSqlError,
   getImportDefinition,
   listImportDefinitions,
   mapRowsToDeclared,
@@ -458,9 +460,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         } else {
           const n = Number(b.staging_purge_days)
           if (!Number.isInteger(n) || n < 0 || n > 3650) {
-            return reply
-              .code(400)
-              .send({ error: 'staging_purge_days must be a whole number of days (blank or 0 = keep)' })
+            return reply.code(400).send({
+              error: 'staging_purge_days must be a whole number of days (blank or 0 = keep)'
+            })
           }
           patch.staging_purge_days = n
         }
@@ -1285,6 +1287,56 @@ export async function stagedImportRoutes(app: FastifyInstance) {
    * result against the staging table's current shape. A file with the wrong
    * columns otherwise only surfaces minutes later, inside the procedure.
    */
+  // #717 — rehearse a procedure-mode import: load + EXEC inside one
+  // transaction, count the tables it writes, roll back. Explicit admin action
+  // (it holds locks for as long as the procedure runs).
+  app.post('/rehearse', { preHandler: requireAdmin }, async (req, reply) => {
+    const multipart = await req.file()
+    if (!multipart) return reply.code(400).send({ error: 'A file upload is required' })
+    const fields = multipart.fields as Record<string, { value?: unknown }> | undefined
+    const key = String(fields?.import_key?.value ?? '').trim()
+    const definition = key ? await getImportDefinition(key) : null
+    if (!definition) return reply.code(400).send({ error: `No import definition for "${key}"` })
+    if (definition.processor && definition.processor !== 'proc') {
+      return reply.code(400).send({
+        error: 'Only procedure imports are rehearsed — the preview already dry-runs this one.'
+      })
+    }
+    let rows: Array<Record<string, string>>
+    try {
+      rows = parseImportFile(await multipart.toBuffer())
+    } catch (err) {
+      return reply
+        .code(400)
+        .send({ error: `That file could not be read: ${(err as Error).message}` })
+    }
+    if (rows.length === 0) return reply.code(400).send({ error: 'That file contained no rows' })
+    let result: Awaited<ReturnType<typeof rehearseProcedureImport>>
+    try {
+      result = await rehearseProcedureImport(definition, rows)
+    } catch (err) {
+      return reply
+        .code(500)
+        .send({ error: `The rehearsal failed: ${describeSqlError(err).slice(0, 500)}` })
+    }
+    await logActivity({
+      action: 'import-rehearse',
+      user: req.user?.id,
+      collection: 'nivaro_import_definitions',
+      item: definition.key,
+      comment: result.refused
+        ? `refused: ${result.refused}`.slice(0, 500)
+        : `${rows.length} rows · ${
+            result.tables
+              .filter((t) => t.delta !== 0)
+              .map((t) => `${t.table} ${t.delta > 0 ? '+' : ''}${t.delta}`)
+              .join(', ') || 'no row count changed'
+          }${result.error ? ' · procedure raised an error' : ''}`.slice(0, 500),
+      req
+    })
+    return { data: result }
+  })
+
   app.post('/preview', { preHandler: requireAdmin }, async (req, reply) => {
     const multipart = await req.file()
     if (!multipart) return reply.code(400).send({ error: 'A file upload is required' })

@@ -164,6 +164,10 @@ export const dataImportGuide: DocSection = {
       type: 'note',
       text: 'The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.'
     },
+    {
+      type: 'p',
+      text: 'Procedure-mode definitions get a Rehearse button in the preview: the file is loaded into the staging table and the procedure runs inside ONE transaction on one connection, every table it (and the procedures it calls, three deep) writes is counted before and after, and then everything is rolled back — "purchase_orders +12 · line_items +340" before the real run is queued. The connection runs with IMPLICIT_TRANSACTIONS on, so a write the procedure makes after its own ROLLBACK opens a new transaction instead of committing, and the final rollback takes it too. It is refused up front when a rollback could not undo the run: a procedure that COMMITs more transactions than it opens, or one that reaches outside the database (mail, shell, linked servers); and its counts are withheld when the procedure ended the rehearsal transaction itself. It holds locks on those tables while the procedure runs, so it is a click, never automatic. `POST /api/staged-imports/rehearse` (multipart import_key + file, admin).'
+    },
     { type: 'h3', id: 'imports-processors', text: 'Import processors' },
     {
       type: 'p',
