@@ -1401,6 +1401,7 @@ function RecorderBadge() {
   return (
     <Link
       to='/e2e-recorder'
+      data-nvr-dock-aware
       className='fixed bottom-4 right-4 z-[120] inline-flex items-center gap-2 rounded-full border border-red-200 bg-white px-3 py-1.5 text-[11.5px] font-medium text-red-600 shadow-lg hover:bg-red-50 dark:border-red-500/30 dark:bg-card dark:text-red-300'
       data-e2e-recorder
       data-e2e-badge={rec.steps.length}

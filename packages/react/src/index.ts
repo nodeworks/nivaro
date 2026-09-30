@@ -109,6 +109,7 @@ export {
   type ChatMessage,
   type ChatOnlineUser,
   ChatPanel,
+  isChatPanelPinned,
   ChatProvider,
   ChatRoomList,
   ChatRoomView,

@@ -28,6 +28,7 @@ export function AutofillRunsChip({ onOpen }: { onOpen: (run: AutofillRun) => voi
   if (runs.length === 0 || typeof document === 'undefined') return null
   return createPortal(
     <div
+      data-nvr-dock-aware
       className='fixed bottom-4 right-4 z-[110] flex flex-col items-end gap-2'
       data-autofill-chips={runs.length}
     >

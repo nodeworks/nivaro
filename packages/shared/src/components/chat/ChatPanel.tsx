@@ -18,6 +18,7 @@ import {
   Paperclip,
   Pencil,
   Pin,
+  PinOff,
   PlayCircle,
   Plus,
   Search,
@@ -717,7 +718,7 @@ export function ChatRoomView({
   const deleteMessage = useDeleteMessage(room)
   // Admins may delete anyone's message (server enforces the same rule).
   const { isAdmin } = useItemEditAuth()
-  const { setMuted, setNotifyMode, setArchived } = useRoomMembership()
+  const { setMuted, setNotifyMode, setArchived, leave } = useRoomMembership()
   const { rooms: allRooms, loading: roomsLoading } = useChatRooms()
   const activeInfo = allRooms.find((r) => r.room === room) ?? null
   // An archived room is not in the main list — look it up in the archive so
@@ -1109,6 +1110,27 @@ export function ChatRoomView({
               </div>
             )}
           </div>
+        )}
+        {roomInfo?.kind === 'entity' && roomInfo.joined && (
+          <button
+            type='button'
+            onClick={() =>
+              leave.mutate(room, {
+                onSuccess: () => {
+                  toast.success(`Left ${roomInfo.label}`, {
+                    description: "Open the record's chat again to rejoin."
+                  })
+                  onBack()
+                }
+              })
+            }
+            title="Leave this record's chat — it leaves your list; open it from the record again to rejoin"
+            aria-label="Leave this record's chat"
+            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
+            data-chat-leave-room
+          >
+            <LogOut className='h-3.5 w-3.5' strokeWidth={2} />
+          </button>
         )}
         {roomInfo && archivable && (
           <button
@@ -2590,16 +2612,25 @@ export function ChatRoomList({
                   >
                     {r.muted ? <Bell className='h-3 w-3' /> : <BellOff className='h-3 w-3' />}
                   </button>
-                  {(r.kind === 'channel' || r.kind === 'global') && r.joined && (
-                    <button
-                      type='button'
-                      title={r.kind === 'global' ? 'Leave General' : 'Leave channel'}
-                      onClick={() => leave.mutate(r.room)}
-                      className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
-                    >
-                      <LogOut className='h-3 w-3' />
-                    </button>
-                  )}
+                  {(r.kind === 'channel' || r.kind === 'global' || r.kind === 'entity') &&
+                    r.joined && (
+                      <button
+                        type='button'
+                        title={
+                          r.kind === 'global'
+                            ? 'Leave General'
+                            : r.kind === 'entity'
+                              ? "Leave this record's chat — open it from the record again to rejoin"
+                              : 'Leave channel'
+                        }
+                        aria-label={`Leave ${r.label}`}
+                        data-chat-row-leave
+                        onClick={() => leave.mutate(r.room)}
+                        className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+                      >
+                        <LogOut className='h-3 w-3' />
+                      </button>
+                    )}
                 </span>
               </div>
             ))}
@@ -3012,6 +3043,35 @@ function GroupDmDialog({
   )
 }
 
+const PIN_KEY = 'nvr-chat-pinned'
+/** Width the pinned panel takes from the page. */
+const PINNED_WIDTH = 400
+
+/** Whether this browser pinned the chat panel open — hosts read it for their
+ *  initial open state, so a pinned panel is still there after a reload. */
+export function isChatPanelPinned(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.localStorage.getItem(PIN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function useWideViewport(): boolean {
+  const query = '(min-width: 1024px)'
+  const [wide, setWide] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.(query).matches
+  )
+  useEffect(() => {
+    const mq = window.matchMedia?.(query)
+    if (!mq) return
+    const on = () => setWide(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return wide
+}
+
 export function ChatPanel({
   open,
   onClose,
@@ -3032,6 +3092,43 @@ export function ChatPanel({
   const cfg = useChatConfig()
   const th = useTheme()
   const me = cfg.me
+  // Pinned: the panel docks beside the page instead of covering it — no
+  // backdrop, the page narrows to make room, and it stays through navigation.
+  // Only on wide screens; a phone keeps the overlay.
+  const [pinnedPref, setPinnedPref] = useState(isChatPanelPinned)
+  const wide = useWideViewport()
+  const pinned = pinnedPref && wide
+  const togglePinned = () => {
+    const next = !pinnedPref
+    setPinnedPref(next)
+    try {
+      if (next) window.localStorage.setItem(PIN_KEY, '1')
+      else window.localStorage.removeItem(PIN_KEY)
+    } catch {
+      /* private window — pinned for this visit only */
+    }
+  }
+  useEffect(() => {
+    if (!open || !pinned) return
+    const body = document.body
+    const before = body.style.paddingRight
+    body.style.paddingRight = `${PINNED_WIDTH}px`
+    body.dataset.nvrChatPinned = '1'
+    // Things that float at the page's right edge (toasts, the bug button,
+    // import chips) would land on the panel — over the message box. They move
+    // over by the panel's width while it is pinned. A host marks any other
+    // floating widget with data-nvr-dock-aware.
+    const style = document.createElement('style')
+    style.dataset.nvrChatPinnedStyle = ''
+    style.textContent = `body[data-nvr-chat-pinned] [data-sonner-toaster][data-x-position="right"],
+body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}px; }`
+    document.head.appendChild(style)
+    return () => {
+      body.style.paddingRight = before
+      delete body.dataset.nvrChatPinned
+      style.remove()
+    }
+  }, [open, pinned])
   const [tab, setTab] = useState<'online' | 'chat' | 'browse' | 'archived'>('online')
   const [activeRoom, setActiveRoom] = useState<{
     room: string
@@ -3145,14 +3242,23 @@ export function ChatPanel({
   if (!open) return null
   return (
     <div
-      className='fixed inset-0 z-40 bg-black/40 animate-in fade-in duration-150'
-      onClick={onClose}
+      className={
+        pinned
+          ? // No backdrop: the rest of the page stays usable.
+            'pointer-events-none fixed inset-y-0 right-0 z-40'
+          : 'fixed inset-0 z-40 bg-black/40 animate-in fade-in duration-150'
+      }
+      style={pinned ? { width: PINNED_WIDTH } : undefined}
+      onClick={pinned ? undefined : onClose}
       data-chat-panel
+      data-chat-pinned={pinned ? '1' : undefined}
     >
       <aside
         className={cn(
-          'absolute right-0 top-0 flex h-full w-full max-w-[400px] flex-col border-l shadow-2xl',
-          'animate-in slide-in-from-right duration-200',
+          'pointer-events-auto absolute right-0 top-0 flex h-full w-full flex-col border-l',
+          pinned
+            ? 'max-w-none'
+            : 'max-w-[400px] shadow-2xl animate-in slide-in-from-right duration-200',
           th.surface,
           'border-slate-200 dark:border-border'
         )}
@@ -3198,8 +3304,32 @@ export function ChatPanel({
           </div>
           <button
             type='button'
+            onClick={togglePinned}
+            aria-pressed={pinnedPref}
+            title={
+              pinnedPref
+                ? 'Unpin — go back to opening chat over the page'
+                : 'Pin — keep chat open beside the page while you work'
+            }
+            aria-label={pinnedPref ? 'Unpin chat panel' : 'Pin chat panel'}
+            className={cn(
+              'ml-auto hidden rounded-md p-1.5 transition-colors lg:flex',
+              pinnedPref
+                ? th.accentSoft
+                : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
+            )}
+            data-chat-pin={pinnedPref ? 'on' : 'off'}
+          >
+            {pinnedPref ? (
+              <PinOff className='h-4 w-4' strokeWidth={2} />
+            ) : (
+              <Pin className='h-4 w-4' strokeWidth={2} />
+            )}
+          </button>
+          <button
+            type='button'
             onClick={onClose}
-            className='ml-auto rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
+            className='rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 max-lg:ml-auto dark:hover:bg-white/10 dark:hover:text-slate-100'
             aria-label='Close panel'
           >
             <X className='h-4 w-4' strokeWidth={2} />

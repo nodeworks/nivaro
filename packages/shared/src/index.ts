@@ -54,6 +54,7 @@ export {
   ChatChannelBrowser,
   ChatChannelSettings,
   ChatPanel,
+  isChatPanelPinned,
   ChatProvider,
   type ChatProviderProps,
   ChatRoomList,

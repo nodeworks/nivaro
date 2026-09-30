@@ -124,6 +124,7 @@ export function BugReporter() {
       data-bug-reporter
       onClick={openReporter}
       title='Report a bug'
+      data-nvr-dock-aware
       className='fixed bottom-4 right-4 z-40 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm transition-colors hover:border-red-200 hover:text-red-500 dark:border-border dark:bg-card'
     >
       {capturing ? <Loader2 className='h-4 w-4 animate-spin' /> : <Bug className='h-4 w-4' />}

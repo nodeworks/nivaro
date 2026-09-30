@@ -1,6 +1,7 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
   ChatPanel,
+  isChatPanelPinned,
   ChatProvider,
   ItemEditAuthContext,
   NivaroProvider,
@@ -16,7 +17,12 @@ import { useNavigate } from 'react-router'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { usePresenceLive, setTypingRoom, useOnlineUsers, usePresenceHeartbeat } from '@/lib/chat-presence'
+import {
+  usePresenceLive,
+  setTypingRoom,
+  useOnlineUsers,
+  usePresenceHeartbeat
+} from '@/lib/chat-presence'
 import { onCollectionUpdate, subscribeChatRooms } from '@/lib/socket'
 
 /**
@@ -114,7 +120,7 @@ export function AdminChatProvider({ children }: { children: React.ReactNode }) {
 function DockInner() {
   usePresenceHeartbeat()
   usePresenceLive()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(isChatPanelPinned)
   const [requestedDm, setRequestedDm] = useState<{
     userId: string
     name?: string
