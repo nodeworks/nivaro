@@ -268,33 +268,33 @@ function runRuleForRow(
   rule: ImportHeaderRule,
   row: Record<string, unknown>,
   resolvedCtx: Record<string, unknown>,
-  batch: RuleLookupBatch | null,
-  lookupStep: LookupStepConfig | null,
+  batches: RuleLookupBatches | null,
   issues: ImportIssue[],
   ruleId: string,
   rowNumber: number | undefined,
   lineCtx?: Record<string, unknown>
 ): StepFoldResult {
   const initial = rule.source != null ? row[rule.source] : undefined
-  const resolver: LookupResolver | undefined =
-    lookupStep && batch
-      ? (candidate, step) =>
-          step === lookupStep
-            ? resolveLookupOutcome(
-                lookupStep,
-                candidate,
-                batch.matchMap,
-                batch.rowScoped,
-                row,
-                lineCtx,
-                resolvedCtx,
-                issues,
-                ruleId,
-                rule.source ?? undefined,
-                rowNumber
-              )
-            : { value: candidate }
-      : undefined
+  const resolver: LookupResolver | undefined = batches
+    ? (candidate, step) => {
+        const batch = batches.get(step as LookupStepConfig)
+        return batch
+          ? resolveLookupOutcome(
+              step as LookupStepConfig,
+              candidate,
+              batch.matchMap,
+              batch.rowScoped,
+              row,
+              lineCtx,
+              resolvedCtx,
+              issues,
+              ruleId,
+              rule.source ?? undefined,
+              rowNumber
+            )
+          : { value: candidate }
+      }
+    : undefined
   return foldStepsSync(
     initial,
     rule.steps,
@@ -314,74 +314,107 @@ interface RuleLookupBatch {
   rowScoped: LookupStepConfig['scope_filters']
 }
 
-// Collects every row's candidate value for a rule's lookup step (running only the
-// steps BEFORE it, which by construction never contain another lookup), dedupes, and
-// resolves them with exactly one lookup() call. Static scope filters ride the SQL;
-// row-scoped ones (referencing `$line.*` or sheet columns) are returned for per-row
-// in-memory selection so the one-query-per-rule batching is preserved.
-async function resolveRuleLookup(
+/** One batch per lookup step of a rule — several when lookups are chained (#718). */
+type RuleLookupBatches = Map<LookupStepConfig, RuleLookupBatch>
+
+function lookupStepsOf(steps: ImportStep[]): LookupStepConfig[] {
+  return steps.filter((s): s is LookupStepConfig => s.type === 'lookup')
+}
+
+// Resolves a rule's lookup steps IN ORDER, each with exactly one lookup() call
+// across every row: a step's candidates come from folding the steps before it,
+// with the earlier lookups already answered from their own batches — so a
+// chained rule (cifa_number → cifa → override_cifa) costs one query per lookup,
+// never one per row. Static scope filters ride the SQL; row-scoped ones
+// (referencing `$line.*` or sheet columns) are returned for per-row in-memory
+// selection.
+async function resolveRuleLookups(
   rule: ImportHeaderRule,
-  lookupStep: LookupStepConfig,
   rowsForBatch: { row: Record<string, unknown>; rowNumber?: number }[],
   resolvedCtx: Record<string, unknown>,
   lookup: LookupFetcher,
   lineCtxFor?: (rowNumber: number | undefined) => Record<string, unknown> | undefined
-): Promise<RuleLookupBatch> {
-  const idx = rule.steps.indexOf(lookupStep)
-  const preSteps = rule.steps.slice(0, idx)
-  const scratchIssues: ImportIssue[] = []
-  const candidates = new Set<string>()
-  for (const { row, rowNumber } of rowsForBatch) {
-    const initial = rule.source != null ? row[rule.source] : undefined
-    const { value } = foldStepsSync(
-      initial,
-      preSteps,
-      row,
-      resolvedCtx,
-      scratchIssues,
-      '',
-      undefined,
-      undefined,
-      lineCtxFor?.(rowNumber)
-    )
-    if (value != null) {
-      const s = String(value).trim()
-      if (s !== '') candidates.add(s)
+): Promise<RuleLookupBatches | null> {
+  const lookupSteps = lookupStepsOf(rule.steps)
+  if (lookupSteps.length === 0) return null
+  const batches: RuleLookupBatches = new Map()
+  for (const lookupStep of lookupSteps) {
+    const idx = rule.steps.indexOf(lookupStep)
+    const preSteps = rule.steps.slice(0, idx)
+    const scratchIssues: ImportIssue[] = []
+    const candidates = new Set<string>()
+    for (const { row, rowNumber } of rowsForBatch) {
+      const lineCtx = lineCtxFor?.(rowNumber)
+      const initial = rule.source != null ? row[rule.source] : undefined
+      const resolver: LookupResolver = (candidate, step) => {
+        const b = batches.get(step as LookupStepConfig)
+        return b
+          ? resolveLookupOutcome(
+              step as LookupStepConfig,
+              candidate,
+              b.matchMap,
+              b.rowScoped,
+              row,
+              lineCtx,
+              resolvedCtx,
+              scratchIssues,
+              '',
+              undefined,
+              undefined
+            )
+          : { value: candidate }
+      }
+      const { value } = foldStepsSync(
+        initial,
+        preSteps,
+        row,
+        resolvedCtx,
+        scratchIssues,
+        '',
+        undefined,
+        resolver,
+        lineCtx
+      )
+      if (value != null && typeof value !== 'object') {
+        const s = String(value).trim()
+        if (s !== '') candidates.add(s)
+      }
     }
-  }
-  const staticFilters: { field: string; op: 'eq' | 'neq'; value: string }[] = []
-  const rowScoped: LookupStepConfig['scope_filters'] = []
-  for (const f of lookupStep.scope_filters) {
-    if (lineCtxFor && isRowScopedFilterValue(f.value)) {
-      rowScoped.push(f)
-    } else {
-      staticFilters.push({
-        field: f.field,
-        op: f.op,
-        value: substituteTemplate(f.value, {}, resolvedCtx, scratchIssues, '', undefined)
-      })
+    const staticFilters: { field: string; op: 'eq' | 'neq'; value: string }[] = []
+    const rowScoped: LookupStepConfig['scope_filters'] = []
+    for (const f of lookupStep.scope_filters) {
+      if (lineCtxFor && isRowScopedFilterValue(f.value)) {
+        rowScoped.push(f)
+      } else {
+        staticFilters.push({
+          field: f.field,
+          op: f.op,
+          value: substituteTemplate(f.value, {}, resolvedCtx, scratchIssues, '', undefined)
+        })
+      }
     }
+    const values = Array.from(candidates)
+    const records = values.length
+      ? await lookup({
+          collection: lookupStep.collection,
+          match_field: lookupStep.match_field,
+          values,
+          scope_filters: staticFilters
+        })
+      : []
+    const matchMap = new Map<string, Record<string, unknown>[]>()
+    for (const rec of records) {
+      const key = rec[lookupStep.match_field]
+      if (key == null) continue
+      const k = String(key).trim().toLowerCase()
+      if (k === '') continue
+      const bucket = matchMap.get(k)
+      if (bucket) bucket.push(rec)
+      else matchMap.set(k, [rec])
+    }
+    batches.set(lookupStep, { matchMap, rowScoped })
   }
-  const values = Array.from(candidates)
-  const records = values.length
-    ? await lookup({
-        collection: lookupStep.collection,
-        match_field: lookupStep.match_field,
-        values,
-        scope_filters: staticFilters
-      })
-    : []
-  const matchMap = new Map<string, Record<string, unknown>[]>()
-  for (const rec of records) {
-    const key = rec[lookupStep.match_field]
-    if (key == null) continue
-    const k = String(key).trim().toLowerCase()
-    if (k === '') continue
-    const bucket = matchMap.get(k)
-    if (bucket) bucket.push(rec)
-    else matchMap.set(k, [rec])
-  }
-  return { matchMap, rowScoped }
+  return batches
 }
 
 export async function runHeaderPhase(
@@ -399,22 +432,9 @@ export async function runHeaderPhase(
   const resolved: Record<string, unknown> = {}
   const m2m: Record<string, Array<string | number>> = {}
   for (const rule of headerMap) {
-    const lookupStep = findLookupStep(rule.steps)
-    let batch: RuleLookupBatch | null = null
-    if (lookupStep) {
-      batch = await resolveRuleLookup(rule, lookupStep, [{ row: headerRow }], resolved, lookup)
-    }
+    const batches = await resolveRuleLookups(rule, [{ row: headerRow }], resolved, lookup)
     const ruleId = `header:${rule.target}`
-    const { value } = runRuleForRow(
-      rule,
-      headerRow,
-      resolved,
-      batch,
-      lookupStep,
-      issues,
-      ruleId,
-      undefined
-    )
+    const { value } = runRuleForRow(rule, headerRow, resolved, batches, issues, ruleId, undefined)
     resolved[rule.target] = value
     if (m2mFields?.has(rule.target)) {
       // Only scalar lookup results are linkable M2M ids — a lookup that resolved to a
@@ -453,10 +473,7 @@ async function runColumnsBatched(
     rowNumber == null ? undefined : lineCtxByRow.get(rowNumber)
 
   for (const col of columns) {
-    const lookupStep = findLookupStep(col.steps)
-    const batch = lookupStep
-      ? await resolveRuleLookup(col, lookupStep, rowsWithIndex, resolvedCtx, lookup, lineCtxFor)
-      : null
+    const batches = await resolveRuleLookups(col, rowsWithIndex, resolvedCtx, lookup, lineCtxFor)
 
     for (const { row, rowNumber } of rowsWithIndex) {
       const ruleId = ruleIdFor(rowNumber, col.target)
@@ -465,8 +482,7 @@ async function runColumnsBatched(
         col,
         row,
         resolvedCtx,
-        batch,
-        lookupStep,
+        batches,
         issues,
         ruleId,
         rowNumber,
@@ -690,7 +706,6 @@ export function resolveCreateDefaults(
       rule,
       row,
       resolvedCtx,
-      null,
       null,
       scratchIssues,
       `create:${rule.target}`,

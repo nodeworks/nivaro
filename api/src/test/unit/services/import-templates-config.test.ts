@@ -92,22 +92,49 @@ describe('normalizeImportTemplateConfig', () => {
     expect(errors[0].path).toBe('line_map')
   })
 
-  it('rejects a rule with more than one lookup step', () => {
+  it('accepts chained lookup steps (#718)', () => {
     const { errors } = normalizeImportTemplateConfig({
       header_map: [
         {
           target: 'vendor',
           source: 'Vendor',
           steps: [
-            { type: 'lookup', collection: 'vendors', match_field: 'name' },
+            {
+              type: 'lookup',
+              collection: 'vendors',
+              match_field: 'name',
+              take: 'field',
+              take_field: 'code'
+            },
             { type: 'lookup', collection: 'regions', match_field: 'code' }
           ]
         }
       ]
     })
-    expect(errors).toContainEqual({
+    expect(errors).toEqual([])
+  })
+
+  it('rejects more than three chained lookups, and on_miss create in a chain', () => {
+    const l = { type: 'lookup', collection: 'vendors', match_field: 'name' }
+    const four = normalizeImportTemplateConfig({
+      header_map: [{ target: 'v', source: 'V', steps: [l, l, l, l] }]
+    })
+    expect(four.errors).toContainEqual({
       path: 'header_map[0]',
-      message: 'Only one lookup step per rule'
+      message: 'At most three chained lookup steps per rule'
+    })
+    const create = normalizeImportTemplateConfig({
+      header_map: [
+        {
+          target: 'v',
+          source: 'V',
+          steps: [l, { ...l, on_miss: 'create', create: { defaults: [], dedupe_by: ['name'] } }]
+        }
+      ]
+    })
+    expect(create.errors).toContainEqual({
+      path: 'header_map[0]',
+      message: 'A rule with chained lookups cannot use on_miss "create"'
     })
   })
 

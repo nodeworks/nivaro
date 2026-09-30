@@ -874,6 +874,7 @@ function StepEditor({
   errors,
   isFirst,
   isLast,
+  chained = false,
   onChange,
   onDelete,
   onMove
@@ -883,6 +884,8 @@ function StepEditor({
   errors: ConfigErrorDetail[]
   isFirst: boolean
   isLast: boolean
+  /** #718 — a lookup after another lookup reads that lookup's result. */
+  chained?: boolean
   onChange: (s: ImportStep) => void
   onDelete: () => void
   onMove: (dir: -1 | 1) => void
@@ -940,6 +943,15 @@ function StepEditor({
         {step.type === 'remap' && <RemapEditor step={step} onChange={onChange} />}
         {step.type === 'expression' && <ExpressionEditor step={step} onChange={onChange} />}
         {step.type === 'const' && <ConstEditor step={step} onChange={onChange} />}
+        {step.type === 'lookup' && chained && (
+          <p
+            className='mb-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'
+            data-chained-lookup
+          >
+            Chained: matches on what the lookup above returned (set that one to take a field). Each
+            lookup is one query across all rows.
+          </p>
+        )}
         {step.type === 'lookup' && (
           <LookupEditor step={step} onChange={onChange} path={path} errors={errors} />
         )}
@@ -1046,6 +1058,9 @@ function RuleRow({
             errors={errors}
             isFirst={si === 0}
             isLast={si === rule.steps.length - 1}
+            chained={
+              step.type === 'lookup' && rule.steps.slice(0, si).some((st) => st.type === 'lookup')
+            }
             onChange={(s) => onPatch({ steps: rule.steps.map((st, idx) => (idx === si ? s : st)) })}
             onDelete={() => onPatch({ steps: rule.steps.filter((_, idx) => idx !== si) })}
             onMove={(dir) => {

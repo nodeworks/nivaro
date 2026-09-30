@@ -748,3 +748,57 @@ describe('collectCreateMisses / resolveCreateDefaults', () => {
     expect(payload).toEqual({ name: 'New Unit', region: 'NER' })
   })
 })
+
+describe('runImportPipeline — chained lookups (#718)', () => {
+  it('feeds one lookup into the next, one query per lookup across all rows', async () => {
+    const config = cfg({
+      line_map: {
+        target_field: 'lines',
+        row_filter: { column: 'CIFA', op: 'nnull' },
+        columns: [
+          {
+            target: 'cifa',
+            source: 'CIFA',
+            steps: [
+              { type: 'trim' },
+              // cifa_number → the item's override (an item id), else the item itself
+              {
+                type: 'lookup',
+                collection: 'cifa_items',
+                match_field: 'cifa_number',
+                take: 'field',
+                take_field: 'override_cifa'
+              },
+              {
+                type: 'lookup',
+                collection: 'cifa_items',
+                match_field: 'id',
+                take: 'field',
+                take_field: 'cifa_number'
+              }
+            ]
+          }
+        ]
+      }
+    })
+    const items = [
+      { id: 1, cifa_number: '100', override_cifa: 2 },
+      { id: 2, cifa_number: '200', override_cifa: null },
+      { id: 3, cifa_number: '300', override_cifa: 1 }
+    ]
+    const lookup = vi.fn(async (req: { match_field: string; values: string[] }) =>
+      items.filter((r) => req.values.includes(String(r[req.match_field as 'id'])))
+    )
+    const { lines, issues } = await runImportPipeline({
+      config,
+      rows: [{ CIFA: ' 100 ' }, { CIFA: '300' }, { CIFA: '999' }, { CIFA: '100' }],
+      lookup: async (req) => lookup(req as never)
+    })
+    expect(lookup).toHaveBeenCalledTimes(2)
+    expect(lookup.mock.calls[0][0].values.sort()).toEqual(['100', '300', '999'])
+    // second query asks only for what the first one answered
+    expect(lookup.mock.calls[1][0].values.sort()).toEqual(['1', '2'])
+    expect(lines.map((l) => l.values.cifa)).toEqual(['200', '100', undefined, '200'])
+    expect(issues.filter((i) => /No match for "999"/.test(i.message))).toHaveLength(1)
+  })
+})

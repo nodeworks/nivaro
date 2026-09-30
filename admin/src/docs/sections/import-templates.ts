@@ -57,6 +57,10 @@ export const importTemplatesGuide: DocSection = {
       text: 'Line rules run in order and each result lands in a per-row `{{$line.*}}` context, so a later rule can chain off earlier ones — in expressions and in scope-filter values. Composite lookups fall out of this: resolve `category_type` and `core_category` first, then a `category` rule with an expression `{{$line.core_category}}` and a scope filter `sub_category = {{$line.category_type}}` picks the exact record matching both, per row. Row-varying scope filters are applied in memory after the single batched query, so lookups stay one query per rule.'
     },
     {
+      type: 'p',
+      text: 'A rule may also CHAIN up to three lookup steps: each later lookup matches on what the one before it returned. Set the first to take a field, e.g. `cifa_number` → cifa_items (take field `override_cifa`) → cifa_items by id (take field `cifa_number`) — the file names an item and the rule lands on its override. Each lookup is still one query across all rows, asking only for the values the previous lookup answered. A miss anywhere in the chain reports that lookup\'s `on_miss`; a chained rule cannot use `on_miss: \'create\'` (which of the chain\'s collections to create in would be ambiguous).'
+    },
+    {
       type: 'table',
       head: ['take', 'Behavior'],
       rows: [

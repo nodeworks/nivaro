@@ -216,10 +216,19 @@ function normalizeRule(raw: unknown, path: string, errors: ConfigError[]): Impor
     const normalized = normalizeStep(step, `${path}.steps[${i}]`, errors)
     if (normalized) normalizedSteps.push(normalized)
   })
-  // The pipeline resolves exactly one lookup per rule (foldStepsSync's pre-lookup
-  // slice assumes no earlier lookup); reject configs that would silently drop one.
-  if (normalizedSteps.filter((s) => s.type === 'lookup').length > 1) {
-    errors.push({ path, message: 'Only one lookup step per rule' })
+  // Lookups may be chained (#718 — cifa_number → cifa → override_cifa): each is
+  // resolved in order, one batched query per lookup. Three is plenty. A chained
+  // rule cannot create records on a miss: the create path follows ONE lookup
+  // back to its column, and which of the chain's collections to create in would
+  // be ambiguous.
+  const lookups = normalizedSteps.filter(
+    (s): s is Extract<ImportStep, { type: 'lookup' }> => s.type === 'lookup'
+  )
+  if (lookups.length > 3) {
+    errors.push({ path, message: 'At most three chained lookup steps per rule' })
+  }
+  if (lookups.length > 1 && lookups.some((s) => s.on_miss === 'create')) {
+    errors.push({ path, message: 'A rule with chained lookups cannot use on_miss "create"' })
   }
   return {
     target: src.target,
