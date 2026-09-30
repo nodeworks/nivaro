@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { canOpenChatRoom, openChatRoom } from '../chat/chat-core'
+import { canOpenChatRoom, openChatRoom, useRecordRoomTypes } from '../chat/chat-core'
 import { SimpleSelect } from '../ui/SimpleSelect'
 
 /**
@@ -18,13 +18,6 @@ import { SimpleSelect } from '../ui/SimpleSelect'
  * hides when the collection has no entity-room registration, so non-chat
  * deployments never see it.
  */
-
-interface RoomType {
-  prefix: string
-  collection: string
-  match_field: string
-  is_active: boolean
-}
 
 interface SidebarRoom {
   room: string
@@ -48,18 +41,29 @@ export function RecordChatActions({
   const [note, setNote] = useState('')
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const { data: types } = useQuery({
-    queryKey: ['nvr-chat-room-types'],
-    queryFn: async () => {
-      const res = (await client.request(get<{ data: RoomType[] }>('/chat/room-types'))) as {
-        data: RoomType[]
-      }
-      return (res.data ?? []).filter((t) => t.is_active)
-    },
-    staleTime: 5 * 60_000
-  })
+  const types = useRecordRoomTypes()
   const type = types?.find((t) => t.collection === collection)
   const token = type ? String(itemDraft[type.match_field] ?? '').trim() : ''
+  const itemId = itemDraft.id == null ? '' : String(itemDraft.id)
+
+  // Unread in this record's room (#986) — the button says there is something
+  // to read before anyone opens it.
+  const { data: roomState } = useQuery({
+    queryKey: ['nvr-chat-record-room', collection, itemId],
+    queryFn: async () => {
+      const res = (await client.request(
+        get<{ data: { room: string; unread: number; messages: number; joined: boolean } | null }>(
+          '/chat/record-room',
+          { collection, item: itemId }
+        )
+      )) as { data: { room: string; unread: number; messages: number; joined: boolean } | null }
+      return res.data ?? null
+    },
+    enabled: !!type && !!token && !!itemId,
+    staleTime: 30_000,
+    refetchInterval: 60_000
+  })
+  const unread = roomState?.unread ?? 0
 
   const { data: rooms } = useQuery({
     queryKey: ['nvr-chat-share-rooms'],
@@ -128,17 +132,38 @@ export function RecordChatActions({
             if (discussable) openChatRoom(room, token)
             else setShareOpen((o) => !o)
           }}
-          title="Open this record's chat room"
-          aria-label="Open this record's chat room"
+          title={
+            unread
+              ? `${unread} unread in this record's chat`
+              : roomState?.messages
+                ? `Open this record's chat · ${roomState.messages} messages`
+                : "Open this record's chat room"
+          }
+          aria-label={
+            unread
+              ? `Open this record's chat room, ${unread} unread`
+              : "Open this record's chat room"
+          }
           className={
             compact
-              ? 'inline-flex w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+              ? 'relative inline-flex w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
               : 'inline-flex items-center gap-1.5 px-3 transition-colors hover:bg-accent hover:text-accent-foreground'
           }
           data-record-chat
+          data-record-chat-unread={unread || undefined}
         >
           <MessageSquare className={compact ? 'h-4 w-4' : 'h-3.5 w-3.5'} strokeWidth={2} />
           {!compact && 'Chat'}
+          {unread > 0 &&
+            (compact ? (
+              <span className='absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold leading-none text-white'>
+                {unread > 9 ? '9+' : unread}
+              </span>
+            ) : (
+              <span className='flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white'>
+                {unread > 99 ? '99+' : unread}
+              </span>
+            ))}
         </button>
         {discussable && (
           <button

@@ -806,6 +806,31 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.chat_sidebar_sort = v
     }
+    if ('chat_density' in body) {
+      const v = body.chat_density
+      if (v !== null && v !== 'compact' && v !== 'comfortable') {
+        return reply
+          .code(400)
+          .send({ error: "chat_density must be 'compact', 'comfortable' or null" })
+      }
+      patch.chat_density = v === 'comfortable' ? null : v
+    }
+    if ('chat_badge_mode' in body) {
+      const v = body.chat_badge_mode
+      if (v !== null && v !== 'all' && v !== 'conversations') {
+        return reply
+          .code(400)
+          .send({ error: "chat_badge_mode must be 'all', 'conversations' or null" })
+      }
+      patch.chat_badge_mode = v === 'all' ? null : v
+    }
+    if ('chat_email_fallback' in body) {
+      const v = body.chat_email_fallback
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'chat_email_fallback must be true, false or null' })
+      }
+      patch.chat_email_fallback = v === true ? true : null
+    }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })
     }

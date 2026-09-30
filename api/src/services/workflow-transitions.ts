@@ -1166,6 +1166,35 @@ export async function applyTransition(opts: {
         opts.userId ?? undefined
       )
     )
+    // Record rooms (#933, #948): a line in the record's chat room when the
+    // room type opted in, and the new owners follow the room when it opted in.
+    if (instance.collection !== 'nivaro_addendums') {
+      const p = payload as unknown as {
+        actor_name?: string | null
+        owners?: Array<{ id: string }>
+      }
+      void (async () => {
+        try {
+          const { postRecordActivity, followRecordRoom } = await import('./chat-records.js')
+          const { getApp } = await import('./io-holder.js')
+          const app = getApp()
+          const from = prevStateObj?.label ?? prevStateObj?.key ?? 'the start'
+          const to = newStateObj?.label ?? newStateObj?.key ?? 'a new state'
+          const who = p.actor_name || (opts.source === 'auto' ? 'An automatic rule' : 'Someone')
+          const text = `${who} moved this from ${from} to ${to}${
+            transition.label ? ` (${transition.label})` : ''
+          }${opts.comment ? ` — “${String(opts.comment).slice(0, 300)}”` : ''}`
+          if (app) await postRecordActivity(app, instance.collection, instance.item, text)
+          await followRecordRoom(
+            instance.collection,
+            instance.item,
+            (p.owners ?? []).map((o) => String(o.id))
+          )
+        } catch {
+          /* chat is decoration here */
+        }
+      })()
+    }
   } catch {
     /* trigger emission is best-effort */
   }

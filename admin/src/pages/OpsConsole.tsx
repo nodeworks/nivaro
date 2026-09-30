@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, RefreshCw, TerminalSquare } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ChatHealthCard } from '@/components/chat-health-card'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -835,6 +836,7 @@ export function OpsConsolePage() {
               </div>
             ) : null}
           </Card>
+          <ChatHealthCard />
           <Card
             title='Environment knobs'
             sub='Which env vars this process sees — secrets masked (#157)'

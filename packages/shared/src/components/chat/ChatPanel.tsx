@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlarmClock,
+  AlertTriangle,
   Archive,
   ArchiveRestore,
   ArrowUpDown,
+  AtSign,
   Bell,
   BellOff,
   Bookmark,
@@ -11,21 +14,29 @@ import {
   ChevronLeft,
   ClipboardPlus,
   ExternalLink,
+  FilePlus2,
   Hash,
   HelpCircle,
+  Info,
   Lock,
   LogOut,
   MessageCircle,
+  MessageSquareReply,
+  NotebookPen,
   Paperclip,
   Pencil,
   Pin,
   PinOff,
+  Plane,
   PlayCircle,
   Plus,
+  Quote,
   Search,
   Send,
   Settings,
   SmilePlus,
+  Sparkles,
+  Star,
   Trash2,
   Users,
   Video,
@@ -37,37 +48,50 @@ import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
-import { ChannelLookPicker, ChannelTile } from './ChannelLook'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
+import { UserChip } from '../item-edit/GroupSection'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { BulkInvitePanel, ChannelAuditLog, ChannelExtrasEditor } from './ChannelExtras'
+import { ChannelLookPicker, ChannelTile } from './ChannelLook'
+import {
+  CatchUpView,
+  ChatSettingsButton,
+  FilterToggle,
+  MentionsView,
+  ScheduledView,
+  SearchFilterBar,
+  useSearchFilterState
+} from './ChatViews'
+import { ChatComposer, type ComposerHandle } from './Composer'
 import {
   CHAT_DEFAULTS,
   type ChannelMeta,
+  type ChatAnchor,
   type ChatConfig,
   ChatConfigContext,
   type ChatMessage,
   type ChatOnlineUser,
+  canOpenDm,
   chatAvatarColor,
   chatInitials,
   type DirectoryChannel,
   dmPeer,
   dmRoom,
   getMentionQuery,
+  openDmWith,
   REACTION_EMOJI,
   type RoomInfo,
   splitMessageTokens,
+  useArchivedRooms,
   useChannelAdmin,
   useChannelDirectory,
   useChannelMembers,
   useChatBotInfo,
-  useMyPreferences,
-  useSetMyPreferences,
   useChatBotName,
   useChatConfig,
   useChatMessages,
   useChatRoles,
-  useArchivedRooms,
   useChatRooms,
   useChatSearch,
   useCreateChannel,
@@ -76,16 +100,30 @@ import {
   useEditMessage,
   useEntityRoomLink,
   useMarkRoomRead,
+  useMyPreferences,
   useOpenRoomRegistration,
+  useOutbox,
   usePeerReadAt,
   useRoomMembership,
   useRoomPins,
   useSendChatMessage,
+  useSetMyPreferences,
   useTogglePin,
   useToggleReaction,
   useTypingIndicator,
   useUserSearch
 } from './chat-core'
+import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
+import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
+import {
+  ChannelIntro,
+  JumpToDate,
+  MemberCountLine,
+  OutboxBubbles,
+  RoomInfoDrawer,
+  ThreadPane,
+  WelcomeNote
+} from './RoomParts'
 
 /**
  * Nivaro chat UI — a complete team panel (Online tab, grouped rooms, live
@@ -220,6 +258,9 @@ interface PersonInfo {
   last_seen: string | null
   timezone: string | null
   away: boolean
+  out_of_office?: boolean
+  ooo_end?: string | null
+  delegate?: { id: string; name: string } | null
 }
 
 // Every badge and header that needs last seen in one render asks together:
@@ -291,45 +332,87 @@ function lastSeenText(info: PersonInfo | null): string | null {
  * "appear away", and decides who this viewer may see); the host's online list
  * only stands in until that query has answered.
  */
-function usePresenceOf(id: string): { state: PresenceState; title: string } {
+function usePresenceOf(id: string): { state: PresenceState; title: string; page: string | null } {
   const cfg = useContext(ChatConfigContext)
   const extras = usePresenceExtras()
   const uid = String(id).toUpperCase()
   if (extras.loaded) {
     const px = extras.byUser.get(uid)
-    if (!px) return { state: 'offline', title: 'Offline' }
-    if (px.away) return { state: 'away', title: 'Away' }
+    if (!px) return { state: 'offline', title: 'Offline', page: null }
+    // Where they are right now (#974) — only for people you may see online.
+    const page = px.page ?? prettyPath(px.current_path)
+    if (px.away) return { state: 'away', title: 'Away', page: null }
     return px.is_idle
-      ? { state: 'idle', title: idleLabel(px) }
-      : { state: 'online', title: 'Online' }
+      ? { state: 'idle', title: idleLabel(px), page }
+      : { state: 'online', title: 'Online', page }
   }
   const u = cfg?.onlineUsers.find((o) => String(o.user_id).toUpperCase() === uid)
-  if (!u) return { state: 'offline', title: 'Offline' }
-  return u.is_idle ? { state: 'idle', title: idleLabel(u) } : { state: 'online', title: 'Online' }
+  if (!u) return { state: 'offline', title: 'Offline', page: null }
+  return u.is_idle
+    ? { state: 'idle', title: idleLabel(u), page: null }
+    : { state: 'online', title: 'Online', page: null }
+}
+
+/** "Out of office until Fri, Oct 3" (#973). */
+function oooText(info: PersonInfo | null): string | null {
+  if (!info?.out_of_office) return null
+  if (!info.ooo_end) return 'Out of office'
+  const d = new Date(info.ooo_end)
+  return `Out of office until ${d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: getDisplayTimezone() ?? undefined
+  })}`
 }
 
 /** Online = solid green; idle and away = hollow amber (a weaker state, so it
  *  reads weaker than online rather than competing with it); offline = grey,
  *  with when they were last seen on hover. */
 function PresenceBadge({ id, size }: { id: string; size: number }) {
-  const { state, title } = usePresenceOf(id)
-  const info = usePersonInfo(id, state === 'offline')
+  const { state, title, page } = usePresenceOf(id)
+  const info = usePersonInfo(id)
   const seen = state === 'offline' ? lastSeenText(info) : null
+  const ooo = oooText(info)
   const dot = size >= 30 ? 10 : 8
+  const tip = [
+    seen ? `Offline · ${seen}` : title,
+    page && state !== 'offline' ? `On ${page}` : null,
+    ooo,
+    ooo && info?.delegate ? `${info.delegate.name} is covering` : null
+  ]
+    .filter(Boolean)
+    .join(' · ')
   return (
-    <span
-      className={cn(
-        'absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-white dark:border-card',
-        state === 'online'
-          ? 'bg-emerald-400'
-          : state === 'idle' || state === 'away'
-            ? 'border-amber-400 bg-white dark:border-amber-400 dark:bg-card'
-            : 'bg-slate-300 dark:bg-slate-600'
+    <>
+      <span
+        className={cn(
+          'absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-white dark:border-card',
+          state === 'online'
+            ? 'bg-emerald-400'
+            : state === 'idle' || state === 'away'
+              ? 'border-amber-400 bg-white dark:border-amber-400 dark:bg-card'
+              : 'bg-slate-300 dark:bg-slate-600'
+        )}
+        style={{ width: dot, height: dot }}
+        data-tip={tip}
+        title={tip}
+        data-chat-presence={state}
+      />
+      {ooo && (
+        // Out of office is its own mark, top-right, so it reads beside any of
+        // the four presence states rather than replacing one.
+        <span
+          className='absolute -right-1 -top-1 flex items-center justify-center rounded-full border-2 border-white bg-violet-600 text-white dark:border-card'
+          style={{ width: dot + 2, height: dot + 2 }}
+          data-chat-ooo
+          title={tip}
+          aria-label={ooo}
+        >
+          <Plane style={{ width: dot - 3, height: dot - 3 }} strokeWidth={2.5} />
+        </span>
       )}
-      style={{ width: dot, height: dot }}
-      title={seen ? `Offline · ${seen}` : title}
-      data-chat-presence={state}
-    />
+    </>
   )
 }
 
@@ -715,9 +798,17 @@ function EntityRoomCard({ room }: { room: string }) {
     staleTime: 60_000
   })
 
+  const facts = useRoomRecord(room, isEntity && !!card)
   if (!isEntity || !card) return null
   const build = cfg.recordUrl ?? ((c: string, id: string | number) => `/collections/${c}/${id}`)
   const href = build(card.collection, card.id)
+  const sla = facts?.sla ?? null
+  const slaTone =
+    sla?.status === 'breached'
+      ? 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+      : sla?.status === 'warning'
+        ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
+        : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'
   return (
     <div
       className={cn('flex shrink-0 items-center gap-2 border-b px-3 py-1.5', th.divider)}
@@ -740,11 +831,48 @@ function EntityRoomCard({ room }: { room: string }) {
           {card.state}
         </span>
       )}
+      {sla && (
+        <span
+          className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-semibold', slaTone)}
+          title={
+            sla.due_hours != null
+              ? `${Math.round(sla.elapsed_hours ?? 0)}h in this state of ${sla.due_hours}h allowed`
+              : undefined
+          }
+          data-chat-room-sla={sla.status}
+        >
+          {sla.status === 'breached'
+            ? 'Past SLA'
+            : sla.status === 'warning'
+              ? 'SLA soon'
+              : 'On time'}
+        </span>
+      )}
+      {facts && facts.owners.length > 0 && (
+        <span
+          className='ml-auto flex -space-x-1.5'
+          title={`Owners: ${facts.owners.map((o) => o.name).join(', ')}`}
+          data-chat-room-owners={facts.owners.length}
+        >
+          {facts.owners.slice(0, 4).map((o) => (
+            <Avatar key={o.id} id={o.id} name={o.name} size={18} presence={false} />
+          ))}
+          {facts.owners.length > 4 && (
+            <span className='flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-slate-200 px-1 text-[9px] font-semibold text-slate-600 dark:bg-muted dark:text-slate-300'>
+              +{facts.owners.length - 4}
+            </span>
+          )}
+        </span>
+      )}
       {href && (
         <button
           type='button'
           onClick={() => cfg.navigate?.(href)}
-          className={cn('ml-auto text-[11px] font-medium hover:underline', th.accentText)}
+          className={cn(
+            'text-[11px] font-medium hover:underline',
+            facts?.owners.length ? 'ml-1.5' : 'ml-auto',
+            th.accentText
+          )}
         >
           Open
         </button>
@@ -801,11 +929,34 @@ function DmPeerLine({ peerId, name }: { peerId: string; name: string }) {
           })()
         : title
   const local = localTimeFor(info?.timezone ?? null, name)
+  const ooo = oooText(info)
+  const delegate = ooo ? (info?.delegate ?? null) : null
   return (
     <p
       className='flex min-w-0 items-center gap-1.5 truncate text-[11px] text-slate-500 dark:text-slate-400'
       data-chat-dm-peer-line={state}
     >
+      {ooo && (
+        <>
+          <span
+            className='shrink-0 font-medium text-violet-700 dark:text-violet-300'
+            data-chat-dm-ooo
+          >
+            {ooo}
+          </span>
+          {delegate && canOpenDm() && (
+            <button
+              type='button'
+              onClick={() => openDmWith(delegate.id, delegate.name)}
+              className='shrink-0 font-medium text-slate-700 underline decoration-dotted underline-offset-2 hover:text-slate-900 dark:text-slate-200 dark:hover:text-white'
+              data-chat-dm-delegate={delegate.id}
+            >
+              Message {delegate.name} instead
+            </button>
+          )}
+          <span aria-hidden>·</span>
+        </>
+      )}
       <span className='truncate'>{status}</span>
       {local && (
         <>
@@ -825,7 +976,8 @@ export function ChatRoomView({
   onBack,
   onOpenSettings,
   renderMessageBody,
-  initialUnread
+  initialUnread,
+  anchor: anchorProp = null
 }: {
   room: string
   label: string
@@ -835,15 +987,22 @@ export function ChatRoomView({
   renderMessageBody?: (m: ChatMessage, ctx: { mine: boolean }) => React.ReactNode
   /** Unread count at open — anchors the "New messages" divider. */
   initialUnread?: number
+  /** Open around a message (a search hit, #977) or a day (#976). */
+  anchor?: ChatAnchor
 }) {
   const cfg = useChatConfig()
   const th = useTheme()
   const client = useNivaroClient()
   const me = cfg.me
-  const { messages, loading } = useChatMessages(room)
+  const [anchor, setAnchor] = useState<ChatAnchor>(anchorProp)
+  useEffect(() => setAnchor(anchorProp), [anchorProp])
+  const { messages, loading, hasOlder, hasNewer, loadOlder, loadingOlder } = useChatMessages(
+    room,
+    anchor
+  )
   // While this room is on screen its messages need no toast or sound.
   useOpenRoomRegistration(room)
-  const send = useSendChatMessage(room)
+  const outbox = useOutbox(room)
   const markRead = useMarkRoomRead()
   const typing = useTypingIndicator(room)
   const peerReadAt = usePeerReadAt(room.startsWith('dm:') ? room : null)
@@ -852,6 +1011,13 @@ export function ChatRoomView({
   const toggleReaction = useToggleReaction(room)
   const pins = useRoomPins(room)
   const togglePin = useTogglePin(room)
+  const isEntityRoom =
+    !room.startsWith('dm:') &&
+    !room.startsWith('ch:') &&
+    room !== cfg.globalRoom &&
+    room.includes(':')
+  const roomRecord = useRoomRecord(room, isEntityRoom)
+  const fileTargets = useRecordFileTargets(room, !!roomRecord)
   // Seen-by (#147): members' read watermarks — "Seen by N" under your own
   // messages in group rooms (channels/group DMs; 1:1 DMs keep the check).
   const isGroupRoom = room.startsWith('ch:')
@@ -876,6 +1042,7 @@ export function ChatRoomView({
         mk.user !== String(msg.sender ?? '') &&
         new Date(mk.last_read_at).getTime() >= new Date(msg.date_created).getTime()
     )
+  const qcRoom = useQueryClient()
   // Saved messages (#148): personal cross-room bookmarks.
   const { data: savedRows = [] } = useQuery<Array<{ id: number }>>({
     queryKey: ['chat-saved'],
@@ -904,13 +1071,6 @@ export function ChatRoomView({
     onSuccess: (d) => setCatchup(d?.summary ?? 'Not enough new messages to summarize.'),
     onError: () => setCatchup('Summary unavailable.')
   })
-  // Entity-room record — powers "make task from message". Reads the room
-  // card's cached resolution (same query key), so no extra fetch.
-  const qcRoom = useQueryClient()
-  const roomRecord = qcRoom.getQueryData<{ collection: string; id: string | number } | null>([
-    'nvr-chat-room-card',
-    room
-  ])
   const makeTask = useMutation({
     mutationFn: async (m: ChatMessage) => {
       if (!roomRecord || !me) throw new Error('no record')
@@ -926,12 +1086,41 @@ export function ChatRoomView({
     onSuccess: () => toast.success('Task created from message — assigned to you'),
     onError: () => toast.error('Could not create a task')
   })
-  const [pinsOpen, setPinsOpen] = useState(false)
+  // Send a message to the record's Notes (#946), attach a file to it (#949).
+  const toNotes = useMutation({
+    mutationFn: (m: ChatMessage) => client.request(post(`/chat/messages/${m.id}/to-notes`, {})),
+    onSuccess: () => toast.success(`Copied to the Notes of ${roomRecord?.label ?? 'the record'}`),
+    onError: (e) =>
+      toast.error((e as { response?: { error?: string } })?.response?.error ?? 'Could not copy it')
+  })
+  const attachToRecord = useMutation({
+    mutationFn: (v: { messageId: number; fileId: string; field: string }) =>
+      client.request(
+        post(`/chat/messages/${v.messageId}/attach-to-record`, {
+          file_id: v.fileId,
+          field: v.field
+        })
+      ),
+    onSuccess: (_d, v) =>
+      toast.success(
+        `Attached to ${roomRecord?.label ?? 'the record'} — ${fileTargets.find((t) => t.field === v.field)?.label ?? v.field}`
+      ),
+    onError: (e) =>
+      toast.error(
+        (e as { response?: { error?: string } })?.response?.error ?? 'Could not attach it'
+      )
+  })
+  const dismissPreview = useMutation({
+    mutationFn: (id: number) =>
+      client.request(patchCmd(`/chat/messages/${id}`, { no_preview: true })),
+    onSuccess: () => void qcRoom.invalidateQueries({ queryKey: ['nvr-chat', room] })
+  })
   const editMessage = useEditMessage(room)
   const deleteMessage = useDeleteMessage(room)
   // Admins may delete anyone's message (server enforces the same rule).
   const { isAdmin } = useItemEditAuth()
-  const { setMuted, setNotifyMode, setArchived, leave } = useRoomMembership()
+  const { setMuted, setNotifyMode, setArchived, setStarred, dismissWelcome, leave } =
+    useRoomMembership()
   const { rooms: allRooms, loading: roomsLoading } = useChatRooms()
   const activeInfo = allRooms.find((r) => r.room === room) ?? null
   // An archived room is not in the main list — look it up in the archive so
@@ -940,27 +1129,26 @@ export function ChatRoomView({
   const roomInfo = activeInfo ?? archivedRooms.find((r) => r.room === room) ?? null
   const archivable = canArchive(roomInfo)
   const botName = useChatBotName()
-  const [draft, setDraft] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const [msgSearch, setMsgSearch] = useState('')
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null)
-  const [mentionIndex, setMentionIndex] = useState(0)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
-  const [pendingFiles, setPendingFiles] = useState<
-    Array<{ id: string; name: string; type: string | null }>
-  >([])
-  const [uploadingFiles, setUploadingFiles] = useState(0)
   const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [notifyMenuOpen, setNotifyMenuOpen] = useState(false)
+  const [threadRoot, setThreadRoot] = useState<number | null>(null)
+  const [quote, setQuote] = useState<ChatMessage | null>(null)
+  const [threadQuote, setThreadQuote] = useState<ChatMessage | null>(null)
+  const [infoOpen, setInfoOpen] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [unseen, setUnseen] = useState<{ count: number; firstId: number } | null>(null)
+  const [flashId, setFlashId] = useState<number | null>(
+    anchorProp && 'around' in anchorProp ? anchorProp.around : null
+  )
   /** Set when MY message mentioned the bot — "…is thinking" until its reply
-   *  arrives (or a timeout says it won't). The asker is the one staring at a
-   *  silent room; everyone else just sees the reply land. */
+   *  arrives (or a timeout says it won't). */
   const [botAskedAt, setBotAskedAt] = useState<number | null>(null)
-  const mentionMapRef = useRef(new Map<string, ChatOnlineUser>())
-  const inputRef = useRef<HTMLInputElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const composerRef = useRef<ComposerHandle>(null)
   const dividerRef = useRef<HTMLDivElement>(null)
   // Frozen at mount — markRead fires immediately, so the live rooms query
   // can't be the divider's source of truth.
@@ -972,35 +1160,89 @@ export function ChatRoomView({
   // room opens (record chips resolving their state, "Seen by", images) keeps
   // the view on the newest message only while this holds — someone reading
   // history is never pulled down.
-  const pinnedRef = useRef(true)
+  const pinnedRef = useRef(!anchorProp)
+  const prevCountRef = useRef(0)
+  const prevFirstRef = useRef<number | null>(null)
+  const prevHeightRef = useRef(0)
   // Scroll the CONTAINER to its end: scrollIntoView on a marker aligns the
   // marker and leaves the container's bottom padding below the fold.
   const toBottom = () => {
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
   }
-
+  const scrollToMessage = (id: number): boolean => {
+    const el = scrollerRef.current?.querySelector<HTMLElement>(`[data-chat-msg="${id}"]`)
+    if (!el) return false
+    el.scrollIntoView({ block: 'center' })
+    pinnedRef.current = false
+    setFlashId(id)
+    return true
+  }
+  /** Show a message: in view if loaded, else reload the history around it. */
+  const openMessage = (id: number) => {
+    setInfoOpen(false)
+    if (!scrollToMessage(id)) {
+      firstScrollRef.current = false
+      pinnedRef.current = false
+      setFlashId(id)
+      setAnchor({ around: id })
+    }
+  }
   useEffect(() => {
+    if (flashId == null) return
+    const t = setTimeout(() => setFlashId(null), 2400)
+    return () => clearTimeout(t)
+  }, [flashId])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset per room/anchor
+  useEffect(() => {
+    firstScrollRef.current = false
+    prevCountRef.current = 0
+    setUnseen(null)
+  }, [room, anchor])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs per message change
+  useEffect(() => {
+    const el = scrollerRef.current
+    const first = messages[0]?.id ?? null
     if (!firstScrollRef.current && messages.length > 0) {
       firstScrollRef.current = true
+      prevCountRef.current = messages.length
+      prevFirstRef.current = first
+      if (flashId != null && scrollToMessage(flashId)) return
       // Land the reader AT the "New messages" line, not past it.
-      if (dividerRef.current) {
+      if (dividerRef.current && !anchor) {
         dividerRef.current.scrollIntoView({ block: 'center' })
         pinnedRef.current = false
-      } else {
+      } else if (!anchor) {
         toBottom()
         pinnedRef.current = true
       }
       return
     }
+    // Older history loaded above: keep the reader where they were.
+    if (first !== prevFirstRef.current && prevFirstRef.current != null && el) {
+      el.scrollTop += el.scrollHeight - prevHeightRef.current
+      prevFirstRef.current = first
+      prevCountRef.current = messages.length
+      return
+    }
+    prevFirstRef.current = first
+    const added = messages.length - prevCountRef.current
+    prevCountRef.current = messages.length
+    if (added <= 0) return
     const last = messages[messages.length - 1]
     const mine = !!last?.sender && last.sender.toLowerCase() === me?.id?.toLowerCase()
     if (pinnedRef.current || mine) {
       toBottom()
       pinnedRef.current = true
+      setUnseen(null)
+    } else {
+      // Reading history: count what arrived instead of pulling them down (#942).
+      const firstNew = messages[messages.length - added]
+      setUnseen((u) => ({ count: (u?.count ?? 0) + added, firstId: u?.firstId ?? firstNew.id }))
     }
-    // biome-ignore lint/correctness/useExhaustiveDependencies: runs per new message
-  }, [messages.length])
+  }, [messages])
 
   // Keep the newest message in view while the content settles.
   useEffect(() => {
@@ -1008,10 +1250,24 @@ export function ChatRoomView({
     if (!content || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
       if (pinnedRef.current) toBottom()
+      prevHeightRef.current = scrollerRef.current?.scrollHeight ?? 0
     })
     ro.observe(content)
     return () => ro.disconnect()
   }, [])
+
+  // Delivery timing sample for chat health (#989): one in five messages that
+  // arrive while the room is open report how late they reached this browser.
+  useEffect(() => {
+    const last = messages[messages.length - 1]
+    if (!last || !firstScrollRef.current || last.sender?.toLowerCase() === me?.id?.toLowerCase())
+      return
+    const lag = Date.now() - new Date(last.date_created).getTime()
+    if (lag > 0 && lag < 5 * 60_000 && Math.random() < 0.2) {
+      void client.request(post('/chat/health/delivery', { ms: lag })).catch(() => {})
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: per newest message
+  }, [messages[messages.length - 1]?.id])
 
   // Bot "thinking" clears when a message FROM the bot lands after the ask,
   // or after 90s (model down, no key — the failure reply also clears it).
@@ -1068,107 +1324,17 @@ export function ChatRoomView({
     staleTime: 5 * 60_000
   })
 
-  const uploadFiles = async (files: File[]) => {
-    if (files.length === 0) return
-    setUploadingFiles((n) => n + files.length)
-    for (const f of files) {
-      try {
-        const result = await client.upload(f)
-        setPendingFiles((prev) => [...prev, { id: result.id, name: f.name, type: f.type || null }])
-      } catch {
-        /* one failed upload shouldn't kill the rest */
-      } finally {
-        setUploadingFiles((n) => n - 1)
-      }
-    }
-  }
   useEffect(() => {
-    markRead.mutate(room)
+    if (!anchor) markRead.mutate(room)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room, messages.length])
+  }, [room, messages.length, anchor])
 
-  const mentionCandidates = useMemo(() => {
-    if (mentionQuery === null) return []
-    const q = mentionQuery.toLowerCase()
-    const people = cfg.onlineUsers
-      .filter((u) => (u.display_name ?? '').toLowerCase().startsWith(q))
-      .slice(0, 6)
-    // The AI assistant answers in-room — offered alongside people when its
-    // configured name matches what's being typed.
-    if (botName && botName.toLowerCase().startsWith(q)) {
-      return [{ user_id: '__bot__', display_name: botName } as ChatOnlineUser, ...people].slice(
-        0,
-        6
-      )
-    }
-    return people
-  }, [mentionQuery, cfg.onlineUsers, botName])
-
-  const selectMention = (u: ChatOnlineUser) => {
-    const name = u.display_name ?? 'Unknown'
-    const suffix = `@[${name}] `
-    const at = draft.lastIndexOf(`@${mentionQuery ?? ''}`)
-    setDraft(at !== -1 ? draft.slice(0, at) + suffix : draft + suffix)
-    mentionMapRef.current.set(name, u)
-    setMentionQuery(null)
-    inputRef.current?.focus()
-  }
-
-  const submit = () => {
-    const text = draft.trim()
-    if (!text && pendingFiles.length === 0) return
-    const attachments = pendingFiles.map((f) => f.id)
-    setDraft('')
-    setPendingFiles([])
-    setMentionQuery(null)
-    typing.clearTyping()
-    // Mentions ride the send call: the server notifies only people who can
-    // actually see the room and aren't muted, which the old client-side
-    // /notifications blast could not check. The bot pseudo-entry is excluded —
-    // the server detects the bot by name in the text.
-    const mentioned = me
-      ? [...mentionMapRef.current.entries()]
-          .filter(([name]) => text.includes(`@[${name}]`))
-          .map(([, u]) => u.user_id)
-          .filter((id) => id !== '__bot__')
-      : []
-    send.mutate({ text, mentions: mentioned, attachments })
-    mentionMapRef.current.clear()
+  const onSent = (text: string) => {
+    pinnedRef.current = true
+    if (anchor) setAnchor(null)
     if (botName) {
       const esc = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       if (new RegExp(`@\\[?${esc}\\]?\\b`, 'i').test(text)) setBotAskedAt(Date.now())
-    }
-  }
-
-  const onDraftChange = (value: string, cursor: number) => {
-    setDraft(value)
-    typing.onType()
-    const q = getMentionQuery(value, cursor)
-    setMentionQuery(q)
-    if (q !== null) setMentionIndex(0)
-  }
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (mentionQuery !== null && mentionCandidates.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setMentionIndex((i) => (i + 1) % mentionCandidates.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setMentionIndex((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length)
-        return
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault()
-        selectMention(mentionCandidates[mentionIndex])
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setMentionQuery(null)
-      }
     }
   }
 
@@ -1189,10 +1355,551 @@ export function ChatRoomView({
     return -1
   }, [visibleMessages, myId, searching])
   const readTime = peerReadAt ? new Date(peerReadAt).getTime() : 0
+  const density = useMyPreferences().chat_density === 'compact' ? 'compact' : 'comfortable'
+  const channel = roomInfo?.channel ?? null
+  const ownsChannel =
+    !!channel && !!me && String(channel.created_by ?? '').toUpperCase() === me.id.toUpperCase()
+  const announceClosed =
+    channel?.announce && !ownsChannel && !isAdmin
+      ? 'Only the channel owner and admins post here. Hover a message and reply in its thread.'
+      : null
+  const showWelcome =
+    !!channel?.welcome_note &&
+    !!roomInfo?.joined &&
+    !roomInfo?.welcome_seen_at &&
+    !channel.is_direct
+
+  const renderToken: TokenRenderer = (p, key) => {
+    if (p.entity) return <EntityChip key={key} token={p.text} url={cfg.entityUrl(p.entity)} />
+    if (p.mention)
+      return (
+        <span key={key} className={cn('rounded px-0.5 font-semibold', th.accentSoft)}>
+          {p.text}
+        </span>
+      )
+    return <span key={key}>{p.text}</span>
+  }
+  const renderTokenMine: TokenRenderer = (p, key) => {
+    if (p.entity) return <EntityChip key={key} token={p.text} url={cfg.entityUrl(p.entity)} mine />
+    if (p.mention)
+      return (
+        <span key={key} className='rounded bg-black/15 px-0.5 font-semibold'>
+          {p.text}
+        </span>
+      )
+    return <span key={key}>{p.text}</span>
+  }
+
+  /** One message, used by the timeline and the thread pane alike. */
+  const renderRow = (
+    m: ChatMessage,
+    opts: {
+      inThread?: boolean
+      isLastMine?: boolean
+      showSender?: boolean
+    } = {}
+  ) => {
+    const mine = m.sender?.toLowerCase() === myId
+    if (m.is_system) {
+      return (
+        <div
+          className='flex justify-center px-4 py-0.5 text-center text-[11px] leading-snug text-slate-500 dark:text-slate-400'
+          data-chat-msg={m.id}
+          data-chat-system
+        >
+          <span>
+            {m.message}
+            <span className='ml-1.5 text-[10px] text-slate-400'>
+              {new Date(m.date_created).toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit'
+              })}
+            </span>
+          </span>
+        </div>
+      )
+    }
+    const wasRead =
+      opts.isLastMine && readTime > 0 && new Date(m.date_created).getTime() <= readTime
+    const deleted = !!m.deleted_at
+    const editable =
+      mine && !deleted && Date.now() - new Date(m.date_created).getTime() < 15 * 60_000
+    const deletable = !deleted && (mine || isAdmin)
+    const isEditing = editingId === m.id
+    const reactionGroups = new Map<string, { count: number; mine: boolean; names: string[] }>()
+    for (const r of m.reactions ?? []) {
+      const g = reactionGroups.get(r.emoji) ?? { count: 0, mine: false, names: [] }
+      g.count++
+      if (r.user?.toLowerCase() === myId) g.mine = true
+      if (r.user_name) g.names.push(r.user_name)
+      reactionGroups.set(r.emoji, g)
+    }
+    const toolBtn =
+      'rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+    return (
+      <div
+        className={cn(
+          'group/msg flex gap-2 rounded-lg transition-colors',
+          mine && 'flex-row-reverse',
+          flashId === m.id && 'bg-[#00ceff1f]'
+        )}
+        data-chat-msg={m.id}
+      >
+        {!mine && (
+          <UserChip userId={m.sender}>
+            <button
+              type='button'
+              className='h-fit shrink-0 rounded-full'
+              aria-label={`${m.sender_name ?? 'Sender'} — profile`}
+              data-chat-avatar-card
+            >
+              <Avatar id={m.sender} name={m.sender_name} size={density === 'compact' ? 22 : 26} />
+            </button>
+          </UserChip>
+        )}
+        <div className={cn('relative max-w-[78%]', mine && 'text-right')}>
+          {!mine && opts.showSender !== false && (
+            <p className='mb-0.5 text-[10.5px] font-medium text-slate-500 dark:text-slate-400'>
+              {m.sender_name ?? 'Unknown'}
+              {m.masquerade_admin_name && (
+                <span
+                  className='ml-1 font-normal text-violet-600 dark:text-violet-300'
+                  title={`Sent by ${m.masquerade_admin_name} while masquerading as ${m.sender_name ?? 'this person'}`}
+                  data-chat-message-masquerade
+                >
+                  · via {m.masquerade_admin_name}
+                </span>
+              )}
+            </p>
+          )}
+          {!deleted && !isEditing && (
+            <div
+              className={cn(
+                'absolute -top-3 z-10 hidden items-center gap-0.5 rounded-full border px-1 py-0.5 shadow-sm group-hover/msg:flex',
+                th.surface,
+                'border-slate-200 dark:border-border',
+                mine ? 'right-0' : 'left-0'
+              )}
+              data-chat-msg-actions
+            >
+              {REACTION_EMOJI.map((e) => (
+                <button
+                  key={e}
+                  type='button'
+                  onClick={() => toggleReaction.mutate({ messageId: m.id, emoji: e })}
+                  className='rounded-full px-0.5 text-[13px] leading-none transition-transform hover:scale-125'
+                  title={`React ${e}`}
+                >
+                  {e}
+                </button>
+              ))}
+              {!opts.inThread && !m.parent_id && (
+                <button
+                  type='button'
+                  title='Reply in thread'
+                  onClick={() => {
+                    setInfoOpen(false)
+                    setThreadRoot(m.id)
+                  }}
+                  className={toolBtn}
+                  data-chat-reply-thread
+                >
+                  <MessageSquareReply className='h-3 w-3' />
+                </button>
+              )}
+              <button
+                type='button'
+                title='Quote'
+                onClick={() => (opts.inThread ? setThreadQuote(m) : setQuote(m))}
+                className={toolBtn}
+                data-chat-quote
+              >
+                <Quote className='h-3 w-3' />
+              </button>
+              {roomRecord && (
+                <>
+                  <button
+                    type='button'
+                    title='Make a task from this message'
+                    onClick={() => makeTask.mutate(m)}
+                    className={toolBtn}
+                  >
+                    <ClipboardPlus className='h-3 w-3' />
+                  </button>
+                  {m.message && (
+                    <button
+                      type='button'
+                      title={`Copy into the Notes of ${roomRecord.label}`}
+                      onClick={() => toNotes.mutate(m)}
+                      className={toolBtn}
+                      data-chat-to-notes
+                    >
+                      <NotebookPen className='h-3 w-3' />
+                    </button>
+                  )}
+                </>
+              )}
+              <button
+                type='button'
+                title={pins.some((p) => p.id === m.id) ? 'Unpin' : 'Pin'}
+                onClick={() => togglePin.mutate(m.id)}
+                className={cn(
+                  'rounded-full p-0.5',
+                  pins.some((p) => p.id === m.id)
+                    ? th.accentText
+                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                )}
+              >
+                <Pin className='h-3 w-3' />
+              </button>
+              <button
+                type='button'
+                title={
+                  savedIds.has(m.id) ? 'Remove from saved' : 'Save for later (personal bookmark)'
+                }
+                onClick={() => toggleSave.mutate(m.id)}
+                className={cn(
+                  'rounded-full p-0.5',
+                  savedIds.has(m.id)
+                    ? th.accentText
+                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                )}
+              >
+                <Bookmark className='h-3 w-3' />
+              </button>
+              {editable && (
+                <button
+                  type='button'
+                  title='Edit'
+                  onClick={() => {
+                    setEditingId(m.id)
+                    setEditDraft(m.message)
+                    setConfirmDeleteId(null)
+                  }}
+                  className={toolBtn}
+                >
+                  <Pencil className='h-3 w-3' />
+                </button>
+              )}
+              {deletable &&
+                (confirmDeleteId === m.id ? (
+                  <button
+                    type='button'
+                    title='Confirm delete'
+                    onClick={() => {
+                      deleteMessage.mutate(m.id)
+                      setConfirmDeleteId(null)
+                    }}
+                    className='rounded-full px-1 text-[10px] font-semibold text-red-500'
+                  >
+                    Sure?
+                  </button>
+                ) : (
+                  <button
+                    type='button'
+                    title={mine ? 'Delete' : 'Delete (admin)'}
+                    onClick={() => setConfirmDeleteId(m.id)}
+                    className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
+                  >
+                    <Trash2 className='h-3 w-3' />
+                  </button>
+                ))}
+            </div>
+          )}
+          {m.urgent && !deleted && (
+            <p
+              className={cn(
+                'mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold text-red-600 dark:text-red-400',
+                mine && 'justify-end'
+              )}
+              data-chat-urgent
+            >
+              <AlertTriangle className='h-3 w-3' /> Urgent
+            </p>
+          )}
+          {deleted ? (
+            <div className='inline-block rounded-2xl border border-dashed border-slate-200 px-3 py-1.5 text-left text-[11.5px] italic text-slate-500 dark:border-border'>
+              Message removed
+            </div>
+          ) : isEditing ? (
+            <form
+              className='flex items-center gap-1'
+              onSubmit={(e) => {
+                e.preventDefault()
+                const text = editDraft.trim()
+                if (text && text !== m.message) {
+                  editMessage.mutate({ messageId: m.id, text })
+                }
+                setEditingId(null)
+              }}
+            >
+              <input
+                autoFocus
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setEditingId(null)
+                }}
+                className={cn(
+                  'h-8 w-[240px] rounded-lg border px-2 text-[12px] outline-none',
+                  th.input
+                )}
+                aria-label='Edit message'
+              />
+              <button
+                type='submit'
+                className={cn('rounded-md px-1.5 py-1 text-[11px] font-medium', th.accentText)}
+              >
+                Save
+              </button>
+            </form>
+          ) : (
+            <div
+              className={cn(
+                'inline-block max-w-full rounded-2xl text-left leading-snug',
+                density === 'compact' ? 'px-2.5 py-1 text-[12px]' : 'px-3 py-1.5 text-[12.5px]',
+                mine ? cn('rounded-br-md', th.bubbleMine) : cn('rounded-bl-md', th.bubbleOther),
+                m.urgent && 'ring-2 ring-red-400/70'
+              )}
+            >
+              {m.quote && (
+                <button
+                  type='button'
+                  onClick={() => openMessage(m.quote!.id)}
+                  className={cn(
+                    'mb-1 block w-full rounded-md border-l-2 px-2 py-1 text-left text-[11px]',
+                    mine
+                      ? 'border-white/60 bg-black/10'
+                      : 'border-slate-400 bg-white/70 dark:border-slate-500 dark:bg-black/20'
+                  )}
+                  data-chat-quote-block
+                >
+                  <span className='block font-semibold'>{m.quote.sender_name ?? 'Someone'}</span>
+                  <span className='line-clamp-2 opacity-90'>
+                    {m.quote.deleted
+                      ? 'Message removed'
+                      : m.quote.message || (m.quote.has_attachments ? 'Attachment' : '')}
+                  </span>
+                </button>
+              )}
+              {m.message &&
+                (renderMessageBody ? (
+                  renderMessageBody(m, { mine })
+                ) : (
+                  <FormattedMessage
+                    text={m.message}
+                    mine={mine}
+                    renderToken={mine ? renderTokenMine : renderToken}
+                    entityPattern={cfg.entityPattern}
+                    timeRefs={m.time_refs}
+                    navigate={cfg.navigate}
+                  />
+                ))}
+              {(m.attachments ?? []).length > 0 && (
+                <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
+                  {(m.attachments ?? []).map((aid) => {
+                    const meta = attachmentMeta?.get(aid)
+                    const name = meta?.title || meta?.filename_download || 'Attachment'
+                    const url = client.fileUrl(aid)
+                    const isImg = (meta?.type ?? '').startsWith('image/')
+                    const openPreview = () =>
+                      setPreview({
+                        id: aid,
+                        url,
+                        name,
+                        type: meta?.type ?? null,
+                        size: meta?.filesize ?? null
+                      })
+                    const attach =
+                      roomRecord && fileTargets.length > 0 ? (
+                        <AttachToRecordButton
+                          targets={fileTargets}
+                          recordLabel={roomRecord.label}
+                          onPick={(field) =>
+                            attachToRecord.mutate({ messageId: m.id, fileId: aid, field })
+                          }
+                        />
+                      ) : null
+                    return isImg ? (
+                      <span key={aid} className='relative inline-block'>
+                        <button
+                          type='button'
+                          onClick={openPreview}
+                          className='block cursor-zoom-in'
+                        >
+                          <img
+                            src={url}
+                            alt={name}
+                            className='max-h-40 max-w-[220px] rounded-lg object-cover'
+                            loading='lazy'
+                          />
+                        </button>
+                        {attach && <span className='absolute right-1 top-1'>{attach}</span>}
+                      </span>
+                    ) : (
+                      <span key={aid} className='inline-flex items-center gap-1'>
+                        <button
+                          type='button'
+                          onClick={openPreview}
+                          className={cn(
+                            'inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px]',
+                            mine
+                              ? 'border-white/30 bg-white/10'
+                              : 'border-slate-200 bg-white dark:border-border dark:bg-card'
+                          )}
+                        >
+                          <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
+                          <span className='truncate'>{name}</span>
+                        </button>
+                        {attach}
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {!deleted && !isEditing && m.message && !m.no_preview && (
+            <div className={cn(mine && 'flex justify-end')}>
+              <LinkPreviews
+                text={m.message}
+                navigate={cfg.navigate}
+                onDismiss={mine ? () => dismissPreview.mutate(m.id) : undefined}
+              />
+            </div>
+          )}
+          {reactionGroups.size > 0 && (
+            <div
+              className={cn('mt-0.5 flex flex-wrap gap-1', mine && 'justify-end')}
+              data-chat-reactions
+            >
+              {[...reactionGroups.entries()].map(([emoji, g]) => (
+                <button
+                  key={emoji}
+                  type='button'
+                  title={g.names.join(', ')}
+                  onClick={() => toggleReaction.mutate({ messageId: m.id, emoji })}
+                  className={cn(
+                    'inline-flex items-center gap-0.5 rounded-full border px-1.5 py-px text-[10.5px] leading-tight transition-colors',
+                    g.mine
+                      ? cn('font-semibold', th.accentSoft, 'border-transparent')
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
+                  )}
+                >
+                  <span>{emoji}</span>
+                  <span className='tabular-nums'>{g.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {!opts.inThread && m.thread && m.thread.count > 0 && (
+            <button
+              type='button'
+              onClick={() => setThreadRoot(m.id)}
+              className={cn(
+                'mt-1 flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium hover:bg-slate-100 dark:hover:bg-muted',
+                th.accentText,
+                mine && 'ml-auto'
+              )}
+              data-chat-thread-summary={m.thread.count}
+            >
+              <span className='flex -space-x-1.5'>
+                {m.thread.people.slice(0, 3).map((p) => (
+                  <Avatar key={p.id} id={p.id} name={p.name} size={16} presence={false} />
+                ))}
+              </span>
+              {m.thread.count} {m.thread.count === 1 ? 'reply' : 'replies'}
+              {m.thread.last_reply_at && (
+                <span className='font-normal text-slate-500 dark:text-slate-400'>
+                  · last {formatRelative(m.thread.last_reply_at)}
+                </span>
+              )}
+            </button>
+          )}
+          <p className='mt-0.5 flex items-center justify-end gap-1 text-[10px] text-slate-500 dark:text-slate-400'>
+            {!mine && <span className='mr-auto' />}
+            {m.edited_at && !deleted && <span className='italic'>(edited)</span>}
+            {new Date(m.date_created).toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit'
+            })}
+            {mine &&
+              isGroupRoom &&
+              !deleted &&
+              (() => {
+                const seen = seenBy(m)
+                if (seen.length === 0) return null
+                return (
+                  <SeenByPopover
+                    seen={seen}
+                    channelId={roomInfo?.channel?.id ?? null}
+                    senderId={String(m.sender ?? '')}
+                  />
+                )
+              })()}
+            {opts.isLastMine &&
+              room.startsWith('dm:') &&
+              (wasRead ? (
+                <span className={cn('inline-flex items-center gap-0.5 font-medium', th.accentText)}>
+                  <CheckCheck className='h-3 w-3' strokeWidth={2.4} /> Read
+                </span>
+              ) : (
+                <span className='inline-flex items-center gap-0.5'>
+                  <Check className='h-3 w-3' strokeWidth={2.2} /> Sent
+                </span>
+              ))}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  const composer = (parentId: number | null) => (
+    <ChatComposer
+      ref={parentId ? undefined : composerRef}
+      room={room}
+      label={label}
+      parentId={parentId}
+      quote={parentId ? threadQuote : quote}
+      onClearQuote={() => (parentId ? setThreadQuote(null) : setQuote(null))}
+      onSent={onSent}
+      disabledReason={parentId ? null : announceClosed}
+      th={th}
+      renderAvatar={(id, name) => (
+        <Avatar id={id} name={name} size={22} presence={id !== '__bot__'} />
+      )}
+    />
+  )
 
   return (
-    <div className='flex h-full min-h-0 flex-col' data-chat-room={room}>
-      <div className={cn('flex shrink-0 items-center gap-2 border-b px-3 py-2', th.divider)}>
+    <div
+      className='relative flex h-full min-h-0 flex-col'
+      data-chat-room={room}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files') && !announceClosed) {
+          e.preventDefault()
+          setDragging(true)
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false)
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return
+        e.preventDefault()
+        setDragging(false)
+        composerRef.current?.addFiles([...e.dataTransfer.files])
+      }}
+    >
+      {dragging && (
+        <div
+          className='pointer-events-none absolute inset-2 z-30 flex items-center justify-center rounded-xl border-2 border-dashed border-nvr-cyan bg-white/85 text-[13px] font-semibold text-slate-700 dark:bg-card/90 dark:text-slate-100'
+          data-chat-drop-target
+        >
+          Drop to attach to your message
+        </div>
+      )}
+      <div className={cn('flex shrink-0 items-center gap-1.5 border-b px-3 py-2', th.divider)}>
         <button
           type='button'
           onClick={onBack}
@@ -1205,12 +1912,22 @@ export function ChatRoomView({
           <ChannelTile icon={roomInfo.channel?.icon} color={roomInfo.channel?.color} size={24} />
         )}
         <div className='min-w-0 flex-1'>
-          <p className='truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
-            {label}
+          <p className='flex items-center gap-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            <span className='truncate'>{label}</span>
+            {channel?.announce && (
+              <span
+                className='shrink-0 rounded bg-slate-100 px-1 text-[9.5px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-muted dark:text-slate-300'
+                title='Announcement channel — the owner and admins post, members reply in threads'
+              >
+                Announcements
+              </span>
+            )}
           </p>
-          {me && dmPeer(room, me.id) && (
+          {me && dmPeer(room, me.id) ? (
             <DmPeerLine peerId={dmPeer(room, me.id) as string} name={label} />
-          )}
+          ) : room.startsWith('ch:') ? (
+            <MemberCountLine room={room} />
+          ) : null}
         </div>
         {recordLink && (
           <button
@@ -1228,7 +1945,39 @@ export function ChatRoomView({
             Open record
           </button>
         )}
+        {roomInfo && (
+          <button
+            type='button'
+            onClick={() => setStarred.mutate({ room, starred: !roomInfo.starred })}
+            className={cn(
+              'rounded-md p-1 transition-colors',
+              roomInfo.starred
+                ? 'text-amber-500'
+                : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
+            )}
+            aria-pressed={!!roomInfo.starred}
+            aria-label={roomInfo.starred ? 'Unstar' : 'Star — keep it at the top of your list'}
+            title={
+              roomInfo.starred
+                ? 'Starred — click to unstar'
+                : 'Star — keep it at the top of your list'
+            }
+            data-chat-star={roomInfo.starred ? 'on' : 'off'}
+          >
+            <Star
+              className={cn('h-3.5 w-3.5', roomInfo.starred && 'fill-current')}
+              strokeWidth={2}
+            />
+          </button>
+        )}
         <ChatTipsButton botName={botName} />
+        <JumpToDate
+          onJump={(d) => {
+            firstScrollRef.current = false
+            pinnedRef.current = false
+            setAnchor({ date: d })
+          }}
+        />
         <button
           type='button'
           onClick={() => {
@@ -1424,6 +2173,24 @@ export function ChatRoomView({
             )}
           </button>
         )}
+        <button
+          type='button'
+          onClick={() => {
+            setThreadRoot(null)
+            setInfoOpen((o) => !o)
+          }}
+          className={cn(
+            'rounded-md p-1 transition-colors',
+            infoOpen
+              ? th.accentSoft
+              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
+          )}
+          aria-label='Room info — members, pinned, files and links'
+          title='Room info — members, pinned, files and links'
+          data-chat-info-button
+        >
+          <Info className='h-3.5 w-3.5' strokeWidth={2} />
+        </button>
         {onOpenSettings && (
           <button
             type='button'
@@ -1448,110 +2215,114 @@ export function ChatRoomView({
         </div>
       )}
       <EntityRoomCard room={room} />
+      {channel && !channel.is_direct && (
+        <ChannelIntro
+          description={channel.description}
+          links={channel.links}
+          th={th}
+          navigate={cfg.navigate}
+        />
+      )}
       {pins.length > 0 && (
         <div className={cn('shrink-0 border-b px-3 py-1', th.divider)} data-chat-pins-strip>
           <button
             type='button'
-            onClick={() => setPinsOpen((o) => !o)}
+            onClick={() => {
+              setThreadRoot(null)
+              setInfoOpen(true)
+            }}
             className='flex w-full items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400'
           >
             <Pin className='h-3 w-3' strokeWidth={2} />
             {pins.length} pinned
-            {pinsOpen ? (
-              <ChevronLeft className='ml-auto h-3 w-3 rotate-90' />
-            ) : (
-              <ChevronLeft className='ml-auto h-3 w-3 -rotate-90' />
-            )}
+            <ChevronLeft className='ml-auto h-3 w-3 -rotate-90' />
           </button>
-          {pinsOpen && (
-            <div className='max-h-36 space-y-1 overflow-y-auto py-1'>
-              {pins.map((p) => (
-                <div key={p.pin_id} className='flex items-start gap-1.5 text-[11.5px]'>
-                  <span className='min-w-0 flex-1 text-slate-600 dark:text-slate-300'>
-                    <span className='font-medium'>{p.sender_name ?? 'Unknown'}: </span>
-                    {p.message.length > 140 ? `${p.message.slice(0, 140)}…` : p.message}
-                  </span>
-                  <button
-                    type='button'
-                    title='Unpin'
-                    onClick={() => togglePin.mutate(p.id)}
-                    className='shrink-0 text-slate-400 hover:text-red-500'
-                  >
-                    <X className='h-3 w-3' />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
+      )}
+      {showWelcome && channel?.welcome_note && (
+        <WelcomeNote
+          note={channel.welcome_note}
+          channelName={label}
+          th={th}
+          onDismiss={() => dismissWelcome.mutate(room)}
+        />
       )}
       <div
         ref={scrollerRef}
         onScroll={(e) => {
           const el = e.currentTarget
           pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+          prevHeightRef.current = el.scrollHeight
+          if (pinnedRef.current && unseen) setUnseen(null)
         }}
-        className='min-h-0 flex-1 overflow-y-auto px-3 py-3'
+        className='relative min-h-0 flex-1 overflow-y-auto px-3 py-3'
         data-chat-messages
       >
-        <div ref={contentRef} className='space-y-2.5'>
+        <div ref={contentRef} className={density === 'compact' ? 'space-y-1' : 'space-y-2.5'}>
+          {hasOlder && !searching && (
+            <div className='flex justify-center'>
+              <button
+                type='button'
+                disabled={loadingOlder}
+                onClick={() => {
+                  prevHeightRef.current = scrollerRef.current?.scrollHeight ?? 0
+                  void loadOlder()
+                }}
+                className='rounded-full border border-slate-200 px-2.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-muted disabled:opacity-50 dark:border-border dark:text-slate-300'
+                data-chat-load-older
+              >
+                {loadingOlder ? 'Loading…' : 'Load earlier messages'}
+              </button>
+            </div>
+          )}
           {loading ? (
-            <p className='py-6 text-center text-[12px] text-slate-400'>Loading…</p>
-          ) : visibleMessages.length === 0 ? (
-            <div className='py-6 text-center text-[12px] text-slate-400'>
+            <p className='py-6 text-center text-[12px] text-slate-500'>Loading…</p>
+          ) : visibleMessages.length === 0 && outbox.length === 0 ? (
+            <div className='py-6 text-center text-[12px] text-slate-500'>
               {searching ? (
                 'No messages match.'
+              ) : anchor ? (
+                'Nothing was said around then.'
               ) : (
                 <>
                   <p>No messages yet — say hello.</p>
                   <p className='mt-1 text-[11px]'>
-                    Tip: @ mentions someone{botName ? `, @${botName} asks the AI` : ''}, and a
-                    record ID like AB26-12345 becomes a live link.
+                    Tip: @ mentions someone{botName ? `, @${botName} asks the AI` : ''}, # inserts a
+                    record, and a record ID like AB26-12345 becomes a live link.
                   </p>
                 </>
               )}
             </div>
           ) : (
             visibleMessages.map((m, idx) => {
-              const mine = m.sender?.toLowerCase() === myId
               const prev = visibleMessages[idx - 1]
               const newDay =
                 idx === 0 ||
                 (prev &&
                   new Date(prev.date_created).toDateString() !==
                     new Date(m.date_created).toDateString())
-              const isLastMine = mine && idx === lastMineIndex
-              const wasRead =
-                isLastMine && readTime > 0 && new Date(m.date_created).getTime() <= readTime
-              const deleted = !!m.deleted_at
-              const editable =
-                mine && !deleted && Date.now() - new Date(m.date_created).getTime() < 15 * 60_000
-              // Delete has no time window: own messages always, any message for
-              // admins (matches the server's own-or-admin rule).
-              const deletable = !deleted && (mine || isAdmin)
-              const isEditing = editingId === m.id
               // "New messages" — anchored to the unread count frozen at open.
               const showUnreadDivider =
                 !searching &&
+                !anchor &&
                 initialUnreadRef.current > 0 &&
                 idx === Math.max(0, visibleMessages.length - initialUnreadRef.current)
-              const reactionGroups = new Map<
-                string,
-                { count: number; mine: boolean; names: string[] }
-              >()
-              for (const r of m.reactions ?? []) {
-                const g = reactionGroups.get(r.emoji) ?? { count: 0, mine: false, names: [] }
-                g.count++
-                if (r.user?.toLowerCase() === myId) g.mine = true
-                if (r.user_name) g.names.push(r.user_name)
-                reactionGroups.set(r.emoji, g)
-              }
+              // Compact: consecutive messages from one person within 5 minutes
+              // drop the repeated name.
+              const grouped =
+                density === 'compact' &&
+                !newDay &&
+                !!prev &&
+                prev.sender === m.sender &&
+                !prev.is_system &&
+                new Date(m.date_created).getTime() - new Date(prev.date_created).getTime() <
+                  5 * 60_000
               return (
                 <div key={m.id}>
                   {newDay && (
                     <div className='my-2 flex items-center gap-2'>
                       <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
-                      <span className='text-[10px] font-medium text-slate-400'>
+                      <span className='text-[10px] font-medium text-slate-500 dark:text-slate-400'>
                         {dateDivider(m.date_created)}
                       </span>
                       <span className='h-px flex-1 bg-slate-100 dark:bg-border' />
@@ -1564,7 +2335,7 @@ export function ChatRoomView({
                       data-chat-unread-divider
                     >
                       <span className='h-px flex-1 bg-red-300 dark:bg-red-500/50' />
-                      <span className='text-[10px] font-semibold uppercase tracking-wide text-red-400'>
+                      <span className='text-[10px] font-semibold uppercase tracking-wide text-red-500'>
                         New messages
                       </span>
                       {initialUnreadRef.current > 20 && (
@@ -1572,7 +2343,7 @@ export function ChatRoomView({
                           type='button'
                           disabled={catchupMut.isPending}
                           onClick={() => catchupMut.mutate()}
-                          className='rounded-full border border-red-200 px-1.5 py-px text-[9.5px] font-medium text-red-400 hover:text-red-600 disabled:opacity-50 dark:border-red-500/40'
+                          className='rounded-full border border-red-200 px-1.5 py-px text-[9.5px] font-medium text-red-500 hover:text-red-600 disabled:opacity-50 dark:border-red-500/40'
                         >
                           {catchupMut.isPending ? 'Summarizing…' : '✨ What did I miss?'}
                         </button>
@@ -1585,310 +2356,47 @@ export function ChatRoomView({
                       {catchup}
                     </div>
                   )}
-                  <div className={cn('group/msg flex gap-2', mine && 'flex-row-reverse')}>
-                    {!mine && <Avatar id={m.sender} name={m.sender_name} size={26} />}
-                    <div className={cn('relative max-w-[78%]', mine && 'text-right')}>
-                      {!mine && (
-                        <p className='mb-0.5 text-[10.5px] font-medium text-slate-400'>
-                          {m.sender_name ?? 'Unknown'}
-                          {m.masquerade_admin_name && (
-                            <span
-                              className='ml-1 font-normal text-violet-600 dark:text-violet-300'
-                              title={`Sent by ${m.masquerade_admin_name} while masquerading as ${m.sender_name ?? 'this person'}`}
-                              data-chat-message-masquerade
-                            >
-                              · via {m.masquerade_admin_name}
-                            </span>
-                          )}
-                        </p>
-                      )}
-                      {/* Hover toolbar: react, and (own, in-window) edit/delete */}
-                      {!deleted && !isEditing && (
-                        <div
-                          className={cn(
-                            'absolute -top-3 z-10 hidden items-center gap-0.5 rounded-full border px-1 py-0.5 shadow-sm group-hover/msg:flex',
-                            th.surface,
-                            'border-slate-200 dark:border-border',
-                            // Anchor at the screen-edge side so the toolbar grows
-                            // INWARD: own bubbles hug the right edge (pin right,
-                            // extend left), others hug the left (pin left, extend
-                            // right). The old inverse pinning pushed the toolbar
-                            // off-screen whenever it was wider than the bubble.
-                            mine ? 'right-0' : 'left-0'
-                          )}
-                          data-chat-msg-actions
-                        >
-                          {REACTION_EMOJI.map((e) => (
-                            <button
-                              key={e}
-                              type='button'
-                              onClick={() => toggleReaction.mutate({ messageId: m.id, emoji: e })}
-                              className='rounded-full px-0.5 text-[13px] leading-none transition-transform hover:scale-125'
-                              title={`React ${e}`}
-                            >
-                              {e}
-                            </button>
-                          ))}
-                          {roomRecord && (
-                            <button
-                              type='button'
-                              title='Make a task from this message'
-                              onClick={() => makeTask.mutate(m)}
-                              className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                            >
-                              <ClipboardPlus className='h-3 w-3' />
-                            </button>
-                          )}
-                          <button
-                            type='button'
-                            title={pins.some((p) => p.id === m.id) ? 'Unpin' : 'Pin'}
-                            onClick={() => togglePin.mutate(m.id)}
-                            className={cn(
-                              'rounded-full p-0.5',
-                              pins.some((p) => p.id === m.id)
-                                ? th.accentText
-                                : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                            )}
-                          >
-                            <Pin className='h-3 w-3' />
-                          </button>
-                          <button
-                            type='button'
-                            title={
-                              savedIds.has(m.id)
-                                ? 'Remove from saved'
-                                : 'Save for later (personal bookmark)'
-                            }
-                            onClick={() => toggleSave.mutate(m.id)}
-                            className={cn(
-                              'rounded-full p-0.5',
-                              savedIds.has(m.id)
-                                ? th.accentText
-                                : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                            )}
-                          >
-                            <Bookmark className='h-3 w-3' />
-                          </button>
-                          {editable && (
-                            <button
-                              type='button'
-                              title='Edit'
-                              onClick={() => {
-                                setEditingId(m.id)
-                                setEditDraft(m.message)
-                                setConfirmDeleteId(null)
-                              }}
-                              className='rounded-full p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-                            >
-                              <Pencil className='h-3 w-3' />
-                            </button>
-                          )}
-                          {deletable && (
-                            <>
-                              {confirmDeleteId === m.id ? (
-                                <button
-                                  type='button'
-                                  title='Confirm delete'
-                                  onClick={() => {
-                                    deleteMessage.mutate(m.id)
-                                    setConfirmDeleteId(null)
-                                  }}
-                                  className='rounded-full px-1 text-[10px] font-semibold text-red-500'
-                                >
-                                  Sure?
-                                </button>
-                              ) : (
-                                <button
-                                  type='button'
-                                  title={mine ? 'Delete' : 'Delete (admin)'}
-                                  onClick={() => setConfirmDeleteId(m.id)}
-                                  className='rounded-full p-0.5 text-slate-400 hover:text-red-500'
-                                >
-                                  <Trash2 className='h-3 w-3' />
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      )}
-                      {deleted ? (
-                        <div className='inline-block rounded-2xl border border-dashed border-slate-200 px-3 py-1.5 text-left text-[11.5px] italic text-slate-400 dark:border-border'>
-                          Message removed
-                        </div>
-                      ) : isEditing ? (
-                        <form
-                          className='flex items-center gap-1'
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            const text = editDraft.trim()
-                            if (text && text !== m.message) {
-                              editMessage.mutate({ messageId: m.id, text })
-                            }
-                            setEditingId(null)
-                          }}
-                        >
-                          <input
-                            autoFocus
-                            value={editDraft}
-                            onChange={(e) => setEditDraft(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Escape') setEditingId(null)
-                            }}
-                            className={cn(
-                              'h-8 w-[240px] rounded-lg border px-2 text-[12px] outline-none',
-                              th.input
-                            )}
-                            aria-label='Edit message'
-                          />
-                          <button
-                            type='submit'
-                            className={cn(
-                              'rounded-md px-1.5 py-1 text-[11px] font-medium',
-                              th.accentText
-                            )}
-                          >
-                            Save
-                          </button>
-                        </form>
-                      ) : (
-                        <div
-                          className={cn(
-                            'inline-block rounded-2xl px-3 py-1.5 text-left text-[12.5px] leading-snug',
-                            mine
-                              ? cn('rounded-br-md', th.bubbleMine)
-                              : cn('rounded-bl-md', th.bubbleOther)
-                          )}
-                        >
-                          {m.message &&
-                            (renderMessageBody ? (
-                              renderMessageBody(m, { mine })
-                            ) : (
-                              <MessageBody text={m.message} mine={mine} />
-                            ))}
-                          {(m.attachments ?? []).length > 0 && (
-                            <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
-                              {(m.attachments ?? []).map((aid) => {
-                                const meta = attachmentMeta?.get(aid)
-                                const name = meta?.title || meta?.filename_download || 'Attachment'
-                                const url = client.fileUrl(aid)
-                                const isImg = (meta?.type ?? '').startsWith('image/')
-                                const openPreview = () =>
-                                  setPreview({
-                                    id: aid,
-                                    url,
-                                    name,
-                                    type: meta?.type ?? null,
-                                    size: meta?.filesize ?? null
-                                  })
-                                return isImg ? (
-                                  <button
-                                    key={aid}
-                                    type='button'
-                                    onClick={openPreview}
-                                    className='block cursor-zoom-in'
-                                  >
-                                    <img
-                                      src={url}
-                                      alt={name}
-                                      className='max-h-40 max-w-[220px] rounded-lg object-cover'
-                                      loading='lazy'
-                                    />
-                                  </button>
-                                ) : (
-                                  <button
-                                    key={aid}
-                                    type='button'
-                                    onClick={openPreview}
-                                    className={cn(
-                                      'inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px]',
-                                      mine
-                                        ? 'border-white/30 bg-white/10'
-                                        : 'border-slate-200 bg-white dark:border-border dark:bg-card'
-                                    )}
-                                  >
-                                    <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
-                                    <span className='truncate'>{name}</span>
-                                  </button>
-                                )
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {reactionGroups.size > 0 && (
-                        <div
-                          className={cn('mt-0.5 flex flex-wrap gap-1', mine && 'justify-end')}
-                          data-chat-reactions
-                        >
-                          {[...reactionGroups.entries()].map(([emoji, g]) => (
-                            <button
-                              key={emoji}
-                              type='button'
-                              title={g.names.join(', ')}
-                              onClick={() => toggleReaction.mutate({ messageId: m.id, emoji })}
-                              className={cn(
-                                'inline-flex items-center gap-0.5 rounded-full border px-1.5 py-px text-[10.5px] leading-tight transition-colors',
-                                g.mine
-                                  ? cn('font-semibold', th.accentSoft, 'border-transparent')
-                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted'
-                              )}
-                            >
-                              <span>{emoji}</span>
-                              <span className='tabular-nums'>{g.count}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <p className='mt-0.5 flex items-center justify-end gap-1 text-[10px] text-slate-400'>
-                        {!mine && <span className='mr-auto' />}
-                        {m.edited_at && !deleted && <span className='italic'>(edited)</span>}
-                        {new Date(m.date_created).toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit'
-                        })}
-                        {mine &&
-                          isGroupRoom &&
-                          !deleted &&
-                          (() => {
-                            const seen = seenBy(m)
-                            if (seen.length === 0) return null
-                            return (
-                              <SeenByPopover
-                                seen={seen}
-                                channelId={roomInfo?.channel?.id ?? null}
-                                senderId={String(m.sender ?? '')}
-                              />
-                            )
-                          })()}
-                        {isLastMine &&
-                          room.startsWith('dm:') &&
-                          (wasRead ? (
-                            <span
-                              className={cn(
-                                'inline-flex items-center gap-0.5 font-medium',
-                                th.accentText
-                              )}
-                            >
-                              <CheckCheck className='h-3 w-3' strokeWidth={2.4} /> Read
-                            </span>
-                          ) : (
-                            <span className='inline-flex items-center gap-0.5'>
-                              <Check className='h-3 w-3' strokeWidth={2.2} /> Sent
-                            </span>
-                          ))}
-                      </p>
-                    </div>
-                  </div>
+                  {renderRow(m, {
+                    isLastMine: m.sender?.toLowerCase() === myId && idx === lastMineIndex,
+                    showSender: !grouped
+                  })}
                 </div>
               )
             })
           )}
+          {!searching && !hasNewer && <OutboxBubbles items={outbox} th={th} />}
         </div>
       </div>
+      {(unseen || hasNewer) && (
+        <div className='pointer-events-none relative z-10 -mt-9 flex h-9 shrink-0 items-center justify-center'>
+          <button
+            type='button'
+            onClick={() => {
+              if (hasNewer) {
+                firstScrollRef.current = false
+                pinnedRef.current = true
+                setAnchor(null)
+                return
+              }
+              if (unseen && !scrollToMessage(unseen.firstId)) toBottom()
+              setUnseen(null)
+            }}
+            className={cn(
+              'pointer-events-auto rounded-full px-3 py-1 text-[11.5px] font-semibold shadow-md',
+              th.pill
+            )}
+            data-chat-new-pill={unseen?.count ?? 0}
+          >
+            {hasNewer
+              ? 'Jump to the latest ↓'
+              : `${unseen?.count} new ${unseen?.count === 1 ? 'message' : 'messages'} ↓`}
+          </button>
+        </div>
+      )}
       <div className='min-h-[18px] shrink-0 px-3.5'>
         {botAskedAt && botName ? (
           <p
-            className='flex items-center gap-1.5 text-[11px] italic text-slate-400'
+            className='flex items-center gap-1.5 text-[11px] italic text-slate-500'
             data-chat-bot-thinking
           >
             <span className='inline-flex gap-0.5'>
@@ -1900,137 +2408,88 @@ export function ChatRoomView({
           </p>
         ) : (
           typing.typingText && (
-            <p className='text-[11px] italic text-slate-400'>{typing.typingText}</p>
+            <p className='text-[11px] italic text-slate-500'>{typing.typingText}</p>
           )
         )}
       </div>
       {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
-      {(pendingFiles.length > 0 || uploadingFiles > 0) && (
-        <div
-          className={cn(
-            'flex shrink-0 flex-wrap items-center gap-1.5 border-t px-3 py-1.5',
-            th.divider
-          )}
-        >
-          {pendingFiles.map((f) => (
-            <span
-              key={f.id}
-              className='inline-flex max-w-[180px] items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
-            >
-              <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
-              <span className='truncate'>{f.name}</span>
-              <button
-                type='button'
-                onClick={() => setPendingFiles((prev) => prev.filter((p) => p.id !== f.id))}
-                className='text-slate-400 hover:text-red-500'
-                aria-label={`Remove ${f.name}`}
-              >
-                <X className='h-3 w-3' />
-              </button>
-            </span>
-          ))}
-          {uploadingFiles > 0 && (
-            <span className='text-[11px] italic text-slate-400'>Uploading…</span>
-          )}
-        </div>
+      {composer(null)}
+      {threadRoot != null && (
+        <ThreadPane
+          room={room}
+          rootId={threadRoot}
+          th={th}
+          onClose={() => setThreadRoot(null)}
+          renderRow={(m) => renderRow(m, { inThread: true })}
+          renderComposer={(pid) => composer(pid)}
+          renderOutbox={(pid) => <ThreadOutbox room={room} parentId={pid} th={th} />}
+        />
       )}
-      <form
-        className={cn('relative flex shrink-0 items-center gap-2 border-t p-2.5', th.divider)}
-        onSubmit={(e) => {
-          e.preventDefault()
-          submit()
-        }}
-        data-chat-composer
-      >
-        {mentionQuery !== null && mentionCandidates.length > 0 && (
-          <div
-            className={cn(
-              'absolute bottom-full left-2.5 z-20 mb-1 w-[260px] overflow-hidden rounded-xl border shadow-lg',
-              th.surface,
-              'border-slate-200 dark:border-border'
-            )}
-          >
-            {mentionCandidates.map((u, i) => (
-              <button
-                key={u.user_id}
-                type='button'
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  selectMention(u)
-                }}
-                className={cn(
-                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px]',
-                  i === mentionIndex ? th.accentSoft : 'text-slate-700 dark:text-slate-200'
-                )}
-              >
-                <Avatar id={u.user_id} name={u.display_name} size={22} />
-                <span className='min-w-0 flex-1 truncate'>
-                  {u.display_name ?? 'Unknown'}
-                  {u.user_id !== '__bot__' && humanLabel(u.role_name) && (
-                    <span className='ml-1.5 text-[11px] text-slate-400 dark:text-slate-500'>
-                      {humanLabel(u.role_name)}
-                    </span>
-                  )}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-        <input
-          ref={inputRef}
-          value={draft}
-          onChange={(e) =>
-            onDraftChange(e.target.value, e.target.selectionStart ?? e.target.value.length)
-          }
-          onKeyDown={onKeyDown}
-          onPaste={(e) => {
-            const files = [...e.clipboardData.files]
-            if (files.length > 0) {
-              e.preventDefault()
-              void uploadFiles(files)
-            }
-          }}
-          placeholder={`Message ${label}… (@ to mention${botName ? `, @${botName} for AI` : ''})`}
-          className={cn(
-            'h-9 min-w-0 flex-1 rounded-lg border px-3 text-[12.5px] outline-none',
-            th.input
-          )}
-          aria-label={`Message ${label}`}
+      {infoOpen && (
+        <RoomInfoDrawer
+          room={room}
+          label={label}
+          th={th}
+          pins={pins}
+          onClose={() => setInfoOpen(false)}
+          onOpenMessage={openMessage}
+          onUnpin={(id) => togglePin.mutate(id)}
+          navigate={cfg.navigate}
+          renderAvatar={(id, name) => <Avatar id={id} name={name} size={22} />}
         />
-        <input
-          ref={fileInputRef}
-          type='file'
-          multiple
-          className='hidden'
-          onChange={(e) => {
-            void uploadFiles([...(e.target.files ?? [])])
-            e.target.value = ''
-          }}
-        />
+      )}
+    </div>
+  )
+}
+
+function ThreadOutbox({ room, parentId, th }: { room: string; parentId: number; th: ChatTheme }) {
+  const items = useOutbox(room, parentId)
+  return <OutboxBubbles items={items} th={th} />
+}
+
+/** "Attach to the record" on a chat file (#949): pick the record's file field. */
+function AttachToRecordButton({
+  targets,
+  recordLabel,
+  onPick
+}: {
+  targets: Array<{ field: string; label: string }>
+  recordLabel: string
+  onPick: (field: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
         <button
           type='button'
-          onClick={() => fileInputRef.current?.click()}
-          className='flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-          aria-label='Attach a file'
-          title='Attach a file (or paste an image)'
+          className='rounded-full border border-slate-200 bg-white p-0.5 text-slate-500 shadow-sm hover:text-slate-800 dark:border-border dark:bg-card dark:hover:text-slate-100'
+          title={`Attach to ${recordLabel}`}
+          aria-label={`Attach to ${recordLabel}`}
+          data-chat-attach-to-record
         >
-          <Paperclip className='h-4 w-4' strokeWidth={2} />
+          <FilePlus2 className='h-3 w-3' />
         </button>
-        <button
-          type='submit'
-          disabled={
-            (!draft.trim() && pendingFiles.length === 0) || send.isPending || uploadingFiles > 0
-          }
-          className={cn(
-            'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-[filter] hover:brightness-110 disabled:opacity-40',
-            th.action
-          )}
-          aria-label='Send'
-        >
-          <Send className='h-4 w-4' strokeWidth={2} />
-        </button>
-      </form>
-    </div>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-[220px] p-1.5'>
+        <p className='px-2 pb-1 pt-0.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+          Attach to {recordLabel}
+        </p>
+        {targets.map((t) => (
+          <button
+            key={t.field}
+            type='button'
+            onClick={() => {
+              setOpen(false)
+              onPick(t.field)
+            }}
+            className='flex w-full rounded-md px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
+          >
+            {t.label}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -2504,6 +2963,9 @@ export function ChatChannelSettings({
             {update.isError && (
               <p className='text-[11.5px] text-red-500'>{(update.error as Error).message}</p>
             )}
+            {!channel.is_direct && (
+              <ChannelExtrasEditor channel={channel} th={th} isAdmin={isAdmin} />
+            )}
           </>
         ) : (
           <p className='text-[12px] leading-relaxed text-slate-500 dark:text-slate-400'>
@@ -2583,7 +3045,13 @@ export function ChatChannelSettings({
               </p>
             </div>
           )}
+          {canEdit && !channel.is_direct && (
+            <div className='mt-2'>
+              <BulkInvitePanel channelId={channel.id} th={th} />
+            </div>
+          )}
         </div>
+        {!channel.is_direct && <ChannelAuditLog channelId={channel.id} th={th} />}
       </div>
     </div>
   )
@@ -2681,19 +3149,23 @@ export function ChatRoomList({
   onOpen,
   onNewGroup,
   archivedView = false,
-  loading = false
+  loading = false,
+  onView
 }: {
   rooms: RoomInfo[]
-  onOpen: (room: RoomInfo) => void
+  onOpen: (room: RoomInfo, anchor?: ChatAnchor) => void
   /** Opens the group-conversation composer (host renders the dialog). */
   onNewGroup?: () => void
+  /** Opens the mentions / scheduled / catch-up views (host renders them). */
+  onView?: (view: 'mentions' | 'scheduled' | 'catchup') => void
   /** The Archived tab: no assistant entry, rows offer Unarchive. */
   archivedView?: boolean
   loading?: boolean
 }) {
   const th = useTheme()
   const cfg = useChatConfig()
-  const { setMuted, leave, setArchived } = useRoomMembership()
+  const { setMuted, leave, setArchived, setStarred } = useRoomMembership()
+  const sf = useSearchFilterState()
   const presence = useMemo(
     () =>
       new Map(
@@ -2709,7 +3181,15 @@ export function ChatRoomList({
   const q = useDebouncedValue(search.trim(), 250)
   // Cross-room message search rides the same box: type ≥2 chars and matching
   // MESSAGES appear under the filtered room list.
-  const { hits, loading: searching } = useChatSearch(q)
+  const { hits, loading: searching } = useChatSearch(q, sf.filters)
+  const searchActive = q.length >= 2 || sf.active
+  // Hits grouped by room, busiest room first (#987).
+  const hitGroups = useMemo(() => {
+    const m = new Map<string, typeof hits>()
+    for (const h of hits) m.set(h.room, [...(m.get(h.room) ?? []), h])
+    return [...m.entries()].sort((a, b) => b[1].length - a[1].length)
+  }, [hits])
+  const unreadRooms = rooms.filter((r) => r.unread > 0 && !r.muted).length
   const roomByKey = useMemo(() => new Map(rooms.map((r) => [r.room, r])), [rooms])
   const prefs = useMyPreferences()
   const setPrefs = useSetMyPreferences()
@@ -2738,10 +3218,14 @@ export function ChatRoomList({
           aria-label='Search rooms and messages'
           data-chat-global-search
         />
+        {!archivedView && (
+          <FilterToggle open={sf.open} active={sf.active} onClick={() => sf.setOpen(!sf.open)} />
+        )}
         <SidebarSortButton
           value={sortMode}
           onChange={(v) => setPrefs.mutate({ chat_sidebar_sort: v === 'recent' ? null : v })}
         />
+        {!archivedView && <ChatSettingsButton />}
         {onNewGroup && (
           <button
             type='button'
@@ -2754,38 +3238,94 @@ export function ChatRoomList({
           </button>
         )}
       </div>
-      {q.length >= 2 && (
-        <div className='mb-1.5'>
+      {!archivedView && sf.open && (
+        <SearchFilterBar filters={sf.filters} onChange={sf.setFilters} rooms={rooms} th={th} />
+      )}
+      {!archivedView && onView && !searchActive && (
+        <div className='mb-1 flex flex-wrap gap-1 px-1' data-chat-view-links>
+          <button
+            type='button'
+            onClick={() => onView('mentions')}
+            className='inline-flex h-6 items-center gap-1 rounded-full border border-slate-200 px-2 text-[11px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+            data-chat-view='mentions'
+          >
+            <AtSign className='h-3 w-3' /> Mentions
+          </button>
+          <button
+            type='button'
+            onClick={() => onView('scheduled')}
+            className='inline-flex h-6 items-center gap-1 rounded-full border border-slate-200 px-2 text-[11px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+            data-chat-view='scheduled'
+          >
+            <AlarmClock className='h-3 w-3' /> Scheduled
+          </button>
+          {unreadRooms > 1 && (
+            <button
+              type='button'
+              onClick={() => onView('catchup')}
+              className={cn(
+                'inline-flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-medium',
+                th.accentSoft
+              )}
+              data-chat-view='catchup'
+            >
+              <Sparkles className='h-3 w-3' /> Catch up · {unreadRooms} rooms
+            </button>
+          )}
+        </div>
+      )}
+      {searchActive && !archivedView && (
+        <div className='mb-1.5' data-chat-search-results>
           <p className='px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400'>
-            Messages
+            Messages{hits.length ? ` · ${hits.length}` : ''}
           </p>
           {searching ? (
             <p className='px-2.5 py-1 text-[11px] text-slate-400'>Searching…</p>
           ) : hits.length === 0 ? (
             <p className='px-2.5 py-1 text-[11px] text-slate-400'>No messages match.</p>
           ) : (
-            hits.slice(0, 15).map((h) => {
-              const r = roomByKey.get(h.room)
+            hitGroups.map(([roomKey, group]) => {
+              const r = roomByKey.get(roomKey)
               return (
-                <button
-                  key={h.id}
-                  type='button'
-                  onClick={() => {
-                    if (r) onOpen(r)
-                  }}
-                  className='flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
-                >
-                  <span className='flex items-center gap-1.5 text-[10.5px] text-slate-400'>
-                    <span className='truncate font-medium'>{r?.label ?? h.room}</span>
-                    <span className='ml-auto shrink-0'>
-                      {new Date(h.date_created).toLocaleDateString()}
+                <div key={roomKey} className='mb-1' data-chat-search-group={roomKey}>
+                  <p className='flex items-center gap-1.5 px-2.5 pb-0.5 pt-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+                    <span className='truncate'>{r?.label ?? roomKey}</span>
+                    <span className='rounded-full bg-slate-100 px-1.5 text-[10px] font-medium tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
+                      {group.length}
                     </span>
-                  </span>
-                  <span className='truncate text-[12px] text-slate-700 dark:text-slate-200'>
-                    {h.sender_name ? `${h.sender_name}: ` : ''}
-                    {h.message}
-                  </span>
-                </button>
+                  </p>
+                  {group.slice(0, 5).map((h) => (
+                    <button
+                      key={h.id}
+                      type='button'
+                      disabled={!r}
+                      onClick={() => {
+                        if (r) onOpen(r, { around: h.parent_id ?? h.id })
+                      }}
+                      className='flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-slate-50 disabled:cursor-default dark:hover:bg-muted/50'
+                      data-chat-search-hit={h.id}
+                    >
+                      <span className='flex items-center gap-1.5 text-[10.5px] text-slate-400'>
+                        <span className='truncate'>{h.sender_name ?? 'Someone'}</span>
+                        <span className='ml-auto shrink-0'>
+                          {new Date(h.date_created).toLocaleDateString()}
+                        </span>
+                      </span>
+                      <span className='line-clamp-2 text-[12px] text-slate-700 dark:text-slate-200'>
+                        {h.message}
+                      </span>
+                    </button>
+                  ))}
+                  {group.length > 5 && r && (
+                    <button
+                      type='button'
+                      onClick={() => sf.setFilters({ ...sf.filters, room: roomKey })}
+                      className={cn('px-2.5 py-0.5 text-[11px] font-medium', th.accentText)}
+                    >
+                      All {group.length} in {r.label}
+                    </button>
+                  )}
+                </div>
               )
             })
           )}
@@ -2838,14 +3378,18 @@ export function ChatRoomList({
       )}
       {(
         [
+          ['Starred', filteredRooms.filter((r) => r.starred)],
           [
             'Channels',
             filteredRooms.filter(
-              (r) => (r.kind === 'global' || r.kind === 'channel') && !isGroupDm(r)
+              (r) => !r.starred && (r.kind === 'global' || r.kind === 'channel') && !isGroupDm(r)
             )
           ],
-          ['Direct messages', filteredRooms.filter((r) => r.kind === 'dm' || isGroupDm(r))],
-          ['Records', filteredRooms.filter((r) => r.kind === 'entity')]
+          [
+            'Direct messages',
+            filteredRooms.filter((r) => !r.starred && (r.kind === 'dm' || isGroupDm(r)))
+          ],
+          ['Records', filteredRooms.filter((r) => !r.starred && r.kind === 'entity')]
         ] as const
       ).map(([groupLabel, groupRooms]) =>
         groupRooms.length === 0 ? null : (
@@ -2904,6 +3448,15 @@ export function ChatRoomList({
                       </span>
                     )}
                   </span>
+                  {(r.mentions ?? 0) > 0 && (
+                    <span
+                      className='flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white'
+                      title={`${r.mentions} mention you`}
+                      data-chat-room-mentions={r.mentions}
+                    >
+                      @
+                    </span>
+                  )}
                   {r.unread > 0 && (
                     <span
                       className={cn(
@@ -2921,6 +3474,20 @@ export function ChatRoomList({
                 </button>
                 {/* Row actions sit on hover so the list stays scannable. */}
                 <span className='absolute right-1.5 top-1.5 hidden items-center gap-0.5 group-hover/room:flex'>
+                  {!archivedView && (
+                    <button
+                      type='button'
+                      title={r.starred ? 'Unstar' : 'Star — keep it at the top'}
+                      aria-label={r.starred ? `Unstar ${r.label}` : `Star ${r.label}`}
+                      onClick={() => setStarred.mutate({ room: r.room, starred: !r.starred })}
+                      className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+                      data-chat-row-star={r.starred ? 'on' : 'off'}
+                    >
+                      <Star
+                        className={cn('h-3 w-3', r.starred && 'fill-amber-400 text-amber-500')}
+                      />
+                    </button>
+                  )}
                   {canArchive(r) && (
                     <button
                       type='button'
@@ -2978,6 +3545,35 @@ export function ChatRoomList({
       )}
     </div>
   )
+}
+
+/**
+ * The mentions / scheduled / catch-up views for hosts that lay chat out
+ * themselves (the admin /chat workspace). The slide-over panel renders the
+ * same views internally.
+ */
+export function ChatSideView({
+  view,
+  rooms,
+  onBack,
+  onOpen
+}: {
+  view: 'mentions' | 'scheduled' | 'catchup'
+  rooms: RoomInfo[]
+  onBack: () => void
+  onOpen: (room: string, label: string, anchor?: ChatAnchor) => void
+}) {
+  const th = useTheme()
+  if (view === 'mentions') return <MentionsView th={th} onBack={onBack} onOpen={onOpen} />
+  if (view === 'scheduled')
+    return (
+      <ScheduledView
+        th={th}
+        onBack={onBack}
+        roomLabel={(room) => rooms.find((r) => r.room === room)?.label ?? room}
+      />
+    )
+  return <CatchUpView rooms={rooms} th={th} onBack={onBack} onOpen={onOpen} />
 }
 
 /**
@@ -3593,7 +4189,15 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
     label: string
     channel?: ChannelMeta | null
     unread?: number
+    anchor?: ChatAnchor
   } | null>(null)
+  const [chatView, setChatView] = useState<'mentions' | 'scheduled' | 'catchup' | null>(null)
+  const openFromView = (room: string, label: string, anchor?: ChatAnchor) => {
+    const r = rooms.find((x) => x.room === room)
+    setSettingsOpen(false)
+    // The view stays set, so Back from the room returns to it.
+    setActiveRoom({ room, label: r?.label ?? label, channel: r?.channel, anchor })
+  }
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // The Archived tab keeps its own open room, so each tab returns to where
@@ -4050,15 +4654,38 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
             onBack={() => setActiveRoom(null)}
             renderMessageBody={renderMessageBody}
             initialUnread={activeRoom.unread}
+            anchor={activeRoom.anchor ?? null}
+          />
+        ) : chatView === 'mentions' ? (
+          <MentionsView th={th} onBack={() => setChatView(null)} onOpen={openFromView} />
+        ) : chatView === 'scheduled' ? (
+          <ScheduledView
+            th={th}
+            onBack={() => setChatView(null)}
+            roomLabel={(room) => rooms.find((r) => r.room === room)?.label ?? room}
+          />
+        ) : chatView === 'catchup' ? (
+          <CatchUpView
+            rooms={rooms}
+            th={th}
+            onBack={() => setChatView(null)}
+            onOpen={openFromView}
           />
         ) : (
           <ChatRoomList
             rooms={rooms}
-            onOpen={(r) => {
+            onOpen={(r, anchor) => {
               setSettingsOpen(false)
-              setActiveRoom({ room: r.room, label: r.label, channel: r.channel, unread: r.unread })
+              setActiveRoom({
+                room: r.room,
+                label: r.label,
+                channel: r.channel,
+                unread: r.unread,
+                anchor
+              })
             }}
             onNewGroup={() => setGroupDialogOpen(true)}
+            onView={setChatView}
           />
         )}
       </aside>

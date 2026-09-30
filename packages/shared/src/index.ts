@@ -61,6 +61,7 @@ export {
   type ChatProviderProps,
   ChatRoomList,
   ChatRoomView,
+  ChatSideView,
   type ChatTheme
 } from './components/chat/ChatPanel'
 export * from './components/chat/chat-core'

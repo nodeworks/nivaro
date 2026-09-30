@@ -4,8 +4,10 @@ import {
   ChatChannelBrowser,
   ChatChannelSettings,
   type ChatOnlineUser,
+  type ChatAnchor,
   ChatRoomList,
   ChatRoomView,
+  ChatSideView,
   chatAvatarColor,
   chatInitials,
   dmRoom,
@@ -50,7 +52,12 @@ import { cn } from '@/lib/utils'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-type ActiveRoom = { room: string; label: string; channel?: ChannelMeta | null }
+type ActiveRoom = {
+  room: string
+  label: string
+  channel?: ChannelMeta | null
+  anchor?: ChatAnchor
+}
 
 function OnlineList({ onOpenDm }: { onOpenDm: (u: ChatOnlineUser) => void }) {
   const cfg = useChatConfig()
@@ -204,6 +211,19 @@ function RoomTypesSheet({ open, onClose }: { open: boolean; onClose: () => void 
     onSuccess: refresh,
     onError: () => toast.error('Failed to update room type')
   })
+  const setFlag = useMutation({
+    mutationFn: ({
+      t,
+      field,
+      value
+    }: {
+      t: ChatRoomType
+      field: 'post_activity' | 'owners_follow'
+      value: boolean
+    }) => api.patch(`/chat/room-types/${t.id}`, { [field]: value }),
+    onSuccess: refresh,
+    onError: () => toast.error('Failed to update room type')
+  })
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
@@ -232,7 +252,7 @@ function RoomTypesSheet({ open, onClose }: { open: boolean; onClose: () => void 
                   <div
                     key={t.id}
                     className={cn(
-                      'flex items-center gap-3 px-3 py-2.5',
+                      'flex flex-wrap items-center gap-3 px-3 py-2.5',
                       i > 0 && 'border-t border-slate-100 dark:border-border/60'
                     )}
                   >
@@ -252,6 +272,40 @@ function RoomTypesSheet({ open, onClose }: { open: boolean; onClose: () => void 
                       onCheckedChange={() => toggle.mutate(t)}
                       aria-label={t.is_active ? 'Deactivate' : 'Activate'}
                     />
+                    <div className='basis-full space-y-1.5 pl-1 pt-1'>
+                      {(
+                        [
+                          [
+                            'post_activity',
+                            'Post record changes into its room',
+                            'State moves and failed partner pushes appear as a line in the conversation — only once the room has messages.'
+                          ],
+                          [
+                            'owners_follow',
+                            'Owners follow the room',
+                            "Whoever owns the record's current step joins its room automatically when it reaches them."
+                          ]
+                        ] as const
+                      ).map(([field, title, hint]) => (
+                        <label
+                          key={field}
+                          className='flex items-start gap-2 text-[11.5px] text-slate-600 dark:text-slate-300'
+                        >
+                          <Switch
+                            checked={!!t[field]}
+                            onCheckedChange={(v) => setFlag.mutate({ t, field, value: v })}
+                            className='mt-0.5 scale-75'
+                            data-room-type-flag={field}
+                          />
+                          <span>
+                            <span className='font-medium text-slate-700 dark:text-slate-200'>
+                              {title}
+                            </span>
+                            <span className='block text-[11px] text-slate-400'>{hint}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -324,6 +378,7 @@ function ChatWorkspace() {
   const [active, setActive] = useState<ActiveRoom | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [typesOpen, setTypesOpen] = useState(false)
+  const [view, setView] = useState<'mentions' | 'scheduled' | 'catchup' | null>(null)
 
   // Deep link: apply ?room= once the room list has resolved (labels/channel
   // meta come from it). An unknown key still opens — entity rooms you've
@@ -415,7 +470,13 @@ function ChatWorkspace() {
             {tab === 'rooms' ? (
               <ChatRoomList
                 rooms={rooms}
-                onOpen={(r) => openRoom({ room: r.room, label: r.label, channel: r.channel })}
+                onOpen={(r, anchor) =>
+                  openRoom({ room: r.room, label: r.label, channel: r.channel, anchor })
+                }
+                onView={(v) => {
+                  setView(v)
+                  setActive(null)
+                }}
               />
             ) : tab === 'browse' ? (
               <ChatChannelBrowser
@@ -445,6 +506,17 @@ function ChatWorkspace() {
                 setSearchParams(searchParams, { replace: true })
               }}
               onOpenSettings={active.channel ? () => setSettingsOpen(true) : undefined}
+              anchor={active.anchor ?? null}
+            />
+          ) : view ? (
+            <ChatSideView
+              view={view}
+              rooms={rooms}
+              onBack={() => setView(null)}
+              onOpen={(room, label, anchor) => {
+                const known = rooms.find((r) => r.room === room)
+                openRoom({ room, label: known?.label ?? label, channel: known?.channel, anchor })
+              }}
             />
           ) : (
             <div className='flex flex-1 flex-col items-center justify-center gap-2 text-center'>

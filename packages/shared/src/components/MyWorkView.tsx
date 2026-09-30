@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useApiFetchConfig, useItemNavigation } from '../context'
+import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
 import {
   type NotificationRouteMap,
   resolveNotificationTarget,
@@ -8,6 +8,8 @@ import {
 } from '../lib/notification-target'
 import { useOptionalRealtime } from '../lib/realtime'
 import { slaChip, withinDay } from '../lib/sla-chip'
+import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
+import { useMyRecordRooms } from './chat/chat-hooks'
 import { TickerNumber } from './TickerNumber'
 import { UserAvatar } from './UserAvatar'
 
@@ -38,6 +40,8 @@ interface OwnedRow {
 
 interface TaskRow {
   id: number
+  /** 'support' = a support ticket (#999); null = an ordinary task. */
+  kind?: string | null
   collection: string | null
   item: string | null
   title: string
@@ -130,7 +134,17 @@ export function MyWorkView({
 } = {}) {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
   const { open: openItem } = useItemNavigation()
+  const nav = useNavigation()
   const qc = useQueryClient()
+  // A support ticket opens its own page (/support?ticket=), in whichever app.
+  const openTicket = (id: number) => {
+    const path =
+      notificationRoutes?.support?.(String(id)) ??
+      nav.consoleUrl?.(`/support?ticket=${id}`) ??
+      `/support?ticket=${id}`
+    if (onOpenPath) onOpenPath(path)
+    else nav.navigate(path)
+  }
 
   // Live "updates available" pill (#278). My Work re-aggregation is expensive
   // (~seconds of live owner resolution) so events never auto-refresh — a
@@ -195,8 +209,9 @@ export function MyWorkView({
   }, [realtime, liveCollections])
 
   const completeTask = useMutation({
-    mutationFn: (id: number) =>
-      fetch(`${apiBase}/tasks/${id}`, {
+    // A ticket closes through /support so its requester hears about it.
+    mutationFn: (t: { id: number; kind?: string | null }) =>
+      fetch(`${apiBase}/${t.kind === 'support' ? 'support/tickets' : 'tasks'}/${t.id}`, {
         method: 'PATCH',
         headers: { ...authHeaders, 'content-type': 'application/json' },
         credentials,
@@ -462,7 +477,7 @@ export function MyWorkView({
                       <button
                         type='button'
                         title='Mark done'
-                        onClick={() => completeTask.mutate(t.id)}
+                        onClick={() => completeTask.mutate(t)}
                         disabled={completeTask.isPending}
                         className='flex h-4 w-4 shrink-0 items-center justify-center rounded border border-slate-300 text-transparent hover:border-emerald-500 hover:text-emerald-500 dark:border-border'
                       >
@@ -473,9 +488,16 @@ export function MyWorkView({
                           urgent
                         </span>
                       )}
+                      {t.kind === 'support' && (
+                        <span className='shrink-0 rounded bg-slate-100 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-white/10 dark:text-slate-300'>
+                          support
+                        </span>
+                      )}
                       <button
                         type='button'
-                        onClick={() => open(t.collection, t.item)}
+                        onClick={() =>
+                          t.kind === 'support' ? openTicket(t.id) : open(t.collection, t.item)
+                        }
                         className='min-w-0 flex-1 truncate text-left text-[12.5px] hover:underline'
                       >
                         {t.title}
@@ -580,6 +602,58 @@ export function MyWorkView({
         }
         return out
       })()}
+      <RecordConversations />
     </div>
+  )
+}
+
+/**
+ * Record rooms with unread messages (#969) — the conversations about work you
+ * own or follow. Renders nothing without a chat dock or with nothing unread,
+ * so My Work stays quiet for people who do not use chat.
+ */
+function RecordConversations() {
+  const enabled = canOpenChatRoom()
+  const { rooms } = useMyRecordRooms(enabled)
+  if (!enabled || rooms.length === 0) return null
+  return (
+    <section
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-my-work-chat
+    >
+      <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+        <h2 className='text-[13px] font-medium'>Record conversations</h2>
+      </div>
+      <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+        {rooms.map((r) => (
+          <li key={r.room}>
+            <button
+              type='button'
+              onClick={() => openChatRoom(r.room, r.label)}
+              className='flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-slate-50 dark:hover:bg-muted/40'
+              data-my-work-chat-room={r.room}
+            >
+              <span className='min-w-0 flex-1'>
+                <span className='block truncate text-[12.5px] font-medium'>{r.label}</span>
+                {r.last_message && (
+                  <span className='block truncate text-[11.5px] text-muted-foreground'>
+                    {r.last_message.sender_name ? `${r.last_message.sender_name}: ` : ''}
+                    {r.last_message.message.replace(/@\[([^\]]+)\]/g, '@$1')}
+                  </span>
+                )}
+              </span>
+              {r.mentions > 0 && (
+                <span className='flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white'>
+                  @
+                </span>
+              )}
+              <span className='flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-100 px-1.5 text-[10px] font-bold tabular-nums text-slate-600 dark:bg-muted dark:text-slate-300'>
+                {r.unread > 99 ? '99+' : r.unread}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }

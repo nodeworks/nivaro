@@ -1387,6 +1387,31 @@ export async function recordSubmission(
       user: null,
       comment: `transition action → api:${externalApi} (${status}${error ? `: ${error.slice(0, 120)}` : ''})`
     })
+    // A failed partner push says so in the record's chat room (#933), when
+    // the room type opted in to activity lines.
+    if (status === 'failed') {
+      void (async () => {
+        try {
+          const api = (await db('nivaro_external_apis').where({ id: externalApi }).first('name')) as
+            | { name?: string }
+            | undefined
+          const { postRecordActivity } = await import('./chat-records.js')
+          const { getApp } = await import('./io-holder.js')
+          const app = getApp()
+          if (app)
+            await postRecordActivity(
+              app,
+              collection,
+              item,
+              `⚠ The push to ${api?.name ?? 'a partner system'} failed${
+                error ? `: ${error.slice(0, 200)}` : ''
+              }`
+            )
+        } catch {
+          /* decoration */
+        }
+      })()
+    }
     const first = inserted[0]
     // tedious hands an OBJECT back from .returning on this stack.
     return typeof first === 'object' && first !== null

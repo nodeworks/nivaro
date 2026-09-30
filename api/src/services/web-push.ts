@@ -75,6 +75,12 @@ export interface PushPayload {
   body: string
   url?: string | null
   tag?: string | null
+  /** Chat: the room this push is about. The service worker keeps one
+   *  notification per room and counts the messages in it (#967). */
+  room?: string | null
+  /** Chat: one-time token that lets the notification's inline Reply post
+   *  into the room as the recipient (#956). */
+  reply_token?: string | null
 }
 
 /**
@@ -96,7 +102,9 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
       title: payload.title.slice(0, 120),
       body: payload.body.slice(0, 300),
       url: payload.url ?? null,
-      tag: payload.tag ?? null
+      tag: payload.tag ?? null,
+      room: payload.room ?? null,
+      reply_token: payload.reply_token ?? null
     })
 
     let sent = 0

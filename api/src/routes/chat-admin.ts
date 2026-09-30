@@ -41,6 +41,41 @@ function parseIdList(raw: unknown): string[] {
 export async function chatAdminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
+  /** Chat health (#989): sockets, sends, failed sends, send and delivery
+   *  timings for the last hour on this replica, plus stored message volume. */
+  app.get('/health', async () => {
+    const { chatHealth } = await import('../services/chat-health.js')
+    const io = app.io as unknown as { engine?: { clientsCount?: number } } | undefined
+    const hourAgo = new Date(Date.now() - 3600_000)
+    const stored = Number(
+      (
+        (await db('chat_messages')
+          .where('date_created', '>=', hourAgo)
+          .count({ n: 'id' })
+          .first()) as { n?: number } | undefined
+      )?.n ?? 0
+    )
+    let scheduled = 0
+    let scheduledFailed = 0
+    if (await db.schema.hasTable('nivaro_chat_scheduled').catch(() => false)) {
+      const rows = (await db('nivaro_chat_scheduled')
+        .whereIn('status', ['pending', 'failed'])
+        .groupBy('status')
+        .select('status')
+        .count({ n: 'id' })) as Array<{ status: string; n: number }>
+      scheduled = Number(rows.find((r) => r.status === 'pending')?.n ?? 0)
+      scheduledFailed = Number(rows.find((r) => r.status === 'failed')?.n ?? 0)
+    }
+    return {
+      data: {
+        ...chatHealth(io?.engine?.clientsCount ?? 0),
+        stored_last_hour: stored,
+        scheduled_pending: scheduled,
+        scheduled_failed: scheduledFailed
+      }
+    }
+  })
+
   app.get('/analytics', async (req) => {
     const days = Math.min(Math.max(Number((req.query as { days?: string }).days) || 30, 1), 365)
     const tz = await userTimeZone(req.user ?? null)

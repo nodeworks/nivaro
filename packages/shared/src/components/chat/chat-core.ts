@@ -1,6 +1,6 @@
 import { readItems } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
@@ -45,7 +45,36 @@ export interface ChatMessage {
   reactions?: ChatReaction[]
   /** The admin who was masquerading as the sender when it was sent. */
   masquerade_admin_name?: string | null
+  /** Thread reply (#927): the root it answers. Null on the timeline. */
+  parent_id?: number | null
+  /** Quoted message (#928). */
+  quote_id?: number | null
+  quote?: {
+    id: number
+    sender_name: string | null
+    message: string
+    deleted: boolean
+    has_attachments: boolean
+  } | null
+  /** Replies under this message (roots only). */
+  thread?: {
+    count: number
+    last_reply_at: string | null
+    people: Array<{ id: string; name: string | null }>
+  } | null
+  urgent?: boolean
+  /** A platform line (record activity, flows) rather than a person. */
+  is_system?: boolean
+  /** The sender removed the link preview. */
+  no_preview?: boolean
+  client_id?: string | null
+  mentions?: string[]
+  /** Times written in the message, as stored instants (#962). */
+  time_refs?: Array<{ text: string; at: string }>
 }
+
+/** Where a room view opens: the newest messages, or around a message / day. */
+export type ChatAnchor = { around: number } | { date: string } | null
 
 /** The reaction palette — mirrored server-side; anything else is rejected. */
 export const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
@@ -187,48 +216,333 @@ function useRealtimeInvalidate(collection: string, keys: string[][]) {
   }, [cfg.realtime, collection, qc])
 }
 
-export function useChatMessages(room: string | null) {
+interface MessagesPage {
+  data: ChatMessage[]
+  meta?: { has_older: boolean; has_newer: boolean; anchor: number | null }
+}
+
+/**
+ * A room's timeline (thread replies excluded). Opens on the newest messages,
+ * or around a message / a day when `anchor` is given (#976, #977); older and
+ * newer history loads on demand.
+ */
+export function useChatMessages(room: string | null, anchor: ChatAnchor = null) {
   const cfg = useChatConfig()
   const client = useNivaroClient()
+  const anchorKey = anchor
+    ? 'around' in anchor
+      ? `around:${anchor.around}`
+      : `date:${anchor.date}`
+    : 'latest'
   const { data, isLoading } = useQuery({
-    queryKey: ['nvr-chat', room],
+    queryKey: ['nvr-chat', room, anchorKey],
     queryFn: async () => {
+      const params: Record<string, unknown> = { room, limit: anchor ? 80 : 80 }
+      if (anchor && 'around' in anchor) params.around = anchor.around
+      if (anchor && 'date' in anchor) params.date = anchor.date
       const res = (await client.request(
-        get<{ data: ChatMessage[] }>('/chat/messages', { room, limit: 80 })
-      )) as { data: ChatMessage[] }
-      // Already oldest-first from the server.
-      return res.data ?? []
+        get<MessagesPage>('/chat/messages', params)
+      )) as MessagesPage
+      return res
     },
     enabled: !!room,
     staleTime: 5_000,
-    refetchInterval: cfg.realtime ? undefined : 10_000
+    refetchInterval: cfg.realtime || cfg.subscribeRooms ? undefined : 10_000
   })
-  useChatRealtime([['nvr-chat'], ['nvr-chat-rooms']], room ? [room] : [])
-  return { messages: data ?? [], loading: isLoading }
+  useChatRealtime([['nvr-chat'], ['nvr-chat-rooms'], ['nvr-chat-thread']], room ? [room] : [])
+
+  // Older pages loaded by scrolling up, kept per room + anchor.
+  const [older, setOlder] = useState<ChatMessage[]>([])
+  const [hasOlder, setHasOlder] = useState<boolean | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  useEffect(() => {
+    setOlder([])
+    setHasOlder(null)
+  }, [room, anchorKey])
+  const base = data?.data ?? []
+  const messages = useMemo(() => {
+    if (older.length === 0) return base
+    const seen = new Set(base.map((m) => m.id))
+    return [...older.filter((m) => !seen.has(m.id)), ...base]
+  }, [older, base])
+  const loadOlder = useCallback(async () => {
+    if (!room || loadingOlder) return
+    const first = messages[0]
+    if (!first) return
+    setLoadingOlder(true)
+    try {
+      const res = (await client.request(
+        get<MessagesPage>('/chat/messages', { room, limit: 60, before: first.id })
+      )) as MessagesPage
+      setOlder((prev) => [...(res.data ?? []), ...prev])
+      setHasOlder(!!res.meta?.has_older)
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [room, messages, client, loadingOlder])
+  return {
+    messages,
+    loading: isLoading,
+    hasOlder: hasOlder ?? !!data?.meta?.has_older,
+    hasNewer: !!data?.meta?.has_newer,
+    anchorId: data?.meta?.anchor ?? null,
+    loadOlder,
+    loadingOlder
+  }
 }
 
-export function useSendChatMessage(room: string) {
+/** One thread: the root and its replies, oldest first (#927). */
+export function useChatThread(room: string | null, rootId: number | null) {
   const cfg = useChatConfig()
   const client = useNivaroClient()
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (
-      input: string | { text: string; mentions?: string[]; attachments?: string[] }
-    ) => {
-      const { text, mentions, attachments } =
-        typeof input === 'string' ? { text: input, mentions: [], attachments: [] } : input
-      // The server stamps sender/sender_name from the session and fans the
-      // mention notifications out itself, skipping anyone who cannot see the
-      // room — a client-supplied sender was always a fiction anyway.
-      await client.request(
-        post('/chat/messages', { room, message: text, mentions, attachments: attachments ?? [] })
-      )
+  const { data, isLoading } = useQuery({
+    queryKey: ['nvr-chat-thread', room, rootId],
+    queryFn: async () => {
+      const res = (await client.request(
+        get<MessagesPage>('/chat/messages', { room, thread: rootId, limit: 300 })
+      )) as MessagesPage
+      return res.data ?? []
     },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['nvr-chat', room] })
-      void qc.invalidateQueries({ queryKey: ['nvr-chat-rooms'] })
-    }
+    enabled: !!room && !!rootId,
+    staleTime: 5_000,
+    refetchInterval: cfg.realtime || cfg.subscribeRooms ? undefined : 10_000
   })
+  useChatRealtime([['nvr-chat-thread']], room ? [room] : [])
+  const all = data ?? []
+  return {
+    root: all.find((m) => m.id === rootId) ?? null,
+    replies: all.filter((m) => m.id !== rootId),
+    loading: isLoading
+  }
+}
+
+export interface SendInput {
+  text: string
+  mentions?: string[]
+  attachments?: string[]
+  parentId?: number | null
+  quoteId?: number | null
+  urgent?: boolean
+}
+
+/**
+ * Send through the outbox (#983, #984): the message shows at once as
+ * "Sending…", a network failure keeps it queued and retries in order when the
+ * connection is back, a refusal marks it failed with Retry. The client id rides
+ * the request, so a retry of a send that actually landed is not posted twice.
+ */
+export function useSendChatMessage(room: string) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const cfg = useChatConfig()
+  bindOutbox(client, qc, cfg.me?.id ?? null)
+  const send = useCallback(
+    (input: string | SendInput) => {
+      const i: SendInput = typeof input === 'string' ? { text: input } : input
+      enqueueOutbox({
+        client_id: newClientId(),
+        room,
+        text: i.text,
+        mentions: i.mentions ?? [],
+        attachments: i.attachments ?? [],
+        parent_id: i.parentId ?? null,
+        quote_id: i.quoteId ?? null,
+        urgent: !!i.urgent,
+        status: 'sending',
+        error: null,
+        created_at: new Date().toISOString(),
+        sender: cfg.me?.id ?? '',
+        sender_name: cfg.me?.name ?? null
+      })
+    },
+    [room, cfg.me?.id, cfg.me?.name]
+  )
+  return { mutate: send, isPending: false }
+}
+
+// ── Outbox ───────────────────────────────────────────────────────────────────
+
+export interface OutboxItem {
+  client_id: string
+  room: string
+  text: string
+  mentions: string[]
+  attachments: string[]
+  parent_id: number | null
+  quote_id: number | null
+  urgent: boolean
+  status: 'sending' | 'queued' | 'failed'
+  error: string | null
+  created_at: string
+  sender: string
+  sender_name: string | null
+}
+
+const OUTBOX_KEY = 'nvr-chat-outbox'
+let outbox: OutboxItem[] = []
+const outboxListeners = new Set<() => void>()
+let outboxClient: ReturnType<typeof useNivaroClient> | null = null
+let outboxQc: ReturnType<typeof useQueryClient> | null = null
+let outboxUser: string | null = null
+let flushing = false
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+function newClientId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+  return c?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+function saveOutbox() {
+  try {
+    if (typeof localStorage === 'undefined' || !outboxUser) return
+    const keep = outbox.filter((o) => o.sender === outboxUser)
+    localStorage.setItem(`${OUTBOX_KEY}:${outboxUser}`, JSON.stringify(keep))
+  } catch {
+    /* storage is a convenience */
+  }
+}
+
+function emitOutbox() {
+  saveOutbox()
+  for (const l of outboxListeners) l()
+}
+
+function bindOutbox(
+  client: ReturnType<typeof useNivaroClient>,
+  qc: ReturnType<typeof useQueryClient>,
+  userId: string | null
+) {
+  outboxClient = client
+  outboxQc = qc
+  if (userId && userId !== outboxUser) {
+    outboxUser = userId
+    try {
+      const raw = localStorage.getItem(`${OUTBOX_KEY}:${userId}`)
+      const saved = raw ? (JSON.parse(raw) as OutboxItem[]) : []
+      // Anything left from an earlier visit waits for a connection again.
+      const known = new Set(outbox.map((o) => o.client_id))
+      for (const o of saved)
+        if (!known.has(o.client_id))
+          outbox.push({ ...o, status: o.status === 'failed' ? 'failed' : 'queued' })
+      if (saved.length) {
+        emitOutbox()
+        scheduleRetry(1000)
+      }
+    } catch {
+      /* storage is a convenience */
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => scheduleRetry(0))
+    }
+  }
+}
+
+function enqueueOutbox(item: OutboxItem) {
+  outbox.push(item)
+  emitOutbox()
+  void flushOutbox()
+}
+
+function scheduleRetry(ms: number) {
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    for (const o of outbox) if (o.status === 'queued') o.status = 'sending'
+    emitOutbox()
+    void flushOutbox()
+  }, ms)
+}
+
+function isNetworkError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status
+  if (status == null) return true // fetch threw: no response at all
+  return status === 0 || status === 502 || status === 503 || status === 504
+}
+
+/** Sends in order: one message at a time, and a queued earlier message holds
+ *  the later ones in the same room back so they never arrive out of order. */
+async function flushOutbox() {
+  if (flushing || !outboxClient) return
+  flushing = true
+  try {
+    const blocked = new Set<string>()
+    for (const o of [...outbox]) {
+      if (o.status === 'failed') continue
+      if (blocked.has(o.room)) continue
+      if (o.status === 'queued') {
+        blocked.add(o.room)
+        continue
+      }
+      try {
+        const res = (await outboxClient.request(
+          post('/chat/messages', {
+            room: o.room,
+            message: o.text,
+            mentions: o.mentions,
+            attachments: o.attachments,
+            parent_id: o.parent_id,
+            quote_id: o.quote_id,
+            urgent: o.urgent,
+            client_id: o.client_id
+          })
+        )) as { data?: ChatMessage }
+        outbox = outbox.filter((x) => x.client_id !== o.client_id)
+        const row = res?.data
+        if (row && !o.parent_id) {
+          outboxQc?.setQueryData<MessagesPage>(['nvr-chat', o.room, 'latest'], (prev) =>
+            prev && !prev.data.some((m) => m.id === row.id)
+              ? { ...prev, data: [...prev.data, row] }
+              : prev
+          )
+        }
+        void outboxQc?.invalidateQueries({ queryKey: ['nvr-chat', o.room] })
+        void outboxQc?.invalidateQueries({ queryKey: ['nvr-chat-thread', o.room] })
+        void outboxQc?.invalidateQueries({ queryKey: ['nvr-chat-rooms'] })
+        emitOutbox()
+      } catch (err) {
+        if (isNetworkError(err)) {
+          o.status = 'queued'
+          o.error = 'Waiting for a connection'
+          blocked.add(o.room)
+          scheduleRetry(8000)
+        } else {
+          o.status = 'failed'
+          const body = (err as { response?: { error?: string } })?.response
+          o.error = body?.error ?? (err instanceof Error ? err.message : 'Could not send')
+        }
+        emitOutbox()
+      }
+    }
+  } finally {
+    flushing = false
+  }
+}
+
+export function retryOutbox(clientId: string) {
+  const o = outbox.find((x) => x.client_id === clientId)
+  if (!o) return
+  o.status = 'sending'
+  o.error = null
+  emitOutbox()
+  void flushOutbox()
+}
+
+export function discardOutbox(clientId: string) {
+  outbox = outbox.filter((x) => x.client_id !== clientId)
+  emitOutbox()
+}
+
+/** Messages still on their way out for one room (or thread). */
+export function useOutbox(room: string, parentId: number | null = null): OutboxItem[] {
+  const [, force] = useState(0)
+  useEffect(() => {
+    const l = () => force((n) => n + 1)
+    outboxListeners.add(l)
+    return () => {
+      outboxListeners.delete(l)
+    }
+  }, [])
+  return outbox.filter((o) => o.room === room && (o.parent_id ?? null) === parentId)
 }
 
 // ── Rooms + unread ───────────────────────────────────────────────────────────
@@ -245,6 +559,11 @@ export interface RoomInfo {
   channel: ChannelMeta | null
   /** Put away by this person — lives in the Archived tab, never alerts. */
   archived?: boolean
+  /** Pinned to the top of this person's list (#957). */
+  starred?: boolean
+  /** Unread messages that name this person. */
+  mentions?: number
+  welcome_seen_at?: string | null
 }
 
 export interface ChannelMeta {
@@ -258,6 +577,11 @@ export interface ChannelMeta {
   icon?: string | null
   /** #rrggbb from the fixed palette; null = neutral tile. */
   color?: string | null
+  announce?: boolean
+  description?: string | null
+  links?: Array<{ label: string; url: string }>
+  welcome_note?: string | null
+  default_roles?: string[]
 }
 
 interface ServerRoom {
@@ -269,6 +593,9 @@ interface ServerRoom {
   notify_mode?: 'all' | 'mentions'
   joined: boolean
   archived?: boolean
+  starred?: boolean
+  mentions?: number
+  welcome_seen_at?: string | null
   channel: ChannelMeta | null
   last_message: ChatMessage | null
 }
@@ -299,7 +626,10 @@ function toRoomInfos(data: ServerRoom[], meId: string | undefined, cfg: ChatConf
       notify_mode: r.notify_mode ?? 'all',
       joined: r.joined,
       channel: r.channel ?? null,
-      archived: !!r.archived
+      archived: !!r.archived,
+      starred: !!r.starred,
+      mentions: r.mentions ?? 0,
+      welcome_seen_at: r.welcome_seen_at ?? null
     }
   })
   // General is opt-in (joined from the directory) — no synthetic row when
@@ -344,8 +674,17 @@ export function useChatRooms() {
   )
 
   // Muted rooms still show their count in the row, but they must not drive the
-  // badge or the chirp.
-  const totalUnread = rooms.reduce((s, r) => s + (r.muted ? 0 : r.unread), 0)
+  // badge or the chirp. With "Conversations and mentions" (#966) channel
+  // chatter drops out of the badge: only DMs, group DMs and mentions count.
+  const badgeMode = useMyPreferences().chat_badge_mode
+  const totalUnread = rooms.reduce((s, r) => {
+    if (r.muted) return s
+    if (badgeMode === 'conversations') {
+      const convo = r.kind === 'dm' || (r.kind === 'channel' && !!r.channel?.is_direct)
+      return s + (convo ? r.unread : (r.mentions ?? 0))
+    }
+    return s + r.unread
+  }, 0)
   return { rooms, totalUnread, loading: query.isLoading }
 }
 
@@ -438,7 +777,17 @@ export function useRoomMembership() {
       client.request(patch2(`/chat/rooms/${encodeURIComponent(room)}`, { archived })),
     onSuccess: refresh
   })
-  return { join, leave, setMuted, setNotifyMode, setArchived }
+  const setStarred = useMutation({
+    mutationFn: ({ room, starred }: { room: string; starred: boolean }) =>
+      client.request(patch2(`/chat/rooms/${encodeURIComponent(room)}`, { starred })),
+    onSuccess: refresh
+  })
+  const dismissWelcome = useMutation({
+    mutationFn: (room: string) =>
+      client.request(patch2(`/chat/rooms/${encodeURIComponent(room)}`, { welcome_seen: true })),
+    onSuccess: refresh
+  })
+  return { join, leave, setMuted, setNotifyMode, setArchived, setStarred, dismissWelcome }
 }
 
 export interface ChannelMember {
@@ -483,6 +832,11 @@ export function useChannelAdmin(channelId: number | null) {
       is_archived?: boolean
       icon?: string | null
       color?: string | null
+      announce?: boolean
+      description?: string | null
+      links?: Array<{ label: string; url: string }>
+      welcome_note?: string | null
+      default_roles?: string[]
     }) => client.request(patch2(`/chat/channels/${channelId}`, patch)),
     onSuccess: refresh
   })
@@ -991,6 +1345,7 @@ export function useDeleteMessage(room: string) {
 
 export interface ChatSearchHit {
   id: number
+  parent_id?: number | null
   room: string
   sender: string | null
   sender_name: string | null
@@ -1000,17 +1355,36 @@ export interface ChatSearchHit {
 
 /** Search every room in MY sidebar (server enforces visibility by
  *  construction — the room set is the user's own). */
-export function useChatSearch(q: string) {
+export interface ChatSearchFilters {
+  sender?: string | null
+  room?: string | null
+  from?: string | null
+  to?: string | null
+  has_attachment?: boolean
+  mentions_me?: boolean
+}
+
+export function useChatSearch(q: string, filters: ChatSearchFilters = {}) {
   const client = useNivaroClient()
+  const params: Record<string, string> = { q }
+  if (filters.sender) params.sender = filters.sender
+  if (filters.room) params.room = filters.room
+  if (filters.from) params.from = filters.from
+  if (filters.to) params.to = filters.to
+  if (filters.has_attachment) params.has_attachment = '1'
+  if (filters.mentions_me) params.mentions_me = '1'
+  const filtered = Object.keys(params).length > 1
   const { data, isLoading } = useQuery({
-    queryKey: ['nvr-chat-search', q],
+    queryKey: ['nvr-chat-search', params],
     queryFn: async () => {
-      const res = (await client.request(get<{ data: ChatSearchHit[] }>('/chat/search', { q }))) as {
+      const res = (await client.request(
+        get<{ data: ChatSearchHit[] }>('/chat/search', params)
+      )) as {
         data: ChatSearchHit[]
       }
       return res.data ?? []
     },
-    enabled: q.trim().length >= 2,
+    enabled: q.trim().length >= 2 || filtered,
     staleTime: 15_000
   })
   return { hits: data ?? [], loading: isLoading }
@@ -1165,4 +1539,47 @@ export function canOpenChatRoom(): boolean {
 
 export function openChatRoom(room: string, label?: string): void {
   roomOpener?.(room, label)
+}
+
+// ── Record rooms outside the chat tree ───────────────────────────────────────
+
+export interface RecordRoomType {
+  prefix: string
+  collection: string
+  match_field: string
+  is_active: boolean
+}
+
+/** Active entity-room registrations. Shared cache key + shape with the record
+ *  header's chat button, so a list and a record form ask once between them. */
+export function useRecordRoomTypes(enabled = true): RecordRoomType[] | undefined {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['nvr-chat-room-types'],
+    queryFn: async () => {
+      const res = (await client.request(get<{ data: RecordRoomType[] }>('/chat/room-types'))) as {
+        data: RecordRoomType[]
+      }
+      return (res.data ?? []).filter((t) => t.is_active)
+    },
+    enabled,
+    staleTime: 5 * 60_000
+  })
+  return data
+}
+
+/** Open a record's chat room from anywhere a record id is known (#968): the
+ *  server resolves the room (and says no when the viewer may not see it). */
+export async function discussRecord(
+  client: ReturnType<typeof useNivaroClient>,
+  collection: string,
+  item: string
+): Promise<boolean> {
+  const res = (await client.request(
+    get<{ data: { room: string } | null }>('/chat/record-room', { collection, item })
+  )) as { data: { room: string } | null }
+  if (!res.data?.room) return false
+  const token = res.data.room.slice(res.data.room.indexOf(':') + 1)
+  openChatRoom(res.data.room, token)
+  return true
 }

@@ -78,6 +78,44 @@ export interface ChatChannel {
   icon?: string | null
   /** #rrggbb from CHANNEL_COLORS; null = neutral. */
   color?: string | null
+  /** Announcement channel (#935): only the owner and admins post. */
+  announce?: boolean
+  /** Optional longer purpose shown at the top of the room (#936). */
+  description?: string | null
+  /** Pinned links at the top of the room (#936). */
+  links?: Array<{ label: string; url: string }>
+  /** Shown once to each new member (#961). */
+  welcome_note?: string | null
+  /** Roles whose members join automatically (#960). */
+  default_roles?: string[]
+}
+
+function jsonList<T>(raw: unknown): T[] {
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw as T[]
+  try {
+    const v = JSON.parse(String(raw))
+    return Array.isArray(v) ? (v as T[]) : []
+  } catch {
+    return []
+  }
+}
+
+/** Validate a channel's pinned links: ≤ 8, http(s) only, short labels. */
+export function cleanChannelLinks(raw: unknown): Array<{ label: string; url: string }> | null {
+  if (raw == null) return []
+  if (!Array.isArray(raw)) return null
+  const out: Array<{ label: string; url: string }> = []
+  for (const l of raw.slice(0, 8)) {
+    const url = String((l as { url?: unknown })?.url ?? '').trim()
+    if (!/^https?:\/\/\S+$/i.test(url) && !/^\/[\w\-/?=&%.#]*$/.test(url)) return null
+    const label =
+      String((l as { label?: unknown })?.label ?? '')
+        .trim()
+        .slice(0, 60) || url
+    out.push({ label, url: url.slice(0, 500) })
+  }
+  return out
 }
 
 /** The icons a channel may carry — the client draws exactly these names. */
@@ -160,7 +198,14 @@ export async function channels(): Promise<Map<string, ChatChannel>> {
   const byKey = new Map(
     rows.map((r) => [
       String(r.key),
-      { ...r, is_archived: !!r.is_archived, is_direct: !!r.is_direct } as unknown as ChatChannel
+      {
+        ...r,
+        is_archived: !!r.is_archived,
+        is_direct: !!r.is_direct,
+        announce: !!r.announce,
+        links: jsonList<{ label: string; url: string }>(r.links),
+        default_roles: jsonList<string>(r.default_roles).map((x) => String(x).toUpperCase())
+      } as unknown as ChatChannel
     ])
   )
   channelCache = { at: Date.now(), byKey }
@@ -282,7 +327,18 @@ export interface RoomSummary {
     is_direct: boolean
     icon: string | null
     color: string | null
+    announce: boolean
+    description: string | null
+    links: Array<{ label: string; url: string }>
+    welcome_note: string | null
+    default_roles: string[]
   } | null
+  /** Pinned to the top of this person's list (#957). */
+  starred: boolean
+  /** When this person dismissed the channel's welcome note (#961). */
+  welcome_seen_at: string | null
+  /** Unread messages that name this person (@mention, @channel, @here). */
+  mentions: number
   last_message: {
     id: number
     message: string
@@ -304,6 +360,7 @@ export async function listRooms(
 ): Promise<RoomSummary[]> {
   const uid = String(user.id)
   const wantArchived = opts.archived === true
+  await autoJoinDefaultChannels(user).catch(() => {})
   const [memberships, dmRooms, chans] = await Promise.all([
     db('nivaro_chat_memberships').where('user', uid) as Promise<
       Array<{
@@ -312,6 +369,8 @@ export async function listRooms(
         is_muted: boolean
         notify_mode: string | null
         archived_at?: Date | null
+        starred?: boolean | null
+        welcome_seen_at?: Date | null
       }>
     >,
     // DMs are implicit: a message addressed to you creates the room.
@@ -360,10 +419,11 @@ export async function listRooms(
   if (allowed.size === 0) return []
 
   const rooms = [...allowed]
-  const [lastMessages, unreadRows, dmNames] = await Promise.all([
+  const [lastMessages, unreadRows, dmNames, mentionRows] = await Promise.all([
     lastMessagePerRoom(rooms),
     unreadPerRoom(uid, rooms),
-    dmPeerNames(uid, rooms)
+    dmPeerNames(uid, rooms),
+    unreadMentionsPerRoom(uid, rooms)
   ])
 
   // A 1:1 DM lists once it holds a message. Opening a conversation writes a
@@ -388,9 +448,19 @@ export async function listRooms(
             created_by: channel.created_by,
             is_direct: channel.is_direct,
             icon: channel.icon ?? null,
-            color: channel.color ?? null
+            color: channel.color ?? null,
+            announce: !!channel.announce,
+            description: channel.description ?? null,
+            links: channel.links ?? [],
+            welcome_note: channel.welcome_note ?? null,
+            default_roles: channel.default_roles ?? []
           }
         : null,
+      starred: !!membership?.starred,
+      welcome_seen_at: membership?.welcome_seen_at
+        ? new Date(membership.welcome_seen_at).toISOString()
+        : null,
+      mentions: mentionRows.get(room) ?? 0,
       unread: unreadRows.get(room) ?? 0,
       muted: !!membership?.is_muted,
       notify_mode: (membership?.notify_mode === 'mentions' ? 'mentions' : 'all') as
@@ -505,6 +575,97 @@ async function dmPeerNames(userId: string, rooms: string[]): Promise<Map<string,
     if (name) out.set(room, name)
   }
   return out
+}
+
+/**
+ * Unread messages per room that name this person: an explicit @mention
+ * (stored ids, migration 370) or a room-wide @channel / @here.
+ */
+async function unreadMentionsPerRoom(
+  userId: string,
+  rooms: string[]
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  if (rooms.length === 0) return out
+  const hasMentions = await hasColumnCached('chat_messages', 'mentions')
+  const me = userId.toUpperCase()
+  for (const chunk of chunked(rooms)) {
+    const rows = (await db('chat_messages as m')
+      .leftJoin('nivaro_chat_memberships as w', (j) =>
+        j.on('w.room', '=', 'm.room').andOn(db.raw('w.[user] = ?', [userId]))
+      )
+      .whereIn('m.room', chunk)
+      .whereNull('m.deleted_at')
+      .andWhere((qb) =>
+        qb.whereNull('m.sender').orWhereRaw('UPPER(CAST(m.sender AS NVARCHAR(36))) <> ?', [me])
+      )
+      .andWhere((qb) =>
+        qb.whereNull('w.last_read_at').orWhereRaw('m.date_created > w.last_read_at')
+      )
+      .andWhere((qb) => {
+        if (hasMentions) qb.where('m.mentions', 'like', `%${me}%`)
+        qb.orWhere('m.message', 'like', '%@channel%').orWhere('m.message', 'like', '%@here%')
+      })
+      .groupBy('m.room')
+      .select('m.room')
+      .count({ n: 'm.id' })
+      .catch(() => [])) as Array<{ room: string; n: number }>
+    for (const r of rows) out.set(String(r.room), Number(r.n))
+  }
+  return out
+}
+
+const columnMemo = new Map<string, { at: number; v: boolean }>()
+async function hasColumnCached(table: string, col: string): Promise<boolean> {
+  const k = `${table}.${col}`
+  const hit = columnMemo.get(k)
+  if (hit && (hit.v || Date.now() - hit.at < 60_000)) return hit.v
+  const { hasColumn } = await import('../lib/column-probe.js')
+  const v = await hasColumn(table, col).catch(() => false)
+  columnMemo.set(k, { at: Date.now(), v })
+  return v
+}
+
+/**
+ * Default channels per role (#960): a person joins every channel whose
+ * default roles include theirs — once. The auto-join is recorded, so leaving
+ * a default channel sticks; being moved into a new role joins that role's.
+ * Runs lazily from the room list, memoised per person for ten minutes.
+ */
+const autoJoinChecked = new Map<string, number>()
+export async function autoJoinDefaultChannels(user: User): Promise<void> {
+  if (!user.role) return
+  const key = `${user.id}|${user.role}`
+  const at = autoJoinChecked.get(key)
+  if (at && Date.now() - at < 10 * 60_000) return
+  autoJoinChecked.set(key, Date.now())
+  if (!(await hasColumnCached('nivaro_chat_channels', 'default_roles'))) return
+  const role = String(user.role).toUpperCase()
+  const wanted = [...(await channels()).values()].filter(
+    (c) => !c.is_archived && !c.is_direct && (c.default_roles ?? []).includes(role)
+  )
+  if (wanted.length === 0) return
+  const done = new Set(
+    (await db('nivaro_chat_auto_joins')
+      .where({ user: user.id })
+      .pluck('room')
+      .catch(() => [])) as string[]
+  )
+  for (const c of wanted) {
+    const room = `ch:${c.key}`
+    if (done.has(room)) continue
+    try {
+      await db('nivaro_chat_auto_joins').insert({ user: user.id, room, joined_at: new Date() })
+    } catch {
+      continue // already recorded by a concurrent request
+    }
+    const existing = await db('nivaro_chat_memberships').where({ user: user.id, room }).first()
+    if (!existing) {
+      await db('nivaro_chat_memberships')
+        .insert({ user: user.id, room, joined_at: new Date(), last_read_at: new Date() })
+        .catch(() => {})
+    }
+  }
 }
 
 /** MSSQL caps bound parameters at ~2100. */

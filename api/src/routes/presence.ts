@@ -746,10 +746,63 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       >,
       db('nivaro_users')
         .whereIn('id', visible)
-        .select('id', 'last_access', 'preferences') as Promise<
-        Array<{ id: string; last_access: Date | null; preferences: unknown }>
+        .select(
+          'id',
+          'last_access',
+          'preferences',
+          'is_out_of_office',
+          'ooo_end',
+          'delegate_id',
+          'delegate_expires_at'
+        ) as Promise<
+        Array<{
+          id: string
+          last_access: Date | null
+          preferences: unknown
+          is_out_of_office: boolean | number | null
+          ooo_end: Date | null
+          delegate_id: string | null
+          delegate_expires_at: Date | null
+        }>
       >
     ])
+    // Out of office + who covers (#973, #988). A delegate is named only when
+    // the delegation is live and the delegate can act — suspended or redacted
+    // people are never suggested as the one to ask instead.
+    const now = Date.now()
+    const delegateIds = [
+      ...new Set(
+        userRows
+          .filter(
+            (u) =>
+              !!u.is_out_of_office &&
+              u.delegate_id &&
+              (!u.delegate_expires_at || new Date(u.delegate_expires_at).getTime() > now)
+          )
+          .map((u) => String(u.delegate_id))
+      )
+    ]
+    const delegates = delegateIds.length
+      ? ((await db('nivaro_users')
+          .whereIn('id', delegateIds)
+          .where((q) => q.whereNull('status').orWhereNot('status', 'suspended'))
+          .where((q) => q.whereNull('is_redacted').orWhere('is_redacted', false))
+          .select('id', 'first_name', 'last_name', 'email')) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+        }>)
+      : []
+    const delegateById = new Map(
+      delegates.map((d) => [
+        String(d.id).toUpperCase(),
+        {
+          id: d.id,
+          name: [d.first_name, d.last_name].filter(Boolean).join(' ') || d.email || 'their delegate'
+        }
+      ])
+    )
     const seen = new Map<string, number>()
     for (const r of presenceRows) {
       const t = r.last_seen ? new Date(r.last_seen).getTime() : 0
@@ -766,7 +819,13 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
         user_id: u.id,
         last_seen: last ? new Date(last).toISOString() : null,
         timezone: tz,
-        away: awayOverride(prefs)
+        away: awayOverride(prefs),
+        out_of_office: !!u.is_out_of_office,
+        ooo_end: u.is_out_of_office && u.ooo_end ? new Date(u.ooo_end).toISOString() : null,
+        delegate:
+          u.is_out_of_office && u.delegate_id
+            ? (delegateById.get(String(u.delegate_id).toUpperCase()) ?? null)
+            : null
       }
     })
     return reply.send({ data })

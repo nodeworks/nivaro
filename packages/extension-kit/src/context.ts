@@ -150,6 +150,17 @@ export interface ExtensionContext {
    *  person; a raw nivaro_notifications insert bypasses every preference.
    *  Never throws. */
   notifyUser(userId: string, opts: NotifyUserOptions): Promise<void>
+  /** Chat (#972): post into a channel, General or a record room — as the
+   *  assistant (default, when the instance has one) or as a platform line.
+   *  Never into direct messages. Resolves the new message id, or null when
+   *  the room does not exist. Never throws. */
+  chat: {
+    post(
+      room: string,
+      text: string,
+      opts?: { as?: 'bot' | 'system'; parent_id?: number | null }
+    ): Promise<number | null>
+  }
   /** Hook helpers scoped to this extension — hooks are tagged and can be
    *  disabled / removed with it. */
   hooks: {

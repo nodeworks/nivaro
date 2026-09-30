@@ -36,4 +36,14 @@ export function registerCoreTriggers(): void {
       '(e.g. import_key eq orders).',
     fields: []
   })
+  registerTrigger({
+    type: 'chat-message',
+    label: 'Chat Message',
+    description:
+      'Fires when a person posts a chat message (never the assistant or a platform line). ' +
+      'Payload: room, room_kind (global|dm|channel|entity), room_prefix + room_token (record rooms), ' +
+      'message_id, parent_id (thread replies), sender, sender_name, text, has_attachments, urgent. ' +
+      'Filter with a Condition operation (e.g. room eq ch:ops, text contains "outage").',
+    fields: []
+  })
 }

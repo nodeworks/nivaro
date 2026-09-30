@@ -1,14 +1,14 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
   ChatPanel,
-  isChatPanelPinned,
   ChatProvider,
   ItemEditAuthContext,
+  isChatPanelPinned,
   NivaroProvider,
-  useChatRooms,
-  useUnreadChirp,
   registerDmOpener,
-  registerRoomOpener
+  registerRoomOpener,
+  useChatRooms,
+  useUnreadChirp
 } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { MessagesSquare } from 'lucide-react'
@@ -18,10 +18,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
-  usePresenceLive,
   setTypingRoom,
   useOnlineUsers,
-  usePresenceHeartbeat
+  usePresenceHeartbeat,
+  usePresenceLive
 } from '@/lib/chat-presence'
 import { onCollectionUpdate, subscribeChatRooms } from '@/lib/socket'
 
@@ -43,6 +43,8 @@ export interface ChatRoomType {
   match_field: string
   label: string | null
   is_active: boolean
+  post_activity?: boolean
+  owners_follow?: boolean
 }
 
 export function useChatRoomTypes() {

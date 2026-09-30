@@ -74,6 +74,8 @@ import {
 } from './bulk/BulkActionButtons'
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
+import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
+import { FilterControl } from './DataTable'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
 import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
@@ -84,7 +86,6 @@ import { MapView } from './MapView'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
-import { FilterControl } from './DataTable'
 import { TipLayer } from './TipLayer'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
 
@@ -650,6 +651,9 @@ export function RowActionsMenu({
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const btnRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  // "Discuss" (#968) only where chat is hosted and the collection has rooms.
+  const roomTypes = useRecordRoomTypes(open)
+  const discussable = canOpenChatRoom() && !!roomTypes?.some((t) => t.collection === collection)
 
   useEffect(() => {
     if (!open) return
@@ -985,6 +989,15 @@ export function RowActionsMenu({
                   item('Peek details', () => {
                     setOpen(false)
                     onPeek()
+                  })}
+                {discussable &&
+                  item('Discuss in chat', () => {
+                    setOpen(false)
+                    void discussRecord(client, collection, String(id))
+                      .then((ok) => {
+                        if (!ok) toast.error('This record has no chat room you can open')
+                      })
+                      .catch(() => toast.error('Could not open the chat room'))
                   })}
                 {onAudit &&
                   item('Audit log', () => {

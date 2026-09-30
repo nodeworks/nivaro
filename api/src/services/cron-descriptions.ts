@@ -52,6 +52,10 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly — reminds users who have not acknowledged a must-acknowledge broadcast, and tells its author how many are outstanding.',
   'chat-reminders':
     'Every 20 seconds — delivers due reminders ("remind me Friday 9am") as a notification and, when set from chat, a message from the assistant in that chat. Records only failed ticks.',
+  'chat-scheduled-send':
+    'Every 20 seconds — sends chat messages people scheduled for later, through the normal send path (room access re-checked at send time). Records only failed ticks.',
+  'chat-dm-email-fallback':
+    'Every 5 minutes — emails people who opted in about direct messages they have not read for 30 minutes, once per unread stretch (quiet hours and mail test mode apply).',
   'outbox-worker':
     'Every minute — retries notification and email deliveries that failed and were parked in the outbox.',
   'extension-events-sweep':

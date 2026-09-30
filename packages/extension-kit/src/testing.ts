@@ -360,6 +360,11 @@ export interface TestContext extends ExtensionContext {
   /** Every side effect the extension asked for, in order. */
   calls: {
     notifications: Array<{ userId: string; opts: NotifyUserOptions }>
+    chat: Array<{
+      room: string
+      text: string
+      opts?: { as?: 'bot' | 'system'; parent_id?: number | null }
+    }>
     externalApi: Array<{ nameOrId: string | number; options?: CallOptions; result: CallResult }>
     activity: Array<Parameters<ExtensionContext['logActivity']>[0]>
     flowsEmitted: Array<{ type: string; payload: Record<string, unknown> }>
@@ -487,6 +492,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
   const user: ExtensionUser = { ...defaultUser, ...opts.user }
   const calls: TestContext['calls'] = {
     notifications: [],
+    chat: [],
     externalApi: [],
     activity: [],
     flowsEmitted: [],
@@ -648,6 +654,12 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     },
     notifyUser: async (userId, o) => {
       calls.notifications.push({ userId, opts: o })
+    },
+    chat: {
+      post: async (room, text, o) => {
+        calls.chat.push({ room, text, opts: o })
+        return calls.chat.length
+      }
     },
     hooks: {
       before: (collection, action, fn) =>

@@ -32,7 +32,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { chaosRoutes } from './chaos.js'
-import { chatRoutes } from './chat.js'
+import { chatPushReplyRoutes, chatRoutes } from './chat.js'
 import { chatAdminRoutes } from './chat-admin.js'
 import { collectionDesignerRoutes } from './collection-designer.js'
 import { collectionLayoutsRoutes } from './collection-layouts.js'
@@ -352,6 +352,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(collectionsRoutes, { prefix: '/collections' })
   await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
   await app.register(chatRoutes, { prefix: '/chat' })
+  // Token-authenticated (the push notification's own reply token).
+  await app.register(chatPushReplyRoutes, { prefix: '/chat-push' })
   await app.register(chatAdminRoutes, { prefix: '/chat/admin' })
   await app.register(dataModelRoutes, { prefix: '/data-model' })
   // Same prefix, auth-only: the read-only relation lookup every record form needs

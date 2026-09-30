@@ -1,7 +1,7 @@
-import { errorText } from '../lib/db-refusal.js'
 import { randomUUID } from 'node:crypto'
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
+import { errorText } from '../lib/db-refusal.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
@@ -991,6 +991,71 @@ async function runWorkflowAutoSweep(op: FlowOperation, data: FlowData, ctx: Exec
   }
 }
 
+/**
+ * chat-post (#970): post a message into a chat room as the assistant (or as a
+ * platform line when the instance has no assistant). Channels, General and
+ * record rooms only — a flow never writes into someone's direct messages.
+ */
+async function runChatPost(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+  const opts = parseOpts(op)
+  const room = resolveTemplate((opts.room as string) ?? '', data).trim()
+  const message = resolveTemplate((opts.message as string) ?? '', data).trim()
+  const resultKey = (opts.result_key as string) || 'chat'
+  const reject = (why: string) => ({
+    status: 'reject' as const,
+    output: { ...data, $error: `chat-post: ${why}` }
+  })
+  if (!room || !message) return reject('room and message are required')
+  const { parseRoom, channels } = await import('./chat.js')
+  const parsed = parseRoom(room)
+  if (parsed.kind === 'dm' || parsed.kind === 'unknown')
+    return reject('not a channel or record room')
+  if (parsed.kind === 'channel') {
+    const ch = (await channels()).get(parsed.channelKey ?? '')
+    if (!ch || ch.is_archived) return reject(`no channel ${room}`)
+  }
+  if (parsed.kind === 'entity') {
+    const { roomTypes } = await import('./chat-records.js')
+    if (!(await roomTypes()).some((t) => t.prefix === parsed.prefix)) {
+      return reject(`no record room type for ${parsed.prefix}`)
+    }
+  }
+  if (ctx.dryRun) {
+    return {
+      status: 'resolve' as const,
+      output: { ...data, [`$preview_${op.key}`]: { op: 'chat-post', room, message } }
+    }
+  }
+  try {
+    const { getApp } = await import('./io-holder.js')
+    const app = getApp()
+    if (!app) return reject('server not ready')
+    const { botUserId, chatBotName } = await import('./chat-bot.js')
+    const botName = await chatBotName()
+    const botId = botName ? await botUserId().catch(() => null) : null
+    const { postChatMessage } = await import('./chat-send.js')
+    const row = await postChatMessage(
+      app,
+      botId
+        ? { user: null, senderId: botId, senderName: botName, skipVisibility: true }
+        : { user: null, senderId: null, senderName: 'Nivaro', system: true, skipVisibility: true },
+      { room, message }
+    )
+    const { logActivity } = await import('./activity.js')
+    void logActivity({
+      action: 'chat-post-flow',
+      user: botId ?? null,
+      collection: 'chat_messages',
+      item: String(row.id),
+      comment: `flow ${ctx.flowName ?? ctx.flowId} → ${room}`
+    })
+    return { status: 'resolve' as const, output: { ...data, [resultKey]: { id: row.id, room } } }
+  } catch (err) {
+    ctx.log.warn({ err, flowId: ctx.flowId, key: op.key }, 'chat-post failed')
+    return reject(err instanceof Error ? err.message : 'send failed')
+  }
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 async function runOperation(
@@ -1046,6 +1111,8 @@ async function runOperationInner(
       return runItemRead(op, data, ctx)
     case 'workflow-auto-sweep':
       return runWorkflowAutoSweep(op, data, ctx)
+    case 'chat-post':
+      return runChatPost(op, data, ctx)
     default: {
       const { getOp } = await import('../flows/registry.js')
       const customOp = getOp(op.type)

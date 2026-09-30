@@ -116,6 +116,7 @@ export {
   ChatAppearAwayRow,
   ChatRoomList,
   ChatRoomView,
+  ChatSideView,
   type ChatTheme,
   CloneDialog,
   CollectionBrowserView,

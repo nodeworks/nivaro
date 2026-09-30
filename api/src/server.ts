@@ -1170,6 +1170,29 @@ export async function buildServer() {
         { quiet: true }
       )
 
+      // Scheduled chat messages (#939): every 20 seconds, same claim as the
+      // request's own timer (services/chat-scheduled.ts).
+      app.cron.schedule(
+        'chat-scheduled-send',
+        '*/20 * * * * *',
+        async () => {
+          const { sendDueScheduled } = await import('./services/chat-scheduled.js')
+          await sendDueScheduled(app)
+        },
+        { quiet: true }
+      )
+      // Email fallback for unread DMs (#965) — opt-in per person.
+      app.cron.schedule('chat-dm-email-fallback', '*/5 * * * *', async () => {
+        const { sweepDmEmailFallback } = await import('./services/chat-send.js')
+        const n = await sweepDmEmailFallback(app)
+        if (n > 0) app.log.info(`chat: ${n} unread-DM email(s) sent`)
+      })
+      // Mention digest (#931): unread chat mentions in the daily summary.
+      {
+        const { registerChatMentionDigest } = await import('./services/chat-digest.js')
+        registerChatMentionDigest()
+      }
+
       app.cron.schedule('fk-integrity-sweep', '40 3 * * *', async () => {
         const { detectDanglingFks } = await import('./services/fk-integrity.js')
         const report = await detectDanglingFks()
@@ -1795,7 +1818,9 @@ export async function buildServer() {
         'metric-alerts-digest-weekly',
         'scheduled-broadcasts',
         'broadcast-ack-chasers',
-        'chat-reminders'
+        'chat-reminders',
+        'chat-scheduled-send',
+        'chat-dm-email-fallback'
       ]) {
         app.cron.annotate(id, { idempotent: 'unsafe' })
       }

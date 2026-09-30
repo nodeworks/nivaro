@@ -963,10 +963,13 @@ function UserCardPopover({
 
 export function UserChip({
   userId,
-  size = 'default'
+  size = 'default',
+  children
 }: {
   userId: string
   size?: 'default' | 'compact'
+  /** A custom trigger (e.g. a chat avatar) that opens the same user card. */
+  children?: React.ReactElement
 }) {
   const client = useOptionalNivaroClient()
   const { navigate, userUrl } = useNavigation()
@@ -1007,7 +1010,7 @@ export function UserChip({
     .toUpperCase()
   const online = presenceData?.online ?? false
 
-  if (isLoading) {
+  if (isLoading && !children) {
     return size === 'compact' ? (
       <span className='animate-pulse inline-block h-3.5 w-16 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
     ) : (
@@ -1021,7 +1024,9 @@ export function UserChip({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        {size === 'compact' ? (
+        {children ? (
+          children
+        ) : size === 'compact' ? (
           <span className='inline-flex cursor-pointer items-center gap-1 rounded-full bg-slate-100 dark:bg-slate-800 py-px pl-px pr-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors'>
             <UserAvatar
               userId={userId}

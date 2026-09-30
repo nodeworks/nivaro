@@ -496,6 +496,52 @@ export function registrationMembers(
         () => undefined
       )
     },
+    chat: {
+      post: async (room, text, o) => {
+        note('chat')
+        try {
+          const { parseRoom, channels } = await import('../services/chat.js')
+          const parsed = parseRoom(room)
+          if (parsed.kind === 'dm' || parsed.kind === 'unknown') return null
+          if (parsed.kind === 'channel') {
+            const ch = (await channels()).get(parsed.channelKey ?? '')
+            if (!ch || ch.is_archived) return null
+          }
+          if (parsed.kind === 'entity') {
+            const { roomTypes } = await import('../services/chat-records.js')
+            if (!(await roomTypes()).some((t) => t.prefix === parsed.prefix)) return null
+          }
+          const { botUserId, chatBotName } = await import('../services/chat-bot.js')
+          const botName = o?.as === 'system' ? null : await chatBotName()
+          const botId = botName ? await botUserId().catch(() => null) : null
+          const { postChatMessage } = await import('../services/chat-send.js')
+          const row = await postChatMessage(
+            ctx.app,
+            botId
+              ? { user: null, senderId: botId, senderName: botName, skipVisibility: true }
+              : {
+                  user: null,
+                  senderId: null,
+                  senderName: 'Nivaro',
+                  system: true,
+                  skipVisibility: true
+                },
+            { room, message: String(text ?? ''), parentId: o?.parent_id ?? null }
+          )
+          void logActivity({
+            action: `${extId}:chat-post`,
+            user: botId,
+            collection: 'chat_messages',
+            item: String(row.id),
+            comment: `room ${room}`,
+            origin: 'machine'
+          })
+          return row.id
+        } catch {
+          return null
+        }
+      }
+    },
     sql: {
       runLong: (sql, o) =>
         runLongSql(sql, runLongOnTenant ? { ...o, knex: ctx.database as never } : o)
@@ -890,6 +936,7 @@ async function loadExtension(
     | 'logActivity'
     | 'sql'
     | 'notifyUser'
+    | 'chat'
     | 'auth'
     | 'flows'
     | 'events'
@@ -1094,6 +1141,7 @@ export async function loadExtensions(
     | 'logActivity'
     | 'sql'
     | 'notifyUser'
+    | 'chat'
     | 'auth'
     | 'flows'
     | 'events'
@@ -1233,6 +1281,7 @@ export async function loadCloudExtensions(
     | 'logActivity'
     | 'sql'
     | 'notifyUser'
+    | 'chat'
     | 'auth'
     | 'flows'
     | 'events'
@@ -1418,6 +1467,7 @@ export async function scanNewExtensions(
     | 'logActivity'
     | 'sql'
     | 'notifyUser'
+    | 'chat'
     | 'auth'
     | 'flows'
     | 'events'

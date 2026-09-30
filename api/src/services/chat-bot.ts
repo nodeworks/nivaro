@@ -107,6 +107,29 @@ export async function handleBotMention(
     /* context is optional */
   }
 
+  // In a record's room the assistant is told WHICH record (#954), read as
+  // the asker — "what is blocking this?" answers about that record.
+  try {
+    const { roomRecordFacts } = await import('./chat-records.js')
+    const rec = await roomRecordFacts(asker, room)
+    if (rec) {
+      const facts = [
+        `This conversation is the chat room of the record ${rec.label} (collection "${rec.collection}", id ${rec.id}).`,
+        rec.state ? `Its workflow state is ${rec.state.label} (key ${rec.state.key}).` : null,
+        rec.sla
+          ? `SLA: ${rec.sla.status}${rec.sla.elapsed_hours != null ? `, ${Math.round(rec.sla.elapsed_hours)}h in this state` : ''}${rec.sla.due_hours != null ? ` of ${rec.sla.due_hours}h allowed` : ''}.`
+          : null,
+        rec.owners.length ? `Current owners: ${rec.owners.map((o) => o.name).join(', ')}.` : null,
+        'When the question says "this", "it" or "this record", it means this record — look it up with the tools by that collection and id.'
+      ]
+        .filter(Boolean)
+        .join(' ')
+      roomContext = `${facts}\n\n${roomContext}`
+    }
+  } catch {
+    /* record context is optional */
+  }
+
   let reply: string
   try {
     reply = await answerQuestion(app, asker, question, roomContext, room)

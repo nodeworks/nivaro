@@ -17,6 +17,7 @@ import {
   Globe,
   History,
   Mail,
+  MessageSquare,
   PlugZap,
   Plus,
   ScrollText,
@@ -139,7 +140,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   'run-flow': Zap,
   'external-api': PlugZap,
   'item-read': Database,
-  'workflow-auto-sweep': GitBranch
+  'workflow-auto-sweep': GitBranch,
+  'chat-post': MessageSquare
 }
 
 const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string }> = {
@@ -197,6 +199,11 @@ const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string
     cls: 'bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/20 dark:text-cyan-400 dark:border-cyan-800',
     label: 'Auto Sweep',
     color: '#0891b2'
+  },
+  'chat-post': {
+    cls: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 dark:bg-fuchsia-900/20 dark:text-fuchsia-400 dark:border-fuchsia-800',
+    label: 'Chat',
+    color: '#c026d3'
   }
 }
 
@@ -1312,6 +1319,50 @@ function EditOperationDialog({
                   </div>
                 </>
               )}
+              {op.type === 'chat-post' && (
+                <>
+                  <div className='rounded-lg border border-fuchsia-200 dark:border-fuchsia-800 bg-fuchsia-50 dark:bg-fuchsia-900/20 px-3 py-2 text-[11px] text-fuchsia-800 dark:text-fuchsia-300'>
+                    <MessageSquare className='inline h-3 w-3 mr-1' />
+                    Posts a message into a channel (<code className='font-mono'>ch:ops</code>),
+                    General (<code className='font-mono'>global</code>) or a record's room (
+                    <code className='font-mono'>{'wf:{{friendly_id}}'}</code>). It is sent as the
+                    chat assistant when one is configured, otherwise as Nivaro. Direct messages are
+                    not allowed.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Room <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.room as string) ?? ''}
+                      onChange={(e) => setOpt('room', e.target.value)}
+                      placeholder='ch:ops'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Message <span className='text-red-500'>*</span>
+                    </Label>
+                    <Textarea
+                      value={(optsState.message as string) ?? ''}
+                      onChange={(e) => setOpt('message', e.target.value)}
+                      placeholder='{{friendly_id}} moved to {{to_state.label}}'
+                      rows={4}
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Result key</Label>
+                    <Input
+                      value={(optsState.result_key as string) ?? ''}
+                      onChange={(e) => setOpt('result_key', e.target.value)}
+                      placeholder='chat'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                </>
+              )}
               {op.type === 'item-read' && (
                 <>
                   <div className='rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-[11px] text-indigo-700 dark:text-indigo-400'>
@@ -2070,6 +2121,9 @@ function AddOperationDialog({
                     </SelectItem>
                     <SelectItem value='workflow-auto-sweep'>
                       Auto Sweep — re-evaluate automatic transitions on a collection
+                    </SelectItem>
+                    <SelectItem value='chat-post'>
+                      Chat — post a message into a channel or record room
                     </SelectItem>
                     {(registeredOpsForAdd ?? []).length > 0 && (
                       <>
