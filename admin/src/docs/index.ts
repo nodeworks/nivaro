@@ -73,8 +73,8 @@ import {
   collabMessageActions,
   collabNotificationsCenter,
   collabSmsPush,
-  collabTasks,
   collabSupportRequests,
+  collabTasks,
   collabUserActivityFeed
 } from './sections/collaboration.js'
 import { commandCenterDocs } from './sections/command-center.js'
@@ -164,10 +164,10 @@ import {
   systemTables
 } from './sections/extensions-system.js'
 import {
+  aiDocumentAutofill,
   aiGenerate,
   aiOverview,
   aiReviewBrief,
-  aiDocumentAutofill,
   aiSummarize,
   analyticsGuide,
   columnPresets,
@@ -379,7 +379,7 @@ import {
   storageProviders
 } from './sections/storage.js'
 import { summaryMode } from './sections/summary-mode.js'
-import { teamThroughputGuide } from './sections/team-throughput.js'
+import { managersTeamGuide, teamThroughputGuide } from './sections/team-throughput.js'
 import {
   orgChartView,
   treeInheritedFields,
@@ -581,7 +581,7 @@ export const navSections: NavGroup[] = [
       aiGenerate,
       aiSummarize,
       aiReviewBrief,
-  aiDocumentAutofill,
+      aiDocumentAutofill,
       aiContentValidation,
       aiDuplicateDetection
     ]
@@ -606,6 +606,7 @@ export const navSections: NavGroup[] = [
       atRiskFlagging,
       dataIntegrityGuide,
       teamThroughputGuide,
+      managersTeamGuide,
       anomalyDetection,
       smtpConfig,
       smsConfig,

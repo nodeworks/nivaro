@@ -311,6 +311,7 @@
           <a class="docs-nav-item" data-section="at-risk-flagging" href="#at-risk-flagging">At-Risk Flagging</a>
           <a class="docs-nav-item" data-section="data-integrity" href="#data-integrity">Data Integrity</a>
           <a class="docs-nav-item" data-section="team-throughput" href="#team-throughput">Team Throughput</a>
+          <a class="docs-nav-item" data-section="managers-team" href="#managers-team">Your team (managers)</a>
           <a class="docs-nav-item" data-section="imports" href="#imports">Data Import Queue</a>
           <a class="docs-nav-item" data-section="import-templates" href="#import-templates">Import Templates</a>
           <a class="docs-nav-item" data-section="report-studio" href="#report-studio">Report Studio</a>
@@ -8209,6 +8210,17 @@ Authorization: Bearer &lt;token&gt;
           </ul>
           <div class="doc-note">Computed live from <code class="doc-code">nivaro_workflow_history</code> — fully retroactive, including imported legacy history. Per-owner backlog trends (My Items sparklines) accumulate daily from the snapshot cron and are not retroactive.</div>
           <!-- /SYNC:team-throughput -->
+        </div>
+
+        <div class="doc-section" id="s-managers-team" data-toc='[{"id":"managers-team","label":"Your team (managers)"},{"id":"managers-team-routes","label":"Routes"},{"id":"managers-team-alerts","label":"Team alerts"}]'>
+          <!-- SYNC:managers-team -->
+          <h1 class="doc-h1" id="managers-team">Your team (managers)</h1>
+          <p class="doc-p">A manager is anyone with active direct reports. <code class="doc-code">/auth/me</code> answers <code class="doc-code">has_reports</code>, and a headless dashboard offers its team widgets only to those people. Every count and every record listed is narrowed to what the viewer may open.</p>
+          <h2 class="doc-h2" id="managers-team-routes">Routes</h2>
+          <p class="doc-p">Team load, time off ahead, the week, tasks, the SLA trend, wins and kudos, new starters, access check and 1:1 preparation — see the admin docs for the full table.</p>
+          <h2 class="doc-h2" id="managers-team-alerts">Team alerts</h2>
+          <p class="doc-p">A manager sets <code class="doc-code">preferences.team_alerts</code>; an hourly job sends one notification per report and rule per day. On Mondays the daily summary carries "Your team this week".</p>
+          <!-- /SYNC:managers-team -->
         </div>
 
         <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-processors","label":"Import processors"},{"id":"imports-table-config","label":"Configuring a table import"},{"id":"imports-run-detail","label":"Reading a run"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>
