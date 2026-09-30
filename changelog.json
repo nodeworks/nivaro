@@ -1,10 +1,53 @@
 {
-  "generated_at": "2026-09-30T02:17:41.419Z",
+  "generated_at": "2026-09-30T16:39:49.747Z",
   "releases": [
+    {
+      "version": "0.2.6",
+      "tag": "v0.2.6",
+      "date": "2026-09-30T12:39:38-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "requests to the administrators on the tasks system (#999)",
+              "hash": "66538cdf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "chat composer, members popover, balanced own profile",
+              "hash": "795abd9e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the rest of the chat backlog",
+              "hash": "cdfa35d8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "browser push card in the shared ProfileView",
+              "hash": "3bfd2c92"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "analytics + admin message log, sidebar sort, last seen, local time, appear away, channel look",
+              "hash": "99ecc59b"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.2.5",
       "tag": "v0.2.5",
-      "date": "2026-09-29T22:17:31-04:00",
+      "date": "2026-09-29T22:17:41-04:00",
       "sections": [
         {
           "label": "Other",
