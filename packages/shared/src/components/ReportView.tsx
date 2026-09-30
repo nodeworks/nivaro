@@ -2091,7 +2091,15 @@ const WidgetCard = memo(function WidgetCard({
     )
   }
 
-  const queryCfg = widget.type === 'query' ? widget.config?.query : null
+  // A query widget names its custom query by `slug`; one saved with the page
+  // builder's `query_slug` spelling reads the same instead of "no query".
+  const rawQuery = widget.type === 'query' ? widget.config?.query : null
+  const queryCfg = rawQuery
+    ? {
+        ...rawQuery,
+        slug: rawQuery.slug || (rawQuery as { query_slug?: string }).query_slug || ''
+      }
+    : null
 
   let body: React.ReactNode = null
   if (queryCfg?.slug) {
