@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-09-30T00:30:02.716Z",
+  "generated_at": "2026-09-30T02:17:41.419Z",
   "releases": [
+    {
+      "version": "0.2.5",
+      "tag": "v0.2.5",
+      "date": "2026-09-29T22:17:31-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "online / idle / offline badge on every chat avatar",
+              "hash": "5f872460"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.4",
       "tag": "v0.2.4",
-      "date": "2026-09-29T20:29:51-04:00",
+      "date": "2026-09-29T20:30:02-04:00",
       "sections": [
         {
           "label": "Other",
