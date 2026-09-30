@@ -1,10 +1,10 @@
 import { Check, Loader2, MapPin, Star } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { CMSField } from './types'
-import { parseJson } from './helpers'
-import { setSiblingField } from './PolishFields'
 import { formatPhone, normalizePhone } from '../../lib/validation-rules'
 import { Input } from '../ui/input'
+import { parseJson } from './helpers'
+import { setSiblingField } from './PolishFields'
+import type { CMSField } from './types'
 
 /**
  * Field interface pack (#663 / #520 / #518):
@@ -56,7 +56,7 @@ export function ProgressField({
           step={1}
           value={pct ?? 0}
           onChange={(e) => onChange(Number(e.target.value))}
-          className='flex-1 accent-[#00ceff]'
+          className='flex-1 accent-nvr-cyan'
           aria-label='Progress percentage'
         />
       )}

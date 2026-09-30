@@ -18,6 +18,7 @@ import {
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { SimpleSelect } from '../ui/SimpleSelect'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
 import type { CMSField, CMSRelation, PipelineOwnerGroup, User } from './types'
@@ -255,28 +256,24 @@ function OwnerFilterRow({
         }}
       />
 
-      <select
+      <SimpleSelect
         value={row.op}
-        onChange={(e) => onChange({ ...row, op: e.target.value })}
-        className='h-8 rounded-md border border-slate-200 bg-white px-2 text-[13px] w-[70px]'
-      >
-        {getFieldOps(effectiveType).map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => onChange({ ...row, op: v })}
+        className='h-8 w-[70px] rounded-md border-slate-200 bg-white px-2 text-[13px]'
+        options={getFieldOps(effectiveType).map((o) => ({ value: o.value, label: o.label }))}
+      />
 
       {effectiveType === 'boolean' ? (
-        <select
+        <SimpleSelect
           value={row.value}
-          onChange={(e) => onChange({ ...row, value: e.target.value })}
-          className='h-8 rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-        >
-          <option value=''>Select…</option>
-          <option value='true'>True</option>
-          <option value='false'>False</option>
-        </select>
+          onChange={(v) => onChange({ ...row, value: v })}
+          className='h-8 w-auto rounded-md border-slate-200 bg-white px-2 text-[13px]'
+          options={[
+            { value: '', label: 'Select…' },
+            { value: 'true', label: 'True' },
+            { value: 'false', label: 'False' }
+          ]}
+        />
       ) : effectiveType === 'integer' ||
         effectiveType === 'decimal' ||
         effectiveType === 'float' ? (

@@ -271,7 +271,9 @@ function TableFrame({
     >
       <header className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
         <div className='flex items-baseline gap-2.5'>
-          <h2 className='text-[13.5px] font-semibold text-slate-800 dark:text-slate-100'>{title}</h2>
+          <h2 className='text-[13.5px] font-semibold text-slate-800 dark:text-slate-100'>
+            {title}
+          </h2>
           {hint && <p className='text-[11.5px] text-slate-400 dark:text-slate-500'>{hint}</p>}
         </div>
         {action}
@@ -423,7 +425,8 @@ export function AlertManagerView({
   })
   const { data: rules = [], isLoading: loadingRules } = useQuery({
     queryKey: ['nvr-ma-rules'],
-    queryFn: () => raw<{ data: MetricAlertRule[] }>('GET', '/metric-alerts/rules').then((r) => r.data)
+    queryFn: () =>
+      raw<{ data: MetricAlertRule[] }>('GET', '/metric-alerts/rules').then((r) => r.data)
   })
   const { data: subscriptions = [], isLoading: loadingSubs } = useQuery({
     queryKey: ['nvr-ma-subs'],
@@ -435,7 +438,9 @@ export function AlertManagerView({
   const { data: logEntries = [], isLoading: loadingLog } = useQuery({
     queryKey: ['nvr-ma-log'],
     queryFn: () =>
-      raw<{ data: MetricAlertLogEntry[] }>('GET', '/metric-alerts/log?limit=100').then((r) => r.data)
+      raw<{ data: MetricAlertLogEntry[] }>('GET', '/metric-alerts/log?limit=100').then(
+        (r) => r.data
+      )
   })
   // Record/workflow event subscriptions (nivaro_notification_subscriptions) —
   // a SEPARATE system from metric-alert rule subscriptions; surfaced together
@@ -708,47 +713,51 @@ export function AlertManagerView({
   const activeAnomalyRules = anomalyRules.filter((r) => r.status === 'active').length
   const newAnomalies = anomalyLog.filter((e) => e.status === 'new').length
 
-  const tabs: Array<{ key: TabKey; label: string; icon: React.ReactNode; badge?: React.ReactNode }> =
-    [
-      { key: 'catalog', label: 'Alert Catalog', icon: <LayoutGrid className='h-3.5 w-3.5' /> },
-      { key: 'rules', label: 'Alert Rules', icon: <Bell className='h-3.5 w-3.5' /> },
-      {
-        key: 'subscriptions',
-        label: 'My Subscriptions',
-        icon: <BellRing className='h-3.5 w-3.5' />,
-        badge: <CountBadge n={subscriptions.length + notifSubs.length} tone='cyan' />
-      },
-      {
-        key: 'history',
-        label: 'Alert History',
-        icon: <Clock className='h-3.5 w-3.5' />,
-        badge: <CountBadge n={firingCount} tone='red' />
-      },
-      {
-        key: 'widget_alerts',
-        label: 'Widget Alerts',
-        icon: <ChartColumn className='h-3.5 w-3.5' />,
-        badge: <CountBadge n={reportAlerts.length} tone='violet' />
-      },
-      {
-        key: 'widget_alert_history',
-        label: 'Widget Alert History',
-        icon: <History className='h-3.5 w-3.5' />,
-        badge: <CountBadge n={widgetFiringCount} tone='red' />
-      },
-      {
-        key: 'anomaly_rules',
-        label: 'Anomaly Rules',
-        icon: <FlaskConical className='h-3.5 w-3.5' />,
-        badge: <CountBadge n={activeAnomalyRules} tone='teal' />
-      },
-      {
-        key: 'anomaly_history',
-        label: 'Anomaly History',
-        icon: <Activity className='h-3.5 w-3.5' />,
-        badge: <CountBadge n={newAnomalies} tone='red' />
-      }
-    ]
+  const tabs: Array<{
+    key: TabKey
+    label: string
+    icon: React.ReactNode
+    badge?: React.ReactNode
+  }> = [
+    { key: 'catalog', label: 'Alert Catalog', icon: <LayoutGrid className='h-3.5 w-3.5' /> },
+    { key: 'rules', label: 'Alert Rules', icon: <Bell className='h-3.5 w-3.5' /> },
+    {
+      key: 'subscriptions',
+      label: 'My Subscriptions',
+      icon: <BellRing className='h-3.5 w-3.5' />,
+      badge: <CountBadge n={subscriptions.length + notifSubs.length} tone='cyan' />
+    },
+    {
+      key: 'history',
+      label: 'Alert History',
+      icon: <Clock className='h-3.5 w-3.5' />,
+      badge: <CountBadge n={firingCount} tone='red' />
+    },
+    {
+      key: 'widget_alerts',
+      label: 'Widget Alerts',
+      icon: <ChartColumn className='h-3.5 w-3.5' />,
+      badge: <CountBadge n={reportAlerts.length} tone='violet' />
+    },
+    {
+      key: 'widget_alert_history',
+      label: 'Widget Alert History',
+      icon: <History className='h-3.5 w-3.5' />,
+      badge: <CountBadge n={widgetFiringCount} tone='red' />
+    },
+    {
+      key: 'anomaly_rules',
+      label: 'Anomaly Rules',
+      icon: <FlaskConical className='h-3.5 w-3.5' />,
+      badge: <CountBadge n={activeAnomalyRules} tone='teal' />
+    },
+    {
+      key: 'anomaly_history',
+      label: 'Anomaly History',
+      icon: <Activity className='h-3.5 w-3.5' />,
+      badge: <CountBadge n={newAnomalies} tone='red' />
+    }
+  ]
   const visibleTabs = tabs.filter((t) => !hiddenTabs.includes(t.key))
 
   const openCreateDrawer = (defId?: number) => {
@@ -774,7 +783,10 @@ export function AlertManagerView({
       )}
 
       {/* Tab bar */}
-      <div className='flex flex-wrap gap-1 border-b border-slate-200 pb-px dark:border-border' data-alert-tabs=''>
+      <div
+        className='flex flex-wrap gap-1 border-b border-slate-200 pb-px dark:border-border'
+        data-alert-tabs=''
+      >
         {visibleTabs.map((t) => (
           <button
             key={t.key}
@@ -843,7 +855,7 @@ export function AlertManagerView({
                             {def.name}
                           </p>
                           {watching > 0 && (
-                            <span className='inline-flex shrink-0 items-center gap-1 rounded-full bg-[#00ceff1a] px-1.5 py-px text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                            <span className='inline-flex shrink-0 items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
                               <BellRing className='h-2.5 w-2.5' />
                               {watching}
                             </span>
@@ -871,7 +883,7 @@ export function AlertManagerView({
                           none of them read as the primary action. */}
                       <button
                         type='button'
-                        className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:border-nvr-cyan hover:bg-[#00ceff14] hover:text-nvr-navy dark:border-border dark:text-slate-300 dark:hover:text-nvr-cyan'
+                        className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:border-nvr-cyan hover:bg-nvr-cyan/[0.08] hover:text-nvr-navy dark:border-border dark:text-slate-300 dark:hover:text-nvr-cyan'
                         onClick={() => {
                           openCreateDrawer(def.id)
                           setTab('rules')
@@ -983,10 +995,7 @@ export function AlertManagerView({
                       </span>
                     ) : (
                       <span className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-slate-400'>
-                        <span
-                          aria-hidden
-                          className='h-1.5 w-1.5 rounded-full bg-emerald-500/70'
-                        />
+                        <span aria-hidden className='h-1.5 w-1.5 rounded-full bg-emerald-500/70' />
                         Within threshold
                       </span>
                     )}
@@ -1015,7 +1024,7 @@ export function AlertManagerView({
                         className={cn(
                           iconBtn,
                           subscribed &&
-                            'border-nvr-cyan bg-[#00ceff1a] text-nvr-navy hover:bg-[#00ceff26] dark:text-nvr-cyan'
+                            'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy hover:bg-nvr-cyan/15 dark:text-nvr-cyan'
                         )}
                       >
                         {subscribed ? (
@@ -1142,8 +1151,8 @@ export function AlertManagerView({
             Record &amp; workflow notifications
           </p>
           <p className='text-[12px] text-slate-400'>
-            Subscriptions to record events and workflow state changes (created from records,
-            queues, or notification settings)
+            Subscriptions to record events and workflow state changes (created from records, queues,
+            or notification settings)
           </p>
           <DataTable
             headers={[
@@ -1174,7 +1183,7 @@ export function AlertManagerView({
                       </span>
                     )}
                     {s.filter_field && (
-                      <span className='inline-flex rounded bg-[#00ceff1a] px-1.5 py-px text-[10.5px] text-slate-600 dark:text-slate-300'>
+                      <span className='inline-flex rounded bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] text-slate-600 dark:text-slate-300'>
                         {s.filter_field === 'to_state' ? 'state' : s.filter_field} ={' '}
                         {s.filter_value ?? 'any'}
                       </span>
@@ -1182,7 +1191,7 @@ export function AlertManagerView({
                     {(s.filters ?? []).map((f, i) => (
                       <span
                         key={`${f.field}-${i}`}
-                        className='inline-flex rounded bg-[#00ceff1a] px-1.5 py-px text-[10.5px] text-slate-600 dark:text-slate-300'
+                        className='inline-flex rounded bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] text-slate-600 dark:text-slate-300'
                       >
                         {f.field} {f.op ?? 'eq'}{' '}
                         {Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? '')}
@@ -1355,7 +1364,8 @@ export function AlertManagerView({
                       onClick={() => onOpenReport?.(a.report)}
                       className={cn(
                         'text-[11px] text-slate-400',
-                        onOpenReport && 'underline-offset-2 hover:text-nvr-navy hover:underline dark:hover:text-nvr-cyan'
+                        onOpenReport &&
+                          'underline-offset-2 hover:text-nvr-navy hover:underline dark:hover:text-nvr-cyan'
                       )}
                     >
                       {a.report_name}
@@ -1467,7 +1477,7 @@ export function AlertManagerView({
                   {entry.status === 'firing' && (
                     <button
                       type='button'
-                      className='rounded border border-nvr-cyan px-2 py-0.5 text-[11.5px] font-medium text-nvr-navy hover:bg-[#00ceff1a] dark:text-nvr-cyan'
+                      className='rounded border border-nvr-cyan px-2 py-0.5 text-[11.5px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
                       onClick={() => resolveReportAlertLog.mutate(entry)}
                     >
                       Resolve
@@ -1689,7 +1699,7 @@ export function AlertManagerView({
                       {unresolved && (
                         <button
                           type='button'
-                          className='inline-flex h-7 items-center rounded-md border border-nvr-cyan px-2.5 text-[11.5px] font-medium text-nvr-navy transition-colors hover:bg-[#00ceff1a] dark:text-nvr-cyan'
+                          className='inline-flex h-7 items-center rounded-md border border-nvr-cyan px-2.5 text-[11.5px] font-medium text-nvr-navy transition-colors hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
                           onClick={() => updateAnomalyLogStatus(entry.id, 'resolved')}
                         >
                           Resolve

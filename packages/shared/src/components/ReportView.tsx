@@ -165,6 +165,9 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '.
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { SimpleSelect } from './ui/SimpleSelect'
 
+/** The brand colour, through the token a host re-points (white-labelling). */
+const BRAND = 'rgb(var(--nvr-cyan-rgb, 0 206 255))'
+
 /**
  * ReportView — the full, styled, interactive Report Studio renderer for
  * headless frontends, matching how QueueWorklist / ItemEditForm ship.
@@ -206,7 +209,7 @@ type PivotData = {
   truncated_cols: number
 }
 
-const CHART_COLORS = ['#00ceff', '#172940', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b']
+const CHART_COLORS = [BRAND, '#172940', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b']
 const DATE_PRESETS: Array<{ id: string; label: string }> = [
   { id: '', label: 'All time' },
   { id: 'this_month', label: 'This month' },
@@ -1610,7 +1613,7 @@ export function AlertBell({
                 type='checkbox'
                 checked={email}
                 onChange={(e) => setEmail(e.target.checked)}
-                className='h-3 w-3 accent-[#00ceff]'
+                className='h-3 w-3 accent-nvr-cyan'
               />
               Also email me
             </label>
@@ -1858,7 +1861,7 @@ function WidgetRecordsModal({
               type='button'
               onClick={crossFilter}
               title='Apply this value as a filter across the whole report'
-              className='shrink-0 rounded-md border border-[#00ceff66] bg-[#00ceff14] px-2 py-0.5 text-[11px] font-medium text-[#007a99] hover:brightness-105 dark:text-nvr-cyan'
+              className='shrink-0 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2 py-0.5 text-[11px] font-medium text-[#007a99] hover:brightness-105 dark:text-nvr-cyan'
             >
               Filter report
             </button>
@@ -2143,7 +2146,7 @@ const WidgetCard = memo(function WidgetCard({
               <polyline
                 points={pts}
                 fill='none'
-                stroke='#00ceff'
+                stroke={BRAND}
                 strokeWidth='2'
                 vectorEffect='non-scaling-stroke'
               />
@@ -2209,7 +2212,7 @@ const WidgetCard = memo(function WidgetCard({
               <polyline
                 points={pts}
                 fill='none'
-                stroke='#00ceff'
+                stroke={BRAND}
                 strokeWidth='2'
                 vectorEffect='non-scaling-stroke'
               />
@@ -3103,7 +3106,7 @@ const WidgetCard = memo(function WidgetCard({
                 <Line
                   type='monotone'
                   dataKey='value'
-                  stroke='#00ceff'
+                  stroke={BRAND}
                   strokeWidth={2}
                   dot={(props: { cx?: number; cy?: number; payload?: { dim?: string } }) =>
                     anomalySet.has(props.payload?.dim ?? '') ? (
@@ -3221,7 +3224,7 @@ const WidgetCard = memo(function WidgetCard({
                 )}
                 <Bar
                   dataKey='value'
-                  fill='#00ceff'
+                  fill={BRAND}
                   radius={[3, 3, 0, 0]}
                   className={widget.collection ? 'cursor-pointer' : undefined}
                   onClick={(
@@ -3250,7 +3253,7 @@ const WidgetCard = memo(function WidgetCard({
                   }}
                 >
                   {series.map((sv) => (
-                    <Cell key={sv.dim} fill={sv.other ? '#94a3b8' : '#00ceff'} />
+                    <Cell key={sv.dim} fill={sv.other ? '#94a3b8' : BRAND} />
                   ))}
                 </Bar>
                 {hasValue2 && (
@@ -3591,7 +3594,7 @@ const WidgetCard = memo(function WidgetCard({
         })()}
       {explainOpen && (
         <div
-          className='mb-1.5 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'
+          className='mb-1.5 rounded-md border border-nvr-cyan/25 bg-nvr-cyan/5 px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'
           data-explain-panel={explainsTrend ? 'trend' : 'number'}
         >
           {explainBusy ? 'Thinking…' : explainText}
@@ -3650,7 +3653,7 @@ const WidgetCard = memo(function WidgetCard({
               <button
                 type='button'
                 onClick={() => setDrillPath(drillPath.slice(0, i + 1))}
-                className='rounded bg-[#00ceff14] px-1.5 py-0.5 font-medium text-[#007a99] dark:text-nvr-cyan'
+                className='rounded bg-nvr-cyan/[0.08] px-1.5 py-0.5 font-medium text-[#007a99] dark:text-nvr-cyan'
               >
                 {d.value}
               </button>
@@ -4261,7 +4264,7 @@ export function ReportView({
                 className={cn(
                   'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
                   snapId === sn.id
-                    ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-[#007a99] dark:text-nvr-cyan'
+                    ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-[#007a99] dark:text-nvr-cyan'
                     : 'border-slate-200 text-slate-400 hover:text-slate-600 dark:border-border'
                 )}
               >
@@ -4339,7 +4342,7 @@ export function ReportView({
             className={cn(
               'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]',
               compare
-                ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-[#007a99] dark:text-nvr-cyan'
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-[#007a99] dark:text-nvr-cyan'
                 : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-border dark:text-slate-400'
             )}
           >
@@ -4398,7 +4401,7 @@ export function ReportView({
             .map((f) => (
               <span
                 key={f.field}
-                className='inline-flex items-center gap-1.5 rounded-full border border-[#00ceff66] bg-[#00ceff14] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[#007a99] dark:text-nvr-cyan'
+                className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] py-0.5 pl-2.5 pr-1 text-[11.5px] text-[#007a99] dark:text-nvr-cyan'
               >
                 {f.field.replace(/_/g, ' ')}: {(f.labels ?? f.values.map(String)).join(', ')}
                 <button
@@ -4408,7 +4411,7 @@ export function ReportView({
                     setEntityFilters((prev) => prev.filter((x) => x.field !== f.field))
                     setDraftFilters((prev) => prev.filter((x) => x.field !== f.field))
                   }}
-                  className='rounded-full p-0.5 hover:bg-[#00ceff29]'
+                  className='rounded-full p-0.5 hover:bg-nvr-cyan/[0.16]'
                 >
                   <X className='h-2.5 w-2.5' />
                 </button>

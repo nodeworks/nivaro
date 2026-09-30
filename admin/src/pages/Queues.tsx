@@ -45,6 +45,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { type ColumnFormatConfig, formatValue } from '@/lib/format-value'
@@ -743,24 +744,21 @@ function ColumnChipConfig({
             {enabled && (
               <div className='space-y-1'>
                 <span className='text-[10px] text-slate-400'>Detail layout</span>
-                <select
-                  value={cfg?.layout_id ?? ''}
-                  onChange={(e) =>
+                <SimpleSelect
+                  value={cfg?.layout_id != null ? String(cfg.layout_id) : ''}
+                  onChange={(v) =>
                     onChange({
                       enabled: true,
-                      layout_id: e.target.value ? Number(e.target.value) : null,
+                      layout_id: v ? Number(v) : null,
                       width: cfg?.width ?? null
                     })
                   }
-                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                >
-                  <option value=''>Default (active detail layout)</option>
-                  {detailLayouts.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                </select>
+                  className='h-7 w-full rounded border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                  options={[
+                    { value: '', label: 'Default (active detail layout)' },
+                    ...detailLayouts.map((l) => ({ value: String(l.id), label: l.name }))
+                  ]}
+                />
                 {detailLayouts.length === 0 && (
                   <p className='text-[10px] text-slate-400'>
                     No detail layouts on {targetCollection} yet — the panel falls back to a
@@ -768,31 +766,28 @@ function ColumnChipConfig({
                   </p>
                 )}
                 <span className='text-[10px] text-slate-400'>Panel width</span>
-                <select
+                <SimpleSelect
                   value={customMode ? '__custom__' : String(cfg?.width ?? 640)}
-                  onChange={(e) => {
-                    if (e.target.value === '__custom__') {
+                  onChange={(v) => {
+                    if (v === '__custom__') {
                       setCustomMode(true)
                       setCustomDraft(cfg?.width != null ? String(cfg.width) : '')
                       return
                     }
                     setCustomMode(false)
-                    const n = Number(e.target.value)
+                    const n = Number(v)
                     onChange({
                       enabled: true,
                       layout_id: cfg?.layout_id ?? null,
                       width: n === 640 ? null : n
                     })
                   }}
-                  className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                >
-                  {DRILLDOWN_WIDTHS.map((w) => (
-                    <option key={w.value} value={String(w.value)}>
-                      {w.label}
-                    </option>
-                  ))}
-                  <option value='__custom__'>Custom…</option>
-                </select>
+                  className='h-7 w-full rounded border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                  options={[
+                    ...DRILLDOWN_WIDTHS.map((w) => ({ value: String(w.value), label: w.label })),
+                    { value: '__custom__', label: 'Custom…' }
+                  ]}
+                />
                 {customMode && (
                   <div className='space-y-0.5'>
                     <Input

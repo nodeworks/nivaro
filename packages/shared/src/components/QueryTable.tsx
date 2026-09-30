@@ -698,7 +698,7 @@ export function QueryTable({
                     e.stopPropagation()
                     a.onClick(row)
                   }}
-                  className='whitespace-nowrap rounded border border-[#00ceff66] bg-[#00ceff1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
+                  className='whitespace-nowrap rounded border border-nvr-cyan/40 bg-nvr-cyan/10 px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
                 >
                   {a.label}
                 </button>
@@ -928,7 +928,7 @@ export function QueryTable({
                   onClick={() => setGranularity(g)}
                   className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
                     granularity === g
-                      ? 'bg-[#00ceff1a] text-slate-800 dark:text-slate-100'
+                      ? 'bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
                       : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                   }`}
                 >

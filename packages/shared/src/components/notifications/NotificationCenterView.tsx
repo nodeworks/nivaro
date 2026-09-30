@@ -23,6 +23,7 @@ import {
   runNotificationTarget
 } from '../../lib/notification-target'
 import { cn, formatRelative } from '../../lib/utils'
+import { SimpleSelect } from '../ui/SimpleSelect'
 import { DeliveryChips } from './DeliveryChips'
 import { NotificationActions } from './NotificationActions'
 import { NotificationDetailBits } from './NotificationDetailBits'
@@ -353,22 +354,19 @@ export function NotificationCenterView({
               className='h-8 w-[240px] rounded-md border border-slate-200 bg-background pl-8 pr-2.5 text-[12.5px] dark:border-border'
             />
           </div>
-          <select
+          <SimpleSelect
             value={collectionFilter}
-            onChange={(e) => {
-              setCollectionFilter(e.target.value)
+            onChange={(v) => {
+              setCollectionFilter(v)
               setPage(1)
             }}
-            aria-label='Collection'
-            className='h-8 rounded-md border border-slate-200 bg-background px-2 text-[12.5px] dark:border-border'
-          >
-            <option value=''>All collections</option>
-            {collections.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+            ariaLabel='Collection'
+            className='h-8 w-auto rounded-md border-slate-200 bg-background px-2 text-[12.5px] dark:border-border'
+            options={[
+              { value: '', label: 'All collections' },
+              ...collections.map((c) => ({ value: c, label: c }))
+            ]}
+          />
         </div>
       </header>
 

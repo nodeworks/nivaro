@@ -122,28 +122,34 @@ export function JsonMapEditor({
     setStatus(null)
   }, [recordId, creating])
 
-  const sectionQueries = useQuery<Array<{ section: number; rows: Array<Record<string, unknown>> }>>({
-    queryKey: ['json-map-keys', scopeKey, JSON.stringify(config.sections.map((s) => s.collection))],
-    queryFn: async () => {
-      const out: Array<{ section: number; rows: Array<Record<string, unknown>> }> = []
-      for (let i = 0; i < config.sections.length; i++) {
-        const s = config.sections[i]
-        const refs = templateFields(s.label_template)
-        const resolved = resolveScope(s.filter, scope)
-        const filter = resolved && !hasUndef(resolved) ? resolved : undefined
-        const res = await client.request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${s.collection}`, {
-            limit: 1000,
-            fields: ['id', ...refs].join(','),
-            ...(filter ? { filter: JSON.stringify(filter) } : {})
-          })
-        )
-        out.push({ section: i, rows: res.data ?? [] })
-      }
-      return out
-    },
-    staleTime: 30_000
-  })
+  const sectionQueries = useQuery<Array<{ section: number; rows: Array<Record<string, unknown>> }>>(
+    {
+      queryKey: [
+        'json-map-keys',
+        scopeKey,
+        JSON.stringify(config.sections.map((s) => s.collection))
+      ],
+      queryFn: async () => {
+        const out: Array<{ section: number; rows: Array<Record<string, unknown>> }> = []
+        for (let i = 0; i < config.sections.length; i++) {
+          const s = config.sections[i]
+          const refs = templateFields(s.label_template)
+          const resolved = resolveScope(s.filter, scope)
+          const filter = resolved && !hasUndef(resolved) ? resolved : undefined
+          const res = await client.request<{ data: Array<Record<string, unknown>> }>(
+            get(`/items/${s.collection}`, {
+              limit: 1000,
+              fields: ['id', ...refs].join(','),
+              ...(filter ? { filter: JSON.stringify(filter) } : {})
+            })
+          )
+          out.push({ section: i, rows: res.data ?? [] })
+        }
+        return out
+      },
+      staleTime: 30_000
+    }
+  )
 
   type KeyRow = { key: string; label: string; section: string | null; bg?: string }
   const keyRows: KeyRow[] = useMemo(() => {
@@ -169,7 +175,8 @@ export function JsonMapEditor({
     for (const mc of config.map_columns) {
       const raw = record?.[mc.json_field]
       try {
-        out[mc.json_field] = typeof raw === 'string' ? JSON.parse(raw) : ((raw as Record<string, unknown>) ?? {})
+        out[mc.json_field] =
+          typeof raw === 'string' ? JSON.parse(raw) : ((raw as Record<string, unknown>) ?? {})
       } catch {
         out[mc.json_field] = {}
       }
@@ -227,7 +234,8 @@ export function JsonMapEditor({
           if (v === '') delete merged[k]
           else merged[k] = Number(v)
         }
-        if (Object.keys(merged).length > 0 || !creating) payload[mc.json_field] = JSON.stringify(merged)
+        if (Object.keys(merged).length > 0 || !creating)
+          payload[mc.json_field] = JSON.stringify(merged)
       }
       let savedId = recordId
       if (creating) {
@@ -248,7 +256,9 @@ export function JsonMapEditor({
       setNameDraft(null)
       if (config.after_save) {
         const params = resolveScope(config.after_save.params ?? {}, scope)
-        await client.request(post(`/custom-queries/${config.after_save.query_slug}/execute`, { params }))
+        await client.request(
+          post(`/custom-queries/${config.after_save.query_slug}/execute`, { params })
+        )
       }
       setFieldDraft({})
       setMapDraft({})
@@ -279,15 +289,13 @@ export function JsonMapEditor({
     <div className='flex h-full flex-col gap-3 overflow-auto p-3'>
       <div className='flex flex-wrap items-end gap-3'>
         <div className='w-64'>
-          <p className='mb-1 text-[11px] font-medium text-slate-500'>
-            {config.title ?? 'Record'}
-          </p>
+          <p className='mb-1 text-[11px] font-medium text-slate-500'>{config.title ?? 'Record'}</p>
           {creating ? (
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder={`New ${labelField}…`}
-              className='h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-[#00ceff] dark:border-border dark:bg-background'
+              className='h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
             />
           ) : (
             <RelationCombobox
@@ -316,7 +324,7 @@ export function JsonMapEditor({
               value={nameDraft ?? String(record?.[labelField] ?? '')}
               onChange={(e) => setNameDraft(e.target.value)}
               placeholder='Name…'
-              className='h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-[#00ceff] dark:border-border dark:bg-background'
+              className='h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
             />
           </div>
         )}
@@ -331,7 +339,7 @@ export function JsonMapEditor({
                   onClick={() => setFieldDraft((p) => ({ ...p, [f.field]: o }))}
                   className={`rounded px-2 py-1 text-[12px] font-medium transition-colors ${
                     (fieldValue(f.field) || f.options[0]) === o
-                      ? 'bg-[#00ceff1a] text-slate-800 dark:text-slate-100'
+                      ? 'bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
                       : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                   }`}
                 >
@@ -345,7 +353,7 @@ export function JsonMapEditor({
           type='button'
           disabled={!active || !dirty || saving || (remaining !== null && remaining < 0)}
           onClick={() => void save()}
-          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50'
         >
           {saving && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
           Save
@@ -371,7 +379,10 @@ export function JsonMapEditor({
               <tr className='border-b border-slate-200 text-left dark:border-border'>
                 <th className='py-1.5 pr-3 font-medium text-slate-500'>Category</th>
                 {config.map_columns.map((mc) => (
-                  <th key={mc.json_field} className='w-36 py-1.5 pr-2 text-right font-medium text-slate-500'>
+                  <th
+                    key={mc.json_field}
+                    className='w-36 py-1.5 pr-2 text-right font-medium text-slate-500'
+                  >
                     {mc.label}
                   </th>
                 ))}
@@ -409,7 +420,7 @@ export function JsonMapEditor({
                             max={mc.max}
                             value={cellValue(mc.json_field, r.key)}
                             onChange={(e) => setCell(mc.json_field, r.key, e.target.value)}
-                            className='h-7 w-[110px] rounded border border-slate-200 bg-white px-1.5 text-right text-[12px] tabular-nums outline-none focus:border-[#00ceff] dark:border-border dark:bg-background'
+                            className='h-7 w-[110px] rounded border border-slate-200 bg-white px-1.5 text-right text-[12px] tabular-nums outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
                           />
                         </td>
                       ))}
@@ -437,7 +448,13 @@ export function JsonMapEditor({
   )
 }
 
-function FragmentRows({ header, children }: { header: React.ReactNode; children?: React.ReactNode }) {
+function FragmentRows({
+  header,
+  children
+}: {
+  header: React.ReactNode
+  children?: React.ReactNode
+}) {
   return (
     <>
       {header}

@@ -627,7 +627,7 @@ export function ReviewListWidget({
                 onChange={(e) => setNoteText(e.target.value)}
                 rows={3}
                 autoFocus
-                className='mt-2 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] text-slate-700 outline-none focus:border-[#00ceff] dark:border-border dark:bg-background dark:text-slate-200'
+                className='mt-2 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
                 placeholder='Why is this being rejected?'
               />
               <div className='mt-3 flex items-center justify-end gap-1.5'>

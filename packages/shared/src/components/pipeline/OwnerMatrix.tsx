@@ -5,17 +5,17 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { UserAvatar } from '../UserAvatar'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
+import { TeamScopeEditor } from './TeamScopeEditor'
 import {
   type CellFilterLite,
   rankTeamForFilters,
   tierOrder,
   useScopeDimensions
 } from './teamScopes'
-import { TeamScopeEditor } from './TeamScopeEditor'
 import type {
   CMSRelation,
   PipelineBinding,
@@ -212,7 +212,9 @@ function personSecondary(u: User, roleNames: Map<string, string> | null): string
 
 function sortPeople(users: User[]): User[] {
   const label = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
-  return [...users].sort((a, b) => label(a).localeCompare(label(b), undefined, { sensitivity: 'base' }))
+  return [...users].sort((a, b) =>
+    label(a).localeCompare(label(b), undefined, { sensitivity: 'base' })
+  )
 }
 
 /** Role id → name, best-effort: /roles is admin-only, so a non-admin host
@@ -540,7 +542,9 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
   const { data: rowRelMeta } = useQuery({
     queryKey: ['collection-meta', rowRelatedCollection],
     queryFn: () =>
-      client.request<{ data: any }>(get(`/collections/${rowRelatedCollection}`)).then((r) => r.data),
+      client
+        .request<{ data: any }>(get(`/collections/${rowRelatedCollection}`))
+        .then((r) => r.data),
     enabled: !!rowRelatedCollection && !rowSubField
   })
 
@@ -599,7 +603,9 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       if (effectiveRowSubField) {
         // Sub-field path (regions.short_name) or plain self-column: one row
         // per distinct value, deduped (legacy data carries duplicate names).
-        const vals = [...new Set(rowItems.map((i) => String(i[effectiveRowSubField] ?? '')).filter(Boolean))]
+        const vals = [
+          ...new Set(rowItems.map((i) => String(i[effectiveRowSubField] ?? '')).filter(Boolean))
+        ]
         vals.sort((a, b) => a.localeCompare(b))
         for (const v of vals) push({ value: v, label: v })
       } else {
@@ -959,51 +965,51 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
       <div className='flex flex-wrap items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 dark:border-border dark:bg-muted/40'>
         {colFilterDims.length > 0 && (
           <>
-          <span className='text-[11px] font-medium text-slate-400 uppercase tracking-wide shrink-0 dark:text-muted-foreground'>
-            Filter
-          </span>
-          {colFilterDims.map((dim, i) => {
-            const resolved = colFilterResolved[i]
-            const rawItems = (colFilterItemQueries[i]?.data ?? []) as Record<string, unknown>[]
-            const relMeta = colFilterRelMetaQueries[i]?.data
-            const options: { value: string; label: string }[] = resolved?.relatedCollection
-              ? rawItems.map((item) => {
-                  if (resolved.subField) {
-                    const v = String(item[resolved.subField] ?? '')
-                    return { value: v, label: v }
-                  }
-                  return {
-                    value: String(item.id),
-                    label: renderDisplayTemplate(relMeta?.display_template ?? null, item)
-                  }
-                })
-              : []
-            return (
-              <div key={dim.id} className='flex items-center gap-1.5'>
-                <span className='text-[12px] font-medium text-slate-600'>{dim.label}</span>
-                <FilterCombobox
-                  label={dim.label}
-                  value={filterValues[dim.id] ?? ''}
-                  options={options}
-                  onChange={(v) =>
-                    setFilterValues((prev) => {
-                      const next = { ...prev, [dim.id]: v }
-                      // Changing a parent clears every dimension cascading
-                      // off it — its old pick may no longer be an option.
-                      for (const child of colFilterDims) {
-                        if ((child.cascade ?? []).some((r) => r.parent_field === dim.field)) {
-                          next[child.id] = ''
+            <span className='text-[11px] font-medium text-slate-400 uppercase tracking-wide shrink-0 dark:text-muted-foreground'>
+              Filter
+            </span>
+            {colFilterDims.map((dim, i) => {
+              const resolved = colFilterResolved[i]
+              const rawItems = (colFilterItemQueries[i]?.data ?? []) as Record<string, unknown>[]
+              const relMeta = colFilterRelMetaQueries[i]?.data
+              const options: { value: string; label: string }[] = resolved?.relatedCollection
+                ? rawItems.map((item) => {
+                    if (resolved.subField) {
+                      const v = String(item[resolved.subField] ?? '')
+                      return { value: v, label: v }
+                    }
+                    return {
+                      value: String(item.id),
+                      label: renderDisplayTemplate(relMeta?.display_template ?? null, item)
+                    }
+                  })
+                : []
+              return (
+                <div key={dim.id} className='flex items-center gap-1.5'>
+                  <span className='text-[12px] font-medium text-slate-600'>{dim.label}</span>
+                  <FilterCombobox
+                    label={dim.label}
+                    value={filterValues[dim.id] ?? ''}
+                    options={options}
+                    onChange={(v) =>
+                      setFilterValues((prev) => {
+                        const next = { ...prev, [dim.id]: v }
+                        // Changing a parent clears every dimension cascading
+                        // off it — its old pick may no longer be an option.
+                        for (const child of colFilterDims) {
+                          if ((child.cascade ?? []).some((r) => r.parent_field === dim.field)) {
+                            next[child.id] = ''
+                          }
                         }
-                      }
-                      return next
-                    })
-                  }
-                  onSearch={(q) => setSearchTerms((prev) => ({ ...prev, [dim.id]: q }))}
-                  loading={colFilterItemQueries[i]?.isLoading}
-                />
-              </div>
-            )
-          })}
+                        return next
+                      })
+                    }
+                    onSearch={(q) => setSearchTerms((prev) => ({ ...prev, [dim.id]: q }))}
+                    loading={colFilterItemQueries[i]?.isLoading}
+                  />
+                </div>
+              )
+            })}
           </>
         )}
         <button
@@ -1122,14 +1128,18 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                             </span>
                           ))}
                           {users.length === 0 && (group?.teams ?? []).length === 0 ? (
-                            <span className='text-slate-400 text-[11px] dark:text-slate-500'>—</span>
+                            <span className='text-slate-400 text-[11px] dark:text-slate-500'>
+                              —
+                            </span>
                           ) : (
                             users.slice(0, 4).map((u) => (
                               <UserAvatar
                                 key={u.link_id}
                                 userId={u.user}
                                 className={`h-6 w-6 ${isInherited ? 'opacity-50' : ''}`}
-                                alt={[u.first_name, u.last_name].filter(Boolean).join(' ') || u.email}
+                                alt={
+                                  [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+                                }
                                 fallback={
                                   <span
                                     title={
@@ -1243,38 +1253,39 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                                   firstCollection || null
                                 )
                                 return (
-                                <div key={`t${t.link_id}`} className='flex items-center gap-1.5'>
-                                  <button
-                                    type='button'
-                                    data-tip='Manage this team’s members and scope'
-                                    onClick={() => setManagingTeam({ id: t.id, name: t.name })}
-                                    className='flex flex-1 items-center gap-1.5 text-left text-[12px] font-medium text-violet-700 hover:underline dark:text-violet-300'
-                                  >
-                                    <Users2 className='h-3.5 w-3.5' />
-                                    {t.name}
-                                    <span className='font-normal tabular-nums text-slate-400'>
-                                      {t.member_count} member{t.member_count === 1 ? '' : 's'}
-                                    </span>
-                                    {rank.tier === 'out' && (
-                                      <span
-                                        data-tip={`Assigned outside its scope — ${rank.mismatches.join('; ')}`}
-                                        className='rounded bg-amber-100 px-1 py-px text-[9px] font-semibold uppercase text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'
-                                      >
-                                        out of scope
+                                  <div key={`t${t.link_id}`} className='flex items-center gap-1.5'>
+                                    <button
+                                      type='button'
+                                      data-tip='Manage this team’s members and scope'
+                                      onClick={() => setManagingTeam({ id: t.id, name: t.name })}
+                                      className='flex flex-1 items-center gap-1.5 text-left text-[12px] font-medium text-violet-700 hover:underline dark:text-violet-300'
+                                    >
+                                      <Users2 className='h-3.5 w-3.5' />
+                                      {t.name}
+                                      <span className='font-normal tabular-nums text-slate-400'>
+                                        {t.member_count} member{t.member_count === 1 ? '' : 's'}
                                       </span>
-                                    )}
-                                  </button>
-                                  <button
-                                    type='button'
-                                    data-tip='Unassign this team from the cell (the team itself is untouched)'
-                                    onClick={() =>
-                                      group && removeTeam.mutate({ groupId: group.id, teamId: t.id })
-                                    }
-                                    className='text-slate-400 hover:text-red-500'
-                                  >
-                                    <X className='h-3 w-3' />
-                                  </button>
-                                </div>
+                                      {rank.tier === 'out' && (
+                                        <span
+                                          data-tip={`Assigned outside its scope — ${rank.mismatches.join('; ')}`}
+                                          className='rounded bg-amber-100 px-1 py-px text-[9px] font-semibold uppercase text-amber-700 dark:bg-amber-500/15 dark:text-amber-400'
+                                        >
+                                          out of scope
+                                        </span>
+                                      )}
+                                    </button>
+                                    <button
+                                      type='button'
+                                      data-tip='Unassign this team from the cell (the team itself is untouched)'
+                                      onClick={() =>
+                                        group &&
+                                        removeTeam.mutate({ groupId: group.id, teamId: t.id })
+                                      }
+                                      className='text-slate-400 hover:text-red-500'
+                                    >
+                                      <X className='h-3 w-3' />
+                                    </button>
+                                  </div>
                                 )
                               })}
                               {users.map((u) => (
@@ -1406,15 +1417,14 @@ export function OwnerMatrix({ templateId, states, bindings }: OwnerMatrixProps) 
                   colSpan={states.length + 1}
                   className='px-4 py-6 text-center text-[13px] text-slate-400'
                 >
-                  No rows yet — the axis fills in automatically once the row dimension's
-                  collection has records.
+                  No rows yet — the axis fills in automatically once the row dimension's collection
+                  has records.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
-
     </div>
   )
 }
@@ -1535,11 +1545,8 @@ function AddUserToCell({
   const roleNames = useRoleNames()
   const { people } = usePeopleSearch(open ? query : '')
   const q = query.trim().toLowerCase()
-  const userLabel = (u: User) =>
-    [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
-  const excluded = new Set(
-    existingUserIds.filter(Boolean).map((id) => String(id).toUpperCase())
-  )
+  const userLabel = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  const excluded = new Set(existingUserIds.filter(Boolean).map((id) => String(id).toUpperCase()))
   const rankedTeams = (q ? teams.filter((t) => t.name.toLowerCase().includes(q)) : teams)
     .map((t) => ({
       ...t,
@@ -1603,7 +1610,11 @@ function AddUserToCell({
           className='flex h-7 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] text-slate-500 transition-colors hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-300'
         >
           <span className='flex items-center gap-1.5'>
-            {isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <Plus className='h-3 w-3' />}
+            {isPending ? (
+              <Loader2 className='h-3 w-3 animate-spin' />
+            ) : (
+              <Plus className='h-3 w-3' />
+            )}
             Add owner…
           </span>
           <ChevronDown className='h-3 w-3 opacity-50' />
@@ -1660,9 +1671,7 @@ function AddUserToCell({
                       out of scope
                     </span>
                   )}
-                  <span className='tabular-nums text-[11px] text-slate-400'>
-                    {t.member_count}
-                  </span>
+                  <span className='tabular-nums text-[11px] text-slate-400'>{t.member_count}</span>
                 </button>
               ))}
               {onCreateTeam && (
@@ -1698,7 +1707,7 @@ function AddUserToCell({
                 userId={u.id}
                 className='h-6 w-6'
                 fallback={
-                  <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#00ceff1a] text-[9.5px] font-semibold text-slate-600 dark:text-slate-300'>
+                  <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/10 text-[9.5px] font-semibold text-slate-600 dark:text-slate-300'>
                     {initials(u)}
                   </span>
                 }
@@ -1870,7 +1879,6 @@ function BulkMembershipPanel({
   )
 }
 
-
 /** Inline team roster manager — opened from a team chip in the Owner Matrix
  *  so rosters are editable without leaving the pipeline. Edits apply to the
  *  TEAM itself: every cell (and mention) using it follows. */
@@ -1910,7 +1918,8 @@ function TeamManagerPanel({
     onError: () => toast.error('Failed to add member')
   })
   const removeMember = useMutation({
-    mutationFn: (userId: string) => client.request(del(`/user-groups/${team.id}/members/${userId}`)),
+    mutationFn: (userId: string) =>
+      client.request(del(`/user-groups/${team.id}/members/${userId}`)),
     onSuccess: refresh,
     onError: () => toast.error('Failed to remove member')
   })
@@ -2004,7 +2013,10 @@ function TeamManagerPanel({
 
 /** People-only styled picker for the team roster manager — same combobox
  *  vocabulary as the cell's owner picker. */
-type ScopedCandidate = User & { scope_tier?: 'match' | 'unrestricted' | 'mismatch'; scope_mismatch?: string[] }
+type ScopedCandidate = User & {
+  scope_tier?: 'match' | 'unrestricted' | 'mismatch'
+  scope_mismatch?: string[]
+}
 
 const CANDIDATE_TIER_LABEL: Record<string, string> = {
   match: 'Matches team scope',
@@ -2058,7 +2070,11 @@ export function MemberPickerCombobox({
           className='flex h-7 w-full items-center justify-between rounded border border-slate-200 bg-white px-2 text-[12px] text-slate-500 transition-colors hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-300'
         >
           <span className='flex items-center gap-1.5'>
-            {isPending ? <Loader2 className='h-3 w-3 animate-spin' /> : <Plus className='h-3 w-3' />}
+            {isPending ? (
+              <Loader2 className='h-3 w-3 animate-spin' />
+            ) : (
+              <Plus className='h-3 w-3' />
+            )}
             Add member…
           </span>
           <ChevronDown className='h-3 w-3 opacity-50' />
@@ -2080,7 +2096,8 @@ export function MemberPickerCombobox({
         <div className='max-h-56 overflow-y-auto py-1'>
           {filtered.map((u, i) => {
             const tier = u.scope_tier ?? 'unrestricted'
-            const showHeader = ranked && (i === 0 || (filtered[i - 1].scope_tier ?? 'unrestricted') !== tier)
+            const showHeader =
+              ranked && (i === 0 || (filtered[i - 1].scope_tier ?? 'unrestricted') !== tier)
             return (
               <Fragment key={u.id}>
                 {showHeader && (

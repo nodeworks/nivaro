@@ -1,9 +1,9 @@
+import { useQuery } from '@tanstack/react-query'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { useQuery } from '@tanstack/react-query'
 import {
   Bold,
   Check,
@@ -200,7 +200,7 @@ export function RichTextEditor({
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-md border border-slate-200 bg-background focus-within:ring-1 focus-within:ring-[#00ceff] focus-within:border-[#00ceff] dark:border-border',
+        'overflow-hidden rounded-md border border-slate-200 bg-background focus-within:ring-1 focus-within:ring-nvr-cyan focus-within:border-nvr-cyan dark:border-border',
         disabled && 'opacity-60'
       )}
     >
@@ -339,7 +339,7 @@ export function RichTextEditor({
                 }}
                 placeholder='https://example.com'
                 aria-label='Link URL'
-                className='flex-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] text-slate-700 outline-none focus:border-[#00ceff] dark:border-border dark:bg-background dark:text-slate-100'
+                className='flex-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
               />
               <button
                 type='button'
@@ -428,7 +428,10 @@ type RecordLinkCollection = {
   display_template?: string | null
 }
 
-function renderPlainTemplate(template: string | null | undefined, row: Record<string, unknown>): string {
+function renderPlainTemplate(
+  template: string | null | undefined,
+  row: Record<string, unknown>
+): string {
   if (!template) return ''
   return template
     .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, token: string) => {
@@ -498,7 +501,9 @@ function RecordLinkPanel({
     queryFn: () =>
       jsonFetch(
         `/items/${collection}?limit=10&search=${encodeURIComponent(debounced.trim())}`
-      ).then((d: { data?: Array<Record<string, unknown>> }) => (Array.isArray(d?.data) ? d.data : []))
+      ).then((d: { data?: Array<Record<string, unknown>> }) =>
+        Array.isArray(d?.data) ? d.data : []
+      )
   })
 
   return (
@@ -524,7 +529,7 @@ function RecordLinkPanel({
           placeholder={collection ? 'Search records…' : 'Pick a collection first'}
           disabled={!collection}
           aria-label='Search records'
-          className='flex-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] text-slate-700 outline-none focus:border-[#00ceff] disabled:opacity-50'
+          className='flex-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-[12px] text-slate-700 outline-none focus:border-nvr-cyan disabled:opacity-50'
         />
         {isFetching && <Loader2 className='h-3.5 w-3.5 animate-spin text-slate-400' />}
         <button

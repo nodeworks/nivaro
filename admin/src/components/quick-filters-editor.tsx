@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Copy, GripVertical, Plus, Trash2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Textarea } from '@/components/ui/textarea'
+import { api, type CMSField, type CMSRelation } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 /**
@@ -157,19 +158,18 @@ function PathBuilder({
     onPick: (v: string) => void,
     placeholder: string
   ) => (
-    <select
+    <SimpleSelect
       value={value ?? ''}
-      onChange={(e) => onPick(e.target.value)}
-      className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-700'
-    >
-      <option value=''>{placeholder}</option>
-      {options.map((h) => (
-        <option key={h.field} value={h.field}>
-          {h.field}
-          {h.kind === 'alias' ? '  (related)' : h.kind === 'm2o' ? '  →' : ''}
-        </option>
-      ))}
-    </select>
+      onChange={(v) => onPick(v)}
+      className='h-7 w-auto rounded-md border-slate-200 bg-white px-2 text-[12px] text-slate-700'
+      options={[
+        { value: '', label: placeholder },
+        ...options.map((h) => ({
+          value: h.field,
+          label: `${h.field}${h.kind === 'alias' ? '  (related)' : h.kind === 'm2o' ? '  →' : ''}`
+        }))
+      ]}
+    />
   )
 
   return (
@@ -217,23 +217,20 @@ function FieldSelect({
   const meta = useCollectionMeta(collection || null)
   const fields = (meta.data?.fields ?? []).filter((f) => !f.field.startsWith('__'))
   return (
-    <select
+    <SimpleSelect
       value={value ?? ''}
-      onChange={(e) => onChange(e.target.value)}
-      className='h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-700'
-    >
-      {allowBlank && <option value=''>{placeholder}</option>}
-      {fields.map((f) => (
-        <option key={f.field} value={f.field}>
-          {f.field}
-        </option>
-      ))}
-      {/* A configured value the collection no longer has must stay visible
-          rather than silently resetting to blank. */}
-      {value && !fields.some((f) => f.field === value) && (
-        <option value={value}>{value} (missing)</option>
-      )}
-    </select>
+      onChange={(v) => onChange(v)}
+      className='h-7 w-full rounded-md border-slate-200 bg-white px-2 text-[12px] text-slate-700'
+      options={[
+        ...(allowBlank ? [{ value: '', label: placeholder }] : []),
+        ...fields.map((f) => ({ value: f.field, label: f.field })),
+        // A configured value the collection no longer has must stay visible
+        // rather than silently resetting to blank.
+        ...(value && !fields.some((f) => f.field === value)
+          ? [{ value, label: `${value} (missing)` }]
+          : [])
+      ]}
+    />
   )
 }
 
@@ -341,8 +338,9 @@ export function QuickFiltersEditor({
                   {f.label?.trim() || <span className='text-slate-400'>Untitled filter</span>}
                 </span>
                 <span className='truncate font-mono text-[11px] text-slate-400'>
-                  {(f.or_paths?.length ? f.or_paths.map((p) => p.join('.')).join('  or  ') : f.path?.join('.')) ||
-                    '—'}
+                  {(f.or_paths?.length
+                    ? f.or_paths.map((p) => p.join('.')).join('  or  ')
+                    : f.path?.join('.')) || '—'}
                 </span>
               </button>
               {issues.length > 0 && (
@@ -489,9 +487,7 @@ export function QuickFiltersEditor({
                         disabled={!f.sort}
                         onClick={() =>
                           update(i, {
-                            sort: f.sort?.startsWith('-')
-                              ? f.sort.slice(1)
-                              : `-${f.sort ?? ''}`
+                            sort: f.sort?.startsWith('-') ? f.sort.slice(1) : `-${f.sort ?? ''}`
                           })
                         }
                         className='h-7 rounded-md border border-slate-200 px-2 text-[11px] text-slate-600 disabled:opacity-40'
@@ -510,7 +506,9 @@ export function QuickFiltersEditor({
                     <button
                       type='button'
                       onClick={() =>
-                        update(i, { or_paths: [...(f.or_paths ?? []), f.path?.length ? [...f.path] : []] })
+                        update(i, {
+                          or_paths: [...(f.or_paths ?? []), f.path?.length ? [...f.path] : []]
+                        })
                       }
                       className='text-[11px] text-nvr-navy hover:underline'
                     >

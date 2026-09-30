@@ -62,7 +62,9 @@ export function AlertSheet({
 
 export function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className='mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400'>{children}</p>
+    <p className='mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+      {children}
+    </p>
   )
 }
 
@@ -192,7 +194,7 @@ export function ScopeMultiSelect({
             return (
               <span
                 key={String(v)}
-                className='inline-flex items-center gap-1 rounded-full border border-nvr-cyan bg-[#00ceff1a] py-0.5 pl-2 pr-1 text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                className='inline-flex items-center gap-1 rounded-full border border-nvr-cyan bg-nvr-cyan/10 py-0.5 pl-2 pr-1 text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'
               >
                 {opt?.label ?? String(v)}
                 <button
@@ -339,7 +341,11 @@ export function AlertRuleDrawer({
     }
   }
 
-  const valid = name.trim() && definitionId !== '' && threshold.trim() !== '' && !Number.isNaN(Number(threshold))
+  const valid =
+    name.trim() &&
+    definitionId !== '' &&
+    threshold.trim() !== '' &&
+    !Number.isNaN(Number(threshold))
 
   return (
     <AlertSheet
@@ -364,9 +370,7 @@ export function AlertRuleDrawer({
                 check_frequency: frequency,
                 is_shared: isShared,
                 status,
-                filters: Object.fromEntries(
-                  Object.entries(filters).filter(([, v]) => v.length > 0)
-                )
+                filters: Object.fromEntries(Object.entries(filters).filter(([, v]) => v.length > 0))
               })
             }
           >
@@ -662,7 +666,9 @@ export function NotifSubEditDrawer({
         <div className='flex items-center justify-between rounded-md border border-slate-200 px-3 py-2.5 dark:border-border'>
           <div>
             <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>Active</p>
-            <p className='text-[11px] text-slate-400'>Pause instead of deleting to keep the setup</p>
+            <p className='text-[11px] text-slate-400'>
+              Pause instead of deleting to keep the setup
+            </p>
           </div>
           <ToggleSwitch checked={active} onChange={setActive} />
         </div>

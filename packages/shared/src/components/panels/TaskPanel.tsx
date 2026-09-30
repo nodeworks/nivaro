@@ -1081,7 +1081,7 @@ export function TaskPanel({
               <button
                 type='button'
                 onClick={() => setAdding(true)}
-                className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-[#00ceff]'
+                className='flex items-center gap-1.5 text-[12px] text-slate-400 transition-colors hover:text-nvr-cyan'
                 data-task-add
               >
                 <Plus className='h-3.5 w-3.5' />

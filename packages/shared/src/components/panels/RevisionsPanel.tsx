@@ -1102,7 +1102,7 @@ function RevisionRow({
                     type='button'
                     disabled={o2mRestoring === f.field}
                     onClick={() => restoreO2MField(f)}
-                    className='rounded border border-[#00ceff]/40 px-2 py-0.5 text-[10.5px] font-medium text-[#00ceff] hover:bg-[#00ceff]/10 disabled:opacity-40'
+                    className='rounded border border-nvr-cyan/40 px-2 py-0.5 text-[10.5px] font-medium text-nvr-cyan hover:bg-nvr-cyan/10 disabled:opacity-40'
                   >
                     {o2mRestoring === f.field ? 'Restoring…' : 'Restore'}
                   </button>
@@ -1758,7 +1758,7 @@ function TimeLapseBar({
             setPlaying(false)
             setIdx(Number(e.target.value))
           }}
-          className='flex-1 accent-[#00ceff]'
+          className='flex-1 accent-nvr-cyan'
           aria-label='History position'
         />
         <span className='shrink-0 tabular-nums text-[11px] text-slate-400'>

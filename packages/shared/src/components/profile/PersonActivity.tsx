@@ -288,7 +288,7 @@ const ACTION_META: Record<string, { cls: string; dot: string }> = {
     dot: 'bg-emerald-500'
   },
   update: {
-    cls: 'bg-[#00ceff1a] text-nvr-navy dark:text-nvr-cyan',
+    cls: 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan',
     dot: 'bg-nvr-cyan'
   },
   delete: { cls: 'bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400', dot: 'bg-red-500' },

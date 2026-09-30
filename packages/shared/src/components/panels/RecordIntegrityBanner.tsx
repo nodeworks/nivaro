@@ -458,7 +458,7 @@ function ProposalPicker({
                         'shrink-0 rounded px-2 py-0.5 text-[10.5px] font-semibold text-white transition-colors disabled:opacity-50',
                         p.kind === 'notify'
                           ? 'bg-slate-600 hover:bg-slate-700'
-                          : 'bg-nvr-cyan hover:bg-[#00b8e0]'
+                          : 'bg-nvr-cyan hover:bg-nvr-cyan-dark'
                       )}
                     >
                       {apply.isPending && apply.variables?.id === p.id

@@ -128,7 +128,7 @@ export function PersonProfile({
                 key={id}
                 value={id}
                 data-person-tab={id}
-                className='h-7 rounded-md px-3 text-[12px] font-medium text-slate-500 data-[state=active]:bg-[#00ceff1a] data-[state=active]:text-nvr-navy data-[state=active]:shadow-none dark:text-slate-400 dark:data-[state=active]:text-nvr-cyan'
+                className='h-7 rounded-md px-3 text-[12px] font-medium text-slate-500 data-[state=active]:bg-nvr-cyan/10 data-[state=active]:text-nvr-navy data-[state=active]:shadow-none dark:text-slate-400 dark:data-[state=active]:text-nvr-cyan'
               >
                 {label}
               </TabsTrigger>

@@ -5,6 +5,7 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -454,18 +455,15 @@ export function ScopeDimensionsPage() {
                 <p className='mb-1 text-[10.5px] uppercase tracking-wide text-slate-400'>
                   Target collection
                 </p>
-                <select
+                <SimpleSelect
                   value={draft.target_collection}
-                  onChange={(e) => setDraft({ ...draft, target_collection: e.target.value })}
-                  className='h-8 w-[180px] rounded-md border border-slate-200 bg-white px-2 text-[12.5px] dark:border-border dark:bg-card'
-                >
-                  <option value=''>Pick…</option>
-                  {collections.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setDraft({ ...draft, target_collection: v })}
+                  className='h-8 w-[180px] rounded-md border-slate-200 bg-white px-2 text-[12.5px] dark:border-border dark:bg-card'
+                  options={[
+                    { value: '', label: 'Pick…' },
+                    ...collections.map((c) => ({ value: c, label: c }))
+                  ]}
+                />
               </div>
               <div>
                 <p className='mb-1 text-[10.5px] uppercase tracking-wide text-slate-400'>

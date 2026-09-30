@@ -1,9 +1,9 @@
 import { Check, MapPin, Star } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import type { CMSField } from './types'
-import { parseJson } from './helpers'
 import { fiscalPeriodOf, getFiscalStartMonth } from '../../lib/fiscal'
 import { Input } from '../ui/input'
+import { parseJson } from './helpers'
+import type { CMSField } from './types'
 
 /**
  * Field Types & Interfaces sprint — the small structured interfaces:
@@ -99,11 +99,12 @@ export function ColorField({
   value: unknown
   onChange: (v: unknown) => void
 }) {
-  const hex = typeof value === 'string' && /^#?[0-9a-f]{6}$/i.test(value)
-    ? value.startsWith('#')
-      ? value
-      : `#${value}`
-    : '#00ceff'
+  const hex =
+    typeof value === 'string' && /^#?[0-9a-f]{6}$/i.test(value)
+      ? value.startsWith('#')
+        ? value
+        : `#${value}`
+      : '#00ceff'
   return (
     <div className='flex items-center gap-2'>
       <input
@@ -120,7 +121,10 @@ export function ColorField({
         className='w-32 font-mono text-[12.5px]'
       />
       {typeof value === 'string' && (
-        <span className='h-6 w-6 rounded-full border border-slate-200' style={{ background: hex }} />
+        <span
+          className='h-6 w-6 rounded-full border border-slate-200'
+          style={{ background: hex }}
+        />
       )}
     </div>
   )
@@ -168,9 +172,10 @@ export function DurationField({
   onChange: (v: unknown) => void
 }) {
   const minutes = Number(value)
-  const display = Number.isFinite(minutes) && value != null && value !== ''
-    ? `${Math.floor(minutes / 60)}:${String(Math.round(minutes % 60)).padStart(2, '0')}`
-    : ''
+  const display =
+    Number.isFinite(minutes) && value != null && value !== ''
+      ? `${Math.floor(minutes / 60)}:${String(Math.round(minutes % 60)).padStart(2, '0')}`
+      : ''
   const [text, setText] = useState(display)
   useEffect(() => setText(display), [display])
   const commit = () => {
@@ -194,7 +199,9 @@ export function DurationField({
         className='w-28 tabular-nums'
       />
       <span className='text-[11.5px] text-slate-400'>
-        {Number.isFinite(minutes) && value != null && value !== '' ? `${minutes} min` : 'stored as minutes'}
+        {Number.isFinite(minutes) && value != null && value !== ''
+          ? `${minutes} min`
+          : 'stored as minutes'}
       </span>
     </div>
   )
@@ -227,7 +234,7 @@ export function RangeSliderField({
           max={max}
           value={Number.isFinite(lo) ? lo : min}
           onChange={(e) => onChange(Number(e.target.value))}
-          className='flex-1 accent-[#00ceff]'
+          className='flex-1 accent-nvr-cyan'
           aria-label={`${field.label ?? field.field} minimum`}
         />
         {endField && (
@@ -436,15 +443,20 @@ export function ChecklistField({
   onChange: (v: unknown) => void
 }) {
   const items: Array<{ text: string; done: boolean }> = (() => {
-    const raw = typeof value === 'string' ? (() => {
-      try {
-        return JSON.parse(value)
-      } catch {
-        return []
-      }
-    })() : value
+    const raw =
+      typeof value === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(value)
+            } catch {
+              return []
+            }
+          })()
+        : value
     return Array.isArray(raw)
-      ? raw.filter((x) => x && typeof x.text === 'string').map((x) => ({ text: x.text, done: !!x.done }))
+      ? raw
+          .filter((x) => x && typeof x.text === 'string')
+          .map((x) => ({ text: x.text, done: !!x.done }))
       : []
   })()
   const [input, setInput] = useState('')
@@ -532,8 +544,7 @@ export function DateRangeField({
   pairedValue?: unknown
 }) {
   const endField = opts<{ range_end_field?: string }>(field).range_end_field
-  const toDateStr = (v: unknown) =>
-    typeof v === 'string' && v ? v.slice(0, 10) : ''
+  const toDateStr = (v: unknown) => (typeof v === 'string' && v ? v.slice(0, 10) : '')
   return (
     <div className='flex items-center gap-2'>
       <Input
@@ -691,13 +702,19 @@ export function RepeaterField({
                         type='checkbox'
                         checked={row[col.key] === true}
                         onChange={(e) =>
-                          commit(rows.map((r, j) => (j === i ? { ...r, [col.key]: e.target.checked } : r)))
+                          commit(
+                            rows.map((r, j) =>
+                              j === i ? { ...r, [col.key]: e.target.checked } : r
+                            )
+                          )
                         }
-                        className='mt-1 block h-4 w-4 accent-[#00ceff]'
+                        className='mt-1 block h-4 w-4 accent-nvr-cyan'
                       />
                     ) : (
                       <Input
-                        type={col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'}
+                        type={
+                          col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'
+                        }
                         value={String(row[col.key] ?? '')}
                         onChange={(e) =>
                           commit(

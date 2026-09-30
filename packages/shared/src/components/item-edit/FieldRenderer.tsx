@@ -325,7 +325,7 @@ export function FieldRenderer({
                 width: m2oDrillCfg.width
               })
             }
-            className='shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-[#00ceff] dark:hover:bg-slate-800'
+            className='shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-nvr-cyan dark:hover:bg-slate-800'
           >
             <ExternalLink className='h-3.5 w-3.5' />
           </button>
@@ -429,7 +429,7 @@ export function FieldRenderer({
                   title: String(value)
                 })
               }
-              className='text-left text-sm text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:text-slate-200 dark:hover:text-[#00ceff]'
+              className='text-left text-sm text-slate-700 underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-nvr-cyan dark:text-slate-200 dark:hover:text-nvr-cyan'
             >
               {formatDisplayValue(value, field)}
             </button>

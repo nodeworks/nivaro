@@ -329,7 +329,7 @@ export function M2MCombobox({
                                 width: drilldown.width
                               })
                             }
-                            className='underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+                            className='underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-nvr-cyan dark:hover:text-nvr-cyan'
                           >
                             <RelatedItemLabel
                               collection={relatedCollection}

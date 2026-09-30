@@ -106,7 +106,7 @@ export function QueueQuickFilters({
           : seededKeys.has(def.key) && selected.length > 0
             ? {
                 label: 'default',
-                cls: 'bg-[#00ceff1f] text-[#0284a8] dark:text-[#00ceff]',
+                cls: 'bg-nvr-cyan/[0.12] text-[#0284a8] dark:text-nvr-cyan',
                 title: `Pre-selected from your default ${def.placeholder} scope — adjust freely`
               }
             : null
@@ -138,7 +138,7 @@ export function QueueQuickFilters({
               onApply(patch)
             }}
             className={`h-6 rounded px-2.5 text-[11px] font-semibold text-white transition-[filter] hover:brightness-110 ${
-              dirty ? 'bg-[#00ceff]' : 'bg-[#00ceff] opacity-60'
+              dirty ? 'bg-nvr-cyan' : 'bg-nvr-cyan opacity-60'
             }`}
             data-queue-quick-apply
           >

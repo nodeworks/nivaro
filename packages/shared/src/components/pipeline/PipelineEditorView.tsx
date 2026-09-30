@@ -83,6 +83,9 @@ import type {
   User
 } from './types'
 
+/** The brand colour, through the token a host re-points (white-labelling). */
+const BRAND = 'rgb(var(--nvr-cyan-rgb, 0 206 255))'
+
 // ─── Simple combobox ──────────────────────────────────────────────────────────
 
 function SimpleCombobox({
@@ -2223,7 +2226,7 @@ function DimensionCascadeEditor({
           className={cn(
             'rounded p-1 transition-colors',
             (d.cascade ?? []).length > 0
-              ? 'text-nvr-cyan hover:text-[#00b8e0]'
+              ? 'text-nvr-cyan hover:text-nvr-cyan-dark'
               : 'text-slate-400 hover:text-slate-700'
           )}
         >
@@ -4147,7 +4150,7 @@ export function AiReviewCard({ templateId }: { templateId: string }) {
             </ul>
           )}
           {result.critique && (
-            <div className='whitespace-pre-wrap rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-3 py-2 text-[12.5px] leading-snug text-slate-600'>
+            <div className='whitespace-pre-wrap rounded-md border border-nvr-cyan/25 bg-nvr-cyan/5 px-3 py-2 text-[12.5px] leading-snug text-slate-600'>
               {result.critique}
             </div>
           )}
@@ -4875,7 +4878,7 @@ export function PipelineSimulatorCard({ bindings }: { bindings: Array<{ collecti
                 key={s.id}
                 className={cn(
                   'rounded-lg border p-3',
-                  s.is_current ? 'border-[#00ceff] bg-[#00ceff0a]' : 'border-slate-200'
+                  s.is_current ? 'border-nvr-cyan bg-nvr-cyan/[0.04]' : 'border-slate-200'
                 )}
               >
                 <div className='flex items-center gap-1.5'>
@@ -5061,7 +5064,7 @@ function CoveragePeoplePicker({
           {selected.map((u) => (
             <span
               key={u.id}
-              className='inline-flex items-center gap-1 rounded-full bg-[#00ceff1a] px-2 py-px text-[11px] font-medium text-slate-700 dark:text-slate-200'
+              className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-px text-[11px] font-medium text-slate-700 dark:text-slate-200'
             >
               {u.name}
               <button
@@ -5091,7 +5094,7 @@ function CoveragePeoplePicker({
               type='button'
               className={cn(
                 'flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] transition-colors',
-                picked ? 'bg-[#00ceff0f]' : 'hover:bg-muted'
+                picked ? 'bg-nvr-cyan/[0.06]' : 'hover:bg-muted'
               )}
               onClick={() =>
                 onChange(
@@ -5105,7 +5108,7 @@ function CoveragePeoplePicker({
                 className={cn(
                   'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border',
                   picked
-                    ? 'border-[#00ceff] bg-[#00ceff] text-white'
+                    ? 'border-nvr-cyan bg-nvr-cyan text-white'
                     : 'border-slate-300 dark:border-border'
                 )}
               >
@@ -6392,7 +6395,7 @@ function PipelineCanvasCard({ templateId }: { templateId: string }) {
               y1={posOf(linkFrom).y + layout.NODE_H / 2}
               x2={linkPos.x}
               y2={linkPos.y}
-              stroke='#00ceff'
+              stroke={BRAND}
               strokeWidth={2}
               strokeDasharray='5 4'
             />
@@ -6613,7 +6616,7 @@ function PipelineFlowMapCard({ templateId }: { templateId: string }) {
               // biome-ignore lint/suspicious/noArrayIndexKey: derived list
               key={i}
               d={r.path}
-              fill={r.f.back ? '#ef4444' : '#00ceff'}
+              fill={r.f.back ? '#ef4444' : BRAND}
               opacity={hover === null ? (r.f.back ? 0.45 : 0.3) : hover === r.f ? 0.75 : 0.08}
               onMouseEnter={() => setHover(r.f)}
               onMouseLeave={() => setHover(null)}
@@ -6869,7 +6872,7 @@ function PipelineReplayCard({ templateId }: { templateId: string }) {
             setPlaying(false)
             setFrame(Number(e.target.value))
           }}
-          className='flex-1 accent-[#00ceff]'
+          className='flex-1 accent-nvr-cyan'
         />
         <span className='w-20 text-right text-[11px] text-slate-400'>
           day {frame + 1}/{frames.length}

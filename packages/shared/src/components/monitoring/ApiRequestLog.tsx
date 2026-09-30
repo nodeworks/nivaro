@@ -416,7 +416,7 @@ export function ApiRequestLog({
                               userId={r.user}
                               className='h-5 w-5 shrink-0 rounded-full'
                               fallback={
-                                <span className='inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#00ceff33] text-[8.5px] font-semibold text-slate-700 dark:text-slate-100'>
+                                <span className='inline-flex h-5 w-5 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8.5px] font-semibold text-slate-700 dark:text-slate-100'>
                                   {initials(callerLabel)}
                                 </span>
                               }
@@ -841,7 +841,7 @@ export function InboundCallersView({ hours: initialHours = 24 }: { hours?: numbe
                       userId={c.user}
                       className='h-6 w-6 shrink-0 rounded-full'
                       fallback={
-                        <span className='inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#00ceff33] text-[9px] font-semibold text-slate-700 dark:text-slate-100'>
+                        <span className='inline-flex h-6 w-6 items-center justify-center rounded-full bg-nvr-cyan/20 text-[9px] font-semibold text-slate-700 dark:text-slate-100'>
                           {initials(c.label)}
                         </span>
                       }

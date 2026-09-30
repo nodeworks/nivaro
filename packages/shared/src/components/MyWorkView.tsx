@@ -349,9 +349,9 @@ export function MyWorkView({
               setUpdatesPending(false)
               void refetch()
             }}
-            className='ml-3 inline-flex items-center gap-1.5 rounded-full border border-[#00ceff]/40 bg-[#00ceff]/10 px-3 py-1.5 text-[12px] font-medium text-[#0e7490] hover:bg-[#00ceff]/20 dark:text-[#67e8f9]'
+            className='ml-3 inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-[#0e7490] hover:bg-nvr-cyan/20 dark:text-[#67e8f9]'
           >
-            <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
+            <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
             Updates available — refresh
           </button>
         )}

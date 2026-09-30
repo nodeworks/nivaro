@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Pencil, Play, RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { describeCron } from '@/lib/cron-text'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
@@ -582,23 +583,23 @@ export default function BackgroundJobs() {
                     {dryRunning === c.id ? 'Dry run…' : 'Dry run'}
                   </button>
                 )}
-                <select
+                <SimpleSelect
                   value={c.after ?? ''}
-                  onChange={(e) => setAfter(c.id, e.target.value || null)}
-                  aria-label={`Run ${c.id} after another job`}
-                  title='Run after — this job runs right after the chosen job completes instead of on its own schedule'
-                  data-cron-chain={c.id}
-                  className='h-6 max-w-[150px] rounded-md border border-slate-200 bg-white px-1 text-[11px] text-slate-600 dark:border-border dark:bg-background dark:text-muted-foreground'
-                >
-                  <option value=''>on schedule</option>
-                  {list
-                    .filter((o) => o.id !== c.id)
-                    .map((o) => (
-                      <option key={o.id} value={o.id}>
-                        after {o.id}
-                      </option>
-                    ))}
-                </select>
+                  onChange={(v) => setAfter(c.id, v || null)}
+                  ariaLabel={`Run ${c.id} after another job`}
+                  triggerProps={{
+                    title:
+                      'Run after — this job runs right after the chosen job completes instead of on its own schedule',
+                    'data-cron-chain': c.id
+                  }}
+                  className='h-6 max-w-[150px] rounded-md border-slate-200 bg-white px-1 text-[11px] text-slate-600 dark:border-border dark:bg-background dark:text-muted-foreground'
+                  options={[
+                    { value: '', label: 'on schedule' },
+                    ...list
+                      .filter((o) => o.id !== c.id)
+                      .map((o) => ({ value: o.id, label: `after ${o.id}` }))
+                  ]}
+                />
                 {c.overridden && editing !== c.id && (
                   <button
                     type='button'

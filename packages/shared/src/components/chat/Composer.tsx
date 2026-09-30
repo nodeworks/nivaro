@@ -542,7 +542,7 @@ export const ChatComposer = forwardRef<
             >
               {!f.id && !f.error && (
                 <span
-                  className='absolute inset-y-0 left-0 bg-[#00ceff26] transition-[width]'
+                  className='absolute inset-y-0 left-0 bg-nvr-cyan/15 transition-[width]'
                   style={{ width: `${Math.round(f.progress * 100)}%` }}
                   aria-hidden
                 />

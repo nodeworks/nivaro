@@ -401,7 +401,7 @@ export function PeopleCard({ profile: p }: { profile: PersonProfile }) {
 function OrgChain({ profile: p }: { profile: PersonProfile }) {
   return (
     <ol className='flex flex-wrap items-center gap-x-1 gap-y-1.5' data-person-org-chain>
-      <li className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff1a] px-2 py-0.5 text-[12px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+      <li className='inline-flex items-center gap-1.5 rounded-md bg-nvr-cyan/10 px-2 py-0.5 text-[12px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
         {p.first_name ?? p.name}
       </li>
       {p.org_chain.map((m) => (

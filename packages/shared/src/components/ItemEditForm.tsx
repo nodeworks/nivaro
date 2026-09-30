@@ -87,7 +87,6 @@ import {
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { CopyAsButton } from './CopyAsButton'
-import { RecordGraphSheet } from './RecordGraph'
 import {
   type DocumentApplySelection,
   DocumentAutofillButton
@@ -175,6 +174,7 @@ import { ValidationSummary, type ValidationSummaryItem } from './item-edit/Valid
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
+import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
 
@@ -309,7 +309,7 @@ interface SaveStepItem {
 
 function SaveStepIcon({ status }: { status: SaveStepStatus }) {
   if (status === 'running')
-    return <Loader2 className='h-4 w-4 animate-spin text-[#00ceff] shrink-0' />
+    return <Loader2 className='h-4 w-4 animate-spin text-nvr-cyan shrink-0' />
   if (status === 'done') return <Check className='h-4 w-4 text-green-500 shrink-0' />
   if (status === 'error') return <AlertCircle className='h-4 w-4 text-red-500 shrink-0' />
   return (
@@ -354,7 +354,7 @@ function SaveProgressDialog({
       >
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2 text-[15px]'>
-            {!allSettled && <Loader2 className='h-4 w-4 animate-spin text-[#00ceff]' />}
+            {!allSettled && <Loader2 className='h-4 w-4 animate-spin text-nvr-cyan' />}
             {allSettled && hasError && <AlertCircle className='h-4 w-4 text-red-500' />}
             {allSettled && !hasError && <Check className='h-4 w-4 text-green-500' />}
             {hasError ? 'Saved with errors' : allSettled ? 'All changes saved' : 'Saving changes…'}
@@ -362,7 +362,7 @@ function SaveProgressDialog({
           <div className='flex items-center gap-3 pt-1'>
             <div className='flex-1 h-1.5 rounded-full bg-slate-100 dark:bg-muted overflow-hidden'>
               <div
-                className='h-full rounded-full bg-[#00ceff] transition-all duration-500'
+                className='h-full rounded-full bg-nvr-cyan transition-all duration-500'
                 style={{ width: `${overallPct}%` }}
               />
             </div>
@@ -383,7 +383,7 @@ function SaveProgressDialog({
                   key={step.id}
                   className={cn(
                     'rounded-lg border px-3 py-2.5 transition-colors duration-200',
-                    step.status === 'running' && 'border-[#00ceff]/30 bg-[#00ceff]/5',
+                    step.status === 'running' && 'border-nvr-cyan/30 bg-nvr-cyan/5',
                     step.status === 'done' &&
                       'border-green-100 bg-green-50/40 dark:border-green-500/25 dark:bg-green-500/10',
                     step.status === 'error' &&
@@ -431,7 +431,7 @@ function SaveProgressDialog({
                       {step.status === 'running' && rowPct !== null && (
                         <div className='mt-1.5 h-1 rounded-full bg-slate-200 overflow-hidden'>
                           <div
-                            className='h-full rounded-full bg-[#00ceff] transition-all duration-200'
+                            className='h-full rounded-full bg-nvr-cyan transition-all duration-200'
                             style={{ width: `${rowPct}%` }}
                           />
                         </div>
@@ -4640,7 +4640,8 @@ export function ItemEditForm({
     if (!el) return
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     el.style.transition = 'box-shadow 0.15s ease'
-    el.style.boxShadow = '0 0 0 2px #00ceff, 0 0 0 5px rgba(0,206,255,0.25)'
+    el.style.boxShadow =
+      '0 0 0 2px rgb(var(--nvr-cyan-rgb, 0 206 255)), 0 0 0 5px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.25)'
     el.style.borderRadius = '12px'
     setTimeout(() => {
       el.style.boxShadow = 'none'
@@ -7986,7 +7987,7 @@ export function ItemEditForm({
                       <button
                         type='button'
                         onClick={() => setContainerTab(c, children[idx + 1].key)}
-                        className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0]'
+                        className='inline-flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-nvr-cyan-dark'
                       >
                         Next
                         <ChevronDown className='h-3.5 w-3.5 -rotate-90' />
@@ -8505,7 +8506,7 @@ export function ItemEditForm({
                 type='button'
                 onClick={() => handleSave()}
                 disabled={saveMut.isPending || isReadOnly || viewAs.active}
-                className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0] disabled:opacity-50'
+                className='inline-flex h-9 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-colors hover:bg-nvr-cyan-dark disabled:opacity-50'
               >
                 <Save className='h-3.5 w-3.5' />
                 {saveMut.isPending ? 'Saving…' : 'Save Progress'}
@@ -8514,7 +8515,7 @@ export function ItemEditForm({
               <button
                 type='button'
                 onClick={handleNext}
-                className='inline-flex items-center gap-1.5 rounded-md bg-[#00ceff] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0]'
+                className='inline-flex items-center gap-1.5 rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-nvr-cyan-dark'
               >
                 Next
                 <ChevronDown className='h-3.5 w-3.5 -rotate-90' />
@@ -10679,8 +10680,8 @@ export function ItemEditForm({
                                       />
                                     )}
                                     {configUpdated && (
-                                      <div className='mb-2 flex items-center gap-2 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
-                                        <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
+                                      <div className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
+                                        <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
                                         Form definition updated — fields refreshed in place. Your
                                         unsaved edits are untouched.
                                       </div>

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import {
   addExpectStep,
@@ -244,21 +245,21 @@ export function E2eRecorderPage() {
             </label>
             <label className='text-[11.5px] text-slate-500'>
               Save into
-              <select
+              <SimpleSelect
                 value={extension}
-                onChange={(e) => setExtension(e.target.value)}
-                className='mt-0.5 block h-8 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
-                data-e2e-target
-              >
-                {(targets?.targets ?? []).map((t) => (
-                  <option key={t.extension} value={t.extension}>
-                    api/extensions/{t.extension}/tests/e2e ({t.specs.length})
-                  </option>
-                ))}
-                {(targets?.targets?.length ?? 0) === 0 && (
-                  <option value=''>No extensions on disk</option>
-                )}
-              </select>
+                onChange={setExtension}
+                className='mt-0.5 block h-8 w-auto rounded-md border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+                triggerProps={{ 'data-e2e-target': '' }}
+                options={[
+                  ...(targets?.targets ?? []).map((t) => ({
+                    value: t.extension,
+                    label: `api/extensions/${t.extension}/tests/e2e (${t.specs.length})`
+                  })),
+                  ...((targets?.targets?.length ?? 0) === 0
+                    ? [{ value: '', label: 'No extensions on disk' }]
+                    : [])
+                ]}
+              />
             </label>
             <div className='ml-auto flex items-center gap-2'>
               <Button

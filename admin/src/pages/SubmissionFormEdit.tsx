@@ -15,13 +15,13 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import {
   Table,
   TableBody,
@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { api, type Collection } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn, formatDate, titleCase } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -667,12 +668,7 @@ export function SubmissionFormEditPage() {
       {/* Header */}
       <div className='flex items-center justify-between border-b border-border px-6 py-4 shrink-0'>
         <div className='flex items-center gap-2.5'>
-          <Button
-            variant='ghost'
-            size='icon'
-            className='h-8 w-8'
-            onClick={goBack}
-          >
+          <Button variant='ghost' size='icon' className='h-8 w-8' onClick={goBack}>
             <ArrowLeft className='h-4 w-4' />
           </Button>
           <FileInput className='h-5 w-5 text-muted-foreground' />
@@ -852,19 +848,15 @@ export function SubmissionFormEditPage() {
                             </div>
                             <div className='space-y-1.5'>
                               <Label className='text-[12px]'>Widget</Label>
-                              <select
+                              <SimpleSelect
                                 value={cfg.widget ?? defaultWidget(entry.path, entry.fieldType)}
-                                onChange={(e) =>
-                                  updateFieldConfig(entry.path, { widget: e.target.value })
-                                }
-                                className='h-8 w-full rounded-md border border-input bg-background px-2 text-sm focus:border-nvr-cyan/60 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/20'
-                              >
-                                {WIDGET_OPTIONS.map((opt) => (
-                                  <option key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </option>
-                                ))}
-                              </select>
+                                onChange={(v) => updateFieldConfig(entry.path, { widget: v })}
+                                className='h-8 w-full rounded-md border-input bg-background px-2 text-sm'
+                                options={WIDGET_OPTIONS.map((opt) => ({
+                                  value: opt.value,
+                                  label: opt.label
+                                }))}
+                              />
                             </div>
                             <div className='flex items-center gap-2.5 pt-4'>
                               <button

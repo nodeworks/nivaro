@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { UserAvatar } from '@nivaro/shared'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clapperboard, Code2, Play, Trash2, Users } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatFileSize, formatRelative } from '@/lib/utils'
@@ -940,18 +941,16 @@ export function SessionReplaysPage() {
               half of the same decision, and it was previously a code constant. */}
           <label className='ml-auto flex items-center gap-1.5 text-[12.5px] text-slate-600 dark:text-slate-300'>
             Keep for
-            <select
+            <SimpleSelect
               value={String(retention)}
-              onChange={(e) => setRetention.mutate(Number(e.target.value))}
+              onChange={(v) => setRetention.mutate(Number(v))}
               disabled={setRetention.isPending}
-              className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
-            >
-              {[1, 3, 7, 14, 30, 60, 90, 180, 365].map((d) => (
-                <option key={d} value={d}>
-                  {d} day{d === 1 ? '' : 's'}
-                </option>
-              ))}
-            </select>
+              className='h-7 w-auto rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+              options={[1, 3, 7, 14, 30, 60, 90, 180, 365].map((d) => ({
+                value: String(d),
+                label: `${d} day${d === 1 ? '' : 's'}`
+              }))}
+            />
           </label>
           <label className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
             Recording {enabled ? 'on' : 'off'}

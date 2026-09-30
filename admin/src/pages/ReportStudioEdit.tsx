@@ -58,6 +58,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
@@ -1726,12 +1727,11 @@ function ConfigSheet({
                   <div className='space-y-1.5'>
                     <Label className='text-[11.5px]'>Second metric (right axis)</Label>
                     <div className='flex items-center gap-1.5'>
-                      <select
+                      <SimpleSelect
                         value={
                           (cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate ?? ''
                         }
-                        onChange={(e) => {
-                          const agg = e.target.value
+                        onChange={(agg) => {
                           if (!agg) {
                             setCfg({ metric2: undefined } as never)
                             return
@@ -1742,41 +1742,39 @@ function ConfigSheet({
                             metric2: { aggregate: agg, field: m2?.field, label: m2?.label }
                           } as never)
                         }}
-                        className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-                      >
-                        <option value=''>None</option>
-                        <option value='count'>Count</option>
-                        <option value='sum'>Sum</option>
-                        <option value='avg'>Avg</option>
-                        <option value='min'>Min</option>
-                        <option value='max'>Max</option>
-                      </select>
+                        className='h-7 w-auto rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                        options={[
+                          { value: '', label: 'None' },
+                          { value: 'count', label: 'Count' },
+                          { value: 'sum', label: 'Sum' },
+                          { value: 'avg', label: 'Avg' },
+                          { value: 'min', label: 'Min' },
+                          { value: 'max', label: 'Max' }
+                        ]}
+                      />
                       {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate &&
                         (cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate !==
                           'count' && (
-                          <select
+                          <SimpleSelect
                             value={(cfg as { metric2?: { field?: string } }).metric2?.field ?? ''}
-                            onChange={(e) => {
+                            onChange={(v) => {
                               const m2 = (
                                 cfg as { metric2?: { aggregate?: string; label?: string } }
                               ).metric2
                               setCfg({
                                 metric2: {
                                   aggregate: m2?.aggregate ?? 'sum',
-                                  field: e.target.value || undefined,
+                                  field: v || undefined,
                                   label: m2?.label
                                 }
                               } as never)
                             }}
-                            className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-                          >
-                            <option value=''>Pick a field…</option>
-                            {numericOpts.map((f) => (
-                              <option key={f.id} value={f.id}>
-                                {f.label}
-                              </option>
-                            ))}
-                          </select>
+                            className='h-7 min-w-0 flex-1 rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+                            options={[
+                              { value: '', label: 'Pick a field…' },
+                              ...numericOpts.map((f) => ({ value: f.id, label: f.label }))
+                            ]}
+                          />
                         )}
                       {(cfg as { metric2?: { aggregate?: string } }).metric2?.aggregate && (
                         <Input
@@ -1874,21 +1872,16 @@ function ConfigSheet({
                           }}
                         />
                       </div>
-                      <select
+                      <SimpleSelect
                         value={f.op}
-                        onChange={(e) => {
+                        onChange={(v) => {
                           const next = [...(cfg.filters ?? [])]
-                          next[i] = { ...next[i], op: e.target.value }
+                          next[i] = { ...next[i], op: v }
                           setCfg({ filters: next })
                         }}
-                        className='h-8 rounded-md border border-slate-200 bg-white px-1 text-[11.5px] dark:border-border dark:bg-card'
-                      >
-                        {FILTER_OPS.map((op) => (
-                          <option key={op} value={op}>
-                            {op}
-                          </option>
-                        ))}
-                      </select>
+                        className='h-8 w-auto rounded-md border-slate-200 bg-white px-1 text-[11.5px] dark:border-border dark:bg-card'
+                        options={FILTER_OPS.map((op) => ({ value: op, label: op }))}
+                      />
                       {!['null', 'nnull'].includes(f.op) && (
                         <Input
                           value={String(f.value ?? '')}
@@ -2100,17 +2093,12 @@ function QueryConfigEditor({
       <div className='grid grid-cols-2 gap-2'>
         <div className='space-y-1.5'>
           <Label className='text-[11.5px]'>Value format</Label>
-          <select
+          <SimpleSelect
             value={value.value_format ?? ''}
-            onChange={(e) => set({ value_format: e.target.value || undefined })}
-            className='h-8 w-full rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
-          >
-            {COL_FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {f || '(raw)'}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => set({ value_format: v || undefined })}
+            className='h-8 w-full rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+            options={COL_FORMATS.map((f) => ({ value: f, label: f || '(raw)' }))}
+          />
         </div>
         <div className='space-y-1.5'>
           <Label className='text-[11.5px]'>Sort (-field = desc)</Label>
@@ -2592,32 +2580,21 @@ function AlertsSheet({
 
   const condRow = (c: { field: string; op: string; value: string }, i: number) => (
     <div key={i} className='flex items-center gap-1.5'>
-      <select
+      <SimpleSelect
         value={c.field}
-        onChange={(e) =>
-          setConds((cs) => cs.map((x, j) => (j === i ? { ...x, field: e.target.value } : x)))
-        }
-        className='h-8 max-w-[180px] rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
-      >
-        {alertFieldOptionsFor(widgets.find((w) => w.id === widgetId)).map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <select
+        onChange={(v) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, field: v } : x)))}
+        className='h-8 w-auto max-w-[180px] rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+        options={alertFieldOptionsFor(widgets.find((w) => w.id === widgetId)).map((o) => ({
+          value: o.value,
+          label: o.label
+        }))}
+      />
+      <SimpleSelect
         value={c.op}
-        onChange={(e) =>
-          setConds((cs) => cs.map((x, j) => (j === i ? { ...x, op: e.target.value } : x)))
-        }
-        className='h-8 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
-      >
-        {['gt', 'gte', 'lt', 'lte', 'eq'].map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => setConds((cs) => cs.map((x, j) => (j === i ? { ...x, op: v } : x)))}
+        className='h-8 w-auto rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card'
+        options={['gt', 'gte', 'lt', 'lte', 'eq'].map((o) => ({ value: o, label: o }))}
+      />
       <Input
         type='number'
         value={c.value}
@@ -2967,25 +2944,22 @@ function SubscribePopover({ reportId }: { reportId: string }) {
             </label>
             <div className='mt-2 border-t border-slate-100 pt-2 dark:border-border'>
               <p className='text-[11px] text-slate-500'>Also post to a chat room</p>
-              <select
+              <SimpleSelect
                 value={sub.deliver_room ?? ''}
-                onChange={(e) =>
+                onChange={(v) =>
                   save.mutate({
                     cadence: sub.cadence,
                     delivery_email: sub.delivery_email !== false,
                     delivery_inapp: sub.delivery_inapp !== false,
-                    deliver_room: e.target.value || null
+                    deliver_room: v || null
                   })
                 }
-                className='mt-1 h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[11.5px] dark:border-border dark:bg-card dark:text-slate-200'
-              >
-                <option value=''>No room delivery</option>
-                {rooms.map((r) => (
-                  <option key={r.room} value={r.room}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
+                className='mt-1 h-7 w-full rounded-md border-slate-200 bg-white px-2 text-[11.5px] dark:border-border dark:bg-card dark:text-slate-200'
+                options={[
+                  { value: '', label: 'No room delivery' },
+                  ...rooms.map((r) => ({ value: r.room, label: r.label }))
+                ]}
+              />
             </div>
             <Button
               size='sm'
@@ -3160,18 +3134,15 @@ function CalcConfigEditor({
             <span className='w-8 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-center font-mono text-[11.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
               {t}
             </span>
-            <select
+            <SimpleSelect
               value={refs[t] ?? ''}
-              onChange={(e) => onChange({ refs: { ...refs, [t]: e.target.value } })}
-              className='h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
-            >
-              <option value=''>Pick a widget…</option>
-              {candidates.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.title || w.type}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => onChange({ refs: { ...refs, [t]: v } })}
+              className='h-7 min-w-0 flex-1 rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+              options={[
+                { value: '', label: 'Pick a widget…' },
+                ...candidates.map((w) => ({ value: w.id, label: w.title || w.type }))
+              ]}
+            />
             <button
               type='button'
               onClick={() => {
@@ -4073,18 +4044,19 @@ export function ReportStudioEditPage() {
               </Popover>
             )}
             {report.editable && (
-              <select
+              <SimpleSelect
                 value={(report as { snapshot_schedule?: string | null }).snapshot_schedule ?? ''}
-                onChange={(e) =>
-                  patchReport.mutate({ snapshot_schedule: e.target.value || null } as never)
-                }
-                title='Automatic snapshots — vs-then comparisons accumulate on cadence'
-                className='h-8 rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
-              >
-                <option value=''>No auto-snapshot</option>
-                <option value='weekly'>Snapshot weekly</option>
-                <option value='monthly'>Snapshot monthly</option>
-              </select>
+                onChange={(v) => patchReport.mutate({ snapshot_schedule: v || null } as never)}
+                triggerProps={{
+                  title: 'Automatic snapshots — vs-then comparisons accumulate on cadence'
+                }}
+                className='h-8 w-auto rounded-md border-slate-200 bg-white px-2 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+                options={[
+                  { value: '', label: 'No auto-snapshot' },
+                  { value: 'weekly', label: 'Snapshot weekly' },
+                  { value: 'monthly', label: 'Snapshot monthly' }
+                ]}
+              />
             )}
             <SubscribePopover reportId={report.id} />
             <Button
@@ -4183,28 +4155,23 @@ export function ReportStudioEditPage() {
 
         {/* Global filter bar */}
         <div className='mt-2 flex flex-wrap items-center gap-1.5'>
-          <select
+          <SimpleSelect
             value={dateRange?.preset ?? ''}
-            onChange={(e) =>
+            onChange={(v) =>
               patchReport.mutate({
                 global_filters: {
                   ...gf,
-                  date_range: e.target.value
-                    ? e.target.value === 'custom'
+                  date_range: v
+                    ? v === 'custom'
                       ? { preset: 'custom', start: gf.date_range?.start, end: gf.date_range?.end }
-                      : { preset: e.target.value }
+                      : { preset: v }
                     : null
                 }
               })
             }
-            className='h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
-          >
-            {DATE_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+            className='h-7 w-auto rounded-md border-slate-200 bg-white px-1.5 text-[12px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+            options={DATE_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
+          />
 
           {gf.date_range?.preset === 'custom' && (
             <span className='flex items-center gap-1'>

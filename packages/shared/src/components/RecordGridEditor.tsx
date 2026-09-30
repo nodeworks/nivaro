@@ -355,7 +355,7 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
           type='button'
           disabled={!scopeReady || !dirty || saving}
           onClick={() => void save()}
-          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-[#00ceff] px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50'
         >
           {saving && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
           Save changes
@@ -490,7 +490,7 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
                         type='number'
                         value={cellValue(row, c.field)}
                         onChange={(e) => setCell(row.key, c.field, e.target.value)}
-                        className='h-7 w-[84px] rounded border border-slate-200 bg-white px-1.5 text-right text-[12px] tabular-nums outline-none focus:border-[#00ceff] dark:border-border dark:bg-background'
+                        className='h-7 w-[84px] rounded border border-slate-200 bg-white px-1.5 text-right text-[12px] tabular-nums outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
                       />
                     </td>
                   ))}
@@ -897,7 +897,7 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
           disabled={!allPicked || !dirty || saving}
           onClick={() => void save()}
           data-record-grid-save
-          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[13px] font-semibold text-[#172940] hover:bg-[#00b8e0] disabled:opacity-50'
+          className='inline-flex h-9 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[13px] font-semibold text-[#172940] hover:bg-nvr-cyan-dark disabled:opacity-50'
         >
           {saving && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
           Save changes

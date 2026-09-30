@@ -55,7 +55,7 @@ export function FormulaColumnAdder({
           setLabel('')
           setFormula('')
         }}
-        className='h-7 rounded bg-[#00ceff] px-2.5 text-[12px] font-semibold text-white disabled:opacity-40'
+        className='h-7 rounded bg-nvr-cyan px-2.5 text-[12px] font-semibold text-white disabled:opacity-40'
       >
         Add formula column
       </button>

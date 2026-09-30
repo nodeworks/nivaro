@@ -2100,7 +2100,7 @@ export function AddendumPanel({
                 className={cn(
                   'ml-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors',
                   compare
-                    ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#0b7ea6] dark:text-nvr-cyan'
+                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-[#0b7ea6] dark:text-nvr-cyan'
                     : 'border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-border dark:text-slate-400'
                 )}
                 data-tip='Every addendum side by side — amount moved, fields touched, lines changed, running total'

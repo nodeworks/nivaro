@@ -228,7 +228,7 @@ export function MetaGrid({ children, cols = 3 }: { children: ReactNode; cols?: 2
 
 export const PILL_TONES = {
   neutral: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-slate-300',
-  brand: 'bg-[#00ceff1a] text-nvr-navy dark:text-nvr-cyan',
+  brand: 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan',
   amber: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400',
   red: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400',
   green: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400',

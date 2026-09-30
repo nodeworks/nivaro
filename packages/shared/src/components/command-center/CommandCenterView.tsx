@@ -107,7 +107,12 @@ export function CommandCenterView({
   // collection chip to hide/show it, click another chip to switch to it.
   const [showRecords, setShowRecords] = useState(true)
   const [clock, setClock] = useState(() => new Date())
-  const [mapFocus, setMapFocus] = useState<{ lat: number; lng: number; zoom?: number; nonce: number } | null>(null)
+  const [mapFocus, setMapFocus] = useState<{
+    lat: number
+    lng: number
+    zoom?: number
+    nonce: number
+  } | null>(null)
   useEffect(() => {
     const t = setInterval(() => setClock(new Date()), 1000)
     return () => clearInterval(t)
@@ -134,7 +139,9 @@ export function CommandCenterView({
     refetchInterval: 60_000,
     enabled: showRecords
   })
-  const { data: centroids = [] } = useQuery<Array<{ id: number; label: string; lat: number; lng: number }>>({
+  const { data: centroids = [] } = useQuery<
+    Array<{ id: number; label: string; lat: number; lng: number }>
+  >({
     queryKey: ['command-center', 'people-geo'],
     queryFn: () =>
       client
@@ -151,7 +158,12 @@ export function CommandCenterView({
         lat: p.lat,
         lng: p.lng,
         label: `${p.label}${p.state ? ` — ${p.state}` : ''}${p.sla === 'breached' ? ' · SLA BREACHED' : p.sla === 'warning' ? ' · SLA warning' : ''}`,
-        color: p.sla === 'breached' ? '#ef4444' : p.sla === 'warning' ? '#f59e0b' : (p.state_color ?? '#00a5cc'),
+        color:
+          p.sla === 'breached'
+            ? '#ef4444'
+            : p.sla === 'warning'
+              ? '#f59e0b'
+              : (p.state_color ?? '#00a5cc'),
         pulse: p.sla === 'breached'
       })),
     [geo, showRecords]
@@ -249,7 +261,7 @@ export function CommandCenterView({
                         setShowRecords(true)
                       }
                     }}
-                    className={`rounded px-2 py-0.5 text-[11px] ${active ? 'bg-[#00ceff] font-medium text-[#172940]' : 'text-slate-400 hover:bg-white/5'}`}
+                    className={`rounded px-2 py-0.5 text-[11px] ${active ? 'bg-nvr-cyan font-medium text-[#172940]' : 'text-slate-400 hover:bg-white/5'}`}
                     title={active ? 'Hide this layer' : 'Show this layer'}
                   >
                     {titleCase(c.replace(/_/g, ' '))}
@@ -272,7 +284,9 @@ export function CommandCenterView({
               bubbles={bubbles}
               focus={mapFocus}
               onPinClick={(id) =>
-                navigate(recordUrl ? recordUrl(geoCollection, id) : `/collections/${geoCollection}/${id}`)
+                navigate(
+                  recordUrl ? recordUrl(geoCollection, id) : `/collections/${geoCollection}/${id}`
+                )
               }
               statusLine={`${showRecords ? `${pins.length} ${geoCollection.replace(/_/g, ' ')}${geo?.truncated ? ' (first 500)' : ''}` : `${geoCollection.replace(/_/g, ' ')} hidden`}${bubbles.length > 0 ? ` · ${bubbles.length} groups with people on` : ''} · © OpenStreetMap`}
               minHeight={380}
@@ -293,7 +307,9 @@ export function CommandCenterView({
                 return (
                   <div key={f.collection}>
                     <div className='mb-1 flex items-baseline justify-between'>
-                      <span className='text-[12px] font-medium text-slate-200'>{f.template_name}</span>
+                      <span className='text-[12px] font-medium text-slate-200'>
+                        {f.template_name}
+                      </span>
                       <span className='text-[11px] tabular-nums text-slate-500'>{total} open</span>
                     </div>
                     <div className='flex h-2.5 overflow-hidden rounded-full bg-white/5'>
@@ -313,8 +329,14 @@ export function CommandCenterView({
                     </div>
                     <div className='mt-1 flex flex-wrap gap-x-3 gap-y-0.5'>
                       {f.states.map((s) => (
-                        <span key={s.key} className='flex items-center gap-1 text-[10.5px] text-slate-400'>
-                          <span className='h-1.5 w-1.5 rounded-full' style={{ background: s.color ?? '#00a5cc' }} />
+                        <span
+                          key={s.key}
+                          className='flex items-center gap-1 text-[10.5px] text-slate-400'
+                        >
+                          <span
+                            className='h-1.5 w-1.5 rounded-full'
+                            style={{ background: s.color ?? '#00a5cc' }}
+                          />
                           {s.label} <b className='tabular-nums text-slate-300'>{s.count}</b>
                         </span>
                       ))}
@@ -323,7 +345,9 @@ export function CommandCenterView({
                 )
               })}
               {(snap?.flow ?? []).length === 0 && (
-                <p className='text-[12px] text-slate-500'>No workflow-bound collections visible to you.</p>
+                <p className='text-[12px] text-slate-500'>
+                  No workflow-bound collections visible to you.
+                </p>
               )}
             </div>
           </div>
@@ -333,11 +357,14 @@ export function CommandCenterView({
           <div className={PANEL}>
             <div className={PANEL_HEAD}>
               <span className={TITLE}>People on now</span>
-              <span className='text-[11px] tabular-nums text-slate-500'>{snap?.people.online_count ?? 0}</span>
+              <span className='text-[11px] tabular-nums text-slate-500'>
+                {snap?.people.online_count ?? 0}
+              </span>
             </div>
             <div className='space-y-2.5 p-3'>
               {(snap?.people.regions ?? []).map((g) => {
-                const centroid = g.region_id != null ? centroids.find((c) => c.id === g.region_id) : null
+                const centroid =
+                  g.region_id != null ? centroids.find((c) => c.id === g.region_id) : null
                 // Office groups carry their own coords (street-level); region
                 // groups fall back to the region centroid.
                 const focus =
@@ -353,7 +380,9 @@ export function CommandCenterView({
                       disabled={!focus}
                       onClick={() => focus && setMapFocus({ ...focus, nonce: Date.now() })}
                       className={`flex w-full items-center gap-1.5 text-left ${focus ? 'group cursor-pointer' : 'cursor-default'}`}
-                      title={focus ? 'Show this group on the map' : 'No map placement for this group'}
+                      title={
+                        focus ? 'Show this group on the map' : 'No map placement for this group'
+                      }
                     >
                       <span className='flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-dashed border-emerald-400/80 bg-emerald-400/25' />
                       <span className='text-[11.5px] font-semibold uppercase tracking-wide text-emerald-300 group-hover:underline'>
@@ -368,7 +397,10 @@ export function CommandCenterView({
                     </button>
                     <div className='mt-1 flex flex-wrap gap-1.5 pl-5'>
                       {g.names.map((n, i) => (
-                        <span key={i} className='rounded-full bg-white/5 px-2 py-0.5 text-[11.5px] text-slate-300'>
+                        <span
+                          key={i}
+                          className='rounded-full bg-white/5 px-2 py-0.5 text-[11.5px] text-slate-300'
+                        >
                           {n}
                         </span>
                       ))}
@@ -387,28 +419,42 @@ export function CommandCenterView({
             <div className={PANEL}>
               <div className={PANEL_HEAD}>
                 <span className={TITLE}>System</span>
-                <span className='text-[11px] text-slate-500'>{snap.health.instances} instance(s)</span>
+                <span className='text-[11px] text-slate-500'>
+                  {snap.health.instances} instance(s)
+                </span>
               </div>
               <div className='grid grid-cols-2 gap-x-4 gap-y-1.5 p-3 text-[12px]'>
                 <span className='flex items-center gap-1.5'>
-                  <span className={`h-2 w-2 rounded-full ${snap.health.db_ok ? 'bg-emerald-400' : 'bg-red-500'}`} />
+                  <span
+                    className={`h-2 w-2 rounded-full ${snap.health.db_ok ? 'bg-emerald-400' : 'bg-red-500'}`}
+                  />
                   Database
                 </span>
                 <span className='flex items-center gap-1.5'>
-                  <span className={`h-2 w-2 rounded-full ${snap.health.redis_ok ? 'bg-emerald-400' : 'bg-red-500'}`} />
+                  <span
+                    className={`h-2 w-2 rounded-full ${snap.health.redis_ok ? 'bg-emerald-400' : 'bg-red-500'}`}
+                  />
                   Redis
                 </span>
                 <span>
                   Errors 1h:{' '}
-                  <b className={`tabular-nums ${snap.health.errors_1h > 20 ? 'text-red-400' : 'text-slate-200'}`}>
+                  <b
+                    className={`tabular-nums ${snap.health.errors_1h > 20 ? 'text-red-400' : 'text-slate-200'}`}
+                  >
                     {snap.health.errors_1h}
                   </b>
-                  <span className='text-slate-500'> / {snap.health.requests_1h.toLocaleString()} req</span>
+                  <span className='text-slate-500'>
+                    {' '}
+                    / {snap.health.requests_1h.toLocaleString()} req
+                  </span>
                 </span>
                 <span>
                   Jobs: <b className='tabular-nums'>{snap.health.jobs_running}</b> running
                   {snap.health.jobs_failed_1h > 0 && (
-                    <b className='tabular-nums text-amber-400'> · {snap.health.jobs_failed_1h} failed</b>
+                    <b className='tabular-nums text-amber-400'>
+                      {' '}
+                      · {snap.health.jobs_failed_1h} failed
+                    </b>
                   )}
                 </span>
                 <span>
@@ -416,7 +462,9 @@ export function CommandCenterView({
                 </span>
                 <span>
                   Loop lag:{' '}
-                  <b className={`tabular-nums ${snap.health.runtime.event_loop_lag_ms.max_1m > 300 ? 'text-red-400' : ''}`}>
+                  <b
+                    className={`tabular-nums ${snap.health.runtime.event_loop_lag_ms.max_1m > 300 ? 'text-red-400' : ''}`}
+                  >
                     {snap.health.runtime.event_loop_lag_ms.max_1m} ms
                   </b>
                 </span>
@@ -436,7 +484,11 @@ export function CommandCenterView({
               type='button'
               onClick={() =>
                 a.collection && a.item
-                  ? navigate(recordUrl ? recordUrl(a.collection, a.item) : `/collections/${a.collection}/${a.item}`)
+                  ? navigate(
+                      recordUrl
+                        ? recordUrl(a.collection, a.item)
+                        : `/collections/${a.collection}/${a.item}`
+                    )
                   : undefined
               }
               className='flex shrink-0 items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 text-[11.5px] text-slate-300 hover:bg-white/10'
@@ -453,7 +505,9 @@ export function CommandCenterView({
             </button>
           ))}
           {(snap?.activity ?? []).length === 0 && (
-            <span className='text-[12px] text-slate-500'>Quiet — no recent activity you can see.</span>
+            <span className='text-[12px] text-slate-500'>
+              Quiet — no recent activity you can see.
+            </span>
           )}
         </div>
       </div>

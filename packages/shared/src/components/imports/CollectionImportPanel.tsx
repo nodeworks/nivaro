@@ -1558,7 +1558,7 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                           `/collections/${job.collection}?ids=${encodeURIComponent(ids)}`
                         )
                       }}
-                      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
+                      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
                     >
                       View the {((job as { created_ids?: unknown[] }).created_ids ?? []).length}{' '}
                       created record

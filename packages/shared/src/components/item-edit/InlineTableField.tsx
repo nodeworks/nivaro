@@ -950,7 +950,7 @@ function AllocateDrawer({
                                     {members.length} line{members.length !== 1 ? 's' : ''}
                                   </span>
                                   {allocatedIn > 0 && (
-                                    <span className='rounded-full bg-[#00ceff]/15 px-1.5 py-0.5 text-[10px] font-medium text-[#0891b2]'>
+                                    <span className='rounded-full bg-nvr-cyan/15 px-1.5 py-0.5 text-[10px] font-medium text-[#0891b2]'>
                                       {allocatedIn} allocated
                                     </span>
                                   )}
@@ -980,7 +980,7 @@ function AllocateDrawer({
                         const existing = eff.amount > 0 ? (eff.savedRow ?? {}) : undefined
                         const current = drafts[optId] ?? (eff.amount > 0 ? String(eff.amount) : '')
                         out.push(
-                          <tr key={optId} className={cn(existing && 'bg-[#00ceff]/5')}>
+                          <tr key={optId} className={cn(existing && 'bg-nvr-cyan/5')}>
                             {columns.map((c, i) => {
                               const text = c.formula
                                 ? evalFormula(c.formula, opt)
@@ -1031,7 +1031,7 @@ function AllocateDrawer({
                                         'h-7 w-28 rounded border px-2 text-[12px] tabular-nums focus:outline-none focus:ring-1',
                                         exceeds
                                           ? 'border-red-400 bg-red-50 text-red-700 focus:ring-red-400 dark:border-red-700 dark:bg-red-950/30 dark:text-red-300'
-                                          : 'border-slate-200 focus:ring-[#00ceff]'
+                                          : 'border-slate-200 focus:ring-nvr-cyan'
                                       )}
                                     />
                                   )
@@ -1378,7 +1378,7 @@ function AutoAllocateButton({
         type='button'
         disabled={running}
         onClick={() => void run()}
-        className='h-6 px-2.5 rounded border border-[#00ceff] text-[#00ceff] hover:bg-[#00ceff]/10 transition-colors disabled:opacity-50'
+        className='h-6 px-2.5 rounded border border-nvr-cyan text-nvr-cyan hover:bg-nvr-cyan/10 transition-colors disabled:opacity-50'
       >
         {running ? 'Allocating…' : (config.label ?? 'Auto allocate')}
       </button>
@@ -3876,7 +3876,7 @@ export function InlineTableField({
               e.stopPropagation()
               drill.open({ collection: target, itemId: it.id, title: it.label, width: '80%' })
             }}
-            className='truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+            className='truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-nvr-cyan dark:hover:text-nvr-cyan'
           >
             {it.label}
           </button>
@@ -6039,7 +6039,7 @@ export function InlineTableField({
                 title: String(val)
               })
             }}
-            className='block max-w-full truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+            className='block max-w-full truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-nvr-cyan dark:hover:text-nvr-cyan'
           >
             {String(val)}
           </button>
@@ -6068,7 +6068,7 @@ export function InlineTableField({
                 title: display ?? String(val)
               })
             }}
-            className='block max-w-full truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-[#00ceff] dark:hover:text-[#00ceff]'
+            className='block max-w-full truncate text-left underline decoration-slate-300 decoration-dotted underline-offset-2 hover:text-[#172940] hover:decoration-nvr-cyan dark:hover:text-nvr-cyan'
           >
             {display ?? String(val)}
           </button>
@@ -7123,7 +7123,7 @@ export function InlineTableField({
         className={cn(
           'h-6 px-2.5 rounded border transition-colors',
           isAllPresetActive
-            ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+            ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
             : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
         )}
       >
@@ -7137,7 +7137,7 @@ export function InlineTableField({
           className={cn(
             'h-6 px-2.5 rounded border transition-colors',
             activePresetHighlightName === p.name
-              ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+              ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
               : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
           )}
         >
@@ -7177,7 +7177,7 @@ export function InlineTableField({
             onChange={(e) =>
               setBulkCount(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))
             }
-            className='w-14 h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-700 text-center focus:outline-none focus:ring-1 focus:ring-[#00ceff]'
+            className='w-14 h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-700 text-center focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
           />
           <button
             type='button'
@@ -7322,7 +7322,7 @@ export function InlineTableField({
               className={cn(
                 'h-6 px-2.5 rounded border transition-colors',
                 defaultsOpen
-                  ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
                   : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
               )}
             >
@@ -7364,7 +7364,7 @@ export function InlineTableField({
               className={cn(
                 'h-6 px-2.5 rounded border transition-colors',
                 rerunOpen
-                  ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
                   : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
               )}
               data-tip='Re-run this grid&apos;s auto-fill rules over every line, saved or not yet saved'
@@ -7389,7 +7389,7 @@ export function InlineTableField({
               className={cn(
                 'inline-flex h-6 items-center gap-1 rounded border px-2 transition-colors',
                 selectMode
-                  ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                  ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
                   : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-slate-300'
               )}
             >
@@ -7421,7 +7421,7 @@ export function InlineTableField({
             className={cn(
               'inline-flex h-6 w-6 items-center justify-center rounded border transition-colors',
               splitMode
-                ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+                ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
                 : 'border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-slate-300'
             )}
           >
@@ -7478,7 +7478,7 @@ export function InlineTableField({
               type='button'
               data-tip='Lines timeline — every line added, changed or removed on this record'
               onClick={() => setTimelineOpen(true)}
-              className='ml-auto rounded p-1 text-slate-300 hover:text-[#00ceff]'
+              className='ml-auto rounded p-1 text-slate-300 hover:text-nvr-cyan'
             >
               <History className='h-3.5 w-3.5' />
             </button>
@@ -7520,7 +7520,7 @@ export function InlineTableField({
       )}
 
       {rerunOpen && !!rowRules?.length && (
-        <div className='rounded-lg border border-[#00ceff]/40 bg-[#00ceff]/5 p-3 space-y-2 dark:bg-nvr-cyan/5'>
+        <div className='rounded-lg border border-nvr-cyan/40 bg-nvr-cyan/5 p-3 space-y-2 dark:bg-nvr-cyan/5'>
           <p className='text-[11px] font-medium text-slate-700 dark:text-slate-200'>
             Re-run rules on {rows.length + pendingRows.length}{' '}
             {rows.length + pendingRows.length === 1 ? 'line' : 'lines'}
@@ -7566,7 +7566,7 @@ export function InlineTableField({
                     setRerunMode(m)
                     setRerunPreview(null)
                   }}
-                  className='accent-[#00ceff]'
+                  className='accent-nvr-cyan'
                 />
                 {label}
               </label>
@@ -7584,7 +7584,7 @@ export function InlineTableField({
                 type='button'
                 disabled={rerunBusy !== null}
                 onClick={() => void rerunRules(false)}
-                className='h-7 rounded bg-[#00ceff] px-3 text-[11px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+                className='h-7 rounded bg-nvr-cyan px-3 text-[11px] font-medium text-white hover:brightness-110 disabled:opacity-50'
               >
                 {rerunBusy === 'apply'
                   ? isPendingMode && staging
@@ -7791,7 +7791,7 @@ export function InlineTableField({
                   <input
                     type='checkbox'
                     aria-label='Select all rows'
-                    className='accent-[#00ceff]'
+                    className='accent-nvr-cyan'
                     checked={allVisibleSelected}
                     onChange={(e) =>
                       setSelectedIds(e.target.checked ? new Set(selectableKeys) : new Set())
@@ -7977,7 +7977,7 @@ export function InlineTableField({
                       className={cn(
                         'group/row border-b border-slate-100 transition-[color,background-color,opacity] duration-300',
                         isDragging ? 'opacity-40' : '',
-                        isDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
+                        isDropTarget ? 'border-t-2 border-t-nvr-cyan' : '',
                         isPendingDelete
                           ? 'opacity-50 bg-red-50/40 cursor-default line-through dark:bg-red-900/10'
                           : '',
@@ -8007,7 +8007,7 @@ export function InlineTableField({
                               <input
                                 type='checkbox'
                                 aria-label={`Select line ${ri + 1}`}
-                                className='accent-[#00ceff]'
+                                className='accent-nvr-cyan'
                                 checked={selectedIds.has(id)}
                                 disabled={isPendingDelete}
                                 onChange={() => toggleSelected(id)}
@@ -8201,7 +8201,7 @@ export function InlineTableField({
                                         setHistoryFocus(prov.revision_id)
                                         setHistoryRow(row)
                                       }}
-                                      className='absolute right-0.5 top-0.5 rounded p-px text-slate-300 opacity-0 transition-opacity duration-150 hover:text-[#00ceff] focus-visible:opacity-100 group-hover/row:opacity-100 dark:text-slate-500'
+                                      className='absolute right-0.5 top-0.5 rounded p-px text-slate-300 opacity-0 transition-opacity duration-150 hover:text-nvr-cyan focus-visible:opacity-100 group-hover/row:opacity-100 dark:text-slate-500'
                                     >
                                       <History className='h-2.5 w-2.5' aria-hidden='true' />
                                     </button>
@@ -8308,7 +8308,7 @@ export function InlineTableField({
                                 type='button'
                                 disabled={saving}
                                 onClick={saveEdit}
-                                className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
+                                className='rounded px-2 h-9 bg-nvr-cyan text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
                               >
                                 {saving ? '…' : 'Save'}
                               </button>
@@ -8372,7 +8372,7 @@ export function InlineTableField({
                                         e.stopPropagation()
                                         setHistoryRow(row)
                                       }}
-                                      className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
+                                      className='rounded p-0.5 text-slate-300 hover:text-nvr-cyan'
                                     >
                                       <History className='h-3 w-3' />
                                     </button>
@@ -8599,7 +8599,7 @@ export function InlineTableField({
                         type='button'
                         disabled={saving}
                         onClick={saveEdit}
-                        className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
+                        className='rounded px-2 h-9 bg-nvr-cyan text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
                       >
                         {saving ? '…' : 'Add'}
                       </button>
@@ -8890,7 +8890,7 @@ export function InlineTableField({
                       className={cn(
                         'nvr-rise-in border-b border-slate-100 transition-colors',
                         isPDragging ? 'opacity-40' : '',
-                        isPDropTarget ? 'border-t-2 border-t-[#00ceff]' : '',
+                        isPDropTarget ? 'border-t-2 border-t-nvr-cyan' : '',
                         isEditing
                           ? splitMode
                             ? 'bg-[#e6f8ff] outline-none dark:bg-nvr-cyan/15 cursor-default'
@@ -8911,7 +8911,7 @@ export function InlineTableField({
                               <input
                                 type='checkbox'
                                 aria-label={`Select line ${rows.length + ri + 1}`}
-                                className='accent-[#00ceff]'
+                                className='accent-nvr-cyan'
                                 checked={selectedIds.has(pendingRowId)}
                                 onChange={() => toggleSelected(pendingRowId)}
                               />
@@ -9120,7 +9120,7 @@ export function InlineTableField({
                                 type='button'
                                 disabled={saving}
                                 onClick={saveEdit}
-                                className='rounded px-2 h-9 bg-[#00ceff] text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
+                                className='rounded px-2 h-9 bg-nvr-cyan text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50'
                               >
                                 {saving ? '…' : 'Save'}
                               </button>
@@ -9142,7 +9142,7 @@ export function InlineTableField({
                                     e.stopPropagation()
                                     setHistoryRow(row)
                                   }}
-                                  className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
+                                  className='rounded p-0.5 text-slate-300 hover:text-nvr-cyan'
                                 >
                                   <History className='h-3 w-3' />
                                 </button>
@@ -9394,7 +9394,7 @@ export function InlineTableField({
             <button
               type='button'
               onClick={startNew}
-              className='text-[11px] font-medium text-[#00ceff] hover:underline'
+              className='text-[11px] font-medium text-nvr-cyan hover:underline'
             >
               + Add row
             </button>
@@ -9751,7 +9751,7 @@ function SpreadAcrossRowsButton(props: {
         className={cn(
           'h-6 px-2.5 rounded border transition-colors',
           open
-            ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+            ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
             : 'border-slate-200 text-slate-600 hover:border-slate-400 hover:text-slate-800'
         )}
         data-tip={`Put the remaining ${fmt(amount)} onto every empty open month across all ${props.rowNoun}s at once`}

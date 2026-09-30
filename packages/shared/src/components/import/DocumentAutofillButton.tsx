@@ -30,6 +30,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '../ui/dialog'
+import { SimpleSelect } from '../ui/SimpleSelect'
 
 /**
  * "Fill from a document" — a person drops a statement of work, a quote, a
@@ -298,32 +299,30 @@ function AskAnswer({
   }
   if (input.type === 'choices')
     return (
-      <select
-        className={base}
+      <SimpleSelect
+        className={`${base} w-auto`}
         value={value == null ? '' : String(value)}
-        onChange={(e) => onChange(e.target.value || null)}
-        data-autofill-ask-input='choices'
-      >
-        <option value=''>Choose…</option>
-        {input.choices.map((c) => (
-          <option key={c.value} value={c.value}>
-            {c.text}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => onChange(v || null)}
+        triggerProps={{ 'data-autofill-ask-input': 'choices' }}
+        options={[
+          { value: '', label: 'Choose…' },
+          ...input.choices.map((c) => ({ value: c.value, label: c.text }))
+        ]}
+      />
     )
   if (input.type === 'boolean')
     return (
-      <select
-        className={base}
+      <SimpleSelect
+        className={`${base} w-auto`}
         value={value == null ? '' : value ? 'true' : 'false'}
-        onChange={(e) => onChange(e.target.value === '' ? null : e.target.value === 'true')}
-        data-autofill-ask-input='boolean'
-      >
-        <option value=''>Choose…</option>
-        <option value='true'>Yes</option>
-        <option value='false'>No</option>
-      </select>
+        onChange={(v) => onChange(v === '' ? null : v === 'true')}
+        triggerProps={{ 'data-autofill-ask-input': 'boolean' }}
+        options={[
+          { value: '', label: 'Choose…' },
+          { value: 'true', label: 'Yes' },
+          { value: 'false', label: 'No' }
+        ]}
+      />
     )
   return (
     <input
@@ -735,7 +734,7 @@ export function DocumentAutofillButton({
                             >
                               <input
                                 type='checkbox'
-                                className='mt-1 h-3.5 w-3.5 accent-[#00ceff]'
+                                className='mt-1 h-3.5 w-3.5 accent-nvr-cyan'
                                 checked={on}
                                 onChange={() => toggle(fieldOn, f.field, setFieldOn)}
                                 aria-label={`Use ${f.label}`}
@@ -789,7 +788,7 @@ export function DocumentAutofillButton({
                         <div className={cn('flex items-center gap-3', !on && 'opacity-55')}>
                           <input
                             type='checkbox'
-                            className='h-3.5 w-3.5 accent-[#00ceff]'
+                            className='h-3.5 w-3.5 accent-nvr-cyan'
                             checked={on}
                             onChange={() => toggle(childOn, c.alias, setChildOn)}
                             aria-label={`Use ${c.label}`}
@@ -864,7 +863,7 @@ export function DocumentAutofillButton({
                             >
                               <input
                                 type='checkbox'
-                                className='h-3.5 w-3.5 accent-[#00ceff]'
+                                className='h-3.5 w-3.5 accent-nvr-cyan'
                                 checked={on}
                                 onChange={() => toggle(m2mOn, m.alias, setM2mOn)}
                                 aria-label={`Use ${m.label}`}

@@ -440,7 +440,7 @@ export function BulkActionButtons({
                     'h-8 rounded-md px-3 text-[12.5px] font-semibold disabled:opacity-40',
                     a.variant === 'danger'
                       ? 'bg-red-600 text-white hover:bg-red-700'
-                      : 'bg-nvr-cyan text-[#172940] hover:bg-[#00b8e0]'
+                      : 'bg-nvr-cyan text-[#172940] hover:bg-nvr-cyan-dark'
                   )}
                 >
                   {isRunning ? (

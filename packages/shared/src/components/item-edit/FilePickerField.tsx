@@ -154,7 +154,7 @@ function FileBrowserPanel({
           placeholder='Search files…'
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className='w-full h-7 rounded border border-slate-200 px-2 text-[12px] focus:outline-none focus:ring-1 focus:ring-[#00ceff]'
+          className='w-full h-7 rounded border border-slate-200 px-2 text-[12px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
           autoFocus
         />
       </div>
@@ -179,7 +179,7 @@ function FileBrowserPanel({
                   className={cn(
                     'nvr-rise-in group flex flex-col items-center gap-1 rounded-lg p-1.5 text-left transition-colors border',
                     isSel
-                      ? 'border-[#00ceff] bg-[#00ceff]/5'
+                      ? 'border-nvr-cyan bg-nvr-cyan/5'
                       : 'border-transparent hover:border-slate-200 hover:bg-slate-50'
                   )}
                 >
@@ -191,8 +191,8 @@ function FileBrowserPanel({
                       size='md'
                     />
                     {isSel && (
-                      <div className='absolute inset-0 flex items-center justify-center rounded bg-[#00ceff]/20'>
-                        <div className='h-4 w-4 rounded-full bg-[#00ceff] flex items-center justify-center'>
+                      <div className='absolute inset-0 flex items-center justify-center rounded bg-nvr-cyan/20'>
+                        <div className='h-4 w-4 rounded-full bg-nvr-cyan flex items-center justify-center'>
                           <svg
                             className='h-2.5 w-2.5 text-white'
                             fill='none'
@@ -411,7 +411,7 @@ export function FilePickerField({
             <a
               href={`${getUrl(fileId)}?download=1`}
               title='Download'
-              className='shrink-0 text-slate-400 hover:text-[#00ceff] p-0.5'
+              className='shrink-0 text-slate-400 hover:text-nvr-cyan p-0.5'
             >
               <Download className='h-3.5 w-3.5' />
             </a>
@@ -802,7 +802,7 @@ export function FileM2MField({
                 <a
                   href={`${getUrl(id)}?download=1`}
                   title='Download'
-                  className='shrink-0 text-slate-400 hover:text-[#00ceff] p-0.5'
+                  className='shrink-0 text-slate-400 hover:text-nvr-cyan p-0.5'
                 >
                   <Download className='h-3.5 w-3.5' />
                 </a>

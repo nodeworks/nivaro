@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { createPortal } from 'react-dom'
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   DrilldownContext,
   type DrilldownTarget,
@@ -19,13 +19,13 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { formatNumber, formatRelative, titleCase } from '../lib/utils'
-import { MatrixEditor, type MatrixEditorConfig } from './MatrixEditor'
 import { CacheStamp, type CustomQueryEnvelope } from './CacheStamp'
+import { RelationCombobox } from './item-edit/RelationCombobox'
+import { MatrixEditor, type MatrixEditorConfig } from './MatrixEditor'
 import { QueryStatStrip, type QueryWidgetStat } from './QueryStatStrip'
-import { RecordGridEditor, type RecordGridEditorConfig } from './RecordGridEditor'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
-import { RelationCombobox } from './item-edit/RelationCombobox'
+import { RecordGridEditor, type RecordGridEditorConfig } from './RecordGridEditor'
 
 // Headless page-builder renderer: draws a nivaro_pages layout (widget grid)
 // through the SDK client, so external apps render pages the same way they
@@ -112,7 +112,7 @@ function mdInline(text: string, keyPrefix: string): ReactNode[] {
       const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
       if (link && (/^https?:\/\//i.test(link[2]) || link[2].startsWith('/'))) {
         nodes.push(
-          <a key={key} href={link[2]} className='text-[#00ceff] underline-offset-2 hover:underline'>
+          <a key={key} href={link[2]} className='text-nvr-cyan underline-offset-2 hover:underline'>
             {link[1]}
           </a>
         )
@@ -450,7 +450,10 @@ type QueryWidgetFilter = {
 function defaultFilterSelection(
   filters: QueryWidgetFilter[] | undefined
 ): Record<string, Array<Record<string, unknown>>> {
-  return initialFilterSelection(filters, typeof window === 'undefined' ? '' : window.location.search)
+  return initialFilterSelection(
+    filters,
+    typeof window === 'undefined' ? '' : window.location.search
+  )
 }
 
 type QueryRowClick = {
@@ -596,7 +599,7 @@ function QuerySheet({
                     onClick={() => setTab(i)}
                     className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors ${
                       i === tab
-                        ? 'bg-[#00ceff1a] text-slate-800 dark:text-slate-100'
+                        ? 'bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
                         : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                     }`}
                   >
@@ -741,7 +744,7 @@ function QueryFilterSelect({
     : scopeDefault && selected.length > 0
       ? {
           label: 'default',
-          cls: 'bg-[#00ceff1f] text-[#0284a8] dark:text-[#00ceff]',
+          cls: 'bg-nvr-cyan/[0.12] text-[#0284a8] dark:text-nvr-cyan',
           title: `Pre-selected from your default ${label} scope — adjust freely`
         }
       : null
@@ -752,7 +755,7 @@ function QueryFilterSelect({
         onClick={() => setOpen((p) => !p)}
         className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition-colors ${
           selected.length > 0
-            ? 'border-[#00ceff] bg-[#00ceff1a] text-slate-700 dark:text-slate-200'
+            ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-700 dark:text-slate-200'
             : 'border-slate-200 bg-white text-slate-600 hover:border-slate-400 dark:border-border dark:bg-card dark:text-slate-300'
         }`}
       >
@@ -808,9 +811,7 @@ function QueryFilterSelect({
                   }
                   className='flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px] text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-muted'
                 >
-                  <span className={`w-3.5 shrink-0 text-[#00ceff] ${on ? '' : 'invisible'}`}>
-                    ✓
-                  </span>
+                  <span className={`w-3.5 shrink-0 text-nvr-cyan ${on ? '' : 'invisible'}`}>✓</span>
                   <span className='truncate'>{String(o[labelField] ?? v)}</span>
                 </button>
               )

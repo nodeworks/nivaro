@@ -105,8 +105,8 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
   return (
     <div className='flex flex-wrap items-center gap-2'>
       {flash && (
-        <span className='inline-flex items-center gap-1.5 rounded-full border border-[#00ceff]/40 bg-[#00ceff]/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-[#67e8f9]'>
-          <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[#00ceff]' />
+        <span className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-[#67e8f9]'>
+          <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
           Updated just now by someone else
         </span>
       )}
@@ -115,7 +115,7 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
           key={`${u.user}:${u.name}`}
           className='inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
         >
-          <UploadCloud className='h-3 w-3 animate-pulse text-[#00ceff]' />
+          <UploadCloud className='h-3 w-3 animate-pulse text-nvr-cyan' />
           {u.user} is uploading “{u.name.length > 32 ? `${u.name.slice(0, 32)}…` : u.name}”
         </span>
       ))}

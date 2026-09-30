@@ -630,7 +630,7 @@ export function QuickPicker({
                 onClick={onFinish}
                 disabled={finishRequiresComplete && !complete}
                 data-quick-picker-create
-                className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#172940] hover:bg-[#00b8e0] disabled:opacity-40'
+                className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#172940] hover:bg-nvr-cyan-dark disabled:opacity-40'
               >
                 {finishLabel}
               </button>
@@ -639,7 +639,7 @@ export function QuickPicker({
                 type='button'
                 onClick={advance}
                 disabled={!nextEnabled}
-                className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#172940] hover:bg-[#00b8e0] disabled:opacity-40'
+                className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#172940] hover:bg-nvr-cyan-dark disabled:opacity-40'
               >
                 Next
               </button>

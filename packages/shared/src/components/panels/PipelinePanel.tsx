@@ -1153,7 +1153,7 @@ function ApprovalChainView({
                       // nvr-cyan token is an opaque var() so Tailwind silently
                       // drops opacity modifiers on it. Kept very light so the
                       // tint doesn't clash with the state badge's own color.
-                      isCurrent && 'bg-[#00ceff0f] dark:bg-[#00ceff1c]',
+                      isCurrent && 'bg-nvr-cyan/[0.06] dark:bg-nvr-cyan/[0.11]',
                       isSkipped && 'opacity-60',
                       blocked && 'bg-red-50 dark:bg-red-500/10'
                     )}

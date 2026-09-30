@@ -984,7 +984,7 @@ function ScopeDimensionRow({
                 className={cn(
                   'rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors',
                   on
-                    ? 'border-nvr-cyan bg-[#00ceff1a] font-medium text-nvr-navy dark:text-nvr-cyan'
+                    ? 'border-nvr-cyan bg-nvr-cyan/10 font-medium text-nvr-navy dark:text-nvr-cyan'
                     : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border'
                 )}
               >
@@ -1003,7 +1003,7 @@ function ScopeDimensionRow({
               {selected.map((v) => (
                 <span
                   key={String(v)}
-                  className='inline-flex items-center gap-1 rounded-full border border-nvr-cyan bg-[#00ceff1a] py-0.5 pl-2.5 pr-1 text-[11.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                  className='inline-flex items-center gap-1 rounded-full border border-nvr-cyan bg-nvr-cyan/10 py-0.5 pl-2.5 pr-1 text-[11.5px] font-medium text-nvr-navy dark:text-nvr-cyan'
                 >
                   {known.get(String(v)) ?? String(v)}
                   <button
@@ -1586,7 +1586,7 @@ function OwnProfile({
                 {fullName(view)}
               </h1>
               {view.role_name && (
-                <span className='rounded-full bg-[#00ceff1a] px-2 py-px text-[10.5px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
+                <span className='rounded-full bg-nvr-cyan/10 px-2 py-px text-[10.5px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
                   {view.role_name}
                 </span>
               )}
@@ -1933,7 +1933,7 @@ function RemindersCard() {
           <button
             type='submit'
             disabled={!note.trim() || !at || create.isPending}
-            className='h-7 rounded bg-nvr-cyan px-2.5 text-[11.5px] font-medium text-white hover:bg-[#00b8e0] disabled:opacity-50'
+            className='h-7 rounded bg-nvr-cyan px-2.5 text-[11.5px] font-medium text-white hover:bg-nvr-cyan-dark disabled:opacity-50'
           >
             {create.isPending ? 'Adding…' : 'Add'}
           </button>
@@ -2088,7 +2088,7 @@ function MySecurityCard() {
           >
             <span className='font-mono text-slate-400'>{sn.sid_prefix}…</span>
             {sn.current && (
-              <span className='rounded bg-[#00ceff14] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
+              <span className='rounded bg-nvr-cyan/[0.08] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
                 this session
               </span>
             )}

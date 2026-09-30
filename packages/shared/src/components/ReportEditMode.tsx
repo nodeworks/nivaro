@@ -1,10 +1,20 @@
 import type { ReportWidget, ReportWidgetConfig } from '@nivaro/sdk'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, Settings2, Trash2, X } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Plus,
+  Settings2,
+  Trash2,
+  X
+} from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, post } from '../lib/commands'
 import { cn } from '../lib/utils'
+import { SimpleSelect } from './ui/SimpleSelect'
 
 /**
  * Lean report-building surface for headless hosts: everything the
@@ -74,39 +84,76 @@ export function WidgetEditBar({
   onMove: (dir: -1 | 1) => void
 }) {
   return (
-    <div className='mb-1.5 flex items-center gap-0.5 rounded-md border border-dashed border-[#00ceff80] bg-[#00ceff0d] px-1.5 py-0.5'>
+    <div className='mb-1.5 flex items-center gap-0.5 rounded-md border border-dashed border-nvr-cyan/50 bg-nvr-cyan/5 px-1.5 py-0.5'>
       <button
         type='button'
         title='Widget settings'
         onClick={onConfigure}
-        className='rounded p-1 text-[#007a99] hover:bg-[#00ceff1f] dark:text-nvr-cyan'
+        className='rounded p-1 text-[#007a99] hover:bg-nvr-cyan/[0.12] dark:text-nvr-cyan'
       >
         <Settings2 className='h-3.5 w-3.5' />
       </button>
-      <span className='mx-0.5 text-[10px] uppercase tracking-wide text-slate-400'>{widget.type}</span>
+      <span className='mx-0.5 text-[10px] uppercase tracking-wide text-slate-400'>
+        {widget.type}
+      </span>
       <span className='ml-auto flex items-center gap-0.5'>
-        <button type='button' title='Move earlier' onClick={() => onMove(-1)} className='rounded p-0.5 text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          title='Move earlier'
+          onClick={() => onMove(-1)}
+          className='rounded p-0.5 text-slate-400 hover:text-slate-600'
+        >
           <ChevronUp className='h-3 w-3' />
         </button>
-        <button type='button' title='Move later' onClick={() => onMove(1)} className='rounded p-0.5 text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          title='Move later'
+          onClick={() => onMove(1)}
+          className='rounded p-0.5 text-slate-400 hover:text-slate-600'
+        >
           <ChevronDown className='h-3 w-3' />
         </button>
-        <button type='button' title='Narrower' onClick={() => onResize(-1, 0)} className='rounded p-0.5 text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          title='Narrower'
+          onClick={() => onResize(-1, 0)}
+          className='rounded p-0.5 text-slate-400 hover:text-slate-600'
+        >
           <ChevronLeft className='h-3 w-3' />
         </button>
-        <button type='button' title='Wider' onClick={() => onResize(1, 0)} className='rounded p-0.5 text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          title='Wider'
+          onClick={() => onResize(1, 0)}
+          className='rounded p-0.5 text-slate-400 hover:text-slate-600'
+        >
           <ChevronRight className='h-3 w-3' />
         </button>
         <span className='px-0.5 text-[10px] tabular-nums text-slate-400'>
           {widget.w}×{widget.h}
         </span>
-        <button type='button' title='Shorter' onClick={() => onResize(0, -1)} className='rounded p-0.5 text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          title='Shorter'
+          onClick={() => onResize(0, -1)}
+          className='rounded p-0.5 text-slate-400 hover:text-slate-600'
+        >
           −
         </button>
-        <button type='button' title='Taller' onClick={() => onResize(0, 1)} className='rounded p-0.5 text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          title='Taller'
+          onClick={() => onResize(0, 1)}
+          className='rounded p-0.5 text-slate-400 hover:text-slate-600'
+        >
           +
         </button>
-        <button type='button' title='Remove widget' onClick={onDelete} className='rounded p-0.5 text-slate-400 hover:text-red-500'>
+        <button
+          type='button'
+          title='Remove widget'
+          onClick={onDelete}
+          className='rounded p-0.5 text-slate-400 hover:text-red-500'
+        >
           <Trash2 className='h-3 w-3' />
         </button>
       </span>
@@ -124,7 +171,7 @@ export function AddWidgetBar({ onAdd, maxY }: { onAdd: (w: ReportWidget) => void
           key={t.id}
           type='button'
           onClick={() => onAdd(newWidget(t.id, maxY))}
-          className='rounded-full border border-slate-200 px-2.5 py-0.5 text-[11.5px] text-slate-500 hover:border-[#00ceff66] hover:text-[#007a99] dark:border-border dark:hover:text-nvr-cyan'
+          className='rounded-full border border-slate-200 px-2.5 py-0.5 text-[11.5px] text-slate-500 hover:border-nvr-cyan/40 hover:text-[#007a99] dark:border-border dark:hover:text-nvr-cyan'
         >
           {t.label}
         </button>
@@ -145,9 +192,7 @@ function JsonBox({
   rows?: number
   placeholder?: string
 }) {
-  const [text, setText] = useState(() =>
-    value == null ? '' : JSON.stringify(value, null, 0)
-  )
+  const [text, setText] = useState(() => (value == null ? '' : JSON.stringify(value, null, 0)))
   const [invalid, setInvalid] = useState(false)
   return (
     <textarea
@@ -181,7 +226,7 @@ function JsonBox({
 const inputCls =
   'h-7 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
 const selectCls =
-  'h-7 rounded-md border border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
+  'h-7 w-auto rounded-md border-slate-200 bg-white px-1.5 text-[12px] dark:border-border dark:bg-card dark:text-slate-200'
 
 export function WidgetConfigSheet({
   widget,
@@ -224,17 +269,16 @@ export function WidgetConfigSheet({
   const numericOpts = fields.filter((f) => NUMERIC_TYPES.has(f.type ?? ''))
   const dateOpts = fields.filter((f) => DATE_TYPES.has(f.type ?? ''))
   const isChart = ['bar', 'line', 'donut', 'movers', 'heatmap', 'waterfall'].includes(widget.type)
-  const needsCollection = !['divider', 'query', 'calc', 'kpi_group', 'narrative'].includes(widget.type)
+  const needsCollection = !['divider', 'query', 'calc', 'kpi_group', 'narrative'].includes(
+    widget.type
+  )
   const refs = (cfg.refs ?? {}) as Record<string, string>
   const calcCandidates = allWidgets.filter(
     (w) => w.id !== widget.id && w.type !== 'divider' && w.type !== 'calc'
   )
 
   return (
-    <div
-      className='fixed inset-0 z-[128] flex justify-end bg-black/30'
-      onClick={onClose}
-    >
+    <div className='fixed inset-0 z-[128] flex justify-end bg-black/30' onClick={onClose}>
       <div
         className='flex h-full w-[380px] flex-col overflow-y-auto border-l border-slate-200 bg-white p-4 shadow-2xl dark:border-border dark:bg-card'
         onClick={(e) => e.stopPropagation()}
@@ -244,18 +288,30 @@ export function WidgetConfigSheet({
           <p className='text-[13.5px] font-semibold text-slate-800 dark:text-slate-100'>
             Widget settings
           </p>
-          <button type='button' onClick={onClose} className='ml-auto rounded p-1 text-slate-400 hover:text-slate-600'>
+          <button
+            type='button'
+            onClick={onClose}
+            className='ml-auto rounded p-1 text-slate-400 hover:text-slate-600'
+          >
             <X className='h-4 w-4' />
           </button>
         </div>
         <div className='space-y-3.5'>
           <label className='block space-y-1'>
-            <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Title</span>
-            <input value={widget.title} onChange={(e) => set({ title: e.target.value })} className={inputCls} />
+            <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+              Title
+            </span>
+            <input
+              value={widget.title}
+              onChange={(e) => set({ title: e.target.value })}
+              className={inputCls}
+            />
           </label>
 
           <div className='space-y-1'>
-            <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Type</span>
+            <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+              Type
+            </span>
             <div className='flex flex-wrap gap-1'>
               {WIDGET_TYPES.map((t) => (
                 <button
@@ -265,7 +321,7 @@ export function WidgetConfigSheet({
                   className={cn(
                     'rounded-full border px-2.5 py-0.5 text-[11.5px]',
                     widget.type === t.id
-                      ? 'border-[#00ceff] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+                      ? 'border-nvr-cyan bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
                       : 'border-slate-200 text-slate-400 dark:border-border'
                   )}
                 >
@@ -277,97 +333,99 @@ export function WidgetConfigSheet({
 
           {needsCollection && (
             <label className='block space-y-1'>
-              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Collection</span>
-              <select
+              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                Collection
+              </span>
+              <SimpleSelect
                 value={widget.collection ?? ''}
-                onChange={(e) => set({ collection: e.target.value || null })}
+                onChange={(v) => set({ collection: v || null })}
                 className={cn(selectCls, 'w-full')}
-              >
-                <option value=''>Pick a collection…</option>
-                {collections.map((c) => (
-                  <option key={c.collection} value={c.collection}>
-                    {c.display_name || c.collection}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: 'Pick a collection…' },
+                  ...collections.map((c) => ({
+                    value: c.collection,
+                    label: c.display_name || c.collection
+                  }))
+                ]}
+              />
             </label>
           )}
 
           {needsCollection && (
             <div className='flex items-center gap-1.5'>
-              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Metric</span>
-              <select
+              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                Metric
+              </span>
+              <SimpleSelect
                 value={cfg.metric?.aggregate ?? 'count'}
-                onChange={(e) =>
-                  setCfg({ metric: { aggregate: e.target.value as never, field: cfg.metric?.field } })
+                onChange={(v) =>
+                  setCfg({
+                    metric: { aggregate: v as never, field: cfg.metric?.field }
+                  })
                 }
                 className={selectCls}
-              >
-                {['count', 'sum', 'avg', 'min', 'max'].map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
+                options={['count', 'sum', 'avg', 'min', 'max'].map((a) => ({ value: a, label: a }))}
+              />
               {(cfg.metric?.aggregate ?? 'count') !== 'count' && (
-                <select
+                <SimpleSelect
                   value={cfg.metric?.field ?? ''}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setCfg({
-                      metric: { aggregate: cfg.metric?.aggregate ?? 'sum', field: e.target.value || undefined }
+                      metric: {
+                        aggregate: cfg.metric?.aggregate ?? 'sum',
+                        field: v || undefined
+                      }
                     })
                   }
                   className={cn(selectCls, 'min-w-0 flex-1')}
-                >
-                  <option value=''>Field…</option>
-                  {numericOpts.map((f) => (
-                    <option key={f.field} value={f.field}>
-                      {f.label || f.field}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: 'Field…' },
+                    ...numericOpts.map((f) => ({ value: f.field, label: f.label || f.field }))
+                  ]}
+                />
               )}
             </div>
           )}
 
           {isChart && (
             <div className='flex items-center gap-1.5'>
-              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Group by</span>
-              <select
+              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                Group by
+              </span>
+              <SimpleSelect
                 value={cfg.dimension?.field ?? ''}
-                onChange={(e) =>
+                onChange={(v) =>
                   setCfg({
-                    dimension: e.target.value
-                      ? { field: e.target.value, bucket: cfg.dimension?.bucket }
-                      : null
+                    dimension: v ? { field: v, bucket: cfg.dimension?.bucket } : null
                   })
                 }
                 className={cn(selectCls, 'min-w-0 flex-1')}
-              >
-                <option value=''>Pick a field…</option>
-                {fields.map((f) => (
-                  <option key={f.field} value={f.field}>
-                    {f.label || f.field}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: 'Pick a field…' },
+                  ...fields.map((f) => ({ value: f.field, label: f.label || f.field }))
+                ]}
+              />
               {widget.type !== 'movers' && widget.type !== 'donut' && (
-                <select
+                <SimpleSelect
                   value={cfg.dimension?.bucket ?? ''}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setCfg({
                       dimension: cfg.dimension?.field
-                        ? { field: cfg.dimension.field, bucket: (e.target.value || undefined) as never }
+                        ? {
+                            field: cfg.dimension.field,
+                            bucket: (v || undefined) as never
+                          }
                         : null
                     })
                   }
                   className={selectCls}
-                >
-                  <option value=''>Values</option>
-                  <option value='day'>Daily</option>
-                  <option value='week'>Weekly</option>
-                  <option value='month'>Monthly</option>
-                </select>
+                  options={[
+                    { value: '', label: 'Values' },
+                    { value: 'day', label: 'Daily' },
+                    { value: 'week', label: 'Weekly' },
+                    { value: 'month', label: 'Monthly' }
+                  ]}
+                />
               )}
             </div>
           )}
@@ -377,33 +435,33 @@ export function WidgetConfigSheet({
               <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
                 Date field (report date range)
               </span>
-              <select
+              <SimpleSelect
                 value={cfg.date_field ?? ''}
-                onChange={(e) => setCfg({ date_field: e.target.value || null })}
+                onChange={(v) => setCfg({ date_field: v || null })}
                 className={cn(selectCls, 'w-full')}
-              >
-                <option value=''>(none — ignores date range)</option>
-                {dateOpts.map((f) => (
-                  <option key={f.field} value={f.field}>
-                    {f.label || f.field}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: '(none — ignores date range)' },
+                  ...dateOpts.map((f) => ({ value: f.field, label: f.label || f.field }))
+                ]}
+              />
             </label>
           )}
 
           {needsCollection && widget.type !== 'table' && (
             <div className='flex items-center gap-1.5'>
-              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Compare</span>
-              <select
+              <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                Compare
+              </span>
+              <SimpleSelect
                 value={cfg.compare ?? ''}
-                onChange={(e) => setCfg({ compare: (e.target.value || null) as never })}
+                onChange={(v) => setCfg({ compare: (v || null) as never })}
                 className={cn(selectCls, 'flex-1')}
-              >
-                <option value=''>Off</option>
-                <option value='previous_period'>Previous period</option>
-                <option value='previous_year'>Previous year</option>
-              </select>
+                options={[
+                  { value: '', label: 'Off' },
+                  { value: 'previous_period', label: 'Previous period' },
+                  { value: 'previous_year', label: 'Previous year' }
+                ]}
+              />
             </div>
           )}
 
@@ -427,48 +485,54 @@ export function WidgetConfigSheet({
                 Second metric (right axis)
               </span>
               <div className='flex items-center gap-1.5'>
-                <select
+                <SimpleSelect
                   value={cfg.metric2?.aggregate ?? ''}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setCfg({
-                      metric2: e.target.value
-                        ? { aggregate: e.target.value as never, field: cfg.metric2?.field, label: cfg.metric2?.label }
+                      metric2: v
+                        ? {
+                            aggregate: v as never,
+                            field: cfg.metric2?.field,
+                            label: cfg.metric2?.label
+                          }
                         : undefined
                     })
                   }
                   className={selectCls}
-                >
-                  <option value=''>None</option>
-                  {['count', 'sum', 'avg', 'min', 'max'].map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: 'None' },
+                    ...['count', 'sum', 'avg', 'min', 'max'].map((a) => ({ value: a, label: a }))
+                  ]}
+                />
                 {cfg.metric2?.aggregate && cfg.metric2.aggregate !== 'count' && (
-                  <select
+                  <SimpleSelect
                     value={cfg.metric2?.field ?? ''}
-                    onChange={(e) =>
+                    onChange={(v) =>
                       setCfg({
-                        metric2: { aggregate: cfg.metric2?.aggregate ?? 'sum', field: e.target.value || undefined, label: cfg.metric2?.label }
+                        metric2: {
+                          aggregate: cfg.metric2?.aggregate ?? 'sum',
+                          field: v || undefined,
+                          label: cfg.metric2?.label
+                        }
                       })
                     }
                     className={cn(selectCls, 'min-w-0 flex-1')}
-                  >
-                    <option value=''>Field…</option>
-                    {numericOpts.map((f) => (
-                      <option key={f.field} value={f.field}>
-                        {f.label || f.field}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: '', label: 'Field…' },
+                      ...numericOpts.map((f) => ({ value: f.field, label: f.label || f.field }))
+                    ]}
+                  />
                 )}
                 {cfg.metric2?.aggregate && (
                   <input
                     value={cfg.metric2?.label ?? ''}
                     onChange={(e) =>
                       setCfg({
-                        metric2: { aggregate: cfg.metric2?.aggregate ?? 'sum', field: cfg.metric2?.field, label: e.target.value || undefined }
+                        metric2: {
+                          aggregate: cfg.metric2?.aggregate ?? 'sum',
+                          field: cfg.metric2?.field,
+                          label: e.target.value || undefined
+                        }
                       })
                     }
                     placeholder='Label'
@@ -532,7 +596,9 @@ export function WidgetConfigSheet({
           {widget.type === 'calc' && (
             <>
               <label className='block space-y-1'>
-                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Formula</span>
+                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                  Formula
+                </span>
                 <input
                   value={(cfg.formula as string) ?? ''}
                   onChange={(e) => setCfg({ formula: e.target.value })}
@@ -541,24 +607,23 @@ export function WidgetConfigSheet({
                 />
               </label>
               <div className='space-y-1'>
-                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Tokens</span>
+                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                  Tokens
+                </span>
                 {Object.keys(refs).map((t) => (
                   <div key={t} className='flex items-center gap-1.5'>
                     <span className='w-8 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-center font-mono text-[11.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
                       {t}
                     </span>
-                    <select
+                    <SimpleSelect
                       value={refs[t] ?? ''}
-                      onChange={(e) => setCfg({ refs: { ...refs, [t]: e.target.value } })}
+                      onChange={(v) => setCfg({ refs: { ...refs, [t]: v } })}
                       className={cn(selectCls, 'min-w-0 flex-1')}
-                    >
-                      <option value=''>Pick a widget…</option>
-                      {calcCandidates.map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.title || w.type}
-                        </option>
-                      ))}
-                    </select>
+                      options={[
+                        { value: '', label: 'Pick a widget…' },
+                        ...calcCandidates.map((w) => ({ value: w.id, label: w.title || w.type }))
+                      ]}
+                    />
                     <button
                       type='button'
                       onClick={() => {
@@ -599,7 +664,9 @@ export function WidgetConfigSheet({
           {widget.type === 'query' && (
             <>
               <label className='block space-y-1'>
-                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Query slug</span>
+                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                  Query slug
+                </span>
                 <input
                   value={cfg.query?.slug ?? ''}
                   onChange={(e) => setCfg({ query: { ...cfg.query, slug: e.target.value } })}
@@ -610,11 +677,7 @@ export function WidgetConfigSheet({
                 <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
                   Query config (JSON — params, display, series…)
                 </span>
-                <JsonBox
-                  value={cfg.query}
-                  onChange={(v) => setCfg({ query: v })}
-                  rows={5}
-                />
+                <JsonBox value={cfg.query} onChange={(v) => setCfg({ query: v })} rows={5} />
               </label>
             </>
           )}
@@ -624,18 +687,15 @@ export function WidgetConfigSheet({
               <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
                 Columns dimension
               </span>
-              <select
+              <SimpleSelect
                 value={(cfg.dimension2 as { field?: string } | null)?.field ?? ''}
-                onChange={(e) => setCfg({ dimension2: e.target.value ? { field: e.target.value } : null })}
+                onChange={(v) => setCfg({ dimension2: v ? { field: v } : null })}
                 className={cn(selectCls, 'w-full')}
-              >
-                <option value=''>Pick a field…</option>
-                {fields.map((f) => (
-                  <option key={f.field} value={f.field}>
-                    {f.label || f.field}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: 'Pick a field…' },
+                  ...fields.map((f) => ({ value: f.field, label: f.label || f.field }))
+                ]}
+              />
             </label>
           )}
 
@@ -674,24 +734,23 @@ export function WidgetConfigSheet({
                 />
               </label>
               <div className='space-y-1'>
-                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>Tokens</span>
+                <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                  Tokens
+                </span>
                 {Object.keys(refs).map((t) => (
                   <div key={t} className='flex items-center gap-1.5'>
                     <span className='w-8 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-center font-mono text-[11.5px] text-slate-600 dark:bg-muted dark:text-slate-300'>
                       {t}
                     </span>
-                    <select
+                    <SimpleSelect
                       value={refs[t] ?? ''}
-                      onChange={(e) => setCfg({ refs: { ...refs, [t]: e.target.value } })}
+                      onChange={(v) => setCfg({ refs: { ...refs, [t]: v } })}
                       className={cn(selectCls, 'min-w-0 flex-1')}
-                    >
-                      <option value=''>Pick a widget…</option>
-                      {calcCandidates.map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.title || w.type}
-                        </option>
-                      ))}
-                    </select>
+                      options={[
+                        { value: '', label: 'Pick a widget…' },
+                        ...calcCandidates.map((w) => ({ value: w.id, label: w.title || w.type }))
+                      ]}
+                    />
                     <button
                       type='button'
                       onClick={() => {
@@ -747,7 +806,9 @@ export function WidgetConfigSheet({
               <span className='text-[11.5px] text-slate-500'>Prefix</span>
               <input
                 value={cfg.format?.prefix ?? ''}
-                onChange={(e) => setCfg({ format: { ...cfg.format, prefix: e.target.value || undefined } })}
+                onChange={(e) =>
+                  setCfg({ format: { ...cfg.format, prefix: e.target.value || undefined } })
+                }
                 className={cn(inputCls, 'w-14')}
               />
               <span className='text-[11.5px] text-slate-500'>Decimals</span>
@@ -796,20 +857,15 @@ function LinkReportSection({
       <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
         Link to report (title click drills there)
       </span>
-      <select
+      <SimpleSelect
         value={link?.report_id ?? ''}
-        onChange={(e) =>
-          setCfg({ link_report: e.target.value ? { report_id: e.target.value } : null })
-        }
+        onChange={(v) => setCfg({ link_report: v ? { report_id: v } : null })}
         className={cn(selectCls, 'w-full')}
-      >
-        <option value=''>No link</option>
-        {reports.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.name}
-          </option>
-        ))}
-      </select>
+        options={[
+          { value: '', label: 'No link' },
+          ...reports.map((r) => ({ value: r.id, label: r.name }))
+        ]}
+      />
     </label>
   )
 }
@@ -853,20 +909,17 @@ function CopyToReportSection({ widgetId }: { widgetId: string }) {
       <span className='text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
         Copy this widget to…
       </span>
-      <select
+      <SimpleSelect
         value=''
-        onChange={(e) => {
-          if (e.target.value) void doCopy(e.target.value)
+        onChange={(v) => {
+          if (v) void doCopy(v)
         }}
         className={cn(selectCls, 'w-full')}
-      >
-        <option value=''>Pick a report…</option>
-        {reports.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.name}
-          </option>
-        ))}
-      </select>
+        options={[
+          { value: '', label: 'Pick a report…' },
+          ...reports.map((r) => ({ value: r.id, label: r.name }))
+        ]}
+      />
       {copied === '__err__' && (
         <span className='text-[10.5px] text-red-400'>Copy failed — save this report first.</span>
       )}

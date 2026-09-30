@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../context'
 import { patch as patchCmd } from '../lib/commands'
 import { cn } from '../lib/utils'
+import { SimpleSelect } from './ui/SimpleSelect'
 
 /** `nivaro_users.preferences.custom_status` — free text + emoji beside the
  *  presence state, self-clearing at `expires_at`. */
@@ -61,7 +62,7 @@ export function CustomStatusEditor({
   const [duration, setDuration] = useState<'30' | '60' | 'today' | 'never'>('60')
   const accentSoft = theme?.accentSoft ?? 'bg-nvr-cyan/15 text-nvr-navy dark:text-nvr-cyan'
   const inputCls = theme?.input ?? 'border-slate-200 bg-white dark:border-border dark:bg-card'
-  const actionCls = theme?.action ?? 'bg-nvr-cyan text-white hover:bg-[#00b8e0]'
+  const actionCls = theme?.action ?? 'bg-nvr-cyan text-white hover:bg-nvr-cyan-dark'
 
   const save = useMutation({
     mutationFn: (next: (CustomStatus & { expires_at: string | null }) | null) =>
@@ -169,16 +170,17 @@ export function CustomStatusEditor({
         className={cn('h-7 w-full rounded-md border px-2 text-[12px]', inputCls)}
       />
       <div className='flex items-center gap-1.5'>
-        <select
+        <SimpleSelect
           value={duration}
-          onChange={(e) => setDuration(e.target.value as typeof duration)}
-          className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
-        >
-          <option value='30'>Clear in 30 min</option>
-          <option value='60'>Clear in 1 hour</option>
-          <option value='today'>Clear today</option>
-          <option value='never'>Don't clear</option>
-        </select>
+          onChange={(v) => setDuration(v as typeof duration)}
+          className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+          options={[
+            { value: '30', label: 'Clear in 30 min' },
+            { value: '60', label: 'Clear in 1 hour' },
+            { value: 'today', label: 'Clear today' },
+            { value: 'never', label: "Don't clear" }
+          ]}
+        />
         <span className='flex-1' />
         <button
           type='button'

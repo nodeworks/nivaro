@@ -51,6 +51,7 @@ import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { UserChip } from '../item-edit/GroupSection'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { SimpleSelect } from '../ui/SimpleSelect'
 import { BulkInvitePanel, ChannelAuditLog, ChannelExtrasEditor } from './ChannelExtras'
 import { ChannelLookPicker, ChannelTile } from './ChannelLook'
 import {
@@ -158,7 +159,7 @@ const DEFAULT_THEME: ChatTheme = {
   bubbleMine: 'bg-nvr-cyan text-white',
   bubbleOther: 'bg-slate-100 text-slate-800 dark:bg-muted dark:text-slate-100',
   accentText: 'text-nvr-navy dark:text-nvr-cyan',
-  accentSoft: 'bg-[#00ceff1a] text-nvr-navy dark:text-nvr-cyan',
+  accentSoft: 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan',
   pill: 'bg-nvr-cyan text-white',
   action: 'bg-nvr-cyan text-white',
   surface: 'bg-white dark:bg-card',
@@ -1465,7 +1466,7 @@ export function ChatRoomView({
         className={cn(
           'group/msg flex gap-2 rounded-lg transition-colors',
           mine && 'flex-row-reverse',
-          flashId === m.id && 'bg-[#00ceff1f]'
+          flashId === m.id && 'bg-nvr-cyan/[0.12]'
         )}
         data-chat-msg={m.id}
       >
@@ -2384,7 +2385,7 @@ export function ChatRoomView({
                     </div>
                   )}
                   {showUnreadDivider && catchup && (
-                    <div className='my-1 rounded-md border border-[#00ceff40] bg-[#00ceff0d] px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+                    <div className='my-1 rounded-md border border-nvr-cyan/25 bg-nvr-cyan/5 px-2.5 py-1.5 text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
                       {catchup}
                     </div>
                   )}
@@ -2949,21 +2950,18 @@ export function ChatChannelSettings({
                   ))}
                 </div>
                 {visibility === 'role' && (
-                  <select
+                  <SimpleSelect
                     value={role}
-                    onChange={(e) => setRole(e.target.value)}
+                    onChange={setRole}
                     className={cn(
                       'mt-2 h-8 w-full rounded-md px-2 text-[12.5px] outline-none',
                       th.input
                     )}
-                  >
-                    <option value=''>Choose a role…</option>
-                    {roles.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: '', label: 'Choose a role…' },
+                      ...roles.map((r) => ({ value: r.id, label: r.name }))
+                    ]}
+                  />
                 )}
               </div>
             )}
@@ -3749,18 +3747,15 @@ export function ChatChannelBrowser({
             </button>
           </div>
           {visibility === 'role' && (
-            <select
+            <SimpleSelect
               value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className={cn('h-8 rounded-md px-2 text-[12.5px] outline-none', th.input)}
-            >
-              <option value=''>Choose a role…</option>
-              {roles.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
+              onChange={setRole}
+              className={cn('h-8 w-auto rounded-md px-2 text-[12.5px] outline-none', th.input)}
+              options={[
+                { value: '', label: 'Choose a role…' },
+                ...roles.map((r) => ({ value: r.id, label: r.name }))
+              ]}
+            />
           )}
           {create.isError && (
             <p className='text-[11.5px] text-red-500'>{(create.error as Error).message}</p>
@@ -4469,27 +4464,24 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
             {users.length > 0 && (
               <div className='mb-1.5 flex items-center gap-1.5 px-1'>
                 <span className='text-[11px] text-slate-400'>Group by</span>
-                <select
+                <SimpleSelect
                   value={groupBy}
-                  onChange={(e) => {
-                    setGroupBy(e.target.value)
+                  onChange={(v) => {
+                    setGroupBy(v)
                     try {
-                      localStorage.setItem('nvr_chat_group_by', e.target.value)
+                      localStorage.setItem('nvr_chat_group_by', v)
                     } catch {
                       /* private mode — the preference just won't persist */
                     }
                   }}
-                  className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
-                  data-chat-group-by
-                >
-                  <option value=''>No grouping</option>
-                  <option value='__role__'>Role</option>
-                  {presenceExtras.dimensions.map((d) => (
-                    <option key={d.name} value={d.name}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
+                  className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
+                  triggerProps={{ 'data-chat-group-by': '' }}
+                  options={[
+                    { value: '', label: 'No grouping' },
+                    { value: '__role__', label: 'Role' },
+                    ...presenceExtras.dimensions.map((d) => ({ value: d.name, label: d.label }))
+                  ]}
+                />
               </div>
             )}
             {users.length === 0 ? (

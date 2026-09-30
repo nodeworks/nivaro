@@ -814,7 +814,8 @@ export function FieldRow({
       if (!el) continue
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       el.style.transition = 'box-shadow 0.15s ease'
-      el.style.boxShadow = '0 0 0 2px #00ceff, 0 0 0 5px rgba(0,206,255,0.25)'
+      el.style.boxShadow =
+        '0 0 0 2px rgb(var(--nvr-cyan-rgb, 0 206 255)), 0 0 0 5px rgb(var(--nvr-cyan-rgb, 0 206 255) / 0.25)'
       el.style.borderRadius = '12px'
       setTimeout(() => {
         el.style.boxShadow = 'none'

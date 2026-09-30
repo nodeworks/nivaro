@@ -3156,7 +3156,7 @@ export function QueueWorklist({
                       'flex h-8 items-center px-3 text-[12px] font-medium transition-colors',
                       i > 0 && 'border-l border-slate-200 dark:border-border',
                       scope === tab.value
-                        ? 'bg-[#00ceff1a] text-slate-900 dark:text-white'
+                        ? 'bg-nvr-cyan/10 text-slate-900 dark:text-white'
                         : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                     )}
                   >
@@ -3190,7 +3190,7 @@ export function QueueWorklist({
                       'flex h-8 items-center px-3 text-[12px] font-medium transition-colors',
                       i > 0 && 'border-l border-slate-200 dark:border-border',
                       view === v.value
-                        ? 'bg-[#00ceff1a] text-slate-900 dark:text-white'
+                        ? 'bg-nvr-cyan/10 text-slate-900 dark:text-white'
                         : 'bg-white text-slate-500 hover:text-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                     )}
                   >
@@ -3214,7 +3214,7 @@ export function QueueWorklist({
             }
             className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
               filterValues.unseen === 'yes'
-                ? 'border-[#00ceff66] bg-[#f2fdff] text-nvr-navy dark:border-nvr-cyan/40 dark:bg-[#20303a] dark:text-nvr-cyan'
+                ? 'border-nvr-cyan/40 bg-[#f2fdff] text-nvr-navy dark:border-nvr-cyan/40 dark:bg-[#20303a] dark:text-nvr-cyan'
                 : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
             }`}
           >
@@ -3248,7 +3248,7 @@ export function QueueWorklist({
             <button
               type='button'
               onClick={refreshPendingUpdates}
-              className='nvr-pop-in flex h-8 items-center gap-1 rounded-full border border-[#00ceff66] bg-[#00ceff14] px-2.5 text-[12px] font-medium transition-colors text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
+              className='nvr-pop-in flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium transition-colors text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
             >
               <RefreshCw className='h-3 w-3' />
               {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
@@ -3263,7 +3263,7 @@ export function QueueWorklist({
                     className={cn(
                       'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
                       groupBy
-                        ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                        ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                         : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
                     )}
                   >
@@ -3305,7 +3305,7 @@ export function QueueWorklist({
                 className={cn(
                   'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
                   sort === '-priority'
-                    ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                    ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                     : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
                 )}
               >
@@ -3334,7 +3334,7 @@ export function QueueWorklist({
                     className={cn(
                       'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
                       swimlaneBy
-                        ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                        ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                         : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
                     )}
                   >
@@ -3369,7 +3369,7 @@ export function QueueWorklist({
               className={cn(
                 'flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium',
                 insightsOpen
-                  ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                   : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
               )}
               data-queue-insights-toggle
@@ -3729,7 +3729,7 @@ export function QueueWorklist({
           {Array.isArray(filterValues.owners) && filterValues.owners.length > 0 && (
             <span
               data-queue-owner-filter
-              className='inline-flex h-6 items-center gap-1 rounded-full border border-[#00ceff66] bg-[#00ceff1a] pl-2.5 pr-1 text-[12px] text-slate-900 dark:text-white'
+              className='inline-flex h-6 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 pl-2.5 pr-1 text-[12px] text-slate-900 dark:text-white'
             >
               Owner:{' '}
               {(filterValues.owners as string[])
@@ -3765,7 +3765,7 @@ export function QueueWorklist({
               className={cn(
                 'inline-flex h-6 items-center rounded-full border px-2.5 text-[12px] transition-colors',
                 activeViewId == null
-                  ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                   : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
               )}
             >
@@ -3782,7 +3782,7 @@ export function QueueWorklist({
               className={cn(
                 'group inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[12px] transition-colors',
                 activeViewId === v.id
-                  ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                  ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                   : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
               )}
             >

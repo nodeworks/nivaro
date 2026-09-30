@@ -722,7 +722,7 @@ function HistoryRow({
             >
               {open ? 'hide receipts' : 'who saw this?'}
               {(a.click_count ?? 0) > 0 && (
-                <span className='ml-1.5 rounded bg-[#00ceff14] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
+                <span className='ml-1.5 rounded bg-nvr-cyan/[0.08] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
                   {a.click_count} link click{a.click_count === 1 ? '' : 's'}
                 </span>
               )}

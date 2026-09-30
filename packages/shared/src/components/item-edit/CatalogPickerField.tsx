@@ -1,4 +1,3 @@
-import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -16,6 +15,7 @@ import { useNivaroClient, useParentDraft, useReimportHandler } from '../../conte
 import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open'
 import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean } from '../../lib/expression'
+import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { applyDisplayTemplate } from './helpers'
@@ -1615,7 +1615,7 @@ export function CatalogPickerField({
                         i % 2 === 0
                           ? 'bg-white dark:bg-background'
                           : 'bg-slate-50/50 dark:bg-muted/30',
-                        (qty ?? 0) > 0 && 'bg-[#00ceff0d]'
+                        (qty ?? 0) > 0 && 'bg-nvr-cyan/5'
                       )}
                     >
                       {starButton(id)}
@@ -1708,7 +1708,7 @@ export function CatalogPickerField({
                           i % 2 === 0
                             ? 'bg-white dark:bg-background'
                             : 'bg-slate-50/50 dark:bg-muted/30',
-                          (qty ?? 0) > 0 && 'bg-[#00ceff0d]',
+                          (qty ?? 0) > 0 && 'bg-nvr-cyan/5',
                           shortfall && 'bg-amber-50 dark:bg-amber-900/15'
                         )}
                       >
@@ -1765,7 +1765,7 @@ export function CatalogPickerField({
                         {s.items.length}
                       </span>
                       {pickedInSection > 0 && (
-                        <span className='rounded bg-[#00ceff1a] px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+                        <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
                           {pickedInSection} picked
                         </span>
                       )}
@@ -1782,7 +1782,7 @@ export function CatalogPickerField({
                               i % 2 === 0
                                 ? 'bg-white dark:bg-background'
                                 : 'bg-slate-50/50 dark:bg-muted/30',
-                              (qty ?? 0) > 0 && 'bg-[#00ceff0d]',
+                              (qty ?? 0) > 0 && 'bg-nvr-cyan/5',
                               shortfall && 'bg-amber-50 dark:bg-amber-900/15'
                             )}
                           >
@@ -2347,7 +2347,7 @@ function BuilderCard({
                       {applyDisplayTemplate(tmpl, resolvedCatalogRow)}
                     </span>
                     {(currentQty(resolvedItemId) ?? 0) > 0 && (
-                      <span className='rounded bg-[#00ceff1a] px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+                      <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
                         picked
                       </span>
                     )}
@@ -2799,7 +2799,7 @@ function FavoritesManagerDrawer({
         </div>
 
         <div className='border-b border-slate-200 px-3 py-2 dark:border-border'>
-          <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 focus-within:border-[#00ceff] focus-within:bg-white dark:border-border dark:bg-muted/40 dark:focus-within:bg-background'>
+          <div className='flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 focus-within:border-nvr-cyan focus-within:bg-white dark:border-border dark:bg-muted/40 dark:focus-within:bg-background'>
             <Search className='h-3.5 w-3.5 shrink-0 text-slate-400' />
             <input
               ref={inputRef}

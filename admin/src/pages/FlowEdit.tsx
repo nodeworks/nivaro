@@ -50,6 +50,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 
@@ -3880,21 +3881,18 @@ function FlowVersionDiffPanel({
     >
       <div className='flex items-center gap-2'>
         <span className='font-semibold text-slate-700 dark:text-foreground'>v{version} →</span>
-        <select
+        <SimpleSelect
           value={against}
-          onChange={(e) => setAgainst(e.target.value)}
-          className='h-6 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-          aria-label='Compare against'
-        >
-          <option value='current'>Current flow</option>
-          {versions
-            .filter((v) => v.version !== version)
-            .map((v) => (
-              <option key={v.version} value={String(v.version)}>
-                v{v.version}
-              </option>
-            ))}
-        </select>
+          onChange={setAgainst}
+          ariaLabel='Compare against'
+          className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+          options={[
+            { value: 'current', label: 'Current flow' },
+            ...versions
+              .filter((v) => v.version !== version)
+              .map((v) => ({ value: String(v.version), label: `v${v.version}` }))
+          ]}
+        />
         {diff && (
           <span className='text-slate-400'>
             {total === 0 ? 'no differences' : `${total} difference${total === 1 ? '' : 's'}`}

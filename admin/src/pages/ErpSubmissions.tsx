@@ -16,6 +16,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -494,19 +495,19 @@ export function ErpSubmissionsPage() {
           </div>
           <div>
             <Label className='mb-1 block text-[11px] text-slate-500'>Status</Label>
-            <select
+            <SimpleSelect
               value={searchStatus}
-              onChange={(e) => setSearchStatus(e.target.value)}
-              className='h-8 rounded-md border border-slate-200 bg-white px-2 text-[12.5px] dark:border-border dark:bg-background'
-              aria-label='Status'
-            >
-              <option value=''>Any</option>
-              {['submitted', 'pending', 'accepted', 'rejected', 'failed'].map((st) => (
-                <option key={st} value={st}>
-                  {titleCase(st)}
-                </option>
-              ))}
-            </select>
+              onChange={setSearchStatus}
+              ariaLabel='Status'
+              className='h-8 w-auto rounded-md border-slate-200 bg-white px-2 text-[12.5px] dark:border-border dark:bg-background'
+              options={[
+                { value: '', label: 'Any' },
+                ...['submitted', 'pending', 'accepted', 'rejected', 'failed'].map((st) => ({
+                  value: st,
+                  label: titleCase(st)
+                }))
+              ]}
+            />
           </div>
           <Button
             type='submit'

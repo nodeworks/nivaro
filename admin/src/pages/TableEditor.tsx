@@ -1,4 +1,5 @@
 import type { Modifier } from '@dnd-kit/core'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import {
   closestCenter,
   DndContext,
@@ -6962,18 +6963,15 @@ function AddendumStartStateRow({
       <p className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
         {pipeline.name}
       </p>
-      <select
-        className='h-7 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
+      <SimpleSelect
+        className='h-7 w-auto rounded-md border-slate-200 bg-white px-2 text-[12px] dark:border-border dark:bg-card'
         value={stateKey ?? ''}
-        onChange={(e) => onStateKeyChange(e.target.value || null)}
-      >
-        <option value=''>Initial state (default)</option>
-        {states.map((s) => (
-          <option key={s.key} value={s.key}>
-            {s.label}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => onStateKeyChange(v || null)}
+        options={[
+          { value: '', label: 'Initial state (default)' },
+          ...states.map((s) => ({ value: s.key, label: s.label }))
+        ]}
+      />
     </div>
   )
 }
@@ -13087,18 +13085,15 @@ function PipelineStateConditionRow({
 
   return (
     <div className='space-y-1.5'>
-      <select
+      <SimpleSelect
         value={pipelineId ?? ''}
-        onChange={(e) => onPipelineChange(e.target.value || undefined)}
-        className='w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
-      >
-        <option value=''>— Select pipeline —</option>
-        {bound.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => onPipelineChange(v || undefined)}
+        className='h-6 w-full rounded border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
+        options={[
+          { value: '', label: '— Select pipeline —' },
+          ...bound.map((p) => ({ value: p.id, label: p.name }))
+        ]}
+      />
       {bound.length === 0 && (
         <p className='text-[10px] text-slate-400'>No pipelines bound to this collection.</p>
       )}
@@ -13245,15 +13240,16 @@ function FieldDefaultValueSection({
     )
   } else if (abstractType === 'boolean') {
     control = (
-      <select
+      <SimpleSelect
         value={value === true ? 'true' : value === false ? 'false' : ''}
-        onChange={(e) => setValue(e.target.value === '' ? null : e.target.value === 'true')}
-        className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-      >
-        <option value=''>—</option>
-        <option value='true'>Yes</option>
-        <option value='false'>No</option>
-      </select>
+        onChange={(v) => setValue(v === '' ? null : v === 'true')}
+        className='h-7 w-full rounded border-slate-200 bg-white px-1.5 py-1 text-[11px]'
+        options={[
+          { value: '', label: '—' },
+          { value: 'true', label: 'Yes' },
+          { value: 'false', label: 'No' }
+        ]}
+      />
     )
   } else {
     const opts = (() => {
@@ -13273,23 +13269,19 @@ function FieldDefaultValueSection({
       : null
     if ((settings.interface ?? '') === 'select-dropdown' && choices && choices.length > 0) {
       control = (
-        <select
+        <SimpleSelect
           value={value != null ? String(value) : ''}
-          onChange={(e) => {
-            const raw = e.target.value
+          onChange={(raw) => {
             if (raw === '') return setValue(null)
             const match = choices.find((c) => String(c.value) === raw)
             setValue(match?.value ?? raw)
           }}
-          className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-        >
-          <option value=''>—</option>
-          {choices.map((c) => (
-            <option key={String(c.value)} value={String(c.value)}>
-              {c.text ?? String(c.value)}
-            </option>
-          ))}
-        </select>
+          className='h-7 w-full rounded border-slate-200 bg-white px-1.5 py-1 text-[11px]'
+          options={[
+            { value: '', label: '—' },
+            ...choices.map((c) => ({ value: String(c.value), label: c.text ?? String(c.value) }))
+          ]}
+        />
       )
     } else {
       const numeric =
@@ -14913,20 +14905,15 @@ function FieldSettingsPopover({
                   <div className='grid grid-cols-2 gap-2'>
                     <div className='space-y-1'>
                       <Label className='text-[11px] text-slate-500'>Detail layout</Label>
-                      <select
-                        value={ddLayoutId ?? ''}
-                        onChange={(e) =>
-                          setDdLayoutId(e.target.value ? Number(e.target.value) : null)
-                        }
-                        className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                      >
-                        <option value=''>Default (active detail)</option>
-                        {ddDetailLayouts.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.name}
-                          </option>
-                        ))}
-                      </select>
+                      <SimpleSelect
+                        value={ddLayoutId != null ? String(ddLayoutId) : ''}
+                        onChange={(v) => setDdLayoutId(v ? Number(v) : null)}
+                        className='h-7 w-full rounded border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                        options={[
+                          { value: '', label: 'Default (active detail)' },
+                          ...ddDetailLayouts.map((l) => ({ value: String(l.id), label: l.name }))
+                        ]}
+                      />
                     </div>
                     <div className='space-y-1'>
                       <Label className='text-[11px] text-slate-500'>Panel width</Label>
@@ -15821,21 +15808,18 @@ function FieldSettingsPopover({
                     {columnPresetsLocal.length >= 2 && (
                       <div className='flex items-center gap-2'>
                         <Label className='text-[10px] text-slate-500 shrink-0'>Default view</Label>
-                        <select
+                        <SimpleSelect
                           value={defaultPresetLocal}
-                          onChange={(e) => setDefaultPresetLocal(e.target.value)}
-                          className='h-6 rounded border border-slate-200 bg-white px-1 text-[10px] text-slate-700'
-                        >
-                          <option value=''>First preset</option>
-                          <option value='__all__'>All columns</option>
-                          {columnPresetsLocal
-                            .filter((p) => p.name.trim())
-                            .map((p) => (
-                              <option key={p._key} value={p.name.trim()}>
-                                {p.name.trim()}
-                              </option>
-                            ))}
-                        </select>
+                          onChange={setDefaultPresetLocal}
+                          className='h-6 w-auto rounded border-slate-200 bg-white px-1 text-[10px] text-slate-700'
+                          options={[
+                            { value: '', label: 'First preset' },
+                            { value: '__all__', label: 'All columns' },
+                            ...columnPresetsLocal
+                              .filter((p) => p.name.trim())
+                              .map((p) => ({ value: p.name.trim(), label: p.name.trim() }))
+                          ]}
+                        />
                       </div>
                     )}
                   </div>
@@ -15953,18 +15937,19 @@ function FieldSettingsPopover({
                     className='rounded-md border border-slate-200 bg-white overflow-hidden'
                   >
                     <div className='flex items-center gap-1.5 px-2.5 py-2 bg-slate-50/50'>
-                      <select
+                      <SimpleSelect
                         value={cond.type}
-                        onChange={(e) => {
+                        onChange={(v) => {
                           const next = [...lockConditions]
-                          next[i] = { ...next[i], type: e.target.value }
+                          next[i] = { ...next[i], type: v }
                           onLockConditionsChange(next)
                         }}
-                        className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px]'
-                      >
-                        <option value='pipeline_state'>Pipeline state</option>
-                        <option value='role'>User role</option>
-                      </select>
+                        className='h-7 flex-1 rounded border-slate-200 bg-white px-1.5 py-1 text-[11px]'
+                        options={[
+                          { value: 'pipeline_state', label: 'Pipeline state' },
+                          { value: 'role', label: 'User role' }
+                        ]}
+                      />
                       <button
                         type='button'
                         onClick={() =>
@@ -17214,21 +17199,17 @@ function SortableGroupCard({
           containerGroups &&
           containerGroups.length > 0 &&
           onSetContainer && (
-            <select
-              value={group.container_id ?? ''}
-              onChange={(e) =>
-                onSetContainer(group.id, e.target.value ? Number(e.target.value) : null)
-              }
-              onPointerDown={(e) => e.stopPropagation()}
-              className='rounded border border-slate-200 bg-white px-1 py-0.5 text-[10px] text-slate-500'
-            >
-              <option value=''>No container</option>
-              {containerGroups.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+            <span onPointerDown={(e) => e.stopPropagation()}>
+              <SimpleSelect
+                value={group.container_id != null ? String(group.container_id) : ''}
+                onChange={(v) => onSetContainer(group.id, v ? Number(v) : null)}
+                className='h-6 w-auto rounded border-slate-200 bg-white px-1 py-0.5 text-[10px] text-slate-500'
+                options={[
+                  { value: '', label: 'No container' },
+                  ...containerGroups.map((c) => ({ value: String(c.id), label: c.label }))
+                ]}
+              />
+            </span>
           )}
         {group.type === 'content' && onGroupSettings && (
           <div onPointerDown={(e) => e.stopPropagation()}>
@@ -17541,10 +17522,10 @@ function SortableGroupCard({
                                     <span className='text-[10px] text-slate-400 shrink-0'>
                                       Show:
                                     </span>
-                                    <select
+                                    <SimpleSelect
                                       value={currentAgg}
-                                      onChange={(e) => {
-                                        const agg = e.target.value as SummaryAggConfig['agg']
+                                      onChange={(v) => {
+                                        const agg = v as SummaryAggConfig['agg']
                                         save(
                                           selected.map((ent) =>
                                             entryKey(ent) === f
@@ -17557,14 +17538,12 @@ function SortableGroupCard({
                                           )
                                         )
                                       }}
-                                      className='flex-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-                                    >
-                                      {AGG_OPTIONS.map((o) => (
-                                        <option key={o.value} value={o.value}>
-                                          {o.label}
-                                        </option>
-                                      ))}
-                                    </select>
+                                      className='h-6 flex-1 rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700'
+                                      options={AGG_OPTIONS.map((o) => ({
+                                        value: o.value,
+                                        label: o.label
+                                      }))}
+                                    />
                                   </div>
                                   {needsAggField && (
                                     <div className='flex items-center gap-1.5'>
@@ -18188,15 +18167,16 @@ function LayoutDefaultValueInput({
 
   if (meta?.type === 'boolean') {
     return (
-      <select
+      <SimpleSelect
         value={value === true ? 'true' : value === false ? 'false' : ''}
-        onChange={(e) => onChange(e.target.value === '' ? null : e.target.value === 'true')}
-        className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-      >
-        <option value=''>—</option>
-        <option value='true'>Yes</option>
-        <option value='false'>No</option>
-      </select>
+        onChange={(v) => onChange(v === '' ? null : v === 'true')}
+        className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+        options={[
+          { value: '', label: '—' },
+          { value: 'true', label: 'Yes' },
+          { value: 'false', label: 'No' }
+        ]}
+      />
     )
   }
 
@@ -18205,23 +18185,19 @@ function LayoutDefaultValueInput({
     : null
   if (meta?.interface === 'select-dropdown' && choices && choices.length > 0) {
     return (
-      <select
+      <SimpleSelect
         value={value != null ? String(value) : ''}
-        onChange={(e) => {
-          const raw = e.target.value
+        onChange={(raw) => {
           if (raw === '') return onChange(null)
           const match = choices.find((c) => String(c.value) === raw)
           onChange(match?.value ?? raw)
         }}
-        className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-      >
-        <option value=''>—</option>
-        {choices.map((c) => (
-          <option key={String(c.value)} value={String(c.value)}>
-            {c.text ?? String(c.value)}
-          </option>
-        ))}
-      </select>
+        className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+        options={[
+          { value: '', label: '—' },
+          ...choices.map((c) => ({ value: String(c.value), label: c.text ?? String(c.value) }))
+        ]}
+      />
     )
   }
 
@@ -19062,23 +19038,24 @@ function LayoutsTab({
                       <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
                         Addendum form
                       </span>
-                      <select
-                        value={selected.addendum_layout_id ?? ''}
-                        onChange={(e) =>
+                      <SimpleSelect
+                        value={
+                          selected.addendum_layout_id != null
+                            ? String(selected.addendum_layout_id)
+                            : ''
+                        }
+                        onChange={(v) =>
                           patchLayoutMut.mutate({
                             id: selected.id,
-                            addendum_layout_id: e.target.value ? Number(e.target.value) : null
+                            addendum_layout_id: v ? Number(v) : null
                           })
                         }
-                        className='max-w-[140px] rounded border border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
-                      >
-                        <option value=''>Collection default</option>
-                        {addendumLayouts.map((l) => (
-                          <option key={l.id} value={l.id}>
-                            {l.name}
-                          </option>
-                        ))}
-                      </select>
+                        className='h-7 w-auto max-w-[140px] rounded border-slate-200 bg-white px-2 py-1 text-[11px] dark:border-border dark:bg-background'
+                        options={[
+                          { value: '', label: 'Collection default' },
+                          ...addendumLayouts.map((l) => ({ value: String(l.id), label: l.name }))
+                        ]}
+                      />
                     </div>
                     <label className='flex cursor-pointer items-center justify-between'>
                       <div>
@@ -19118,31 +19095,29 @@ function LayoutsTab({
                         {conditionRows.map((row, idx) => (
                           // biome-ignore lint/suspicious/noArrayIndexKey: order-stable rule list
                           <div key={idx} className='flex items-center gap-1.5'>
-                            <select
+                            <SimpleSelect
                               value={row.field}
-                              onChange={(e) => updateConditionRow(idx, { field: e.target.value })}
-                              className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-                            >
-                              <option value=''>Field…</option>
-                              {dbColumns.map((c) => (
-                                <option key={c.name} value={c.name}>
-                                  {c.name}
-                                </option>
-                              ))}
-                            </select>
-                            <select
+                              onChange={(v) => updateConditionRow(idx, { field: v })}
+                              className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+                              options={[
+                                { value: '', label: 'Field…' },
+                                ...dbColumns.map((c) => ({ value: c.name, label: c.name }))
+                              ]}
+                            />
+                            <SimpleSelect
                               value={row.op}
-                              onChange={(e) =>
+                              onChange={(v) =>
                                 updateConditionRow(idx, {
-                                  op: e.target.value as 'eq' | 'neq' | 'nnull'
+                                  op: v as 'eq' | 'neq' | 'nnull'
                                 })
                               }
-                              className='h-7 w-24 shrink-0 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-                            >
-                              <option value='eq'>=</option>
-                              <option value='neq'>≠</option>
-                              <option value='nnull'>is not empty</option>
-                            </select>
+                              className='h-7 w-24 shrink-0 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+                              options={[
+                                { value: 'eq', label: '=' },
+                                { value: 'neq', label: '≠' },
+                                { value: 'nnull', label: 'is not empty' }
+                              ]}
+                            />
                             {row.op !== 'nnull' && (
                               <Input
                                 value={row.value}
@@ -19198,22 +19173,19 @@ function LayoutsTab({
                         {defaultValueRows.map((row, idx) => (
                           // biome-ignore lint/suspicious/noArrayIndexKey: order-stable rule list
                           <div key={idx} className='flex items-start gap-1.5'>
-                            <select
+                            <SimpleSelect
                               value={row.field}
-                              onChange={(e) =>
+                              onChange={(v) =>
                                 // A new field means the old value's shape may
                                 // not fit (ids vs text) — reset it.
-                                updateDefaultValueRow(idx, { field: e.target.value, value: null })
+                                updateDefaultValueRow(idx, { field: v, value: null })
                               }
-                              className='h-7 min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
-                            >
-                              <option value=''>Field…</option>
-                              {defaultFieldOptions.map((name) => (
-                                <option key={name} value={name}>
-                                  {name}
-                                </option>
-                              ))}
-                            </select>
+                              className='h-7 min-w-0 flex-1 rounded border-slate-200 bg-white px-1.5 text-[11px] dark:border-border dark:bg-background'
+                              options={[
+                                { value: '', label: 'Field…' },
+                                ...defaultFieldOptions.map((name) => ({ value: name, label: name }))
+                              ]}
+                            />
                             <LayoutDefaultValueInput
                               tableName={tableName}
                               field={row.field}
@@ -19385,25 +19357,22 @@ function LayoutsTab({
                         {!!selected.row_order_field && (
                           <div>
                             <p className='text-[10px] text-slate-400 mb-1'>Order field</p>
-                            <select
+                            <SimpleSelect
                               value={selected.row_order_field ?? ''}
-                              onChange={(e) =>
+                              onChange={(v) =>
                                 patchLayoutMut.mutate({
                                   id: selected.id,
-                                  row_order_field: e.target.value || null
+                                  row_order_field: v || null
                                 })
                               }
-                              className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300'
-                            >
-                              <option value=''>— select field —</option>
-                              {dbColumns
-                                .filter((c) => NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase()))
-                                .map((c) => (
-                                  <option key={c.name} value={c.name}>
-                                    {c.name}
-                                  </option>
-                                ))}
-                            </select>
+                              className='h-7 w-full rounded border-slate-200 bg-white px-2 text-[11px] text-slate-700 dark:border-border dark:bg-background dark:text-slate-300'
+                              options={[
+                                { value: '', label: '— select field —' },
+                                ...dbColumns
+                                  .filter((c) => NUMERIC_DATA_TYPES.has(c.data_type.toLowerCase()))
+                                  .map((c) => ({ value: c.name, label: c.name }))
+                              ]}
+                            />
                           </div>
                         )}
                       </div>
@@ -20830,25 +20799,18 @@ function InlineDisplaySection({
               }
               className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
             />
-            <select
+            <SimpleSelect
               value={entry.format ?? 'text'}
-              onChange={(e) =>
+              onChange={(v) =>
                 onChange(
                   entries.map((en, j) =>
-                    j === i
-                      ? { ...en, format: e.target.value === 'text' ? null : e.target.value }
-                      : en
+                    j === i ? { ...en, format: v === 'text' ? null : v } : en
                   )
                 )
               }
-              className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-            >
-              {FORMAT_OPTS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600'
+              options={FORMAT_OPTS.map((o) => ({ value: o.value, label: o.label }))}
+            />
           </div>
         </div>
       ))}
@@ -22615,20 +22577,21 @@ function FieldGroupsTab({
                           <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>
                             {inp.label || inp.key}
                           </span>
-                          <select
+                          <SimpleSelect
                             value={binding.binding_type}
-                            onChange={(e) =>
+                            onChange={(v) =>
                               updateBinding(inp.key, {
-                                binding_type: e.target.value,
+                                binding_type: v,
                                 binding_value: ''
                               })
                             }
-                            className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
-                          >
-                            <option value='item_field'>Field</option>
-                            <option value='static'>Static</option>
-                            <option value='url_param'>URL Param</option>
-                          </select>
+                            className='h-5 w-20 shrink-0 rounded border-slate-200 bg-white px-1 py-px text-[9px]'
+                            options={[
+                              { value: 'item_field', label: 'Field' },
+                              { value: 'static', label: 'Static' },
+                              { value: 'url_param', label: 'URL Param' }
+                            ]}
+                          />
                         </div>
                         {binding.binding_type === 'item_field' ? (
                           <FieldPicker
@@ -22810,20 +22773,21 @@ function FieldGroupsTab({
                           <span className='w-16 shrink-0 truncate font-mono text-[9px] text-slate-400'>
                             {inp.label || inp.key}
                           </span>
-                          <select
+                          <SimpleSelect
                             value={binding.binding_type}
-                            onChange={(e) =>
+                            onChange={(v) =>
                               updateBinding(inp.key, {
-                                binding_type: e.target.value,
+                                binding_type: v,
                                 binding_value: ''
                               })
                             }
-                            className='w-20 shrink-0 rounded border border-slate-200 bg-white px-1 py-px text-[9px]'
-                          >
-                            <option value='item_field'>Field</option>
-                            <option value='static'>Static</option>
-                            <option value='url_param'>URL Param</option>
-                          </select>
+                            className='h-5 w-20 shrink-0 rounded border-slate-200 bg-white px-1 py-px text-[9px]'
+                            options={[
+                              { value: 'item_field', label: 'Field' },
+                              { value: 'static', label: 'Static' },
+                              { value: 'url_param', label: 'URL Param' }
+                            ]}
+                          />
                         </div>
                         {binding.binding_type === 'item_field' ? (
                           <FieldPicker
@@ -22899,17 +22863,12 @@ function FieldGroupsTab({
             </div>
             <div className='space-y-1'>
               <p className='text-[10px] text-slate-400 font-medium'>Display format</p>
-              <select
+              <SimpleSelect
                 value={meta.display_format}
-                onChange={(e) => update({ display_format: e.target.value })}
-                className='w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
-              >
-                {FORMAT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => update({ display_format: v })}
+                className='h-7 w-full rounded border-slate-200 bg-white px-1.5 py-1 text-[11px]'
+                options={FORMAT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              />
             </div>
             <div className='space-y-1'>
               <p className='text-[10px] text-slate-400 font-medium'>Color</p>

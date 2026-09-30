@@ -7,6 +7,7 @@ import { get, patch, post } from '../../lib/commands'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
+import { SimpleSelect } from '../ui/SimpleSelect'
 import { CollectionFieldPicker } from './FieldPicker'
 import type { SkipCondition, SkipCriteria, SkipOp } from './types'
 
@@ -173,14 +174,15 @@ export function PipelineSkipCriteria({
 
           <div className='space-y-1.5'>
             <Label className='text-[12px]'>Match mode</Label>
-            <select
+            <SimpleSelect
               value={mode}
-              onChange={(e) => setMode(e.target.value as 'any' | 'all')}
-              className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-            >
-              <option value='any'>Skip if ANY condition is true</option>
-              <option value='all'>Skip if ALL conditions are true</option>
-            </select>
+              onChange={(v) => setMode(v as 'any' | 'all')}
+              className='h-8 w-full rounded-md border-slate-200 bg-white px-2 text-[13px]'
+              options={[
+                { value: 'any', label: 'Skip if ANY condition is true' },
+                { value: 'all', label: 'Skip if ALL conditions are true' }
+              ]}
+            />
           </div>
 
           {conditions.length === 0 ? (
@@ -240,17 +242,12 @@ export function PipelineSkipCriteria({
                         }}
                         placeholder='Select field…'
                       />
-                      <select
+                      <SimpleSelect
                         value={cond.op}
-                        onChange={(e) => updateCondition(idx, { op: e.target.value as SkipOp })}
-                        className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-                      >
-                        {OPS.map((op) => (
-                          <option key={op} value={op}>
-                            {op}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(v) => updateCondition(idx, { op: v as SkipOp })}
+                        className='h-8 w-full rounded-md border-slate-200 bg-white px-2 text-[13px]'
+                        options={OPS.map((op) => ({ value: op, label: op }))}
+                      />
                       {fieldRelations[idx] ? (
                         <RelationValuePicker
                           relatedCollection={fieldRelations[idx].collection}
@@ -273,9 +270,9 @@ export function PipelineSkipCriteria({
                     <div className='space-y-2'>
                       <p className='text-[11px] text-slate-400'>
                         Skip when a matched row in another collection compares true against a record
-                        value (e.g. requisition amount below a threshold table amount). Filter values
-                        may come from a record field — plain column, dotted M2O path, or an M2M alias
-                        (matches any linked id).
+                        value (e.g. requisition amount below a threshold table amount). Filter
+                        values may come from a record field — plain column, dotted M2O path, or an
+                        M2M alias (matches any linked id).
                       </p>
                       <div className='grid gap-2 sm:grid-cols-2'>
                         <div className='space-y-1'>
@@ -312,29 +309,21 @@ export function PipelineSkipCriteria({
                             Operator (record vs row)
                           </span>
                           <div className='flex gap-2'>
-                            <select
+                            <SimpleSelect
                               value={cond.op}
-                              onChange={(e) =>
-                                updateCondition(idx, { op: e.target.value as SkipOp })
-                              }
-                              className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-                            >
-                              {OPS.map((op) => (
-                                <option key={op} value={op}>
-                                  {op}
-                                </option>
-                              ))}
-                            </select>
-                            <select
+                              onChange={(v) => updateCondition(idx, { op: v as SkipOp })}
+                              className='h-8 w-full rounded-md border-slate-200 bg-white px-2 text-[13px]'
+                              options={OPS.map((op) => ({ value: op, label: op }))}
+                            />
+                            <SimpleSelect
                               value={cond.match ?? 'any'}
-                              onChange={(e) =>
-                                updateCondition(idx, { match: e.target.value as 'any' | 'all' })
-                              }
-                              className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-                            >
-                              <option value='any'>any row</option>
-                              <option value='all'>all rows</option>
-                            </select>
+                              onChange={(v) => updateCondition(idx, { match: v as 'any' | 'all' })}
+                              className='h-8 w-full rounded-md border-slate-200 bg-white px-2 text-[13px]'
+                              options={[
+                                { value: 'any', label: 'any row' },
+                                { value: 'all', label: 'all rows' }
+                              ]}
+                            />
                           </div>
                         </div>
                       </div>
@@ -598,21 +587,17 @@ function RelationValuePicker({
   const items = data ?? []
 
   return (
-    <select
+    <SimpleSelect
       value={value == null ? '' : String(value)}
-      onChange={(e) => onChange(e.target.value === '' ? '' : e.target.value)}
-      className='h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-[13px]'
-    >
-      <option value=''>— any —</option>
-      {items.map((item) => {
-        const label = String(item[displayField] ?? item.id)
-        const val = String(item[displayField] ?? item.id)
-        return (
-          <option key={String(item.id)} value={val}>
-            {label}
-          </option>
-        )
-      })}
-    </select>
+      onChange={(v) => onChange(v === '' ? '' : v)}
+      className='h-8 w-full rounded-md border-slate-200 bg-white px-2 text-[13px]'
+      options={[
+        { value: '', label: '— any —' },
+        ...items.map((item) => {
+          const val = String(item[displayField] ?? item.id)
+          return { value: val, label: val }
+        })
+      ]}
+    />
   )
 }

@@ -177,9 +177,7 @@ export function NestedRelationEditor({
           })
         )
         .then((r) => r.data ?? []),
-    enabled: matchCollection
-      ? !!matchQuery
-      : !!grandCollection && !!fkField && parentRowId != null,
+    enabled: matchCollection ? !!matchQuery : !!grandCollection && !!fkField && parentRowId != null,
     staleTime: 30_000
   })
 
@@ -548,7 +546,7 @@ export function NestedRelationEditor({
                                 e.stopPropagation()
                                 save()
                               }}
-                              className='rounded px-2 h-7 bg-[#00ceff] text-white text-[10px] font-medium hover:brightness-110 disabled:opacity-50'
+                              className='rounded px-2 h-7 bg-nvr-cyan text-white text-[10px] font-medium hover:brightness-110 disabled:opacity-50'
                             >
                               {saving ? '…' : 'Save'}
                             </button>
@@ -596,7 +594,7 @@ export function NestedRelationEditor({
                                 e.stopPropagation()
                                 startEdit(key, data)
                               }}
-                              className='rounded p-0.5 text-slate-300 hover:text-[#00ceff]'
+                              className='rounded p-0.5 text-slate-300 hover:text-nvr-cyan'
                             >
                               <Pencil className='h-3 w-3' />
                             </button>
@@ -646,7 +644,7 @@ export function NestedRelationEditor({
                     type='button'
                     disabled={saving}
                     onClick={save}
-                    className='rounded px-2 h-7 bg-[#00ceff] text-white text-[10px] font-medium hover:brightness-110 disabled:opacity-50'
+                    className='rounded px-2 h-7 bg-nvr-cyan text-white text-[10px] font-medium hover:brightness-110 disabled:opacity-50'
                   >
                     {saving ? '…' : 'Add'}
                   </button>
@@ -685,7 +683,7 @@ export function NestedRelationEditor({
           <button
             type='button'
             onClick={startAdd}
-            className='text-[11px] text-[#00ceff] font-medium hover:underline'
+            className='text-[11px] text-nvr-cyan font-medium hover:underline'
           >
             + Add row
           </button>

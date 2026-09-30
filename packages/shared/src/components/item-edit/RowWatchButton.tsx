@@ -69,7 +69,7 @@ export function RowWatchButton({
       data-row-watched={watched ? 'true' : undefined}
       onClick={onClick}
       disabled={toggle.isPending}
-      className={`rounded p-0.5 ${watched ? 'text-nvr-cyan' : 'text-slate-300 hover:text-[#00ceff]'}`}
+      className={`rounded p-0.5 ${watched ? 'text-nvr-cyan' : 'text-slate-300 hover:text-nvr-cyan'}`}
     >
       {watched ? <BellRing className='h-3 w-3' /> : <Bell className='h-3 w-3' />}
     </button>

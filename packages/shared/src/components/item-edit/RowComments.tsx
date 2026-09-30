@@ -112,7 +112,8 @@ export function RowCommentButton({
     if (!r) return
     // Flip above when the panel would run off the viewport bottom.
     const panelH = 280
-    const top = r.bottom + panelH > window.innerHeight ? Math.max(8, r.top - panelH - 4) : r.bottom + 4
+    const top =
+      r.bottom + panelH > window.innerHeight ? Math.max(8, r.top - panelH - 4) : r.bottom + 4
     setPos({ top, left: Math.max(8, Math.min(r.left - 240, window.innerWidth - 320)) })
   }
 
@@ -123,7 +124,7 @@ export function RowCommentButton({
         type='button'
         onClick={toggle}
         title='Line comments'
-        className={`relative rounded p-0.5 ${count > 0 ? 'text-nvr-navy dark:text-nvr-cyan' : 'text-slate-300 hover:text-[#00ceff]'}`}
+        className={`relative rounded p-0.5 ${count > 0 ? 'text-nvr-navy dark:text-nvr-cyan' : 'text-slate-300 hover:text-nvr-cyan'}`}
         data-row-comments={rowId}
       >
         <MessageSquare className='h-3 w-3' />
@@ -184,7 +185,9 @@ export function RowCommentButton({
                               }`}
                             >
                               {r.emoji}
-                              <span className='tabular-nums text-[9.5px] font-semibold'>{r.count}</span>
+                              <span className='tabular-nums text-[9.5px] font-semibold'>
+                                {r.count}
+                              </span>
                             </button>
                           ))}
                           <span className='relative'>

@@ -3,8 +3,7 @@ import { Loader2, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
-import { titleCase } from '../../lib/utils'
+import { cn, titleCase } from '../../lib/utils'
 
 /** Config: `options.quick_create` on an M2O field. Renders a "＋ New" button next
  *  to the picker that creates a record in the TARGET collection inline and
@@ -64,7 +63,9 @@ export function QuickCreateButton({
               (r.data?.relations ?? [])
                 .filter(
                   (rel) =>
-                    rel.one_collection === targetCollection && !!rel.one_field && !!rel.junction_field
+                    rel.one_collection === targetCollection &&
+                    !!rel.one_field &&
+                    !!rel.junction_field
                 )
                 .map((rel) => String(rel.one_field))
             )
@@ -131,7 +132,7 @@ export function QuickCreateButton({
         className={cn(
           'inline-flex h-9 items-center gap-1 rounded-md border px-2.5 text-[12px] transition-colors',
           open
-            ? 'border-[#00ceff] bg-[#00ceff]/10 text-[#00ceff]'
+            ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-cyan'
             : 'border-input text-slate-600 hover:border-slate-400 hover:text-slate-800 dark:text-slate-300'
         )}
       >
@@ -175,7 +176,7 @@ export function QuickCreateButton({
               // Wait for the target's relations so a many-to-many seed is sent as links.
               disabled={saving || (seedFields.length > 0 && !m2mAliases)}
               onClick={() => void create()}
-              className='inline-flex h-7 items-center gap-1 rounded bg-[#00ceff] px-2.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+              className='inline-flex h-7 items-center gap-1 rounded bg-nvr-cyan px-2.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50'
             >
               {saving && <Loader2 className='h-3 w-3 animate-spin' />}
               Create &amp; select

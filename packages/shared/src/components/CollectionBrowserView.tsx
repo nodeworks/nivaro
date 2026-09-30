@@ -943,7 +943,7 @@ export function RowActionsMenu({
                         onClick={() => setConfirm((c) => (c ? { ...c, picked: t.id } : c))}
                         className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[12px] ${
                           confirm.picked === t.id
-                            ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-slate-800 dark:text-slate-100'
+                            ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-slate-800 dark:text-slate-100'
                             : 'border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-300'
                         }`}
                       >
@@ -966,7 +966,7 @@ export function RowActionsMenu({
                       : 'Reason (optional)…'
                   }
                   rows={2}
-                  className='w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                  className='w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                 />
                 <div className='mt-1.5 flex gap-1.5'>
                   <button
@@ -985,7 +985,7 @@ export function RowActionsMenu({
                     }}
                     data-row-action-confirm
                     className={`h-7 flex-1 rounded-md text-[12px] font-semibold text-white disabled:opacity-40 ${
-                      confirm.action?.variant === 'danger' ? 'bg-red-600' : 'bg-[#00ceff]'
+                      confirm.action?.variant === 'danger' ? 'bg-red-600' : 'bg-nvr-cyan'
                     }`}
                   >
                     {transitionMut.isPending || actionMut.isPending ? 'Applying…' : 'Confirm'}
@@ -1298,7 +1298,7 @@ export function MultiPick({
           block ? 'w-full min-w-[64px]' : 'max-w-[150px]'
         } ${
           selected.length
-            ? 'border-[#00ceff66] bg-[#00ceff14] text-slate-800 dark:text-slate-100'
+            ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-slate-800 dark:text-slate-100'
             : 'border-slate-200 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
         }`}
       >
@@ -1334,7 +1334,7 @@ export function MultiPick({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder='Search…'
-            className='m-1.5 h-6 shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11px] font-normal normal-case outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+            className='m-1.5 h-6 shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11px] font-normal normal-case outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
           />
           <div className='min-h-0 flex-1 overflow-y-auto p-1'>
             {loading ? (
@@ -1593,7 +1593,7 @@ function DateColFilter({
         }}
         className={`inline-flex h-6 w-full min-w-[64px] items-center gap-1 rounded border px-1.5 text-[11px] font-normal normal-case tracking-normal ${
           value
-            ? 'border-[#00ceff66] bg-[#00ceff14] text-slate-800 dark:text-slate-100'
+            ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-slate-800 dark:text-slate-100'
             : 'border-slate-200 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
         }`}
       >
@@ -1627,7 +1627,7 @@ function DateColFilter({
                 }}
                 className={`block w-full rounded px-2 py-1 text-left text-[11.5px] font-normal normal-case tracking-normal ${
                   value === d.value || (!value && !d.value)
-                    ? 'bg-[#00ceff14] font-medium text-slate-800 dark:text-slate-100'
+                    ? 'bg-nvr-cyan/[0.08] font-medium text-slate-800 dark:text-slate-100'
                     : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
                 }`}
               >
@@ -1649,7 +1649,7 @@ function DateColFilter({
                   onClick={() => setOp(o.op)}
                   className={`rounded border px-1 py-0.5 text-[10px] font-normal normal-case leading-tight tracking-normal ${
                     op === o.op
-                      ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-slate-800 dark:text-slate-100'
+                      ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-slate-800 dark:text-slate-100'
                       : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
                   }`}
                 >
@@ -1681,7 +1681,7 @@ function DateColFilter({
               type='button'
               disabled={!from && !to}
               onClick={applyRange}
-              className='mt-1.5 h-6 w-full rounded bg-[#00ceff] text-[11px] font-semibold text-white disabled:opacity-40'
+              className='mt-1.5 h-6 w-full rounded bg-nvr-cyan text-[11px] font-semibold text-white disabled:opacity-40'
             >
               Apply
             </button>
@@ -1750,7 +1750,7 @@ function QuickFilterSelect({
     : scopeDefault && selected.length > 0
       ? {
           label: 'default',
-          cls: 'bg-[#00ceff1f] text-[#0284a8] dark:text-[#00ceff]',
+          cls: 'bg-nvr-cyan/[0.12] text-[#0284a8] dark:text-nvr-cyan',
           title: `Pre-selected from your default ${def.label} scope — adjust freely`
         }
       : null
@@ -2343,7 +2343,7 @@ function RelationValueList({
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder={`Search ${titleCase(target)}…`}
-        className='mx-2 mb-1 h-7 shrink-0 rounded border border-slate-200 bg-slate-50 px-2 text-[12px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+        className='mx-2 mb-1 h-7 shrink-0 rounded border border-slate-200 bg-slate-50 px-2 text-[12px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
       />
       <div className='min-h-0 flex-1 overflow-y-auto px-1 pb-1'>
         {isLoading ? (
@@ -2564,7 +2564,7 @@ function FilterBar({
           onChange={(e) => onSearch(e.target.value)}
           placeholder='Search…'
           aria-label={`Search ${collection}`}
-          className='h-8 w-48 rounded-md border border-slate-200 bg-white pl-8 pr-3 text-[13px] outline-none focus:border-[#00ceff80] focus:ring-2 focus:ring-[#00ceff4d] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+          className='h-8 w-48 rounded-md border border-slate-200 bg-white pl-8 pr-3 text-[13px] outline-none focus:border-nvr-cyan/50 focus:ring-2 focus:ring-nvr-cyan/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
         />
       </div>
 
@@ -2574,7 +2574,7 @@ function FilterBar({
         return (
           <span
             key={f.id}
-            className='nvr-pop-in inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] transition-colors hover:border-[#00ceff66] dark:border-slate-700 dark:bg-slate-900'
+            className='nvr-pop-in inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[12px] transition-colors hover:border-nvr-cyan/40 dark:border-slate-700 dark:bg-slate-900'
           >
             <button
               type='button'
@@ -2598,7 +2598,7 @@ function FilterBar({
               <span className='text-slate-500'>{chip.field}</span>
               <span className='font-semibold text-slate-700 dark:text-slate-200'>{chip.op}</span>
               {chip.value && (
-                <span className='text-[#00a5cc] dark:text-[#00ceff]'>{chip.value}</span>
+                <span className='text-[#00a5cc] dark:text-nvr-cyan'>{chip.value}</span>
               )}
             </button>
             <button
@@ -2641,7 +2641,7 @@ function FilterBar({
                     value={fieldFilter}
                     onChange={(e) => setFieldFilter(e.target.value)}
                     placeholder='Find field…'
-                    className='h-8 w-full rounded-lg border-2 border-[#00ceff80] bg-white px-2.5 text-[12.5px] outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-[#00ceff33] dark:border-[#00ceff66] dark:bg-slate-800 dark:text-slate-100'
+                    className='h-8 w-full rounded-lg border-2 border-nvr-cyan/50 bg-white px-2.5 text-[12.5px] outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-nvr-cyan/20 dark:border-nvr-cyan/40 dark:bg-slate-800 dark:text-slate-100'
                   />
                 </div>
                 <div className='max-h-80 overflow-y-auto py-1'>
@@ -2740,7 +2740,7 @@ function FilterBar({
                         type='button'
                         disabled={relSel.length === 0}
                         onClick={applyRelation}
-                        className='h-8 w-full rounded-md bg-[#00ceff] text-[13px] font-medium text-white disabled:opacity-40'
+                        className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
                       >
                         Apply{relSel.length > 0 ? ` (${relSel.length})` : ''}
                       </button>
@@ -2762,7 +2762,7 @@ function FilterBar({
                             b.op.includes(':') ? b.op.split(':')[1] : ''
                           )
                         }
-                        className='h-8 flex-1 rounded-md border border-slate-200 text-[12.5px] text-slate-600 hover:border-[#00ceff66] hover:bg-[#00ceff0d] dark:border-slate-700 dark:text-slate-300'
+                        className='h-8 flex-1 rounded-md border border-slate-200 text-[12.5px] text-slate-600 hover:border-nvr-cyan/40 hover:bg-nvr-cyan/5 dark:border-slate-700 dark:text-slate-300'
                       >
                         {b.label}
                       </button>
@@ -2781,7 +2781,7 @@ function FilterBar({
                             // rolling instead of freezing the pick-day range.
                             applyScalar('_preset', d.value)
                           }}
-                          className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-600 hover:border-[#00ceff66] hover:bg-[#00ceff0d] dark:border-slate-700 dark:text-slate-300'
+                          className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-600 hover:border-nvr-cyan/40 hover:bg-nvr-cyan/5 dark:border-slate-700 dark:text-slate-300'
                         >
                           {d.label}
                         </button>
@@ -2812,7 +2812,7 @@ function FilterBar({
                         else if (value) applyScalar('_gte', value)
                         else if (value2) applyScalar('_lte', value2)
                       }}
-                      className='h-8 w-full rounded-md bg-[#00ceff] text-[13px] font-medium text-white disabled:opacity-40'
+                      className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
                     >
                       Apply
                     </button>
@@ -2839,7 +2839,7 @@ function FilterBar({
                           onClick={() => setPickedOp(o.value)}
                           className={`rounded-md border px-2 py-1 text-[11.5px] ${
                             pickedOp === o.value
-                              ? 'border-[#00ceff66] bg-[#00ceff14] font-medium text-slate-800 dark:text-slate-100'
+                              ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-slate-800 dark:text-slate-100'
                               : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
                           }`}
                         >
@@ -2868,7 +2868,7 @@ function FilterBar({
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         placeholder='Value…'
-                        className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                        className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                       />
                       {leafKind === 'number' && pickedOp === '_between' && (
                         <>
@@ -2878,7 +2878,7 @@ function FilterBar({
                             value={value2}
                             onChange={(e) => setValue2(e.target.value)}
                             placeholder='To…'
-                            className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                            className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                           />
                         </>
                       )}
@@ -2888,7 +2888,7 @@ function FilterBar({
                       disabled={
                         pickedOp === '_between' ? value === '' || value2 === '' : !value.trim()
                       }
-                      className='h-8 w-full rounded-md bg-[#00ceff] text-[13px] font-medium text-white disabled:opacity-40'
+                      className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
                     >
                       {editingId ? 'Update' : 'Apply'}
                     </button>
@@ -3048,7 +3048,7 @@ function RecordMergeForm({
           className={cn(
             'h-8 rounded-md border px-3 font-mono text-[12px]',
             String(survivor) === String(id)
-              ? 'border-[#00ceff] bg-[#00ceff22] text-[#7fe7ff]'
+              ? 'border-nvr-cyan bg-nvr-cyan/[0.13] text-[#7fe7ff]'
               : 'border-white/20 dark:border-border text-slate-300 dark:text-muted-foreground hover:bg-white/10 dark:hover:bg-muted'
           )}
         >
@@ -3191,7 +3191,7 @@ function MessageStakeholdersForm({
         Critical
       </label>
       <span
-        className='text-[11.5px] text-[#00ceff]'
+        className='text-[11.5px] text-nvr-cyan'
         data-tip={preview?.users?.map((u) => u.name).join(', ')}
       >
         {count == null ? '…' : `${count} recipient${count === 1 ? '' : 's'}`}
@@ -3213,7 +3213,7 @@ function MessageStakeholdersForm({
       <button
         type='submit'
         disabled={busy || !subject.trim() || !message.trim() || count === 0}
-        className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
+        className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
       >
         {busy ? 'Sending…' : 'Send'}
       </button>
@@ -3370,7 +3370,7 @@ function BulkBar({
       >
         ✕
       </button>
-      <span className='text-[13px] font-medium text-[#00ceff] dark:text-nvr-cyan'>
+      <span className='text-[13px] font-medium text-nvr-cyan dark:text-nvr-cyan'>
         {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'} selected
       </span>
       {comparing && (
@@ -3404,7 +3404,7 @@ function BulkBar({
                       ? `Set ${r.config?.field} = ${r.config?.value}`
                       : `Transition: ${r.config?.transition_label}`
                   }
-                  className='h-8 rounded-md border border-[#00ceff55] bg-[#00ceff14] px-3 text-[12.5px] font-medium text-[#7fe7ff] hover:bg-[#00ceff22] disabled:opacity-40'
+                  className='h-8 rounded-md border border-nvr-cyan/[0.33] bg-nvr-cyan/[0.08] px-3 text-[12.5px] font-medium text-[#7fe7ff] hover:bg-nvr-cyan/[0.13] disabled:opacity-40'
                 >
                   {r.name}
                 </button>
@@ -3571,7 +3571,7 @@ function BulkBar({
           <button
             type='submit'
             disabled={busy}
-            className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
+            className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
           >
             Apply
           </button>
@@ -3628,7 +3628,7 @@ function BulkBar({
           <button
             type='submit'
             disabled={busy || !transitionId}
-            className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
+            className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
           >
             Run
           </button>
@@ -3677,7 +3677,7 @@ function BulkBar({
           <button
             type='submit'
             disabled={!recipeName.trim()}
-            className='h-8 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
+            className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
           >
             Save
           </button>
@@ -4996,7 +4996,7 @@ export function CollectionBrowserView({
           }
           placeholder='Filter…'
           aria-label={`Filter ${key}`}
-          className='h-6 w-full min-w-[64px] rounded border border-slate-200 bg-white px-1.5 text-[11px] font-normal normal-case tracking-normal outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+          className='h-6 w-full min-w-[64px] rounded border border-slate-200 bg-white px-1.5 text-[11px] font-normal normal-case tracking-normal outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
         />
       )
     if (cls.kind === 'num') {
@@ -5017,7 +5017,7 @@ export function CollectionBrowserView({
               setColFilter(key, e.target.value ? { kind: 'num', op, value: e.target.value } : null)
             }
             aria-label={`Filter value ${key}`}
-            className='h-6 w-full min-w-[52px] rounded border border-slate-200 bg-white px-1.5 text-[11px] font-normal outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+            className='h-6 w-full min-w-[52px] rounded border border-slate-200 bg-white px-1.5 text-[11px] font-normal outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
           />
         </span>
       )
@@ -5780,7 +5780,7 @@ export function CollectionBrowserView({
       }}
       onClick={(e) => e.stopPropagation()}
       title='Drag to resize · double-click to fit content'
-      className='absolute right-0 top-0 h-full w-1.5 cursor-col-resize opacity-0 transition-opacity hover:bg-[#00ceff66] hover:opacity-100 group-hover/hcell:opacity-60'
+      className='absolute right-0 top-0 h-full w-1.5 cursor-col-resize opacity-0 transition-opacity hover:bg-nvr-cyan/40 hover:opacity-100 group-hover/hcell:opacity-60'
     />
   )
   const widthStyle = (key: string): React.CSSProperties | undefined =>
@@ -5865,7 +5865,7 @@ export function CollectionBrowserView({
           position: absolute;
           top: 0; bottom: 0;
           border-radius: 2px;
-          background: #00ceff;
+          background: rgb(var(--nvr-cyan-rgb, 0 206 255));
           animation: cbv-progress 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
         }
         @keyframes cbv-overlay-in {
@@ -6082,7 +6082,7 @@ export function CollectionBrowserView({
               setPendingLive(0)
               void refetch()
             }}
-            className='flex h-8 items-center gap-1 rounded-full border border-[#00ceff66] bg-[#00ceff14] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
+            className='flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
           >
             {pendingLive} update{pendingLive === 1 ? '' : 's'} · Refresh
           </button>
@@ -6140,7 +6140,7 @@ export function CollectionBrowserView({
             title={altView === v.key ? 'Back to the table' : `Show as ${v.label.toLowerCase()}`}
             className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
               altView === v.key
-                ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
                 : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
             }`}
           >
@@ -6158,7 +6158,7 @@ export function CollectionBrowserView({
             title={mapMode ? 'Back to the table' : 'Show these records on a map'}
             className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
               mapMode
-                ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
                 : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
             }`}
             data-cbv-map-toggle
@@ -6173,7 +6173,7 @@ export function CollectionBrowserView({
           title='Ask the table a question'
           className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
             aiOpen || aiResult
-              ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+              ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
               : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
           }`}
         >
@@ -6194,7 +6194,7 @@ export function CollectionBrowserView({
                 if (e.key === 'Escape') setAiOpen(false)
               }}
               placeholder='Ask in plain language — "over 50k in Zone 1 still waiting on approval"'
-              className='h-8 flex-1 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] outline-none focus:border-[#00ceff80] focus:ring-2 focus:ring-[#00ceff4d] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+              className='h-8 flex-1 rounded-md border border-slate-200 bg-white px-3 text-[12.5px] outline-none focus:border-nvr-cyan/50 focus:ring-2 focus:ring-nvr-cyan/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
             />
             <button
               type='button'
@@ -6225,7 +6225,7 @@ export function CollectionBrowserView({
           </span>
         ))}
         {aiResult && (
-          <span className='order-last inline-flex max-w-full items-center gap-1.5 rounded-full border border-[#00ceff66] bg-[#00ceff14] py-1 pl-2.5 pr-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
+          <span className='order-last inline-flex max-w-full items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] py-1 pl-2.5 pr-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
             <Sparkles className='h-3 w-3 shrink-0' />
             <span className='min-w-0 truncate'>
               {aiResult.interpreted || 'AI result'} · {fmtNum(aiResult.total)} match
@@ -6238,7 +6238,7 @@ export function CollectionBrowserView({
               type='button'
               onClick={clearAi}
               aria-label='Clear AI result'
-              className='rounded-full p-0.5 hover:bg-[#00ceff29]'
+              className='rounded-full p-0.5 hover:bg-nvr-cyan/[0.16]'
             >
               <X className='h-3 w-3' />
             </button>
@@ -6250,7 +6250,7 @@ export function CollectionBrowserView({
             onClick={() => setGroupOpen((o) => !o)}
             className={`flex h-8 items-center gap-1 rounded-md border px-2.5 text-[12px] font-medium ${
               groupBy
-                ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-[#007a99] dark:text-nvr-cyan'
                 : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
             }`}
           >
@@ -6266,7 +6266,7 @@ export function CollectionBrowserView({
                 onClick={() => pickGroupBy(null)}
                 className={`block w-full rounded px-2 py-1.5 text-left text-[12px] ${
                   groupBy === null
-                    ? 'bg-[#00ceff14] font-semibold text-slate-800 dark:text-slate-100'
+                    ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
                     : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
                 }`}
               >
@@ -6279,7 +6279,7 @@ export function CollectionBrowserView({
                   onClick={() => pickGroupBy(c.key)}
                   className={`block w-full truncate rounded px-2 py-1.5 text-left text-[12px] ${
                     groupBy === c.key
-                      ? 'bg-[#00ceff14] font-semibold text-slate-800 dark:text-slate-100'
+                      ? 'bg-nvr-cyan/[0.08] font-semibold text-slate-800 dark:text-slate-100'
                       : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
                   }`}
                 >
@@ -6358,7 +6358,7 @@ export function CollectionBrowserView({
                             if (e.key === 'Enter' || e.key === 'Escape') setRenamingCol(null)
                           }}
                           onBlur={() => setRenamingCol(null)}
-                          className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                          className='h-5 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                         />
                       ) : (
                         <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
@@ -6442,7 +6442,7 @@ export function CollectionBrowserView({
                                 }}
                                 className={`rounded border px-1.5 py-0.5 text-[10.5px] ${
                                   active
-                                    ? 'border-[#00ceff66] bg-[#00ceff14] text-slate-800 dark:text-slate-100'
+                                    ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] text-slate-800 dark:text-slate-100'
                                     : 'border-slate-200 bg-white text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400'
                                 }`}
                               >
@@ -6470,7 +6470,7 @@ export function CollectionBrowserView({
                             }
                             if (e.key === 'Escape') setFormattingCol(null)
                           }}
-                          className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+                          className='mt-1 h-5 w-full rounded border border-slate-200 bg-white px-1 text-[10.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
                         />
                         {/* Conditional tint (#84): first matching rule colors the cell. */}
                         <div className='mt-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
@@ -6648,7 +6648,7 @@ export function CollectionBrowserView({
                         }
                         if (e.key === 'Escape') setPresetOpen(false)
                       }}
-                      className='h-6 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                      className='h-6 w-full min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                     />
                     <button
                       type='button'
@@ -6788,7 +6788,7 @@ export function CollectionBrowserView({
               <button
                 type='button'
                 onClick={() => setNewItemMenuOpen((v) => !v)}
-                className='flex h-8 items-center gap-1 rounded-md bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
+                className='flex h-8 items-center gap-1 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
               >
                 + New item
                 <ChevronDown className='h-3.5 w-3.5' />
@@ -6881,7 +6881,7 @@ export function CollectionBrowserView({
                 ref={newItemBtnRef}
                 onClick={() => startNew(null)}
                 className={cn(
-                  'h-8 bg-[#00ceff] px-3 text-[12.5px] font-semibold text-white hover:brightness-105',
+                  'h-8 bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:brightness-105',
                   defaultQuickSteps.length > 0 || autofillCfg.data?.enabled
                     ? 'rounded-l-md'
                     : 'rounded-md'
@@ -6897,7 +6897,7 @@ export function CollectionBrowserView({
                   aria-label='Quick pick'
                   onClick={() => setQuickPick({ slug: null })}
                   className={cn(
-                    'flex h-8 items-center border-l border-white/30 bg-[#00ceff] px-2 text-white hover:brightness-105',
+                    'flex h-8 items-center border-l border-white/30 bg-nvr-cyan px-2 text-white hover:brightness-105',
                     !autofillCfg.data?.enabled && 'rounded-r-md'
                   )}
                 >
@@ -6912,7 +6912,7 @@ export function CollectionBrowserView({
                   title='New from document — upload a SOW, quote or spreadsheet and review what it proposes'
                   aria-label='New from document'
                   onClick={() => newFromDocument(null)}
-                  className='flex h-8 items-center rounded-r-md border-l border-white/30 bg-[#00ceff] px-2 text-white hover:brightness-105 disabled:opacity-60'
+                  className='flex h-8 items-center rounded-r-md border-l border-white/30 bg-nvr-cyan px-2 text-white hover:brightness-105 disabled:opacity-60'
                 >
                   <FileText className='h-3.5 w-3.5' />
                 </button>
@@ -6949,14 +6949,14 @@ export function CollectionBrowserView({
       {/* Deep-link context (dashboard tiles etc.) — visible + dismissable so a
           contextual landing never reads as "the list is mysteriously short". */}
       {linkConds.length > 0 && (
-        <div className='flex shrink-0 flex-wrap items-center gap-1.5 border-b border-slate-100 bg-[#00ceff08] px-4 py-1.5 dark:border-slate-800'>
+        <div className='flex shrink-0 flex-wrap items-center gap-1.5 border-b border-slate-100 bg-nvr-cyan/[0.03] px-4 py-1.5 dark:border-slate-800'>
           <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
             Showing:
           </span>
           {linkConds.map((c, i) => (
             <span
               key={i}
-              className='rounded border border-[#00ceff66] bg-[#00ceff14] px-1.5 py-px text-[11px] text-slate-800 dark:text-slate-100'
+              className='rounded border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-1.5 py-px text-[11px] text-slate-800 dark:text-slate-100'
             >
               {c.label ?? c.path.join('.')}
             </span>
@@ -6991,7 +6991,7 @@ export function CollectionBrowserView({
               setAppliedQuick(quickSel)
               setPage(1)
             }}
-            className='h-6 rounded bg-[#00ceff] px-2.5 text-[11px] font-semibold text-white'
+            className='h-6 rounded bg-nvr-cyan px-2.5 text-[11px] font-semibold text-white'
           >
             Apply
           </button>
@@ -7022,7 +7022,7 @@ export function CollectionBrowserView({
             onClick={clearView}
             className={`inline-flex h-6 items-center rounded-full border px-2.5 text-[12px] transition-colors ${
               activeViewId == null
-                ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                 : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
             }`}
           >
@@ -7034,7 +7034,7 @@ export function CollectionBrowserView({
             key={v.id}
             className={`inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[12px] transition-colors ${
               activeViewId === v.id
-                ? 'border-[#00ceff66] bg-[#00ceff1a] text-slate-900 dark:text-white'
+                ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-slate-900 dark:text-white'
                 : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
             }`}
           >
@@ -7058,7 +7058,7 @@ export function CollectionBrowserView({
               <span
                 data-view-role-default={v.default_for_role}
                 title={`Default view for ${v.default_for_role_name ?? 'a role'}`}
-                className='rounded bg-[#00ceff1a] px-1 text-[10.5px] text-[#04516b] dark:text-nvr-cyan'
+                className='rounded bg-nvr-cyan/10 px-1 text-[10.5px] text-[#04516b] dark:text-nvr-cyan'
               >
                 {v.default_for_role_name ?? 'role'} default
               </span>
@@ -7152,12 +7152,12 @@ export function CollectionBrowserView({
               value={saveName}
               onChange={(e) => setSaveName(e.target.value)}
               placeholder='View name…'
-              className='h-6 w-32 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-[#00ceff80] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+              className='h-6 w-32 rounded border border-slate-200 bg-slate-50 px-1.5 text-[11.5px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
             />
             <button
               type='submit'
               disabled={!saveName.trim()}
-              className='rounded bg-[#00ceff] px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-40'
+              className='rounded bg-nvr-cyan px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-40'
             >
               Save
             </button>
@@ -7673,7 +7673,7 @@ export function CollectionBrowserView({
                                     setSearch('')
                                     setPage(1)
                                   }}
-                                  className='mt-1 h-7 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-[#00ceff66] hover:text-[#00a5cc] dark:border-slate-700 dark:text-slate-300'
+                                  className='mt-1 h-7 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-nvr-cyan/40 hover:text-[#00a5cc] dark:border-slate-700 dark:text-slate-300'
                                 >
                                   Clear all filters
                                 </button>
@@ -7741,8 +7741,8 @@ export function CollectionBrowserView({
                           onMouseEnter={() => prefetchRecord(id)}
                           title={risk ? `At risk — ${risk.rule}` : undefined}
                           style={enterStyle}
-                          className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-[#00ceff0a] dark:border-slate-800 dark:hover:bg-[#00ceff14] ${
-                            isSelected ? 'bg-[#00ceff14]' : (riskTint ?? '')
+                          className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
+                            isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
                           }`}
                         >
                           {/* stopPropagation only — the checkbox's own onChange

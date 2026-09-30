@@ -116,9 +116,9 @@ export function StepsBar({
                 borderRadius
               }}
               className={cn(
-                'group absolute inset-0 flex items-center gap-2 py-0 text-left transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00ceff]',
+                'group absolute inset-0 flex items-center gap-2 py-0 text-left transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
                 isActive
-                  ? 'bg-[#172940] dark:bg-[#00ceff]/[0.1]'
+                  ? 'bg-[#172940] dark:bg-nvr-cyan/[0.1]'
                   : hasError
                     ? 'bg-[#fef2f2] hover:bg-red-100/60 dark:bg-red-500/[0.05] dark:hover:bg-red-500/[0.08]'
                     : 'bg-[#f1f5f9] hover:bg-slate-200/70 dark:bg-[#1e293b] dark:hover:bg-white/[0.04]'
@@ -126,7 +126,7 @@ export function StepsBar({
             >
               {/* Cyan top accent — active only */}
               {isActive && (
-                <span className='pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-[#00ceff]' />
+                <span className='pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-nvr-cyan' />
               )}
 
               {/* Step bubble */}
@@ -135,9 +135,9 @@ export function StepsBar({
                   'flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full text-[9px] font-bold leading-none transition-colors duration-100',
                   isActive && 'nvr-state-pulse',
                   isActive
-                    ? 'bg-[#00ceff] text-[#172940]'
+                    ? 'bg-nvr-cyan text-[#172940]'
                     : isDone
-                      ? 'bg-[#00ceff] text-[#172940]'
+                      ? 'bg-nvr-cyan text-[#172940]'
                       : hasError
                         ? 'bg-red-500 text-white'
                         : 'bg-slate-300 text-slate-500 dark:bg-white/[0.12] dark:text-slate-400'
@@ -157,7 +157,7 @@ export function StepsBar({
                 className={cn(
                   'min-w-0 truncate text-[11px] font-semibold leading-none transition-colors duration-100',
                   isActive
-                    ? 'text-white dark:text-[#00ceff]'
+                    ? 'text-white dark:text-nvr-cyan'
                     : isDone
                       ? 'text-slate-400 dark:text-slate-500'
                       : hasError
