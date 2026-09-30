@@ -261,6 +261,7 @@ export {
   useScopeDimensions
 } from './components/pipeline/teamScopes'
 export { BrowserPushCard } from './components/profile/BrowserPushCard'
+export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './lib/view-as'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
 export { StatusPill as SupportStatusPill, TicketDetailSheet } from './components/support/TicketDetailSheet'
@@ -413,6 +414,12 @@ export {
   translateScopeValues,
   useMyScopes
 } from './lib/use-my-scopes'
+export {
+  type PlanGridHost,
+  PlanGridHostContext,
+  type PlanGridRowHistoryArgs,
+  usePlanGridHost
+} from './components/item-edit/PlanGridHost'
 export { useOnlineUsers } from './lib/use-online-users'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'

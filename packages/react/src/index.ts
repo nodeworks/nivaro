@@ -534,3 +534,13 @@ export type {
   UseNivaroFormOptions,
   UseNivaroFormReturn
 } from './types'
+// Record form & grids batch (2026-09-30): people-only user pickers (#732)
+// and the plan grid host slot (#842).
+export {
+  PEOPLE_USER_OPTION_FILTER,
+  type PlanGridHost,
+  PlanGridHostContext,
+  type PlanGridRowHistoryArgs,
+  userOptionFilter,
+  usePlanGridHost
+} from '@nivaro/shared'

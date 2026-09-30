@@ -39,6 +39,7 @@ import {
 } from './CompareSeries'
 import type { GridStatConfig, GridSumCapConfig } from './InlineTableField'
 import { useLiveRows, useO2MStaging } from './O2MStagingContext'
+import { usePlanGridHost } from './PlanGridHost'
 import { RowHistorySheet, type RowRevisionEntry } from './RowHistorySheet'
 import { RowWatchButton } from './RowWatchButton'
 import type { CMSField } from './types'
@@ -871,6 +872,20 @@ export function PlanGridField(props: {
 
   // ── history ─────────────────────────────────────────────────────────────
   const [historyRow, setHistoryRow] = useState<PlanRow | null>(null)
+  // A host with its own history for this collection takes over (#842).
+  const planHost = usePlanGridHost()
+  const hostHistory =
+    historyRow && planHost?.renderRowHistory
+      ? planHost.renderRowHistory({
+          collection: rc,
+          parentId,
+          rowId: historyRow.id,
+          key: historyRow.key,
+          category: historyRow.cat,
+          categoryLabel: (id) => catLabel(String(id)),
+          onClose: () => setHistoryRow(null)
+        })
+      : null
   const { data: revisions = [], isLoading: revLoading } = useQuery<RowRevisionEntry[]>({
     queryKey: ['o2m-row-revisions', rc, historyRow?.id],
     queryFn: () =>
@@ -879,7 +894,7 @@ export function PlanGridField(props: {
           get('/revisions', { collection: rc, item: String(historyRow?.id) })
         )
         .then((r) => r.data ?? []),
-    enabled: !!historyRow?.id,
+    enabled: !!historyRow?.id && hostHistory == null,
     staleTime: 15_000
   })
   const { data: childFields = [] } = useQuery<CMSField[]>({
@@ -1511,7 +1526,8 @@ export function PlanGridField(props: {
         </div>
       )}
 
-      {historyRow && (
+      {hostHistory}
+      {historyRow && hostHistory == null && (
         <RowHistorySheet
           open
           onOpenChange={(o) => {
