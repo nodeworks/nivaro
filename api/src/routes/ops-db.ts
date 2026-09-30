@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { DEAD_COLUMNS } from '../db/dead-columns.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -95,6 +96,33 @@ export async function opsDbRoutes(app: FastifyInstance) {
           status: 'warn',
           detail: `${bad.length} of ${all.length} procedure(s) open a transaction without SET XACT_ABORT ON or a CATCH that rolls back.`,
           blockers: bad.slice(0, 20).map((f) => `${f.procedure}: add SET XACT_ABORT ON after AS`)
+        }
+      }
+    })
+    registerReadinessCheck({
+      id: 'utc-defaults',
+      label: 'Timestamp defaults are UTC',
+      group: 'Configuration',
+      description:
+        'A nivaro_* column defaulting to local GETDATE() stores the server wall clock while the API writes UTC — one column, two clocks (#749). Migration 378 converted every existing one; new migrations use utcNow() from db/dialect.ts.',
+      run: async () => {
+        if (!isMssql(db)) return { status: 'skip', detail: 'Checked on SQL Server only.' }
+        const rows = (await db.raw(`
+          SELECT t.name AS tbl, c.name AS col
+          FROM sys.default_constraints dc
+          JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+          JOIN sys.tables t ON t.object_id = dc.parent_object_id
+          WHERE t.name LIKE 'nivaro[_]%'
+            AND (dc.definition LIKE '%getdate()%' OR dc.definition LIKE '%current_timestamp%' OR dc.definition LIKE '%sysdatetime()%')
+          ORDER BY t.name, c.name`)) as Array<{ tbl: string; col: string }>
+        if (rows.length === 0)
+          return { status: 'pass', detail: 'Every nivaro_* timestamp default is GETUTCDATE().' }
+        return {
+          status: 'warn',
+          detail: `${rows.length} nivaro_* column(s) default to the server's local clock.`,
+          blockers: rows
+            .slice(0, 30)
+            .map((r) => `${r.tbl}.${r.col}: default it to utcNow(knex) / GETUTCDATE()`)
         }
       }
     })

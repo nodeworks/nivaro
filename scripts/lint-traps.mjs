@@ -178,6 +178,15 @@ function checkMigrations() {
   for (const name of readdirSync(dir).filter((f) => /\.ts$/.test(f) && !f.endsWith('.d.ts'))) {
     const file = join(dir, name)
     const text = readFileSync(file, 'utf8')
+    // #749 — knex.fn.now() is the server's LOCAL clock on SQL Server; new
+    // migrations default timestamps with utcNow() from db/dialect.ts.
+    const num = Number.parseInt(name, 10)
+    const now = text.match(/\bfn\.now\(\)/)
+    if (now && num > 378) {
+      const ln = lineOf(text, now.index)
+      if (!suppressed(text.split('\n'), ln - 1))
+        add(file, ln, 'migration-local-now', 'knex.fn.now() defaults to the server LOCAL clock on SQL Server — use utcNow(knex) from db/dialect.ts')
+    }
     const m = text.match(TSQL)
     if (!m || GUARD.test(text) || MIGRATION_BASELINE.has(name)) continue
     add(file, lineOf(text, m.index), 'migration-dialect', `T-SQL (${m[0]}) with no dialect guard — wrap it in \`if (isMssql(knex))\` from db/dialect.ts so a Postgres / MySQL tenant does not fail here`)
