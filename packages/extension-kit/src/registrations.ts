@@ -205,6 +205,10 @@ export interface MachineMarkerSet {
   exact?: string[]
   /** Prefix matches, case-insensitive ("forecast-import:"). */
   prefixes?: string[]
+  /** How row history names each marker ("reforecast" → "Nightly
+   *  reforecast"), keyed by the exact string or prefix above. Unlabelled
+   *  markers read as "Automatic update". */
+  labels?: Record<string, string>
 }
 
 // ─── Readiness, integrity, briefs, links ────────────────────────────────────

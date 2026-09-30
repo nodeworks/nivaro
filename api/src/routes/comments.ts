@@ -258,6 +258,15 @@ export async function commentsRoutes(app: FastifyInstance) {
    * Never editable: these belong to the thing that recorded them. Gated on
    * read permission for the parent collection, same as the comments list.
    */
+  // GET /comments/machine-markers — the comment strings machinery writes
+  // (core + every extension's ctx.notes.registerMachineMarkers), so row
+  // history renders them as provenance instead of quoting them as reasons
+  // (#730). Strings only — nothing record-specific.
+  app.get('/machine-markers', async (_req, reply) => {
+    const { relatedNoteRegistry } = await import('../extensions/related-notes.js')
+    return reply.send({ data: relatedNoteRegistry.describeMarkers() })
+  })
+
   app.get<{ Querystring: { collection?: string; item?: string } }>(
     '/related',
     async (req, reply) => {

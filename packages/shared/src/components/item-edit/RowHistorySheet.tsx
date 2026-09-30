@@ -87,19 +87,30 @@ interface Props {
   restoringAll?: boolean
 }
 
-// Importer / job stamps that ride nivaro_activity.comment. They explain WHERE
-// a version came from, not WHY someone changed it — same list the Notes
-// thread filters (routes/comments.ts isHumanNote).
-const MACHINE_COMMENTS: Record<string, string> = {
-  'legacy-import': 'Imported from the legacy system',
-  reforecast: 'Nightly reforecast',
-  'legacy-state-sync': 'State sync from the legacy system',
-  'natural-key upsert (create matched an existing record)': 'Matched an existing record on import'
+// Importer / job stamps that ride nivaro_activity.comment explain WHERE a
+// version came from, not WHY someone changed it. Which strings those are is
+// declared on the server (core + each extension's registerMachineMarkers) and
+// served by GET /comments/machine-markers (#730) — the same list the Notes
+// thread filters, so a new extension marker never reads as a reason here.
+export interface MachineMarkerSetInfo {
+  owner: string
+  exact: string[]
+  prefixes: string[]
+  labels?: Record<string, string>
 }
-const MACHINE_PREFIXES: Array<[string, string]> = [
-  ['forecast-import:', 'Imported forecast history'],
-  ['invoice-decision:', 'Invoice decision']
-]
+
+export function useMachineMarkers(client: Client): MachineMarkerSetInfo[] {
+  const { data } = useQuery<MachineMarkerSetInfo[]>({
+    queryKey: ['nvr-machine-markers'],
+    queryFn: () =>
+      client
+        .request<{ data: MachineMarkerSetInfo[] }>(get('/comments/machine-markers'))
+        .then((r) => r.data ?? []),
+    staleTime: 10 * 60_000,
+    retry: false
+  })
+  return data ?? []
+}
 
 export function parseImportStamp(
   comment: string | null | undefined
@@ -116,7 +127,10 @@ export function parseImportStamp(
   return { template, fileId: run || !ref ? null : ref, runId: run ? Number(run[1]) : null }
 }
 
-function provenanceOf(comment: string | null | undefined): {
+export function provenanceOf(
+  comment: string | null | undefined,
+  markers: MachineMarkerSetInfo[] = []
+): {
   kind: 'none' | 'machine' | 'reason'
   text: string
   fileId?: string | null
@@ -126,9 +140,12 @@ function provenanceOf(comment: string | null | undefined): {
   const imp = parseImportStamp(t)
   if (imp) return { kind: 'machine', text: `Imported via ${imp.template}`, fileId: imp.fileId }
   const lower = t.toLowerCase()
-  if (MACHINE_COMMENTS[lower]) return { kind: 'machine', text: MACHINE_COMMENTS[lower] }
-  for (const [prefix, label] of MACHINE_PREFIXES)
-    if (lower.startsWith(prefix)) return { kind: 'machine', text: label }
+  for (const set of markers) {
+    if (set.exact.includes(lower))
+      return { kind: 'machine', text: set.labels?.[lower] ?? 'Automatic update' }
+    const prefix = set.prefixes.find((p) => lower.startsWith(p))
+    if (prefix) return { kind: 'machine', text: set.labels?.[prefix] ?? 'Automatic update' }
+  }
   return { kind: 'reason', text: t }
 }
 
@@ -179,6 +196,7 @@ export function RowHistorySheet({
   restoringAll = false
 }: Props) {
   const qc = useQueryClient()
+  const machineMarkers = useMachineMarkers(client)
   const isTimeline = mode === 'timeline'
   const fieldByName = useMemo(() => new Map(fields.map((f) => [f.field, f])), [fields])
   const m2oRelMap = useMemo(() => {
@@ -272,7 +290,7 @@ export function RowHistorySheet({
         who,
         changes,
         snapshot,
-        provenance: provenanceOf(rev.comment),
+        provenance: provenanceOf(rev.comment, machineMarkers),
         row,
         before: prev
       })
@@ -307,7 +325,7 @@ export function RowHistorySheet({
     all.sort((a, b) => b.rev.id - a.rev.id)
     return all
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revisions, orderIndex, parentField, isTimeline, rowLabel])
+  }, [revisions, orderIndex, parentField, isTimeline, rowLabel, machineMarkers])
 
   // Timeline: a Save flushes lines one at a time, so one person's versions
   // landing within a few seconds of each other are ONE event to a reader —
