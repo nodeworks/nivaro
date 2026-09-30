@@ -56,9 +56,11 @@ function normalizeItem(
   seen: Set<string>,
   depth: number
 ): { item: DashboardItem } | { error: string } {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: `${path} must be an object` }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return { error: `${path} must be an object` }
   const r = raw as Record<string, unknown>
-  if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return { error: `${path}.id must be a short id` }
+  if (typeof r.id !== 'string' || !ID_RE.test(r.id))
+    return { error: `${path}.id must be a short id` }
   if (seen.has(r.id)) return { error: `${path}.id "${r.id}" is used twice` }
   seen.add(r.id)
   const kind = r.kind
@@ -121,11 +123,13 @@ function normalizeItem(
  * must serialise under 64 KB.
  */
 export function normalizeDashboardLayout(raw: unknown): Result {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'layout must be an object' }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return { error: 'layout must be an object' }
   const r = raw as Record<string, unknown>
   if (r.version !== 1) return { error: 'layout.version must be 1' }
   if (!Array.isArray(r.items)) return { error: 'layout.items must be a list' }
-  if (r.items.length > MAX_TOP_ITEMS) return { error: `layout holds more than ${MAX_TOP_ITEMS} items` }
+  if (r.items.length > MAX_TOP_ITEMS)
+    return { error: `layout holds more than ${MAX_TOP_ITEMS} items` }
   const seen = new Set<string>()
   const items: DashboardItem[] = []
   for (let i = 0; i < r.items.length; i++) {
@@ -133,7 +137,8 @@ export function normalizeDashboardLayout(raw: unknown): Result {
     if ('error' in it) return { error: it.error }
     items.push(it.item)
   }
-  if (seen.size > MAX_TOTAL_ITEMS) return { error: `layout holds more than ${MAX_TOTAL_ITEMS} items` }
+  if (seen.size > MAX_TOTAL_ITEMS)
+    return { error: `layout holds more than ${MAX_TOTAL_ITEMS} items` }
   const layout: DashboardLayout = { version: 1, items }
   if (JSON.stringify(layout).length > DASHBOARD_LAYOUT_MAX_BYTES)
     return { error: 'layout is larger than 64 KB' }
@@ -148,7 +153,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  */
 export function normalizeDashboardRoleDefaults(
   raw: unknown
-): { map: Record<string, DashboardLayout>; error?: undefined } | { error: string; map?: undefined } {
+):
+  | { map: Record<string, DashboardLayout>; error?: undefined }
+  | { error: string; map?: undefined } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
     return { error: 'dashboard_role_defaults must be an object keyed by role id' }
   const entries = Object.entries(raw as Record<string, unknown>)

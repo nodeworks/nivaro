@@ -56,9 +56,9 @@ describe('normalizeDashboardLayout', () => {
   })
 
   it('refuses an item that runs past the last column', () => {
-    expect(normalizeDashboardLayout({ version: 1, items: [widget('a', { x: 6, w: 8 })] }).error).toMatch(
-      /past the last column/
-    )
+    expect(
+      normalizeDashboardLayout({ version: 1, items: [widget('a', { x: 6, w: 8 })] }).error
+    ).toMatch(/past the last column/)
   })
 
   it('refuses a duplicate id anywhere in the tree', () => {
@@ -91,9 +91,9 @@ describe('normalizeDashboardLayout', () => {
   })
 
   it('refuses a widget without a key and a bad version', () => {
-    expect(normalizeDashboardLayout({ version: 1, items: [widget('a', { key: '' })] }).error).toMatch(
-      /name a widget/
-    )
+    expect(
+      normalizeDashboardLayout({ version: 1, items: [widget('a', { key: '' })] }).error
+    ).toMatch(/name a widget/)
     expect(normalizeDashboardLayout({ version: 2, items: [] }).error).toMatch(/version/)
   })
 
@@ -146,7 +146,8 @@ describe('widget titles (#1044)', () => {
   })
   it('refuses a title that is not text', () => {
     expect(
-      normalizeDashboardLayout({ version: 1, items: [widget('a', { key: 'rp:12', title: 5 })] }).error
+      normalizeDashboardLayout({ version: 1, items: [widget('a', { key: 'rp:12', title: 5 })] })
+        .error
     ).toMatch(/title must be text/)
   })
 })
