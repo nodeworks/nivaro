@@ -20,6 +20,10 @@ const RUN_ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 
 const svc = vi.hoisted(() => ({
   isAvailable: vi.fn(() => true),
+  promoteAvailable: vi.fn(() => false),
+  promoteCandidates: vi.fn(async () => []),
+  validatePromoteBody: () => ({ ok: false, error: 'x' }),
+  runtime: { promotePath: () => 'promote.mjs' },
   currentRun: vi.fn(async () => null),
   listRuns: vi.fn(async () => []),
   readRun: vi.fn(async (): Promise<unknown> => null),
@@ -209,5 +213,37 @@ describe('release routes', () => {
     expect(
       (await app.inject({ method: 'POST', url: `/release/runs/${RUN_ID}/cancel` })).statusCode
     ).toBe(404)
+  })
+
+  it('promotion answers 404 without a production block, and needs the version typed back', async () => {
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/release/promote', payload: { version: '1.2.3' } })
+    expect(r.statusCode).toBe(404)
+
+    svc.promoteAvailable.mockReturnValue(true)
+    ;(svc as Record<string, unknown>).validatePromoteBody = () => ({
+      ok: true,
+      version: '1.2.3',
+      args: ['--go', '--events', '--version', '1.2.3']
+    })
+    const { releaseRunsRoutes: routes } = await import('../../../routes/release-runs.js')
+    const app2 = Fastify()
+    await app2.register(routes, { prefix: '/release' })
+    const miss = await app2.inject({
+      method: 'POST',
+      url: '/release/promote',
+      payload: { version: '1.2.3', confirm: '1.2.2' }
+    })
+    expect(miss.statusCode).toBe(400)
+    expect(svc.startRun).not.toHaveBeenCalled()
+    svc.startRun.mockResolvedValueOnce({ id: 'p1', started_by: 'admin-1' })
+    const ok = await app2.inject({
+      method: 'POST',
+      url: '/release/promote',
+      payload: { version: '1.2.3', confirm: '1.2.3' }
+    })
+    expect(ok.statusCode).toBe(201)
+    expect(svc.startRun).toHaveBeenCalledWith(expect.objectContaining({ mode: 'promote' }))
+    svc.promoteAvailable.mockReturnValue(false)
   })
 })

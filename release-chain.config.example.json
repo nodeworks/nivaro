@@ -3,19 +3,52 @@
   "workflows_repo": "your-org/your-public-mirror",
   "image": "your-namespace/nivaro",
   "frontends": [
-    { "name": "portal", "path": "~/code/portal", "branch": "main", "build": "build" }
+    {
+      "name": "portal",
+      "path": "~/code/portal",
+      "branch": "main",
+      "build": "build"
+    }
   ],
   "deployments": [
     {
       "name": "staging",
       "path": "~/code/staging-deploy",
       "branch": "main",
-      "prepare": ["bash scripts/sync-extension.sh", "pnpm build"],
-      "commit_paths": ["src/extensions"]
+      "prepare": [
+        "bash scripts/sync-extension.sh",
+        "pnpm build"
+      ],
+      "commit_paths": [
+        "src/extensions"
+      ]
     }
   ],
   "verify": [
-    { "name": "staging api", "url": "https://staging.example.com/api/version", "field": "version" },
-    { "name": "staging frontend", "url": "https://staging.example.com/version.json", "field": "version", "expect": "frontend:portal" }
-  ]
+    {
+      "name": "staging api",
+      "url": "https://staging.example.com/api/version",
+      "field": "version"
+    },
+    {
+      "name": "staging frontend",
+      "url": "https://staging.example.com/version.json",
+      "field": "version",
+      "expect": "frontend:portal"
+    }
+  ],
+  "production": {
+    "name": "production",
+    "path": "~/code/staging-deploy",
+    "source_branch": "main",
+    "branch": "production",
+    "pin_file": ".docker/nivaro-version",
+    "verify": [
+      {
+        "name": "production api",
+        "url": "https://app.example.com/api/version",
+        "field": "version"
+      }
+    ]
+  }
 }

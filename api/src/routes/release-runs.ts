@@ -9,12 +9,16 @@ import {
   isAvailable,
   listRuns,
   parseEvents,
+  promoteAvailable,
+  promoteCandidates,
   RunLockedError,
   type RunSummary,
   readLogChunk,
   readRun,
   runPlan,
+  runtime,
   startRun,
+  validatePromoteBody,
   validateStartBody
 } from '../services/release-runs.js'
 
@@ -63,8 +67,56 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
     const named = await withStarterNames(current ? [current, ...runs] : runs)
     return {
       available: true,
+      promote_available: promoteAvailable(),
       current: current ? named[0] : null,
       runs: current ? named.slice(1) : named
+    }
+  })
+
+  // ── Production target (#722) ──────────────────────────────────────────────
+  // Promotion moves a version staging already verified; it never builds.
+
+  app.get('/promote/candidates', async (_req, reply) => {
+    if (!available() || !promoteAvailable()) return reply.code(404).send(UNAVAILABLE)
+    return { candidates: await promoteCandidates() }
+  })
+
+  app.post('/promote/plan', async (req, reply) => {
+    if (!available() || !promoteAvailable()) return reply.code(404).send(UNAVAILABLE)
+    const v = validatePromoteBody(req.body)
+    if (!v.ok) return reply.code(400).send({ error: v.error })
+    const r = await runPlan(90_000, runtime.promotePath(), ['--version', v.version])
+    if (r.timedOut)
+      return reply.code(502).send({ error: 'promotion plan timed out', log_tail: tail(r.log) })
+    if (!r.plan)
+      return reply.code(502).send({ error: 'promotion plan failed', log_tail: tail(r.log) })
+    return { plan: r.plan, log_tail: tail(r.log) }
+  })
+
+  app.post('/promote', async (req, reply) => {
+    if (!available() || !promoteAvailable()) return reply.code(404).send(UNAVAILABLE)
+    const v = validatePromoteBody(req.body)
+    if (!v.ok) return reply.code(400).send({ error: v.error })
+    const b = req.body as { confirm?: unknown }
+    // The version typed back — promoting production is never a single click.
+    if (b?.confirm !== v.version)
+      return reply.code(400).send({ error: 'type the version to confirm the promotion' })
+    const user = req.user!.id
+    try {
+      const run = await startRun({ mode: 'promote', args: v.args, user })
+      await logActivity({
+        action: 'release-promote-start',
+        user,
+        collection: 'release',
+        item: run.id,
+        comment: `promote ${v.version} to production`,
+        req
+      })
+      return reply.code(201).send({ run })
+    } catch (err) {
+      if (err instanceof RunLockedError)
+        return reply.code(409).send({ error: err.message, current: err.current ?? null })
+      throw err
     }
   })
 
@@ -87,7 +139,7 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
     // A resume continues the newest run, and only when that run failed: resuming
     // an older failure would re-run stages a later release already changed.
     if (v.args.includes('--from')) {
-      const [newest] = await listRuns(1)
+      const [newest] = (await listRuns(10)).filter((r) => r.mode !== 'promote')
       if (newest?.state !== 'failed')
         return reply.code(409).send({ error: 'only the newest run can be resumed' })
     }

@@ -14,11 +14,15 @@ const STAGES = [
   'deployments',
   'verify'
 ] as const
-type Stage = (typeof STAGES)[number]
+/** scripts/promote-production.mjs (#722). */
+const PROMOTE_STAGES = ['check', 'push', 'verify'] as const
+type Stage = (typeof STAGES)[number] | (typeof PROMOTE_STAGES)[number]
+/** Every stage either script can report, for the stage map. */
+const ALL_STAGES: readonly Stage[] = [...STAGES, 'check', 'push']
 
 interface RunSummary {
   id: string
-  mode: 'plan' | 'go'
+  mode: 'plan' | 'go' | 'promote'
   args: string[]
   started_at: string
   started_by: string
@@ -57,8 +61,8 @@ type StageStatus = 'pending' | 'running' | 'ok' | 'failed' | 'skipped' | 'cancel
 /** Pure: the stage the chain was in last — the newest one started and not finished. */
 export function lastRunningStage(events: StageEvent[]): Stage | null {
   const s = stageStates(events)
-  for (let i = STAGES.length - 1; i >= 0; i--)
-    if (s[STAGES[i]].status === 'running') return STAGES[i]
+  for (let i = ALL_STAGES.length - 1; i >= 0; i--)
+    if (s[ALL_STAGES[i]].status === 'running') return ALL_STAGES[i]
   return null
 }
 
@@ -71,10 +75,9 @@ export function stageStates(
   events: StageEvent[],
   runState?: RunSummary['state']
 ): Record<Stage, { status: StageStatus; detail?: string }> {
-  const out = Object.fromEntries(STAGES.map((s) => [s, { status: 'pending' as const }])) as Record<
-    Stage,
-    { status: StageStatus; detail?: string }
-  >
+  const out = Object.fromEntries(
+    ALL_STAGES.map((s) => [s, { status: 'pending' as const }])
+  ) as Record<Stage, { status: StageStatus; detail?: string }>
   for (const e of events) {
     const cur = out[e.stage]
     if (e.status === 'start') out[e.stage] = { status: 'running' }
@@ -98,7 +101,8 @@ export function interruptionLine(state: RunSummary['state'], stage: Stage | null
       : 'Process ended without a result — check the log.'
   if (state !== 'cancelled') return null
   if (!stage) return 'Cancelled before any stage started'
-  return STAGES.indexOf(stage) >= STAGES.indexOf('publish')
+  const pushes = new Set<Stage>(['publish', 'artifacts', 'frontends', 'deployments', 'push'])
+  return pushes.has(stage)
     ? `Cancelled during ${stage} — ${stage} may already have pushed`
     : `Cancelled during ${stage}`
 }
@@ -162,9 +166,12 @@ export function ReleaseCard() {
     queryKey: ['release-status'],
     queryFn: () =>
       api
-        .get<{ available: boolean; current: RunSummary | null; runs: RunSummary[] }>(
-          '/release/status'
-        )
+        .get<{
+          available: boolean
+          promote_available?: boolean
+          current: RunSummary | null
+          runs: RunSummary[]
+        }>('/release/status')
         .then((r) => r.data),
     refetchInterval: (q) => (q.state.data?.current ? 5_000 : 60_000)
   })
@@ -369,6 +376,7 @@ export function ReleaseCard() {
                   className='underline-offset-2 hover:underline'
                   onClick={() => openRun(r.id)}
                 >
+                  {r.mode === 'promote' ? 'production · ' : ''}
                   {r.state}
                   {r.version ? ` · ${r.version}` : ''}
                   {r.failed_stage ? ` at ${r.failed_stage}` : ''} · {formatRelative(r.started_at)} ·{' '}
@@ -379,7 +387,186 @@ export function ReleaseCard() {
           </ul>
         </details>
       )}
+
+      {status.data.promote_available && (
+        <ProductionTarget busy={busy} onStarted={(id) => openRun(id)} />
+      )}
     </section>
+  )
+}
+
+interface PromotePlan {
+  version: string
+  target: string
+  production_version: string | null
+  staging_now: boolean
+  verified_by_run: boolean
+  source_commit: { hash: string; subject: string } | null
+  image_on_registry: boolean | null
+  migrations: string[]
+  pin_file: string
+  branch: string
+  blockers: string[]
+  lines: Array<{ stage: string; text: string }>
+}
+
+/**
+ * #722 — move a version staging already verified to production: pick one,
+ * read the plan (what production runs now, migrations that will run at boot,
+ * anything that blocks), type the version back, promote. The script never
+ * builds anything; it pins and pushes the production branch.
+ */
+function ProductionTarget({ busy, onStarted }: { busy: boolean; onStarted: (id: string) => void }) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [version, setVersion] = useState<string | null>(null)
+  const [plan, setPlan] = useState<PromotePlan | null>(null)
+  const [typed, setTyped] = useState('')
+  const candidates = useQuery({
+    queryKey: ['release-promote-candidates'],
+    enabled: open,
+    queryFn: () =>
+      api
+        .get<{ candidates: Array<{ version: string; at: string }> }>('/release/promote/candidates')
+        .then((r) => r.data.candidates)
+  })
+  const planMut = useMutation({
+    mutationFn: (v: string) =>
+      api
+        .post<{ plan: PromotePlan }>('/release/promote/plan', { version: v })
+        .then((r) => r.data.plan),
+    onMutate: () => {
+      setPlan(null)
+      setTyped('')
+    },
+    onSuccess: setPlan,
+    onError: (e: ApiError) => toast.error(e.response?.data?.error ?? 'Could not plan the promotion')
+  })
+  const go = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ run: RunSummary }>('/release/promote', { version: plan?.version, confirm: typed })
+        .then((r) => r.data.run),
+    onSuccess: (run) => {
+      setPlan(null)
+      setTyped('')
+      onStarted(run.id)
+      void qc.invalidateQueries({ queryKey: ['release-status'] })
+    },
+    onError: (e: ApiError) =>
+      toast.error(e.response?.data?.error ?? 'Could not start the promotion')
+  })
+  const blocked = !plan || plan.blockers.length > 0
+  return (
+    <div className='mt-3 border-t border-slate-100 pt-3 dark:border-border' data-release-production>
+      <button
+        type='button'
+        className='text-[12.5px] font-medium text-slate-700 hover:text-slate-900 dark:text-slate-200'
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        data-release-production-toggle
+      >
+        {open ? '▾' : '▸'} Promote to production
+      </button>
+      {open && (
+        <div className='mt-2 space-y-2 text-[12px]'>
+          <p className='text-slate-500 dark:text-muted-foreground'>
+            Pick a version a release run verified on staging. Nothing is built: the production
+            branch of the deployment repository is pinned to that image and pushed.
+          </p>
+          {candidates.isLoading ? (
+            <div className='h-7 w-64 animate-pulse rounded bg-muted' />
+          ) : (candidates.data ?? []).length === 0 ? (
+            <p className='text-slate-500' data-release-production-empty>
+              No release run has verified a version on staging yet.
+            </p>
+          ) : (
+            <div className='flex flex-wrap gap-1.5' data-release-production-candidates>
+              {(candidates.data ?? []).map((c) => (
+                <Button
+                  key={c.version}
+                  size='sm'
+                  variant={version === c.version ? 'default' : 'outline'}
+                  aria-pressed={version === c.version}
+                  onClick={() => {
+                    setVersion(c.version)
+                    planMut.mutate(c.version)
+                  }}
+                  data-release-production-candidate={c.version}
+                  title={`verified ${formatRelative(c.at)}`}
+                >
+                  {c.version}
+                </Button>
+              ))}
+            </div>
+          )}
+          {planMut.isPending && (
+            <p className='text-slate-500' data-release-production-planning>
+              Checking the registry, staging and production…
+            </p>
+          )}
+          {plan && (
+            <div
+              className='rounded-lg border border-slate-200 p-3 dark:border-border'
+              data-release-production-plan
+            >
+              <p>
+                Production runs{' '}
+                <span className='font-medium'>{plan.production_version ?? '(unreachable)'}</span> →{' '}
+                <span className='font-medium'>{plan.version}</span> on {plan.target}
+              </p>
+              {plan.migrations.length > 0 && (
+                <p
+                  className='mt-1 text-amber-700 dark:text-amber-300'
+                  data-release-production-migrations
+                >
+                  {plan.migrations.length} migration(s) will run at production boot:{' '}
+                  {plan.migrations.map((m) => m.split('/').pop()).join(', ')}
+                </p>
+              )}
+              <ul className='mt-2 space-y-0.5 text-slate-600 dark:text-muted-foreground'>
+                {plan.lines.map((l, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: plan lines repeat stages
+                  <li key={`${l.stage}-${i}`}>
+                    <span className='font-mono text-slate-400'>{l.stage}</span> · {l.text}
+                  </li>
+                ))}
+              </ul>
+              {plan.blockers.length > 0 ? (
+                <ul
+                  className='mt-2 space-y-0.5 text-rose-700 dark:text-rose-300'
+                  data-release-production-blockers
+                >
+                  {plan.blockers.map((b) => (
+                    <li key={b}>Blocked: {b}</li>
+                  ))}
+                </ul>
+              ) : (
+                <div className='mt-3 flex flex-wrap items-center gap-2'>
+                  <label className='flex items-center gap-1.5'>
+                    Type <span className='font-mono'>{plan.version}</span> to promote
+                    <input
+                      value={typed}
+                      onChange={(e) => setTyped(e.target.value)}
+                      className='h-7 w-24 rounded border border-slate-300 bg-white px-1.5 font-mono text-[12px] dark:border-border dark:bg-background'
+                      data-release-production-confirm-input
+                    />
+                  </label>
+                  <Button
+                    size='sm'
+                    onClick={() => go.mutate()}
+                    disabled={busy || blocked || typed !== plan.version || go.isPending}
+                    data-release-production-go
+                  >
+                    Promote {plan.version}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -460,7 +647,12 @@ function RunView({
   return (
     <div className='mt-3' data-release-run={id} data-release-run-state={run?.state}>
       <div className='flex flex-wrap items-center gap-1.5'>
-        {STAGES.map((s) => (
+        {run?.mode === 'promote' && (
+          <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
+            Production:
+          </span>
+        )}
+        {(run?.mode === 'promote' ? PROMOTE_STAGES : STAGES).map((s) => (
           <span
             key={s}
             className={cn('rounded-full border px-2 py-0.5 text-[11px]', tone[stages[s].status])}
@@ -508,7 +700,7 @@ function RunView({
           ))}
         {run?.state === 'failed' && run.failed_stage && (
           <>
-            {canResume ? (
+            {canResume && run.mode !== 'promote' ? (
               <Button
                 size='sm'
                 onClick={() => onResume(run)}

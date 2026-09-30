@@ -8,7 +8,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,12 +22,14 @@ export const STAGES = [
   'deployments',
   'verify'
 ] as const
-export type Stage = (typeof STAGES)[number]
+/** scripts/promote-production.mjs — the production target (#722). */
+export const PROMOTE_STAGES = ['check', 'push', 'verify'] as const
+export type Stage = (typeof STAGES)[number] | (typeof PROMOTE_STAGES)[number]
 export type Outcome = 'done' | 'failed' | 'cancelled' | 'lost'
 
 export interface RunRecord {
   id: string
-  mode: 'plan' | 'go'
+  mode: 'plan' | 'go' | 'promote'
   args: string[]
   pid: number
   started_at: string
@@ -63,7 +65,8 @@ export interface RunSummary extends RunRecord {
 
 const BUMPS = new Set(['patch', 'minor', 'major'])
 const isStage = (s: unknown): s is Stage =>
-  typeof s === 'string' && (STAGES as readonly string[]).includes(s)
+  typeof s === 'string' &&
+  ((STAGES as readonly string[]).includes(s) || (PROMOTE_STAGES as readonly string[]).includes(s))
 
 export function parseEvents(log: string): {
   events: StageEvent[]
@@ -93,7 +96,7 @@ export function parseEvents(log: string): {
 export function markerOutcome(
   log: string
 ): { outcome: Outcome; failed_stage?: Stage; version?: string } | null {
-  const done = log.match(/^### DONE — nivaro (\S+)/m)
+  const done = log.match(/^### DONE — (?:nivaro|promoted) (\S+)/m)
   if (done) return { outcome: 'done', version: done[1] }
   const failed = log.match(/^### FAILED (?:at (\w+)|before starting)/m)
   if (failed)
@@ -153,11 +156,12 @@ export function repoRoot(): string {
 export const runtime = {
   runsDir: (): string => join(repoRoot(), '.release-runs'),
   scriptPath: (): string => join(repoRoot(), 'scripts', 'release-chain.mjs'),
+  promotePath: (): string => join(repoRoot(), 'scripts', 'promote-production.mjs'),
   /** A pid can be reused after a reboot: only trust it when the process is ours. */
   isOurProcess: (pid: number, _startedAt: string): boolean => {
     try {
       const cmd = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
-      return cmd.includes('release-chain.mjs')
+      return cmd.includes('release-chain.mjs') || cmd.includes('promote-production.mjs')
     } catch {
       return false
     }
@@ -311,7 +315,7 @@ export async function currentRun(): Promise<RunSummary | null> {
 }
 
 export async function startRun(opts: {
-  mode: 'go'
+  mode: 'go' | 'promote'
   args: string[]
   user: string
 }): Promise<RunRecord> {
@@ -334,7 +338,8 @@ export async function startRun(opts: {
     const fd = openSync(log, 'a')
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(process.execPath, [runtime.scriptPath(), ...opts.args], {
+      const script = opts.mode === 'promote' ? runtime.promotePath() : runtime.scriptPath()
+      child = spawn(process.execPath, [script, ...opts.args], {
         cwd: repoRoot(),
         detached: true,
         stdio: ['ignore', fd, fd],
@@ -364,14 +369,51 @@ export async function startRun(opts: {
   }
 }
 
-export async function runPlan(timeoutMs = 60_000): Promise<{
+/** The production target is configured: a `production` block in the config. */
+export function promoteAvailable(): boolean {
+  try {
+    const cfg = JSON.parse(
+      readFileSync(join(dirname(runtime.runsDir()), 'release-chain.config.json'), 'utf8')
+    ) as { production?: unknown }
+    return !!cfg.production && existsSync(runtime.promotePath())
+  } catch {
+    return false
+  }
+}
+
+export function validatePromoteBody(
+  body: unknown
+): { ok: true; version: string; args: string[] } | { ok: false; error: string } {
+  const v = (body as { version?: unknown } | null)?.version
+  if (typeof v !== 'string' || !/^\d+\.\d+\.\d+$/.test(v))
+    return { ok: false, error: 'version must look like 1.2.3' }
+  return { ok: true, version: v, args: ['--go', '--events', '--version', v] }
+}
+
+/** Versions a finished, verified release run took to staging — the candidates. */
+export async function promoteCandidates(): Promise<Array<{ version: string; at: string }>> {
+  const runs = await listRuns(40)
+  const seen = new Set<string>()
+  const out: Array<{ version: string; at: string }> = []
+  for (const r of runs) {
+    if (r.mode !== 'go' || r.state !== 'done' || !r.version || r.args.includes('--skip-verify'))
+      continue
+    if (seen.has(r.version)) continue
+    seen.add(r.version)
+    out.push({ version: r.version, at: r.finished_at ?? r.started_at })
+    if (out.length >= 8) break
+  }
+  return out
+}
+
+export async function runPlan(timeoutMs = 60_000, script?: string, args: string[] = []): Promise<{
   plan: Record<string, unknown> | null
   log: string
   ok: boolean
   timedOut?: boolean
 }> {
   return new Promise((resolvePlan) => {
-    const child = spawn(process.execPath, [runtime.scriptPath(), '--events'], {
+    const child = spawn(process.execPath, [script ?? runtime.scriptPath(), '--events', ...args], {
       cwd: repoRoot(),
       stdio: ['ignore', 'pipe', 'pipe'],
       env: childEnv()
