@@ -2,6 +2,7 @@ import {
   AutofillRunsChip,
   ForceReloadBanner,
   parseThemeAccents,
+  registerViewAsOpener,
   resolveAccentColor,
   rumRouteChange,
   setDisplayTimezone,
@@ -47,9 +48,9 @@ import {
   HeartPulse,
   House,
   Inbox,
-  LifeBuoy,
   KeyRound,
   LayoutGrid,
+  LifeBuoy,
   Link2,
   ListFilter,
   ListOrdered,
@@ -156,6 +157,7 @@ import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
 import { useT } from '@/lib/i18n'
+import { openViewAsTab, readMasquerade, stopMasquerade } from '@/lib/masquerade'
 import { usePagePresence } from '@/lib/use-page-presence'
 import { captureErrorClip, useSessionRecorder } from '@/lib/use-session-recorder'
 import { useSettings } from '@/lib/useSettings'
@@ -716,6 +718,8 @@ export function AppLayout() {
   usePagePresence()
   useSessionRecorder()
   const { user, refetch: refetchAuth } = useAuth()
+  // "View as" on a person's page (#640) opens a new tab as them.
+  useEffect(() => registerViewAsOpener(openViewAsTab), [])
   const { data: settings } = useSettings()
   useQuery({
     queryKey: ['health'],
@@ -970,6 +974,7 @@ export function AppLayout() {
               `/changelog?since=${encodeURIComponent(u.from ?? '')}&to=${encodeURIComponent(u.version)}`
             }
           />
+          <ViewAsBar />
           <DevStaleBanner />
           <RecorderBadge />
           <SessionExpiryWatcher />
@@ -1428,5 +1433,36 @@ function AutofillChips() {
     <AutofillRunsChip
       onOpen={(run) => navigate(`/collections/${run.collection}/new?autofill=${run.id}`)}
     />
+  )
+}
+
+/** The amber bar of a "View as" tab (#640): who this tab is, and the way out. */
+function ViewAsBar() {
+  const m = readMasquerade()
+  const [leaving, setLeaving] = useState(false)
+  if (!m) return null
+  return (
+    <div
+      data-view-as-bar
+      role='status'
+      className='flex shrink-0 items-center gap-3 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-[12.5px] text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100'
+    >
+      <span>
+        Viewing as <b>{m.name || 'another person'}</b> in this tab. Everything here is what they see
+        and can do; your other tabs are still you.
+      </span>
+      <button
+        type='button'
+        data-view-as-stop
+        disabled={leaving}
+        onClick={() => {
+          setLeaving(true)
+          void stopMasquerade()
+        }}
+        className='ml-auto h-7 rounded-md border border-amber-400 px-2.5 text-[12px] font-semibold hover:bg-amber-200 disabled:opacity-60 dark:border-amber-500/50 dark:hover:bg-amber-500/25'
+      >
+        {leaving ? 'Leaving…' : 'Stop viewing as'}
+      </button>
+    </div>
   )
 }

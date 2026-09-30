@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { UsersBulkBar } from '@/components/users-bulk-bar'
 import { api, type User } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { formatNumber, formatRelative } from '@/lib/utils'
@@ -84,6 +85,9 @@ export function UsersPage() {
   const [showInactive, setShowInactive] = useState(false)
   const [showDelegation, setShowDelegation] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  // #641 — selection survives paging and filtering, so a cleanup can be built
+  // across several pages before one bulk action runs.
+  const [selected, setSelected] = useState<Map<string, { id: string; name: string }>>(new Map())
 
   const { data, isLoading } = useQuery({
     queryKey: ['users', page, search, sort, statusFilter, directoryFilter],
@@ -255,7 +259,52 @@ export function UsersPage() {
     })
   }
 
+  const nameOf = (u: User) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+  const pageAllSelected = users.length > 0 && users.every((u) => selected.has(u.id))
+  const toggle = (u: User) =>
+    setSelected((prev) => {
+      const next = new Map(prev)
+      if (next.has(u.id)) next.delete(u.id)
+      else next.set(u.id, { id: u.id, name: nameOf(u) })
+      return next
+    })
   const columns: Column<User>[] = [
+    {
+      key: '__select__',
+      header: (
+        <input
+          type='checkbox'
+          aria-label='Select everyone on this page'
+          data-users-select-page
+          checked={pageAllSelected}
+          onChange={() =>
+            setSelected((prev) => {
+              const next = new Map(prev)
+              for (const u of users) {
+                if (pageAllSelected) next.delete(u.id)
+                else next.set(u.id, { id: u.id, name: nameOf(u) })
+              }
+              return next
+            })
+          }
+        />
+      ),
+      sortable: false,
+      className: 'w-8',
+      render: (user) => (
+        // biome-ignore lint/a11y/noStaticElementInteractions: stops the row click; the checkbox is the control
+        // biome-ignore lint/a11y/useKeyWithClickEvents: same — keyboard reaches the checkbox itself
+        <span onClick={(e) => e.stopPropagation()}>
+          <input
+            type='checkbox'
+            aria-label={`Select ${nameOf(user)}`}
+            data-users-select={user.id}
+            checked={selected.has(user.id)}
+            onChange={() => toggle(user)}
+          />
+        </span>
+      )
+    },
     {
       key: 'name',
       header: 'User',
@@ -493,6 +542,7 @@ export function UsersPage() {
       <div className='p-8'>
         {showInactive && <InactiveUserReport />}
         {showDelegation && <DelegationChains />}
+        <UsersBulkBar selected={selected} roles={roles} onClear={() => setSelected(new Map())} />
         <DataTable
           columns={columns}
           rows={users}

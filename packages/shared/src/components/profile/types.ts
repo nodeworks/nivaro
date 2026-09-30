@@ -54,6 +54,8 @@ export interface PersonProfile {
   seat_count: number
   scopes: Array<{ dimension: string; label: string; values: string[] }>
   open_tasks: number
+  /** When they are usually around (UTC hours, 10th–90th percentile of their actions). */
+  typical_hours_utc?: { start: number; end: number; samples: number } | null
   admin: {
     account_kind: string | null
     city: string | null

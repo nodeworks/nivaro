@@ -90,7 +90,29 @@ export async function queuesRoutes(app: FastifyInstance) {
       })
       .orderBy('created_at', 'asc')) as QueueRow[]
 
-    return reply.send({ data: rows.map(formatQueue) })
+    // Which collections each queue reads — lets a caller pick "a queue that
+    // holds these records" (the profile's Working on → Open in queue, #638).
+    const sourceRows = rows.length
+      ? ((await db('nivaro_queue_sources')
+          .whereIn(
+            'queue_id',
+            rows.map((r) => r.id)
+          )
+          .where('type', 'collection')
+          .select('queue_id', 'collection')) as Array<{ queue_id: string; collection: string }>)
+      : []
+    const byQueue = new Map<string, Set<string>>()
+    for (const r of sourceRows) {
+      const k = String(r.queue_id).toUpperCase()
+      if (!byQueue.has(k)) byQueue.set(k, new Set())
+      byQueue.get(k)!.add(r.collection)
+    }
+    return reply.send({
+      data: rows.map((r) => ({
+        ...formatQueue(r),
+        source_collections: [...(byQueue.get(String(r.id).toUpperCase()) ?? [])]
+      }))
+    })
   })
 
   // GET /:id — single queue + its sources

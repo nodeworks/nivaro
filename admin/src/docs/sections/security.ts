@@ -307,6 +307,11 @@ Authorization: Bearer <nvm_-token>
 → 200 { "ok": true }
 → 400 { "error": "Not a masquerade session" }`
     },
+    { type: 'h3', text: 'View as, from a person’s page' },
+    {
+      type: 'p',
+      text: 'The admin app’s "View as" button (People page → header) mints a token and opens a new tab on it. The token lives only in that tab’s sessionStorage and rides every request as a bearer, so the admin’s other tabs stay the admin; an amber bar names the person and "Stop viewing as" revokes the token and closes the tab. See People page tools.'
+    },
     {
       type: 'warn',
       text: 'A masquerade token carries the target user’s full permissions — including admin, if the target is an admin. Tokens live in Redis under `masq:<token>`; restarting Redis revokes all active masquerades.'

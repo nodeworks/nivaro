@@ -379,7 +379,11 @@ import {
   storageProviders
 } from './sections/storage.js'
 import { summaryMode } from './sections/summary-mode.js'
-import { managersTeamGuide, teamThroughputGuide } from './sections/team-throughput.js'
+import {
+  managersTeamGuide,
+  peoplePageGuide,
+  teamThroughputGuide
+} from './sections/team-throughput.js'
 import {
   orgChartView,
   treeInheritedFields,
@@ -607,6 +611,7 @@ export const navSections: NavGroup[] = [
       dataIntegrityGuide,
       teamThroughputGuide,
       managersTeamGuide,
+      peoplePageGuide,
       anomalyDetection,
       smtpConfig,
       smsConfig,

@@ -1,7 +1,11 @@
-import { Building2, Clock, Mail, MapPin, MessageSquare, Phone, Video } from 'lucide-react'
+import { Building2, Clock, Eye, Mail, MapPin, MessageSquare, Phone, Video } from 'lucide-react'
+import { useState } from 'react'
+import { toast } from 'sonner'
 import { cn, formatRelative } from '../../lib/utils'
+import { canViewAs, viewAs } from '../../lib/view-as'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { UserAvatar } from '../UserAvatar'
+import { BestTimeChip } from './BestTime'
 import { NotifyButton } from './PersonExtras'
 import { PersonChip, Pill, personInitials } from './primitives'
 import type { PersonProfile } from './types'
@@ -160,6 +164,8 @@ export function PersonHeader({
             </span>
           </div>
 
+          <BestTimeChip profile={p} />
+
           {p.manager ? (
             <div className='mt-2 flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400'>
               <span>Reports to</span>
@@ -191,6 +197,9 @@ export function PersonHeader({
         {/* Reach out — the three doors, always in the same place. */}
         <div className='flex shrink-0 flex-wrap items-center gap-2 self-start' data-person-actions>
           {isAdmin && <NotifyButton profile={p} />}
+          {isAdmin && canViewAs() && p.status === 'active' && !p.admin?.is_redacted && (
+            <ViewAsButton profile={p} />
+          )}
           <a
             href={`mailto:${p.email}`}
             className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
@@ -218,5 +227,36 @@ export function PersonHeader({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * #640 — open the app as this person in a new tab. The host decides how
+ * (the admin mints a masquerade token that lives only in that tab); the
+ * request is activity-logged server-side under the admin's name.
+ */
+function ViewAsButton({ profile: p }: { profile: PersonProfile }) {
+  const [busy, setBusy] = useState(false)
+  const first = p.first_name ?? p.name
+  return (
+    <button
+      type='button'
+      data-person-view-as
+      disabled={busy}
+      data-tip={`See the app exactly as ${first} does. Recorded in the activity log under your name.`}
+      onClick={async () => {
+        setBusy(true)
+        try {
+          await viewAs({ id: p.id, name: p.name })
+        } catch (err) {
+          toast.error((err as Error)?.message || `Could not open the app as ${first}`)
+        } finally {
+          setBusy(false)
+        }
+      }}
+      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-amber-300 px-3 text-[12px] font-medium text-amber-800 transition-colors hover:bg-amber-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 dark:border-amber-500/40 dark:text-amber-200 dark:hover:bg-amber-500/10'
+    >
+      <Eye className='h-3.5 w-3.5' /> View as
+    </button>
   )
 }

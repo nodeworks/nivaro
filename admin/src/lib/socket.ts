@@ -1,6 +1,7 @@
 import { createLeaderSocket, type RealtimeAdapter } from '@nivaro/shared'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
+import { readMasquerade } from '@/lib/masquerade'
 
 /**
  * One shared authenticated socket for chat + collection feeds + realtime
@@ -116,7 +117,10 @@ let leaderHandle: ReturnType<typeof createLeaderSocket> | null = null
 
 function ensureLeaderSocket() {
   if (leaderHandle) return leaderHandle
-  leaderHandle = createLeaderSocket('admin-feed', {
+  // A "View as" tab is someone else: it must neither lead nor follow the
+  // admin's own tabs, or one identity's feed would stand in for the other's.
+  const masq = readMasquerade()
+  leaderHandle = createLeaderSocket(masq ? `admin-feed:as:${masq.user_id}` : 'admin-feed', {
     becomeLeader(deliver, emitRef) {
       const s = getSocket()
       for (const c of joinedCollections) {

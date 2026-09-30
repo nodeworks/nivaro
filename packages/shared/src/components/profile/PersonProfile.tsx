@@ -13,6 +13,7 @@ import {
 } from './PersonAccess'
 import { ActivityFeedCard, JourneyCard, SignInsCard, StatsCard } from './PersonActivity'
 import { ForceReloadCard, MergeCard, OffboardingCard } from './PersonAdminTools'
+import { CompareAccessCard } from './PersonCompare'
 import { TeamLoadCard, WhyCard, WorkingOnCard } from './PersonExtras'
 import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
@@ -142,6 +143,7 @@ export function PersonProfile({
                 <AccessCard profile={profile} />
                 <UserScopesCard userId={profile.id} />
                 <WhyCard profile={profile} />
+                <CompareAccessCard profile={profile} />
               </div>
               <div className='space-y-4'>
                 <UserDirectoryCard profile={profile} />

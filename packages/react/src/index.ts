@@ -72,6 +72,8 @@ export type {
 // Re-export sweep (2026-08-25): shared surface that headless hosts were
 // missing — display-pref setters, the fiscal/formula/layout-slot libs,
 // field-interface registry, and the utility components/hooks below.
+// Record form & grids batch (2026-09-30): people-only user pickers (#732)
+// and the plan grid host slot (#842).
 export {
   ACTIVE_USER_OPTION_FILTER,
   AccessDeniedPanel,
@@ -131,6 +133,7 @@ export {
   canOpenChatRoom,
   canOpenDm,
   canPreviewFile,
+  canViewAs,
   changeReasonChallenge,
   chatAvatarColor,
   chatInitials,
@@ -302,6 +305,7 @@ export {
   type PartnerDetailProps,
   PartnersView,
   type PartnersViewProps,
+  PEOPLE_USER_OPTION_FILTER,
   PersonHeader,
   PersonProfile,
   type PersonProfileData,
@@ -311,6 +315,9 @@ export {
   PipelinePanel,
   PipelineSimulatorCard,
   PipelineTransitionButtons,
+  type PlanGridHost,
+  PlanGridHostContext,
+  type PlanGridRowHistoryArgs,
   ProfileFieldsCard,
   ProfileSectionCard,
   ProfileView,
@@ -354,6 +361,7 @@ export {
   registerFieldInterface,
   registerLayoutSlot,
   registerRoomOpener,
+  registerViewAsOpener,
   resolveCollectionIcon,
   resolveNotificationTarget,
   resolveNotificationTargetFor,
@@ -445,11 +453,13 @@ export {
   usePartners,
   usePeerReadAt,
   usePersonProfile,
+  usePlanGridHost,
   useQuickPickerSteps,
   useRecordIntegrationActivity,
   useRefreshSignals,
   useRoomMembership,
   useRoomPins,
+  userOptionFilter,
   useScopeDimensions,
   useSendChatMessage,
   useSetImportCadence,
@@ -463,6 +473,7 @@ export {
   useUnreadChirp,
   useUserSearch,
   validateExpression,
+  viewAs,
   WidgetSlot,
   WorkflowPanel,
   withGetCoalescing
@@ -534,13 +545,3 @@ export type {
   UseNivaroFormOptions,
   UseNivaroFormReturn
 } from './types'
-// Record form & grids batch (2026-09-30): people-only user pickers (#732)
-// and the plan grid host slot (#842).
-export {
-  PEOPLE_USER_OPTION_FILTER,
-  type PlanGridHost,
-  PlanGridHostContext,
-  type PlanGridRowHistoryArgs,
-  userOptionFilter,
-  usePlanGridHost
-} from '@nivaro/shared'

@@ -1762,6 +1762,28 @@ export function QueueWorklist({
     if (s.page) setPage(s.page)
     pendingScrollRef.current = stash.scroll ?? 0
   }, [displayReady, queueId])
+  // #638 — a link from someone's profile (Working on → Open in queue) arrives
+  // as ?owner=<user id>: show every record in the queue that person owns.
+  // Applied once after the default view landed, then dropped from the URL so
+  // a reload or a saved view starts clean.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on ready
+  useEffect(() => {
+    if (!displayReady || typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const owner = params.get('owner')
+    if (!owner) return
+    params.delete('owner')
+    const qs = params.toString()
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
+    )
+    setScope('all')
+    setFilterValues((prev) => ({ ...prev, owners: [owner] }))
+    setActiveViewId(null)
+    setPage(1)
+  }, [displayReady])
   useEffect(() => {
     if (pendingScrollRef.current == null || items.length === 0 || !scrollRef.current) return
     scrollRef.current.scrollTop = pendingScrollRef.current
@@ -3465,6 +3487,39 @@ export function QueueWorklist({
           className='flex shrink-0 flex-wrap items-center gap-1.5 border-b border-slate-100 bg-white px-4 py-1.5 dark:border-slate-800 dark:bg-slate-900'
           data-queue-saved-views
         >
+          {/* An owner filter has no quick-filter pill of its own (it usually
+              arrives from a profile's "Open in queue"), so say it here. */}
+          {Array.isArray(filterValues.owners) && filterValues.owners.length > 0 && (
+            <span
+              data-queue-owner-filter
+              className='inline-flex h-6 items-center gap-1 rounded-full border border-[#00ceff66] bg-[#00ceff1a] pl-2.5 pr-1 text-[12px] text-slate-900 dark:text-white'
+            >
+              Owner:{' '}
+              {(filterValues.owners as string[])
+                .map(
+                  (id) =>
+                    data?.available_values.owners?.find(
+                      (o) => String(o.id).toUpperCase() === String(id).toUpperCase()
+                    )?.name ?? 'someone'
+                )
+                .join(', ')}
+              <button
+                type='button'
+                aria-label='Clear the owner filter'
+                data-queue-owner-filter-clear
+                onClick={() => {
+                  setFilterValues((prev) => {
+                    const { owners: _drop, ...rest } = prev
+                    return rest
+                  })
+                  setPage(1)
+                }}
+                className='flex h-4 w-4 items-center justify-center rounded-full text-[10px] hover:bg-black/10 dark:hover:bg-white/10'
+              >
+                ✕
+              </button>
+            </span>
+          )}
           {!(views?.data ?? []).some((v) => v.is_default) && (
             <button
               type='button'

@@ -665,7 +665,12 @@ export function applyColumnFilters(
         // string keeps the legacy substring-on-names behavior so saved views
         // created before the combobox still work.
         if (Array.isArray(value)) {
-          if (value.length > 0 && !item.owners.some((o) => value.includes(o.id))) return false
+          const wanted = value.map((v) => String(v).toUpperCase())
+          if (
+            wanted.length > 0 &&
+            !item.owners.some((o) => wanted.includes(String(o.id).toUpperCase()))
+          )
+            return false
         } else {
           const names = item.owners.map((o) => o.name.toLowerCase()).join(' ')
           if (!names.includes(String(value).toLowerCase())) return false

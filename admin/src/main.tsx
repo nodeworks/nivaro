@@ -6,6 +6,11 @@ import { toast } from 'sonner'
 import './globals.css'
 import App from './App'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
+import { captureMasqueradeFromHash, installMasqueradeFetch } from './lib/masquerade'
+
+// A "View as" tab (#640) reads its token before anything fetches.
+captureMasqueradeFromHash()
+installMasqueradeFetch()
 
 window.__NIVARO__ = {
   React,

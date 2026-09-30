@@ -1,12 +1,21 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Bell, ClipboardList, Loader2, ScanSearch, Send, Users } from 'lucide-react'
+import {
+  Bell,
+  ClipboardList,
+  Download,
+  ListFilter,
+  Loader2,
+  ScanSearch,
+  Send,
+  Users
+} from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn, humanHours } from '../../lib/utils'
+import { cn, humanHours, titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { SimpleSelect } from '../ui/SimpleSelect'
+import { SimpleSelect, SimpleSelectXs } from '../ui/SimpleSelect'
 import { EmptyLine, PersonChip, Pill, SectionCard } from './primitives'
 import { errorText, type PersonProfile } from './types'
 
@@ -29,29 +38,120 @@ const SLA_TONE: Record<string, string> = {
 }
 
 /** The open records this person is a resolved owner of — what waits on them. */
+const WORKING_ON_FETCH = 500
+const WORKING_ON_SHOWN = 30
+
+type WorkingSort = 'urgent' | 'oldest' | 'newest' | 'name'
+
+function csvCell(v: unknown): string {
+  const s = v == null ? '' : String(v)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
 export function WorkingOnCard({ profile: p }: { profile: PersonProfile }) {
   const client = useNivaroClient()
   const nav = useNavigation()
   const { urlFor } = useItemNavigation()
   const { data, isLoading } = useQuery<{ items: WorkingOnItem[]; total: number; hidden: number }>({
-    queryKey: ['nvr-person-working-on', p.id],
+    queryKey: ['nvr-person-working-on', p.id, WORKING_ON_FETCH],
     queryFn: () =>
       client
         .request<{ data: { items: WorkingOnItem[]; total: number; hidden: number } }>(
-          get(`/users/${p.id}/working-on`)
+          get(`/users/${p.id}/working-on?limit=${WORKING_ON_FETCH}`)
         )
         .then((r) => r.data),
     staleTime: 60_000
   })
+  const [collection, setCollection] = useState('')
+  const [state, setState] = useState('')
+  const [pastSla, setPastSla] = useState(false)
+  const [sort, setSort] = useState<WorkingSort>('urgent')
+  const [showAll, setShowAll] = useState(false)
+
+  const all = data?.items ?? []
+  const collections = [...new Set(all.map((i) => i.collection))].sort()
+  const states = [
+    ...new Map(
+      all
+        .filter((i) => !collection || i.collection === collection)
+        .filter((i) => i.state)
+        .map((i) => [i.state as string, i.state_label ?? (i.state as string)])
+    )
+  ].sort((a, b) => a[1].localeCompare(b[1]))
+  const filtered = all
+    .filter((i) => !collection || i.collection === collection)
+    .filter((i) => !state || i.state === state)
+    .filter((i) => !pastSla || i.sla_status === 'breached')
+  const rank = (v: string | null) => (v === 'breached' ? 0 : v === 'warning' ? 1 : 2)
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort === 'name') return a.label.localeCompare(b.label)
+    if (sort === 'oldest') return (b.aging_hours ?? 0) - (a.aging_hours ?? 0)
+    if (sort === 'newest') return (a.aging_hours ?? 0) - (b.aging_hours ?? 0)
+    return rank(a.sla_status) - rank(b.sla_status) || (b.aging_hours ?? 0) - (a.aging_hours ?? 0)
+  })
+  const shown = showAll ? sorted : sorted.slice(0, WORKING_ON_SHOWN)
+  const narrowed = !!collection || !!state || pastSla
+
   const first = p.first_name ?? p.name
-  const breached = data?.items.filter((i) => i.sla_status === 'breached').length ?? 0
+  const breached = all.filter((i) => i.sla_status === 'breached').length
+  const total = data?.total ?? 0
+  // The server caps the fetch; say so rather than filter a partial list silently.
+  const partial = total > all.length
+
+  // Queues that read these collections — "open this as a queue, filtered to them".
+  const { data: queues } = useQuery<
+    Array<{ id: string; name: string; source_collections?: string[] }>
+  >({
+    queryKey: ['nvr-person-working-on-queues'],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ id: string; name: string; source_collections?: string[] }> }>(
+          get('/queues')
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    enabled: all.length > 0,
+    staleTime: 5 * 60_000
+  })
+  const wanted = new Set(filtered.map((i) => i.collection))
+  const queueChoices = (queues ?? []).filter((q) =>
+    (q.source_collections ?? []).some((c) => wanted.has(c))
+  )
+  function queueHref(queueId: string): string | null {
+    const path = `/queues/${queueId}?owner=${encodeURIComponent(p.id)}`
+    return nav.consoleUrl ? nav.consoleUrl(path) : path
+  }
+
+  function exportCsv() {
+    const header = ['Collection', 'Record', 'State', 'SLA', 'Hours in state', 'Link']
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    const lines = sorted.map((it) =>
+      [
+        titleCase(it.collection),
+        it.label,
+        it.state_label ?? it.state ?? '',
+        it.sla_status === 'breached' ? 'Past SLA' : it.sla_status === 'warning' ? 'SLA soon' : '',
+        it.aging_hours ?? '',
+        `${origin}${urlFor({ collection: it.collection, itemId: it.item_id })}`
+      ]
+        .map(csvCell)
+        .join(',')
+    )
+    const blob = new Blob([[header.join(','), ...lines].join('\n')], { type: 'text/csv' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${first.replace(/[^\w-]+/g, '-').toLowerCase()}-working-on.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   return (
     <SectionCard
       icon={<ClipboardList className='h-4 w-4' />}
       title='Working on'
       hint={
-        data && data.total > 0
-          ? `${data.total} open record${data.total === 1 ? '' : 's'} waiting on ${first}${breached ? ` · ${breached} past SLA` : ''}`
+        total > 0
+          ? `${total} open record${total === 1 ? '' : 's'} waiting on ${first}${breached ? ` · ${breached} past SLA` : ''}`
           : undefined
       }
       testId='working-on'
@@ -62,66 +162,214 @@ export function WorkingOnCard({ profile: p }: { profile: PersonProfile }) {
             <div key={i} className='h-5 animate-pulse rounded bg-slate-100 dark:bg-muted' />
           ))}
         </div>
-      ) : !data || data.items.length === 0 ? (
+      ) : !data || all.length === 0 ? (
         <EmptyLine>
           {data && data.hidden > 0
             ? `Nothing you can see — ${data.hidden} record${data.hidden === 1 ? '' : 's'} sit in collections your role cannot read.`
             : `Nothing waits on ${first} right now.`}
         </EmptyLine>
       ) : (
-        <ul className='divide-y divide-slate-100 dark:divide-border/60' data-person-working-on>
-          {data.items.map((it) => {
-            const href = urlFor({ collection: it.collection, itemId: it.item_id })
-            return (
-              <li key={`${it.collection}:${it.item_id}`} className='flex items-center gap-3 py-1.5'>
-                <a
-                  href={href}
-                  onClick={(e) => {
-                    if (e.metaKey || e.ctrlKey) return
-                    e.preventDefault()
-                    nav.navigate(href)
-                  }}
-                  className='min-w-0 flex-1 truncate text-[12.5px] font-medium text-slate-700 hover:text-nvr-navy hover:underline dark:text-slate-200 dark:hover:text-nvr-cyan'
-                >
-                  {it.label}
-                </a>
-                {it.state && (
-                  <span
-                    className='shrink-0 rounded-full px-2 py-px text-[10.5px] font-semibold'
-                    style={{
-                      backgroundColor: `${it.state_color ?? '#94a3b8'}22`,
-                      color: it.state_color ?? '#475569'
-                    }}
-                  >
-                    {it.state_label ?? it.state}
-                  </span>
+        <>
+          <div className='mb-2 flex flex-wrap items-center gap-1.5' data-person-working-on-tools>
+            {collections.length > 1 && (
+              <SimpleSelectXs
+                ariaLabel='Collection'
+                value={collection}
+                onChange={(v) => {
+                  setCollection(v)
+                  setState('')
+                }}
+                options={[
+                  { value: '', label: 'All collections' },
+                  ...collections.map((c) => ({ value: c, label: titleCase(c) }))
+                ]}
+              />
+            )}
+            {states.length > 1 && (
+              <SimpleSelectXs
+                ariaLabel='State'
+                value={state}
+                onChange={setState}
+                options={[
+                  { value: '', label: 'Any state' },
+                  ...states.map(([v, l]) => ({ value: v, label: l }))
+                ]}
+              />
+            )}
+            {breached > 0 && (
+              <button
+                type='button'
+                aria-pressed={pastSla}
+                data-person-working-on-breached
+                onClick={() => setPastSla((v) => !v)}
+                className={cn(
+                  'h-7 rounded-md border px-2 text-[11.5px] font-medium transition-colors',
+                  pastSla
+                    ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300'
+                    : 'border-slate-200 text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
                 )}
-                {it.sla_status && it.sla_status !== 'ok' && (
-                  <span
-                    className={cn(
-                      'shrink-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold',
-                      SLA_TONE[it.sla_status]
+              >
+                Past SLA only
+              </button>
+            )}
+            <SimpleSelectXs
+              ariaLabel='Sort'
+              value={sort}
+              onChange={(v) => setSort(v as WorkingSort)}
+              options={[
+                { value: 'urgent', label: 'Most urgent' },
+                { value: 'oldest', label: 'Longest in state' },
+                { value: 'newest', label: 'Newest in state' },
+                { value: 'name', label: 'Name' }
+              ]}
+            />
+            <span className='flex-1' />
+            <button
+              type='button'
+              data-person-working-on-csv
+              onClick={exportCsv}
+              disabled={sorted.length === 0}
+              className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-600 hover:bg-muted disabled:opacity-50 dark:text-slate-300'
+            >
+              <Download className='h-3.5 w-3.5' /> CSV
+            </button>
+            {queueChoices.length > 0 && <OpenInQueue choices={queueChoices} hrefFor={queueHref} />}
+          </div>
+          {sorted.length === 0 ? (
+            <EmptyLine>Nothing matches these filters.</EmptyLine>
+          ) : (
+            <ul className='divide-y divide-slate-100 dark:divide-border/60' data-person-working-on>
+              {shown.map((it) => {
+                const href = urlFor({ collection: it.collection, itemId: it.item_id })
+                return (
+                  <li
+                    key={`${it.collection}:${it.item_id}`}
+                    className='flex items-center gap-3 py-1.5'
+                  >
+                    <a
+                      href={href}
+                      onClick={(e) => {
+                        if (e.metaKey || e.ctrlKey) return
+                        e.preventDefault()
+                        nav.navigate(href)
+                      }}
+                      className='min-w-0 flex-1 truncate text-[12.5px] font-medium text-slate-700 hover:text-nvr-navy hover:underline dark:text-slate-200 dark:hover:text-nvr-cyan'
+                    >
+                      {it.label}
+                    </a>
+                    {it.state && (
+                      <span
+                        className='shrink-0 rounded-full px-2 py-px text-[10.5px] font-semibold'
+                        style={{
+                          backgroundColor: `${it.state_color ?? '#94a3b8'}22`,
+                          color: it.state_color ?? '#475569'
+                        }}
+                      >
+                        {it.state_label ?? it.state}
+                      </span>
                     )}
-                  >
-                    {it.sla_status === 'breached' ? 'past SLA' : 'SLA soon'}
-                  </span>
-                )}
-                {it.aging_hours != null && (
-                  <span className='shrink-0 text-[11px] tabular-nums text-slate-400'>
-                    {humanHours(it.aging_hours)}
-                  </span>
-                )}
-              </li>
-            )
-          })}
-          {data.total > data.items.length && (
-            <li className='pt-2 text-[11.5px] text-slate-400'>
-              +{data.total - data.items.length} more
-            </li>
+                    {it.sla_status && it.sla_status !== 'ok' && (
+                      <span
+                        className={cn(
+                          'shrink-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold',
+                          SLA_TONE[it.sla_status]
+                        )}
+                      >
+                        {it.sla_status === 'breached' ? 'past SLA' : 'SLA soon'}
+                      </span>
+                    )}
+                    {it.aging_hours != null && (
+                      <span className='shrink-0 text-[11px] tabular-nums text-slate-400'>
+                        {humanHours(it.aging_hours)}
+                      </span>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
           )}
-        </ul>
+          <div className='flex flex-wrap items-center gap-x-3 pt-2 text-[11.5px] text-slate-400'>
+            {sorted.length > shown.length && (
+              <button
+                type='button'
+                data-person-working-on-all
+                onClick={() => setShowAll(true)}
+                className='font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+              >
+                Show all {sorted.length}
+              </button>
+            )}
+            {narrowed && sorted.length > 0 && (
+              <span>
+                {sorted.length} of {all.length} match
+              </span>
+            )}
+            {partial && (
+              <span>
+                Showing the {all.length} most urgent of {total}
+              </span>
+            )}
+          </div>
+        </>
       )}
     </SectionCard>
+  )
+}
+
+function OpenInQueue({
+  choices,
+  hrefFor
+}: {
+  choices: Array<{ id: string; name: string }>
+  hrefFor: (queueId: string) => string | null
+}) {
+  const nav = useNavigation()
+  const [open, setOpen] = useState(false)
+  const go = (id: string) => {
+    const href = hrefFor(id)
+    if (!href) return
+    setOpen(false)
+    if (/^https?:/.test(href)) window.open(href, '_blank', 'noopener')
+    else nav.navigate(href)
+  }
+  const usable = choices.filter((q) => hrefFor(q.id) != null)
+  if (usable.length === 0) return null
+  if (usable.length === 1)
+    return (
+      <button
+        type='button'
+        data-person-working-on-queue={usable[0].id}
+        onClick={() => go(usable[0].id)}
+        className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-nvr-navy hover:bg-muted dark:text-nvr-cyan'
+      >
+        <ListFilter className='h-3.5 w-3.5' /> Open in {usable[0].name}
+      </button>
+    )
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-person-working-on-queue-menu
+          className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-nvr-navy hover:bg-muted dark:text-nvr-cyan'
+        >
+          <ListFilter className='h-3.5 w-3.5' /> Open in queue
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-60 p-1'>
+        {usable.map((q) => (
+          <button
+            key={q.id}
+            type='button'
+            data-person-working-on-queue={q.id}
+            onClick={() => go(q.id)}
+            className='block w-full truncate rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-muted'
+          >
+            {q.name}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   )
 }
 

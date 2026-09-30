@@ -327,7 +327,8 @@ export function PersonChip({
   // item — a photo has none, an initials disc has a text baseline — so two
   // chips in one row landed at different heights (the peers strip). Middle
   // alignment is the same for both.
-  const cls = 'group/person inline-flex max-w-full items-center gap-2 rounded-md text-left align-middle'
+  const cls =
+    'group/person inline-flex max-w-full items-center gap-2 rounded-md text-left align-middle'
   if (!href) return <span className={cls}>{body}</span>
   return (
     <a

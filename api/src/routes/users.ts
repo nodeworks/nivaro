@@ -5,6 +5,13 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
+import {
+  applyAccessCopy,
+  type BulkUserAction,
+  buildAccessCopyPlan,
+  type CopyInclude,
+  runBulkUserAction
+} from '../services/people-access.js'
 import { writeRevision } from '../services/revisions.js'
 import {
   buildTeamLoad,
@@ -341,13 +348,99 @@ export async function usersRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       const id = req.params.id === 'me' ? req.user!.id : req.params.id
-      const data = await buildWorkingOn(id, {
-        id: req.user!.id,
-        isAdmin: !!req.isAdmin,
-        role: (req.user as { role?: string | null } | undefined)?.role ?? null,
-        ...(req.user as object)
-      } as never)
+      // The card shows 30; its filters, sort and CSV (#638) ask for the lot.
+      const limit = Math.min(
+        1000,
+        Math.max(1, Number((req.query as { limit?: string }).limit) || 30)
+      )
+      const data = await buildWorkingOn(
+        id,
+        {
+          id: req.user!.id,
+          isAdmin: !!req.isAdmin,
+          role: (req.user as { role?: string | null } | undefined)?.role ?? null,
+          ...(req.user as object)
+        } as never,
+        limit
+      )
       return reply.send({ data })
+    }
+  )
+
+  // #637 — copy role, scopes and teams from one person onto another (admin).
+  // dry_run (default) answers the plan; the real run rebuilds it server-side
+  // so a stale plan in the browser can never be what gets written.
+  app.post<{
+    Params: { id: string }
+    Body: { from?: string; include?: CopyInclude; dry_run?: boolean }
+  }>('/:id/copy-access', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body ?? {}
+    if (!b.from) return reply.code(400).send({ error: 'from is required' })
+    const include: CopyInclude = {
+      role: b.include?.role !== false,
+      scopes: b.include?.scopes !== false,
+      teams: b.include?.teams !== false
+    }
+    try {
+      const plan =
+        b.dry_run === false
+          ? await applyAccessCopy(req.params.id, b.from, include, req.user!.id)
+          : await buildAccessCopyPlan(req.params.id, b.from, include)
+      return reply.send({ data: { ...plan, applied: b.dry_run === false } })
+    } catch (err) {
+      const e = err as Error & { statusCode?: number }
+      return reply.code(e.statusCode ?? 500).send({ error: e.message })
+    }
+  })
+
+  // #641 — the Users list's bulk bar: role, suspend / reactivate, delegate,
+  // add to team. One result per person; each change is its own activity row.
+  app.post<{ Body: { ids?: unknown } & Record<string, unknown> }>(
+    '/bulk',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const b = req.body ?? {}
+      const ids = Array.isArray(b.ids)
+        ? b.ids.filter((v): v is string => typeof v === 'string' && v !== '')
+        : []
+      if (ids.length === 0) return reply.code(400).send({ error: 'ids is required' })
+      if (ids.length > 500) return reply.code(400).send({ error: 'At most 500 people at a time' })
+      let action: BulkUserAction
+      switch (b.action) {
+        case 'set_role':
+          if (typeof b.role_id !== 'string' || !b.role_id)
+            return reply.code(400).send({ error: 'role_id is required' })
+          action = { action: 'set_role', role_id: b.role_id }
+          break
+        case 'suspend':
+        case 'activate':
+          action = { action: b.action }
+          break
+        case 'set_delegate':
+          action = {
+            action: 'set_delegate',
+            delegate_id: typeof b.delegate_id === 'string' && b.delegate_id ? b.delegate_id : null,
+            expires_at: typeof b.expires_at === 'string' && b.expires_at ? b.expires_at : null
+          }
+          break
+        case 'add_to_team': {
+          const teamId = Number(b.team_id)
+          if (!Number.isFinite(teamId) || teamId <= 0)
+            return reply.code(400).send({ error: 'team_id is required' })
+          action = { action: 'add_to_team', team_id: teamId }
+          break
+        }
+        default:
+          return reply.code(400).send({
+            error: 'action must be set_role, suspend, activate, set_delegate or add_to_team'
+          })
+      }
+      try {
+        return reply.send({ data: await runBulkUserAction(ids, action, req.user!.id) })
+      } catch (err) {
+        const e = err as Error & { statusCode?: number }
+        return reply.code(e.statusCode ?? 500).send({ error: e.message })
+      }
     }
   )
 

@@ -65,6 +65,9 @@ export interface PersonProfile {
   seat_count: number
   scopes: Array<{ dimension: string; label: string; values: string[] }>
   open_tasks: number
+  /** 10th–90th percentile of the UTC hour of their actions (8 weeks), or
+   *  null under 12 samples. Hours are fractional (9.5 = 09:30 UTC). */
+  typical_hours_utc: { start: number; end: number; samples: number } | null
   admin: {
     account_kind: string | null
     city: string | null
@@ -185,6 +188,13 @@ export async function buildUserProfile(
   const id = String(u.id)
   const prefs = parsePrefs(u.preferences)
   const isSelf = String(viewer.id).toUpperCase() === id.toUpperCase()
+  // #639 — when this person is usually around, for the header's "best time
+  // to reach" chip. Machine accounts keep no rhythm worth showing.
+  const rhythm = u.account_kind
+    ? Promise.resolve(null)
+    : computeUserStats(id)
+        .then((s) => s.typical_hours_utc)
+        .catch(() => null)
 
   const [manager, delegate, reports, covering, teamRows, seatRows, dims, openTasks, presenceRow] =
     await Promise.all([
@@ -464,6 +474,7 @@ export async function buildUserProfile(
     seat_count: (seatRows as unknown[]).length,
     scopes,
     open_tasks: openTasks,
+    typical_hours_utc: await rhythm,
     admin
   }
 }

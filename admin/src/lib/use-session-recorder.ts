@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { readMasquerade } from '@/lib/masquerade'
 
 function clientMeta(): Record<string, string | number> {
   try {
@@ -231,7 +232,8 @@ export function useSessionRecorder() {
       api
         .get<{ data: { enabled: boolean; error_replay?: boolean } }>('/session-recordings/enabled')
         .then((r) => r.data.data),
-    enabled: !!user,
+    // Never record a "View as" tab — it would be filed under the other person.
+    enabled: !!user && !readMasquerade(),
     staleTime: 5 * 60_000,
     retry: false
   })

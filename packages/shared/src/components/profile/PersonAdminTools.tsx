@@ -85,7 +85,7 @@ export function ForceReloadCard({ profile: p }: { profile: PersonProfile }) {
 
 // ─── Successor / survivor picker ─────────────────────────────────────────────
 
-function UserPicker({
+export function UserPicker({
   excludeId,
   value,
   label,

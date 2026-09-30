@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
+import { readMasquerade } from './masquerade'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 
@@ -12,6 +13,9 @@ export const api = axios.create({
 api.interceptors.request.use((config) => {
   const ws = localStorage.getItem(WORKSPACE_KEY)
   if (ws) config.headers['x-workspace'] = ws
+  // A "View as" tab acts as that person (lib/masquerade.ts).
+  const masq = readMasquerade()
+  if (masq && !config.headers.Authorization) config.headers.Authorization = `Bearer ${masq.token}`
   return config
 })
 
