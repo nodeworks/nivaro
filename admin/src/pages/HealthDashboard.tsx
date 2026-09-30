@@ -11,6 +11,7 @@ import {
   Wifi,
   Zap
 } from 'lucide-react'
+import { SloPanel } from '@/components/slo-panel'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -431,6 +432,7 @@ export function HealthDashboardPage() {
             <InfoCard icon={Activity} title='Nivaro version' value={data.version ?? '—'} />
           </div>
         )}
+        <SloPanel />
         {boot && boot.phases.length > 0 && <BootPanel data={boot} />}
       </div>
     </div>

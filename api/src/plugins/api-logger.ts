@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { maskQueryString } from '../services/secret-mask.js'
+import { instanceKey } from '../services/settings-overrides.js'
 
 interface ApiLogRow {
   method: string
@@ -139,6 +140,8 @@ function shouldSkip(path: string, method: string): boolean {
  * 5 seconds or once 50 rows accumulate. On ~1% of flushes, rows older than
  * 14 days are pruned (mail + external API call logs: 30 days).
  */
+const INSTANCE = instanceKey().slice(0, 60)
+
 export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   let buffer: ApiLogRow[] = []
   let flushing = false
@@ -171,9 +174,14 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
               ...rest
             }) => rest
           )
+      // #666 — which instance served it (migration 379); the SLO dashboard
+      // groups by it because several instances can share one database.
+      const stamped = (await hasColumn('nivaro_api_logs', 'instance'))
+        ? shaped.map((r) => ({ ...r, instance: INSTANCE }))
+        : shaped
       // Insert in modest chunks to stay under MSSQL parameter limits
-      for (let i = 0; i < shaped.length; i += 50) {
-        await db('nivaro_api_logs').insert(shaped.slice(i, i + 50))
+      for (let i = 0; i < stamped.length; i += 50) {
+        await db('nivaro_api_logs').insert(stamped.slice(i, i + 50))
       }
       if (Math.random() < CLEANUP_PROBABILITY) {
         const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000)

@@ -579,6 +579,62 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
   // Probes each API component's /api/extensions/:id/settings with ITS token
   // (server-side, tokens never reach the browser) and lays the values side by
   // side with this instance's own. Secrets compare as set / unset only.
+  // #666 — each registered API component's own SLO (its /api/health/slo,
+  // asked server-side with its token), so environments on their own database
+  // (production) sit beside this one on the Health page.
+  app.get('/slo', async (_req, reply) => {
+    const envs = (await db('nivaro_environments').orderBy('sort').orderBy('id')) as Array<{
+      id: number
+      name: string
+    }>
+    const comps = (
+      (await db('nivaro_environment_components')
+        .where('kind', 'api')
+        .orderBy('sort')
+        .orderBy('id')) as ComponentRow[]
+    ).filter((c) => !!c.base_url)
+    const out = await Promise.all(
+      comps.map(async (c) => {
+        const environment = envs.find((e) => e.id === c.environment)?.name ?? null
+        if (!c.api_token)
+          return { id: c.id, name: c.name, environment, state: 'no-token' as const, slo: null }
+        try {
+          const res = await fetchJson(
+            `${c.base_url!.replace(/\/+$/, '')}/api/health/slo`,
+            { authorization: `Bearer ${c.api_token}` },
+            25_000
+          )
+          if (!res.ok)
+            return {
+              id: c.id,
+              name: c.name,
+              environment,
+              state: res.status === 404 ? ('not-supported' as const) : ('unreachable' as const),
+              note: `HTTP ${res.status}`,
+              slo: null
+            }
+          return {
+            id: c.id,
+            name: c.name,
+            environment,
+            state: 'ok' as const,
+            slo: (res.body as { data?: unknown })?.data ?? null
+          }
+        } catch (err) {
+          return {
+            id: c.id,
+            name: c.name,
+            environment,
+            state: 'unreachable' as const,
+            note: err instanceof Error ? err.message.slice(0, 200) : 'unreachable',
+            slo: null
+          }
+        }
+      })
+    )
+    return reply.send({ data: out })
+  })
+
   app.get('/settings-compare', async (req, reply) => {
     const ext = String((req.query as { extension?: string }).extension ?? '')
     if (!/^[a-z0-9][a-z0-9-]*$/.test(ext))

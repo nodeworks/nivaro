@@ -120,6 +120,12 @@ export async function healthRoutes(app: FastifyInstance) {
   })
 
   // GET /health/detailed — admin-only subsystem diagnostics
+  // #666 — availability, p95 and error-budget burn per instance vs targets.
+  app.get('/health/slo', { preHandler: requireAdmin }, async (_req, reply) => {
+    const { computeSlo } = await import('../services/slo.js')
+    return reply.send({ data: await computeSlo() })
+  })
+
   app.get('/health/detailed', { preHandler: requireAdmin }, async (_req, reply) => {
     // DB latency
     const dbStart = Date.now()

@@ -124,6 +124,8 @@ const allowedSettingsKeys = [
   'team_stuck_hours',
   // Sign-in session max age + idle timeout, default and per role (#665)
   'session_policy',
+  // SLO targets for the Health page (#666): availability %, p95 ms, window days
+  'slo_targets',
   // Deprecation policy for the API surface (#613): days a field stays
   // deprecated before it may be removed; blank = 14, 0 = no policy
   'graphql_deprecation_days',
@@ -311,6 +313,17 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { bustTeamSettings } = await import('../services/team.js')
       reply.raw.once('finish', () => bustTeamSettings())
+    }
+
+    // SLO targets (#666)
+    if ('slo_targets' in patch) {
+      const { validateSloTargets, parseSloTargets } = await import('../services/slo.js')
+      const err = validateSloTargets(patch.slo_targets)
+      if (err) return reply.code(400).send({ error: err })
+      patch.slo_targets =
+        patch.slo_targets == null || patch.slo_targets === ''
+          ? null
+          : JSON.stringify(parseSloTargets(patch.slo_targets))
     }
 
     // Session policy (#665): validated strictly, stored as JSON text, cache
