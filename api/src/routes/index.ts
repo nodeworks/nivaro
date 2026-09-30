@@ -188,6 +188,7 @@ import { streamRoutes } from './stream.js'
 import { subRowsRoutes } from './sub-rows.js'
 import { submissionFormsRoutes } from './submission-forms.js'
 import { syncJobsRoutes } from './sync-jobs.js'
+import { supportRoutes } from './support.js'
 import { tasksRoutes } from './tasks.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
@@ -451,6 +452,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(subRowsRoutes, { prefix: '/sub-rows' })
   await app.register(addendumsRoutes, { prefix: '/addendums' })
   await app.register(tasksRoutes, { prefix: '/tasks' })
+  await app.register(supportRoutes, { prefix: '/support' })
   await app.register(remindersRoutes, { prefix: '/reminders' })
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })

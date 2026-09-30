@@ -44,6 +44,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
+import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
@@ -1049,7 +1050,10 @@ export function ChatRoomView({
         })
       )
     },
-    onSuccess: () => toast.success('Task created from message — assigned to you'),
+    onSuccess: () => {
+      if (roomRecord) invalidateRecordTasks(qcRoom, roomRecord.collection, roomRecord.id)
+      toast.success('Task created from message — assigned to you')
+    },
     onError: () => toast.error('Could not create a task')
   })
   // Send a message to the record's Notes (#946), attach a file to it (#949).

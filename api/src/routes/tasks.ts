@@ -7,13 +7,14 @@ import { can } from '../services/permissions.js'
 
 interface TaskRow {
   id: number
-  collection: string
-  item: string
+  kind?: string | null
+  collection: string | null
+  item: string | null
   title: string
   description: string | null
-  assignee: string
+  assignee: string | null
   due_date: Date | null
-  status: 'open' | 'done' | 'cancelled'
+  status: 'open' | 'in_progress' | 'done' | 'cancelled'
   priority: 'low' | 'normal' | 'urgent'
   created_by: string
   completed_at: Date | null
@@ -21,7 +22,9 @@ interface TaskRow {
   updated_at: Date
 }
 
-const TASK_STATUSES = ['open', 'done', 'cancelled']
+const TASK_STATUSES = ['open', 'in_progress', 'done', 'cancelled']
+/** Still to do: a support ticket someone picked up is in_progress (#999). */
+const ACTIVE_STATUSES = ['open', 'in_progress']
 const TASK_PRIORITIES = ['low', 'normal', 'urgent']
 // urgent first in any 'what next' ordering
 const PRIORITY_RANK_SQL = "CASE t.priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END"
@@ -38,6 +41,7 @@ async function getItemLabels(tasks: TaskRow[]): Promise<Record<string, string>> 
   const labels: Record<string, string> = {}
   const byCollection = new Map<string, Set<string>>()
   for (const t of tasks) {
+    if (!t.collection || !t.item) continue // General Support tickets point at no record
     if (!byCollection.has(t.collection)) byCollection.set(t.collection, new Set())
     byCollection.get(t.collection)!.add(t.item)
   }
@@ -98,7 +102,8 @@ function baseQuery() {
 }
 
 async function notifyAssignee(app: FastifyInstance, task: TaskRow, actorId: string): Promise<void> {
-  if (task.assignee === actorId) return // self-assignment needs no notification
+  if (!task.assignee || task.assignee === actorId) return // self-assignment needs no notification
+  if (task.kind === 'support' || !task.collection || !task.item) return // tickets notify via /support
   const { buildTaskAssignedMail } = await import('../services/mail-builders.js')
   const built = await buildTaskAssignedMail(task.id).catch(() => null)
   const { renderNotificationTemplate } = await import('../services/notification-templates.js')
@@ -137,7 +142,13 @@ export async function tasksRoutes(app: FastifyInstance) {
 
   // GET / — list tasks with filters
   app.get<{
-    Querystring: { collection?: string; item?: string; assignee?: string; status?: string }
+    Querystring: {
+      collection?: string
+      item?: string
+      assignee?: string
+      created_by?: string
+      status?: string
+    }
   }>('/', async (req, reply) => {
     const { collection, item, assignee, status } = req.query
 
@@ -148,6 +159,21 @@ export async function tasksRoutes(app: FastifyInstance) {
       query = query.where('t.assignee', assignee === 'me' ? req.user!.id : assignee)
     }
     if (status) query = query.where('t.status', status)
+    const createdBy = req.query.created_by
+    if (createdBy)
+      query = query.where('t.created_by', createdBy === 'me' ? req.user!.id : createdBy)
+    // Support tickets (#999) are private to their requester, assignee and the
+    // admins — a record's task list must not show someone else's request.
+    if (!req.isAdmin) {
+      const me = req.user!.id
+      query = query.where((w) =>
+        w
+          .whereNull('t.kind')
+          .orWhereNot('t.kind', 'support')
+          .orWhere('t.created_by', me)
+          .orWhere('t.assignee', me)
+      )
+    }
 
     const rows = (await query) as Array<TaskRow & Record<string, unknown>>
     return reply.send({ data: withNames(rows) })
@@ -157,14 +183,62 @@ export async function tasksRoutes(app: FastifyInstance) {
   app.get('/mine', async (req, reply) => {
     const rows = (await baseQuery()
       .where('t.assignee', req.user!.id)
-      .where('t.status', 'open')
+      .whereIn('t.status', ACTIVE_STATUSES)
       .orderByRaw(PRIORITY_RANK_SQL)
       .orderBy('t.due_date', 'asc')) as Array<TaskRow & Record<string, unknown>>
 
     const labels = await getItemLabels(rows as TaskRow[])
     const data = withNames(rows).map((r) => ({
       ...r,
-      item_label: labels[`${r.collection}:${r.item}`] ?? null
+      item_label: r.collection ? (labels[`${r.collection}:${r.item}`] ?? null) : 'General Support'
+    }))
+    return reply.send({ data })
+  })
+
+  // GET /requested?days=14 — tasks I asked other people to do (created by me,
+  // assigned to someone else or to nobody yet), support requests included:
+  // everything still open, plus what was finished in the last `days` days so
+  // the requester sees it land.
+  app.get<{ Querystring: { days?: string } }>('/requested', async (req, reply) => {
+    const me = req.user!.id
+    const days = Math.min(Math.max(Number(req.query.days) || 14, 0), 90)
+    const since = new Date(Date.now() - days * 86_400_000)
+    const rows = (await baseQuery()
+      .where('t.created_by', me)
+      .where((w) => w.whereNull('t.assignee').orWhereNot('t.assignee', me))
+      .where((w) =>
+        w
+          .whereIn('t.status', ACTIVE_STATUSES)
+          .orWhere((d) =>
+            d.whereIn('t.status', ['done', 'cancelled']).where('t.completed_at', '>=', since)
+          )
+      )
+      .orderByRaw("CASE WHEN t.status IN ('open', 'in_progress') THEN 0 ELSE 1 END")
+      .orderByRaw('CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END')
+      .orderBy('t.due_date', 'asc')
+      .orderBy('t.completed_at', 'desc')
+      .orderBy('t.created_at', 'desc')
+      .limit(100)) as Array<TaskRow & Record<string, unknown>>
+    // The record's human id (TP26-80366), the way people name it.
+    const { resolveFriendlyId } = await import('../services/workflow-transitions.js')
+    const friendly = new Map<string, string>()
+    await Promise.all(
+      [
+        ...new Set(
+          rows.filter((r) => r.collection && r.item).map((r) => `${r.collection}\u0000${r.item}`)
+        )
+      ].map(async (k) => {
+        const [c, i] = k.split('\u0000')
+        friendly.set(k, await resolveFriendlyId(c, i).catch(() => i))
+      })
+    )
+    const data = withNames(rows).map((r) => ({
+      ...r,
+      item_label: r.collection
+        ? (friendly.get(`${r.collection}\u0000${r.item}`) ?? r.item)
+        : r.kind === 'support'
+          ? 'General Support'
+          : null
     }))
     return reply.send({ data })
   })
@@ -180,7 +254,7 @@ export async function tasksRoutes(app: FastifyInstance) {
     if (ids.length === 0) return reply.send({ data: {} })
     const rows = (await db('nivaro_tasks')
       .whereIn('assignee', ids)
-      .where('status', 'open')
+      .whereIn('status', ACTIVE_STATUSES)
       .groupBy('assignee')
       .select('assignee')
       .count('* as n')) as Array<{ assignee: string; n: number }>
@@ -196,6 +270,15 @@ export async function tasksRoutes(app: FastifyInstance) {
       TaskRow & Record<string, unknown>
     >
     if (!rows.length) return reply.code(404).send({ error: 'Not found' })
+    const r0 = rows[0]
+    if (
+      r0.kind === 'support' &&
+      !req.isAdmin &&
+      String(r0.created_by).toUpperCase() !== String(req.user!.id).toUpperCase() &&
+      String(r0.assignee ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()
+    ) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
     return reply.send({ data: withNames(rows)[0] })
   })
 
@@ -371,7 +454,7 @@ export async function tasksRoutes(app: FastifyInstance) {
     if (!req.isAdmin && existing.assignee !== me && existing.created_by !== me) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    if (existing.status !== 'open') {
+    if (!ACTIVE_STATUSES.includes(existing.status)) {
       return reply.code(409).send({ error: `Task is already ${existing.status}` })
     }
 

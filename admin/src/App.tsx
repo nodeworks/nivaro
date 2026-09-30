@@ -162,6 +162,7 @@ const ReadinessPage = lazy(() => import('@/pages/Readiness'))
 const DataIntegrityPage = lazy(() => import('@/pages/DataIntegrity'))
 const AnnouncementsPage = lazy(() => import('@/pages/Announcements'))
 const MyWorkPage = lazy(() => import('@/pages/MyWork').then((m) => ({ default: m.MyWorkPage })))
+const SupportPage = lazy(() => import('@/pages/Support').then((m) => ({ default: m.SupportPage })))
 const CoverageGapsPage = lazy(() =>
   import('@/pages/CoverageGaps').then((m) => ({ default: m.CoverageGapsPage }))
 )
@@ -543,6 +544,7 @@ export default function App() {
                   <Route path='coverage-gaps' element={<CoverageGapsPage />} />
                   <Route path='delegation' element={<DelegationConsole />} />
                   <Route path='my-work' element={<MyWorkPage />} />
+                  <Route path='support' element={<SupportPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route
                     path='integration-events'

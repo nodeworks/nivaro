@@ -54,7 +54,8 @@ const KINDS = new Set<NotificationKind>([
   'my_work',
   'home',
   'external',
-  'integration'
+  'integration',
+  'support'
 ])
 const ACTIONS = new Set<NotificationAction>([
   'open',
@@ -188,6 +189,8 @@ export async function resolveTargetUrl(
         return withFocus(await linkTo('integrations', {}, opts))
       case 'task':
         return linkTo('tasks', {}, opts)
+      case 'support':
+        return linkTo('support', { id: spec.id ?? '' }, opts)
       case 'access_request':
         return linkTo('access_requests', {}, opts)
       case 'chat':
@@ -306,6 +309,8 @@ export function describeTarget(spec: NotificationTargetSpec | null): string | nu
       return 'SLA'
     case 'task':
       return 'Task'
+    case 'support':
+      return 'Support ticket'
     case 'approval':
       return 'Approval'
     case 'access_request':

@@ -37,7 +37,8 @@ const ADMIN_ROUTES: Record<LinkKind, string> = {
   issues: '/issues',
   imports: '/imports',
   dashboard: '/dashboards/{id}',
-  integrations: '/integration-health'
+  integrations: '/integration-health',
+  support: '/support?ticket={id}'
 }
 
 let registered: LinkRegistration | null = null

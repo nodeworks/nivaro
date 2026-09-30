@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { invalidateRecordTasks, OPEN_TASK_STATUSES } from '../../lib/record-tasks'
 import { cn, formatDate, formatRelative } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Checkbox } from '../ui/checkbox'
@@ -192,7 +193,7 @@ export function TaskPanel({
     staleTime: 5 * 60_000
   })
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['tasks', collection, item] })
+  const invalidate = () => invalidateRecordTasks(qc, collection, item)
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -239,8 +240,10 @@ export function TaskPanel({
   if (!item) return null
 
   const isNew = item === 'new'
-  const openTasks = tasks.filter((t) => t.status !== 'completed')
-  const completedTasks = tasks.filter((t) => t.status === 'completed')
+  // The API finishes a task as 'done' (or 'cancelled'); only open and
+  // in-progress ones are still to do.
+  const openTasks = tasks.filter((t) => OPEN_TASK_STATUSES.has(t.status))
+  const completedTasks = tasks.filter((t) => !OPEN_TASK_STATUSES.has(t.status))
   const usersById = new Map(users.map((u) => [u.id, u]))
   const now = Date.now()
 

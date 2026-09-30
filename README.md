@@ -98,6 +98,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Parallel Workflow Branches** — split/join with auto-join when all branches complete
 - **Cross-Collection Triggers** — rule-driven writes into other collections with `{{field}}` templates and a recursion guard
 - **Tasks & Approval Chains** — per-record assignments and sequential sign-off with decision log
+- **Support Requests** — people raise requests about a record or for general help; administrators work them from a desk (pick up, reply, close) with request types, team routing and a full history
 - **Item Locking & Presence** — soft edit locks with heartbeat; live viewer indicators
 - **Notifications Center & SMS/Push Channels** — full inbox page; Twilio SMS delivery; Slack/Teams Adaptive Card actions with signed Approve/Reject buttons
 - **Global Search (Cmd+K)** — command palette across collections, pages, and actions

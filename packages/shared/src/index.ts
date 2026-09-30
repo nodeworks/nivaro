@@ -261,6 +261,15 @@ export {
   useScopeDimensions
 } from './components/pipeline/teamScopes'
 export { BrowserPushCard } from './components/profile/BrowserPushCard'
+export { SupportRequestDialog } from './components/support/SupportRequestDialog'
+export { SupportView } from './components/support/SupportView'
+export { StatusPill as SupportStatusPill, TicketDetailSheet } from './components/support/TicketDetailSheet'
+export type {
+  SupportCategory,
+  SupportSummary,
+  SupportTicket,
+  SupportTicketDetail
+} from './components/support/types'
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
 export { SectionCard as ProfileSectionCard } from './components/profile/primitives'

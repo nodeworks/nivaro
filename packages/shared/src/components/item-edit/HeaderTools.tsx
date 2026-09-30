@@ -54,16 +54,30 @@ export function HeaderTools({ children }: { children: ReactNode }) {
       const t = e.target as HTMLElement
       // Portaled popovers opened FROM a tool (Quick pick) render outside the
       // panel — a click inside them must not read as "outside".
+      // The More menu (HeaderMenu) is its own portal too: pressing one of its
+      // rows used to close this panel — and unmount the menu — before the
+      // click landed, so no More action worked while the tools were folded.
       if (
         t.closest('[data-nvr-header-tools-panel]') ||
         t.closest('[data-nvr-header-tools-btn]') ||
+        t.closest('[data-nvr-header-menu-panel]') ||
         t.closest('[data-radix-popper-content-wrapper]')
       )
         return
       setOpen(false)
     }
+    // A row that closes the More menu (data-nvr-menu-close) is done with the
+    // tools as well — fold the panel away once its click has run.
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-nvr-header-menu-panel] [data-nvr-menu-close]')) setOpen(false)
+    }
     window.addEventListener('mousedown', onDown, true)
-    return () => window.removeEventListener('mousedown', onDown, true)
+    window.addEventListener('click', onClick)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('click', onClick)
+    }
   }, [open])
 
   if (!collapsed) {

@@ -746,3 +746,41 @@ export const collabChat: DocSection = {
     }
   ]
 }
+
+export const collabSupportRequests: DocSection = {
+  id: 'support-requests',
+  label: 'Support Requests',
+  content: [
+    { type: 'h1', id: 'support-requests', text: 'Support Requests' },
+    {
+      type: 'p',
+      text: 'People ask the administrators for help or for a change to a record, and follow the request until it is done. A support request is a task (`nivaro_tasks.kind = support`) that points at a record, or at nothing for General Support, and waits unassigned until someone picks it up.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Raise one** from a record\'s ⋯ menu (Request a change — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.',
+        '**Follow it** on the Support page (`/support`) under My requests, in the "Tasks I\'ve requested" dashboard widget, and through notifications on every status change and reply.',
+        '**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.',
+        '**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.',
+        '**Request types** (`nivaro_task_categories`, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.',
+        '**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague\'s record task list.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `POST /api/support/tickets
+{ "title": "Move to funding year 2027", "description": "…", "category_id": 3,
+  "collection": "workflows", "item": "371431", "attachments": ["<file id>"] }
+
+GET   /api/support/tickets?scope=mine|desk&status=open|closed&assignee=me|unassigned&q=
+GET   /api/support/tickets/:id           // thread + history
+POST  /api/support/tickets/:id/comments  { "text": "…" }
+POST  /api/support/tickets/:id/claim
+PATCH /api/support/tickets/:id           { "status": "done" }
+GET   /api/support/summary               // badge counts
+GET   /api/support/categories?collection=workflows
+GET   /api/tasks/requested               // tasks I asked others to do`
+    }
+  ]
+}

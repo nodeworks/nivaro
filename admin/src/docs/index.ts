@@ -74,6 +74,7 @@ import {
   collabNotificationsCenter,
   collabSmsPush,
   collabTasks,
+  collabSupportRequests,
   collabUserActivityFeed
 } from './sections/collaboration.js'
 import { commandCenterDocs } from './sections/command-center.js'
@@ -743,6 +744,7 @@ export const navSections: NavGroup[] = [
     label: 'Collaboration',
     items: [
       collabTasks,
+      collabSupportRequests,
       collabApprovals,
       collabChat,
       collabItemLocking,

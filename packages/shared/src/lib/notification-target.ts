@@ -30,6 +30,8 @@ export interface NotificationRouteMap {
   approvals?: () => string | null
   access_requests?: () => string | null
   my_work?: () => string | null
+  /** A support ticket (#999); hosts without a support page fall back to the server url. */
+  support?: (id?: string | null) => string | null
 }
 
 export type NotificationTarget =
@@ -56,6 +58,7 @@ export interface NotificationTargetSpec {
     | 'dashboard'
     | 'my_work'
     | 'home'
+    | 'support'
     | 'external'
   collection?: string | null
   id?: string | number | null
@@ -256,6 +259,9 @@ export function resolveNotificationTargetFor(
         break
       case 'access_request':
         hit = p(routes.access_requests?.())
+        break
+      case 'support':
+        hit = p(routes.support?.(spec.id != null ? String(spec.id) : null))
         break
       case 'chat':
         hit = spec.room && canOpenChatRoom() ? { type: 'chat', room: spec.room } : null

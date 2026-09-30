@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
+import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { formatRelative } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
 import { UserAvatar } from '../UserAvatar'
@@ -809,7 +810,10 @@ export function CommentPanel({
           assignee: userId
         })
       ),
-    onSuccess: () => toast.success('Task created from comment — assigned to you'),
+    onSuccess: () => {
+      invalidateRecordTasks(queryClient, collection, item)
+      toast.success('Task created from comment — assigned to you')
+    },
     onError: () => toast.error('Could not create a task')
   })
 

@@ -13,6 +13,7 @@ import {
   Copy,
   Eye,
   FileDown,
+  LifeBuoy,
   Loader2,
   PencilLine,
   Save,
@@ -72,6 +73,7 @@ import {
   headerNeedsDense
 } from '../lib/header-strip'
 import { extSlotKey } from '../lib/layout-slots'
+import { invalidateRecordTasks } from '../lib/record-tasks'
 import {
   normalizeSummaryModeRules,
   resolveSummaryMode,
@@ -170,6 +172,7 @@ import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
+import { SupportRequestDialog } from './support/SupportRequestDialog'
 
 let formulaCtxHydrated = false
 
@@ -5599,6 +5602,8 @@ export function ItemEditForm({
 
   // Save-as-template dialog (#8) — styled, never a browser prompt.
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  // Request a change (#999) — a support ticket about this record.
+  const [supportOpen, setSupportOpen] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [templateShared, setTemplateShared] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
@@ -6829,6 +6834,7 @@ export function ItemEditForm({
               .catch(() => {})
           )
         )
+        invalidateRecordTasks(qc, collection, savedId)
       }
 
       return savedId
@@ -9528,6 +9534,17 @@ export function ItemEditForm({
                                               </svg>
                                               Save as template
                                             </button>
+                                            <button
+                                              type='button'
+                                              title='Ask the administrators to change something on this record'
+                                              data-request-change
+                                              data-nvr-menu-close
+                                              onClick={() => setSupportOpen(true)}
+                                              className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                            >
+                                              <LifeBuoy className='h-3.5 w-3.5' />
+                                              Request a change
+                                            </button>
                                             {isAdmin && (
                                               <>
                                                 <div data-nvr-menu-divider />
@@ -9997,6 +10014,18 @@ export function ItemEditForm({
                                     saveMut.mutate()
                                   }}
                                 />
+                                {!isNew && itemId && (
+                                  <SupportRequestDialog
+                                    open={supportOpen}
+                                    onOpenChange={setSupportOpen}
+                                    collection={collection}
+                                    item={String(itemId)}
+                                    recordLabel={itemTitle ? String(itemTitle) : null}
+                                    onCreated={(t) =>
+                                      toast.success(`Request #${t.id} sent to the administrators`)
+                                    }
+                                  />
+                                )}
                                 {isAdmin && !isNew && itemId && (
                                   <RawEditSheet
                                     collection={collection}

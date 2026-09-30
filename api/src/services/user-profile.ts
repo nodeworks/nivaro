@@ -238,7 +238,7 @@ export async function buildUserProfile(
       listScopeDimensions(true).catch(() => []),
       db('nivaro_tasks')
         .where('assignee', id)
-        .where('status', 'open')
+        .whereIn('status', ['open', 'in_progress'])
         .count({ c: '*' })
         .first()
         .then((r) => Number((r as { c?: number | string } | undefined)?.c ?? 0))

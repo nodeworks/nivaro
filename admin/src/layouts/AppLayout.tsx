@@ -47,6 +47,7 @@ import {
   HeartPulse,
   House,
   Inbox,
+  LifeBuoy,
   KeyRound,
   LayoutGrid,
   Link2,
@@ -177,6 +178,7 @@ export const navCategories: NavCategory[] = [
     items: [
       { icon: House, label: 'Overview', to: '/' },
       { icon: Inbox, label: 'My Work', to: '/my-work' },
+      { icon: LifeBuoy, label: 'Support', to: '/support' },
       { icon: Radar, label: 'Command Center', to: '/command' },
       { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards' },
       { icon: Sparkles, label: 'Ask AI', to: '/ask' },

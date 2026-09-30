@@ -2263,7 +2263,7 @@ export async function resolveTasksSource(
 ): Promise<SourceResult> {
   const rows = (await db('nivaro_tasks as t')
     .leftJoin('nivaro_users as u', 't.assignee', 'u.id')
-    .where('t.status', 'open')
+    .whereIn('t.status', ['open', 'in_progress'])
     .orderBy('t.created_at', 'asc')
     .select(
       't.id',
@@ -2278,10 +2278,10 @@ export async function resolveTasksSource(
     )) as Array<{
     id: number
     title: string
-    target_collection: string
-    target_item: string
+    target_collection: string | null
+    target_item: string | null
     created_at: Date
-    assignee: string
+    assignee: string | null
     assignee_first: string | null
     assignee_last: string | null
     assignee_email: string
@@ -2304,21 +2304,27 @@ export async function resolveTasksSource(
     label: r.title,
     state: null,
     state_color: null,
-    owners: [
-      {
-        id: r.assignee,
-        name: userDisplayName({
-          first_name: r.assignee_first,
-          last_name: r.assignee_last,
-          email: r.assignee_email
-        })
-      }
-    ],
+    // An unclaimed support ticket (#999) has no assignee yet.
+    owners: r.assignee
+      ? [
+          {
+            id: r.assignee,
+            name: userDisplayName({
+              first_name: r.assignee_first,
+              last_name: r.assignee_last,
+              email: r.assignee_email
+            })
+          }
+        ]
+      : [],
     sla_status: null,
     at_risk: false,
     aging_hours: Math.max(0, (now - new Date(r.created_at).getTime()) / (1000 * 60 * 60)),
     claimed_by: null,
-    url: `/collections/${r.target_collection}/${r.target_item}`
+    url:
+      r.target_collection && r.target_item
+        ? `/collections/${r.target_collection}/${r.target_item}`
+        : `/support?ticket=${r.id}`
   }))
   return { items, matchedCount, truncated, idMeta }
 }

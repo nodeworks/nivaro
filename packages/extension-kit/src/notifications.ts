@@ -27,6 +27,7 @@ export type NotificationKind =
   | 'home'
   | 'external'
   | 'integration'
+  | 'support'
 
 export type NotificationAction =
   | 'open'

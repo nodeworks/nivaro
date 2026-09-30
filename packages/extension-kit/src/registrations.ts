@@ -292,6 +292,7 @@ export type LinkKind =
   | 'imports'
   | 'dashboard'
   | 'integrations'
+  | 'support'
 
 /** The headless frontend's base URL + route map, so email links land there. */
 export interface LinkRegistration {

@@ -39,7 +39,8 @@ export function MyWorkPage() {
                 dashboard: (id) => `/dashboards/${id}`,
                 alerts: () => '/alert-manager',
                 imports: () => '/imports',
-                issues: () => '/issues'
+                issues: () => '/issues',
+                support: (id) => (id ? `/support?ticket=${id}` : '/support')
               }}
               onOpenPath={(p) => navigate(p)}
             />

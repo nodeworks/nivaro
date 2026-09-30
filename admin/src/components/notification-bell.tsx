@@ -28,7 +28,8 @@ const NOTIF_ROUTES: NotificationRouteMap = {
   tasks: () => '/tasks',
   approvals: () => '/approvals',
   access_requests: () => '/access-requests',
-  my_work: () => '/my-work'
+  my_work: () => '/my-work',
+  support: (id) => (id ? `/support?ticket=${id}` : '/support')
 }
 
 const bellClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')

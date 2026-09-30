@@ -218,7 +218,7 @@ function TaskForm({
 export function TasksPage() {
   const qc = useQueryClient()
 
-  const [scope, setScope] = useState<'all' | 'me'>('all')
+  const [scope, setScope] = useState<'all' | 'me' | 'requested'>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'done'>('open')
   const [creating, setCreating] = useState(false)
   const [deleting, setDeleting] = useState<Task | null>(null)
@@ -228,6 +228,7 @@ export function TasksPage() {
     queryFn: () => {
       const params = new URLSearchParams()
       if (scope === 'me') params.set('assignee', 'me')
+      if (scope === 'requested') params.set('created_by', 'me')
       if (statusFilter !== 'all') params.set('status', statusFilter)
       const qs = params.toString()
       return api.get<{ data: Task[] }>(`/tasks${qs ? `?${qs}` : ''}`).then((r) => r.data.data)
@@ -301,13 +302,14 @@ export function TasksPage() {
           <h1 className='text-lg font-semibold'>Tasks</h1>
         </div>
         <div className='flex items-center gap-2'>
-          <Select value={scope} onValueChange={(v) => setScope(v as 'all' | 'me')}>
-            <SelectTrigger className='h-9 w-[140px]'>
+          <Select value={scope} onValueChange={(v) => setScope(v as 'all' | 'me' | 'requested')}>
+            <SelectTrigger className='h-9 w-[170px]'>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value='all'>All Tasks</SelectItem>
               <SelectItem value='me'>My Tasks</SelectItem>
+              <SelectItem value='requested'>Requested by me</SelectItem>
             </SelectContent>
           </Select>
           <Select
@@ -442,13 +444,13 @@ export function TasksPage() {
             <DialogTitle>New Task</DialogTitle>
           </DialogHeader>
           <DialogBody>
-          <TaskForm
-            collections={collections}
-            users={users}
-            onSave={(body) => createMut.mutate(body)}
-            onCancel={() => setCreating(false)}
-            saving={createMut.isPending}
-          />
+            <TaskForm
+              collections={collections}
+              users={users}
+              onSave={(body) => createMut.mutate(body)}
+              onCancel={() => setCreating(false)}
+              saving={createMut.isPending}
+            />
           </DialogBody>
         </DialogContent>
       </Dialog>
