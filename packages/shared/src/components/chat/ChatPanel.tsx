@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Archive,
+  ArchiveRestore,
   Bell,
   BellOff,
   Bookmark,
@@ -35,6 +37,7 @@ import { cn } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { UserAvatar } from '../UserAvatar'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   CHAT_DEFAULTS,
   type ChannelMeta,
@@ -59,6 +62,7 @@ import {
   useChatConfig,
   useChatMessages,
   useChatRoles,
+  useArchivedRooms,
   useChatRooms,
   useChatSearch,
   useCreateChannel,
@@ -67,6 +71,7 @@ import {
   useEditMessage,
   useEntityRoomLink,
   useMarkRoomRead,
+  useOpenRoomRegistration,
   usePeerReadAt,
   useRoomMembership,
   useRoomPins,
@@ -444,7 +449,7 @@ function ChatTipsButton({ botName }: { botName: string | null }) {
           'rounded-md p-1 transition-colors',
           open
             ? th.accentSoft
-            : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+            : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
         )}
         aria-label='Chat tips'
         title='Tips'
@@ -622,6 +627,8 @@ export function ChatRoomView({
   const client = useNivaroClient()
   const me = cfg.me
   const { messages, loading } = useChatMessages(room)
+  // While this room is on screen its messages need no toast or sound.
+  useOpenRoomRegistration(room)
   const send = useSendChatMessage(room)
   const markRead = useMarkRoomRead()
   const typing = useTypingIndicator(room)
@@ -710,9 +717,14 @@ export function ChatRoomView({
   const deleteMessage = useDeleteMessage(room)
   // Admins may delete anyone's message (server enforces the same rule).
   const { isAdmin } = useItemEditAuth()
-  const { setMuted, setNotifyMode } = useRoomMembership()
-  const { rooms: allRooms } = useChatRooms()
-  const roomInfo = allRooms.find((r) => r.room === room) ?? null
+  const { setMuted, setNotifyMode, setArchived } = useRoomMembership()
+  const { rooms: allRooms, loading: roomsLoading } = useChatRooms()
+  const activeInfo = allRooms.find((r) => r.room === room) ?? null
+  // An archived room is not in the main list — look it up in the archive so
+  // its header (members, bell, unarchive) still works.
+  const { rooms: archivedRooms } = useArchivedRooms(!roomsLoading && !activeInfo)
+  const roomInfo = activeInfo ?? archivedRooms.find((r) => r.room === room) ?? null
+  const archivable = canArchive(roomInfo)
   const botName = useChatBotName()
   const [draft, setDraft] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -936,7 +948,7 @@ export function ChatRoomView({
         <button
           type='button'
           onClick={onBack}
-          className='rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+          className='rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
           aria-label='Back to conversations'
         >
           <ChevronLeft className='h-4 w-4' strokeWidth={2} />
@@ -971,12 +983,15 @@ export function ChatRoomView({
             'rounded-md p-1 transition-colors',
             searchOpen
               ? th.accentSoft
-              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
           )}
           aria-label='Search in this conversation'
         >
           <Search className='h-3.5 w-3.5' strokeWidth={2} />
         </button>
+        {roomInfo?.channel?.is_direct && (
+          <GroupMembersButton channel={roomInfo.channel} onLeft={onBack} />
+        )}
         {(room.startsWith('dm:') || roomInfo?.channel?.is_direct) && (
           <button
             type='button'
@@ -1015,7 +1030,7 @@ export function ChatRoomView({
                 toast.error('Could not resolve participants')
               }
             }}
-            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
             aria-label='Start a Teams call'
             data-chat-teams-call
           >
@@ -1031,7 +1046,7 @@ export function ChatRoomView({
                 'rounded-md p-1 transition-colors',
                 roomInfo.muted || roomInfo.notify_mode === 'mentions'
                   ? th.accentSoft
-                  : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+                  : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
               )}
               aria-label='Notification settings for this room'
               title={
@@ -1095,11 +1110,48 @@ export function ChatRoomView({
             )}
           </div>
         )}
+        {roomInfo && archivable && (
+          <button
+            type='button'
+            onClick={() =>
+              setArchived.mutate(
+                { room, archived: !roomInfo.archived },
+                {
+                  onSuccess: () => {
+                    if (roomInfo.archived) toast.success('Moved back to your chats')
+                    else {
+                      toast.success('Archived for you — others in the conversation still see it', {
+                        description: 'Find it under the Archived tab.'
+                      })
+                      onBack()
+                    }
+                  }
+                }
+              )
+            }
+            title={
+              roomInfo.archived
+                ? 'Unarchive — back to your chats'
+                : 'Archive for me — hides it from my list and stops my alerts. Others in the conversation are not affected.'
+            }
+            aria-label={
+              roomInfo.archived ? 'Unarchive conversation' : 'Archive conversation for me'
+            }
+            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
+            data-chat-archive={roomInfo.archived ? 'unarchive' : 'archive'}
+          >
+            {roomInfo.archived ? (
+              <ArchiveRestore className='h-3.5 w-3.5' strokeWidth={2} />
+            ) : (
+              <Archive className='h-3.5 w-3.5' strokeWidth={2} />
+            )}
+          </button>
+        )}
         {onOpenSettings && (
           <button
             type='button'
             onClick={onOpenSettings}
-            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+            className='rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
             aria-label='Channel settings'
           >
             <Settings className='h-3.5 w-3.5' strokeWidth={2} />
@@ -1673,7 +1725,7 @@ export function ChatRoomView({
         <button
           type='button'
           onClick={() => fileInputRef.current?.click()}
-          className='flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+          className='flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
           aria-label='Attach a file'
           title='Attach a file (or paste an image)'
         >
@@ -1734,6 +1786,183 @@ function humanLabel(value: string | null | undefined): string | null {
 }
 
 /**
+ * Who is in a group conversation. Group DMs have no settings page (they are
+ * conversations, not channels), so the member list lives behind a header
+ * button: everyone can see who is here and leave; whoever started the group
+ * (or an admin) can add and remove people.
+ */
+function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft: () => void }) {
+  const th = useTheme()
+  const cfg = useChatConfig()
+  const { isAdmin } = useItemEditAuth()
+  const [open, setOpen] = useState(false)
+  const { members, loading } = useChannelMembers(channel.id)
+  const { addMember, removeMember } = useChannelAdmin(channel.id)
+  const [search, setSearch] = useState('')
+  const debounced = useDebouncedValue(search, 250)
+  const meId = cfg.me?.id.toUpperCase() ?? ''
+  const canEdit = isAdmin || (!!meId && String(channel.created_by ?? '').toUpperCase() === meId)
+  const { users } = useUserSearch(debounced, open && canEdit && !!search.trim())
+  const memberIds = new Set(members.map((m) => String(m.user).toUpperCase()))
+  const online = new Map(
+    cfg.onlineUsers.map((u) => [String(u.user_id).toUpperCase(), u.is_idle ? 'idle' : 'online'])
+  )
+  const nameOf = (m: {
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+    user: string
+  }) => [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email || m.user
+  const sorted = [...members].sort((a, b) => {
+    const ua = String(a.user).toUpperCase()
+    const ub = String(b.user).toUpperCase()
+    if (ua === meId) return -1
+    if (ub === meId) return 1
+    return nameOf(a).localeCompare(nameOf(b))
+  })
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          title='People in this conversation'
+          aria-label='People in this conversation'
+          className={cn(
+            'flex items-center gap-1 rounded-md px-1 py-1 text-[11px] font-medium tabular-nums transition-colors',
+            open
+              ? th.accentSoft
+              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
+          )}
+          data-chat-group-members
+        >
+          <Users className='h-3.5 w-3.5' strokeWidth={2} />
+          {members.length > 0 && members.length}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align='end'
+        sideOffset={6}
+        className={cn('w-[260px] p-0', th.surface)}
+        data-chat-group-members-panel
+      >
+        <div className={cn('border-b px-3 py-2', th.divider)}>
+          <p className='text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400'>
+            In this conversation {members.length > 0 && `· ${members.length}`}
+          </p>
+        </div>
+        <div className='max-h-[280px] overflow-y-auto py-1'>
+          {loading && <p className='px-3 py-2 text-[12px] text-slate-400'>Loading…</p>}
+          {sorted.map((m) => {
+            const uid = String(m.user).toUpperCase()
+            const nm = nameOf(m)
+            const state = online.get(uid)
+            const isMe = uid === meId
+            const isOwner = String(channel.created_by ?? '').toUpperCase() === uid
+            return (
+              <div
+                key={m.user}
+                className='group flex items-center gap-2 px-3 py-1.5'
+                data-chat-group-member={m.user}
+              >
+                <span className='relative shrink-0'>
+                  <Avatar id={m.user} name={nm} size={26} />
+                  {state && (
+                    <span
+                      className={cn(
+                        'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-card',
+                        state === 'online' ? 'bg-emerald-500' : 'bg-amber-400'
+                      )}
+                      title={state === 'online' ? 'Online' : 'Idle'}
+                    />
+                  )}
+                </span>
+                <span className='min-w-0 flex-1'>
+                  <span className='block truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
+                    {nm}
+                    {isMe && <span className='text-slate-400'> (you)</span>}
+                  </span>
+                  {isOwner && (
+                    <span className='block text-[10.5px] text-slate-400'>Started the group</span>
+                  )}
+                </span>
+                {canEdit && !isMe && (
+                  <button
+                    type='button'
+                    title={`Remove ${nm}`}
+                    aria-label={`Remove ${nm}`}
+                    onClick={() => removeMember.mutate(m.user)}
+                    className='rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-100 hover:text-red-500 focus:opacity-100 group-hover:opacity-100 dark:hover:bg-muted'
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        {canEdit && (
+          <div className={cn('border-t px-3 py-2', th.divider)}>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder='Add someone…'
+              className={cn('h-7 w-full rounded-md px-2 text-[12px] outline-none', th.input)}
+              data-chat-group-add
+            />
+            {search.trim() && (
+              <div className='mt-1 max-h-36 overflow-y-auto'>
+                {users
+                  .filter((u) => !memberIds.has(String(u.id).toUpperCase()))
+                  .map((u) => {
+                    const nm =
+                      [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id
+                    return (
+                      <button
+                        key={u.id}
+                        type='button'
+                        onClick={() => {
+                          addMember.mutate(u.id)
+                          setSearch('')
+                        }}
+                        className='flex w-full items-center gap-2 rounded px-1 py-1 text-left hover:bg-muted'
+                      >
+                        <Avatar id={u.id} name={nm} size={22} />
+                        <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                          {nm}
+                        </span>
+                      </button>
+                    )
+                  })}
+              </div>
+            )}
+          </div>
+        )}
+        {meId && memberIds.has(meId) && (
+          <div className={cn('border-t px-3 py-1.5', th.divider)}>
+            <button
+              type='button'
+              onClick={() => {
+                removeMember.mutate(cfg.me!.id, {
+                  onSuccess: () => {
+                    setOpen(false)
+                    onLeft()
+                  }
+                })
+              }}
+              className='text-[11.5px] font-medium text-red-500 hover:underline'
+              data-chat-group-leave
+            >
+              Leave conversation
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/**
  * Channel settings. Owner or admin edits name/topic/visibility, manages members
  * and archives; everyone else gets the read-only summary, so a member can still
  * see what kind of room they are in and who else is here.
@@ -1775,7 +2004,7 @@ export function ChatChannelSettings({
         <button
           type='button'
           onClick={onBack}
-          className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+          className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-white/10 dark:hover:text-slate-100'
           aria-label='Back to conversation'
         >
           <ChevronLeft className='h-4 w-4' />
@@ -1977,19 +2206,41 @@ function useDebouncedValue<T>(value: T, ms: number): T {
   return v
 }
 
+/** Direct messages, group conversations and record rooms can be archived;
+ *  channels are left instead. */
+function canArchive(r: RoomInfo | null): boolean {
+  if (!r) return false
+  return r.kind === 'dm' || r.kind === 'entity' || (r.kind === 'channel' && !!r.channel?.is_direct)
+}
+
 export function ChatRoomList({
   rooms,
   onOpen,
-  onNewGroup
+  onNewGroup,
+  archivedView = false,
+  loading = false
 }: {
   rooms: RoomInfo[]
   onOpen: (room: RoomInfo) => void
   /** Opens the group-conversation composer (host renders the dialog). */
   onNewGroup?: () => void
+  /** The Archived tab: no assistant entry, rows offer Unarchive. */
+  archivedView?: boolean
+  loading?: boolean
 }) {
   const th = useTheme()
   const cfg = useChatConfig()
-  const { setMuted, leave } = useRoomMembership()
+  const { setMuted, leave, setArchived } = useRoomMembership()
+  const presence = useMemo(
+    () =>
+      new Map(
+        cfg.onlineUsers.map((u) => [
+          String(u.user_id).toUpperCase(),
+          u.is_idle ? ('idle' as const) : ('online' as const)
+        ])
+      ),
+    [cfg.onlineUsers]
+  )
   const bot = useChatBotInfo()
   const [search, setSearch] = useState('')
   const q = useDebouncedValue(search.trim(), 250)
@@ -2066,7 +2317,15 @@ export function ChatRoomList({
           )}
         </div>
       )}
-      {bot.bot_name && bot.bot_user_id && cfg.me && (
+      {archivedView && !loading && rooms.length === 0 && (
+        <p className='px-3 py-6 text-center text-[12px] leading-relaxed text-slate-400'>
+          Nothing archived. Archiving is just for you: the conversation leaves your chat list and
+          stops alerting you, while everyone else in it carries on as before. Archive from a room's
+          header or its row in your chat list; writing in it again brings it back.
+        </p>
+      )}
+      {archivedView && loading && <p className='px-3 py-3 text-[12px] text-slate-400'>Loading…</p>}
+      {!archivedView && bot.bot_name && bot.bot_user_id && cfg.me && (
         <button
           type='button'
           onClick={() =>
@@ -2127,7 +2386,35 @@ export function ChatRoomList({
                   onClick={() => onOpen(r)}
                   className='flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
                 >
-                  <span className='flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'>
+                  {(() => {
+                    const peer = r.kind === 'dm' && cfg.me ? dmPeer(r.room, cfg.me.id) : null
+                    if (!peer) return null
+                    const state = presence.get(peer.toUpperCase()) ?? 'offline'
+                    return (
+                      <span className='relative shrink-0' data-chat-room-avatar={state}>
+                        <Avatar id={peer} name={r.label} size={32} />
+                        <span
+                          className={cn(
+                            'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-card',
+                            state === 'online'
+                              ? 'bg-emerald-500'
+                              : state === 'idle'
+                                ? 'bg-amber-400'
+                                : 'bg-slate-300 dark:bg-slate-600'
+                          )}
+                          title={
+                            state === 'online' ? 'Online' : state === 'idle' ? 'Idle' : 'Offline'
+                          }
+                        />
+                      </span>
+                    )
+                  })()}
+                  <span
+                    className={cn(
+                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400',
+                      r.kind === 'dm' && cfg.me && dmPeer(r.room, cfg.me.id) && 'hidden'
+                    )}
+                  >
                     {r.kind === 'dm' ? (
                       <MessageCircle className='h-4 w-4' strokeWidth={1.8} />
                     ) : r.channel?.is_direct ? (
@@ -2169,11 +2456,33 @@ export function ChatRoomList({
                 </button>
                 {/* Row actions sit on hover so the list stays scannable. */}
                 <span className='absolute right-1.5 top-1.5 hidden items-center gap-0.5 group-hover/room:flex'>
+                  {canArchive(r) && (
+                    <button
+                      type='button'
+                      title={
+                        archivedView
+                          ? 'Unarchive — back to your chats'
+                          : 'Archive for me — hides it from my list and stops my alerts. Others in the conversation are not affected.'
+                      }
+                      aria-label={
+                        archivedView ? `Unarchive ${r.label}` : `Archive ${r.label} for me`
+                      }
+                      onClick={() => setArchived.mutate({ room: r.room, archived: !archivedView })}
+                      className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+                      data-chat-row-archive={archivedView ? 'unarchive' : 'archive'}
+                    >
+                      {archivedView ? (
+                        <ArchiveRestore className='h-3 w-3' />
+                      ) : (
+                        <Archive className='h-3 w-3' />
+                      )}
+                    </button>
+                  )}
                   <button
                     type='button'
                     title={r.muted ? 'Unmute' : 'Mute'}
                     onClick={() => setMuted.mutate({ room: r.room, muted: !r.muted })}
-                    className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted'
+                    className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
                   >
                     {r.muted ? <Bell className='h-3 w-3' /> : <BellOff className='h-3 w-3' />}
                   </button>
@@ -2182,7 +2491,7 @@ export function ChatRoomList({
                       type='button'
                       title={r.kind === 'global' ? 'Leave General' : 'Leave channel'}
                       onClick={() => leave.mutate(r.room)}
-                      className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-muted'
+                      className='rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
                     >
                       <LogOut className='h-3 w-3' />
                     </button>
@@ -2495,7 +2804,7 @@ function GroupDmDialog({
         <button
           type='button'
           onClick={onClose}
-          className='rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+          className='rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
           aria-label='Back'
         >
           <ChevronLeft className='h-4 w-4' strokeWidth={2} />
@@ -2619,7 +2928,7 @@ export function ChatPanel({
   const cfg = useChatConfig()
   const th = useTheme()
   const me = cfg.me
-  const [tab, setTab] = useState<'online' | 'chat' | 'browse'>('online')
+  const [tab, setTab] = useState<'online' | 'chat' | 'browse' | 'archived'>('online')
   const [activeRoom, setActiveRoom] = useState<{
     room: string
     label: string
@@ -2628,7 +2937,11 @@ export function ChatPanel({
   } | null>(null)
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // The Archived tab keeps its own open room, so each tab returns to where
+  // the person left it.
+  const [archivedRoom, setArchivedRoom] = useState<{ room: string; label: string } | null>(null)
   const { rooms, totalUnread } = useChatRooms()
+  const archived = useArchivedRooms(tab === 'archived')
   /** Online people split into sections by the chosen attribute.
    *
    *  Each person appears EXACTLY ONCE. Someone covering three zones is grouped
@@ -2744,22 +3057,27 @@ export function ChatPanel({
       >
         <div className={cn('flex shrink-0 items-center gap-2 border-b px-3.5 py-2.5', th.divider)}>
           <div className='flex gap-0.5 rounded-lg border border-slate-200 p-0.5 dark:border-border'>
-            {(['online', 'chat', 'browse'] as const).map((t) => (
+            {(['online', 'chat', 'browse', 'archived'] as const).map((t) => (
               <button
                 key={t}
                 type='button'
-                onClick={() => {
-                  setTab(t)
-                  if (t === 'online') setActiveRoom(null)
-                }}
+                // The open conversation survives a visit to another tab —
+                // coming back to Chat returns to where the person was.
+                onClick={() => setTab(t)}
                 className={cn(
-                  'flex items-center gap-1.5 rounded-md px-3 py-1 text-[12px] font-medium transition-colors',
+                  'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors',
                   tab === t
                     ? th.accentSoft
                     : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
                 )}
               >
-                {t === 'online' ? `Online · ${users.length}` : t === 'chat' ? 'Chat' : 'Browse'}
+                {t === 'online'
+                  ? `Online · ${users.length}`
+                  : t === 'chat'
+                    ? 'Chat'
+                    : t === 'browse'
+                      ? 'Browse'
+                      : 'Archived'}
                 {t === 'chat' && totalUnread > 0 && (
                   <span
                     className={cn(
@@ -2777,7 +3095,7 @@ export function ChatPanel({
           <button
             type='button'
             onClick={onClose}
-            className='ml-auto rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-muted'
+            className='ml-auto rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
             aria-label='Close panel'
           >
             <X className='h-4 w-4' strokeWidth={2} />
@@ -2996,6 +3314,22 @@ export function ChatPanel({
               ))
             )}
           </div>
+        ) : tab === 'archived' ? (
+          archivedRoom ? (
+            <ChatRoomView
+              room={archivedRoom.room}
+              label={archivedRoom.label}
+              onBack={() => setArchivedRoom(null)}
+              renderMessageBody={renderMessageBody}
+            />
+          ) : (
+            <ChatRoomList
+              rooms={archived.rooms}
+              loading={archived.loading}
+              archivedView
+              onOpen={(r) => setArchivedRoom({ room: r.room, label: r.label })}
+            />
+          )
         ) : tab === 'browse' ? (
           // The tab is checked BEFORE the open room: leaving it last meant
           // switching to Browse with a conversation open kept showing that

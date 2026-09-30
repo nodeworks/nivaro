@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef } fr
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
+import { playNotificationSound } from '../../lib/notification-sound'
 
 /**
  * Nivaro chat — data layer.
@@ -242,6 +243,8 @@ export interface RoomInfo {
   notify_mode: 'all' | 'mentions'
   joined: boolean
   channel: ChannelMeta | null
+  /** Put away by this person — lives in the Archived tab, never alerts. */
+  archived?: boolean
 }
 
 export interface ChannelMeta {
@@ -261,8 +264,49 @@ interface ServerRoom {
   muted: boolean
   notify_mode?: 'all' | 'mentions'
   joined: boolean
+  archived?: boolean
   channel: ChannelMeta | null
   last_message: ChatMessage | null
+}
+
+function toRoomInfos(data: ServerRoom[], meId: string | undefined, cfg: ChatConfig): RoomInfo[] {
+  const myId = meId?.toLowerCase() ?? ''
+  const out = data.map((r) => {
+    const kind: RoomInfo['kind'] = r.kind === 'unknown' ? 'entity' : r.kind
+    const label =
+      kind === 'global'
+        ? cfg.globalLabel
+        : kind === 'dm'
+          ? // The server resolves the peer's name from the user table; the
+            // message sender is only a fallback for hosts that don't send one.
+            (r.label ??
+            (r.last_message?.sender?.toLowerCase() !== myId
+              ? (r.last_message?.sender_name ?? null)
+              : null) ??
+            `User ${dmPeer(r.room, myId)?.slice(0, 8) ?? ''}`)
+          : (r.label ?? cfg.roomLabel?.(r.room) ?? r.room.toUpperCase())
+    return {
+      room: r.room,
+      label,
+      kind,
+      lastMessage: r.last_message,
+      unread: r.unread,
+      muted: r.muted,
+      notify_mode: r.notify_mode ?? 'all',
+      joined: r.joined,
+      channel: r.channel ?? null,
+      archived: !!r.archived
+    }
+  })
+  // General is opt-in (joined from the directory) — no synthetic row when
+  // the server left it out.
+  return out.sort((a, b) => {
+    if (a.kind === 'global') return -1
+    if (b.kind === 'global') return 1
+    const ta = a.lastMessage ? new Date(a.lastMessage.date_created).getTime() : 0
+    const tb = b.lastMessage ? new Date(b.lastMessage.date_created).getTime() : 0
+    return tb - ta
+  })
 }
 
 /**
@@ -290,49 +334,35 @@ export function useChatRooms() {
   })
   useChatRealtime([['nvr-chat-rooms']])
 
-  const rooms: RoomInfo[] = useMemo(() => {
-    const myId = me?.id?.toLowerCase() ?? ''
-    const out = (query.data ?? []).map((r) => {
-      const kind: RoomInfo['kind'] = r.kind === 'unknown' ? 'entity' : r.kind
-      const label =
-        kind === 'global'
-          ? cfg.globalLabel
-          : kind === 'dm'
-            ? // The server resolves the peer's name from the user table; the
-              // message sender is only a fallback for hosts that don't send one.
-              (r.label ??
-              (r.last_message?.sender?.toLowerCase() !== myId
-                ? (r.last_message?.sender_name ?? null)
-                : null) ??
-              `User ${dmPeer(r.room, myId)?.slice(0, 8) ?? ''}`)
-            : (r.label ?? cfg.roomLabel?.(r.room) ?? r.room.toUpperCase())
-      return {
-        room: r.room,
-        label,
-        kind,
-        lastMessage: r.last_message,
-        unread: r.unread,
-        muted: r.muted,
-        notify_mode: r.notify_mode ?? 'all',
-        joined: r.joined,
-        channel: r.channel ?? null
-      }
-    })
-    // General is opt-in (joined from the directory) — no synthetic row when
-    // the server left it out.
-    return out.sort((a, b) => {
-      if (a.kind === 'global') return -1
-      if (b.kind === 'global') return 1
-      const ta = a.lastMessage ? new Date(a.lastMessage.date_created).getTime() : 0
-      const tb = b.lastMessage ? new Date(b.lastMessage.date_created).getTime() : 0
-      return tb - ta
-    })
-  }, [query.data, me?.id, cfg])
+  const rooms: RoomInfo[] = useMemo(
+    () => toRoomInfos(query.data ?? [], me?.id, cfg),
+    [query.data, me?.id, cfg]
+  )
 
   // Muted rooms still show their count in the row, but they must not drive the
   // badge or the chirp.
   const totalUnread = rooms.reduce((s, r) => s + (r.muted ? 0 : r.unread), 0)
   return { rooms, totalUnread, loading: query.isLoading }
+}
+
+/** Rooms this person archived — the Archived tab. Fetched only while shown. */
+export function useArchivedRooms(enabled: boolean) {
+  const cfg = useChatConfig()
+  const client = useNivaroClient()
+  const me = cfg.me
+  const query = useQuery({
+    queryKey: ['nvr-chat-rooms', me?.id, 'archived'],
+    queryFn: async () => {
+      const res = (await client.request(
+        get<{ data: ServerRoom[] }>('/chat/rooms', { archived: '1' })
+      )) as { data: ServerRoom[] }
+      return res.data ?? []
+    },
+    enabled: !!me && enabled,
+    staleTime: 10_000
+  })
+  const rooms = useMemo(() => toRoomInfos(query.data ?? [], me?.id, cfg), [query.data, me?.id, cfg])
+  return { rooms, loading: query.isLoading }
 }
 
 // ── Channel directory + membership ───────────────────────────────────────────
@@ -397,7 +427,12 @@ export function useRoomMembership() {
       ),
     onSuccess: refresh
   })
-  return { join, leave, setMuted, setNotifyMode }
+  const setArchived = useMutation({
+    mutationFn: ({ room, archived }: { room: string; archived: boolean }) =>
+      client.request(patch2(`/chat/rooms/${encodeURIComponent(room)}`, { archived })),
+    onSuccess: refresh
+  })
+  return { join, leave, setMuted, setNotifyMode, setArchived }
 }
 
 export interface ChannelMember {
@@ -547,23 +582,78 @@ function isConversation(r: RoomInfo): boolean {
   return r.kind === 'dm' || (r.kind === 'channel' && !!r.channel?.is_direct)
 }
 
+/**
+ * Rooms a ChatRoomView is showing right now (refcounted — the dock and the
+ * /chat page can both mount one). A message landing in a room the person is
+ * already reading needs neither a toast nor a sound: they are looking at it,
+ * and a toast there sits right on top of the composer.
+ */
+const openRooms = new Map<string, number>()
+
+export function useOpenRoomRegistration(room: string | null | undefined) {
+  useEffect(() => {
+    if (!room) return
+    openRooms.set(room, (openRooms.get(room) ?? 0) + 1)
+    return () => {
+      const n = (openRooms.get(room) ?? 1) - 1
+      if (n <= 0) openRooms.delete(room)
+      else openRooms.set(room, n)
+    }
+  }, [room])
+}
+
+function pageVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState === 'visible'
+}
+
+function isReading(room: string): boolean {
+  return openRooms.has(room) && pageVisible()
+}
+
+/**
+ * The person's own sound preference — `preferences.notification_sound`
+ * ('off' | 'subtle' | 'chime'), the same setting the notification bell plays.
+ * Shares the profile card's query key and shape, so changing it there applies
+ * to chat at once. Unset reads as off, which is what the profile shows.
+ */
+export function useNotificationSoundPreference(): string {
+  const client = useNivaroClient()
+  const { data } = useQuery({
+    queryKey: ['nvr-profile-prefs'],
+    queryFn: () =>
+      client
+        .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
+        .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>),
+    staleTime: 60_000
+  })
+  const raw = data?.notification_sound
+  return typeof raw === 'string' ? raw : 'off'
+}
+
 export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
   const cfg = useChatConfig()
+  const soundPref = useNotificationSoundPreference()
   useEffect(() => {
     // Without rooms the hook only knows the total — keep the old behaviour.
+    // Rooms the person is reading are left out of both the sound and the toast.
     const conversationUnread = rooms
-      ? rooms.filter(isConversation).reduce((n, r) => n + r.unread, 0)
+      ? rooms
+          .filter((r) => isConversation(r) && !isReading(r.room))
+          .reduce((n, r) => n + r.unread, 0)
       : totalUnread
     const grew = conversationUnread > prevUnread
-    if (cfg.sound && grew) playChirp()
+    if (cfg.sound && grew) playNotificationSound(soundPref)
 
     if (rooms) {
       // First pass seeds the watermarks; toasting then would announce every
       // unread that already existed when the app loaded.
       const seeded = prevByRoom.size > 0
+      // With a conversation open the composer sits bottom-right, exactly where
+      // toasts stack — show them at the top instead.
+      const anyRoomOpen = openRooms.size > 0
       for (const r of rooms) {
         const before = prevByRoom.get(r.room) ?? 0
-        if (seeded && !r.muted && isConversation(r) && r.unread > before) {
+        if (seeded && !r.muted && isConversation(r) && r.unread > before && !isReading(r.room)) {
           const last = r.lastMessage
           const who = last?.sender_name ? String(last.sender_name).trim() : null
           toast(
@@ -577,6 +667,7 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
                     .slice(0, 90)
                 : undefined,
               duration: 4000,
+              ...(anyRoomOpen ? { position: 'top-center' as const } : {}),
               // Reading the message is the whole reason the toast exists, so
               // it opens the conversation — only when a host has somewhere to
               // open it, otherwise the click would do nothing.
@@ -598,7 +689,7 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
     }
 
     prevUnread = conversationUnread
-  }, [totalUnread, cfg.sound, rooms])
+  }, [totalUnread, cfg.sound, rooms, soundPref])
 }
 
 // ── Read watermarks ──────────────────────────────────────────────────────────

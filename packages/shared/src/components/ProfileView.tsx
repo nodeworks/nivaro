@@ -447,7 +447,7 @@ export function NotificationRulesCard() {
             }}
           />
           <span className='text-[11px] text-slate-400'>
-            plays when an in-app notification arrives
+            plays when a notification or a direct message arrives
           </span>
         </div>
         <table className='w-full text-[12px]'>
@@ -627,47 +627,6 @@ export function NotificationRulesCard() {
           </div>
         </div>
         <div className='flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3 text-[12.5px] text-slate-600 dark:border-border/60 dark:text-muted-foreground'>
-          {/* Notification sounds (#179) */}
-          <label className='flex cursor-pointer items-center gap-1.5'>
-            <input
-              type='checkbox'
-              checked={(prefs?.notification_sound as { enabled?: boolean })?.enabled === true}
-              onChange={(e) =>
-                saveRaw.mutate({
-                  notification_sound: {
-                    enabled: e.target.checked,
-                    volume: (prefs?.notification_sound as { volume?: number })?.volume ?? 0.4
-                  }
-                })
-              }
-              className='rounded'
-            />
-            Sound on new notifications
-          </label>
-          {(prefs?.notification_sound as { enabled?: boolean })?.enabled === true && (
-            <label className='flex items-center gap-1.5'>
-              Volume
-              <input
-                type='range'
-                min={0}
-                max={100}
-                defaultValue={Math.round(
-                  ((prefs?.notification_sound as { volume?: number })?.volume ?? 0.4) * 100
-                )}
-                onMouseUp={(e) =>
-                  saveRaw.mutate({
-                    notification_sound: {
-                      enabled: true,
-                      volume: Number((e.target as HTMLInputElement).value) / 100
-                    }
-                  })
-                }
-                className='w-24'
-              />
-            </label>
-          )}
-        </div>
-        <div className='flex flex-wrap items-center gap-4 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
           {/* Auto-watch rules (#400) */}
           <span className='text-[11.5px] text-slate-400'>Auto-watch records I…</span>
           {(

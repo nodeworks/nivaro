@@ -209,6 +209,7 @@ export interface RoomSummary {
   unread: number
   muted: boolean
   notify_mode: 'all' | 'mentions'
+  archived: boolean
   joined: boolean
   /** Channel rooms only — what the settings panel needs without a second fetch. */
   channel: {
@@ -234,8 +235,12 @@ export interface RoomSummary {
  * they have NOT joined are deliberately excluded — they belong to the
  * directory, which is what keeps the sidebar usable at hundreds of channels.
  */
-export async function listRooms(user: User): Promise<RoomSummary[]> {
+export async function listRooms(
+  user: User,
+  opts: { archived?: boolean } = {}
+): Promise<RoomSummary[]> {
   const uid = String(user.id)
+  const wantArchived = opts.archived === true
   const [memberships, dmRooms, chans] = await Promise.all([
     db('nivaro_chat_memberships').where('user', uid) as Promise<
       Array<{
@@ -243,6 +248,7 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
         last_read_at: Date | null
         is_muted: boolean
         notify_mode: string | null
+        archived_at?: Date | null
       }>
     >,
     // DMs are implicit: a message addressed to you creates the room.
@@ -267,10 +273,16 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
   ])
 
   const byRoom = new Map(memberships.map((m) => [m.room, m]))
+  // Archive is personal: an archived room lives only in the Archived list, so
+  // it never counts toward the badge, the sound or the toast. Without the
+  // column (a database behind migration 368) nothing is archived.
+  const archived = new Set(memberships.filter((m) => m.archived_at).map((m) => m.room))
   // General is OPT-IN like any open channel (2026-09-22): it lists only once
   // the person has joined it from the directory. Every open room would
   // otherwise page the whole company on every message.
-  const candidates = new Set<string>([...byRoom.keys(), ...dmRooms])
+  const candidates = new Set<string>(
+    [...byRoom.keys(), ...dmRooms].filter((room) => archived.has(room) === wantArchived)
+  )
 
   // Archived channels drop out of the sidebar even for members.
   for (const room of [...candidates]) {
@@ -291,7 +303,12 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
     dmPeerNames(uid, rooms)
   ])
 
-  const out: RoomSummary[] = rooms.map((room) => {
+  // A 1:1 DM lists once it holds a message. Opening a conversation writes a
+  // membership row (the read watermark), so every person someone ever clicked
+  // on would otherwise sit in the sidebar forever as an empty "direct message".
+  const listed = rooms.filter((room) => !room.startsWith('dm:') || lastMessages.has(room))
+
+  const out: RoomSummary[] = listed.map((room) => {
     const parsed = parseRoom(room)
     const membership = byRoom.get(room)
     const channel = parsed.kind === 'channel' ? chans.get(parsed.channelKey ?? '') : undefined
@@ -315,6 +332,7 @@ export async function listRooms(user: User): Promise<RoomSummary[]> {
         | 'all'
         | 'mentions',
       joined: !!membership,
+      archived: archived.has(room),
       last_message: lastMessages.get(room) ?? null
     }
   })

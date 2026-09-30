@@ -48,7 +48,10 @@ export async function chatRoutes(app: FastifyInstance) {
   // ── Rooms ─────────────────────────────────────────────────────────────────
 
   app.get('/rooms', async (req) => {
-    return { data: await listRooms(req.user!) }
+    const q = req.query as { archived?: string }
+    return {
+      data: await listRooms(req.user!, { archived: q.archived === '1' || q.archived === 'true' })
+    }
   })
 
   app.get('/directory', async (req) => {
@@ -314,6 +317,7 @@ export async function chatRoutes(app: FastifyInstance) {
           }).catch(() => null)
           for (const m of members.slice(0, 300)) {
             if (String(m.user).toUpperCase() === senderId) continue
+            if (await isMuted(m.user, room)) continue
             await notifyUser(app, m.user, {
               subject: `@channel in ${room.slice(3)}`,
               category: 'mentions',
@@ -347,6 +351,12 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // Sending is also reading: seeing your own message as unread is noise.
     await touchWatermark(String(req.user!.id), room)
+    // Writing in a room you archived brings it back — you are using it again.
+    await db('nivaro_chat_memberships')
+      .where({ user: String(req.user!.id), room })
+      .whereNotNull('archived_at')
+      .update({ archived_at: null })
+      .catch(() => {})
 
     // Mentions notify explicitly (the socket only reaches people with the room
     // open). Only mention users who can actually see the room.
@@ -416,14 +426,15 @@ export async function chatRoutes(app: FastifyInstance) {
   app.patch<{ Params: { room: string } }>('/rooms/:room', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
-    const b = req.body as { muted?: boolean; notify_mode?: string | null }
-    const patch: { is_muted?: boolean; notify_mode?: string | null } = {}
+    const b = req.body as { muted?: boolean; notify_mode?: string | null; archived?: boolean }
+    const patch: { is_muted?: boolean; notify_mode?: string | null; archived_at?: Date | null } = {}
     if (b.muted !== undefined) patch.is_muted = !!b.muted
+    if (b.archived !== undefined) patch.archived_at = b.archived ? new Date() : null
     if (b.notify_mode !== undefined) {
       patch.notify_mode = b.notify_mode === 'mentions' ? 'mentions' : null
     }
     if (Object.keys(patch).length === 0) {
-      return reply.code(400).send({ error: 'muted or notify_mode is required' })
+      return reply.code(400).send({ error: 'muted, notify_mode or archived is required' })
     }
     await upsertMembership(String(req.user!.id), room, patch)
     return { data: { room, ...patch } }
@@ -1022,7 +1033,12 @@ export async function chatRoutes(app: FastifyInstance) {
   async function upsertMembership(
     user: string,
     room: string,
-    patch: { is_muted?: boolean; last_read_at?: Date; notify_mode?: string | null }
+    patch: {
+      is_muted?: boolean
+      last_read_at?: Date
+      notify_mode?: string | null
+      archived_at?: Date | null
+    }
   ): Promise<void> {
     const existing = await db('nivaro_chat_memberships').where({ user, room }).first()
     if (existing) {
@@ -1045,9 +1061,10 @@ export async function chatRoutes(app: FastifyInstance) {
     await upsertMembership(user, room, { last_read_at: new Date() })
   }
 
+  /** Muted OR archived — either way the person asked not to be told. */
   async function isMuted(user: string, room: string): Promise<boolean> {
     const row = await db('nivaro_chat_memberships').where({ user, room }).first()
-    return !!row?.is_muted
+    return !!row?.is_muted || !!row?.archived_at
   }
 }
 

@@ -583,13 +583,24 @@ export async function usersRoutes(app: FastifyInstance) {
       patch.dashboard_density = d
     }
     if ('notification_sound' in body) {
-      // #684 — client-side chirp when an in-app notification lands.
-      if (!['off', 'subtle', 'chime'].includes(String(body.notification_sound))) {
+      // #684 — client-side sound when an in-app notification or a direct
+      // message lands: 'off' | 'subtle' | 'chime'. An older profile card sent
+      // {enabled, volume}; read that as on/off rather than refusing it (a second
+      // handler for the same key used to refuse the string form, so neither
+      // control could ever save).
+      const raw = body.notification_sound
+      let value: string | null
+      if (raw === null) value = null
+      else if (typeof raw === 'string') value = raw
+      else if (raw && typeof raw === 'object' && !Array.isArray(raw))
+        value = (raw as { enabled?: unknown }).enabled === true ? 'subtle' : 'off'
+      else value = '__invalid__'
+      if (value !== null && !['off', 'subtle', 'chime'].includes(value)) {
         return reply
           .code(400)
           .send({ error: "notification_sound must be 'off', 'subtle' or 'chime'" })
       }
-      patch.notification_sound = body.notification_sound
+      patch.notification_sound = value
     }
     if ('notification_prefs' in body) {
       // Quiet hours + per-category channel matrix (see notification-channels).
@@ -655,20 +666,6 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')
       bustNotifyPrefsCache(req.user!.id)
-    }
-    if ('notification_sound' in body) {
-      // Notification sounds (#179): {enabled, volume 0-1}; null clears.
-      const raw = body.notification_sound
-      if (raw === null) patch.notification_sound = null
-      else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        const v = Number((raw as { volume?: unknown }).volume)
-        patch.notification_sound = {
-          enabled: (raw as { enabled?: unknown }).enabled === true,
-          volume: Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.4
-        }
-      } else {
-        return reply.code(400).send({ error: 'notification_sound must be an object or null' })
-      }
     }
     if ('onboarding_done' in body) {
       // First-login checklist (#134): the personal setup card dismisses once.
