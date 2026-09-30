@@ -118,6 +118,9 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
           heavy: c.heavy ?? false,
           idempotent: c.idempotent ?? 'unknown',
           description: c.description ?? null,
+          // #831 — the zone the schedule is read in, and why
+          timezone: c.timezone ?? null,
+          timezone_source: c.timezone_source ?? null,
           supports_dry_run: c.supports_dry_run ?? false,
           gate: c.gate ?? null,
           after: c.after ?? null,

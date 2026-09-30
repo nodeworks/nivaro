@@ -53,6 +53,11 @@ export interface CronEntry {
   after?: string | null
   /** Records only failed ticks (see ScheduleOpts.quiet). */
   quiet?: boolean
+  /** #831 — the IANA zone the expression is evaluated in. */
+  timezone?: string
+  /** Where that zone came from: an admin override, the job's own code, the
+   *  instance setting (nivaro_settings.sla_timezone) or the container. */
+  timezone_source?: 'override' | 'job' | 'instance' | 'container'
 }
 
 type CronFn = () => void | Promise<void>
@@ -80,6 +85,26 @@ export interface ScheduleOpts {
    *  do: only FAILED ticks are recorded in nivaro_job_runs, so it neither
    *  floods the run history nor reads as missed. */
   quiet?: boolean
+  /** #831 — pin this job to a zone (e.g. 'UTC' for jobs that must follow UTC
+   *  days). Absent = the instance time zone. */
+  timezone?: string
+}
+
+/** A usable IANA zone name, or null. */
+export function validTimeZone(z: unknown): string | null {
+  const v = typeof z === 'string' ? z.trim() : ''
+  if (!v) return null
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: v })
+    return v
+  } catch {
+    return null
+  }
+}
+
+/** The zone this process's clock reads in when nothing else is set. */
+export function containerTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 }
 
 /** Throws with croner's own message when the expression is not valid. */
@@ -89,8 +114,11 @@ export function assertCronExpression(expression: string): void {
 }
 
 /** The next N fire times of an expression, for admin previews. */
-export function previewCronRuns(expression: string, count = 5): Date[] {
-  const probe = new Cron(expression, { paused: true })
+export function previewCronRuns(expression: string, count = 5, timezone?: string): Date[] {
+  const probe = new Cron(expression, {
+    paused: true,
+    timezone: validTimeZone(timezone) ?? undefined
+  })
   const runs = probe.nextRuns(count)
   probe.stop()
   return runs
@@ -154,6 +182,52 @@ export class CronManager {
   /** Heavy-job serialization (#136): heavy ticks run one at a time, queued in
    *  arrival order — nightly procs/sweeps/backfills stop piling onto the pool. */
   private heavyChain: Promise<void> = Promise.resolve()
+  /** #831 — the instance time zone (nivaro_settings.sla_timezone); null = the
+   *  container's clock. Hydrated at boot before anything schedules. */
+  private instanceTz: string | null = null
+  /** #831 — admin per-job zone overrides (cron id → IANA zone). */
+  private tzOverrides = new Map<string, string>()
+
+  /** Evaluate every job in `tz` (null = container) — re-creates each job
+   *  whose effective zone changes. */
+  setInstanceTimezone(tz: string | null): void {
+    const next = validTimeZone(tz)
+    if (next === this.instanceTz) return
+    this.instanceTz = next
+    for (const id of [...this.entries.keys()]) this.rebuild(id)
+  }
+  getInstanceTimezone(): string | null {
+    return this.instanceTz
+  }
+  /** Replace the per-job zone overrides (hydrated with cron_overrides). */
+  setTimezoneOverrides(map: Record<string, string>): void {
+    const next = new Map<string, string>()
+    for (const [id, tz] of Object.entries(map)) {
+      const v = validTimeZone(tz)
+      if (v) next.set(id, v)
+    }
+    this.tzOverrides = next
+    for (const id of [...this.entries.keys()]) this.rebuild(id)
+  }
+  /** Pin one job to a zone live (null = back to its default). */
+  setTimezone(id: string, tz: string | null): void {
+    const v = validTimeZone(tz)
+    if (tz && !v) throw new Error(`Unknown time zone: ${tz}`)
+    if (v) this.tzOverrides.set(id, v)
+    else this.tzOverrides.delete(id)
+    this.rebuild(id)
+  }
+  private zoneFor(
+    id: string,
+    opts?: ScheduleOpts
+  ): { tz: string | undefined; source: NonNullable<CronEntry['timezone_source']> } {
+    const o = this.tzOverrides.get(id)
+    if (o) return { tz: o, source: 'override' }
+    const j = validTimeZone(opts?.timezone)
+    if (j) return { tz: j, source: 'job' }
+    if (this.instanceTz) return { tz: this.instanceTz, source: 'instance' }
+    return { tz: undefined, source: 'container' }
+  }
 
   setPaused(ids: string[]): void {
     this.pausedIds = new Set(ids)
@@ -202,7 +276,8 @@ export class CronManager {
     const e = this.entries.get(id)
     if (!e) return
     const effective = this.overrides.get(id) ?? e.defaultExpression
-    if (effective === e.expression) return
+    const zone = this.zoneFor(id, e.scheduleOpts).tz ?? containerTimeZone()
+    if (effective === e.expression && zone === e.timezone) return
     const { fn, defaultExpression, scheduleOpts, catchUpHours, heavy, idempotent, description } = e
     this.schedule(id, defaultExpression, fn, {
       ...scheduleOpts,
@@ -301,7 +376,7 @@ export class CronManager {
     const e = this.entries.get(id)
     if (!e) return null
     try {
-      const probe = new Cron(e.expression)
+      const probe = new Cron(e.expression, { timezone: e.timezone })
       const n1 = probe.nextRun(now)
       const n2 = n1 ? probe.nextRun(n1) : null
       if (!n1 || !n2) return null
@@ -321,9 +396,12 @@ export class CronManager {
     // expression; the registered one is kept as the revert target.
     const effective = this.overrides.get(id) ?? expression
     const budget = opts?.watchdogMs ?? WATCHDOG_DEFAULT_MS
+    const zone = this.zoneFor(id, opts)
     const job = new Cron(
       effective,
       {
+        // #831 — evaluated in the instance zone, not the container's clock.
+        timezone: zone.tz,
         // protect blocks the tick when the previous one is still running —
         // the callback form makes the skip VISIBLE instead of silent.
         protect: () => {
@@ -398,6 +476,8 @@ export class CronManager {
       idempotent: opts?.idempotent ?? 'unknown',
       description: opts?.description,
       dryRun: opts?.dryRun,
+      timezone: zone.tz ?? containerTimeZone(),
+      timezone_source: zone.source,
       job,
       get nextRun() {
         return job.nextRun() ?? null
@@ -511,7 +591,9 @@ export class CronManager {
         heavy,
         idempotent,
         description,
-        gate
+        gate,
+        timezone,
+        timezone_source
       }) => ({
         id,
         expression,
@@ -528,7 +610,9 @@ export class CronManager {
         // copied here or the registry silently drops it (the first cron bug).
         supports_dry_run: !!this.entries.get(id)?.dryRun,
         after: this.chains.get(id) ?? null,
-        quiet: this.entries.get(id)?.scheduleOpts?.quiet === true
+        quiet: this.entries.get(id)?.scheduleOpts?.quiet === true,
+        timezone,
+        timezone_source
       })
     )
   }

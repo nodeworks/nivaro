@@ -196,6 +196,20 @@ export async function settingsRoutes(app: FastifyInstance) {
     if ('available_locales' in patch && patch.available_locales !== null) {
       patch.available_locales = JSON.stringify(patch.available_locales)
     }
+    // #831 — cron schedules follow the instance zone: re-evaluate every job
+    // on this replica once the write lands (others pick it up at boot).
+    if ('sla_timezone' in patch) {
+      const tz = typeof patch.sla_timezone === 'string' ? patch.sla_timezone.trim() : ''
+      if (tz) {
+        try {
+          new Intl.DateTimeFormat('en-US', { timeZone: tz })
+        } catch {
+          return reply.code(400).send({ error: `Unknown time zone: ${tz}` })
+        }
+      }
+      reply.raw.once('finish', () => app.cron?.setInstanceTimezone(tz || 'America/New_York'))
+    }
+
     if ('sla_zone_map' in patch) {
       if (patch.sla_zone_map !== null && typeof patch.sla_zone_map === 'object') {
         patch.sla_zone_map = JSON.stringify(patch.sla_zone_map)

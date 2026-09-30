@@ -311,14 +311,33 @@ export async function buildServer() {
       | { cron_overrides?: string | null }
       | undefined
     if (row?.cron_overrides) {
-      const parsed = JSON.parse(row.cron_overrides) as Record<string, { expression?: string }>
+      const parsed = JSON.parse(row.cron_overrides) as Record<
+        string,
+        { expression?: string; timezone?: string }
+      >
       const map: Record<string, string> = {}
-      for (const [id, v] of Object.entries(parsed ?? {}))
+      const zones: Record<string, string> = {}
+      for (const [id, v] of Object.entries(parsed ?? {})) {
         if (v?.expression) map[id] = String(v.expression)
+        if (v?.timezone) zones[id] = String(v.timezone)
+      }
       app.cron.setOverrides(map)
+      app.cron.setTimezoneOverrides(zones)
     }
   } catch {
     /* column mid-migration or unparseable — no overrides */
+  }
+  // #831 — schedules are evaluated in the instance time zone (the same
+  // nivaro_settings.sla_timezone every other "instance clock" reads, US
+  // Eastern when blank), not the container's; hydrated before anything
+  // schedules so no job is created on the wrong clock first.
+  try {
+    const row = (await db('nivaro_settings').orderBy('id', 'asc').first('sla_timezone')) as
+      | { sla_timezone?: string | null }
+      | undefined
+    app.cron.setInstanceTimezone(row?.sla_timezone || 'America/New_York')
+  } catch {
+    app.cron.setInstanceTimezone('America/New_York')
   }
   // #54 — chains hydrate the same way: a chained job's own ticks are no-ops
   // and it runs right after its parent completes.

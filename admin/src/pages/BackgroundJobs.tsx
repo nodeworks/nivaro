@@ -28,6 +28,9 @@ interface CronEntry {
   supports_dry_run?: boolean
   gate?: { flag: string; enabled: boolean } | null
   after?: string | null
+  /** #831 — zone the schedule is read in, and where it came from. */
+  timezone?: string | null
+  timezone_source?: 'override' | 'job' | 'instance' | 'container' | null
   errors_7d: number
   last: {
     status: string
@@ -164,20 +167,25 @@ export default function BackgroundJobs() {
   // back to the registered expression.
   const [editing, setEditing] = useState<string | null>(null)
   const [editExpr, setEditExpr] = useState('')
+  // #831 — '' = the instance zone; anything else pins this job to that zone.
+  const [editZone, setEditZone] = useState('')
   const [preview, setPreview] = useState<{ ok: boolean; text: string } | null>(null)
   const previewTimer = useRef<number | null>(null)
   const startEdit = (c: CronEntry) => {
     setEditing(c.id)
     setEditExpr(c.expression)
+    setEditZone(c.timezone_source === 'override' ? (c.timezone ?? '') : '')
     setPreview(null)
   }
-  const onExprChange = (v: string) => {
+  const onExprChange = (v: string, zone = editZone) => {
     setEditExpr(v)
     if (previewTimer.current) window.clearTimeout(previewTimer.current)
     if (!v.trim()) return setPreview(null)
     previewTimer.current = window.setTimeout(async () => {
       try {
-        const r = await api.get('/cron/preview', { params: { expression: v.trim() } })
+        const r = await api.get('/cron/preview', {
+          params: { expression: v.trim(), ...(zone.trim() ? { timezone: zone.trim() } : {}) }
+        })
         const runs: string[] = r.data.data?.next_runs ?? []
         setPreview({
           ok: true,
@@ -205,6 +213,10 @@ export default function BackgroundJobs() {
   }
   const saveSchedule = async (id: string) => {
     try {
+      const entry = crons.find((c) => c.id === id)
+      const pinned = entry?.timezone_source === 'override' ? (entry.timezone ?? '') : ''
+      if (editZone.trim() !== pinned)
+        await api.patch(`/cron/${id}`, { timezone: editZone.trim() || null })
       await api.patch(`/cron/${id}`, { expression: editExpr.trim() })
       toast.success(`Schedule for ${id} updated`)
       setEditing(null)
@@ -414,6 +426,42 @@ export default function BackgroundJobs() {
                       default {c.default_expression}
                     </span>
                   )}
+                  <span
+                    className='flex items-center gap-1 font-sans text-[10.5px]'
+                    data-cron-zone-edit
+                  >
+                    <span className='text-slate-500 dark:text-muted-foreground'>Zone</span>
+                    {[
+                      { v: '', label: 'Instance' },
+                      { v: 'UTC', label: 'UTC' }
+                    ].map((o) => (
+                      <button
+                        key={o.label}
+                        type='button'
+                        onClick={() => {
+                          setEditZone(o.v)
+                          onExprChange(editExpr, o.v)
+                        }}
+                        className={cn(
+                          'rounded px-1.5 py-px',
+                          editZone === o.v
+                            ? 'bg-nvr-cyan/15 font-semibold text-nvr-navy dark:text-nvr-cyan'
+                            : 'text-slate-500 hover:text-slate-800 dark:text-muted-foreground'
+                        )}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                    <input
+                      value={editZone === 'UTC' ? '' : editZone}
+                      onChange={(e) => {
+                        setEditZone(e.target.value)
+                        onExprChange(editExpr, e.target.value)
+                      }}
+                      placeholder='or e.g. Europe/London'
+                      className='h-5 w-32 rounded border border-slate-300 bg-white px-1 font-mono text-[10.5px] dark:border-border dark:bg-background'
+                    />
+                  </span>
                 </span>
               ) : (
                 <button
@@ -429,6 +477,27 @@ export default function BackgroundJobs() {
                     {describeCron(c.expression) && (
                       <span className='font-sans text-[10.5px] font-normal text-slate-500 dark:text-muted-foreground'>
                         {describeCron(c.expression)}
+                      </span>
+                    )}
+                    {c.timezone && (
+                      <span
+                        data-cron-zone={c.timezone}
+                        data-cron-zone-source={c.timezone_source ?? ''}
+                        className='font-sans text-[10.5px] font-normal text-slate-400 dark:text-muted-foreground'
+                        title={
+                          c.timezone_source === 'override'
+                            ? 'Pinned to this zone by an administrator'
+                            : c.timezone_source === 'job'
+                              ? 'The job pins itself to this zone'
+                              : c.timezone_source === 'instance'
+                                ? 'The instance time zone (Settings → SLA)'
+                                : "The server's own clock — no instance zone is set"
+                        }
+                      >
+                        {c.timezone}
+                        {c.timezone_source === 'override' || c.timezone_source === 'job'
+                          ? ' · pinned'
+                          : ''}
                       </span>
                     )}
                   </span>

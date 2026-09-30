@@ -4,7 +4,10 @@ import { previewCronRuns } from '../plugins/cron.js'
 import { logActivity } from '../services/activity.js'
 
 type OverrideRow = {
-  expression: string
+  /** Absent when only the zone is overridden (#831). */
+  expression?: string
+  /** #831 — IANA zone this job is pinned to (absent = the instance zone). */
+  timezone?: string
   note?: string | null
   updated_by?: string | null
   updated_at?: string
@@ -22,6 +25,18 @@ async function readOverrides(): Promise<Record<string, OverrideRow>> {
   } catch {
     return {}
   }
+}
+
+/** Remove one field from an override row, and the row once it is empty. */
+function clearOverrideField(
+  map: Record<string, OverrideRow>,
+  id: string,
+  key: 'expression' | 'timezone'
+) {
+  const row = map[id]
+  if (!row) return
+  delete row[key]
+  if (!row.expression && !row.timezone) delete map[id]
 }
 
 async function writeOverrides(map: Record<string, OverrideRow>): Promise<void> {
@@ -76,14 +91,17 @@ export async function cronRoutes(app: FastifyInstance) {
 
   // Next fire times for an expression — the editor's live preview. Invalid
   // expressions answer 400 with croner's own message.
-  app.get<{ Querystring: { expression?: string } }>(
+  app.get<{ Querystring: { expression?: string; timezone?: string } }>(
     '/preview',
     { preHandler: requireAdmin },
     async (req, reply) => {
       const expression = String(req.query.expression ?? '').trim()
       if (!expression) return reply.code(400).send({ error: 'expression is required' })
       try {
-        return { data: { expression, next_runs: previewCronRuns(expression, 5) } }
+        const tz = req.query.timezone || app.cron.getInstanceTimezone() || undefined
+        return {
+          data: { expression, timezone: tz ?? null, next_runs: previewCronRuns(expression, 5, tz) }
+        }
       } catch (err) {
         return reply
           .code(400)
@@ -97,82 +115,125 @@ export async function cronRoutes(app: FastifyInstance) {
   // replica hydrates at boot before extensions register — so the override
   // binds regardless of which code registered the job.
   // #32 — a job's dry-run handler: the report of what a tick would do.
-  app.post<{ Params: { id: string } }>('/:id/dry-run', { preHandler: requireAdmin }, async (req, reply) => {
-    const { id } = req.params
-    if (!app.cron.list().some((j) => j.id === id)) {
-      return reply.code(404).send({ error: 'No scheduled job with that id' })
-    }
-    const t0 = Date.now()
-    try {
-      const r = await app.cron.dryRun(id)
-      if (!r.supported) return reply.code(400).send({ error: 'This job has no dry-run handler' })
-      await logActivity({ action: 'cron-dry-run', user: req.user?.id, req, comment: id })
-      return { data: { report: r.report, duration_ms: Date.now() - t0 } }
-    } catch (err) {
-      return reply.code(500).send({ error: err instanceof Error ? err.message : 'Dry run failed' })
-    }
-  })
-
-  app.patch<{ Params: { id: string }; Body: { expression?: string | null; note?: string | null; after?: string | null } }>(
-    '/:id',
+  app.post<{ Params: { id: string } }>(
+    '/:id/dry-run',
     { preHandler: requireAdmin },
     async (req, reply) => {
       const { id } = req.params
-      const entry = app.cron.list().find((j) => j.id === id)
-      if (!entry) return reply.code(404).send({ error: 'No scheduled job with that id' })
-      const body = req.body ?? {}
-      // #54 — chaining is its own edit: `after` present = set/clear the chain
-      // and stop; the schedule stays registered as the revert target.
-      if ('after' in body) {
-        const after = body.after == null || String(body.after).trim() === '' ? null : String(body.after).trim()
-        if (after && !app.cron.list().some((j) => j.id === after)) {
-          return reply.code(400).send({ error: `No scheduled job named "${after}"` })
-        }
-        try {
-          app.cron.setAfter(id, after)
-        } catch (err) {
-          return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad chain' })
-        }
-        const chains = await readChains()
-        if (after) chains[id] = after
-        else delete chains[id]
-        await writeChains(chains)
-        await logActivity({ action: 'cron-chain', user: req.user?.id, req, comment: after ? `${id} runs after ${after}` : `${id} unchained` })
-        return { data: app.cron.list().find((j) => j.id === id) }
+      if (!app.cron.list().some((j) => j.id === id)) {
+        return reply.code(404).send({ error: 'No scheduled job with that id' })
       }
-      const expression = body.expression == null ? null : String(body.expression).trim()
+      const t0 = Date.now()
+      try {
+        const r = await app.cron.dryRun(id)
+        if (!r.supported) return reply.code(400).send({ error: 'This job has no dry-run handler' })
+        await logActivity({ action: 'cron-dry-run', user: req.user?.id, req, comment: id })
+        return { data: { report: r.report, duration_ms: Date.now() - t0 } }
+      } catch (err) {
+        return reply
+          .code(500)
+          .send({ error: err instanceof Error ? err.message : 'Dry run failed' })
+      }
+    }
+  )
+
+  app.patch<{
+    Params: { id: string }
+    Body: {
+      expression?: string | null
+      note?: string | null
+      after?: string | null
+      timezone?: string | null
+    }
+  }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params
+    const entry = app.cron.list().find((j) => j.id === id)
+    if (!entry) return reply.code(404).send({ error: 'No scheduled job with that id' })
+    const body = req.body ?? {}
+    // #54 — chaining is its own edit: `after` present = set/clear the chain
+    // and stop; the schedule stays registered as the revert target.
+    if ('after' in body) {
+      const after =
+        body.after == null || String(body.after).trim() === '' ? null : String(body.after).trim()
+      if (after && !app.cron.list().some((j) => j.id === after)) {
+        return reply.code(400).send({ error: `No scheduled job named "${after}"` })
+      }
+      try {
+        app.cron.setAfter(id, after)
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad chain' })
+      }
+      const chains = await readChains()
+      if (after) chains[id] = after
+      else delete chains[id]
+      await writeChains(chains)
+      await logActivity({
+        action: 'cron-chain',
+        user: req.user?.id,
+        req,
+        comment: after ? `${id} runs after ${after}` : `${id} unchained`
+      })
+      return { data: app.cron.list().find((j) => j.id === id) }
+    }
+    // #831 — pin the job to a zone (null/'' = back to the instance zone).
+    if ('timezone' in body) {
+      const tz = body.timezone == null ? '' : String(body.timezone).trim()
+      try {
+        app.cron.setTimezone(id, tz || null)
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad time zone' })
+      }
       const map = await readOverrides()
-      if (expression === null || expression === '' || expression === entry.defaultExpression) {
-        app.cron.revert(id)
-        delete map[id]
-        await writeOverrides(map)
-        await logActivity({ action: 'cron-revert', user: req.user?.id, req, comment: id })
-      } else {
-        try {
-          app.cron.override(id, expression)
-        } catch (err) {
-          return reply
-            .code(400)
-            .send({ error: err instanceof Error ? err.message : 'Invalid cron expression' })
-        }
+      if (tz) {
         map[id] = {
-          expression,
-          note: body.note ?? map[id]?.note ?? null,
+          ...(map[id] ?? {}),
+          timezone: tz,
           updated_by: req.user?.id ?? null,
           updated_at: new Date().toISOString()
         }
-        await writeOverrides(map)
-        await logActivity({
-          action: 'cron-override',
-          user: req.user?.id,
-          req,
-          comment: `${id}: ${entry.defaultExpression} → ${expression}`
-        })
-      }
-      const after = app.cron.list().find((j) => j.id === id)
-      return { data: { ...after, override: map[id] ?? null } }
+      } else clearOverrideField(map, id, 'timezone')
+      await writeOverrides(map)
+      await logActivity({
+        action: 'cron-timezone',
+        user: req.user?.id,
+        req,
+        comment: tz ? `${id} runs on ${tz}` : `${id} back to the instance zone`
+      })
+      return { data: { ...app.cron.list().find((j) => j.id === id), override: map[id] ?? null } }
     }
-  )
+    const expression = body.expression == null ? null : String(body.expression).trim()
+    const map = await readOverrides()
+    if (expression === null || expression === '' || expression === entry.defaultExpression) {
+      app.cron.revert(id)
+      clearOverrideField(map, id, 'expression')
+      await writeOverrides(map)
+      await logActivity({ action: 'cron-revert', user: req.user?.id, req, comment: id })
+    } else {
+      try {
+        app.cron.override(id, expression)
+      } catch (err) {
+        return reply
+          .code(400)
+          .send({ error: err instanceof Error ? err.message : 'Invalid cron expression' })
+      }
+      map[id] = {
+        ...(map[id] ?? {}),
+        expression,
+        note: body.note ?? map[id]?.note ?? null,
+        updated_by: req.user?.id ?? null,
+        updated_at: new Date().toISOString()
+      }
+      await writeOverrides(map)
+      await logActivity({
+        action: 'cron-override',
+        user: req.user?.id,
+        req,
+        comment: `${id}: ${entry.defaultExpression} → ${expression}`
+      })
+    }
+    const after = app.cron.list().find((j) => j.id === id)
+    return { data: { ...after, override: map[id] ?? null } }
+  })
 
   app.post<{ Params: { id: string } }>(
     '/:id/revert',
@@ -184,7 +245,7 @@ export async function cronRoutes(app: FastifyInstance) {
       }
       app.cron.revert(id)
       const map = await readOverrides()
-      delete map[id]
+      clearOverrideField(map, id, 'expression')
       await writeOverrides(map)
       await logActivity({ action: 'cron-revert', user: req.user?.id, req, comment: id })
       return { data: app.cron.list().find((j) => j.id === id) }
