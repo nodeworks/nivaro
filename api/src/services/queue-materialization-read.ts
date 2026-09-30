@@ -5,8 +5,19 @@ import type { User } from '../types.js'
 import { getSlaScheduleSync } from './business-hours.js'
 import { parseColumnFilterOp } from './column-filter-ops.js'
 import { parseJson } from './pipeline-engine.js'
-import { applyQueueGatesToCache, type QueueGate, queueGatesFor } from './queue-access.js'
-import type { QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
+import {
+  applyQueueGate,
+  applyQueueGatesToCache,
+  type QueueGate,
+  queueGatesFor
+} from './queue-access.js'
+import {
+  applyTypedExtraPredicate,
+  decodeCachedExtra,
+  hasTypedExtraFilter,
+  twinJsonPath
+} from './queue-materialization-extra.js'
+import type { QueueGroupSummary, QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
 import { normalizeDisplayConfig } from './queues.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
@@ -18,27 +29,23 @@ import { normalizeDisplayConfig } from './queues.js'
 // JSON_VALUE over the cached `extra` JSON (a 6s live resolve otherwise — see
 // jsonValueExpr below). The caller should route requests matching this to the
 // existing live-resolve path instead of calling fetchMaterializedQueueItems.
-// The cached extra JSON may carry a reserved __ids key (related-record ids per
-// relation path, written by buildMaterializedRow) — split it back out so the
-// API shape matches the live path's extra / extra_ids pair.
-function splitExtra(raw: string | null): {
-  extra: Record<string, unknown>
-  extra_ids: Record<string, string[]>
-} {
-  if (!raw) return { extra: {}, extra_ids: {} }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    const { __ids, ...rest } = parsed
-    return { extra: rest, extra_ids: (__ids as Record<string, string[]>) ?? {} }
-  } catch {
-    return { extra: {}, extra_ids: {} }
-  }
-}
+// The cached extra JSON carries reserved keys (__ids, __t, __via) — split
+// them back out so the API shape matches the live path's extra / extra_ids /
+// via_addendum (see queue-materialization-extra.ts).
+const splitExtra = decodeCachedExtra
 
 export function requiresLiveResolveFallback(
   sort: string,
-  _filters: Record<string, unknown>
+  _filters: Record<string, unknown>,
+  opts: {
+    /** Every cached row carries typed twins (#801), so date / number /
+     *  boolean column filters can be answered in SQL. */
+    typedTwins?: boolean
+    /** #741: SLA and aging groups are computed at read time — live path. */
+    groupBy?: string | null
+  } = {}
 ): boolean {
+  if (opts.groupBy && !groupKeySql(opts.groupBy)) return true
   const sortKey = sort.startsWith('-') ? sort.slice(1) : sort
   // Triage-label filters (#109) join a queue-local table the SQL pushdown
   // doesn't know — route to the live path, which filters in memory.
@@ -58,18 +65,17 @@ export function requiresLiveResolveFallback(
   // `extra` holds whatever the source column stringified to (ISO one row,
   // MM/DD/YYYY the next), so the comparison is JS on the resolved rows, never
   // a JSON_VALUE string compare that would silently mis-order them.
-  for (const [key, raw] of Object.entries(_filters ?? {})) {
-    if (!key.startsWith('extra.')) continue
-    const values = Array.isArray(raw) ? raw : [raw]
-    if (values.some((v) => typeof v === 'string' && parseColumnFilterOp(v))) return true
-  }
-  // Only an owners sort still live-resolves (it would need SQL string
-  // aggregation across the owners M2M). priority sorts and sla_status/
+  // Since #801 the cache stores a typed twin per extra value, read with the
+  // same readers the live filter uses — only a cache written before that
+  // (no twins yet; one rebuild fixes it) still needs the live path.
+  if (!opts.typedTwins && hasTypedExtraFilter(_filters)) return true
+  // An owners sort is served from the cache's owner_names (#800), written as
+  // name-ordered ', '-joined names — the live sort key exactly. priority sorts and sla_status/
   // aging_hours filters are served from the cache via a narrow scan +
   // computeSla in JS (see fetchMaterializedQueueItems' useJsPath) — exact
   // business-hours math over the same cached inputs the table columns show,
   // WITHOUT the full live resolve that used to take ~48s on large queues.
-  return sortKey === 'owners'
+  return false
 }
 
 // JSON path for an extra-field key: the cached `extra` object is FLAT — dotted
@@ -271,17 +277,253 @@ export async function breachedCountsByQueue(queueIds: string[]): Promise<Record<
 // Shared by the stats/availableValues queries (scope-filtered, pre-column-filter —
 // see fetchQueueItems' computeStats(scoped)/computeAvailableValues(scoped) convention
 // in queues.ts) and as the seed for the column-filtered `base` used for total/rows.
+/** #742 — an `addendums` source's rows follow their PARENT record's access:
+ *  no read on the parent collection hides them all, and the parent's row
+ *  filter / user scopes hide the addendums of parents the viewer cannot see. */
+interface AddendumCacheGate {
+  sourceId: number
+  parentCollection: string
+  deny: boolean
+  gate: QueueGate | null
+}
+
+async function addendumCacheGatesFor(user: User, queueId: string): Promise<AddendumCacheGate[]> {
+  const rows = (await db('nivaro_queue_sources')
+    .where({ queue_id: queueId, type: 'addendums' })
+    .whereNotNull('collection')
+    .select('id', 'collection')
+    .catch(() => [])) as Array<{ id: number; collection: string }>
+  if (rows.length === 0) return []
+  const { can } = await import('./permissions.js')
+  const { queueGateFor } = await import('./queue-access.js')
+  return Promise.all(
+    rows.map(async (r) => {
+      const readable = await can(user, 'read', r.collection)
+      return {
+        sourceId: Number(r.id),
+        parentCollection: r.collection,
+        deny: !readable,
+        gate: readable ? await queueGateFor(user, r.collection) : null
+      }
+    })
+  )
+}
+
+function applyAddendumCacheGates(qb: Knex.QueryBuilder, gates: AddendumCacheGate[], user: User) {
+  for (const g of gates) {
+    if (g.deny || g.gate?.deny) {
+      qb.whereNot('qi.source_id', g.sourceId)
+      continue
+    }
+    if (!g.gate) continue
+    const gate = g.gate
+    const visibleParents = db(g.parentCollection).select(
+      db.raw('CAST(??.?? AS NVARCHAR(255))', [g.parentCollection, 'id'])
+    )
+    applyQueueGate(visibleParents, gate, user)
+    const visibleAddendums = db('nivaro_addendums as a')
+      .where('a.parent_collection', g.parentCollection)
+      .whereIn('a.parent_id', visibleParents)
+      .select(db.raw('CAST(a.id AS NVARCHAR(255))'))
+    qb.where(function () {
+      this.whereNot('qi.source_id', g.sourceId).orWhereIn('qi.item_id', visibleAddendums)
+    })
+  }
+}
+
+async function cacheGatesFor(
+  user: User,
+  queueId: string
+): Promise<{ gates: QueueGate[]; addendumGates: AddendumCacheGate[] }> {
+  const [gates, addendumGates] = await Promise.all([
+    queueGatesFor(user, queueId),
+    addendumCacheGatesFor(user, queueId)
+  ])
+  return { gates, addendumGates }
+}
+
+/**
+ * #741 — the SQL twin of queueGroupKey (queues.ts) for the attributes the
+ * cache can group in SQL. sla_status and aging depend on business-hours math
+ * done at read time, so those live-resolve (requiresLiveResolveFallback).
+ */
+export function groupKeySql(attribute: string): { sql: string; bindings: string[] } | null {
+  if (attribute === 'state') return { sql: `COALESCE(qi.state, 'No state')`, bindings: [] }
+  if (attribute === 'collection') return { sql: 'qi.collection', bindings: [] }
+  if (attribute === 'at_risk')
+    return {
+      sql: `CASE WHEN qi.at_risk = 1 THEN 'At risk' ELSE 'Not at risk' END`,
+      bindings: []
+    }
+  if (attribute === 'owners')
+    return {
+      sql: `CASE WHEN qi.owner_names IS NULL OR qi.owner_names = '' THEN 'No owners' ELSE qi.owner_names END`,
+      bindings: []
+    }
+  if (attribute.startsWith('extra.')) {
+    const path = extraJsonPath(attribute.slice('extra.'.length))
+    return {
+      sql: `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL OR JSON_VALUE(qi.extra, ?) = '' THEN '—' ELSE JSON_VALUE(qi.extra, ?) END`,
+      bindings: [path, path, path]
+    }
+  }
+  return null
+}
+
+/** Group headers over the cache: one GROUP BY for counts, at-risk and sums,
+ *  plus the breached count from a narrow SLA scan of rule-carrying rows (SLA
+ *  status is computed at read time, like every cached SLA figure). */
+async function materializedGroupSummaries(
+  base: Knex.QueryBuilder,
+  attribute: string,
+  sums: string[]
+): Promise<QueueGroupSummary[]> {
+  const expr = groupKeySql(attribute)
+  if (!expr) return []
+  const safeSums = sums.filter((p) => /^[\w.]+$/.test(p)).slice(0, 12)
+  // Grouped over a derived table: a parameterised key expression (extra.*
+  // binds its JSON path) cannot be repeated in GROUP BY — each copy gets its
+  // own parameter and SQL Server reads them as different expressions.
+  const inner = base
+    .clone()
+    .clearSelect()
+    .clearOrder()
+    .select(db.raw(`${expr.sql} AS gk`, expr.bindings), 'qi.at_risk')
+  safeSums.forEach((p, i) => {
+    inner.select(
+      db.raw(`TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)) AS s${i}`, [twinJsonPath(p, 'n')])
+    )
+  })
+  const q = db
+    .from(inner.as('g'))
+    .select('g.gk')
+    .count('* as n')
+    .select(db.raw('SUM(CASE WHEN g.at_risk = 1 THEN 1 ELSE 0 END) AS risky'))
+    .groupBy('g.gk')
+  safeSums.forEach((_p, i) => {
+    q.select(db.raw(`SUM(g.s${i}) AS s${i}`))
+  })
+  const rows = (await q) as Array<Record<string, unknown>>
+  const breachedRows = (await base
+    .clone()
+    .clearSelect()
+    .clearOrder()
+    .whereNotNull('qi.sla_duration_hours')
+    .select(
+      db.raw(`${expr.sql} AS gk`, expr.bindings),
+      'qi.entered_state_at',
+      'qi.sla_duration_hours',
+      'qi.sla_warning_pct',
+      'qi.sla_business_hours_only',
+      'qi.sla_timezone'
+    )) as Array<{
+    gk: string
+    entered_state_at: Date | null
+    sla_duration_hours: number | null
+    sla_warning_pct: number | null
+    sla_business_hours_only: boolean
+    sla_timezone: string | null
+  }>
+  const breached = new Map<string, number>()
+  for (const r of breachedRows) {
+    if (
+      computeSla({ ...r, sla_business_hours_only: !!r.sla_business_hours_only }).status ===
+      'breached'
+    )
+      breached.set(r.gk, (breached.get(r.gk) ?? 0) + 1)
+  }
+  const { orderQueueGroups } = await import('./queues.js')
+  return orderQueueGroups(
+    rows.map((r) => {
+      const key = String(r.gk)
+      const out: QueueGroupSummary = {
+        key,
+        count: Number(r.n),
+        breached: breached.get(key) ?? 0,
+        at_risk: Number(r.risky ?? 0),
+        sums: {}
+      }
+      safeSums.forEach((p, i) => {
+        const v = r[`s${i}`]
+        if (v != null) out.sums[p] = Number(v)
+      })
+      return out
+    }),
+    attribute
+  )
+}
+
+function wantsUnseenFilter(filters: Record<string, unknown>): boolean {
+  const v = filters.unseen
+  return v === true || v === 'yes' || v === 'true' || (Array.isArray(v) && v.includes('yes'))
+}
+
+/**
+ * #643 on the materialized cache: record-unseen's rule (an edit, a pipeline
+ * move or a comment by someone else after the viewer's last open) keyed on
+ * the cache's `qi.collection` / `qi.item_id`, since cache rows span several
+ * collections. services/record-unseen.ts `whereUnseen` is the same rule for a
+ * single collection's own `id`; keep the two in step.
+ */
+export function applyUnseenToCache(qb: Knex.QueryBuilder, userId: string): void {
+  const viewed = (b: Knex.QueryBuilder) =>
+    b
+      .where('v.user', userId)
+      .whereRaw('v.collection = qi.collection')
+      .whereRaw('v.item_id = qi.item_id')
+  qb.where((outer) => {
+    outer
+      .whereExists(
+        viewed(
+          db('nivaro_record_views as v').join('nivaro_activity as a', function () {
+            this.on('a.collection', '=', 'v.collection').andOn('a.item', '=', 'v.item_id')
+          })
+        )
+          .whereIn('a.action', ['create', 'update'])
+          .whereRaw('a.[timestamp] > v.last_viewed_at')
+          .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
+          .select(db.raw('1'))
+      )
+      .orWhereExists(
+        viewed(
+          db('nivaro_record_views as v')
+            .join('nivaro_workflow_instances as i', function () {
+              this.on('i.collection', '=', 'v.collection').andOn('i.item', '=', 'v.item_id')
+            })
+            .join('nivaro_workflow_history as h', 'h.instance', 'i.id')
+        )
+          .whereRaw('h.[timestamp] > v.last_viewed_at')
+          .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
+          .select(db.raw('1'))
+      )
+      .orWhereExists(
+        viewed(
+          db('nivaro_record_views as v').join('nivaro_comments as c', function () {
+            this.on('c.collection', '=', 'v.collection').andOn('c.item', '=', 'v.item_id')
+          })
+        )
+          .whereRaw('c.created_at > v.last_viewed_at')
+          .whereNot('c.user', userId)
+          .select(db.raw('1'))
+      )
+  })
+}
+
 function applyScope(
   qb: Knex.QueryBuilder,
   queueId: string,
   user: User,
   scope: QueueScope,
-  gates: QueueGate[] = []
+  cacheGates: { gates: QueueGate[]; addendumGates: AddendumCacheGate[] } = {
+    gates: [],
+    addendumGates: []
+  }
 ): Knex.QueryBuilder {
   qb.where('qi.queue_id', queueId)
   // The viewer's row filter + user scopes per source collection — the cache
   // holds every viewer's rows, so it is narrowed here, on every read.
-  applyQueueGatesToCache(qb, gates, user)
+  applyQueueGatesToCache(qb, cacheGates.gates, user)
+  applyAddendumCacheGates(qb, cacheGates.addendumGates, user)
   if (scope === 'mine') {
     qb.whereExists(function () {
       this.select('*')
@@ -334,7 +576,6 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
       'qi.sla_duration_hours',
       'qi.sla_warning_pct',
       'qi.sla_business_hours_only',
-      'qi.sla_timezone',
       'qi.sla_timezone'
     )) as Array<{
     entered_state_at: Date | null
@@ -371,7 +612,7 @@ export async function fetchMaterializedStats(
     owners: Array<{ id: string; name: string }>
   }
 }> {
-  const gates = await queueGatesFor(user, queueId)
+  const gates = await cacheGatesFor(user, queueId)
   const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope, gates)
 
   const statsRows = (await scopeBase
@@ -411,7 +652,6 @@ export async function fetchMaterializedStats(
       'qi.sla_duration_hours',
       'qi.sla_warning_pct',
       'qi.sla_business_hours_only',
-      'qi.sla_timezone',
       'qi.sla_timezone'
     )) as Array<{
     entered_state_at: Date | null
@@ -477,9 +717,17 @@ export async function fetchMaterializedQueueItems(
   queueId: string,
   user: User,
   scope: QueueScope,
-  options: { sort?: string; filters?: Record<string, unknown>; page?: number; limit?: number } = {}
+  options: {
+    sort?: string
+    filters?: Record<string, unknown>
+    page?: number
+    limit?: number
+    withUnseen?: boolean
+    group?: { by: string; key?: string | null; sums?: string[] }
+  } = {}
 ): Promise<{
   items: QueueItem[]
+  groups?: QueueGroupSummary[]
   stats: QueueStats
   filteredStats: QueueStats | null
   /** Rows per state under every active filter except State itself — the
@@ -509,7 +757,7 @@ export async function fetchMaterializedQueueItems(
   // computeAvailableValues(scoped) which are computed on the scope-filtered set
   // BEFORE column filters, so the stat strip and filter dropdown options never
   // shrink as a viewer narrows the table via column filters.
-  const gates = await queueGatesFor(user, queueId)
+  const gates = await cacheGatesFor(user, queueId)
   const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, scope, gates)
 
   // base = scopeBase + column filters — feeds total count and the paginated rows.
@@ -530,13 +778,26 @@ export async function fetchMaterializedQueueItems(
     if (!key.startsWith('extra.')) continue
     const values = asList(raw)
     if (values.length === 0) continue
-    const path = extraJsonPath(key.slice('extra.'.length))
+    const field = key.slice('extra.'.length)
+    const path = extraJsonPath(field)
     baseNoState.where(function () {
       for (const v of values) {
-        this.orWhereRaw('JSON_VALUE(qi.extra, ?) LIKE ?', [path, `%${v}%`])
+        const op = parseColumnFilterOp(v)
+        if (op) {
+          // A typed operator reads the twin (#801) — the same value the live
+          // matcher parses, so both paths keep the same rows.
+          this.orWhere(function () {
+            applyTypedExtraPredicate(this, field, op)
+          })
+        } else {
+          this.orWhereRaw('JSON_VALUE(qi.extra, ?) LIKE ?', [path, `%${v}%`])
+        }
       }
     })
   }
+  // "Unseen changes" (#643): the record-unseen rule as a predicate on the
+  // cache's own (collection, item_id) — see applyUnseenToCache.
+  if (wantsUnseenFilter(filters)) applyUnseenToCache(baseNoState, user.id)
   const labelList = asList(filters.label)
   if (labelList.length > 0) {
     baseNoState.where(function () {
@@ -565,10 +826,29 @@ export async function fetchMaterializedQueueItems(
     }
   }
   if (filters.at_risk) baseNoState.where('qi.at_risk', filters.at_risk === 'yes')
-  const base = baseNoState.clone()
+  let base = baseNoState.clone()
   if (stateList.length > 0) base.whereIn('qi.state', stateList)
   const inStateFilter = (state: string | null) =>
     stateList.length === 0 || (state != null && stateList.includes(state))
+
+  // #741 group-by: the headers come from grouped SQL over every filter, then
+  // rows are narrowed to the one group being expanded (none for headers only).
+  let groups: QueueGroupSummary[] | undefined
+  let groupHeadersOnly = false
+  if (options.group) {
+    const expr = groupKeySql(options.group.by)
+    if (expr) {
+      groups = await materializedGroupSummaries(base, options.group.by, options.group.sums ?? [])
+      if (options.group.key == null) {
+        groupHeadersOnly = true
+      } else {
+        const key = options.group.key
+        baseNoState.whereRaw(`(${expr.sql}) = ?`, [...expr.bindings, key])
+        base = baseNoState.clone()
+        if (stateList.length > 0) base.whereIn('qi.state', stateList)
+      }
+    }
+  }
 
   const sort = options.sort ?? ''
   const desc = sort.startsWith('-')
@@ -642,7 +922,6 @@ export async function fetchMaterializedQueueItems(
         'qi.sla_warning_pct',
         'qi.sla_business_hours_only',
         'qi.sla_timezone',
-        'qi.sla_timezone',
         'qi.at_risk',
         db.raw(
           'CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio WHERE qio.queue_item_id = qi.id) THEN 1 ELSE 0 END AS has_owner'
@@ -691,7 +970,7 @@ export async function fetchMaterializedQueueItems(
     total = ordered.length
     jsFilteredStats = statsFromNarrowRows(ordered)
 
-    const limit = options.limit ?? total
+    const limit = groupHeadersOnly ? 0 : (options.limit ?? total)
     const pageIds = (limit > 0 ? ordered.slice((page - 1) * limit, page * limit) : []).map(
       (r) => r.id
     )
@@ -730,6 +1009,11 @@ export async function fetchMaterializedQueueItems(
       )
     } else if (sortKey === 'at_risk') {
       base.orderBy('qi.at_risk', desc ? 'desc' : 'asc')
+    } else if (sortKey === 'owners') {
+      // No owners sorts last in both directions, like sortItems (#800).
+      base.orderByRaw(
+        `CASE WHEN qi.owner_names IS NULL OR qi.owner_names = '' THEN 1 ELSE 0 END ASC, qi.owner_names ${desc ? 'DESC' : 'ASC'}`
+      )
     } else if (sortKey.startsWith('extra.')) {
       const path = extraJsonPath(sortKey.slice('extra.'.length))
       // Nulls last regardless of direction — matches sortItems' convention.
@@ -755,7 +1039,7 @@ export async function fetchMaterializedQueueItems(
     // MSSQL — skip the pagination clauses entirely; the WHERE clause already matches
     // nothing, so the result set is empty either way.
     if (limit > 0) rowsQuery.offset((page - 1) * limit).limit(limit)
-    rows = (await rowsQuery) as FullRow[]
+    rows = groupHeadersOnly ? [] : ((await rowsQuery) as FullRow[])
   }
 
   const ownerRows =
@@ -849,6 +1133,11 @@ export async function fetchMaterializedQueueItems(
       url: r.url
     }
   })
+  if (options.withUnseen) {
+    const { unseenForItems } = await import('./queues.js')
+    const unseen = await unseenForItems(user.id, items).catch(() => new Map())
+    for (const it of items) it.unseen = unseen.get(`${it.collection}:${it.item_id}`) ?? null
+  }
 
   // Stats and availableValues come from the shared scope-filtered helper — see
   // fetchMaterializedStats above.
@@ -865,6 +1154,7 @@ export async function fetchMaterializedQueueItems(
 
   return {
     items,
+    ...(groups ? { groups } : {}),
     stats,
     filteredStats,
     stateCounts,

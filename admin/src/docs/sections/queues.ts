@@ -169,6 +169,30 @@ export const queuesGuide: DocSection = {
       type: 'p',
       text: 'Each queue in the Queues sidebar carries a count pill: the total item count, with a red past-SLA count appended (e.g. "142 · 3⚠") when anything has breached. Large materialized queues show exact live counts straight from their cache; regular queues show the numbers from the latest nightly snapshot — the pill’s tooltip tells you which. Badges refresh every minute and only appear for queues with items.'
     },
+    { type: 'h3', text: 'Addendums as a source' },
+    {
+      type: 'p',
+      text: 'An "Addendums in flight" source lists the addendums still in approval on one collection (a collection must have addendums turned on). Each row is the addendum itself: labelled with its title and the record it changes, owned by whoever owns its current approval step, with its money change in a Cost impact column and its own SLA. Its state filter reads the addendum approval states. Opening a row opens the record with that addendum in view. The addendum inherits the record\'s access: people who cannot read the record do not see its addendums.'
+    },
+    {
+      type: 'p',
+      text: 'A collection row whose record has an addendum in flight shows the ADDENDUM\'s state and owners (the approval actually moving) on large, cached queues too — the cache follows addendums as they are created, move, are approved or rejected.'
+    },
+    { type: 'h3', text: 'Grouping a table' },
+    {
+      type: 'p',
+      text: 'Group by (state, collection, owners, at-risk, SLA, aging or any extra column) in the Table view loads the group headers first — each with its count, breached and at-risk counts, and a sum for every number column — and a group\'s rows load when you open it, 50 at a time (Show more adds the next 50). On large, cached queues the headers come from one grouped query. Kanban still groups the full set on the board.'
+    },
+    { type: 'h3', text: 'Changed since you looked' },
+    {
+      type: 'p',
+      text: 'A small dot before an item means someone else edited it, moved it through its pipeline, or commented on it after you last opened it (hover for who and when). Records you have never opened carry no dot. The Unseen changes button narrows the table to those records.'
+    },
+    { type: 'h3', text: 'Filters and sorts on large queues' },
+    {
+      type: 'p',
+      text: 'Large queues read from a cache. Date, number and yes/no column filters (before / after / between, greater than, equals…) and the Owners sort are answered straight from it; a cache built before this release answers them the slower way until its next rebuild (saving the queue\'s sources, or Rematerialize, rebuilds it).'
+    },
     { type: 'h3', text: 'Trends' },
     {
       type: 'p',

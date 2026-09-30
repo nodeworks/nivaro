@@ -28,9 +28,9 @@ import {
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { BulkActionsPicker } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { CollectionFieldPicker, type PickedField } from '@/components/field-picker'
-import { BulkActionsPicker } from '@/components/bulk-actions-section'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -52,7 +52,7 @@ import { cn } from '@/lib/utils'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type SourceType = 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
+type SourceType = 'collection' | 'tasks' | 'approvals' | 'owned_by_me' | 'addendums'
 
 interface QueueCondition {
   field: string
@@ -265,7 +265,8 @@ const SOURCE_TYPE_OPTIONS: { value: SourceType; label: string }[] = [
   { value: 'owned_by_me', label: 'Owned by me (auto)' },
   { value: 'collection', label: 'Collection' },
   { value: 'tasks', label: 'Tasks' },
-  { value: 'approvals', label: 'Approvals' }
+  { value: 'approvals', label: 'Approvals' },
+  { value: 'addendums', label: 'Addendums in flight' }
 ]
 
 // ─── Combobox helper (mirrors Hierarchies.tsx FieldCombobox) ──────────────────
@@ -878,12 +879,18 @@ function SourceRow({
 }) {
   const currentExtraFields = source.extra_fields ?? []
   const isCollection = source.type === 'collection' && !!source.collection
+  // #742: an addendums source names the PARENT collection; its states are the
+  // addendum approval states, not the record's.
+  const isAddendums = source.type === 'addendums' && !!source.collection
+  const listsCollection = source.type === 'collection' || source.type === 'addendums'
 
   const { data: states = [] } = useQuery<Array<{ key: string; label: string }>>({
-    queryKey: ['queue-collection-states', source.collection],
+    queryKey: ['queue-collection-states', source.collection, isAddendums],
     queryFn: () =>
-      api.get(`/queues/collection-states/${source.collection}`).then((r) => r.data.data),
-    enabled: isCollection
+      api
+        .get(`/queues/collection-states/${source.collection}${isAddendums ? '?addendums=1' : ''}`)
+        .then((r) => r.data.data),
+    enabled: isCollection || isAddendums
   })
 
   const { data: fieldConfig } = useQuery<{
@@ -964,25 +971,29 @@ function SourceRow({
               onChange({
                 ...source,
                 type: v as SourceType,
-                collection: v === 'collection' ? source.collection : null
+                collection: v === 'collection' || v === 'addendums' ? source.collection : null
               })
             }
             options={SOURCE_TYPE_OPTIONS}
             disabled={!canEdit}
           />
         </div>
-        {source.type === 'collection' && (
+        {listsCollection && (
           <div className='flex-1'>
             <FieldCombobox
               value={source.collection ?? ''}
               onChange={(v) => onChange({ ...source, collection: v || null })}
               options={collectionOptions}
-              placeholder='Select collection…'
+              placeholder={
+                source.type === 'addendums'
+                  ? 'Addendums of which collection…'
+                  : 'Select collection…'
+              }
               disabled={!canEdit}
             />
           </div>
         )}
-        {source.type === 'collection' && (
+        {listsCollection && (
           <div className='w-40 shrink-0'>
             <FieldCombobox
               value={source.sla_filter ?? ''}
@@ -1018,18 +1029,18 @@ function SourceRow({
         >
           This source only lists records whose SLA is {source.sla_filter}. That filter has to
           compute every record's SLA before anything else in the source can load, so this source
-          resolves noticeably slower than one without it. To narrow by SLA without that cost,
-          leave this empty and use the SLA filter on the queue itself.
+          resolves noticeably slower than one without it. To narrow by SLA without that cost, leave
+          this empty and use the SLA filter on the queue itself.
         </p>
       )}
-      {source.type === 'collection' && (
+      {listsCollection && (
         <div className='grid gap-x-8 gap-y-5 p-4 md:grid-cols-2'>
           {/* Which items appear: narrowing (states + field filters) */}
           <div className='space-y-4'>
             <h4 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
               Which items appear
             </h4>
-            {isCollection && states.length > 0 && (
+            {(isCollection || isAddendums) && states.length > 0 && (
               <div className='space-y-1'>
                 <div className='flex items-center gap-2'>
                   <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>
@@ -1106,7 +1117,7 @@ function SourceRow({
                           }
                         }}
                         options={[
-                          ...(stateValues.includes('__none__')
+                          ...(stateValues.includes('__none__') || isAddendums
                             ? []
                             : [{ value: '__none__', label: '(No state)' }]),
                           ...states
@@ -1193,6 +1204,13 @@ function SourceRow({
             <h4 className='text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
               How items display
             </h4>
+            {source.type === 'addendums' && (
+              <p className='max-w-[60ch] text-[12px] leading-5 text-slate-500 dark:text-slate-400'>
+                Each row is an addendum still in approval, labelled with its title and the record it
+                changes, owned by whoever owns its current approval step, with its money change in a
+                Cost impact column. Opening a row opens the record with that addendum in view.
+              </p>
+            )}
             {isCollection && (
               <div className='space-y-1'>
                 <Label className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>

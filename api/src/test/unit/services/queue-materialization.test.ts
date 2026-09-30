@@ -20,8 +20,8 @@ vi.mock('../../../services/pipeline-engine.js', () => ({
 import { db } from '../../../db/index.js'
 import { computeStatusBatch } from '../../../routes/sla.js'
 import { resolveStateOwnersBatch } from '../../../services/pipeline-engine.js'
-import { requiresLiveResolveFallback } from '../../../services/queue-materialization-read.js'
 import { queueItemMatchesSource } from '../../../services/queue-materialization.js'
+import { requiresLiveResolveFallback } from '../../../services/queue-materialization-read.js'
 import type { QueueSourceRow } from '../../../services/queues.js'
 
 function makeDbChain(result: unknown) {
@@ -342,8 +342,8 @@ describe('requiresLiveResolveFallback', () => {
     expect(requiresLiveResolveFallback('', {})).toBe(false)
   })
 
-  it('falls back ONLY for owners sorts; sla/aging filters use the narrow-scan JS path', () => {
-    expect(requiresLiveResolveFallback('owners', {})).toBe(true)
+  it('never falls back for owners sorts or sla/aging filters (#800 + narrow scan)', () => {
+    expect(requiresLiveResolveFallback('owners', {})).toBe(false)
     expect(requiresLiveResolveFallback('', { sla_status: 'breached' })).toBe(false)
     expect(requiresLiveResolveFallback('', { aging_hours: { min: 1 } })).toBe(false)
   })

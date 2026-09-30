@@ -18,6 +18,7 @@ import {
 import { getCollection, getRelations } from './collections.js'
 import {
   matchesColumnFilterOp,
+  numberOfValue,
   parseColumnFilterOp,
   sortOptionValues
 } from './column-filter-ops.js'
@@ -38,7 +39,7 @@ import { sendBackBatch } from './send-backs.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type QueueSourceType = 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
+export type QueueSourceType = 'collection' | 'tasks' | 'approvals' | 'owned_by_me' | 'addendums'
 
 export type QueueConditionOp =
   | 'eq'
@@ -435,6 +436,8 @@ export interface QueueItem {
     latest_status: string | null
     cost_impact: number | null
   } | null
+  /** #643 — someone else changed the record after the viewer last opened it. */
+  unseen?: { changed_at: string; by: string | null; kinds: string[] } | null
   /** Set when `state`/`owners` come from an in-flight addendum's instance. */
   via_addendum?: { id: string; title: string | null } | null
   /** #7 — shipped / requested figures when the source collection declares
@@ -580,6 +583,131 @@ export function attachClaims(items: QueueItem[], claims: Map<string, QueueOwner>
 
 // True when the request carries at least one active column filter — drives the
 // optional filtered_stats block (stat strip "277 / 504" display).
+// ─── Server-side group-by (#741) ───────────────────────────────────────────────
+
+export const QUEUE_GROUP_ATTRIBUTES = [
+  'state',
+  'collection',
+  'sla_status',
+  'at_risk',
+  'owners',
+  'aging'
+]
+
+export function isQueueGroupAttribute(attr: string): boolean {
+  return QUEUE_GROUP_ATTRIBUTES.includes(attr) || /^extra\.[\w.]+$/.test(attr)
+}
+
+export interface QueueGroupSummary {
+  key: string
+  count: number
+  breached: number
+  at_risk: number
+  /** Per requested numeric extra column: the sum over the group's rows. */
+  sums: Record<string, number>
+}
+
+function agingBucketOf(hours: number | null): string {
+  if (hours == null) return 'unknown'
+  if (hours < 24) return '<1d'
+  if (hours < 72) return '1–3d'
+  if (hours < 168) return '3–7d'
+  return '>7d'
+}
+
+/** The group a row belongs to — the client's deriveGroupKey, except owners
+ *  are name-ordered (the cache's owner_names), so live and cached groups agree. */
+export function queueGroupKey(item: QueueItem, attribute: string): string {
+  if (attribute === 'state') return item.state ?? 'No state'
+  if (attribute === 'collection') return item.collection
+  if (attribute === 'sla_status') return item.sla_status ?? '—'
+  if (attribute === 'at_risk') return item.at_risk ? 'At risk' : 'Not at risk'
+  if (attribute === 'owners') return ownerSortKey(item.owners.map((o) => o.name)) ?? 'No owners'
+  if (attribute === 'aging') return agingBucketOf(item.aging_hours)
+  if (attribute.startsWith('extra.')) {
+    const value = item.extra?.[attribute.slice('extra.'.length)]
+    return value == null || value === '' ? '—' : String(value)
+  }
+  return '—'
+}
+
+const GROUP_FIXED_ORDERS: Record<string, string[]> = {
+  sla_status: ['breached', 'warning', 'ok', '—'],
+  at_risk: ['At risk', 'Not at risk'],
+  aging: ['>7d', '3–7d', '1–3d', '<1d', 'unknown']
+}
+
+/** Same order the client's buildGroups uses: fixed semantic orders, else by
+ *  size with 'No owners' last. */
+export function orderQueueGroups(
+  groups: QueueGroupSummary[],
+  attribute: string
+): QueueGroupSummary[] {
+  const fixed = GROUP_FIXED_ORDERS[attribute]
+  if (fixed) return [...groups].sort((a, b) => fixed.indexOf(a.key) - fixed.indexOf(b.key))
+  return [...groups].sort((a, b) => {
+    const al = a.key === 'No owners' ? 1 : 0
+    const bl = b.key === 'No owners' ? 1 : 0
+    if (al !== bl) return al - bl
+    return b.count - a.count || a.key.localeCompare(b.key)
+  })
+}
+
+export function summarizeQueueGroups(
+  items: QueueItem[],
+  attribute: string,
+  sums: string[] = []
+): QueueGroupSummary[] {
+  const map = new Map<string, QueueGroupSummary>()
+  for (const item of items) {
+    const key = queueGroupKey(item, attribute)
+    const g = map.get(key) ?? { key, count: 0, breached: 0, at_risk: 0, sums: {} }
+    g.count++
+    if (item.sla_status === 'breached') g.breached++
+    if (item.at_risk) g.at_risk++
+    for (const path of sums) {
+      const n = numberOfValue(item.extra?.[path])
+      if (n != null) g.sums[path] = (g.sums[path] ?? 0) + n
+    }
+    map.set(key, g)
+  }
+  return orderQueueGroups([...map.values()], attribute)
+}
+
+/** The "Unseen changes" toggle (#643) — a filter key, not a column. */
+export function wantsUnseen(filters: Record<string, unknown> | undefined): boolean {
+  const v = filters?.unseen
+  return v === true || v === 'yes' || v === 'true' || (Array.isArray(v) && v.includes('yes'))
+}
+
+/**
+ * #643 — "changed since you looked" per row, batched per collection through
+ * record-unseen's rule (a record the viewer never opened carries no mark).
+ * Tasks and addendum rows have no record view of their own and never mark.
+ */
+export async function unseenForItems(
+  userId: string,
+  items: Array<Pick<QueueItem, 'collection' | 'item_id'>>
+): Promise<Map<string, NonNullable<QueueItem['unseen']>>> {
+  const out = new Map<string, NonNullable<QueueItem['unseen']>>()
+  const byCollection = new Map<string, string[]>()
+  for (const it of items) {
+    if (it.collection === 'tasks' || it.collection === ADDENDUM_COLLECTION) continue
+    const list = byCollection.get(it.collection) ?? []
+    list.push(it.item_id)
+    byCollection.set(it.collection, list)
+  }
+  if (byCollection.size === 0) return out
+  const { unseenChangesFor } = await import('./record-unseen.js')
+  await Promise.all(
+    [...byCollection].map(async ([collection, ids]) => {
+      const map = await unseenChangesFor(userId, collection, ids).catch(() => new Map())
+      for (const [id, change] of map) out.set(`${collection}:${id}`, change)
+    })
+  )
+  return out
+}
+
 export function hasActiveColumnFilters(filters: Record<string, unknown> | undefined): boolean {
   if (!filters) return false
   return Object.values(filters).some((v) => {
@@ -722,6 +850,13 @@ export function computePriorityScore(item: QueueItem, weights?: PriorityWeights 
   return sla + (item.at_risk ? w.at_risk : 0) + Math.min(item.aging_hours ?? 0, w.age_hour_cap)
 }
 
+/** Owner names as one sortable string: name order, ', '-joined, null when none.
+ *  The materialized cache stores exactly this in owner_names (#800). */
+export function ownerSortKey(names: string[]): string | null {
+  const sorted = names.filter(Boolean).sort((a, b) => a.localeCompare(b))
+  return sorted.length ? sorted.join(', ') : null
+}
+
 function sortValue(
   item: QueueItem,
   key: string,
@@ -730,7 +865,9 @@ function sortValue(
   if (key === 'collection') return item.collection
   if (key === 'label') return item.label
   if (key === 'state') return item.state
-  if (key === 'owners') return item.owners.map((o) => o.name).join(', ')
+  // Names in name order, so the cache's owner_names (written the same way)
+  // sorts identically (#800); no owners sorts last, like every other null.
+  if (key === 'owners') return ownerSortKey(item.owners.map((o) => o.name))
   if (key === 'aging_hours') return item.aging_hours
   if (key === 'sla_status') return item.sla_status ? (SLA_SEVERITY[item.sla_status] ?? null) : null
   if (key === 'at_risk') return item.at_risk ? 1 : 0
@@ -941,6 +1078,11 @@ export function computeAvailableExtraFields(sources: QueueSourceRow[]): string[]
   const seen = new Set<string>()
   const out: string[] = []
   for (const source of sources) {
+    // An addendums source (#742) always carries the addendum's money change.
+    if (source.type === 'addendums' && !seen.has('cost_impact')) {
+      seen.add('cost_impact')
+      out.push('cost_impact')
+    }
     if (source.type !== 'collection') continue
     const fields = (parseJson(source.extra_fields) as string[] | null) ?? []
     for (const field of fields) {
@@ -998,6 +1140,10 @@ export async function computeExtraFieldMeta(
     const aggs =
       (parseJson(source.aggregates ?? null) as Record<string, QueueAggregateFn> | null) ?? {}
     for (const [p, fn] of Object.entries(aggs)) if (!aggByPath.has(p)) aggByPath.set(p, fn)
+  }
+
+  if (sources.some((s) => s.type === 'addendums') && !paths.has('cost_impact')) {
+    out.push({ path: 'cost_impact', kind: 'plain' })
   }
 
   for (const [path, baseCollection] of paths) {
@@ -2263,6 +2409,159 @@ export async function resolveCollectionSource(
   return { items, matchedCount: sanity.matchedCount, truncated: sanity.truncated, idMeta }
 }
 
+/**
+ * #742 — addendums as a queue source. `source.collection` names the PARENT
+ * collection; the rows are its in-flight addendums (an open pipeline
+ * instance, status neither approved nor rejected), narrowed by the source's
+ * state_values / state_mode against the ADDENDUM's own state. Each row is
+ * collection 'nivaro_addendums', item_id = the addendum id, labelled
+ * 'Addendum "title" · <parent label>', owned by the addendum state's owners
+ * (resolved through the parent record, like every addendum instance), with
+ * the addendum's SLA and `extra.cost_impact`, and opens on the parent record
+ * with the addendum view pinned.
+ *
+ * Access follows the PARENT: the viewer must read the parent collection, and
+ * its row filter / user scopes narrow the parents whose addendums show.
+ * `onlyIds` limits the read to specific addendums (the cache write path).
+ */
+export async function resolveAddendumsSource(
+  source: QueueSourceRow,
+  user: User,
+  ceiling: number = QUEUE_SANITY_CEILING,
+  opts: { enforceAccess?: boolean; onlyIds?: string[] } = {}
+): Promise<SourceResult> {
+  const empty: SourceResult = { items: [], matchedCount: 0, truncated: false, idMeta: [] }
+  const parentCollection = source.collection
+  if (!parentCollection) return empty
+  if (opts.enforceAccess !== false && !(await can(user, 'read', parentCollection))) return empty
+  const gate = opts.enforceAccess === false ? null : await queueGateFor(user, parentCollection)
+  const stateValues = (parseJson(source.state_values) as string[] | null) ?? []
+  const stateMode: 'include' | 'exclude' = source.state_mode === 'exclude' ? 'exclude' : 'include'
+
+  const q = db('nivaro_addendums as a')
+    .join('nivaro_workflow_instances as wi', function () {
+      this.on('wi.collection', db.raw('?', [ADDENDUM_COLLECTION])).andOn(
+        'wi.item',
+        db.raw('CAST(a.id AS NVARCHAR(36))')
+      )
+    })
+    .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+    .where('a.parent_collection', parentCollection)
+    .whereNotIn('a.status', ['approved', 'rejected'])
+    .whereNull('wi.completed_at')
+    .whereNotNull('wi.current_state')
+    .select(
+      'a.id',
+      'a.parent_id',
+      'a.title',
+      'a.cost_impact',
+      'a.created_at',
+      'wi.id as instance_id',
+      'wi.current_state as state_id',
+      's.key as state_key',
+      's.color as state_color'
+    )
+    .orderBy('a.created_at', 'asc')
+  if (opts.onlyIds) {
+    if (opts.onlyIds.length === 0) return empty
+    q.whereIn('a.id', opts.onlyIds)
+  }
+  if (gate) {
+    const visible = db(parentCollection).select(
+      db.raw('CAST(??.?? AS NVARCHAR(255))', [parentCollection, 'id'])
+    )
+    applyQueueGate(visible, gate, user)
+    q.whereIn('a.parent_id', visible)
+  }
+  let rows = (await q.catch(() => [])) as Array<{
+    id: string
+    parent_id: string
+    title: string | null
+    cost_impact: number | string | null
+    created_at: Date
+    instance_id: string
+    state_id: string
+    state_key: string | null
+    state_color: string | null
+  }>
+  // Several instances per addendum should not happen; keep the first.
+  const seen = new Set<string>()
+  rows = rows.filter((r) => {
+    const k = String(r.id).toUpperCase()
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+  if (stateValues.length > 0) {
+    rows = rows.filter((r) => stateFilterKeep(r.state_key, stateValues, stateMode))
+  }
+  const ids = rows.map((r) => String(r.id))
+  let slaMap = await computeStatusBatch(ADDENDUM_COLLECTION, ids).catch(
+    () => ({}) as Record<string, SlaBatchEntry>
+  )
+  if (source.sla_filter) {
+    const kept = new Set(filterBySlaStatus(ids, slaMap, source.sla_filter))
+    rows = rows.filter((r) => kept.has(String(r.id)))
+  }
+  const matchedCount = rows.length
+  const truncated = matchedCount > ceiling
+  const idMeta: SourceIdMeta[] = rows.map((r) => ({
+    collection: ADDENDUM_COLLECTION,
+    item_id: String(r.id),
+    state: r.state_key,
+    sla_status: slaMap[String(r.id)]?.status ?? null
+  }))
+  const scoped = truncated ? rows.slice(0, ceiling) : rows
+  const scopedIds = scoped.map((r) => String(r.id))
+  if (scoped.length < rows.length)
+    slaMap = Object.fromEntries(scopedIds.map((id) => [id, slaMap[id]]))
+
+  const [labels, ownersByItem] = await Promise.all([
+    getLabels(new Map([[ADDENDUM_COLLECTION, new Set(scopedIds)]])),
+    resolveStateOwnersBatch(
+      scoped.map((r) => ({
+        key: String(r.id),
+        stateId: r.state_id,
+        instanceId: String(r.instance_id),
+        collection: ADDENDUM_COLLECTION,
+        itemId: String(r.id)
+      }))
+    )
+  ])
+  const items: QueueItem[] = scoped.map((r) => {
+    const id = String(r.id)
+    const sla = slaMap[id]
+    const cost = r.cost_impact == null || r.cost_impact === '' ? null : Number(r.cost_impact)
+    return {
+      collection: ADDENDUM_COLLECTION,
+      item_id: id,
+      label: labels[`${ADDENDUM_COLLECTION}:${id}`] ?? r.title ?? id,
+      state: r.state_key,
+      state_id: r.state_id,
+      state_color: r.state_color,
+      owners: (ownersByItem.get(id) ?? []).map((o) => ({ id: o.id, name: userDisplayName(o) })),
+      sla_status: sla?.status ?? null,
+      at_risk: false,
+      at_risk_color: null,
+      aging_hours: sla?.elapsed_hours ?? null,
+      state_entered_at: sla?.entered_at
+        ? new Date(sla.entered_at as unknown as string).toISOString()
+        : null,
+      claimed_by: null,
+      extra: { cost_impact: Number.isFinite(cost) ? cost : null },
+      extra_ids: {},
+      url:
+        addendumRecordPath({
+          id,
+          parentCollection,
+          parentId: String(r.parent_id),
+          title: r.title
+        }) ?? `/collections/${parentCollection}/${r.parent_id}`
+    }
+  })
+  return { items, matchedCount, truncated, idMeta }
+}
+
 export async function resolveTasksSource(
   ceiling: number = QUEUE_SANITY_CEILING
 ): Promise<SourceResult> {
@@ -2576,9 +2875,16 @@ export async function fetchQueueItems(
     ceiling?: number
     page?: number
     limit?: number
+    /** Mark returned rows changed-since-you-looked (#643) — the worklist
+     *  asks; digests, snapshots and feeds do not pay for it. */
+    withUnseen?: boolean
+    /** #741: group summaries for `by`; rows only for the group `key` (none
+     *  when key is absent — the headers come first, rows on expand). */
+    group?: { by: string; key?: string | null; sums?: string[] }
   } = {}
 ): Promise<{
   items: QueueItem[]
+  groups?: QueueGroupSummary[]
   stats: QueueStats
   /** Stats over the column-filtered set; null when no column filters are active. */
   filteredStats: QueueStats | null
@@ -2642,7 +2948,20 @@ export async function fetchQueueItems(
   if (queueRow?.materialized) {
     const { requiresLiveResolveFallback, fetchMaterializedQueueItems, fetchMaterializedStats } =
       await import('./queue-materialization-read.js')
-    if (!requiresLiveResolveFallback(options.sort ?? '', options.filters ?? {})) {
+    const { hasTypedExtraFilter, cacheHasTypedTwins } = await import(
+      './queue-materialization-extra.js'
+    )
+    // A typed column filter is answered in SQL only when every cached row
+    // carries its twin (#801) — one probe, and only when such a filter is set.
+    const typedTwins = hasTypedExtraFilter(options.filters ?? {})
+      ? await cacheHasTypedTwins(queueId).catch(() => false)
+      : false
+    if (
+      !requiresLiveResolveFallback(options.sort ?? '', options.filters ?? {}, {
+        typedTwins,
+        groupBy: options.group?.by
+      })
+    ) {
       const res = await fetchMaterializedQueueItems(queueId, user, scope, options)
       await attachLabels(res.items)
       return res
@@ -2667,6 +2986,7 @@ export async function fetchQueueItems(
           if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
           if (source.type === 'tasks') return resolveTasksSource(ceiling)
           if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
+          if (source.type === 'addendums') return resolveAddendumsSource(source, user, ceiling)
           return resolveOwnedByMeSource(user.id, ceiling)
         })
       ),
@@ -2700,12 +3020,18 @@ export async function fetchQueueItems(
     scoped,
     (options.filters ?? undefined) as Record<string, string | string[]> | undefined
   )
-  const filtered = options.filters ? applyColumnFilters(scoped, options.filters) : scoped
+  // "Unseen changes" (#643): one batched read over the scoped rows.
+  const unseenMap = wantsUnseen(options.filters) ? await unseenForItems(user.id, scoped) : null
+  const keepUnseen = (list: QueueItem[]) =>
+    unseenMap ? list.filter((i) => unseenMap.has(`${i.collection}:${i.item_id}`)) : list
+  const filtered = keepUnseen(
+    options.filters ? applyColumnFilters(scoped, options.filters) : scoped
+  )
   const stateCounts: Record<string, number> = {}
   const { state: _stateFilter, ...nonStateFilters } = options.filters ?? {}
-  for (const item of hasActiveColumnFilters(nonStateFilters)
-    ? applyColumnFilters(scoped, nonStateFilters)
-    : scoped) {
+  for (const item of keepUnseen(
+    hasActiveColumnFilters(nonStateFilters) ? applyColumnFilters(scoped, nonStateFilters) : scoped
+  )) {
     const k = item.state ?? 'none'
     stateCounts[k] = (stateCounts[k] ?? 0) + 1
   }
@@ -2715,7 +3041,22 @@ export async function fetchQueueItems(
   // items that appear in more than one source and would ignore scope filtering.
   // computeStats(scoped) counts the final deduped, scope-filtered set instead,
   // which is more accurate than a raw per-source sum.
-  const { items: paged, total } = paginateItems(sorted, options.page, options.limit)
+  const groups = options.group
+    ? summarizeQueueGroups(sorted, options.group.by, options.group.sums ?? [])
+    : undefined
+  const pageSource = options.group
+    ? options.group.key == null
+      ? []
+      : sorted.filter((i) => queueGroupKey(i, options.group!.by) === options.group!.key)
+    : sorted
+  const { items: paged, total: pageTotal } = paginateItems(pageSource, options.page, options.limit)
+  // Headers-only (no group key): total is the whole grouped set, not the
+  // empty page — an empty-queue explanation must not fire for it.
+  const total = options.group && options.group.key == null ? sorted.length : pageTotal
+  if (options.withUnseen) {
+    const pageUnseen = unseenMap ?? (await unseenForItems(user.id, paged))
+    for (const it of paged) it.unseen = pageUnseen.get(`${it.collection}:${it.item_id}`) ?? null
+  }
   // Prefer exact cache stats for a materialized queue on the live-fallback path —
   // fall back to live-computed stats if the cache read failed for any reason.
   const exact = materializedStats ? await materializedStats.catch(() => null) : null
@@ -2742,6 +3083,7 @@ export async function fetchQueueItems(
       : null
   return {
     items: paged,
+    ...(groups ? { groups } : {}),
     stats: exact?.stats ?? liveExact ?? computeStats(scoped),
     filteredStats: hasActiveColumnFilters(options.filters) ? computeStats(filtered) : null,
     stateCounts,

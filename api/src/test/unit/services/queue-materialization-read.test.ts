@@ -28,12 +28,19 @@ describe('requiresLiveResolveFallback', () => {
     expect(requiresLiveResolveFallback('-priority', {})).toBe(false)
   })
 
-  it('returns true when sort is owners', () => {
-    expect(requiresLiveResolveFallback('owners', {})).toBe(true)
+  it('serves owners sorts from the cache (owner_names, #800)', () => {
+    expect(requiresLiveResolveFallback('owners', {})).toBe(false)
   })
 
-  it('returns true when sort is -owners (descending)', () => {
-    expect(requiresLiveResolveFallback('-owners', {})).toBe(true)
+  it('serves -owners sorts from the cache too', () => {
+    expect(requiresLiveResolveFallback('-owners', {})).toBe(false)
+  })
+
+  it('typed extra filters live-resolve until the cache carries typed twins (#801)', () => {
+    const f = { 'extra.due': 'before:2026-10-01', 'extra.cost': 'num:gt:100' }
+    expect(requiresLiveResolveFallback('', f)).toBe(true)
+    expect(requiresLiveResolveFallback('', f, { typedTwins: true })).toBe(false)
+    expect(requiresLiveResolveFallback('', { 'extra.name': 'plain' })).toBe(false)
   })
 
   it('returns false when neither sort nor filters reference any fallback-triggering field', () => {

@@ -4,6 +4,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { addendumSummaryBatch } from '../services/addendum-summary.js'
 import { can } from '../services/permissions.js'
+import { syncAddendumInQueues } from '../services/queue-materialization.js'
 import { emitWorkflowStartEvent } from '../services/workflow-transitions.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -402,6 +403,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       }
     }
 
+    void syncAddendumInQueues(String(insertedId), body.parent_collection, String(body.parent_id))
     return reply.code(201).send({ data: formatAddendum(created) })
   })
 
@@ -503,6 +505,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
     }
 
     await db('nivaro_addendums').where({ id }).delete()
+    void syncAddendumInQueues(id, String(existing.parent_collection), String(existing.parent_id))
 
     await logActivity({
       action: 'delete',
@@ -593,6 +596,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       req
     })
 
+    void syncAddendumInQueues(id, String(existing.parent_collection), String(existing.parent_id))
     return reply.send({ data: { id, status: 'approved' } })
   })
 
@@ -649,6 +653,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       req
     })
 
+    void syncAddendumInQueues(id, String(existing.parent_collection), String(existing.parent_id))
     return reply.send({ data: { id, status: 'rejected' } })
   })
 }

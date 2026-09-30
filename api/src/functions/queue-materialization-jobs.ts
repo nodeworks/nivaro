@@ -8,10 +8,13 @@ import {
 } from '../routes/at-risk.js'
 import { computeEnteredStateAtBatch, computeStatusBatch } from '../routes/sla.js'
 import { chunkArray, selectInChunks } from '../services/db-batch.js'
+import { encodeCachedExtra } from '../services/queue-materialization-extra.js'
 import {
   BACKFILL_CEILING,
+  ownerSortKey,
   type QueueItem,
   type QueueSourceRow,
+  resolveAddendumsSource,
   resolveApprovalsSource,
   resolveCollectionSource,
   resolveOwnedByMeSource,
@@ -76,6 +79,8 @@ export interface MaterializedRowInput {
   owner_names: string | null
   extra: Record<string, unknown> | undefined
   extra_ids?: Record<string, string[]>
+  /** #715 — the in-flight addendum whose state/owners the row shows. */
+  via_addendum?: { id: string; title: string | null } | null
   url: string
   ownerIds: string[]
 }
@@ -101,12 +106,36 @@ function rowFromQueueItem(item: QueueItem): MaterializedRowInput {
     sla_timezone: null,
     at_risk: item.at_risk,
     at_risk_color: null,
-    owner_names: item.owners.map((o) => o.name).join(' ') || null,
+    owner_names: ownerSortKey(item.owners.map((o) => o.name)),
     extra: item.extra,
     extra_ids: item.extra_ids,
+    via_addendum: item.via_addendum ?? null,
     url: item.url,
     ownerIds: item.owners.map((o) => o.id)
   }
+}
+
+/**
+ * Rows for an `addendums` source (#742): the resolver's items plus the SLA
+ * inputs of each addendum's OWN instance, so the cache's SLA math (entered_at +
+ * rule duration, computed at read time) matches the live answer.
+ */
+export async function rowFromQueueItemWithSla(items: QueueItem[]): Promise<MaterializedRowInput[]> {
+  const ids = items.map((i) => i.item_id)
+  const sla = await computeStatusBatch('nivaro_addendums', ids).catch(
+    () => ({}) as Awaited<ReturnType<typeof computeStatusBatch>>
+  )
+  return items.map((item) => {
+    const e = sla[item.item_id]
+    return {
+      ...rowFromQueueItem(item),
+      entered_state_at: e?.entered_at ? new Date(e.entered_at as unknown as string) : null,
+      sla_duration_hours: e?.duration_hours ?? null,
+      sla_warning_pct: e?.warning_threshold_pct ?? null,
+      sla_business_hours_only: e?.business_hours_only ?? false,
+      sla_timezone: e?.timezone ?? null
+    }
+  })
 }
 
 // Batched row builder for `collection`-type sources. Calls resolveCollectionSource ONCE
@@ -166,9 +195,10 @@ async function buildCollectionSourceRows(
       sla_timezone: sla?.timezone ?? null,
       at_risk: item.at_risk,
       at_risk_color: item.at_risk ? (colorByItemId.get(item.item_id) ?? null) : null,
-      owner_names: item.owners.map((o) => o.name).join(' ') || null,
+      owner_names: ownerSortKey(item.owners.map((o) => o.name)),
       extra: item.extra,
       extra_ids: item.extra_ids,
+      via_addendum: item.via_addendum ?? null,
       url: item.url,
       ownerIds: item.owners.map((o) => o.id)
     }
@@ -222,13 +252,9 @@ export async function writeMaterializedRowChunk(
       at_risk: r.at_risk,
       at_risk_color: r.at_risk_color,
       owner_names: r.owner_names,
-      // Reserved __ids key mirrors buildMaterializedRow — the read path splits it
-      // back out into extra_ids for drill-down.
-      extra: JSON.stringify(
-        r.extra_ids && Object.keys(r.extra_ids).length > 0
-          ? { ...(r.extra ?? {}), __ids: r.extra_ids }
-          : (r.extra ?? {})
-      ),
+      // Reserved keys (__ids, __t typed twins, __via) — mirrors
+      // buildMaterializedRow; see queue-materialization-extra.ts.
+      extra: encodeCachedExtra(r.extra, r.extra_ids, r.via_addendum),
       url: r.url,
       updated_at: new Date()
     }))
@@ -261,6 +287,35 @@ export async function writeMaterializedRowChunk(
       await db('nivaro_queue_item_owners').insert(batch)
     }
   }
+}
+
+/** Every cache row one source contributes — the backfill's per-source step,
+ *  exported so a rebuild can also run in-process (verification, scripts). */
+export async function buildSourceRows(
+  source: QueueSourceRow,
+  ownerUser: User
+): Promise<MaterializedRowInput[]> {
+  let rows: MaterializedRowInput[]
+  if (source.type === 'collection' && source.collection) {
+    rows = await buildCollectionSourceRows(source, ownerUser)
+  } else if (source.type === 'tasks') {
+    rows = (await resolveTasksSource(BACKFILL_CEILING)).items.map(rowFromQueueItem)
+  } else if (source.type === 'approvals') {
+    rows = (await resolveApprovalsSource(BACKFILL_CEILING)).items.map(rowFromQueueItem)
+  } else if (source.type === 'addendums') {
+    rows = await rowFromQueueItemWithSla(
+      (
+        await resolveAddendumsSource(source, ownerUser, BACKFILL_CEILING, {
+          enforceAccess: false
+        })
+      ).items
+    )
+  } else {
+    rows = (await resolveOwnedByMeSource(ownerUser.id, BACKFILL_CEILING)).items.map(
+      rowFromQueueItem
+    )
+  }
+  return rows
 }
 
 export const queueMaterializationBackfill = inngest.createFunction(
@@ -349,18 +404,7 @@ export const queueMaterializationBackfill = inngest.createFunction(
       // whole way through, so the previous rehydration step (`new Date(r.entered_state_at)`)
       // is no longer needed and has been removed.
       await step.run(`resolve-and-write-source-${source.id}`, async () => {
-        let rows: MaterializedRowInput[]
-        if (source.type === 'collection' && source.collection) {
-          rows = await buildCollectionSourceRows(source, ownerUser)
-        } else if (source.type === 'tasks') {
-          rows = (await resolveTasksSource(BACKFILL_CEILING)).items.map(rowFromQueueItem)
-        } else if (source.type === 'approvals') {
-          rows = (await resolveApprovalsSource(BACKFILL_CEILING)).items.map(rowFromQueueItem)
-        } else {
-          rows = (await resolveOwnedByMeSource(ownerUser.id, BACKFILL_CEILING)).items.map(
-            rowFromQueueItem
-          )
-        }
+        const rows = await buildSourceRows(source, ownerUser)
         for (let i = 0; i < rows.length; i += WRITE_CHUNK_SIZE) {
           await writeMaterializedRowChunk(queueId, source.id, rows.slice(i, i + WRITE_CHUNK_SIZE))
         }

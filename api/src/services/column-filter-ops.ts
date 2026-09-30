@@ -18,7 +18,12 @@
 
 export type ColumnFilterOp =
   | { kind: 'date'; from: string | null; to: string | null }
-  | { kind: 'num'; op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'between'; a: number; b?: number }
+  | {
+      kind: 'num'
+      op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'between'
+      a: number
+      b?: number
+    }
   | { kind: 'bool'; value: boolean }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/
@@ -104,9 +109,11 @@ export function numberOfValue(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-function boolOfValue(value: unknown): boolean | null {
+export function boolOfValue(value: unknown): boolean | null {
   if (typeof value === 'boolean') return value
-  const s = String(value ?? '').trim().toLowerCase()
+  const s = String(value ?? '')
+    .trim()
+    .toLowerCase()
   if (['true', '1', 'yes', 'y'].includes(s)) return true
   if (['false', '0', 'no', 'n'].includes(s)) return false
   return null

@@ -13,6 +13,7 @@ import {
   fetchQueueItems,
   fetchQueueWorkload,
   isDisplayOnlySourceChange,
+  isQueueGroupAttribute,
   normalizeDisplayConfig,
   parsePaginationParams,
   validateAggregates,
@@ -67,7 +68,13 @@ export function canReadQueue(queue: QueueRow, req: FastifyRequest): boolean {
   return queue.role_id === null || queue.role_id === userRole
 }
 
-const SOURCE_TYPES: QueueSourceType[] = ['collection', 'tasks', 'approvals', 'owned_by_me']
+const SOURCE_TYPES: QueueSourceType[] = [
+  'collection',
+  'tasks',
+  'approvals',
+  'owned_by_me',
+  'addendums'
+]
 const MAX_SOURCES_PER_QUEUE = 10
 
 export async function queuesRoutes(app: FastifyInstance) {
@@ -391,6 +398,22 @@ export async function queuesRoutes(app: FastifyInstance) {
       if (s.type === 'collection' && !s.collection) {
         return reply.code(400).send({ error: 'collection is required for type=collection sources' })
       }
+      if (s.type === 'addendums') {
+        // #742: `collection` is the PARENT collection whose addendums are listed.
+        if (!s.collection) {
+          return reply
+            .code(400)
+            .send({ error: 'collection (the parent collection) is required for addendums sources' })
+        }
+        const parent = (await db('nivaro_collections')
+          .where({ collection: s.collection })
+          .first('addendums_enabled')) as { addendums_enabled?: boolean | number } | undefined
+        if (!parent?.addendums_enabled) {
+          return reply.code(400).send({
+            error: `${s.collection} does not have addendums turned on (Table Editor → Settings)`
+          })
+        }
+      }
       if (s.sla_filter && s.sla_filter !== 'warning' && s.sla_filter !== 'breached') {
         return reply.code(400).send({ error: `invalid sla_filter: ${s.sla_filter}` })
       }
@@ -516,6 +539,40 @@ export async function queuesRoutes(app: FastifyInstance) {
   // (builder state include/exclude picker; authenticated, non-admin — personal queues).
   app.get('/collection-states/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
+    // ?addendums=1 (#742): the states an addendum of this collection moves
+    // through — the templates its addendum layouts start, plus any template an
+    // existing addendum instance already runs.
+    if ((req.query as { addendums?: string }).addendums === '1') {
+      const [layoutTemplates, instanceTemplates] = await Promise.all([
+        db('nivaro_collection_layouts')
+          .where({ collection, layout_type: 'addendum' })
+          .whereNotNull('workflow_template_id')
+          .distinct('workflow_template_id as t')
+          .catch(() => []) as Promise<Array<{ t: string }>>,
+        db('nivaro_addendums as a')
+          .join('nivaro_workflow_instances as wi', function () {
+            this.on('wi.collection', db.raw('?', ['nivaro_addendums'])).andOn(
+              'wi.item',
+              db.raw('CAST(a.id AS NVARCHAR(36))')
+            )
+          })
+          .where('a.parent_collection', collection)
+          .distinct('wi.template as t')
+          .catch(() => []) as Promise<Array<{ t: string }>>
+      ])
+      const templates = [
+        ...new Set([...layoutTemplates, ...instanceTemplates].map((r) => String(r.t).toUpperCase()))
+      ]
+      if (templates.length === 0) return reply.send({ data: [] })
+      const rows = (await db('nivaro_workflow_states')
+        .whereIn('template', templates)
+        .orderBy(['template', 'sort'])
+        .select('key', 'label', 'color')) as Array<{ key: string; label: string; color: string }>
+      const seen = new Set<string>()
+      return reply.send({
+        data: rows.filter((r) => (seen.has(r.key) ? false : (seen.add(r.key), true)))
+      })
+    }
     const binding = (await db('nivaro_workflow_bindings').where({ collection }).first()) as
       | { template: string }
       | undefined
@@ -1210,6 +1267,9 @@ export async function queuesRoutes(app: FastifyInstance) {
   })
 
   // GET /:id/items?scope=mine|unowned|all|claimed&sort=&filters=&page=&limit= — fan-out worklist
+  //   &group_by=<attr>[&group_key=<key>][&group_sums=extra.a,extra.b] — #741: the
+  //   response carries `groups` (headers, counts, per-group sums); rows come back
+  //   only for group_key, paged like any other request.
   app.get('/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string }
     const {
@@ -1217,17 +1277,37 @@ export async function queuesRoutes(app: FastifyInstance) {
       sort = '',
       filters,
       page: pageRaw,
-      limit: limitRaw
+      limit: limitRaw,
+      group_by: groupBy,
+      group_key: groupKey,
+      group_sums: groupSums
     } = req.query as {
       scope?: string
       sort?: string
       filters?: string
       page?: string
       limit?: string
+      group_by?: string
+      group_key?: string
+      group_sums?: string
     }
     if (!['mine', 'unowned', 'all', 'claimed'].includes(scope)) {
       return reply.code(400).send({ error: 'scope must be mine, unowned, all, or claimed' })
     }
+    if (groupBy && !isQueueGroupAttribute(groupBy)) {
+      return reply.code(400).send({ error: `cannot group by ${groupBy}` })
+    }
+    const group = groupBy
+      ? {
+          by: groupBy,
+          key: groupKey ?? null,
+          sums: (groupSums ?? '')
+            .split(',')
+            .map((p) => p.trim().replace(/^extra\./, ''))
+            .filter((p) => /^[\w.]+$/.test(p))
+            .slice(0, 12)
+        }
+      : undefined
 
     let parsedFilters: Record<string, unknown> = {}
     if (filters) {
@@ -1257,6 +1337,8 @@ export async function queuesRoutes(app: FastifyInstance) {
     const result = await fetchQueueItems(id, req.user!, scope as QueueScope, {
       sort,
       filters: parsedFilters,
+      withUnseen: true,
+      group,
       ...(paginationRequested ? { page, limit } : {})
     })
     // #502: an empty view says WHY — nothing yours vs filtered out vs a
@@ -1277,6 +1359,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         : null
     return reply.send({
       data: result.items,
+      ...(result.groups ? { groups: result.groups } : {}),
       stats: result.stats,
       filtered_stats: result.filteredStats,
       state_counts: result.stateCounts,

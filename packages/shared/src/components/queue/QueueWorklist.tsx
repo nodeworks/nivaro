@@ -42,6 +42,7 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import {
   type DrilldownTarget,
+  type ItemLinkTarget,
   useItemEditAuth,
   useItemNavigation,
   useNavigation,
@@ -142,6 +143,8 @@ export interface QueueItemRow {
   labels?: string[]
   /** State/owners come from this in-flight addendum's instance. */
   via_addendum?: { id: string; title: string | null } | null
+  /** #643 — someone else changed the record after you last opened it. */
+  unseen?: { changed_at: string; by: string | null; kinds: string[] } | null
   /** Addendum presence (collection sources with addendums enabled). */
   addendums?: {
     active: number
@@ -209,7 +212,7 @@ interface QueueStats {
 
 interface QueueSource {
   id: number
-  type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me'
+  type: 'collection' | 'tasks' | 'approvals' | 'owned_by_me' | 'addendums'
   collection: string | null
   drilldown?: Record<
     string,
@@ -288,6 +291,30 @@ interface QueueView {
   } | null
 }
 
+/** Rows per server group request (#741); "Show more" adds another page. */
+const GROUP_PAGE_SIZE = 50
+
+/** #741 — a group header as the server sends it. */
+interface ServerGroup {
+  key: string
+  count: number
+  breached: number
+  at_risk: number
+  sums?: Record<string, number>
+}
+
+interface DisplayGroup {
+  key: string
+  rows: QueueItemRow[]
+  breached: number
+  atRisk: number
+  count: number
+  sums: Record<string, number>
+}
+
+/** Rows of an `addendums` source (#742) — each is an in-flight addendum. */
+const ADDENDUM_ROW_COLLECTION = 'nivaro_addendums'
+
 const SCOPE_TABS: { value: Scope; label: string }[] = [
   { value: 'mine', label: 'My Items' },
   { value: 'unowned', label: 'No Owners' },
@@ -329,6 +356,15 @@ function QueueAddendumPill({ summary }: { summary: QueueItemRow['addendums'] }) 
       {costText && <span className='tabular-nums opacity-80'>· {costText}</span>}
     </span>
   )
+}
+
+function unseenTip(u: NonNullable<QueueItemRow['unseen']>): string {
+  const what = u.kinds
+    .map((k) => (k === 'edit' ? 'edited' : k === 'transition' ? 'moved' : 'commented on'))
+    .join(', ')
+  const when = new Date(u.changed_at)
+  const at = Number.isNaN(when.getTime()) ? '' : ` · ${when.toLocaleString()}`
+  return `${u.by ?? 'Someone'} ${what} this since you last opened it${at}`
 }
 
 function formatAging(hours: number | null): string {
@@ -794,6 +830,25 @@ export function QueueWorklist({
   const filtersSettled = JSON.stringify(debouncedFilterValues) === JSON.stringify(filterValues)
   const firstFetchedRef = useRef(false)
 
+  // #741: grouping a TABLE is served by the server — headers (counts, SLA,
+  // sums) in the items response, rows per group on expand. Kanban still groups
+  // the full set client-side.
+  const serverGrouped = view === 'table' && !!groupBy
+  // Numeric extra columns get a per-group sum in the header.
+  const groupSumPaths = (() => {
+    const paths = new Set<string>()
+    for (const m of queue?.extra_field_meta ?? []) {
+      if (m.aggregate && m.aggregate !== 'count') paths.add(m.path)
+    }
+    for (const src of queue?.sources ?? []) {
+      for (const [p, cfg] of Object.entries(src.column_formats ?? {})) {
+        if (cfg?.type === 'number') paths.add(p)
+      }
+      if (src.type === 'addendums') paths.add('cost_impact')
+    }
+    return [...paths].slice(0, 12)
+  })()
+
   const apiFilters = (() => {
     const out: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(debouncedFilterValues)) {
@@ -983,6 +1038,8 @@ export function QueueWorklist({
 
   const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt } = useQuery<{
     data: QueueItemRow[]
+    /** #741: server-side group headers (table view, grouped). */
+    groups?: ServerGroup[]
     stats: QueueStats
     filtered_stats: QueueStats | null
     /** Rows per state under every filter except State (absent on older servers). */
@@ -1022,9 +1079,16 @@ export function QueueWorklist({
                 ? 'aging_hours'
                 : sort,
           filters: JSON.stringify(apiFilters),
-          // Grouping renders the full matching set (kanban's existing path) —
-          // groups are derived client-side, so pagination pauses while grouped.
-          ...(view === 'table' && !groupBy ? { page, limit } : {})
+          // Table + group: headers only (rows load per group on expand, #741).
+          // Kanban renders the full matching set, grouped client-side.
+          ...(serverGrouped
+            ? {
+                group_by: groupBy,
+                ...(groupSumPaths.length ? { group_sums: groupSumPaths.join(',') } : {})
+              }
+            : view === 'table'
+              ? { page, limit }
+              : {})
         })
       ),
     // Wait for display_config AND scope seeding so the first fetch uses the
@@ -1079,7 +1143,7 @@ export function QueueWorklist({
 
   // Poll record-viewer counts for the current page (#272). Per-node data —
   // treated as a hint, never as truth.
-  const viewerRowsKey = (data?.data ?? [])
+  const viewerRowsKey = (serverGrouped ? [] : (data?.data ?? []))
     .slice(0, 100)
     .map((r) => `${r.collection}:${r.item_id}`)
     .join(',')
@@ -1195,7 +1259,68 @@ export function QueueWorklist({
     setDefaultViewId(columnPrefs.data.default_view_id)
   }, [columnPrefs])
 
-  const items = data?.data ?? []
+  // #741 — rows of each expanded server group, one request per loaded page
+  // (the items route caps a page at 100, so "Show more" adds pages).
+  const [groupPages, setGroupPages] = useState<Record<string, number>>({})
+  const serverGroups = serverGrouped ? (data?.groups ?? null) : null
+  const expandedGroupKeys = (serverGroups ?? [])
+    .filter((g) => !collapsedGroups.has(g.key))
+    .map((g) => g.key)
+  const groupPageSpecs = expandedGroupKeys.flatMap((key) =>
+    Array.from({ length: groupPages[key] ?? 1 }, (_, i) => ({ key, page: i + 1 }))
+  )
+  const groupRowQueries = useQueries({
+    queries: groupPageSpecs.map(({ key, page: groupPage }) => ({
+      queryKey: [
+        'queue-items',
+        queueId,
+        'group-rows',
+        scope,
+        sort,
+        debouncedFilterValues,
+        groupBy,
+        key,
+        groupPage
+      ],
+      queryFn: () =>
+        client
+          .request(
+            get(`/queues/${queueId}/items`, {
+              scope,
+              sort:
+                sort === 'state_entered'
+                  ? '-aging_hours'
+                  : sort === '-state_entered'
+                    ? 'aging_hours'
+                    : sort,
+              filters: JSON.stringify(apiFilters),
+              group_by: groupBy as string,
+              group_key: key,
+              page: groupPage,
+              limit: GROUP_PAGE_SIZE
+            })
+          )
+          .then((r) => ({ key, rows: (r as { data: QueueItemRow[] }).data })),
+      enabled: !!data && serverGrouped,
+      placeholderData: (prev: { key: string; rows: QueueItemRow[] } | undefined) => prev
+    }))
+  })
+  const groupRowsStamp = groupRowQueries.map((q) => q.dataUpdatedAt).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the stamp string is the dependency (useQueries results are a fresh array each render)
+  const groupRows = useMemo(() => {
+    const byKey = new Map<string, QueueItemRow[]>()
+    groupRowQueries.forEach((q, i) => {
+      if (!q.data) return
+      const key = groupPageSpecs[i].key
+      byKey.set(key, [...(byKey.get(key) ?? []), ...q.data.rows])
+    })
+    return byKey
+  }, [groupRowsStamp, groupPageSpecs.map((g) => `${g.key}\u0000${g.page}`).join('\u0001')])
+  const groupLoading = new Set(
+    groupRowQueries.flatMap((q, i) => (q.isFetching ? [groupPageSpecs[i].key] : []))
+  )
+
+  const items = serverGroups ? [...groupRows.values()].flat() : (data?.data ?? [])
   // Server-declared per collection: the resolver sets `fulfilment` only when
   // the source collection declares fulfilment fields (#7), and `send_backs`
   // only for records with a workflow instance (#85).
@@ -1505,21 +1630,47 @@ export function QueueWorklist({
   }
 
   const collectionLabel = (name: string): string => {
+    if (name === ADDENDUM_ROW_COLLECTION) return 'Addendums'
     const row = (collectionsReg ?? []).find((c) => c.collection === name)
     return row?.display_name || row?.plural || friendly(name)
   }
 
-  const groups = useMemo(() => (groupBy ? buildGroups(items, groupBy) : null), [items, groupBy])
+  const groups = useMemo((): DisplayGroup[] | null => {
+    if (!groupBy) return null
+    if (serverGroups) {
+      return serverGroups.map((g) => ({
+        key: g.key,
+        rows: groupRows.get(g.key) ?? [],
+        breached: g.breached,
+        atRisk: g.at_risk,
+        count: g.count,
+        sums: g.sums ?? {}
+      }))
+    }
+    return buildGroups(items, groupBy).map((g) => ({ ...g, count: g.rows.length, sums: {} }))
+  }, [items, groupBy, serverGroups, groupRows])
 
   // Spec: groups collapse by default when the grouped set exceeds 200 rows.
   // Re-derived only when the grouping attribute changes — a socket-driven
   // refetch must not blow away the user's manual expand state, so groups/items
   // stay out of the deps on purpose.
+  // Server-grouped tables (#741) decide once the headers for the attribute
+  // arrive: each expanded group is its own request, so a large set starts
+  // folded and the reader opens what they need.
+  const collapseDecidedFor = useRef<string | null>(null)
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only on attribute change, not data refetch
   useEffect(() => {
-    if (!groupBy || !groups) return
-    setCollapsedGroups(items.length > 200 ? new Set(groups.map((g) => g.key)) : new Set())
-  }, [groupBy])
+    if (!groupBy || !groups) {
+      collapseDecidedFor.current = null
+      return
+    }
+    if (serverGrouped && !serverGroups) return
+    if (collapseDecidedFor.current === groupBy) return
+    collapseDecidedFor.current = groupBy
+    const total = groups.reduce((n, g) => n + g.count, 0)
+    setCollapsedGroups(total > 200 ? new Set(groups.map((g) => g.key)) : new Set())
+    setGroupPages({})
+  }, [groupBy, serverGroups])
 
   function toggleGroup(key: string) {
     setCollapsedGroups((prev) => {
@@ -1547,6 +1698,30 @@ export function QueueWorklist({
   // Item edit-page opener with the queue's configured layout pinned. Goes
   // through useItemNavigation so an embedding host's itemUrl/openItem
   // overrides apply (the admin default is the /collections/:col/:id shape).
+  // Where a row opens. An addendum row (#742, collection nivaro_addendums)
+  // opens its PARENT record with the addendum view pinned — the server's url
+  // carries both, so it is read back instead of rebuilt.
+  const rowTarget = (row: QueueItemRow): ItemLinkTarget => {
+    if (row.collection === ADDENDUM_ROW_COLLECTION && row.url) {
+      const m = row.url.match(/^\/collections\/([^/?]+)\/([^/?]+)(?:\?(.*))?$/)
+      if (m) {
+        const query: Record<string, string> = {}
+        for (const [k, v] of new URLSearchParams(m[3] ?? '')) query[k] = v
+        return {
+          collection: decodeURIComponent(m[1]),
+          itemId: decodeURIComponent(m[2]),
+          layoutSlug: displayConfig?.item_layout ?? null,
+          query
+        }
+      }
+    }
+    return {
+      collection: row.collection,
+      itemId: row.item_id,
+      layoutSlug: displayConfig?.item_layout ?? null
+    }
+  }
+
   const openItemPage = (row: QueueItemRow) => {
     // #50 — remember where the queue was so the record's "Back to <queue>"
     // chip returns here with the same filters, page and scroll position.
@@ -1560,11 +1735,7 @@ export function QueueWorklist({
         state: { scope, page, sort, filters: filterValues, group_by: groupBy, view }
       })
     }
-    itemNav.open({
-      collection: row.collection,
-      itemId: row.item_id,
-      layoutSlug: displayConfig?.item_layout ?? null
-    })
+    itemNav.open(rowTarget(row))
   }
 
   // Row context menu (#43, queues): right-click a table row for its actions.
@@ -1588,7 +1759,9 @@ export function QueueWorklist({
   const openItem = (row: QueueItemRow) => {
     setHighlightedId(rowId(row))
     const mode = displayConfig?.row_click ?? 'preview'
-    if (mode === 'full') {
+    // An addendum row has no record of its own to preview — it opens the
+    // parent record with the addendum in view.
+    if (mode === 'full' || row.collection === ADDENDUM_ROW_COLLECTION) {
       openItemPage(row)
       return
     }
@@ -1926,7 +2099,39 @@ export function QueueWorklist({
     header: (
       <>
         <span>{groupKeyLabel(g.key)}</span>
-        <span className='font-normal text-slate-400'>({formatNumber(g.rows.length)})</span>
+        <span className='font-normal text-slate-400'>({formatNumber(g.count)})</span>
+        {Object.entries(g.sums).map(([path, total]) => {
+          const fmt = formatConfigFor(path)
+          return (
+            <span
+              key={path}
+              className='font-normal tabular-nums text-slate-500 dark:text-slate-400'
+              data-queue-group-sum={path}
+            >
+              {aliasFor(`extra.${path}`, formatColumnHeader(path))}:{' '}
+              {fmt ? formatMultiValue(String(total), fmt) : formatNumber(total)}
+            </span>
+          )
+        })}
+        {serverGroups && !collapsedGroups.has(g.key) && groupLoading.has(g.key) && (
+          <span className='font-normal text-slate-400'>loading…</span>
+        )}
+        {serverGroups &&
+          !collapsedGroups.has(g.key) &&
+          g.rows.length > 0 &&
+          g.rows.length < g.count && (
+            <button
+              type='button'
+              data-queue-group-more={g.key}
+              onClick={(e) => {
+                e.stopPropagation()
+                setGroupPages((prev) => ({ ...prev, [g.key]: (prev[g.key] ?? 1) + 1 }))
+              }}
+              className='rounded px-1.5 py-0.5 text-[11px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan'
+            >
+              Showing {formatNumber(g.rows.length)} of {formatNumber(g.count)} · Show more
+            </button>
+          )}
         {g.breached > 0 && (
           <span className='rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-600 dark:bg-red-500/10 dark:text-red-400'>
             {g.breached} breached
@@ -1965,6 +2170,16 @@ export function QueueWorklist({
         // a whole, but nothing on it said so — an underline is the one
         // convention people already read as "this goes somewhere".
         <span className='flex items-center gap-1.5'>
+          {row.unseen && (
+            // #643 — someone else changed this since you last opened it.
+            <span
+              className='h-2 w-2 shrink-0 rounded-full bg-nvr-cyan'
+              data-queue-unseen
+              data-tip={unseenTip(row.unseen)}
+              role='img'
+              aria-label='Changed since you last opened it'
+            />
+          )}
           <span
             className='block max-w-[160px] truncate font-medium underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover/row:decoration-nvr-cyan dark:decoration-slate-600'
             title={row.label}
@@ -2411,7 +2626,7 @@ export function QueueWorklist({
     key: '__actions__',
     header: '',
     render: (row) =>
-      row.collection === 'tasks' ? null : (
+      row.collection === 'tasks' || row.collection === ADDENDUM_ROW_COLLECTION ? null : (
         <span onClick={(e) => e.stopPropagation()}>
           <RowActionsMenu
             collection={row.collection}
@@ -2984,6 +3199,28 @@ export function QueueWorklist({
                 ))}
             </div>
           )}
+          <button
+            type='button'
+            aria-pressed={filterValues.unseen === 'yes'}
+            data-queue-unseen-filter
+            title='Only records someone else changed since you last opened them'
+            onClick={() =>
+              setFilterValues((prev) => {
+                const next = { ...prev }
+                if (next.unseen === 'yes') delete next.unseen
+                else next.unseen = 'yes'
+                return next
+              })
+            }
+            className={`flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
+              filterValues.unseen === 'yes'
+                ? 'border-[#00ceff66] bg-[#f2fdff] text-nvr-navy dark:border-nvr-cyan/40 dark:bg-[#20303a] dark:text-nvr-cyan'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-300'
+            }`}
+          >
+            <span className='h-2 w-2 rounded-full bg-nvr-cyan' />
+            Unseen changes
+          </button>
           {addendumsEnabled && (
             <button
               type='button'
@@ -3933,13 +4170,7 @@ export function QueueWorklist({
                 const r = openInTabs(
                   items
                     .filter((x) => selectedIds.includes(rowId(x)) && x.collection !== 'tasks')
-                    .map((x) =>
-                      itemNav.urlFor({
-                        collection: x.collection,
-                        itemId: x.item_id,
-                        layoutSlug: displayConfig?.item_layout ?? null
-                      })
-                    )
+                    .map((x) => itemNav.urlFor(rowTarget(x)))
                 )
                 if (r.blocked > 0 || r.capped > 0) toast.warning(openInTabsMessage(r))
                 else toast.success(openInTabsMessage(r))
@@ -4017,11 +4248,7 @@ export function QueueWorklist({
                 label: 'Copy link',
                 run: () =>
                   void navigator.clipboard?.writeText(
-                    `${window.location.origin}${itemNav.urlFor({
-                      collection: rowCtxMenu.row.collection,
-                      itemId: rowCtxMenu.row.item_id,
-                      layoutSlug: displayConfig?.item_layout ?? null
-                    })}`
+                    `${window.location.origin}${itemNav.urlFor(rowTarget(rowCtxMenu.row))}`
                   )
               },
               // Custom actions (#125): the record's registered actions, right here.
