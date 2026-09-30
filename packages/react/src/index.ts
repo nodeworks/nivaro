@@ -545,3 +545,9 @@ export type {
   UseNivaroFormOptions,
   UseNivaroFormReturn
 } from './types'
+export {
+  RecordGraphExplorer,
+  type RecordGraphGroup,
+  type RecordGraphNode,
+  RecordGraphSheet
+} from '@nivaro/shared'

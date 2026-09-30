@@ -19,6 +19,7 @@ import {
   Save,
   Trash2,
   Wand2,
+  Waypoints,
   Wrench,
   X
 } from 'lucide-react'
@@ -86,6 +87,7 @@ import {
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { CopyAsButton } from './CopyAsButton'
+import { RecordGraphSheet } from './RecordGraph'
 import {
   type DocumentApplySelection,
   DocumentAutofillButton
@@ -1443,6 +1445,7 @@ export function ItemEditForm({
   // until the user supplies a justification, then retries with _change_reason
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
   const [rawEditOpen, setRawEditOpen] = useState(false)
+  const [graphOpen, setGraphOpen] = useState(false)
   const changeReasonRef = useRef<string | null>(null)
   // Mid-air collision: a 409 pauses the save into a per-field merge dialog
   // (their value vs yours); resolving retries against the newer revision.
@@ -9229,6 +9232,16 @@ export function ItemEditForm({
                                                 <Clipboard className='h-4 w-4' />
                                               )}
                                             </button>
+                                            <button
+                                              type='button'
+                                              title='Relationships — see and explore every record linked to this one'
+                                              onClick={() => setGraphOpen(true)}
+                                              aria-label='Relationships'
+                                              data-record-graph-open
+                                              className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+                                            >
+                                              <Waypoints className='h-4 w-4' />
+                                            </button>
                                             {isAdmin &&
                                               colMeta?.browser_config?.copy_as !== false && (
                                                 <CopyAsButton
@@ -10060,6 +10073,14 @@ export function ItemEditForm({
                                     onCreated={(t) =>
                                       toast.success(`Request #${t.id} sent to the administrators`)
                                     }
+                                  />
+                                )}
+                                {!isNew && itemId && (
+                                  <RecordGraphSheet
+                                    collection={collection}
+                                    itemId={String(itemId)}
+                                    open={graphOpen}
+                                    onOpenChange={setGraphOpen}
                                   />
                                 )}
                                 {isAdmin && !isNew && itemId && (

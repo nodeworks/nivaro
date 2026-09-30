@@ -35,24 +35,28 @@ row security, computed fields and activity logging all run.`
 
 export const recordGraphDocs: DocSection = {
   id: 'record-graph',
-  label: 'Record Graph Explorer',
+  label: 'Relationship Explorer',
   content: [
-    { type: 'h1', id: 'record-graph', text: 'Record Graph Explorer' },
+    { type: 'h1', id: 'record-graph', text: 'Relationship Explorer' },
     {
       type: 'p',
-      text: 'A radial map of one record’s relation neighborhood: M2O parents, O2M children (capped at 12 per relation) and M2M partners, each with resolved labels. Click a node to recenter on it, double-click to open the record.'
+      text: 'Every record form has a Relationships button in its header. It opens a map of the records linked to this one, grouped by the link: what the record points at (vendor, project, creator), what points at it (lines, forecasts, notes), and records joined through a many-to-many link. Expand any record to see what it connects to in turn; click a record to open it.'
     },
     {
       type: 'pre',
       code: `GET /api/record-graph/:collection/:id
-→ { "data": { "node": {…}, "edges": [{ "kind": "m2o|o2m|m2m", "via": "field", "node": {…} }], "truncated": false } }`
+→ { "data": { "node": {collection, id, label, collection_label},
+              "groups": [{ "direction": "out|in|m2m", "field", "label", "collection",
+                           "collection_label", "total", "items": [{collection, id, label}] }],
+              "edges": 29, "truncated": false } }`
     },
     {
       type: 'ul',
       items: [
-        'Neighbor collections require read permission; system tables are excluded (nivaro_files attachments are the one allowed system target).',
-        'One API hop per recenter — the explorer never loads more than a single neighborhood.',
-        'Open it from the graph button in the item editor header.'
+        'Every record in the answer is read as the viewer (roles, row filters, User Scopes): a group the viewer cannot read is left out and counts are what the viewer can see. A record outside their access answers 404.',
+        'Up to 12 records per group; `total` says how many there are. Polymorphic links are split per target collection.',
+        'A relation row naming a table that no longer exists drops that group rather than failing the map.',
+        'Shared components `RecordGraphSheet` / `RecordGraphExplorer` (exported from @nivaro/react), so headless hosts get the same explorer.'
       ]
     }
   ]

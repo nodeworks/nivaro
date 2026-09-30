@@ -294,6 +294,12 @@ export { QueueWorklist } from './components/queue/QueueWorklist'
 export { QueueWorkloadView } from './components/queue/QueueWorkloadView'
 export { RecentRecordsRail } from './components/RecentRecordsRail'
 export { RecordDrilldownSheet } from './components/RecordDrilldownSheet'
+export {
+  RecordGraphExplorer,
+  type RecordGraphGroup,
+  type RecordGraphNode,
+  RecordGraphSheet
+} from './components/RecordGraph'
 export type { RecordGridEditorConfig } from './components/RecordGridEditor'
 export { RecordGridEditor } from './components/RecordGridEditor'
 export { type ReadViewLayout, RecordReadView } from './components/RecordReadView'

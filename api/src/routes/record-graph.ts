@@ -2,193 +2,388 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
+import { getLabels } from '../services/queues.js'
 
 /**
- * Record graph — instance-level relation neighborhood for one record:
- * M2O parents, O2M children, and M2M partners (via junction pairs), each
- * with resolved labels. The explorer recenters on click, so one hop per
- * request is all it ever needs.
+ * Relationship explorer (#998) — one hop of a record's neighbourhood.
+ *
+ * GET /record-graph/:collection/:id answers every registered relation the
+ * record takes part in, grouped:
+ *   - out   — its own M2O fields (vendor, project, creator…)
+ *   - in    — plain M2O rows elsewhere that point AT it (lines, invoices…)
+ *   - m2m   — junction-linked records, M2A legs split per target collection
+ *
+ * Every business record in the answer is read AS THE VIEWER through
+ * readItems (RBAC, row filters, User Scopes): a group the viewer cannot read
+ * is left out, and counts are what the viewer can see — nothing about hidden
+ * rows is disclosed. The explorer asks again for each node someone expands,
+ * so the graph grows one hop at a time.
+ *
+ * nivaro_relations is a CLAIM, not truth — every relation is try/caught and a
+ * broken one degrades to a missing group, never a 500.
  */
 
-interface GraphNode {
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+const PER_GROUP = 12
+const MAX_RELATIONS = 40
+const USER_COLLECTIONS = new Set(['nivaro_users', 'directus_users'])
+const FILE_COLLECTIONS = new Set(['nivaro_files', 'directus_files'])
+
+interface RelRow {
+  id: number
+  many_collection: string | null
+  many_field: string | null
+  one_collection: string | null
+  one_field: string | null
+  junction_field: string | null
+  one_collection_field: string | null
+  one_allowed_collections: string | null
+}
+
+export interface GraphNode {
   collection: string
   id: string
   label: string
 }
 
-interface GraphEdge {
-  kind: 'm2o' | 'o2m' | 'm2m'
-  via: string // field / junction name
-  node: GraphNode
+export interface GraphGroup {
+  key: string
+  direction: 'out' | 'in' | 'm2m'
+  /** The field on this record (out / m2m) or on the other collection (in). */
+  field: string
+  label: string
+  collection: string
+  collection_label: string
+  total: number
+  items: GraphNode[]
 }
 
-const CHILD_CAP = 12
-
-function rowLabel(row: Record<string, unknown> | undefined, fallback: string): string {
-  if (!row) return fallback
-  return String(row.title ?? row.name ?? row.label ?? row.subject ?? fallback).slice(0, 60)
+function ident(v: unknown): v is string {
+  return typeof v === 'string' && IDENT_RE.test(v)
 }
 
-async function readableSet(userRole: string | null, isAdmin: boolean): Promise<Set<string> | null> {
-  if (isAdmin) return null // null = everything
-  if (!userRole) return new Set()
-  const policies = (await db('nivaro_policies')
-    .where({ role: userRole, action: 'read' })
-    .select('collection')) as Array<{ collection: string }>
-  return new Set(policies.map((p) => p.collection))
+function isSystem(c: string): boolean {
+  return /^(nivaro|directus)_/i.test(c)
+}
+
+/** A bare comma list on legacy rows, a JSON array on newer ones. */
+function allowedList(raw: string | null): string[] {
+  if (!raw) return []
+  const t = raw.trim()
+  if (t.startsWith('[')) {
+    try {
+      const v = JSON.parse(t)
+      return Array.isArray(v) ? v.map(String) : []
+    } catch {
+      return []
+    }
+  }
+  return t
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function titleCase(s: string): string {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 export async function recordGraphRoutes(app: FastifyInstance) {
-  app.get('/:collection/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const { collection, id } = req.params as { collection: string; id: string }
-    if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
-      return reply.code(400).send({ error: 'Invalid collection' })
-    }
-    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
-    }
-    const readable = await readableSet(req.user?.role ?? null, req.isAdmin ?? false)
-    const canRead = (c: string) => (readable === null ? true : readable.has(c) || readable.has('*'))
-
-    let record: Record<string, unknown> | undefined
-    try {
-      record = (await db(collection).where({ id }).first()) as Record<string, unknown> | undefined
-    } catch {
-      record = undefined
-    }
-    if (!record) return reply.code(404).send({ error: 'Record not found' })
-
-    const relations = (await db('nivaro_relations')
-      .where('many_collection', collection)
-      .orWhere('one_collection', collection)) as Array<Record<string, unknown>>
-
-    const edges: GraphEdge[] = []
-    let truncated = false
-
-    // M2O parents: this record's FK columns → parent rows
-    const m2oRels = relations.filter(
-      (r) => r.many_collection === collection && r.one_collection && r.junction_field == null
-    )
-    for (const r of m2oRels) {
-      const target = String(r.one_collection)
-      const fk = String(r.many_field ?? '')
-      const fkVal = record[fk]
-      if (!fk || fkVal == null || !canRead(target) || target.startsWith('nivaro_')) continue
-      try {
-        const parent = (await db(target).where({ id: fkVal }).first()) as
-          | Record<string, unknown>
-          | undefined
-        if (parent) {
-          edges.push({
-            kind: 'm2o',
-            via: fk,
-            node: { collection: target, id: String(fkVal), label: rowLabel(parent, String(fkVal)) }
-          })
-        }
-      } catch {
-        /* physical mismatch — skip */
+  app.get<{ Params: { collection: string; id: string } }>(
+    '/:collection/:id',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { collection, id } = req.params
+      if (!ident(collection) || isSystem(collection)) {
+        return reply.code(400).send({ error: 'Business collections only' })
       }
-    }
+      const user = req.user!
+      const mayRead = async (c: string) => req.isAdmin || (await can(user, 'read', c))
+      if (!(await mayRead(collection))) return reply.code(403).send({ error: 'Forbidden' })
 
-    // O2M children: relations where we are the "one" side, no junction
-    const o2mRels = relations.filter(
-      (r) => r.one_collection === collection && r.junction_field == null
-    )
-    for (const r of o2mRels) {
-      const child = String(r.many_collection)
-      const fk = String(r.many_field ?? '')
-      if (!fk || !canRead(child) || child.startsWith('nivaro_')) continue
-      try {
-        const rows = (await db(child)
-          .where({ [fk]: id })
-          .limit(CHILD_CAP + 1)) as Array<Record<string, unknown>>
-        if (rows.length > CHILD_CAP) truncated = true
-        for (const row of rows.slice(0, CHILD_CAP)) {
-          edges.push({
-            kind: 'o2m',
-            via: fk,
-            node: { collection: child, id: String(row.id), label: rowLabel(row, String(row.id)) }
-          })
-        }
-      } catch {
-        /* skip */
-      }
-    }
+      const { readItems } = await import('../services/items.js')
 
-    // M2M partners: junction pairs
-    const m2mRels = relations.filter(
-      (r) => r.one_collection === collection && r.junction_field != null
-    )
-    // Companion rows (junction → other side) have neither endpoint equal to
-    // this collection, so they need their own fetch.
-    const junctionNames = m2mRels.map((r) => String(r.many_collection))
-    const companions = junctionNames.length
-      ? ((await db('nivaro_relations').whereIn('many_collection', junctionNames)) as Array<
-          Record<string, unknown>
-        >)
-      : []
-    for (const r of m2mRels) {
-      const junction = String(r.many_collection)
-      const myFk = String(r.junction_field ?? '') // column pointing at ME? convention check:
-      // In this registry, many_field points at the parent (this collection) and
-      // junction_field at the related record — same reading the queue resolvers use.
-      const parentCol = String(r.many_field ?? '')
-      const relatedCol = String(r.junction_field ?? '')
-      // Companion relation names the other side's collection
-      const companion = companions.find(
-        (c) =>
-          c.many_collection === junction && String(c.many_field) !== parentCol && c.one_collection
-      )
-      const target = companion ? String(companion.one_collection) : null
-      if (!target) continue
-      // nivaro_files is the ONLY permitted system target: attachment labels
-      // are already visible to any authenticated user with read access to the
-      // parent record (the Files field and the authenticate-only /files
-      // routes expose the same data). Every other nivaro_/directus_ table is
-      // blocked outright, and business targets require read permission.
-      const isFiles = target === 'nivaro_files'
-      if (!isFiles && (target.startsWith('nivaro_') || target.startsWith('directus_'))) continue
-      if (!isFiles && !canRead(target)) continue
-      const targetCollection = target
-      try {
-        const links = (await db(junction)
-          .where({ [parentCol]: id })
-          .limit(CHILD_CAP + 1)
-          .select(relatedCol)) as Array<Record<string, unknown>>
-        if (links.length > CHILD_CAP) truncated = true
-        const ids = links
-          .slice(0, CHILD_CAP)
-          .map((l) => l[relatedCol])
-          .filter((v) => v != null)
-        if (ids.length === 0) continue
-        const rows = (await db(targetCollection).whereIn(
+      // The record itself, as the viewer — a record outside their access has
+      // no neighbourhood to show.
+      const own = await readItems(user, collection, {
+        filter: { id: { _eq: id } },
+        limit: 1
+      }).catch(() => null)
+      const record = (own?.data as Array<Record<string, unknown>> | undefined)?.[0]
+      if (!record) return reply.code(404).send({ error: 'Record not found' })
+
+      const rels = (await db('nivaro_relations')
+        .where((q) =>
+          q
+            .where({ many_collection: collection })
+            .orWhere({ one_collection: collection })
+            .orWhereNotNull('junction_field')
+        )
+        .select(
           'id',
-          ids as Array<string | number>
-        )) as Array<Record<string, unknown>>
-        const byId = new Map(rows.map((row) => [String(row.id), row]))
-        for (const rid of ids) {
-          edges.push({
-            kind: 'm2m',
-            via: junction,
-            node: {
-              collection: targetCollection,
-              id: String(rid),
-              label: rowLabel(byId.get(String(rid)), String(rid))
+          'many_collection',
+          'many_field',
+          'one_collection',
+          'one_field',
+          'junction_field',
+          'one_collection_field',
+          'one_allowed_collections'
+        )) as RelRow[]
+
+      const junctionCollections = new Set(
+        rels.filter((r) => r.junction_field && r.many_collection).map((r) => r.many_collection!)
+      )
+      // Field labels name the groups on this record's side ("Vendor",
+      // "Purchase orders") — the column name only when no label is set.
+      const fieldLabels = new Map<string, string>()
+      const fieldRows = (await db('nivaro_fields')
+        .where({ collection })
+        .select('field', 'label')
+        .catch(() => [])) as Array<{ field: string; label: string | null }>
+      for (const f of fieldRows) if (f.label) fieldLabels.set(f.field, f.label)
+
+      interface Pending {
+        key: string
+        direction: GraphGroup['direction']
+        field: string
+        collection: string
+        /** ids to resolve (out / m2m) — null = query by FK (in). */
+        ids: string[] | null
+        fk?: string
+      }
+      const pending: Pending[] = []
+      const seen = new Set<string>()
+      const add = (p: Pending) => {
+        if (seen.has(p.key) || pending.length >= MAX_RELATIONS) return
+        seen.add(p.key)
+        pending.push(p)
+      }
+
+      // ── out: this record's own M2O columns ──────────────────────────────
+      for (const r of rels) {
+        if (r.many_collection !== collection || !ident(r.many_field) || !ident(r.one_collection))
+          continue
+        const v = record[r.many_field]
+        const idv = v && typeof v === 'object' ? (v as Record<string, unknown>).id : (v as unknown)
+        if (idv == null || idv === '') continue
+        add({
+          key: `out:${r.many_field}`,
+          direction: 'out',
+          field: r.many_field,
+          collection: r.one_collection,
+          ids: [String(idv)]
+        })
+      }
+
+      // ── in + m2m: relations whose one side is this collection ───────────
+      for (const r of rels) {
+        if (r.one_collection !== collection || !ident(r.many_collection) || !ident(r.many_field))
+          continue
+        if (!r.junction_field) {
+          if (junctionCollections.has(r.many_collection)) continue
+          add({
+            key: `in:${r.many_collection}.${r.many_field}`,
+            direction: 'in',
+            field: r.many_field,
+            collection: r.many_collection,
+            ids: null,
+            fk: r.many_field
+          })
+          continue
+        }
+        // Junction leg pointing at this record: its companion names the target.
+        const companion = rels.find(
+          (c) =>
+            c.id !== r.id &&
+            c.many_collection === r.many_collection &&
+            c.many_field === r.junction_field
+        )
+        if (!companion || !ident(r.junction_field)) continue
+        const alias = r.one_field && ident(r.one_field) ? r.one_field : r.many_collection
+        try {
+          const discriminator =
+            !companion.one_collection && ident(companion.one_collection_field)
+              ? companion.one_collection_field
+              : null
+          const cols = discriminator ? [r.junction_field, discriminator] : [r.junction_field]
+          const rows = (await db(r.many_collection)
+            .where(r.many_field, id)
+            .select(cols)
+            .limit(400)) as Array<Record<string, unknown>>
+          const byTarget = new Map<string, string[]>()
+          for (const row of rows) {
+            const v = row[r.junction_field]
+            if (v == null || v === '') continue
+            let target = companion.one_collection
+            if (!target && discriminator) {
+              const d = row[discriminator]
+              target = typeof d === 'string' ? d : null
+              if (target && !allowedList(companion.one_allowed_collections).includes(target))
+                target = null
+            }
+            if (!target) continue
+            const list = byTarget.get(target) ?? []
+            list.push(String(v))
+            byTarget.set(target, list)
+          }
+          for (const [target, ids] of byTarget) {
+            add({
+              key: `m2m:${alias}:${target}`,
+              direction: 'm2m',
+              field: alias,
+              collection: target,
+              ids: [...new Set(ids)]
+            })
+          }
+        } catch {
+          // Stale junction row / missing table — skip this relation.
+        }
+      }
+
+      // ── resolve every group as the viewer ───────────────────────────────
+      const groups = (
+        await Promise.all(
+          pending.map(async (p): Promise<GraphGroup | null> => {
+            try {
+              if (USER_COLLECTIONS.has(p.collection)) {
+                if (!p.ids) return null
+                const rows = (await db('nivaro_users')
+                  .whereIn('id', p.ids.slice(0, PER_GROUP * 4))
+                  .where((q) => q.where('is_redacted', false).orWhereNull('is_redacted'))
+                  .select('id', 'first_name', 'last_name', 'email')) as Array<{
+                  id: string
+                  first_name: string | null
+                  last_name: string | null
+                  email: string | null
+                }>
+                if (rows.length === 0) return null
+                return {
+                  key: p.key,
+                  direction: p.direction,
+                  field: p.field,
+                  label: fieldLabels.get(p.field) ?? titleCase(p.field),
+                  collection: 'nivaro_users',
+                  collection_label: 'People',
+                  total: rows.length,
+                  items: rows.slice(0, PER_GROUP).map((u) => ({
+                    collection: 'nivaro_users',
+                    id: String(u.id),
+                    label:
+                      [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || `#${u.id}`
+                  }))
+                }
+              }
+              if (FILE_COLLECTIONS.has(p.collection)) {
+                if (!p.ids) return null
+                const rows = (await db('nivaro_files')
+                  .whereIn('id', p.ids.slice(0, PER_GROUP * 4))
+                  .select('id', 'title', 'filename_download')) as Array<{
+                  id: string
+                  title: string | null
+                  filename_download: string | null
+                }>
+                if (rows.length === 0) return null
+                return {
+                  key: p.key,
+                  direction: p.direction,
+                  field: p.field,
+                  label: fieldLabels.get(p.field) ?? titleCase(p.field),
+                  collection: 'nivaro_files',
+                  collection_label: 'Files',
+                  total: rows.length,
+                  items: rows.slice(0, PER_GROUP).map((f) => ({
+                    collection: 'nivaro_files',
+                    id: String(f.id),
+                    label: f.title || f.filename_download || `#${f.id}`
+                  }))
+                }
+              }
+              if (isSystem(p.collection) || !ident(p.collection)) return null
+              if (!(await mayRead(p.collection))) return null
+              const filter = p.ids
+                ? { id: { _in: p.ids.slice(0, 2000) } }
+                : { [p.fk!]: { _eq: id } }
+              const page = await readItems(user, p.collection, {
+                filter,
+                fields: ['id'],
+                sort: ['-id'],
+                limit: PER_GROUP
+              })
+              const total = Number(page.total ?? 0)
+              const rows = page.data as Array<{ id: string | number }>
+              if (total === 0 || rows.length === 0) return null
+              return {
+                key: p.key,
+                direction: p.direction,
+                field: p.field,
+                label: p.direction === 'in' ? '' : (fieldLabels.get(p.field) ?? titleCase(p.field)),
+                collection: p.collection,
+                collection_label: '',
+                total,
+                items: rows.map((row) => ({
+                  collection: p.collection,
+                  id: String(row.id),
+                  label: ''
+                }))
+              }
+            } catch {
+              return null
             }
           })
-        }
-      } catch {
-        /* skip */
-      }
-      void myFk
-    }
+        )
+      ).filter((g): g is GraphGroup => g !== null)
 
-    return reply.send({
-      data: {
-        node: { collection, id, label: rowLabel(record, id) },
-        edges,
-        truncated
+      // Labels + collection names in one pass each.
+      const labelMap = new Map<string, Set<string>>()
+      const want = (c: string, i: string) => {
+        const set = labelMap.get(c) ?? new Set<string>()
+        set.add(i)
+        labelMap.set(c, set)
       }
-    })
-  })
+      want(collection, id)
+      for (const g of groups) {
+        if (isSystem(g.collection)) continue
+        for (const n of g.items) want(n.collection, n.id)
+      }
+      const labels = await getLabels(labelMap).catch(() => ({}) as Record<string, string>)
+      const names = (await db('nivaro_collections')
+        .whereIn('collection', [collection, ...new Set(groups.map((g) => g.collection))])
+        .select('collection', 'display_name')
+        .catch(() => [])) as Array<{ collection: string; display_name: string | null }>
+      const nameOf = new Map(names.map((n) => [n.collection, n.display_name]))
+      const collectionLabel = (c: string) => nameOf.get(c) || titleCase(c)
+
+      for (const g of groups) {
+        if (!g.collection_label) g.collection_label = collectionLabel(g.collection)
+        if (!g.label) g.label = collectionLabel(g.collection)
+        for (const n of g.items) {
+          if (!n.label) n.label = (labels[`${n.collection}:${n.id}`] ?? '').trim() || `#${n.id}`
+        }
+      }
+      const order = { out: 0, m2m: 1, in: 2 }
+      groups.sort((a, b) => order[a.direction] - order[b.direction] || b.total - a.total)
+
+      // Legacy shape (edges) kept beside the groups for older callers of the
+      // SDK's readRecordGraph.
+      const kindOf = { out: 'm2o', in: 'o2m', m2m: 'm2m' } as const
+      const edges = groups.flatMap((g) =>
+        g.items.map((n) => ({ kind: kindOf[g.direction], via: g.field, node: n }))
+      )
+      const truncated = groups.some((g) => g.total > g.items.length)
+
+      return reply.send({
+        data: {
+          edges,
+          truncated,
+          node: {
+            collection,
+            id,
+            label: (labels[`${collection}:${id}`] ?? '').trim() || `#${id}`,
+            collection_label: collectionLabel(collection)
+          },
+          groups
+        }
+      })
+    }
+  )
 }
