@@ -15,8 +15,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient, useParentDraft } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useAfterIdle } from '../../lib/defer'
 import { evaluateNumeric } from '../../lib/expression'
-import { cn } from '../../lib/utils'
+import { cn, formatRelative } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type CompareDetailRow,
@@ -302,7 +303,11 @@ export function PlanGridField(props: {
   const totalField = config.total_field ?? null
 
   // ── data ────────────────────────────────────────────────────────────────
-  const { data: rawRows = [], isLoading: rowsLoading } = useQuery<Record<string, unknown>[]>({
+  const {
+    data: rawRows = [],
+    isLoading: rowsLoading,
+    dataUpdatedAt: rowsUpdatedAt
+  } = useQuery<Record<string, unknown>[]>({
     queryKey: ['o2m-rows', rc, mf, parentId, ''],
     queryFn: () =>
       client
@@ -313,6 +318,59 @@ export function PlanGridField(props: {
     enabled: !isNew,
     staleTime: 30_000
   })
+
+  // #729 — who last changed each figure, and the reason they gave (the
+  // InlineTableField cell-history read, same endpoint); a figure changed FOR
+  // a stated reason carries a corner notch.
+  const provenanceSettled = useAfterIdle(2000)
+  const { data: cellProvenance = {} } = useQuery<PlanCellProvenance>({
+    queryKey: ['o2m-cell-provenance', rc, mf, parentId, rowsUpdatedAt],
+    queryFn: () =>
+      client
+        .request<{ data: PlanCellProvenance }>(
+          get('/revisions/o2m-cell-provenance', {
+            collection: rc,
+            many_field: mf,
+            parent_id: parentId
+          })
+        )
+        .then((r) => r.data ?? {}),
+    enabled: provenanceSettled && showHistory && !isNew && rawRows.length > 0,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev
+  })
+  const cellKeyOf = (row: PlanRow, col: string) => (row.id ? `${rc}:${row.id}:${col}` : undefined)
+  const provOf = (row: PlanRow, col: string) =>
+    row.id && !row.edited ? cellProvenance[row.id]?.[col] : undefined
+  // #729 — shared cursors, the InlineTableField contract: a saved figure's
+  // cell is tagged `<collection>:<row>:<field>`, and focus moving between
+  // cells rides window `nvr:cell-editing` for the presence host to relay.
+  const cellFocusRef = useRef<string | null>(null)
+  const emitCell = (cell: string | null, state: 'start' | 'end') => {
+    if (!cell || typeof window === 'undefined') return
+    window.dispatchEvent(new CustomEvent('nvr:cell-editing', { detail: { cell, state } }))
+  }
+  const onCellFocusCapture = (e: React.FocusEvent) => {
+    const cell =
+      (e.target as HTMLElement | null)?.closest?.('[data-grid-cell]')?.getAttribute('data-grid-cell') ??
+      null
+    if (cell === cellFocusRef.current) return
+    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
+    cellFocusRef.current = cell
+    if (cell) emitCell(cell, 'start')
+  }
+  const onCellBlurCapture = (e: React.FocusEvent) => {
+    if ((e.relatedTarget as HTMLElement | null)?.closest?.('[data-grid-cell]')) return
+    if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
+    cellFocusRef.current = null
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only release of the cursor
+  useEffect(
+    () => () => {
+      if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
+    },
+    []
+  )
 
   const compareEndpoint = useMemo(
     () =>
@@ -1034,6 +1092,8 @@ export function PlanGridField(props: {
       <div
         className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'
         data-plan-grid-scroll
+        onFocusCapture={onCellFocusCapture}
+        onBlurCapture={onCellBlurCapture}
       >
         <table
           className='border-separate border-spacing-0 text-[12px] tabular-nums'
@@ -1252,6 +1312,8 @@ export function PlanGridField(props: {
                           row={b.top as PlanRow}
                           col={c}
                           closed={closed}
+                          prov={provOf(b.top as PlanRow, c)}
+                          cellKey={cellKeyOf(b.top as PlanRow, c)}
                           locked={isLocked(b.key, c)}
                           lockedTip={
                             closed
@@ -1377,6 +1439,8 @@ export function PlanGridField(props: {
                             row={r}
                             col={c}
                             closed={isClosed(b.key, c)}
+                            prov={provOf(r, c)}
+                            cellKey={cellKeyOf(r, c)}
                             locked={isLocked(b.key, c)}
                             lockedTip={
                               isClosed(b.key, c)
@@ -1570,30 +1634,53 @@ function Figure(props: { n: number; muted?: boolean }) {
 }
 
 // ── an editable plan cell ───────────────────────────────────────────────────
+type PlanCellProvenance = Record<
+  string,
+  Record<string, { at: string; who: string; revision_id: number; reason?: string | null }>
+>
+
 function PlanCell(props: {
   row: PlanRow
   col: string
   closed: boolean
   locked: boolean
   lockedTip?: string
+  /** Who last changed this figure (#729); the notch marks a stated reason. */
+  prov?: { at: string; who: string; reason?: string | null }
+  /** `<collection>:<row>:<field>` — the shared-cursor identity (#729). */
+  cellKey?: string
   onCommit: (v: number) => boolean
   onMove: (uid: string, col: string, dRow: number, dCol: number) => void
   onPaste: (row: PlanRow, col: string, text: string) => void
 }) {
-  const { row, col, closed, locked, lockedTip, onCommit, onMove, onPaste } = props
+  const { row, col, closed, locked, lockedTip, prov, cellKey, onCommit, onMove, onPaste } = props
   const value = num(row.values[col])
+  const provTip = prov
+    ? `${monthLabelLong(col)} · changed ${formatRelative(prov.at)} by ${prov.who}${
+        prov.reason ? `\nReason: “${prov.reason}”` : ''
+      }`
+    : undefined
+  const notch = prov?.reason ? (
+    <span
+      aria-hidden='true'
+      data-cell-reason
+      className='pointer-events-none absolute left-0 top-0 h-0 w-0 border-r-[6px] border-t-[6px] border-r-transparent border-t-nvr-cyan'
+    />
+  ) : null
   const [text, setText] = useState<string | null>(null)
   const skipRef = useRef(false)
   if (locked)
     return (
       <td
         data-plan-locked={closed ? 'closed' : 'readonly'}
-        data-tip={lockedTip}
+        data-tip={[lockedTip, provTip].filter(Boolean).join('\n') || undefined}
+        data-grid-cell={cellKey}
         className={cn(
-          'px-2.5 py-1 text-right text-slate-700 dark:text-slate-200',
+          'relative px-2.5 py-1 text-right text-slate-700 dark:text-slate-200',
           closed && closedTint
         )}
       >
+        {notch}
         <Figure n={value} />
       </td>
     )
@@ -1613,7 +1700,12 @@ function PlanCell(props: {
     onCommit(parsed)
   }
   return (
-    <td className={cn('p-0', closed && closedTint)}>
+    <td
+      className={cn('relative p-0', closed && closedTint)}
+      data-grid-cell={cellKey}
+      data-tip={provTip}
+    >
+      {notch}
       <input
         data-pg-cell={`${row.uid}:${col}`}
         aria-label={`${monthLabelLong(col)} ${row.key}`}
