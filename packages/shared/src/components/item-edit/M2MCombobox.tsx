@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useDrilldown, useNivaroClient } from '../../context'
+import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
+import { cn, userOptionFilter } from '../../lib/utils'
 import { useOnlineUsers } from '../../lib/use-online-users'
 import { UserAvatar } from '../UserAvatar'
 
@@ -145,7 +145,9 @@ export function M2MCombobox({
 
   // nivaro_users options mirror listUsers(): redacted accounts never appear
   // and suspended users are not pickable (committed values still display).
-  const redactionFilter = relatedCollection === 'nivaro_users' ? ACTIVE_USER_OPTION_FILTER : null
+  const viewerIsAdmin = useItemEditAuth().isAdmin
+  const redactionFilter =
+    relatedCollection === 'nivaro_users' ? userOptionFilter(viewerIsAdmin) : null
   const onlineUsers = useOnlineUsers(relatedCollection === 'nivaro_users')
   const effectiveFilter = extraFilter
     ? redactionFilter
@@ -527,7 +529,9 @@ export function M2MSingleSelectCombobox({
 
   // nivaro_users options mirror listUsers(): redacted accounts never appear
   // and suspended users are not pickable (committed values still display).
-  const redactionFilter = relatedCollection === 'nivaro_users' ? ACTIVE_USER_OPTION_FILTER : null
+  const viewerIsAdmin = useItemEditAuth().isAdmin
+  const redactionFilter =
+    relatedCollection === 'nivaro_users' ? userOptionFilter(viewerIsAdmin) : null
   const onlineUsers = useOnlineUsers(relatedCollection === 'nivaro_users')
   const effectiveFilter = extraFilter
     ? redactionFilter

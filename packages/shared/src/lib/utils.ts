@@ -156,6 +156,21 @@ export const ACTIVE_USER_OPTION_FILTER = {
 }
 
 /**
+ * The same, minus machine identities (bots, integrations, service accounts,
+ * placeholders — `account_kind` set). A person picking a contact or an
+ * assignee should only ever be offered people; admins keep the machine
+ * accounts because they occasionally configure one on purpose.
+ */
+export const PEOPLE_USER_OPTION_FILTER = {
+  _and: [...ACTIVE_USER_OPTION_FILTER._and, { account_kind: { _null: true } }]
+}
+
+/** The user-picker option filter for this viewer (#732). */
+export function userOptionFilter(isAdmin: boolean) {
+  return isAdmin ? ACTIVE_USER_OPTION_FILTER : PEOPLE_USER_OPTION_FILTER
+}
+
+/**
  * Select-choice display text. Legacy Directus schema imports store choice
  * labels as i18n keys ('$t:published') that Directus resolved through its own
  * translation bundle — Nivaro has no such bundle, so the raw key leaked into

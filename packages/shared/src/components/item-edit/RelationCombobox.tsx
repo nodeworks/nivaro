@@ -3,7 +3,7 @@ import { AlertTriangle, Check, ChevronDown, Loader2, Search, X } from 'lucide-re
 import type { CSSProperties } from 'react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNivaroClient, useStaleFieldReporter } from '../../context'
+import { useItemEditAuth, useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useOnlineUsers } from '../../lib/use-online-users'
 import { UserAvatar } from '../UserAvatar'
@@ -23,7 +23,7 @@ function labelInitials(label: string): string {
   )
 }
 
-import { ACTIVE_USER_OPTION_FILTER, cn } from '../../lib/utils'
+import { cn, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 
 /**
@@ -247,16 +247,17 @@ export function RelationCombobox({
   const isUserCollection = collection === 'nivaro_users'
   // Online presence dots in user pickers (#284) — the shared 30s-polled set.
   const onlineUsers = useOnlineUsers(isUserCollection)
+  const viewerIsAdmin = useItemEditAuth().isAdmin
   const combinedFilter = useMemo(() => {
     const clauses: Record<string, unknown>[] = []
-    if (isUserCollection) clauses.push(ACTIVE_USER_OPTION_FILTER)
+    if (isUserCollection) clauses.push(userOptionFilter(viewerIsAdmin))
     if (extraFilter) clauses.push(extraFilter)
     for (const [f, v] of Object.entries(facetSel)) {
       if (v !== null && v !== undefined && v !== '') clauses.push({ [f]: { _eq: v } })
     }
     if (clauses.length === 0) return undefined
     return clauses.length === 1 ? clauses[0] : { _and: clauses }
-  }, [extraFilter, facetSel])
+  }, [extraFilter, facetSel, viewerIsAdmin])
 
   // Extract template fields for relation expansion (e.g. '{{category.name}}' → 'category.name')
   const effectiveTemplate =
