@@ -92,6 +92,11 @@ const allowedSettingsKeys = [
   'sms_test_mode',
   'sms_test_recipient',
   'sms_test_allowlist',
+  'push_test_mode',
+  'push_test_recipient',
+  'push_test_allowlist',
+  'teams_test_mode',
+  'teams_test_webhook_url',
   // SMS
   'sms_provider',
   'sms_account_sid',
@@ -174,7 +179,11 @@ export async function settingsRoutes(app: FastifyInstance) {
         mail_test_env_mode: envOn(process.env.MAIL_TEST_MODE),
         mail_test_env_recipient: process.env.MAIL_TEST_RECIPIENT || null,
         sms_test_env_mode: envOn(process.env.SMS_TEST_MODE),
-        sms_test_env_recipient: process.env.SMS_TEST_RECIPIENT || null
+        sms_test_env_recipient: process.env.SMS_TEST_RECIPIENT || null,
+        push_test_env_mode: envOn(process.env.PUSH_TEST_MODE),
+        push_test_env_recipient: process.env.PUSH_TEST_RECIPIENT || null,
+        teams_test_env_mode: envOn(process.env.TEAMS_TEST_MODE),
+        teams_test_env_webhook: process.env.TEAMS_TEST_WEBHOOK_URL ? true : null
       },
       env_overrides: envOverrideKeys()
     })
@@ -313,6 +322,12 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { bustTeamSettings } = await import('../services/team.js')
       reply.raw.once('finish', () => bustTeamSettings())
+    }
+
+    // Push / Teams test mode (#832): the next send reads the new switch.
+    if (Object.keys(patch).some((k) => k.startsWith('push_test_') || k.startsWith('teams_test_'))) {
+      const { bustChannelTestMode } = await import('../services/channel-test-mode.js')
+      reply.raw.once('finish', () => bustChannelTestMode())
     }
 
     // SLO targets (#666)

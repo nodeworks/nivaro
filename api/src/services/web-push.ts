@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { routePush } from './channel-test-mode.js'
 import webpush from 'web-push'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
@@ -89,6 +90,15 @@ export interface PushPayload {
  */
 export async function sendWebPush(userId: string, payload: PushPayload): Promise<number> {
   try {
+    // Test mode (#832): a person outside the allowlist is not pushed; the test
+    // recipient's browsers get it instead, titled with who it was for.
+    const routed = await routePush(userId)
+    if (!routed) return 0
+    if (routed.userId !== userId) {
+      userId = routed.userId
+      // A redirected push must not carry a chat reply token for someone else.
+      payload = { ...payload, title: `${routed.prefix}${payload.title}`, reply_token: undefined }
+    }
     const subs = (await db('nivaro_push_subscriptions').where({ user: userId })) as Array<{
       id: number
       endpoint: string

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { routeTeams } from './channel-test-mode.js'
 
 /** Post a card to Teams via the configured incoming webhook. Fire-and-forget (no throw). */
 export async function sendTeamsNotification(opts: {
@@ -8,8 +9,13 @@ export async function sendTeamsNotification(opts: {
 }): Promise<void> {
   try {
     const settings = await db('nivaro_settings').where({ id: 1 }).first()
-    const url = settings?.teams_webhook_url as string | null
-    if (!url) return
+    const configured = settings?.teams_webhook_url as string | null
+    if (!configured) return
+    // Test mode (#832): another channel, or nowhere.
+    const routed = await routeTeams(configured)
+    if (!routed) return
+    const url = routed.url
+    opts = { ...opts, title: `${routed.prefix}${opts.title}` }
 
     const body = {
       '@type': 'MessageCard',

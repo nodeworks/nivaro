@@ -25,6 +25,7 @@ import {
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { ChannelTestModeCard } from '@/components/channel-test-mode-card'
 import { DirectorySyncCard } from '@/components/directory-sync-card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -2796,6 +2797,7 @@ export function SettingsPage() {
                       className='h-8 text-[13px]'
                     />
                   </Field>
+                  <ChannelTestModeCard />
 
                   <div className='space-y-2'>
                     <div className='flex items-center justify-between'>

@@ -303,6 +303,14 @@ export const smsConfig: DocSection = {
       type: 'note',
       text: 'The `SMS_TEST_MODE` and `SMS_TEST_RECIPIENT` env vars override the settings values and force test mode on — set them in dev/staging `.env` files so the protection survives database restores from production. Email has the same feature: see Email / SMTP → Test mode.'
     },
+    {
+      type: 'h3',
+      text: 'Browser push and Teams test mode'
+    },
+    {
+      type: 'p',
+      text: 'Settings → Microsoft carries the same protection for the other two channels. Browser push: a push to anyone whose email is not on the allowlist (emails or @domains) goes to the test person\'s browsers instead, titled `[TEST — was: <email>]`; with no test person it is dropped, and a redirected chat push loses its reply token. Teams: every card goes to the test channel\'s incoming webhook instead, titled `[TEST — was: <channel host>]`; with no test webhook it is dropped. `PUSH_TEST_MODE` / `PUSH_TEST_RECIPIENT` and `TEAMS_TEST_MODE` / `TEAMS_TEST_WEBHOOK_URL` force the mode on from the environment, like the mail and SMS variables.'
+    },
     { type: 'h3', text: 'API' },
     {
       type: 'pre',

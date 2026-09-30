@@ -98,8 +98,14 @@ export interface ActionCardOptions {
 
 /** Post an Adaptive Card with action buttons to a Teams incoming webhook. */
 export async function sendActionCard(opts: ActionCardOptions): Promise<boolean> {
-  const webhookUrl = opts.webhookUrl ?? (await getTeamsWebhookUrl())
-  if (!webhookUrl) return false
+  const configured = opts.webhookUrl ?? (await getTeamsWebhookUrl())
+  if (!configured) return false
+  // Test mode (#832): another channel, or nowhere.
+  const { routeTeams } = await import('../services/channel-test-mode.js')
+  const routed = await routeTeams(configured)
+  if (!routed) return false
+  const webhookUrl = routed.url
+  opts = { ...opts, title: `${routed.prefix}${opts.title}` }
 
   const buttons = opts.actions.map((a) => ({
     type: 'Action.OpenUrl',
