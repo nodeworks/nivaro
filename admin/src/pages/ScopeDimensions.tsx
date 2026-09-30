@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, RefreshCw, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { toast } from 'sonner'
 
 /**
  * Scope Dimensions — the User Scopes registry. A dimension names a target
@@ -43,7 +44,11 @@ const STATUS_STYLE: Record<CoverageRow['status'], string> = {
 }
 
 function CoverageTable({ dim }: { dim: Dim }) {
-  const { data: rows = [], refetch, isFetching } = useQuery({
+  const {
+    data: rows = [],
+    refetch,
+    isFetching
+  } = useQuery({
     queryKey: ['scope-coverage', dim.id],
     queryFn: () =>
       api
@@ -69,12 +74,20 @@ function CoverageTable({ dim }: { dim: Dim }) {
         <table className='w-full text-[11.5px]'>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.collection} className='border-b border-slate-50 last:border-0 dark:border-border/40'>
+              <tr
+                key={r.collection}
+                className='border-b border-slate-50 last:border-0 dark:border-border/40'
+              >
                 <td className='px-2 py-1 font-medium text-slate-700 dark:text-slate-300'>
                   {r.collection}
                 </td>
                 <td className='px-2 py-1'>
-                  <span className={cn('rounded-full px-1.5 py-px text-[10px] font-semibold', STATUS_STYLE[r.status])}>
+                  <span
+                    className={cn(
+                      'rounded-full px-1.5 py-px text-[10px] font-semibold',
+                      STATUS_STYLE[r.status]
+                    )}
+                  >
                     {r.status}
                   </span>
                 </td>
@@ -95,10 +108,204 @@ function CoverageTable({ dim }: { dim: Dim }) {
   )
 }
 
+// ─── Raw SQL scope coverage (#770) ────────────────────────────────────────────
+// Custom queries and extension read routes are raw SQL — the items-service
+// scope enforcement cannot reach them. A query is safe when its scope params
+// carry every dimension that reaches the tables it reads.
+
+interface CoverageQuery {
+  id: number
+  slug: string
+  name: string
+  tables: string[]
+  reaching: Array<{ dimension: string; label: string; tables: string[] }>
+  covered: string[]
+  missing: Array<{ dimension: string; label: string }>
+  used_by: Array<{ surface: string; name: string; link: string | null }>
+  status: 'covered' | 'unscoped-tables' | 'gap' | 'leak'
+}
+interface CoverageRoute {
+  extension: string
+  method: string
+  url: string
+  gate: string
+  scope: 'enforced' | 'not-scoped' | null
+}
+interface CoverageReport {
+  queries: CoverageQuery[]
+  routes: CoverageRoute[]
+  totals: { queries: number; leaks: number; gaps: number; routes_undeclared: number }
+  computed_at: string
+}
+
+const Q_STYLE: Record<CoverageQuery['status'], { label: string; cls: string }> = {
+  leak: {
+    label: 'Runs unscoped',
+    cls: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300'
+  },
+  gap: {
+    label: 'Unscoped, unused',
+    cls: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'
+  },
+  covered: {
+    label: 'Scoped',
+    cls: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+  },
+  'unscoped-tables': {
+    label: 'No scoped tables',
+    cls: 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'
+  }
+}
+
+function RawSqlCoverageCard() {
+  const [fresh, setFresh] = useState(0)
+  const [showAll, setShowAll] = useState(false)
+  const { data, isFetching } = useQuery({
+    queryKey: ['raw-sql-scope-coverage', fresh],
+    queryFn: () =>
+      api
+        .get<{ data: CoverageReport }>('/scope-dimensions/raw-sql-coverage', {
+          params: fresh ? { fresh: 1 } : {}
+        })
+        .then((r) => r.data.data)
+  })
+  const shown = (data?.queries ?? []).filter(
+    (q) => showAll || q.status === 'leak' || q.status === 'gap'
+  )
+  const undeclared = (data?.routes ?? []).filter((r) => !r.scope)
+  return (
+    <div
+      data-raw-sql-coverage
+      className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
+    >
+      <div className='flex flex-wrap items-center gap-2'>
+        <p className='text-[13.5px] font-semibold text-slate-800 dark:text-slate-100'>
+          Raw SQL coverage
+        </p>
+        <button
+          type='button'
+          onClick={() => setFresh((n) => n + 1)}
+          className='rounded p-0.5 text-slate-300 hover:text-slate-500'
+          title='Re-check now'
+        >
+          <RefreshCw className={cn('h-3 w-3', isFetching && 'animate-spin')} />
+        </button>
+        {data && (
+          <span className='ml-auto text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            {data.totals.leaks} run unscoped · {data.totals.gaps} unscoped but unused ·{' '}
+            {data.totals.routes_undeclared} extension routes undeclared
+          </span>
+        )}
+      </div>
+      <p className='mt-1 max-w-[80ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Custom queries skip User Scopes unless their scope params name each dimension that reaches
+        the tables they read. A query a page, report or alert runs without them shows a restricted
+        person rows outside their scope.
+      </p>
+      {!data ? (
+        <p className='mt-3 text-[12px] text-slate-400'>Checking every query…</p>
+      ) : (
+        <>
+          <div className='mt-3 max-h-96 overflow-y-auto rounded-md border border-slate-100 dark:border-border'>
+            <table className='w-full text-[11.5px]'>
+              <tbody>
+                {shown.map((q) => (
+                  <tr
+                    key={q.id}
+                    data-raw-sql-query={q.slug}
+                    data-raw-sql-status={q.status}
+                    className='border-b border-slate-50 align-top last:border-0 dark:border-border/40'
+                  >
+                    <td className='px-2 py-1.5'>
+                      <Link
+                        to={`/custom-queries/${q.id}`}
+                        className='font-medium text-slate-700 hover:underline dark:text-slate-200'
+                      >
+                        {q.slug}
+                      </Link>
+                      <p className='text-[10.5px] text-slate-400' title={q.tables.join(', ')}>
+                        reads {q.tables.length} table{q.tables.length === 1 ? '' : 's'}
+                      </p>
+                    </td>
+                    <td className='px-2 py-1.5'>
+                      <span
+                        className={cn(
+                          'whitespace-nowrap rounded-full px-1.5 py-px text-[10px] font-semibold',
+                          Q_STYLE[q.status].cls
+                        )}
+                      >
+                        {Q_STYLE[q.status].label}
+                      </span>
+                    </td>
+                    <td className='px-2 py-1.5 text-slate-600 dark:text-slate-300'>
+                      {q.missing.length > 0 ? (
+                        <>needs {q.missing.map((m) => m.label).join(', ')}</>
+                      ) : (
+                        <span className='text-slate-400'>—</span>
+                      )}
+                    </td>
+                    <td className='px-2 py-1.5 text-slate-500 dark:text-muted-foreground'>
+                      {q.used_by.slice(0, 3).map((d, i) => (
+                        <span key={`${d.surface}-${d.name}-${i}`} className='block'>
+                          {d.link ? (
+                            <Link to={d.link} className='hover:underline'>
+                              {d.name}
+                            </Link>
+                          ) : (
+                            d.name
+                          )}{' '}
+                          <span className='text-slate-400'>· {d.surface}</span>
+                        </span>
+                      ))}
+                      {q.used_by.length > 3 && (
+                        <span className='text-slate-400'>+{q.used_by.length - 3} more</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button
+            type='button'
+            onClick={() => setShowAll((v) => !v)}
+            className='mt-1 text-[11px] text-slate-400 hover:text-slate-600'
+          >
+            {showAll ? 'Only the gaps' : `Show all ${data.queries.length} queries`}
+          </button>
+          {undeclared.length > 0 && (
+            <details className='mt-3'>
+              <summary className='cursor-pointer text-[12px] font-medium text-slate-600 dark:text-slate-300'>
+                {undeclared.length} extension read routes have not said whether they apply scopes
+              </summary>
+              <p className='mt-1 text-[11px] text-slate-400'>
+                The extension declares it on the route: config: {'{'} scope: 'enforced' |
+                'not-scoped' {'}'}.
+              </p>
+              <ul className='mt-1 columns-2 gap-4 font-mono text-[10.5px] text-slate-500'>
+                {undeclared.map((r) => (
+                  <li key={`${r.extension}${r.url}`} data-raw-sql-route={r.url}>
+                    {r.url}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 export function ScopeDimensionsPage() {
   const queryClient = useQueryClient()
   const [expanded, setExpanded] = useState<number | null>(null)
-  const [draft, setDraft] = useState({ name: '', label: '', target_collection: '', display_field: '' })
+  const [draft, setDraft] = useState({
+    name: '',
+    label: '',
+    target_collection: '',
+    display_field: ''
+  })
 
   const { data: dims = [] } = useQuery({
     queryKey: ['scope-dimensions'],
@@ -146,13 +353,14 @@ export function ScopeDimensionsPage() {
           </h1>
         </div>
         <p className='mt-0.5 text-[12.5px] text-slate-500'>
-          Per-user defaults and restrictions by dimension (zone, region, …). Paths auto-resolve
-          from the relations graph — set values per user on their user page.
+          Per-user defaults and restrictions by dimension (zone, region, …). Paths auto-resolve from
+          the relations graph — set values per user on their user page.
         </p>
       </header>
 
       <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         <div className='space-y-3'>
+          <RawSqlCoverageCard />
           {dims.map((d) => (
             <div
               key={d.id}
@@ -197,7 +405,11 @@ export function ScopeDimensionsPage() {
                     type='button'
                     className='p-1 text-slate-300 hover:text-red-500'
                     onClick={() => {
-                      if (window.confirm(`Delete dimension "${d.label}" and every user's values for it?`))
+                      if (
+                        window.confirm(
+                          `Delete dimension "${d.label}" and every user's values for it?`
+                        )
+                      )
                         remove.mutate(d.id)
                     }}
                   >

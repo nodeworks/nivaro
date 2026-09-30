@@ -32,7 +32,52 @@ function sanitizeValues(raw: unknown): Array<string | number> {
     .filter((v) => v !== '')
 }
 
+let rawSqlCheckRegistered = false
+
 export async function userScopesRoutes(app: FastifyInstance) {
+  // #770 — raw SQL that reads scoped tables without carrying the scopes.
+  if (!rawSqlCheckRegistered) {
+    rawSqlCheckRegistered = true
+    const { registerReadinessCheck } = await import('../services/readiness.js')
+    registerReadinessCheck({
+      id: 'raw-sql-scope-coverage',
+      label: 'Raw SQL that people run applies User Scopes',
+      group: 'Security',
+      description:
+        'User Scopes are enforced by the items service; custom queries are raw SQL. A query a page, report or widget runs must carry, in its scope params, every scope dimension that reaches the tables it reads — otherwise a restricted person sees rows outside their scope.',
+      run: async () => {
+        const { scopeCoverage } = await import('../services/scope-coverage.js')
+        const r = await scopeCoverage()
+        if (r.dimensions.length === 0)
+          return { status: 'skip', detail: 'No active scope dimensions.' }
+        const leaks = r.queries.filter((q) => q.status === 'leak')
+        const detail = `${r.totals.queries} enabled quer${r.totals.queries === 1 ? 'y' : 'ies'}: ${leaks.length} run by a page or widget without the scopes their tables need, ${r.totals.gaps} more with the same gap that nothing runs; ${r.totals.routes_undeclared} extension read route(s) have not declared whether they apply scopes.`
+        if (leaks.length === 0) return { status: 'pass', detail }
+        return {
+          status: 'warn',
+          detail,
+          blockers: leaks.slice(0, 20).map(
+            (q) =>
+              `${q.slug}: add scope params for ${q.missing.map((m) => m.label).join(', ')} (used by ${q.used_by
+                .slice(0, 3)
+                .map((d) => d.name)
+                .join(', ')})`
+          )
+        }
+      }
+    })
+  }
+
+  // #770 — the report behind the readiness check, for /scope-dimensions.
+  app.get<{ Querystring: { fresh?: string } }>(
+    '/scope-dimensions/raw-sql-coverage',
+    { preHandler: requireAdmin },
+    async (req) => {
+      const { scopeCoverage } = await import('../services/scope-coverage.js')
+      return { data: await scopeCoverage(req.query.fresh === '1') }
+    }
+  )
+
   // ── Dimension registry (admin) ──────────────────────────────────────────────
 
   app.get('/scope-dimensions', { preHandler: requireAuth }, async () => {

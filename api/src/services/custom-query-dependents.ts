@@ -105,6 +105,56 @@ function esc(s: string): string {
   return s.replace(/[%_[]/g, (c) => `[${c}]`)
 }
 
+/**
+ * Every surface read ONCE, searched in memory — for reports that ask about
+ * every query at once (#770). Same needles and same rows as
+ * customQueryDependents, without one LIKE scan per query per surface.
+ */
+export async function customQueryDependentsIndex(): Promise<
+  (id: string | number, slug: string) => Dependent[]
+> {
+  const loaded: Array<{ s: Surface; rows: Array<Record<string, unknown>> }> = []
+  for (const s of SURFACES) {
+    try {
+      const rows = (await db(s.table)
+        .where((qb) => {
+          for (const c of s.cols) void qb.orWhereNotNull(c)
+        })
+        .select('*')) as Array<Record<string, unknown>>
+      loaded.push({ s, rows })
+    } catch {
+      // absent table / column on this deployment
+    }
+  }
+  return (id, slug) => {
+    const needles = [`"${slug}"`, `"query_id":"${id}"`, `"query_id":${id},`, `"query_id":${id}}`]
+    const out: Dependent[] = []
+    for (const { s, rows } of loaded) {
+      let n = 0
+      for (const r of rows) {
+        if (n >= 50) break
+        if (s.table === 'nivaro_custom_queries' && String(r.id) === String(id)) continue
+        const hit = s.cols.some((c) => {
+          const v = r[c]
+          if (v == null) return false
+          const text = typeof v === 'string' ? v : JSON.stringify(v)
+          return needles.some((nd) => text.includes(nd))
+        })
+        if (!hit) continue
+        n++
+        out.push({
+          surface: s.label,
+          id: r.id,
+          name: s.nameOf(r),
+          link: s.link(r),
+          detail: s.detail?.(r) ?? null
+        })
+      }
+    }
+    return out
+  }
+}
+
 export async function customQueryDependents(
   id: string | number,
   slug: string

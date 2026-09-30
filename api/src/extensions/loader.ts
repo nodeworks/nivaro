@@ -314,6 +314,10 @@ export interface ExtensionRouteRecord {
   gate: ExtensionRouteGate
   /** The custom gate's function name(s), when `gate` is custom. */
   detail?: string
+  /** #770 — `config: { scope: 'enforced' | 'not-scoped' }` on the route: the
+   *  extension's own word on whether its read applies User Scopes. Absent =
+   *  not declared, listed as unreviewed by the raw-SQL scope coverage report. */
+  scope?: 'enforced' | 'not-scoped'
 }
 
 export const extensionRoutes = new Map<string, ExtensionRouteRecord[]>()
@@ -358,11 +362,19 @@ function recordRoute(
 ): void {
   const list = extensionRoutes.get(extId) ?? []
   const { gate, detail } = gateOf(route, scopeGates)
+  const declared = (route.config as { scope?: unknown } | undefined)?.scope
+  const scope = declared === 'enforced' || declared === 'not-scoped' ? declared : undefined
   for (const m of Array.isArray(route.method) ? route.method : [route.method]) {
     const method = String(m).toUpperCase()
     if (method === 'HEAD') continue
     if (list.some((r) => r.method === method && r.url === route.url)) continue
-    list.push({ method, url: route.url, gate, ...(detail ? { detail } : {}) })
+    list.push({
+      method,
+      url: route.url,
+      gate,
+      ...(detail ? { detail } : {}),
+      ...(scope ? { scope } : {})
+    })
   }
   extensionRoutes.set(extId, list)
 }
