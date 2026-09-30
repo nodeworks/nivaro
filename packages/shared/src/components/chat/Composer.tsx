@@ -585,7 +585,7 @@ export const ChatComposer = forwardRef<
         </p>
       )}
       <form
-        className={cn('relative flex items-end gap-1.5', compact ? 'p-2' : 'p-2.5')}
+        className={cn('relative', compact ? 'p-2' : 'p-2.5')}
         onSubmit={(e) => {
           e.preventDefault()
           submit()
@@ -656,138 +656,147 @@ export const ChatComposer = forwardRef<
                 ))}
           </div>
         )}
-        <textarea
-          ref={inputRef}
-          rows={1}
-          value={draft}
-          onChange={(e) =>
-            onChange(e.target.value, e.target.selectionStart ?? e.target.value.length)
-          }
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          placeholder={
-            parentId
-              ? 'Reply in thread…'
-              : `Message ${label}… (@ to mention, # for a record${botName ? `, @${botName} for AI` : ''})`
-          }
+        {/* One box: the text gets the whole width, the tools sit under it. In a
+            400px panel a single row left the field half-width and the
+            placeholder wrapped onto three lines. */}
+        <div
           className={cn(
-            'min-h-9 min-w-0 flex-1 resize-none rounded-lg border px-3 py-2 text-[12.5px] leading-[19px] outline-none',
+            'rounded-lg border transition-colors focus-within:border-nvr-cyan',
             th.input,
-            urgent && 'border-red-400 dark:border-red-500'
+            urgent && 'border-red-400 focus-within:border-red-500 dark:border-red-500'
           )}
-          aria-label={parentId ? 'Reply in thread' : `Message ${label}`}
-          data-chat-input
-        />
-        <input
-          ref={fileInputRef}
-          type='file'
-          multiple
-          className='hidden'
-          onChange={(e) => {
-            startUploads([...(e.target.files ?? [])])
-            e.target.value = ''
-          }}
-        />
-        <FormattingHint />
-        <button
-          type='button'
-          onClick={() => fileInputRef.current?.click()}
-          className='flex h-9 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-          aria-label='Attach a file'
-          title='Attach a file (or paste / drop one)'
+          data-chat-composer-box
         >
-          <Paperclip className='h-4 w-4' strokeWidth={2} />
-        </button>
-        <button
-          type='button'
-          onClick={() => setUrgent((u) => !u)}
-          className={cn(
-            'flex h-9 w-7 shrink-0 items-center justify-center rounded-lg transition-colors',
-            urgent
-              ? 'bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300'
-              : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-          )}
-          aria-pressed={urgent}
-          aria-label='Mark urgent'
-          title={
-            urgent
-              ? 'Urgent: reaches people even when they muted the room (5 per hour)'
-              : 'Mark urgent — breaks through mute for the people it is addressed to'
-          }
-          data-chat-urgent-toggle={urgent ? 'on' : 'off'}
-        >
-          <AlertTriangle className='h-4 w-4' strokeWidth={2} />
-        </button>
-        <Popover open={scheduleOpen} onOpenChange={setScheduleOpen}>
-          <PopoverTrigger asChild>
+          <textarea
+            ref={inputRef}
+            rows={1}
+            value={draft}
+            onChange={(e) =>
+              onChange(e.target.value, e.target.selectionStart ?? e.target.value.length)
+            }
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            placeholder={parentId ? 'Reply in thread…' : `Message ${label}…`}
+            className='block min-h-9 w-full resize-none bg-transparent px-3 pb-1 pt-2 text-[12.5px] leading-[19px] outline-none placeholder:text-slate-500 dark:placeholder:text-slate-400'
+            aria-label={parentId ? 'Reply in thread' : `Message ${label}`}
+            data-chat-input
+          />
+          <div className='flex items-center gap-0.5 px-1 pb-1' data-chat-composer-tools>
+            <input
+              ref={fileInputRef}
+              type='file'
+              multiple
+              className='hidden'
+              onChange={(e) => {
+                startUploads([...(e.target.files ?? [])])
+                e.target.value = ''
+              }}
+            />
+            <FormattingHint botName={botName} />
             <button
               type='button'
-              className='flex h-9 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-              aria-label='Send later'
-              title='Send later'
-              data-chat-schedule
+              onClick={() => fileInputRef.current?.click()}
+              className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+              aria-label='Attach a file'
+              title='Attach a file (or paste / drop one)'
             >
-              <AlarmClock className='h-4 w-4' strokeWidth={2} />
+              <Paperclip className='h-4 w-4' strokeWidth={2} />
             </button>
-          </PopoverTrigger>
-          <PopoverContent align='end' side='top' className='w-[240px] p-2'>
-            <p className='px-1 pb-1.5 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
-              Send this later
-            </p>
-            {presets.map((p) => (
-              <button
-                key={p.label}
-                type='button'
-                onClick={() => doSchedule(p.at)}
-                className='flex w-full items-center rounded-md px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
-              >
-                {p.label}
-              </button>
-            ))}
-            <div className='mt-1.5 flex items-center gap-1 border-t border-slate-100 pt-2 dark:border-border'>
-              <input
-                type='datetime-local'
-                value={scheduleAt}
-                onChange={(e) => setScheduleAt(e.target.value)}
-                className={cn(
-                  'h-8 min-w-0 flex-1 rounded-md border px-1.5 text-[11.5px] outline-none',
-                  th.input
-                )}
-                aria-label='Send at'
-              />
-              <button
-                type='button'
-                disabled={!scheduleAt}
-                onClick={() => doSchedule(new Date(scheduleAt))}
-                className={cn(
-                  'h-8 rounded-md px-2 text-[11.5px] font-medium disabled:opacity-40',
-                  th.action
-                )}
-              >
-                Set
-              </button>
-            </div>
-          </PopoverContent>
-        </Popover>
-        <button
-          type='submit'
-          disabled={(!draft.trim() && !files.some((f) => f.id)) || uploading}
-          className={cn(
-            'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-[filter] hover:brightness-110 disabled:opacity-40',
-            urgent ? 'bg-red-600 text-white' : th.action
-          )}
-          aria-label={urgent ? 'Send urgent' : 'Send'}
-          title={uploading ? 'Waiting for the upload to finish' : undefined}
-        >
-          <Send className='h-4 w-4' strokeWidth={2} />
-        </button>
+            <button
+              type='button'
+              onClick={() => setUrgent((u) => !u)}
+              className={cn(
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors',
+                urgent
+                  ? 'bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300'
+                  : 'text-slate-500 hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+              )}
+              aria-pressed={urgent}
+              aria-label='Mark urgent'
+              title={
+                urgent
+                  ? 'Urgent: reaches people even when they muted the room (5 per hour)'
+                  : 'Mark urgent — breaks through mute for the people it is addressed to'
+              }
+              data-chat-urgent-toggle={urgent ? 'on' : 'off'}
+            >
+              <AlertTriangle className='h-4 w-4' strokeWidth={2} />
+            </button>
+            <Popover open={scheduleOpen} onOpenChange={setScheduleOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type='button'
+                  className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+                  aria-label='Send later'
+                  title='Send later'
+                  data-chat-schedule
+                >
+                  <AlarmClock className='h-4 w-4' strokeWidth={2} />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align='end' side='top' className='w-[240px] p-2'>
+                <p className='px-1 pb-1.5 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
+                  Send this later
+                </p>
+                {presets.map((p) => (
+                  <button
+                    key={p.label}
+                    type='button'
+                    onClick={() => doSchedule(p.at)}
+                    className='flex w-full items-center rounded-md px-2 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <div className='mt-1.5 flex items-center gap-1 border-t border-slate-100 pt-2 dark:border-border'>
+                  <input
+                    type='datetime-local'
+                    value={scheduleAt}
+                    onChange={(e) => setScheduleAt(e.target.value)}
+                    className={cn(
+                      'h-8 min-w-0 flex-1 rounded-md border px-1.5 text-[11.5px] outline-none',
+                      th.input
+                    )}
+                    aria-label='Send at'
+                  />
+                  <button
+                    type='button'
+                    disabled={!scheduleAt}
+                    onClick={() => doSchedule(new Date(scheduleAt))}
+                    className={cn(
+                      'h-8 rounded-md px-2 text-[11.5px] font-medium disabled:opacity-40',
+                      th.action
+                    )}
+                  >
+                    Set
+                  </button>
+                </div>
+              </PopoverContent>
+            </Popover>
+            <button
+              type='submit'
+              disabled={(!draft.trim() && !files.some((f) => f.id)) || uploading}
+              className={cn(
+                'ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-[filter] hover:brightness-110 disabled:opacity-40',
+                urgent ? 'bg-red-600 text-white' : th.action
+              )}
+              aria-label={urgent ? 'Send urgent' : 'Send'}
+              title={uploading ? 'Waiting for the upload to finish' : undefined}
+              data-chat-send
+            >
+              <Send className='h-4 w-4' strokeWidth={2} />
+            </button>
+          </div>
+        </div>
       </form>
     </div>
   )
 })
 
-function FormattingHint() {
+function FormattingHint({ botName }: { botName?: string | null }) {
   const rows: Array<[string, string]> = [
+    ['@name', 'Mention someone'],
+    ...(botName ? ([[`@${botName}`, 'Ask the assistant']] as Array<[string, string]>) : []),
     ['**bold**', 'Bold (Ctrl/⌘ B)'],
     ['_italic_', 'Italic (Ctrl/⌘ I)'],
     ['`code`', 'Code (Ctrl/⌘ E)'],
@@ -796,7 +805,7 @@ function FormattingHint() {
     ['> quote', 'Quote'],
     ['- item', 'Bulleted list'],
     ['1. item', 'Numbered list'],
-    ['#AB26', 'Insert a record'],
+    ['#AB26', 'Link a record'],
     ['Shift + Enter', 'New line']
   ]
   return (
@@ -804,9 +813,9 @@ function FormattingHint() {
       <PopoverTrigger asChild>
         <button
           type='button'
-          className='flex h-9 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-100'
-          aria-label='Formatting help'
-          title='Formatting'
+          className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100'
+          aria-label='Formatting and shortcuts'
+          title='Formatting, @mentions and # records'
           data-chat-format-hint
         >
           <Type className='h-4 w-4' strokeWidth={2} />
@@ -814,7 +823,7 @@ function FormattingHint() {
       </PopoverTrigger>
       <PopoverContent align='end' side='top' className='w-[260px] p-3'>
         <p className='pb-2 text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
-          Formatting
+          Writing a message
         </p>
         <dl className='grid grid-cols-[96px_1fr] gap-x-2 gap-y-1 text-[11.5px]'>
           {rows.map(([k, v]) => (

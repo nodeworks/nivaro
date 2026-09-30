@@ -1648,103 +1648,104 @@ function OwnProfile({
       </div>
 
       {isOwn && me ? (
-        <div className='grid gap-4 lg:grid-cols-2'>
-          <div className='space-y-4'>
-            <SectionCard
-              icon={<UserRound className='h-4 w-4' />}
-              title='About you'
-              hint='Shown on your contact card across the app'
-              actions={
-                dirty && (
-                  <span className='flex items-center gap-1.5'>
-                    <button
-                      type='button'
-                      title='Discard changes'
-                      onClick={() => setDraft(null)}
-                      className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-200'
-                    >
-                      <Undo2 className='h-3 w-3' /> Reset
-                    </button>
-                    <button
-                      type='button'
-                      disabled={saveIdentity.isPending}
-                      onClick={() => saveIdentity.mutate()}
-                      className='inline-flex h-7 items-center gap-1 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white transition-opacity disabled:opacity-50'
-                    >
-                      {saveIdentity.isPending ? (
-                        <Loader2 className='h-3 w-3 animate-spin' />
-                      ) : (
-                        <Check className='h-3 w-3' />
-                      )}{' '}
-                      Save
-                    </button>
-                  </span>
-                )
-              }
-            >
-              <div className='grid gap-3 sm:grid-cols-2'>
-                <Field
-                  label='First name'
-                  value={d.first_name}
-                  onChange={(v) => setDraft({ ...d, first_name: v })}
-                />
-                <Field
-                  label='Last name'
-                  value={d.last_name}
-                  onChange={(v) => setDraft({ ...d, last_name: v })}
-                />
-                <Field
-                  label='Title'
-                  value={d.title}
-                  onChange={(v) => setDraft({ ...d, title: v })}
-                  placeholder='e.g. Construction Manager'
-                />
-                <Field
-                  label='Department'
-                  value={d.department}
-                  onChange={(v) => setDraft({ ...d, department: v })}
-                />
-                <Field
-                  label='Phone'
-                  value={d.phone}
-                  onChange={(v) => setDraft({ ...d, phone: v })}
-                  placeholder='+1 …'
-                  type='tel'
-                />
-                <Field label='Email' value={me.email ?? ''} disabled hint='managed by admin' />
-              </div>
-            </SectionCard>
-            <DelegationCard
-              user={me}
-              onSaved={() => {
-                void qc.invalidateQueries({ queryKey: ['nvr-profile-user'] })
-                void qc.invalidateQueries({ queryKey: ['nvr-profile-card'] })
-              }}
-            />
-            <ScopeDefaultsCard />
-            <ProfileFieldsCard />
-            <TimezoneCard />
-            <LinkAppCard />
-            <NotificationRulesCard />
-            <DisplayPrefsCard />
-            <RemindersCard />
-            <MyStatsCard />
-            <MySecurityCard />
-            <MyPermissionsCard />
-            <MyMatrixSeatsCard />
-          </div>
-          <div className='space-y-4'>
-            {/* The full picture — every notification source in the app,
+        // One list in reading order — you, then notifications, then access
+        // and security — flowing into two balanced columns. Two fixed stacks
+        // left thirteen cards on one side and four on the other, and the page
+        // ran as long as the heavy side. Cards never split across columns.
+        <div
+          className='gap-4 lg:columns-2 [&>*]:mb-4 [&>*]:break-inside-avoid'
+          data-profile-columns
+        >
+          <SectionCard
+            icon={<UserRound className='h-4 w-4' />}
+            title='About you'
+            hint='Shown on your contact card across the app'
+            actions={
+              dirty && (
+                <span className='flex items-center gap-1.5'>
+                  <button
+                    type='button'
+                    title='Discard changes'
+                    onClick={() => setDraft(null)}
+                    className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-400 transition-colors hover:text-slate-600 dark:hover:text-slate-200'
+                  >
+                    <Undo2 className='h-3 w-3' /> Reset
+                  </button>
+                  <button
+                    type='button'
+                    disabled={saveIdentity.isPending}
+                    onClick={() => saveIdentity.mutate()}
+                    className='inline-flex h-7 items-center gap-1 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white transition-opacity disabled:opacity-50'
+                  >
+                    {saveIdentity.isPending ? (
+                      <Loader2 className='h-3 w-3 animate-spin' />
+                    ) : (
+                      <Check className='h-3 w-3' />
+                    )}{' '}
+                    Save
+                  </button>
+                </span>
+              )
+            }
+          >
+            <div className='grid gap-3 sm:grid-cols-2'>
+              <Field
+                label='First name'
+                value={d.first_name}
+                onChange={(v) => setDraft({ ...d, first_name: v })}
+              />
+              <Field
+                label='Last name'
+                value={d.last_name}
+                onChange={(v) => setDraft({ ...d, last_name: v })}
+              />
+              <Field
+                label='Title'
+                value={d.title}
+                onChange={(v) => setDraft({ ...d, title: v })}
+                placeholder='e.g. Construction Manager'
+              />
+              <Field
+                label='Department'
+                value={d.department}
+                onChange={(v) => setDraft({ ...d, department: v })}
+              />
+              <Field
+                label='Phone'
+                value={d.phone}
+                onChange={(v) => setDraft({ ...d, phone: v })}
+                placeholder='+1 …'
+                type='tel'
+              />
+              <Field label='Email' value={me.email ?? ''} disabled hint='managed by admin' />
+            </div>
+          </SectionCard>
+          <DelegationCard
+            user={me}
+            onSaved={() => {
+              void qc.invalidateQueries({ queryKey: ['nvr-profile-user'] })
+              void qc.invalidateQueries({ queryKey: ['nvr-profile-card'] })
+            }}
+          />
+          <ProfileFieldsCard />
+          <TimezoneCard />
+          <DisplayPrefsCard />
+          <LinkAppCard />
+          <ScopeDefaultsCard />
+          <RemindersCard />
+          {/* Renders nothing for someone with no direct reports. */}
+          <TeamLoadCard userId='me' />
+          <MyStatsCard />
+          <NotificationRulesCard />
+          {/* The full picture — every notification source in the app,
                 superseding the old subscriptions-only card. */}
-            {/* Renders nothing for someone with no direct reports. */}
-            <TeamLoadCard userId='me' />
-            <NotificationSourcesCard />
-            <SecurityCard />
-            {pushServiceWorker !== false && (
-              <BrowserPushCard serviceWorkerPath={pushServiceWorker} />
-            )}
-            {extra}
-          </div>
+          <NotificationSourcesCard />
+          {pushServiceWorker !== false && <BrowserPushCard serviceWorkerPath={pushServiceWorker} />}
+          <MySecurityCard />
+          <SecurityCard />
+          <MyPermissionsCard />
+          <MyMatrixSeatsCard />
+          {extra}
         </div>
       ) : null}
     </div>

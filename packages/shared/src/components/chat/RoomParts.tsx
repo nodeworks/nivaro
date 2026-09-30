@@ -17,8 +17,10 @@ import { cn, formatFileSize, formatRelative } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type ChatMessage,
+  canOpenDm,
   discardOutbox,
   type OutboxItem,
+  openDmWith,
   type PinnedMessage,
   retryOutbox,
   useChatThread
@@ -708,17 +710,106 @@ export function RoomInfoDrawer({
   )
 }
 
-export function MemberCountLine({ room }: { room: string }) {
+export function MemberCountLine({
+  room,
+  renderAvatar,
+  me
+}: {
+  room: string
+  /** Avatar with its presence badge (the room view passes the chat one). */
+  renderAvatar?: (id: string, name: string | null) => ReactNode
+  me?: string | null
+}) {
   const info = useRoomInfo(room)
+  const [open, setOpen] = useState(false)
   if (!info) return null
+  const label = `${info.member_count} ${info.member_count === 1 ? 'member' : 'members'} · ${info.online_count} online`
+  // Open rooms list no members — anyone who can see the room can read it.
+  if (!info.members.length) {
+    return (
+      <p
+        className='flex items-center gap-1 truncate text-[11px] text-slate-500 dark:text-slate-400'
+        data-chat-member-count
+      >
+        <Users className='h-3 w-3' />
+        {label}
+      </p>
+    )
+  }
+  const myId = me ? me.toUpperCase() : null
+  // Online first, then by name — the question is usually "who's here now?"
+  const members = [...info.members].sort(
+    (a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name)
+  )
+  const canDm = canOpenDm()
   return (
-    <p
-      className='flex items-center gap-1 truncate text-[11px] text-slate-500 dark:text-slate-400'
-      data-chat-member-count
-    >
-      <Users className='h-3 w-3' />
-      {info.member_count} {info.member_count === 1 ? 'member' : 'members'} · {info.online_count}{' '}
-      online
-    </p>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className='flex max-w-full items-center gap-1 truncate rounded text-[11px] text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline dark:text-slate-400 dark:hover:text-slate-100'
+          aria-label={`${label} — show members`}
+          data-chat-member-count
+        >
+          <Users className='h-3 w-3 shrink-0' />
+          <span className='truncate'>{label}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-[260px] p-0' data-chat-member-popover>
+        <p className='border-b border-slate-100 px-3 py-2 text-[11.5px] font-semibold text-slate-800 dark:border-border dark:text-slate-100'>
+          {label}
+        </p>
+        <ul className='max-h-[320px] overflow-y-auto p-1'>
+          {members.map((m) => {
+            const self = !!myId && m.id.toUpperCase() === myId
+            const row = (
+              <>
+                {renderAvatar?.(m.id, m.name)}
+                <span className='min-w-0 flex-1'>
+                  <span className='block truncate text-[12px] text-slate-800 dark:text-slate-100'>
+                    {m.name}
+                    {self && <span className='ml-1 text-slate-500 dark:text-slate-400'>(you)</span>}
+                  </span>
+                  {m.title && (
+                    <span className='block truncate text-[10.5px] text-slate-500 dark:text-slate-400'>
+                      {m.title}
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={cn(
+                    'shrink-0 text-[10.5px]',
+                    m.online
+                      ? 'text-emerald-700 dark:text-emerald-400'
+                      : 'text-slate-500 dark:text-slate-400'
+                  )}
+                >
+                  {m.online ? 'Online' : 'Offline'}
+                </span>
+              </>
+            )
+            return (
+              <li key={m.id} data-chat-member={m.online ? 'online' : 'offline'}>
+                {canDm && !self ? (
+                  <button
+                    type='button'
+                    onClick={() => {
+                      setOpen(false)
+                      openDmWith(m.id, m.name)
+                    }}
+                    title={`Message ${m.name}`}
+                    className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted'
+                  >
+                    {row}
+                  </button>
+                ) : (
+                  <div className='flex items-center gap-2 px-2 py-1.5'>{row}</div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      </PopoverContent>
+    </Popover>
   )
 }

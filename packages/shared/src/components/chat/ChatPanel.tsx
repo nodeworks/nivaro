@@ -32,9 +32,7 @@ import {
   Plus,
   Quote,
   Search,
-  Send,
   Settings,
-  SmilePlus,
   Sparkles,
   Star,
   Trash2,
@@ -78,11 +76,9 @@ import {
   type DirectoryChannel,
   dmPeer,
   dmRoom,
-  getMentionQuery,
   openDmWith,
   REACTION_EMOJI,
   type RoomInfo,
-  splitMessageTokens,
   useArchivedRooms,
   useChannelAdmin,
   useChannelDirectory,
@@ -567,36 +563,6 @@ function EntityChip({ token, url, mine }: { token: string; url: string | null; m
         </span>
       )}
     </button>
-  )
-}
-
-function MessageBody({ text, mine }: { text: string; mine?: boolean }) {
-  const cfg = useChatConfig()
-  const th = useTheme()
-  const parts = useMemo(
-    () => splitMessageTokens(text, cfg.entityPattern),
-    [text, cfg.entityPattern]
-  )
-  return (
-    <>
-      {parts.map((p, i) => {
-        if (p.entity) {
-          const url = cfg.entityUrl(p.entity)
-          return <EntityChip key={i} token={p.text} url={url} mine={mine} />
-        }
-        if (p.mention) {
-          return (
-            <span
-              key={i}
-              className={cn('rounded px-0.5 font-semibold', mine ? 'bg-black/15' : th.accentSoft)}
-            >
-              {p.text}
-            </span>
-          )
-        }
-        return <span key={i}>{p.text}</span>
-      })}
-    </>
   )
 }
 
@@ -1926,7 +1892,11 @@ export function ChatRoomView({
           {me && dmPeer(room, me.id) ? (
             <DmPeerLine peerId={dmPeer(room, me.id) as string} name={label} />
           ) : room.startsWith('ch:') ? (
-            <MemberCountLine room={room} />
+            <MemberCountLine
+              room={room}
+              me={cfg.me?.id ?? null}
+              renderAvatar={(id, name) => <Avatar id={id} name={name} size={24} />}
+            />
           ) : null}
         </div>
         {recordLink && (
