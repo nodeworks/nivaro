@@ -73,6 +73,7 @@ import {
   headerNeedsDense
 } from '../lib/header-strip'
 import { extSlotKey } from '../lib/layout-slots'
+import { useRecordReader } from '../lib/record-loader'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import {
   normalizeSummaryModeRules,
@@ -1160,6 +1161,7 @@ export function ItemEditForm({
   initialRows
 }: ItemEditFormProps) {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const fetchCfg = useApiFetchConfig()
   const { isAdmin, userId: authUserId } = useContext(ItemEditAuthContext)
   // View as role (#8, admin): the previewed role's layout pins by slug when
@@ -3279,12 +3281,9 @@ export function ItemEditForm({
                   .filter((v) => v != null)
                   .map((v) => String(v))
               } else {
-                const row = await client
-                  .request<{ data: Record<string, unknown> }>(
-                    get(`/items/${pickedCollection}/${String(pickedId)}`, { fields: `id,${col}` })
-                  )
-                  .then((r) => r.data)
-                  .catch(() => null)
+                const row = await readRow(pickedCollection, String(pickedId), [col]).catch(
+                  () => null
+                )
                 const v = row?.[col]
                 if (v != null && v !== '') values = [String(v)]
               }
@@ -3399,22 +3398,13 @@ export function ItemEditForm({
         ].filter(Boolean)
         const hasM2MTargets = Object.keys(map).some((t) => m2mAliasFieldsForRules.has(t))
         if (sourceFields.length === 0 && !hasM2MTargets) continue
-        void client
-          .request<{ data: Record<string, unknown> }>(
-            get(`/items/${cfg.source_collection}/${value}`, {
-              fields: sourceFields.length > 0 ? sourceFields.join(',') : 'id'
-            })
-          )
-          // A map naming an alias SOURCE puts an alias in fields=, which
-          // readOne rejects — refetch id-only and let the relation branches
-          // resolve everything.
-          .catch(() =>
-            client.request<{ data: Record<string, unknown> }>(
-              get(`/items/${cfg.source_collection}/${value}`, { fields: 'id' })
-            )
-          )
+        // The shared row read (full row, projected) never names an alias in
+        // fields=, so an alias SOURCE simply reads as absent and the relation
+        // branches below resolve it; a dotted source still goes to the server.
+        void readRow(cfg.source_collection, value as string | number, sourceFields)
+          .catch(() => readRow(cfg.source_collection as string, value as string | number, ['id']))
           .then(async (res) => {
-            const src = res.data
+            const src = res
             if (!src) return
             const patch: Record<string, unknown> = {}
             // Upstream fill covers all four source/target shapes:
@@ -4852,9 +4842,9 @@ export function ItemEditForm({
           client.request<{ data: { display_template?: string | null } }>(
             get(`/collections/${target}`)
           ),
-          client.request<{ data: Record<string, unknown> }>(get(`/items/${target}/${String(id)}`))
+          readRow(target, String(id))
         ])
-        const row = rowRes.data
+        const row = rowRes ?? {}
         const tmpl =
           metaRes.data?.display_template ??
           (target === 'nivaro_users' ? '{{first_name}} {{last_name}}' : null)

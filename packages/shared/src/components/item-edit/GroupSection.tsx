@@ -23,6 +23,7 @@ import {
   useOptionalNivaroClient
 } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { UserAvatar } from '../UserAvatar'
@@ -78,6 +79,7 @@ export function InlineDisplay({
   separator?: string | null
 }) {
   const client = useOptionalNivaroClient()
+  const readRow = useRecordReader()
   const idStr = String(relId)
   // Dotted entry fields (e.g. 'project_type.name') resolve via the single-read
   // endpoint's nested expansion — request exactly the configured paths.
@@ -85,12 +87,7 @@ export function InlineDisplay({
   const fieldsParam = hasDotted ? ['id', ...entries.map((e) => e.field)].join(',') : null
   const { data: record } = useQuery<Record<string, unknown> | null>({
     queryKey: ['inline-display', relCollection, idStr, fieldsParam],
-    queryFn: () =>
-      client!
-        .request<{ data: Record<string, unknown> }>(
-          get(`/items/${relCollection}/${idStr}`, fieldsParam ? { fields: fieldsParam } : undefined)
-        )
-        .then((r) => r.data ?? null),
+    queryFn: () => readRow(relCollection, idStr as string, fieldsParam),
     enabled: !!client && !!idStr,
     staleTime: 60_000
   })
@@ -1206,6 +1203,7 @@ export function RelationCell({
   className?: string
 }) {
   const client = useOptionalNivaroClient()
+  const readRow = useRecordReader()
   const idStr = id != null && id !== '' ? String(id) : null
   const { data: colMeta } = useQuery<{ display_template?: string | null }>({
     queryKey: ['col-meta-dt', relCollection],
@@ -1227,12 +1225,7 @@ export function RelationCell({
   const fieldsParam = nestedFields.length ? ['id', ...nestedFields].join(',') : null
   const { data: record, isLoading } = useQuery<Record<string, unknown> | null>({
     queryKey: ['rel-display', relCollection, idStr, fieldsParam],
-    queryFn: () =>
-      client!
-        .request<{ data: Record<string, unknown> }>(
-          get(`/items/${relCollection}/${idStr}`, fieldsParam ? { fields: fieldsParam } : undefined)
-        )
-        .then((r) => r.data ?? null),
+    queryFn: () => readRow(relCollection, idStr as string, fieldsParam),
     enabled: !!client && !!idStr && colMeta !== undefined,
     staleTime: 60_000
   })

@@ -3,6 +3,7 @@ import { Check, ChevronRight, Copy, Loader2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { useRecordReader } from '../../lib/record-loader'
 import { cn, titleCase } from '../../lib/utils'
 import { useChangePulse } from './GroupSection'
 import {
@@ -490,6 +491,7 @@ const summaryText = (v: unknown): string => {
  *  then the row); an unresolvable id falls back to '#id'. */
 function useRelatedText(collection: string | null, id: unknown): string | null {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const enabled = !!collection && id != null && id !== ''
   const { data: meta } = useQuery({
     queryKey: ['cbv-collection-meta', collection],
@@ -503,11 +505,7 @@ function useRelatedText(collection: string | null, id: unknown): string | null {
   })
   const { data: row } = useQuery({
     queryKey: ['rrv-related', collection, String(id)],
-    queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-        .then((r) => r.data)
-        .catch(() => null),
+    queryFn: () => readRow(collection as string, id as string | number).catch(() => null),
     enabled: enabled && !!meta,
     staleTime: 60_000,
     retry: false

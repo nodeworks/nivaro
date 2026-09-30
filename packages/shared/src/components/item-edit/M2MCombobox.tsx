@@ -3,8 +3,9 @@ import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, X } from 'l
 import { useEffect, useRef, useState } from 'react'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { cn, userOptionFilter } from '../../lib/utils'
+import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
+import { cn, userOptionFilter } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
 
 /** Initials from a rendered user label ("Jane Doe (jane@x)" → "JD"). */
@@ -21,6 +22,7 @@ function labelInitials(label: string): string {
       .toUpperCase() || '?'
   )
 }
+
 import { Button } from '../ui/button'
 import {
   Command,
@@ -31,10 +33,9 @@ import {
   CommandList
 } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { useStaleTip } from './RelationCombobox'
-import { useM2MStaging } from './M2MStagingContext'
 import { applyDisplayTemplate } from './helpers'
-import { RelatedItemLabel } from './RelationCombobox'
+import { useM2MStaging } from './M2MStagingContext'
+import { RelatedItemLabel, useStaleTip } from './RelationCombobox'
 import type { CMSRelation } from './types'
 
 // ─── M2A-aware related-collection resolution ─────────────────────────────────
@@ -483,6 +484,7 @@ export function M2MSingleSelectCombobox({
   readOnly?: boolean
 }) {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const staging = useM2MStaging()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -593,11 +595,9 @@ export function M2MSingleSelectCombobox({
   const { data: currentItemData } = useQuery<Record<string, unknown>>({
     queryKey: ['relation-single', relatedCollection, String(currentRelatedId)],
     queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown> }>(
-          get(`/items/${relatedCollection}/${currentRelatedId}`)
-        )
-        .then((r) => r.data),
+      readRow(relatedCollection as string, currentRelatedId as string | number) as Promise<
+        Record<string, unknown>
+      >,
     enabled: !!relatedCollection && currentRelatedId != null,
     staleTime: 60_000
   })

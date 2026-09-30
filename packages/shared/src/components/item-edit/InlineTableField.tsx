@@ -136,9 +136,9 @@ import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { useOptionalRealtime } from '../../lib/realtime'
-import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { useRecordReader } from '../../lib/record-loader'
 import type { RuleProvenance } from '../../lib/rule-provenance'
-import { RuleProvenanceChip } from './RuleProvenancePopover'
+import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
@@ -190,6 +190,7 @@ import {
   useRowMatches
 } from './RowMatchPanel'
 import { RowWatchButton } from './RowWatchButton'
+import { RuleProvenanceChip } from './RuleProvenancePopover'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -1515,6 +1516,7 @@ export function InlineTableField({
   parentFieldKey?: string
 }) {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const drill = useDrilldown()
   const qc = useQueryClient()
   const staging = useO2MStaging()
@@ -3244,11 +3246,8 @@ export function InlineTableField({
     queries: pinnedParents.map(([key, p]) => ({
       queryKey: ['pinned-parent', p.collection, p.id, [...p.fields].sort().join(',')],
       queryFn: () =>
-        client
-          .request<{ data: Record<string, unknown> }>(
-            get(`/items/${p.collection}/${p.id}`, { fields: [...p.fields].join(',') })
-          )
-          .then((r) => [key, r.data] as const)
+        readRow(p.collection, p.id, [...p.fields])
+          .then((row) => [key, row] as const)
           .catch(() => [key, null] as const),
       staleTime: 60_000
     }))
@@ -4324,7 +4323,10 @@ export function InlineTableField({
       filter: Record<string, unknown>
       ids: string[]
     }> = []
-    const fields = new Set([...Object.keys(fieldCascadeFilters), ...Object.keys(fieldOptionFilters)])
+    const fields = new Set([
+      ...Object.keys(fieldCascadeFilters),
+      ...Object.keys(fieldOptionFilters)
+    ])
     for (const field of fields) {
       const rel = m2oRelMap.get(field)
       if (!rel?.one_collection) continue
@@ -4386,7 +4388,15 @@ export function InlineTableField({
     return map
     // pinnedOptionFor is a stable closure over pinnedParentRows + parent draft
     // biome-ignore lint/correctness/useExhaustiveDependencies: pinnedOptionFor reads pinnedParentRows + the parent draft, both listed
-  }, [staleSweepInput, staleSweepResults, pinnedConfigByField, pinnedParentRows, parentDraftCtx?.draft, rows, pendingRows])
+  }, [
+    staleSweepInput,
+    staleSweepResults,
+    pinnedConfigByField,
+    pinnedParentRows,
+    parentDraftCtx?.draft,
+    rows,
+    pendingRows
+  ])
 
   // ── Cascade swap ───────────────────────────────────────────────────────────
   // A parent field the USER changed this session (dirtyFields — a record that
@@ -4799,7 +4809,7 @@ export function InlineTableField({
           fk_field: manyField,
           ...(isNew ? {} : { parent_id: parentId }),
           parent_context: buildParentCtx(),
-              parent_collection: parentCollection,
+          parent_collection: parentCollection,
           row_rules: rowRules,
           mode: rerunMode,
           dry_run: dryRun || stageIt || pendingPayload.length > 0,
@@ -4859,7 +4869,7 @@ export function InlineTableField({
             fk_field: manyField,
             parent_id: parentId,
             parent_context: buildParentCtx(),
-              parent_collection: parentCollection,
+            parent_collection: parentCollection,
             row_rules: rowRules,
             mode: rerunMode,
             dry_run: false,
@@ -4929,7 +4939,7 @@ export function InlineTableField({
           locks_only: true,
           probe: true,
           parent_context: buildParentCtx(),
-              parent_collection: parentCollection,
+          parent_collection: parentCollection,
           row_rules: rowRules
         })
       )
@@ -5084,7 +5094,7 @@ export function InlineTableField({
           target_fields: [field],
           probe: true,
           parent_context: buildParentCtx(),
-              parent_collection: parentCollection,
+          parent_collection: parentCollection,
           row_rules: rowRules
         })
       )
@@ -6387,7 +6397,7 @@ export function InlineTableField({
                 changed_field: k,
                 probe: true,
                 parent_context: buildParentCtx(),
-              parent_collection: parentCollection,
+                parent_collection: parentCollection,
                 row_rules: rowRules
               })
             )

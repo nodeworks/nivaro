@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { useRecordReader } from '../../lib/record-loader'
+import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import {
   Command,
@@ -16,7 +18,6 @@ import {
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { UserAvatar } from '../UserAvatar'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { findM2ORelation, findO2MRelation, renderDisplayTemplate } from './relations'
 import type { CMSField, CMSRelation, PipelineOwnerGroup, User } from './types'
@@ -117,6 +118,7 @@ function M2OValuePicker({
   onChange: (v: string) => void
 }) {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
   const [inputVal, setInputVal] = useState('')
@@ -443,7 +445,9 @@ export function PipelineStateOwners({
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
     queryFn: () =>
-      client.request<{ data: CollectionMeta }>(get(`/collections/${collection}`)).then((r) => r.data),
+      client
+        .request<{ data: CollectionMeta }>(get(`/collections/${collection}`))
+        .then((r) => r.data),
     enabled: !!collection
   })
 
@@ -839,7 +843,9 @@ export function PipelineStateOwners({
                 size='sm'
                 variant='ghost'
                 className='h-6 gap-1 text-[11px]'
-                onClick={() => setNewGroupFilters((f) => [...f, { field: '', op: 'eq', value: '' }])}
+                onClick={() =>
+                  setNewGroupFilters((f) => [...f, { field: '', op: 'eq', value: '' }])
+                }
               >
                 <Plus className='h-3 w-3' />
                 Add Filter

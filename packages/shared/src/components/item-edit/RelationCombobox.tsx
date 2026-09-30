@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useItemEditAuth, useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
 import { UserAvatar } from '../UserAvatar'
 
@@ -114,6 +115,7 @@ export function RelationCombobox({
   facets?: Array<{ field: string; label?: string; sort?: string; filter?: Record<string, unknown> }>
 }) {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -301,11 +303,7 @@ export function RelationCombobox({
   const { data: selected, isLoading: isLoadingSelected } = useQuery<Item | null>({
     queryKey: ['relation-single', collection, String(value), tmplFields],
     queryFn: () =>
-      client
-        .request<{ data: Item }>(
-          get(`/items/${collection}/${value}`, tmplFields ? { fields: tmplFields } : undefined)
-        )
-        .then((r) => r.data),
+      readRow(collection, value as string | number, tmplFields) as Promise<Item | null>,
     enabled: !!value,
     staleTime: 60_000
   })
@@ -314,12 +312,9 @@ export function RelationCombobox({
   const { data: pinnedItem } = useQuery<Item | null>({
     queryKey: ['relation-single', collection, pinnedId ?? '', tmplFields],
     queryFn: () =>
-      client
-        .request<{ data: Item }>(
-          get(`/items/${collection}/${pinnedId}`, tmplFields ? { fields: tmplFields } : undefined)
-        )
-        .then((r) => r.data)
-        .catch(() => null),
+      (readRow(collection, pinnedId as string, tmplFields) as Promise<Item | null>).catch(
+        () => null
+      ),
     enabled: !!pinnedId && open,
     staleTime: 60_000
   })
@@ -767,6 +762,7 @@ export function RelatedItemLabel({
   displayTemplate?: string | null
 }) {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const isFiles = collection === 'nivaro_files' || collection === 'directus_files'
   // A dotted display template needs the nested expansion — the bare row only
   // carries FK ids and every such label rendered as '-'.
@@ -780,11 +776,9 @@ export function RelatedItemLabel({
     queryFn: () =>
       isFiles
         ? client.request<{ data: Record<string, unknown> }>(get(`/files/${id}`)).then((r) => r.data)
-        : client
-            .request<{ data: Record<string, unknown> }>(
-              get(`/items/${collection}/${id}`, nestedFields ? { fields: nestedFields } : {})
-            )
-            .then((r) => r.data),
+        : (readRow(collection, id as string | number, nestedFields) as Promise<
+            Record<string, unknown>
+          >),
     enabled: !!id && !!collection,
     staleTime: 60_000
   })

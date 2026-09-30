@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react
 import { useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
+import { useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
 import { formatRelative, titleCase } from '../lib/utils'
 import { FileM2MField } from './item-edit/FilePickerField'
@@ -153,6 +154,7 @@ function BoolPill({
 /** Label for a related record — display template else name-ish fallback. */
 function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   const client = useNivaroClient()
+  const readRow = useRecordReader()
   const drill = useDrilldown()
   const { data: meta } = useQuery({
     queryKey: ['cbv-collection-meta', collection],
@@ -171,11 +173,7 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   })
   const { data: row, isPending } = useQuery({
     queryKey: ['rrv-related', collection, String(id)],
-    queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-        .then((r) => r.data)
-        .catch(() => null),
+    queryFn: () => readRow(collection, id as string | number).catch(() => null),
     enabled: id != null && !!meta,
     staleTime: 60_000,
     retry: false
