@@ -22,7 +22,7 @@ export const summaryMode: DocSection = {
     { type: 'h3', text: 'Which mode a record opens in' },
     {
       type: 'p',
-      text: 'Data Model → collection → Settings → Form UX. Turn on "Summary mode" to show the switch, then set the default (Edit or Summary) and any number of rules. A rule combines a role list, a state test and conditions on the record's own values: "when role is X, state is / is not [states] and On Hold is true → open in Summary|Edit". Leave roles empty to match any role, states empty to match any state. "No state yet" matches a record that has no pipeline instance. Rules run top to bottom and the first match wins; when none match the default applies.'
+      text: 'Data Model → collection → Settings → Form UX. Turn on "Summary mode" to show the switch, then set the default (Edit or Summary) and any number of rules. A rule combines a role list, a state test and conditions on the record\u2019s own values: "when role is X, state is / is not [states] and On Hold is true → open in Summary|Edit". Leave roles empty to match any role, states empty to match any state. "No state yet" matches a record that has no pipeline instance. Rules run top to bottom and the first match wins; when none match the default applies.'
     },
     {
       type: 'pre',
