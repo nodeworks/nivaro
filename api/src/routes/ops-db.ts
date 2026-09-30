@@ -363,6 +363,28 @@ export async function opsDbRoutes(app: FastifyInstance) {
     return reply.send({ data: { dropped: table } })
   })
 
+  // #721 — legacy retirement list: directus_*, backup and orphaned staging
+  // tables and finished dead columns, each with what stands in the way of
+  // dropping it, plus a generated drop script. Never drops anything.
+  app.get('/legacy-retirement', async (_req, reply) => {
+    const { legacyRetirement } = await import('../services/legacy-retirement.js')
+    return reply.send(await dmv(legacyRetirement))
+  })
+  app.get('/legacy-retirement/script', async (_req, reply) => {
+    const { legacyRetirement, retirementScript } = await import('../services/legacy-retirement.js')
+    const report = await legacyRetirement()
+    const name = (await db.raw('SELECT DB_NAME() AS n').catch(() => [{ n: 'database' }])) as Array<{
+      n: string
+    }>
+    return reply
+      .header('content-type', 'text/plain; charset=utf-8')
+      .header(
+        'content-disposition',
+        `attachment; filename="legacy-retirement-${name[0]?.n ?? 'db'}.sql"`
+      )
+      .send(retirementScript(report, name[0]?.n ?? 'database'))
+  })
+
   // #508 — redundant indexes: an index whose key list is a strict PREFIX of
   // another index on the same table answers no query the wider one cannot,
   // and taxes every write on the busiest junctions (workflows_regions

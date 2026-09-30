@@ -755,6 +755,8 @@ export function DbHealthPage() {
             )}
           </Panel>
 
+          <LegacyRetirementPanel />
+
           <Panel
             title='Long transactions'
             sub='Sleeping sessions holding open transactions ≥ 5 min — the silent lock-holder trap (#289 · #290)'
@@ -1112,5 +1114,128 @@ export function DbHealthPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// #721 — legacy retirement list. Built on demand (a few seconds: it reads
+// every procedure's text and scans the source tree), never drops anything.
+interface RetirementRow {
+  kind: 'legacy-platform' | 'backup' | 'staging' | 'dead-column'
+  table: string
+  column?: string
+  rows: number | null
+  size_mb: number | null
+  last_read: string | null
+  last_write: string | null
+  blockers: string[]
+  note?: string
+}
+const KIND_LABEL: Record<RetirementRow['kind'], string> = {
+  'legacy-platform': 'Legacy platform',
+  backup: 'Backup copy',
+  staging: 'Staging',
+  'dead-column': 'Dead column'
+}
+function LegacyRetirementPanel() {
+  const [asked, setAsked] = useState(false)
+  const [onlyReady, setOnlyReady] = useState(true)
+  const q = useQuery({
+    queryKey: ['ops', '/ops-db/legacy-retirement'],
+    queryFn: () =>
+      api
+        .get<{
+          data?: {
+            candidates: RetirementRow[]
+            totals: { candidates: number; ready: number; blocked: number; size_mb: number }
+            usage_since: string | null
+          }
+          unavailable?: string
+        }>('/ops-db/legacy-retirement')
+        .then((r) => r.data),
+    enabled: asked,
+    staleTime: 60_000
+  })
+  const d = q.data?.data
+  const rows = (d?.candidates ?? []).filter((c) => !onlyReady || c.blockers.length === 0)
+  return (
+    <Panel
+      title='Legacy retirement'
+      sub='The old platform’s tables (directus_…), backup copies, staging tables no import owns, and finished dead columns — each with what stands in the way of dropping it. Nivaro never drops these; download the script for a DBA.'
+      right={
+        d ? (
+          <span className='flex items-center gap-3 text-[11px] text-slate-500 dark:text-muted-foreground'>
+            <span data-retirement-totals className='whitespace-nowrap'>
+              {d.totals.ready} ready · {d.totals.blocked} blocked ·{' '}
+              {d.totals.size_mb >= 1024
+                ? `${num(Math.round(d.totals.size_mb / 102.4) / 10)} GB`
+                : `${num(d.totals.size_mb)} MB`}
+            </span>
+            <a
+              href='/api/ops-db/legacy-retirement/script'
+              data-retirement-script
+              className='whitespace-nowrap rounded border border-slate-200 px-2 py-0.5 hover:bg-muted dark:border-border'
+            >
+              Download drop script
+            </a>
+          </span>
+        ) : undefined
+      }
+    >
+      {!asked ? (
+        <button
+          type='button'
+          data-retirement-build
+          className='rounded border border-slate-200 px-3 py-1 text-[12px] hover:bg-muted dark:border-border'
+          onClick={() => setAsked(true)}
+        >
+          Build the list
+        </button>
+      ) : q.data?.unavailable ? (
+        <Unavailable reason={q.data.unavailable} />
+      ) : !d ? (
+        <p className='text-[12px] text-slate-400'>Reading tables, procedures and source…</p>
+      ) : (
+        <>
+          <label className='mb-2 flex items-center gap-2 text-[11.5px] text-slate-500'>
+            <input
+              type='checkbox'
+              checked={onlyReady}
+              onChange={(e) => setOnlyReady(e.target.checked)}
+            />
+            Only what is ready to drop
+            {d.usage_since && (
+              <span className='text-slate-400'>
+                · read / write times since {new Date(d.usage_since).toLocaleDateString()}
+              </span>
+            )}
+          </label>
+          <MiniTable
+            head={['Object', 'Kind', 'Rows', 'Size', 'Last write', 'In the way']}
+            rows={rows.map((c) => [
+              <code
+                key='n'
+                data-retirement-row={c.column ? `${c.table}.${c.column}` : c.table}
+                className='font-mono text-[11px]'
+              >
+                {c.column ? `${c.table}.${c.column}` : c.table}
+              </code>,
+              KIND_LABEL[c.kind],
+              c.rows == null ? '—' : num(c.rows),
+              c.size_mb == null ? '—' : `${num(c.size_mb)} MB`,
+              c.last_write ? new Date(c.last_write).toLocaleDateString() : 'Not since restart',
+              c.blockers.length ? (
+                <span key='b' className='text-[11px] text-amber-700 dark:text-amber-400'>
+                  {c.blockers.join('; ')}
+                </span>
+              ) : (
+                <span key='r' className='text-[11px] text-emerald-700 dark:text-emerald-400'>
+                  Nothing — in the script
+                </span>
+              )
+            ])}
+          />
+        </>
+      )}
+    </Panel>
   )
 }
