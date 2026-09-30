@@ -1,10 +1,82 @@
 {
-  "generated_at": "2026-09-30T17:51:50.175Z",
+  "generated_at": "2026-09-30T19:05:49.438Z",
   "releases": [
+    {
+      "version": "0.2.8",
+      "tag": "v0.2.8",
+      "date": "2026-09-30T15:05:38-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "Your team (managers) — the team routes, alerts and stuck threshold",
+              "hash": "b27ea701"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "read a query widget's slug from query_slug too",
+              "hash": "2706571e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a DM opened from a link is named after the other person",
+              "hash": "1e8e585f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "more room between the DM header avatar and the name",
+              "hash": "392148e8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the other person's avatar in a DM header opens their user card",
+              "hash": "8125702c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a manager's view of their direct reports (#1030-#1043)",
+              "hash": "5d1e604b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "biome format for the #1044 change (and sort the react export list)",
+              "hash": "3e545cba"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "report widgets as canvas widgets (#1044)",
+              "hash": "f19a1a68"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "user card: close on any outside press and on window blur",
+              "hash": "da39a583"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.2.7",
       "tag": "v0.2.7",
-      "date": "2026-09-30T13:51:39-04:00",
+      "date": "2026-09-30T13:51:50-04:00",
       "sections": [
         {
           "label": "Other",
