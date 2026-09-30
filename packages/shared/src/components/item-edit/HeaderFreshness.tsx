@@ -3,6 +3,7 @@ import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { formatDateTime, formatRelative } from '../../lib/utils'
+import { InboundRequestPopover } from '../integrations/InboundRequest'
 
 /**
  * "updated 2h ago · import (Bid Import)" under a header chip — the newest
@@ -10,7 +11,17 @@ import { formatDateTime, formatRelative } from '../../lib/utils'
  * header field (react-query dedupes on the shared key). A field nobody has
  * changed since creation shows nothing: the stamp marks edits, not birth.
  */
-type Touch = { at: string; who: string; via: 'import' | 'integration' | 'system' | 'user' }
+export type FieldTouch = {
+  at: string
+  who: string
+  via: 'import' | 'integration' | 'system' | 'user'
+  /** The activity row that wrote it — opens the inbound request (#617). */
+  activity_id?: number
+  /** An inbound token / API-key write: the caller's name (key name, else
+   *  the account's), never just "integration". */
+  caller?: { name: string; kind: 'api_key' | 'token' | 'account'; key: string } | null
+}
+type Touch = FieldTouch
 
 export function useFieldTouches(collection: string, itemId: string, fields: string[]) {
   const client = useNivaroClient()
@@ -46,6 +57,27 @@ export function HeaderFreshness({
   const t = data?.[field]
   if (!t) return null
   const machine = t.via !== 'user'
+  // #617 — an inbound write names its caller and opens the request.
+  if (t.caller && t.activity_id) {
+    return (
+      <InboundRequestPopover
+        activityId={t.activity_id}
+        callerName={t.caller.name}
+        collection={collection}
+        itemId={itemId}
+      >
+        <button
+          type='button'
+          data-copy-skip
+          data-field-touch-caller={t.caller.key}
+          className='mt-0.5 block max-w-full truncate text-left text-[10px] leading-none text-amber-700/80 underline decoration-dotted underline-offset-2 hover:text-amber-800 dark:text-amber-300/80 dark:hover:text-amber-200 [[data-header-dense]_&]:hidden'
+          data-tip={`${t.caller.name} · ${formatDateTime(t.at)} — click for the request`}
+        >
+          {t.caller.name} · {formatRelative(t.at)}
+        </button>
+      </InboundRequestPopover>
+    )
+  }
   return (
     <span
       data-copy-skip

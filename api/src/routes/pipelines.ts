@@ -254,9 +254,21 @@ function normalizeCommentMode(v: unknown): 'none' | 'optional' | 'required' {
 
 /** The record panel's view of a transition — everything but the server-only
  *  post-transition action configs. */
-function stripTransitionActions<T extends { actions?: unknown }>(t: T): Omit<T, 'actions'> {
-  const { actions: _actions, ...rest } = t
-  return rest
+/**
+ * Drop a transition's action configs from a response, keeping only how many
+ * partner pushes it carries (`pushes`, #616) — the header's push-readiness
+ * chip asks the server to pre-flight only the transitions that send something.
+ */
+function stripTransitionActions<T extends { actions?: unknown }>(
+  t: T
+): Omit<T, 'actions'> & { pushes: number } {
+  const { actions, ...rest } = t
+  const pushes = Array.isArray(actions)
+    ? actions.filter(
+        (a) => !!a && typeof a === 'object' && (a as { type?: unknown }).type === 'erp_submit'
+      ).length
+    : 0
+  return { ...rest, pushes }
 }
 
 function formatTransition(t: WorkflowTransition) {

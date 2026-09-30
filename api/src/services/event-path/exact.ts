@@ -418,8 +418,176 @@ export async function loadChainSteps(
     }
   }
 
+  steps.push(...(await loadNotifySteps(chainId, opts.withBodies, warnings)))
+
   steps.unshift(...(await buildActivitySteps(activityRows, steps, warnings)))
   return { steps, rootStep, warnings }
+}
+
+/** Channel outcomes a notification row records (notification-channels.ts
+ *  NotificationDelivery) → the channels that reached the person, and the
+ *  ones that tried and failed. Unknown / unparseable = in-app only. */
+export function deliveryChannels(raw: unknown): {
+  reached: string[]
+  failed: string[]
+  channels: Array<{ channel: string; status: string; reason?: string | null }>
+} {
+  let d: Record<string, { status?: string; reason?: string } | undefined> = {}
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (v && typeof v === 'object') d = v as typeof d
+  } catch {
+    // unparseable = nothing known beyond the inbox row itself
+  }
+  const REACHED: Record<string, string[]> = {
+    inapp: ['delivered'],
+    push: ['sent'],
+    email: ['sent', 'deferred'],
+    sms: ['sent']
+  }
+  const LABEL: Record<string, string> = {
+    inapp: 'in-app',
+    push: 'push',
+    email: 'email',
+    sms: 'text'
+  }
+  const reached: string[] = []
+  const failed: string[] = []
+  const channels: Array<{ channel: string; status: string; reason?: string | null }> = []
+  for (const ch of ['inapp', 'push', 'email', 'sms']) {
+    const entry = d[ch]
+    if (!entry?.status) continue
+    if (entry.status === 'not_requested') continue
+    channels.push({ channel: LABEL[ch], status: entry.status, reason: entry.reason ?? null })
+    if (REACHED[ch].includes(entry.status)) reached.push(LABEL[ch])
+    else if (entry.status === 'failed') failed.push(LABEL[ch])
+  }
+  if (channels.length === 0) {
+    reached.push('in-app')
+    channels.push({ channel: 'in-app', status: 'delivered' })
+  }
+  return { reached, failed, channels }
+}
+
+/** How many addresses a mail-log `to` names (comma list). */
+function recipientCount(to: unknown): number {
+  return String(to ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean).length
+}
+
+/**
+ * Who was told, and by which channel (#706): inbox rows and mail-log rows
+ * stamped with the chain (migration 385). A notification's own email / text
+ * hangs under it (`notification:<id>`); a mail sent on its own sits under the
+ * step that sent it. Addresses are shown to admins only — everyone else sees
+ * how many people an email went to.
+ */
+async function loadNotifySteps(
+  chainId: string,
+  withBodies: boolean,
+  warnings: string[]
+): Promise<PathStep[]> {
+  const out: PathStep[] = []
+  if (await hasChainColumns('nivaro_notifications')) {
+    const rows = (await safe('notifications', warnings, () =>
+      db('nivaro_notifications as n')
+        .leftJoin('nivaro_users as u', 'u.id', 'n.recipient')
+        .where('n.chain_id', chainId)
+        .select(
+          'n.id',
+          'n.subject',
+          'n.timestamp',
+          'n.category',
+          'n.lane',
+          'n.delivery',
+          'n.collection',
+          'n.item',
+          'n.chain_parent',
+          'u.first_name',
+          'u.last_name'
+        )
+        .orderBy('n.id')
+        .limit(ACTIVITY_LIMIT)
+    )) as Array<Record<string, unknown>>
+    for (const n of rows) {
+      const name = whoOf(n) ?? 'someone'
+      const { reached, failed, channels } = deliveryChannels(n.delivery)
+      const how = reached.length ? ` · ${reached.join(', ')}` : ''
+      out.push({
+        key: `notification:${n.id}`,
+        parent: parentKey(n.chain_parent),
+        kind: 'notify',
+        at: iso(n.timestamp),
+        record:
+          n.collection && n.item != null && !String(n.collection).startsWith('nivaro_')
+            ? { collection: String(n.collection), item: String(n.item) }
+            : null,
+        summary: `Told ${name}${how}`,
+        failed: failed.length > 0 && reached.length === 0,
+        reason: failed.length ? `${failed.join(', ')} did not go out` : null,
+        detail: {
+          type: 'notify',
+          recipient: name,
+          // Another person's inbox line — admins only, like bodies.
+          subject: withBodies ? String(n.subject ?? '') : null,
+          category: (n.category as string | null) ?? null,
+          lane: (n.lane as string | null) ?? null,
+          channels
+        }
+      })
+    }
+  }
+  if (await hasChainColumns('nivaro_mail_log')) {
+    const rows = (await safe('mail log', warnings, () =>
+      db('nivaro_mail_log')
+        .where('chain_id', chainId)
+        .select(
+          'id',
+          'to',
+          'subject',
+          'template',
+          'status',
+          'error',
+          'collection',
+          'item',
+          'created_at',
+          'chain_parent'
+        )
+        .orderBy('id')
+        .limit(ACTIVITY_LIMIT)
+    )) as Array<Record<string, unknown>>
+    for (const m of rows) {
+      const count = recipientCount(m.to)
+      const status = String(m.status ?? '')
+      const failed = status === 'failed'
+      out.push({
+        key: `mail:${m.id}`,
+        parent: parentKey(m.chain_parent),
+        kind: 'mail',
+        at: iso(m.created_at),
+        record:
+          m.collection && m.item != null
+            ? { collection: String(m.collection), item: String(m.item) }
+            : null,
+        summary: `Email to ${count} ${count === 1 ? 'recipient' : 'recipients'} · ${status}`,
+        failed,
+        reason: failed ? redactError(m.error, withBodies) : null,
+        detail: {
+          type: 'mail',
+          status,
+          subject: withBodies ? String(m.subject ?? '') : null,
+          template: (m.template as string | null) ?? null,
+          to: withBodies ? String(m.to ?? '') : null,
+          recipients: count,
+          mail_log_id: Number(m.id),
+          error: redactError(m.error, withBodies)
+        }
+      })
+    }
+  }
+  return out
 }
 
 /**

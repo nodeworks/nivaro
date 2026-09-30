@@ -11,6 +11,8 @@ export type StepKind =
   | 'push'
   | 'attempt'
   | 'partner_call'
+  | 'notify'
+  | 'mail'
   | 'group'
 
 export interface PathStep {
@@ -51,6 +53,27 @@ export type StepDetail =
     }
   | { type: 'flow'; status: string; halted_at?: string | null; error?: string | null }
   | { type: 'transition'; from?: string | null; to?: string | null; comment?: string | null }
+  | {
+      type: 'notify'
+      recipient: string
+      /** Admins only; null for everyone else. */
+      subject: string | null
+      category?: string | null
+      lane?: string | null
+      channels: Array<{ channel: string; status: string; reason?: string | null }>
+    }
+  | {
+      type: 'mail'
+      status: string
+      /** Admins only; null for everyone else. */
+      subject: string | null
+      template?: string | null
+      /** Admins only; null for everyone else. */
+      to?: string | null
+      recipients: number
+      mail_log_id: number
+      error?: string | null
+    }
 
 export interface PathNode extends PathStep {
   children: PathNode[]

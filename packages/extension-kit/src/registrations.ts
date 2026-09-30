@@ -69,6 +69,35 @@ export interface ItemActionDef {
   /** Per-record applicability; the client hides inapplicable buttons. Errors
    *  count as applicable — a broken check must not hide a working action. */
   applicable?(ctx: { collection: string; itemId: string | number }): Promise<boolean>
+  /**
+   * Optional pre-flight (#616): what would stop this action (or make the
+   * partner reject it) BEFORE anyone presses the button — the same
+   * pre-validations `execute` runs, without sending anything. The record
+   * form shows "Ready" when this returns no issues, else the issues, each
+   * with a jump to the field or the lines it names. Must be read-only and
+   * cheap; errors are shown as "could not check", never as "ready".
+   */
+  preflight?(ctx: {
+    collection: string
+    itemId: string | number
+    userId?: string
+  }): Promise<ItemActionPreflightIssue[]>
+}
+
+/** One thing standing between an item action and a clean run (#616). */
+export interface ItemActionPreflightIssue {
+  /** Plain sentence: "2 lines missing Oracle category". */
+  message: string
+  /** 'block' = the action would refuse or fail; 'warn' = it would run but
+   *  the partner may reject or ignore part of it. Default 'block'. */
+  severity?: 'block' | 'warn'
+  /** A field on the record to bring into view. */
+  field?: string
+  /** Child rows to bring into view: their collection, the FK to the record,
+   *  and the rows (id + a label a person recognises). */
+  collection?: string
+  fk_field?: string
+  rows?: Array<{ id: string | number; label?: string }>
 }
 
 // ─── Admin surfaces ─────────────────────────────────────────────────────────
@@ -343,6 +372,8 @@ export type ChainTable =
   | 'nivaro_external_api_logs'
   | 'nivaro_workflow_history'
   | 'nivaro_flow_runs'
+  | 'nivaro_notifications'
+  | 'nivaro_mail_log'
 
 export type EventDirection = 'in' | 'out' | 'poll'
 

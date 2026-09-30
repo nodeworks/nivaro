@@ -13,6 +13,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
+import { apiUptime } from '../services/external-api-health.js'
 import { maskHeaders, mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
 import { isAuthFailure } from '../services/integration-signals-core.js'
 import { maskBodySecrets } from '../services/secret-mask.js'
@@ -336,6 +337,11 @@ async function buildCards(onlyId?: number) {
     .groupBy('api', 'outcome')
     .select('api', 'outcome')
     .count('* as n')) as Array<{ api: string; outcome: string; n: number | string }>
+  // #612 — health-probe uptime per API (side traffic, never counted as calls).
+  const uptime = await apiUptime(
+    apis.map((a) => a.id),
+    24
+  )
   const owners = (await db('nivaro_users')
     .whereIn('id', apis.map((a) => a.owner_user).filter(Boolean) as string[])
     .select('id', 'first_name', 'last_name')) as Array<{
@@ -394,7 +400,20 @@ async function buildCards(onlyId?: number) {
       owner: owner
         ? { id: owner.id, name: `${owner.first_name ?? ''} ${owner.last_name ?? ''}`.trim() }
         : null,
-      obligations: counts
+      obligations: counts,
+      uptime24: (() => {
+        const u = uptime.get(a.id)
+        if (!u || u.probes === 0) return null
+        return {
+          pct: u.uptime_pct,
+          probes: u.probes,
+          buckets: u.buckets.map((b) => ({
+            at: b.at,
+            ok: b.ok + b.token_ok,
+            failed: b.failed + b.token_failed
+          }))
+        }
+      })()
     }
   })
 }

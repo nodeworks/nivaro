@@ -86,6 +86,28 @@ export const obsApiAnalytics: DocSection = {
     {
       type: 'p',
       text: 'Every request records how it authenticated, and a call that is not a browser session — a static-token user or a named API key — is by definition an integration. The Integrations page (Monitoring → Integrations → Inbound calls) rolls those callers up one card each: calls, errors, latency, last call, last error and top paths; picking a card scopes the request list to that caller. The Directus-era root aliases (`POST /files`, `POST /graphql`) that third-party integrations still use are logged like any `/api` route.'
+    },
+    { type: 'h2', id: 'api-analytics-dependencies', text: 'Partner dependencies' },
+    {
+      type: 'p',
+      text: 'Picking a caller card also opens its Dependencies panel: every collection and field the caller read or wrote, the GraphQL operations and REST endpoints it called, with call counts and when each was last used. The map is built from the request log itself — a read’s fields come from its logged query string (`fields`, `sort`, `filter`, aggregate parameters), a write’s from its stored body, a GraphQL call’s from its document walked against the live schema (selections, `filter` / `sort` keys, the keys of a mutation’s `data`, documents sent by persisted-query id or hash included). It reaches back as far as the log does (14 days) and as deep as what was logged: bodies are stored only for token and API-key callers. A read with no field list is shown as “every field”. Two downloads narrow the published surfaces to exactly what the caller uses: an OpenAPI subset (the generated items spec, only its paths and fields) and a GraphQL SDL subset (the used types, fields, arguments and input fields).'
+    },
+    {
+      type: 'p',
+      text: 'The break check compares every partner’s used set — API keys, and static-token accounts marked as machine accounts — with the schema as it is now. A used collection or field that no longer exists, or a GraphQL root field the schema dropped, is a break; a used field carrying a deprecation stamp is a warning. The same findings feed the readiness scorecard (“Partner integrations still find the fields they use”, a warning, never a failure), the release preflight prints a one-line summary without blocking, and the field-removal confirm in the Table Editor lists the callers that used the field.'
+    },
+    {
+      type: 'pre',
+      code: `pnpm --filter @nivaro/api run partners:check            # exit 1 on a break
+pnpm --filter @nivaro/api run partners:check -- --people # also people on tokens
+pnpm --filter @nivaro/api run partners:check -- --json   # findings as JSON
+
+GET /api/partner-dependencies?days=14                    // every caller, summarised
+GET /api/partner-dependencies/check?days=14&people=1     // break + deprecation findings
+GET /api/partner-dependencies/field/:collection/:field   // callers of one field
+GET /api/partner-dependencies/:key                       // key = key:<id> | user:<uuid>
+GET /api/partner-dependencies/:key/openapi.json?download=1
+GET /api/partner-dependencies/:key/schema.graphql?download=1`
     }
   ]
 }

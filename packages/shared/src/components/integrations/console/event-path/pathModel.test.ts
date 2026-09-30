@@ -50,6 +50,24 @@ describe('summarySentence', () => {
       'LinX · CM26-79811 · 3 records changed · 1 push (1 failed)'
     )
   })
+
+  it('counts the distinct people a path told (#706)', () => {
+    const told = (key: string, recipient: string) =>
+      n(key, 'notify', {
+        detail: { type: 'notify', recipient, subject: null, channels: [] }
+      })
+    const withNotices = {
+      ...path,
+      root: n('cron:x', 'cron', {
+        children: [
+          told('notification:1', 'Ada'),
+          told('notification:2', 'Ada'),
+          told('notification:3', 'Bo')
+        ]
+      })
+    }
+    expect(summarySentence(withNotices)).toBe('0 records changed · 2 people told')
+  })
 })
 
 describe('flattenVisible', () => {

@@ -166,6 +166,45 @@ export async function sendPayload(
   }
 }
 
+/**
+ * Re-send one submission's stored payload and record the outcome — the one
+ * sequence every retry path runs (the /retry route, the bulk sweep and the
+ * collection browser / queue "Retry failed pushes", #620): the call log and
+ * attempt row hang under the submission, applySendOutcome writes the row
+ * (error_class included), and the linked obligation moves with it. Throws
+ * when the submission has no stored payload to send.
+ */
+export async function retrySubmissionRow(
+  row: Pick<
+    ErpSubmissionRow,
+    'id' | 'external_api' | 'external_ref' | 'attempts' | 'payload' | 'obligation_id'
+  >,
+  userId: string | null
+): Promise<SendOutcome> {
+  const stored = parseJson<StoredPayload>(row.payload)
+  if (!stored?.endpoint_path) throw new Error('Submission has no stored payload to retry')
+  const outcome = await withChainStep(`submission:${row.id}`, async () => {
+    const sent = await sendPayload(row.external_api, stored, userId ?? undefined)
+    const { applySendOutcome } = await import('../services/erp-submission-status.js')
+    await applySendOutcome({
+      submissionId: row.id,
+      outcome: sent,
+      priorExternalRef: row.external_ref,
+      priorAttempts: row.attempts,
+      requestedBy: userId,
+      requestedVia: 'retry'
+    })
+    return sent
+  })
+  await propagateSubmissionStatus({
+    submissionId: row.id,
+    status: outcome.status,
+    error: outcome.error,
+    obligationId: row.obligation_id
+  })
+  return outcome
+}
+
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 export async function erpSubmissionsRoutes(app: FastifyInstance) {
@@ -557,30 +596,10 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Submission has no stored payload to retry' })
       }
 
-      // A retry's call log and attempt row hang under the submission it retries.
-      const outcome = await withChainStep(`submission:${row.id}`, async () => {
-        const sent = await sendPayload(row.external_api, stored, req.user?.id)
-
-        // One function for the row update (#628: writes error_class too) so
-        // this route can never drift from the bulk sweep or Task 19's own
-        // send paths about which columns a retry touches.
-        const { applySendOutcome } = await import('../services/erp-submission-status.js')
-        await applySendOutcome({
-          submissionId: id,
-          outcome: sent,
-          priorExternalRef: row.external_ref,
-          priorAttempts: row.attempts,
-          requestedBy: req.user?.id ?? null,
-          requestedVia: 'retry'
-        })
-        return sent
-      })
-      await propagateSubmissionStatus({
-        submissionId: id,
-        status: outcome.status,
-        error: outcome.error,
-        obligationId: row.obligation_id
-      })
+      // A retry's call log and attempt row hang under the submission it
+      // retries; one helper for the row update + obligation (#628) so this
+      // route can never drift from the bulk paths about what a retry touches.
+      const outcome = await retrySubmissionRow(row, req.user?.id ?? null)
 
       const updated = (await db('nivaro_erp_submissions').where({ id }).first()) as ErpSubmissionRow
 
@@ -632,31 +651,10 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           continue
         }
         try {
-          const outcome = await withChainStep(`submission:${row.id}`, async () => {
-            const sent = await sendPayload(row.external_api, stored, req.user?.id)
-            // Same shared function every other writer uses now (#628: writes
-            // error_class too), so a bulk-retried failure is no longer
-            // invisible to runRetryPass just for having gone through this route.
-            const { applySendOutcome } = await import('../services/erp-submission-status.js')
-            await applySendOutcome({
-              submissionId: id,
-              outcome: sent,
-              priorExternalRef: row.external_ref,
-              priorAttempts: row.attempts,
-              requestedBy: req.user?.id ?? null,
-              requestedVia: 'retry'
-            })
-            return sent
-          })
-          // A fourth writer of `status`, alongside /retry, the PATCH override
-          // and the automatic sweep — moves the obligation the same way they
-          // do, so a bulk-recovered submission cannot leave one behind.
-          await propagateSubmissionStatus({
-            submissionId: id,
-            status: outcome.status,
-            error: outcome.error,
-            obligationId: row.obligation_id
-          })
+          // The shared retry sequence (applySendOutcome writes error_class,
+          // #628; the obligation moves with it) — a bulk-recovered submission
+          // can neither hide from runRetryPass nor leave an obligation behind.
+          const outcome = await retrySubmissionRow(row, req.user?.id ?? null)
           results.push({ id, status: outcome.status, error: outcome.error ?? undefined })
         } catch (err) {
           results.push({

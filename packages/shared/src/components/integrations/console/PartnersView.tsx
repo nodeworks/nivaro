@@ -1,7 +1,15 @@
 import { useMemo, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { usePartners } from './api'
-import { fmtMs, fmtPct, HEALTH, HealthPill, HourlyBars, PartnerFlags } from './PartnerBits'
+import {
+  fmtMs,
+  fmtPct,
+  HEALTH,
+  HealthPill,
+  HourlyBars,
+  PartnerFlags,
+  UptimeStrip
+} from './PartnerBits'
 import { PartnerDetail } from './PartnerDetail'
 import { agoText, exactTime, TONE_TEXT, type Tone } from './tone'
 import type { PartnerCard } from './types'
@@ -56,6 +64,7 @@ function PartnerTile({ card, onOpen }: { card: PartnerCard; onOpen: () => void }
         <Figure label='Slow (p95)' value={fmtMs(card.p95_ms)} />
       </dl>
       <HourlyBars hourly={card.hourly} className='w-full' />
+      {card.uptime24 && <UptimeStrip uptime={card.uptime24} className='w-full' />}
       <div className='w-full space-y-1 text-[12px]'>
         <p className='flex gap-1.5 text-muted-foreground'>
           <span className='w-[88px] shrink-0'>Last success</span>

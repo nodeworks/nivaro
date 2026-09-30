@@ -1,6 +1,9 @@
+import { createNivaro } from '@nivaro/sdk'
+import { EventPathSheet, NivaroProvider } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Pencil, Play, RotateCw } from 'lucide-react'
+import { Activity, GitBranch, Pencil, Play, RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
@@ -56,7 +59,13 @@ interface JobRun {
   error: string | null
   progress: string | null
   triggered_by_name: string | null
+  /** The integration event chain the run started (#707); null on runs from
+   *  before migration 385 and on kinds that do not start one. */
+  chain_id?: string | null
 }
+
+/** The event-path sheet reads through the SDK client (shared component). */
+const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
 const KINDS = ['', 'cron', 'remediation', 'backfill', 'recalc', 'monitor'] as const
 
@@ -110,6 +119,9 @@ export default function BackgroundJobs() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [running, setRunning] = useState<string | null>(null)
+  /** "Show what it wrote" (#707): the run whose chain the path sheet shows. */
+  const [pathRun, setPathRun] = useState<{ chainId: string; label: string } | null>(null)
+  const navigate = useNavigate()
 
   const registry = useQuery({
     queryKey: ['job-registry'],
@@ -859,6 +871,23 @@ export default function BackgroundJobs() {
                             {r.outcome ?? '—'}
                           </span>
                         )}
+                        {r.chain_id && r.status !== 'running' && (
+                          <button
+                            type='button'
+                            data-job-run-path={r.id}
+                            onClick={() =>
+                              setPathRun({
+                                chainId: String(r.chain_id),
+                                label: `${r.job_id} · ${new Date(r.started_at).toLocaleString()}`
+                              })
+                            }
+                            className='mt-0.5 flex items-center gap-1 text-[11px] font-medium text-slate-600 underline decoration-nvr-cyan/60 underline-offset-2 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+                            title='Every write, workflow move, push and message this run made'
+                          >
+                            <GitBranch className='h-3 w-3' strokeWidth={2} aria-hidden />
+                            Show what it wrote
+                          </button>
+                        )}
                       </td>
                     </tr>
                   )
@@ -898,6 +927,17 @@ export default function BackgroundJobs() {
           )}
         </div>
       </div>
+      <NivaroProvider client={sharedClient}>
+        <EventPathSheet
+          target={pathRun ? { chainId: pathRun.chainId } : null}
+          event={pathRun ? { label: pathRun.label } : null}
+          onClose={() => setPathRun(null)}
+          onOpenRecord={(c, id) => navigate(`/collections/${c}/${id}`)}
+          onOpenEvent={(t) =>
+            setPathRun((cur) => ({ chainId: t.chainId, label: cur?.label ?? '' }))
+          }
+        />
+      </NivaroProvider>
     </div>
   )
 }

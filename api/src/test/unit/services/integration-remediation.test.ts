@@ -842,3 +842,143 @@ describe('refireRefusal — re-firing is opt-in on three counts', () => {
     expect(refireRefusal({ ...base, safe_to_refire: true, endpoint_path: '/orders' })).toBeNull()
   })
 })
+
+// ─── #772 arming preview — the dry runs send nothing, write nothing ────────
+describe('runRetryPass — dry run', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('buckets rows by error class into retry / waiting / give-up with the switch OFF, and touches nothing', async () => {
+    const settings = settingsChain(false)
+    const now = Date.now()
+    const obligations: Record<string, unknown> = chain({
+      select: vi.fn().mockResolvedValue([
+        // attempts 0, last try an hour ago → due (1 minute rung passed)
+        {
+          id: 1,
+          submission_id: 10,
+          attempts: 0,
+          updated_at: new Date(now - 3_600_000),
+          error_class: 'transient',
+          api: 'Partner',
+          kind: 'outbound',
+          collection: 'workflows',
+          item: '1'
+        },
+        // attempts 3, last try a minute ago → waiting for the 120-minute rung
+        {
+          id: 2,
+          submission_id: 20,
+          attempts: 3,
+          updated_at: new Date(now - 60_000),
+          error_class: 'rate_limited',
+          api: 'Partner',
+          kind: 'outbound',
+          collection: 'workflows',
+          item: '2'
+        },
+        // past the ladder → a person
+        {
+          id: 3,
+          submission_id: 30,
+          attempts: 5,
+          updated_at: new Date(now - 60_000),
+          error_class: 'transient',
+          api: 'Partner',
+          kind: 'outbound',
+          collection: 'workflows',
+          item: '3'
+        }
+      ])
+    })
+    const writes = { where: vi.fn(), update: vi.fn() }
+    writes.where.mockReturnValue(writes)
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations as o') return obligations
+      if (table === 'nivaro_integration_obligations') return writes
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const r = await runRetryPass({ dryRun: true })
+
+    expect(r.retried).toBe(0)
+    expect(r.gaveUp).toBe(0)
+    expect(r.plan?.retry.map((x) => x.obligation_id)).toEqual([1])
+    expect(r.plan?.waiting.map((x) => x.obligation_id)).toEqual([2])
+    expect(r.plan?.give_up.map((x) => x.obligation_id)).toEqual([3])
+    expect(r.plan?.by_error_class).toEqual({
+      transient: { retry: 1, waiting: 0, give_up: 1 },
+      rate_limited: { retry: 0, waiting: 1, give_up: 0 }
+    })
+    // No ledger write, no send, no outcome applied.
+    expect(writes.update).not.toHaveBeenCalled()
+    expect(sendPayload).not.toHaveBeenCalled()
+    expect(applySendOutcome).not.toHaveBeenCalled()
+    expect(propagateSubmissionStatus).not.toHaveBeenCalled()
+  })
+})
+
+describe('runMissingRefirePass — dry run', () => {
+  beforeEach(() => clearObligationKinds())
+  afterEach(() => vi.clearAllMocks())
+
+  it('names the request it would repeat, lists what stays for a person, and sends nothing', async () => {
+    registerObligationKind(refireableKind())
+    registerObligationKind(
+      refireableKind({ kind: 'manual_push', human: true, endpoint_path: '/manage-order' })
+    )
+    const settings = settingsChain(false)
+    const missingRows = chain({
+      select: vi.fn().mockResolvedValue([
+        { id: 11, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '2' },
+        { id: 12, api: 'Partner', kind: 'outbound', collection: 'workflows', item: '3' }
+      ])
+    })
+    // groupBy/count for "left for a person" rides the same table name.
+    const counts = chain({})
+    counts.groupBy = vi.fn().mockReturnValue(counts)
+    counts.select = vi.fn().mockReturnValue(counts)
+    counts.count = vi.fn().mockResolvedValue([
+      { api: 'Partner', kind: 'manual_push', n: 4 },
+      { api: 'Partner', kind: 'outbound', n: 2 }
+    ])
+    let obligationsCalls = 0
+    const priorLookup = chain({
+      first: vi.fn().mockResolvedValueOnce({ id: 77 }).mockResolvedValueOnce(undefined)
+    })
+    const submissions = { where: vi.fn(), first: vi.fn(), insert: vi.fn(), update: vi.fn() }
+    submissions.where.mockReturnValue(submissions)
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') {
+        obligationsCalls++
+        return obligationsCalls === 1 ? counts : missingRows
+      }
+      if (table === 'nivaro_erp_submissions as es') return priorLookup
+      if (table === 'nivaro_erp_submissions') return submissions
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+
+    const r = await runMissingRefirePass({ dryRun: true })
+
+    expect(r.refired).toBe(0)
+    expect(r.plan?.refire).toEqual([
+      {
+        obligation_id: 11,
+        api: 'Partner',
+        kind: 'outbound',
+        collection: 'workflows',
+        item: '2',
+        submission_id: 77
+      }
+    ])
+    expect(r.plan?.queued.map((q) => q.obligation_id)).toEqual([12])
+    expect(r.plan?.left_for_a_person).toEqual([
+      expect.objectContaining({ api: 'Partner', kind: 'manual_push', count: 4 })
+    ])
+    expect(submissions.insert).not.toHaveBeenCalled()
+    expect(sendPayload).not.toHaveBeenCalled()
+    expect(applySendOutcome).not.toHaveBeenCalled()
+    expect(propagateSubmissionStatus).not.toHaveBeenCalled()
+  })
+})

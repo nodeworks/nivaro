@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { chainFields } from '../services/chain-columns.js'
 import { applyWorkspaceScope, applyWriteComputedFields } from '../services/items.js'
 import { applyRowFilter, getRowFilter } from '../services/permissions.js'
 import { getAiCollectionSettings } from './ai-validation.js'
@@ -88,6 +89,7 @@ async function notifyValidationWarning(
   try {
     const rows = (await db('nivaro_notifications')
       .insert({
+        ...(await chainFields('nivaro_notifications')),
         recipient,
         subject,
         status: 'inbox',

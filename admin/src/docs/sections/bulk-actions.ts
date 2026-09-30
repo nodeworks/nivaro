@@ -7,12 +7,12 @@ export const bulkActionsGuide: DocSection = {
     { type: 'h1', id: 'bulk-actions', text: 'Bulk Actions' },
     {
       type: 'p',
-      text: 'Bulk actions are admin-defined buttons offered over a selection — in the collection browser\'s selection bar and in a queue\'s selection pill — that apply one change to every selected record: On Hold, Remove Hold, Cancel, Uncancel and whatever else a collection needs. Each action is defined once per collection (Data Model → collection → Settings → Bulk actions) and each surface chooses which of the enabled actions it shows.'
+      text: "Bulk actions are admin-defined buttons offered over a selection — in the collection browser's selection bar and in a queue's selection pill — that apply one change to every selected record: On Hold, Remove Hold, Cancel, Uncancel and whatever else a collection needs. Each action is defined once per collection (Data Model → collection → Settings → Bulk actions) and each surface chooses which of the enabled actions it shows."
     },
     { type: 'h3', text: 'Built-in operations' },
     {
       type: 'p',
-      text: 'The bars\' own operations are registry entries too, listed under "Built-in" in the same card: Update Field, Transition, Message…, Compare, Merge… (admins, fixed), Saved recipes and Delete for the collection browser; Claim, Release and Transition for queues. Each can be switched off for the collection or given an access rule (everyone / admins / roles). The endpoints behind them (bulk update / delete / transition, message stakeholders, queue claim / release) enforce the same rule, so a stale client cannot drive a disabled operation. Surface allow-lists include built-ins by key (update-field, transition, message, compare, merge, recipes, delete, claim, release).'
+      text: 'The bars\' own operations are registry entries too, listed under "Built-in" in the same card: Update Field, Transition, Message…, Compare, Merge… (admins, fixed), Saved recipes and Delete for the collection browser; Claim, Release and Transition for queues; Push… and Retry failed pushes on both. Each can be switched off for the collection or given an access rule (everyone / admins / roles). The endpoints behind them (bulk update / delete / transition, message stakeholders, queue claim / release) enforce the same rule, so a stale client cannot drive a disabled operation. Surface allow-lists include built-ins by key (update-field, transition, message, compare, merge, recipes, delete, claim, release, push, retry-push).'
     },
     { type: 'h3', text: 'Custom actions' },
     {
@@ -25,7 +25,7 @@ export const bulkActionsGuide: DocSection = {
         ],
         [
           'Run a transition',
-          'Matched by transition LABEL per record against the collection\'s pipeline, so each record runs the transition valid from its own state — Uncancel\'s return-to-previous resolves per record. The transition\'s own conditions, required roles, requirements and actions are enforced exactly as a manual click; a record with no matching transition is skipped.'
+          "Matched by transition LABEL per record against the collection's pipeline, so each record runs the transition valid from its own state — Uncancel's return-to-previous resolves per record. The transition's own conditions, required roles, requirements and actions are enforced exactly as a manual click; a record with no matching transition is skipped."
         ]
       ]
     },
@@ -50,13 +50,36 @@ export const bulkActionsGuide: DocSection = {
         ],
         [
           'Queue',
-          'Queue builder → Bulk actions → checklist across the queue\'s source collections (display_config.bulk_action_keys, entries are collection:key — null = all).'
+          "Queue builder → Bulk actions → checklist across the queue's source collections (display_config.bulk_action_keys, entries are collection:key — null = all)."
         ],
         [
           'Extensions',
           'ctx.bulkActions.register({id, label, collections, access, require_reason, confirm, execute}) — appears alongside DB-defined actions on the same surfaces.'
         ]
       ]
+    },
+    { type: 'h3', text: 'Integration pushes' },
+    {
+      type: 'p',
+      text: 'Two built-ins send selected records to integration partners, in the collection browser bar, the queue pill and a record row\'s Actions menu (under "Integrations"):'
+    },
+    {
+      type: 'table',
+      head: ['Built-in', 'What it does'],
+      rows: [
+        [
+          'Push… (push)',
+          'One button per item action an extension registered for the collection (ctx.itemActions — e.g. "Push to <partner>"), run on each selected record one at a time. The record form\'s gates apply per record: the action must apply to the record (its applicable() check), an addendum-creating action needs the addendum gate, and the record must be readable by the person running it. When the action asks for a note, one note is sent with every record.'
+        ],
+        [
+          'Retry failed pushes (retry-push)',
+          "For each selected record, every partner whose LATEST submission failed (or was rejected) is re-sent the same stored request the record's own Retry button sends. A partner whose latest push landed is left alone; a record never pushed is skipped."
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The popover opens with a dry run ("3 of 5 would run · 2 not applicable to this record") and, after the run, keeps a per-row result list — sent, skipped with the reason, or failed with the partner\'s answer. Records run sequentially (at most 200 per run): every one is a real partner request. The row menu offers the same two operations for one record ("Retry last failed push" appears only when a partner\'s latest push failed).'
     },
     { type: 'h3', text: 'Results' },
     {
@@ -72,6 +95,15 @@ GET  /api/bulk-actions/transition-labels?collection=    # labels for the transit
 POST /api/bulk-actions/run
 { "collection": "workflows", "key": "on-hold", "ids": [1, 2, 3], "reason": "Vendor dispute" }
 → { "data": { "succeeded": 2, "skipped": 1, "failed": 0, "errors": [], "skipped_items": ["3"] } }
+
+# integration pushes (built-ins push / retry-push; dry_run classifies, sends nothing)
+POST /api/bulk-actions/push
+{ "collection": "orders", "action_id": "push-to-partner", "ids": [1, 2], "payload": { "message": "…" }, "dry_run": false }
+POST /api/bulk-actions/retry-push
+{ "collection": "orders", "ids": [1, 2], "dry_run": true }
+→ { "data": { "succeeded": 1, "skipped": 1, "failed": 0, "errors": [],
+              "outcomes": [{ "item": "1", "outcome": "change", "reason": "Partner A: accepted" },
+                           { "item": "2", "outcome": "skip", "reason": "no failed push" }] } }
 
 # admin
 GET/POST   /api/bulk-actions/defs?collection=

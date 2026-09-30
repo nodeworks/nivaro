@@ -273,3 +273,87 @@ describe('the notification target', () => {
     })
   })
 })
+
+// ─── #772 arming preview — dry run sends nothing ────────────────────────────
+describe('alertUnmetObligations — dry run', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('plans recipients with names while the switch is OFF, and claims / sends nothing', async () => {
+    setApp(null as never)
+    const settingsChain = makeChain({ first: { integration_notifications_enabled: false } })
+    const obligationsChain = makeChain({
+      select: [row, { ...row, id: 2, item: '11', api: 'Nobody' }],
+      update: 1
+    })
+    const apisChain = makeChain({
+      select: [{ name: 'Partner', owner_user: 'aaaaaaaa-0000-0000-0000-000000000001' }]
+    })
+    const instancesChain = makeChain({
+      select: [{ collection: 'workflows', item: '10', id: 'inst-1', current_state: 'st-1' }]
+    })
+    const usersChain = makeChain({
+      select: [
+        {
+          id: 'AAAAAAAA-0000-0000-0000-000000000001',
+          first_name: 'Ada',
+          last_name: 'Owner',
+          email: 'ada@example.com'
+        },
+        {
+          id: 'BBBBBBBB-0000-0000-0000-000000000002',
+          first_name: 'Bo',
+          last_name: 'Record',
+          email: null
+        }
+      ]
+    })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settingsChain
+      if (table === 'nivaro_integration_obligations') return obligationsChain
+      if (table === 'nivaro_external_apis') return apisChain
+      if (table === 'nivaro_workflow_instances') return instancesChain
+      if (table === 'nivaro_users') return usersChain
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    vi.mocked(resolveStateOwnersBatch).mockResolvedValue(
+      new Map([
+        [
+          'workflows::10',
+          [
+            { id: 'aaaaaaaa-0000-0000-0000-000000000001' },
+            { id: 'bbbbbbbb-0000-0000-0000-000000000002' }
+          ]
+        ]
+      ]) as never
+    )
+
+    const out = await alertUnmetObligations({ dryRun: true })
+
+    expect(out.notified).toBe(0)
+    expect(out.plan).toMatchObject({ obligations: 2, messages: 2, recipientless: 1 })
+    expect(out.plan?.recipients.map((r) => r.name).sort()).toEqual(['Ada Owner', 'Bo Record'])
+    expect(out.plan?.rows.map((r) => r.recipients)).toEqual([2, 0])
+    // Nothing claimed, nothing sent.
+    expect(obligationsChain.update).not.toHaveBeenCalled()
+    expect(notifyUser).not.toHaveBeenCalled()
+  })
+
+  it('an empty ledger plans nothing', async () => {
+    const obligationsChain = makeChain({ select: [] })
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_integration_obligations') return obligationsChain
+      return makeChain()
+    }) as never)
+    const out = await alertUnmetObligations({ dryRun: true })
+    expect(out.plan).toEqual({
+      obligations: 0,
+      messages: 0,
+      recipientless: 0,
+      recipients: [],
+      rows: []
+    })
+    expect(notifyUser).not.toHaveBeenCalled()
+  })
+})

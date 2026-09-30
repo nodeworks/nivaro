@@ -1,5 +1,6 @@
 import type { GraphQLSchema } from 'graphql'
 import { db } from '../db/index.js'
+import { chainFields } from './chain-columns.js'
 import { getApp } from './io-holder.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
 
@@ -86,6 +87,7 @@ async function notifyAdminsOfBreak(subject: string, message: string): Promise<vo
         continue
       }
       await db('nivaro_notifications').insert({
+        ...(await chainFields('nivaro_notifications')),
         recipient: a.id,
         subject: subject.slice(0, 255),
         status: 'inbox',

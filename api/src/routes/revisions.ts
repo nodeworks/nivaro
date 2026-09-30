@@ -3,6 +3,12 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chunkArray } from '../services/db-batch.js'
+import {
+  apiKeyNames,
+  callerOf,
+  inboundSelectColumns,
+  inboundStampedSince
+} from '../services/inbound-attribution.js'
 import { updateOne } from '../services/items.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
 import { originOfRow } from '../services/note-authorship.js'
@@ -391,12 +397,25 @@ export async function revisionsRoutes(app: FastifyInstance) {
         'u.first_name',
         'u.last_name',
         'u.email',
-        'u.account_kind'
+        'u.account_kind',
+        'a.id as activity_id',
+        ...(await inboundSelectColumns('a'))
       )) as Array<Record<string, unknown>>
     const wanted = new Set(fields)
+    // #617 — a write that arrived on a token or API key names its CALLER
+    // (the key's name, else the account's) instead of just "integration",
+    // and carries the activity id the client opens the request from.
+    const keyNames = await apiKeyNames(rows.map((r) => r.api_key_id as number | null))
+    const stampedSince = await inboundStampedSince()
     const out: Record<
       string,
-      { at: string; who: string; via: 'import' | 'integration' | 'system' | 'user' }
+      {
+        at: string
+        who: string
+        via: 'import' | 'integration' | 'system' | 'user'
+        activity_id?: number
+        caller?: { name: string; kind: string; key: string } | null
+      }
     > = {}
     for (const row of rows) {
       if (wanted.size === 0) break
@@ -415,21 +434,43 @@ export async function revisionsRoutes(app: FastifyInstance) {
         wanted.delete(f)
         const comment = String(row.comment ?? '')
         const email = String(row.email ?? '').toLowerCase()
+        const caller = /^import:/i.test(comment)
+          ? null
+          : callerOf(
+              {
+                auth_method: row.auth_method as string | null | undefined,
+                api_key_id: row.api_key_id as number | null | undefined,
+                user: row.user_id as string | null,
+                first_name: row.first_name as string | null,
+                last_name: row.last_name as string | null,
+                email,
+                account_kind: row.account_kind as string | null,
+                timestamp: row.timestamp as string
+              },
+              keyNames,
+              stampedSince
+            )
         const via: 'import' | 'integration' | 'system' | 'user' = /^import:/i.test(comment)
           ? 'import'
-          : !row.user_id
-            ? 'system'
-            : isMachineAccount({ account_kind: row.account_kind as string | null, email })
-              ? 'integration'
-              : 'user'
+          : caller
+            ? 'integration'
+            : !row.user_id
+              ? 'system'
+              : isMachineAccount({ account_kind: row.account_kind as string | null, email })
+                ? 'integration'
+                : 'user'
         const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
         out[f] = {
           at: Number.isNaN(ts.getTime()) ? String(row.timestamp) : ts.toISOString(),
           who:
             via === 'import'
               ? `import (${comment.split(':')[1] || 'file'})`
-              : [row.first_name, row.last_name].filter(Boolean).join(' ') || email || 'system',
-          via
+              : caller
+                ? caller.name
+                : [row.first_name, row.last_name].filter(Boolean).join(' ') || email || 'system',
+          via,
+          activity_id: row.activity_id != null ? Number(row.activity_id) : undefined,
+          caller: caller ? { name: caller.name, kind: caller.kind, key: caller.key } : null
         }
       }
     }

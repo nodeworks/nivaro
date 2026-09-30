@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { deferEffect } from '../services/unit-of-work.js'
 import { emitTrigger } from '../flows/registry.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { chainFields } from '../services/chain-columns.js'
+import { deferEffect } from '../services/unit-of-work.js'
 import { hooks } from './registry.js'
 
 // Store app reference so the hook can emit socket notifications after startup.
@@ -55,21 +56,21 @@ export function registerFieldWatchHooks() {
       // #86 — a watched field change is a flow event too, subscribers or not.
       try {
         void deferEffect('field-watch-trigger', () =>
-        emitTrigger(
-          'field-watch',
-          {
-            collection,
-            item: String(item),
-            field,
-            watch_id: watch.id,
-            watch_name: watch.name ?? null,
-            old: oldVal ?? null,
-            new: newVal ?? null,
-            user_id: ctx.user?.id ?? null
-          },
-          console as unknown as Parameters<typeof emitTrigger>[2],
-          ctx.user?.id ?? undefined
-        )
+          emitTrigger(
+            'field-watch',
+            {
+              collection,
+              item: String(item),
+              field,
+              watch_id: watch.id,
+              watch_name: watch.name ?? null,
+              old: oldVal ?? null,
+              new: newVal ?? null,
+              user_id: ctx.user?.id ?? null
+            },
+            console as unknown as Parameters<typeof emitTrigger>[2],
+            ctx.user?.id ?? undefined
+          )
         )
       } catch {
         /* trigger emission is best-effort */
@@ -98,6 +99,7 @@ export function registerFieldWatchHooks() {
         try {
           const [notif] = (await db('nivaro_notifications')
             .insert({
+              ...(await chainFields('nivaro_notifications')),
               recipient: sub.id,
               subject,
               status: 'inbox',

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { errorText } from '../lib/db-refusal.js'
 import { getIo } from './io-holder.js'
 
@@ -43,13 +44,26 @@ function emitJobEvent(payload: Record<string, unknown>): void {
 export async function startJobRun(
   kind: JobRunKind,
   jobId: string,
-  opts?: { label?: string; extensionId?: string; triggeredBy?: string | null }
+  opts?: {
+    label?: string
+    extensionId?: string
+    triggeredBy?: string | null
+    /** The integration event chain this run started (#707) — lets the console
+     *  open the path of everything the run wrote. Probed per tenant, so a
+     *  database behind migration 385 keeps recording runs without it. */
+    chainId?: string | null
+  }
 ): Promise<JobRunHandle> {
   const startedAt = new Date()
   let id: number | null = null
   try {
+    const chain =
+      opts?.chainId && (await hasColumn('nivaro_job_runs', 'chain_id').catch(() => false))
+        ? { chain_id: opts.chainId }
+        : {}
     const [row] = await db('nivaro_job_runs')
       .insert({
+        ...chain,
         kind,
         job_id: jobId.slice(0, 200),
         label: opts?.label?.slice(0, 300) ?? null,

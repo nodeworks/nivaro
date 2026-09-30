@@ -33,6 +33,8 @@ export {
   useAvailableBulkActions,
   useBuiltinGate
 } from './components/bulk/BulkActionButtons'
+export type { PushItemAction, PushRunOutcome } from './components/bulk/PushBulkButtons'
+export { PushBulkButtons, PushResultList } from './components/bulk/PushBulkButtons'
 export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
 export { CacheStamp, cacheStampTip } from './components/CacheStamp'
 export { CellCopyLayer } from './components/CellCopyLayer'
@@ -133,6 +135,11 @@ export type {
   ImportStats
 } from './components/imports/types'
 export * from './components/integrations/console'
+export {
+  InboundRequestDetail,
+  type InboundRequestInfo,
+  InboundRequestPopover
+} from './components/integrations/InboundRequest'
 export type { IntegrationDotsProps } from './components/integrations/IntegrationDots'
 export {
   INTEGRATIONS_FILTER_OPTIONS,
@@ -145,6 +152,14 @@ export {
   IntegrationStatusLines,
   useRecordObligations
 } from './components/integrations/IntegrationStatusLines'
+export { IntegrationsFilterPill } from './components/integrations/IntegrationsFilterPill'
+export {
+  focusRecordTarget,
+  OutboundPreviewSection,
+  type PreflightIssue,
+  type PreflightResult,
+  PushReadinessChip
+} from './components/integrations/RecordIntegrationPreview'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export {
   ChangeReasonDialog,
@@ -196,7 +211,9 @@ export {
   AuthFailuresSection,
   InboundCallersView
 } from './components/monitoring/ApiRequestLog'
+export { CallerChangesSection } from './components/monitoring/CallerChanges'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
+export { PartnerDependenciesPanel } from './components/monitoring/PartnerDependencies'
 export type {
   BellLaneTab,
   BellNotification,

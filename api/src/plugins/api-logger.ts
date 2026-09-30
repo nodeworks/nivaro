@@ -190,9 +190,10 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
           .where('created_at', '<', cutoff)
           .delete()
           .catch(() => {})
-        await db('nivaro_outbound_log')
-          .where('created_at', '<', cutoff)
-          .delete()
+        // Outbound call log + flight recorder (#626): counter rows 31 days
+        // (per-API SLOs), recorded bodies 24 hours, side traffic by kind.
+        await import('../services/outbound-recorder.js')
+          .then((m) => m.pruneOutboundRecorder())
           .catch(() => {})
         // Mail log rides the same pass — 30 days answers "did it send".
         await db('nivaro_mail_log')

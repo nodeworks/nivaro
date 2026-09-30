@@ -156,3 +156,53 @@ export function HourlyBars({
     </div>
   )
 }
+
+/**
+ * #612 — 24 hourly health-probe cells: green when every probe passed, red
+ * when any failed, a hairline when the hour had none.
+ */
+export function UptimeStrip({
+  uptime,
+  className
+}: {
+  uptime: NonNullable<PartnerCard['uptime24']>
+  className?: string
+}) {
+  return (
+    <div className={cn('flex items-center gap-2', className)} data-ic-uptime>
+      <span className='shrink-0 text-[11px] text-muted-foreground'>Probe uptime</span>
+      <div
+        className='flex h-3 min-w-0 flex-1 items-stretch gap-px'
+        role='img'
+        aria-label={`Health probes: ${uptime.pct ?? '—'}% up over 24 hours`}
+      >
+        {uptime.buckets.map((b) => {
+          const n = b.ok + b.failed
+          const label = new Date(b.at).toLocaleString(undefined, {
+            weekday: 'short',
+            hour: 'numeric'
+          })
+          return (
+            <span
+              key={b.at}
+              className={cn(
+                'min-w-0 flex-1 rounded-[1px]',
+                n === 0
+                  ? 'bg-border'
+                  : b.failed > 0
+                    ? TONE_FILL.negative
+                    : cn(TONE_FILL.positive, 'opacity-70')
+              )}
+              data-tip={
+                n === 0 ? `${label} · no probes` : `${label} · ${b.ok} ok · ${b.failed} failed`
+              }
+            />
+          )
+        })}
+      </div>
+      <span className='shrink-0 text-[11.5px] font-medium tabular-nums text-foreground'>
+        {uptime.pct == null ? '—' : `${uptime.pct}%`}
+      </span>
+    </div>
+  )
+}

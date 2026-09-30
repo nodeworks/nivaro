@@ -74,7 +74,8 @@ import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
-import { IntegrationDots } from '../integrations/IntegrationDots'
+import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/IntegrationDots'
+import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
@@ -2816,6 +2817,18 @@ export function QueueWorklist({
           }
         ]
       : []),
+    // #630 — integration partners; the queue read model filters on it
+    // (live path in memory, materialized cache in SQL).
+    ...(integrationsEnabled
+      ? [
+          {
+            key: 'integrations',
+            placeholder: aliasFor('integrations', 'Integrations'),
+            type: 'select' as const,
+            options: INTEGRATIONS_FILTER_OPTIONS.map((o) => ({ label: o.label, value: o.value }))
+          }
+        ]
+      : []),
     ...(fulfilmentEnabled
       ? [
           {
@@ -3243,6 +3256,20 @@ export function QueueWorklist({
               <FileDiff className='h-3.5 w-3.5' />
               Active addendums
             </button>
+          )}
+          {integrationsEnabled && (
+            <IntegrationsFilterPill
+              label={aliasFor('integrations', 'Integrations')}
+              value={filterValues.integrations}
+              onChange={(v) =>
+                setFilterValues((prev) => {
+                  const next = { ...prev }
+                  if (v) next.integrations = v
+                  else delete next.integrations
+                  return next
+                })
+              }
+            />
           )}
           {pendingUpdates > 0 && (
             <button
@@ -4185,7 +4212,7 @@ export function QueueWorklist({
           <BulkActionButtons
             targets={items
               .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')
-              .map((r) => ({ collection: r.collection, id: r.item_id }))}
+              .map((r) => ({ collection: r.collection, id: r.item_id, label: r.label }))}
             enabledKeys={displayConfig?.bulk_action_keys ?? null}
             tone='light'
             disabled={bulkBusy}

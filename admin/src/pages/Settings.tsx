@@ -27,6 +27,7 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ChannelTestModeCard } from '@/components/channel-test-mode-card'
 import { DirectorySyncCard } from '@/components/directory-sync-card'
+import { ObligationsArmingPreview } from '@/components/obligations-arming-preview'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -3524,6 +3525,7 @@ export function SettingsPage() {
                       onCheckedChange={setIntegrationRemediationEnabled}
                     />
                   </div>
+                  <ObligationsArmingPreview />
                   <div
                     data-settings-epoch
                     className='rounded-lg border border-slate-200 px-3 py-2.5 dark:border-border'

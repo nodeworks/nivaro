@@ -419,8 +419,35 @@ export async function sendNow(
  * (RETRYABLE_CLASSES excludes them): repeating identical bytes cannot fix
  * either.
  */
-export async function runRetryPass(): Promise<{ retried: number; gaveUp: number }> {
-  if (!(await remediationEnabled())) return { retried: 0, gaveUp: 0 }
+/** One row of a remediation preview (#772). */
+export interface RemediationPlanRow {
+  obligation_id: number
+  submission_id?: number | null
+  api: string | null
+  kind: string | null
+  collection: string | null
+  item: string | null
+  error_class?: string | null
+  attempts?: number
+  /** When the retry ladder next allows a send (retry pass, waiting rows). */
+  due_at?: string | null
+  /** Why nothing will be sent (queued / left for a person). */
+  reason?: string | null
+}
+
+/** What the first retry pass would do — sends nothing (#772). */
+export interface RetryPlan {
+  retry: RemediationPlanRow[]
+  waiting: RemediationPlanRow[]
+  give_up: RemediationPlanRow[]
+  by_error_class: Record<string, { retry: number; waiting: number; give_up: number }>
+}
+
+export async function runRetryPass(
+  opts: { dryRun?: boolean } = {}
+): Promise<{ retried: number; gaveUp: number; plan?: RetryPlan }> {
+  const dryRun = opts.dryRun === true
+  if (!dryRun && !(await remediationEnabled())) return { retried: 0, gaveUp: 0 }
 
   const rows = (await db('nivaro_integration_obligations as o')
     .where('o.outcome', 'failed')
@@ -436,12 +463,62 @@ export async function runRetryPass(): Promise<{ retried: number; gaveUp: number 
     // Leave rows the pre-existing sweep owns to the pre-existing sweep.
     .whereNull('api.retry_policy')
     .limit(50)
-    .select('o.id', 'o.submission_id', 'es.attempts', 'es.updated_at')) as Array<{
+    .select(
+      'o.id',
+      'o.submission_id',
+      'es.attempts',
+      'es.updated_at',
+      'es.error_class',
+      'o.api',
+      'o.kind',
+      'o.collection',
+      'o.item'
+    )) as Array<{
     id: number
     submission_id: number
     attempts: number
     updated_at: Date
+    error_class?: string | null
+    api?: string | null
+    kind?: string | null
+    collection?: string | null
+    item?: string | null
   }>
+
+  if (dryRun) {
+    // The same rows, the same ladder, the same "due" test as below — and no
+    // write, no resend, no ledger update.
+    const now = new Date()
+    const plan: RetryPlan = { retry: [], waiting: [], give_up: [], by_error_class: {} }
+    for (const r of rows) {
+      const due = nextRetryAt(r.attempts, new Date(r.updated_at))
+      const cls = String(r.error_class ?? 'unknown')
+      const bucket = plan.by_error_class[cls] ?? { retry: 0, waiting: 0, give_up: 0 }
+      plan.by_error_class[cls] = bucket
+      const row: RemediationPlanRow = {
+        obligation_id: Number(r.id),
+        submission_id: Number(r.submission_id),
+        api: r.api ?? null,
+        kind: r.kind ?? null,
+        collection: r.collection ?? null,
+        item: r.item != null ? String(r.item) : null,
+        error_class: cls,
+        attempts: Number(r.attempts ?? 0),
+        due_at: due ? due.toISOString() : null
+      }
+      if (!due) {
+        plan.give_up.push({ ...row, reason: 'five attempts made — a person needs to look' })
+        bucket.give_up++
+      } else if (due > now) {
+        plan.waiting.push(row)
+        bucket.waiting++
+      } else {
+        plan.retry.push(row)
+        bucket.retry++
+      }
+    }
+    return { retried: 0, gaveUp: 0, plan }
+  }
 
   let retried = 0
   let gaveUp = 0
@@ -483,8 +560,36 @@ export async function runRetryPass(): Promise<{ retried: number; gaveUp: number 
  * it into `failed` would both lose that and flip the readiness check's only
  * FAIL tier to a warning without anything being fixed.
  */
-export async function runMissingRefirePass(): Promise<{ refired: number; queued: number }> {
-  if (!(await remediationEnabled())) return { refired: 0, queued: 0 }
+/** What the first missing-obligation re-fire pass would do — sends nothing
+ *  (#772). `left_for_a_person` counts the `missing` rows of kinds that never
+ *  re-fire by themselves, with the reason the ledger gives for each kind. */
+export interface RefirePlan {
+  refire: RemediationPlanRow[]
+  queued: RemediationPlanRow[]
+  left_for_a_person: Array<{ api: string; kind: string; count: number; reason: string }>
+}
+
+/** Open `missing` rows per kind that the sweep will never touch, and why. */
+async function missingLeftForAPerson(): Promise<RefirePlan['left_for_a_person']> {
+  const counts = (await db('nivaro_integration_obligations')
+    .where({ outcome: 'missing' })
+    .whereNull('resolved_at')
+    .groupBy('api', 'kind')
+    .select('api', 'kind')
+    .count({ n: '*' })) as Array<{ api: string; kind: string; n: number | string }>
+  const out: RefirePlan['left_for_a_person'] = []
+  for (const c of counts) {
+    const refusal = refireRefusal(getObligationKind(c.api, c.kind))
+    if (refusal) out.push({ api: c.api, kind: c.kind, count: Number(c.n), reason: refusal })
+  }
+  return out.sort((a, b) => b.count - a.count)
+}
+
+export async function runMissingRefirePass(
+  opts: { dryRun?: boolean } = {}
+): Promise<{ refired: number; queued: number; plan?: RefirePlan }> {
+  const dryRun = opts.dryRun === true
+  if (!dryRun && !(await remediationEnabled())) return { refired: 0, queued: 0 }
 
   // Only the kinds that opted in are even READ. Selecting the oldest 25
   // `missing` rows regardless and then refusing most of them would starve
@@ -492,7 +597,14 @@ export async function runMissingRefirePass(): Promise<{ refired: number; queued:
   // deliberately left exactly where it is (no write, so it never ages out of
   // the front of the queue). Nothing opted in = no database work at all.
   const refireable = allObligationKinds().filter((d) => refireRefusal(d) === null)
-  if (refireable.length === 0) return { refired: 0, queued: 0 }
+  const plan: RefirePlan | undefined = dryRun
+    ? {
+        refire: [],
+        queued: [],
+        left_for_a_person: await missingLeftForAPerson().catch(() => [])
+      }
+    : undefined
+  if (refireable.length === 0) return { refired: 0, queued: 0, ...(plan ? { plan } : {}) }
 
   const rows = (await db('nivaro_integration_obligations')
     .where({ outcome: 'missing' })
@@ -514,11 +626,20 @@ export async function runMissingRefirePass(): Promise<{ refired: number; queued:
   let refired = 0
   let queued = 0
   for (const r of rows) {
+    const base: RemediationPlanRow = {
+      obligation_id: Number(r.id),
+      api: r.api,
+      kind: r.kind,
+      collection: r.collection,
+      item: r.item != null ? String(r.item) : null
+    }
     const def = getObligationKind(r.api, r.kind)
-    if (refireRefusal(def)) {
+    const refusal = refireRefusal(def)
+    if (refusal) {
       // Left `missing` on purpose — see the note above. No write at all, so
       // the row keeps its own due_at age and its original reason.
       queued++
+      plan?.queued.push({ ...base, reason: refusal })
       continue
     }
     const prior = await mostRecentSubmissionFor(
@@ -529,12 +650,21 @@ export async function runMissingRefirePass(): Promise<{ refired: number; queued:
     )
     if (!prior) {
       queued++
+      plan?.queued.push({
+        ...base,
+        reason: 'nothing to repeat — this send has never run for this record'
+      })
+      continue
+    }
+    if (plan) {
+      // Preview: name the request that would be repeated, send nothing.
+      plan.refire.push({ ...base, submission_id: Number(prior.id) })
       continue
     }
     await refireFromPrior(r.id, prior.id, null)
     refired++
   }
-  return { refired, queued }
+  return plan ? { refired: 0, queued: 0, plan } : { refired, queued }
 }
 
 /** Whether a `send-now` request on this obligation's OUTCOME is even a

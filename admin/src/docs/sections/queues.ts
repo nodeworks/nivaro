@@ -153,8 +153,14 @@ export const queuesGuide: DocSection = {
       type: 'ul',
       items: [
         'Save the current scope + filters + sort + grouping + view mode as a named view (+ Save view); views appear as pills and can be shared with everyone. Views are per-queue.',
-        'Selecting rows (checkboxes) opens a floating bar: bulk Claim, Release, or Transition to a target state. Transitions apply per item under the same permission and condition rules as dragging a card — a summary toast reports successes and skips.'
+        'Selecting rows (checkboxes) opens a floating bar: bulk Claim, Release, or Transition to a target state. Transitions apply per item under the same permission and condition rules as dragging a card — a summary toast reports successes and skips.',
+        'Where the source collections offer them, the bar also carries the integration pushes — one "Push to <partner>" button per registered push, and "Retry failed pushes" — each with a dry run before it sends and a per-row result list after (see Bulk Actions → Integration pushes). The row Actions menu offers the same for one record.'
       ]
+    },
+    { type: 'h3', text: 'Integrations filter' },
+    {
+      type: 'p',
+      text: "When a source collection has integration partners, the queue carries an Integrations column (one dot per partner) and an Integrations pill beside Unseen changes: Overdue, failed or missing · Pending or skipped · Sent · No integration. The same buckets as the collection browser's Integrations filter, read from the integration ledger. On large, cached queues the filter is answered straight from the cache. API: filters.integrations = danger | warning | positive | none (aliases failed, pending, sent, never; several values OR)."
     },
     { type: 'h3', text: 'Kanban swimlanes and live updates' },
     {
@@ -176,12 +182,12 @@ export const queuesGuide: DocSection = {
     },
     {
       type: 'p',
-      text: 'A collection row whose record has an addendum in flight shows the ADDENDUM\'s state and owners (the approval actually moving) on large, cached queues too — the cache follows addendums as they are created, move, are approved or rejected.'
+      text: "A collection row whose record has an addendum in flight shows the ADDENDUM's state and owners (the approval actually moving) on large, cached queues too — the cache follows addendums as they are created, move, are approved or rejected."
     },
     { type: 'h3', text: 'Grouping a table' },
     {
       type: 'p',
-      text: 'Group by (state, collection, owners, at-risk, SLA, aging or any extra column) in the Table view loads the group headers first — each with its count, breached and at-risk counts, and a sum for every number column — and a group\'s rows load when you open it, 50 at a time (Show more adds the next 50). On large, cached queues the headers come from one grouped query. Kanban still groups the full set on the board.'
+      text: "Group by (state, collection, owners, at-risk, SLA, aging or any extra column) in the Table view loads the group headers first — each with its count, breached and at-risk counts, and a sum for every number column — and a group's rows load when you open it, 50 at a time (Show more adds the next 50). On large, cached queues the headers come from one grouped query. Kanban still groups the full set on the board."
     },
     { type: 'h3', text: 'Changed since you looked' },
     {
@@ -191,7 +197,7 @@ export const queuesGuide: DocSection = {
     { type: 'h3', text: 'Filters and sorts on large queues' },
     {
       type: 'p',
-      text: 'Large queues read from a cache. Date, number and yes/no column filters (before / after / between, greater than, equals…) and the Owners sort are answered straight from it; a cache built before this release answers them the slower way until its next rebuild (saving the queue\'s sources, or Rematerialize, rebuilds it).'
+      text: "Large queues read from a cache. Date, number and yes/no column filters (before / after / between, greater than, equals…) and the Owners sort are answered straight from it; a cache built before this release answers them the slower way until its next rebuild (saving the queue's sources, or Rematerialize, rebuilds it)."
     },
     { type: 'h3', text: 'Trends' },
     {

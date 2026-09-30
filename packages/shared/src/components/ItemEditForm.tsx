@@ -46,6 +46,7 @@ import {
   useItemNavigation,
   useNivaroClient
 } from '../context'
+import { formatApiPayload } from '../lib/api-payload'
 import { del, get, patch, post, put } from '../lib/commands'
 import {
   deleteDraft,
@@ -946,53 +947,7 @@ export function partitionRuleResults(
  * write, transition, flow and partner push that request set off, which is
  * how the record's values got from that payload to what it holds now.
  */
-/** The recorded request body as people read it: a GraphQL envelope becomes
- *  the query text itself (real line breaks, common indentation removed) with
- *  its variables as their own JSON block; anything else is pretty JSON. */
-export function formatApiPayload(body: unknown): {
-  sections: Array<{ kind: 'query' | 'variables' | 'json' | 'text'; title: string; text: string }>
-} | null {
-  if (body == null || body === '') return null
-  if (typeof body === 'string') {
-    try {
-      return formatApiPayload(JSON.parse(body))
-    } catch {
-      return { sections: [{ kind: 'text', title: 'Body', text: body }] }
-    }
-  }
-  const obj = body as Record<string, unknown>
-  if (typeof obj.query === 'string') {
-    const sections: Array<{
-      kind: 'query' | 'variables' | 'json' | 'text'
-      title: string
-      text: string
-    }> = [
-      {
-        kind: 'query',
-        title: obj.operationName ? `Query · ${String(obj.operationName)}` : 'Query',
-        text: dedent(obj.query)
-      }
-    ]
-    if (obj.variables != null && Object.keys(obj.variables as object).length > 0) {
-      sections.push({
-        kind: 'variables',
-        title: 'Variables',
-        text: JSON.stringify(obj.variables, null, 2)
-      })
-    }
-    return { sections }
-  }
-  return { sections: [{ kind: 'json', title: 'Body', text: JSON.stringify(obj, null, 2) }] }
-}
-
-function dedent(text: string): string {
-  const lines = text.replace(/\r\n/g, '\n').split('\n')
-  while (lines.length && lines[0].trim() === '') lines.shift()
-  while (lines.length && lines[lines.length - 1].trim() === '') lines.pop()
-  const indents = lines.filter((l) => l.trim()).map((l) => l.match(/^\s*/)?.[0].length ?? 0)
-  const min = indents.length ? Math.min(...indents) : 0
-  return lines.map((l) => l.slice(Math.min(min, l.match(/^\s*/)?.[0].length ?? 0))).join('\n')
-}
+export { formatApiPayload }
 
 /** Colour classes per token kind — one set that reads on both the light
  *  slate-50 block and the dark navy block (every pair ≥ 4.5:1). */
@@ -4957,43 +4912,24 @@ export function ItemEditForm({
   const rowFocusDoneRef = useRef(false)
   const jumpToFieldRef = useRef<(key: string) => boolean>(() => false)
   jumpToFieldRef.current = jumpToField
-  useEffect(() => {
-    if (rowFocusDoneRef.current || isNew || typeof window === 'undefined') return
-    const raw = new URLSearchParams(window.location.search).get('row')
-    if (!raw) return
-    const cut = raw.indexOf(':')
-    if (cut < 1) return
-    const childCollection = raw.slice(0, cut)
-    const rowId = raw.slice(cut + 1)
+  // Bring one child row into view and open it in its grid: switch to the
+  // step the grid lives on, unfold a folded Summary section, then ask the
+  // grid to open the row. Shared by `?row=` links and by in-form jumps
+  // (window event 'nvr:record-focus' — a push-readiness issue, #616).
+  const focusChildRowRef = useRef<
+    (childCollection: string, rowId: string, eager?: boolean) => boolean
+  >(() => false)
+  focusChildRowRef.current = (childCollection: string, rowId: string, eager = false): boolean => {
     const rel = o2mRelations.find((r) => r.many_collection === childCollection)
-    if (!rel?.one_field || !rel.many_field) return
-    rowFocusDoneRef.current = true
+    if (!rel?.one_field || !rel.many_field) return false
     const detail = { collection: childCollection, field: rel.many_field, rowId }
     // A record page paints over several seconds (mode, layout, grid rows) —
-    // keep looking for the row until it exists, then act once. Not cleared on
-    // re-run: the relation list re-settles while the record loads and the
-    // one-shot guard above would leave nothing scheduled.
+    // keep looking for the row until it exists, then act once.
     let tries = 0
     let jumped = false
-    const tick = window.setInterval(() => {
-      tries++
-      const rowEl = document.querySelector<HTMLElement>(
-        `[data-o2m-row="${childCollection}:${rowId}"]`
-      )
-      if (!rowEl) {
-        // The grid may sit on another step — ask for it once the form is up.
-        if (!jumped && tries >= 3) {
-          jumped = true
-          try {
-            jumpToFieldRef.current(rel.one_field as string)
-          } catch {
-            /* not on a step */
-          }
-        }
-        if (tries > 40) window.clearInterval(tick)
-        return
-      }
-      window.clearInterval(tick)
+    const find = () =>
+      document.querySelector<HTMLElement>(`[data-o2m-row="${childCollection}:${rowId}"]`)
+    const act = (rowEl: HTMLElement) => {
       // Summary mode keeps sections folded with their content mounted but
       // hidden — unfold the one that holds the row.
       if (rowEl.offsetParent === null)
@@ -5005,9 +4941,87 @@ export function ItemEditForm({
         () => window.dispatchEvent(new CustomEvent('nvr:grid-open-row', { detail })),
         250
       )
+    }
+    const now = find()
+    if (now) {
+      act(now)
+      return true
+    }
+    if (eager) {
+      jumped = true
+      try {
+        jumpToFieldRef.current(rel.one_field as string)
+      } catch {
+        /* not on a step */
+      }
+    }
+    const tick = window.setInterval(() => {
+      tries++
+      const rowEl = find()
+      if (!rowEl) {
+        // The grid may sit on another step — ask for it once the form is up.
+        // A link on page load waits for the form to paint (~2s); a jump the
+        // person just asked for goes at once.
+        if (!jumped && tries >= (eager ? 1 : 3)) {
+          jumped = true
+          try {
+            jumpToFieldRef.current(rel.one_field as string)
+          } catch {
+            /* not on a step */
+          }
+        }
+        if (tries > 40) window.clearInterval(tick)
+        return
+      }
+      window.clearInterval(tick)
+      act(rowEl)
     }, 600)
+    return true
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-runs as the relation list settles
+  useEffect(() => {
+    if (rowFocusDoneRef.current || isNew || typeof window === 'undefined') return
+    const raw = new URLSearchParams(window.location.search).get('row')
+    if (!raw) return
+    const cut = raw.indexOf(':')
+    if (cut < 1) return
+    // Not cleared on re-run: the relation list re-settles while the record
+    // loads, so the one-shot guard only flips once a relation resolves.
+    if (focusChildRowRef.current(raw.slice(0, cut), raw.slice(cut + 1)))
+      rowFocusDoneRef.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [o2mRelations, isNew])
+  // #616 — "jump to the line / field" from anything outside the form's own
+  // tree (the push-readiness chip, the Integrations dialog): window event
+  // 'nvr:record-focus' {collection, item, field?, childCollection?, rowId?}.
+  useEffect(() => {
+    if (isNew || typeof window === 'undefined') return
+    const onFocus = (e: Event) => {
+      const d = (
+        e as CustomEvent<{
+          collection?: string
+          item?: string
+          field?: string
+          childCollection?: string
+          rowId?: string
+        }>
+      ).detail
+      if (!d || d.collection !== collection || String(d.item ?? '') !== String(itemId)) return
+      if (d.childCollection && d.rowId) {
+        focusChildRowRef.current(d.childCollection, String(d.rowId), true)
+        return
+      }
+      if (d.field) {
+        try {
+          jumpToFieldRef.current(d.field)
+        } catch {
+          /* field not on this layout */
+        }
+      }
+    }
+    window.addEventListener('nvr:record-focus', onFocus)
+    return () => window.removeEventListener('nvr:record-focus', onFocus)
+  }, [collection, itemId, isNew])
   // Per-container active tab: Map<containerId, tabKey>
   const [containerTabs, setContainerTabs] = useState<Map<number, string>>(() => new Map())
   const [containerVisited, setContainerVisited] = useState<Map<number, Set<string>>>(

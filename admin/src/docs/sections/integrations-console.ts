@@ -278,6 +278,14 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze`
       text: "On a record, the history sheet's Integration activity section lists every integration chain that touched it (integration accounts and API keys only), and each push under External requests has Show path. A record reader sees the path without request or response bodies, full error text or URL query strings; steps on records they cannot read are left out and counted."
     },
     {
+      type: 'p',
+      text: 'A path ends with who was told: every in-app notification and every logged email sent inside the chain is a step (migration 385 stamps `nivaro_notifications` and `nivaro_mail_log`). A notification names the person and the channels that reached them (in-app, push, email, text); the email it sent hangs underneath it. Admins see subjects and addresses; everyone else sees the name, the channels and how many recipients an email had.'
+    },
+    {
+      type: 'p',
+      text: 'A scheduled job run records the chain it started (`nivaro_job_runs.chain_id`), so on Background Jobs each finished run has "Show what it wrote" — the same path sheet, opened on that run: every write, workflow move, push and message the run made. Runs from before migration 385 have no chain and show no link.'
+    },
+    {
       type: 'note',
       text: 'Routes: `GET /integration-events` (admin; filters `source`, `partner`, `caller`, `include_people`, `record`), `GET /integration-events/:source/:id/path` and `GET /integration-events/chain/:chainId/path` (admin), `GET /integration-events/record/:collection/:item` and `.../path?source=&id=` (read permission on the record; the path 404s unless the event names the record or shares one of its chains). A path that cannot be built answers 503, never 500. Extensions start a chain for their own feed events with `ctx.chain.begin` and list them with `ctx.integrations.registerEventSource`.'
     },
@@ -329,7 +337,7 @@ PATCH /api/integration-signals/settings/core:import-stale   { "cadence_hours:ord
     },
     {
       type: 'p',
-      text: 'Bulk: tick imports in the Inbound tab\'s table (or the select-all box) and the bar above it sets every selected import together — a number of hours, **Back to default**, or **Stop monitoring** — in one request. Only imports still on the page are written; the selection clears after a successful save.'
+      text: "Bulk: tick imports in the Inbound tab's table (or the select-all box) and the bar above it sets every selected import together — a number of hours, **Back to default**, or **Stop monitoring** — in one request. Only imports still on the page are written; the selection clears after a successful save."
     },
 
     { type: 'h2', id: 'ic-alerts', text: 'Alerts — opt-in real-time and daily-summary' },

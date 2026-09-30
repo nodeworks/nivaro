@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { chainFields } from '../services/chain-columns.js'
 import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
 import { detailColumn, notificationRowMeta } from '../services/notification-channels.js'
@@ -499,6 +500,7 @@ async function fireSubscriptionNotifications(
         })
         const [notif] = await db('nivaro_notifications')
           .insert({
+            ...(await chainFields('nivaro_notifications')),
             recipient: sub.user,
             subject: subject.slice(0, 255),
             status: 'inbox',
@@ -825,6 +827,7 @@ export async function fireWorkflowStateSubscriptions(opts: {
       if (wantInapp) {
         const [notif] = await db('nivaro_notifications')
           .insert({
+            ...(await chainFields('nivaro_notifications')),
             recipient: sub.user,
             subject: subject.slice(0, 255),
             status: 'inbox',

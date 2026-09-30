@@ -1,12 +1,14 @@
 import {
   AlertTriangle,
   ArrowRightLeft,
+  Bell,
   ChevronDown,
   ChevronRight,
   Clock,
   FileEdit,
   GitBranch,
   Layers,
+  Mail,
   Send,
   Workflow
 } from 'lucide-react'
@@ -52,6 +54,8 @@ const KIND_ICON: Record<PathNode['kind'], typeof Send> = {
   push: Send,
   attempt: Send,
   partner_call: ArrowRightLeft,
+  notify: Bell,
+  mail: Mail,
   group: Layers
 }
 
@@ -209,6 +213,42 @@ function StepDetailView({ node }: { node: PathNode }) {
           <StatusPill status={d.status} />
         </Fact>
         {d.halted_at && <Fact label='Stopped at'>{d.halted_at}</Fact>}
+        {d.error && <ErrorBox text={d.error} />}
+      </div>
+    )
+  } else if (d?.type === 'notify') {
+    body = (
+      <div className='space-y-1.5' data-path-notify>
+        <Fact label='Told'>{d.recipient}</Fact>
+        {d.subject && <Fact label='Subject'>{d.subject}</Fact>}
+        {d.category && <Fact label='Category'>{d.category}</Fact>}
+        <Fact label='Channels'>
+          <span className='flex flex-wrap gap-1.5'>
+            {d.channels.map((c) => (
+              <span
+                key={c.channel}
+                data-path-channel={c.channel}
+                data-tip={c.reason ?? undefined}
+                className='rounded-full border border-border px-2 py-px text-[11px] text-foreground'
+              >
+                {c.channel} · {c.status.replace(/_/g, ' ')}
+              </span>
+            ))}
+          </span>
+        </Fact>
+      </div>
+    )
+  } else if (d?.type === 'mail') {
+    body = (
+      <div className='space-y-1.5' data-path-mail>
+        <Fact label='Status'>
+          <StatusPill status={d.status} />
+        </Fact>
+        {d.subject && <Fact label='Subject'>{d.subject}</Fact>}
+        <Fact label='To'>
+          {d.to || `${d.recipients} ${d.recipients === 1 ? 'recipient' : 'recipients'}`}
+        </Fact>
+        {d.template && <Fact label='Template'>{d.template}</Fact>}
         {d.error && <ErrorBox text={d.error} />}
       </div>
     )

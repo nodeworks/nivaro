@@ -7,6 +7,7 @@ import { get } from '../lib/commands'
 import { useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
 import { formatRelative, titleCase } from '../lib/utils'
+import { InboundRequestPopover } from './integrations/InboundRequest'
 import { FileM2MField } from './item-edit/FilePickerField'
 import { UserChip } from './item-edit/GroupSection'
 import { useFieldTouches } from './item-edit/HeaderFreshness'
@@ -979,10 +980,35 @@ export function RecordReadView({
     [layoutData]
   )
   const { data: touches } = useFieldTouches(collection, itemId, touchFields)
-  const TouchMark = ({ field }: { field: string }) => {
+  // Called as a function, not mounted as <TouchMark/>: a component declared
+  // in render remounts every render, which would close the request popover.
+  const touchMark = (field: string) => {
     const t = touches?.[field]
     if (!t) return null
     const machine = t.via !== 'user'
+    // #617 — an inbound write names its caller; the dot opens the request.
+    if (t.caller && t.activity_id) {
+      return (
+        <InboundRequestPopover
+          activityId={t.activity_id}
+          callerName={t.caller.name}
+          collection={collection}
+          itemId={itemId}
+        >
+          <button
+            type='button'
+            data-field-touch={field}
+            data-field-touch-caller={t.caller.key}
+            data-tip={`Changed ${formatRelative(t.at)} by ${t.caller.name} (through the API) — click for the request`}
+            aria-label={`Changed ${formatRelative(t.at)} by ${t.caller.name} through the API`}
+            className='ml-1 inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 align-middle text-[9.5px] font-medium leading-4 text-amber-800 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:hover:bg-amber-400/20'
+          >
+            <span className='h-1.5 w-1.5 rounded-full bg-amber-400' aria-hidden />
+            {t.caller.name} · {formatRelative(t.at)}
+          </button>
+        </InboundRequestPopover>
+      )
+    }
     return (
       <span
         data-field-touch={field}
@@ -1485,7 +1511,7 @@ export function RecordReadView({
                     <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                       {labelFor(a)}
                       <IntegrityMark field={a.field} />
-                      <TouchMark field={a.field} />
+                      {touchMark(a.field)}
                     </dt>
                     <dd
                       className={`mt-1 min-w-0 ${
@@ -1572,7 +1598,7 @@ export function RecordReadView({
                   <dt className='text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
                     {labelFor(a)}
                     <IntegrityMark field={a.field} />
-                    <TouchMark field={a.field} />
+                    {touchMark(a.field)}
                   </dt>
                   <dd className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                     {record ? renderValue(a) : '…'}

@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { chainFields } from './chain-columns.js'
+import { currentTraceCaller } from './request-trace.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
 // 'pulse' socket room when the server has registered itself here.
@@ -35,6 +37,35 @@ async function originColumn(
   return o ? { origin: o } : {}
 }
 
+/**
+ * Which credential the write arrived on (migration 384, #609 / #617): the
+ * named API key's id and the auth method. A key acts as its owner, so without
+ * this a partner's writes through a key read as that person's edits. The
+ * request is the one handed in, else the one the current trace is serving
+ * (GraphQL resolvers, effects deferred inside the request). A database behind
+ * the migration gets nothing written.
+ */
+async function callerColumns(req: FastifyRequest | undefined): Promise<Record<string, unknown>> {
+  const fromReq = req
+    ? {
+        auth: (req as { authMethod?: string }).authMethod ?? null,
+        apiKeyId: (req as { apiKeyId?: number | null }).apiKeyId ?? null
+      }
+    : null
+  const caller = fromReq?.auth ? fromReq : (currentTraceCaller() ?? fromReq)
+  if (!caller?.auth && caller?.apiKeyId == null) return {}
+  try {
+    if (!(await hasColumn('nivaro_activity', 'auth_method'))) return {}
+  } catch {
+    return {}
+  }
+  const out: Record<string, unknown> = {}
+  if (caller.auth) out.auth_method = String(caller.auth).slice(0, 20)
+  if (caller.apiKeyId != null && Number.isFinite(Number(caller.apiKeyId)))
+    out.api_key_id = Number(caller.apiKeyId)
+  return out
+}
+
 export async function logActivity(opts: {
   action: string
   user: string | null | undefined
@@ -55,6 +86,7 @@ export async function logActivity(opts: {
         comment: opts.comment ?? null,
         ...(await originColumn(opts.origin, opts.comment)),
         ...(await chainFields('nivaro_activity')),
+        ...(await callerColumns(opts.req)),
         ip: opts.req?.ip ?? null,
         user_agent: opts.req?.headers['user-agent'] ?? null,
         timestamp: new Date()

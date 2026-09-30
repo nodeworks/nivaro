@@ -85,11 +85,20 @@ interface TraceContext {
   /** Per-request id — the AI call log groups a tool loop's calls under it. */
   id: string
   userId?: string
+  /** The request itself (read lazily): how it authenticated is only known
+   *  after `authenticate` runs, well after the trace begins (#609). */
+  request?: TraceCallerSource
   /** Every statement this request ran, in completion order (capped). */
   statements: RanStatement[]
   /** Statements started but not yet answered, by knex query uid. */
   inflight: Map<string, { sql: string; bindings: unknown[]; start: number }>
   queries: number
+}
+
+/** What activity attribution reads off the live request (#609 / #617). */
+export interface TraceCallerSource {
+  authMethod?: string
+  apiKeyId?: number | null
 }
 
 const als = new AsyncLocalStorage<TraceContext>()
@@ -101,7 +110,7 @@ const CAPACITY = Number(process.env.TRACE_BUFFER ?? 200)
 
 const buffer: TraceRecord[] = []
 
-export function beginTrace(urlHint?: string): void {
+export function beginTrace(urlHint?: string, request?: TraceCallerSource): void {
   // enterWith (rather than als.run) is what lets a Fastify onRequest hook scope
   // the context for the whole request without wrapping the handler chain.
   als.enterWith({
@@ -109,10 +118,24 @@ export function beginTrace(urlHint?: string): void {
     spans: [],
     urlHint,
     id: randomUUID(),
+    request,
     statements: [],
     inflight: new Map(),
     queries: 0
   })
+}
+
+/** How the current request authenticated, for a write that has no request
+ *  object in hand (GraphQL resolvers, deferred effects inside the request).
+ *  Null outside a request — a cron's writes are nobody's inbound call. */
+export function currentTraceCaller(): { auth: string | null; apiKeyId: number | null } | null {
+  const req = als.getStore()?.request
+  if (!req) return null
+  return {
+    auth: req.authMethod ?? null,
+    apiKeyId:
+      req.apiKeyId != null && Number.isFinite(Number(req.apiKeyId)) ? Number(req.apiKeyId) : null
+  }
 }
 
 /** Run `fn` inside its own trace context — a background job that must

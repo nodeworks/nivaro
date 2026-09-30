@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { bulkActionRegistry } from '../extensions/bulk-actions.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -8,6 +8,7 @@ import {
   BUILTIN_KEYS,
   BULK_ACTION_KINDS,
   type BulkActionKind,
+  builtinAllowed,
   formatRow,
   KEY_RE,
   listAllForCollection,
@@ -20,6 +21,7 @@ import {
   setBuiltin,
   transitionLabelsFor
 } from '../services/bulk-actions.js'
+import { BULK_PUSH_MAX, retryFailedPushes, runItemActionOver } from '../services/bulk-push.js'
 import { can } from '../services/permissions.js'
 import type { User } from '../types.js'
 
@@ -201,6 +203,107 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) })
     }
+  })
+
+  // ── Integration pushes (#620 bars, #622 row menu) ─────────────────────────
+  // Built-ins 'push' / 'retry-push': the switch + access rule, update
+  // permission, then per-record gates inside services/bulk-push.ts. Sends are
+  // sequential and capped — every record is a real partner request.
+  const pushGate = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    key: 'push' | 'retry-push'
+  ): Promise<{ collection: string; ids: string[]; dryRun: boolean } | null> => {
+    const body = (req.body ?? {}) as { collection?: string; ids?: unknown; dry_run?: unknown }
+    const collection = String(body.collection ?? '').trim()
+    const ids = (Array.isArray(body.ids) ? body.ids : [])
+      .map((v) => String(v ?? '').trim())
+      .filter(Boolean)
+    if (!collection) {
+      reply.code(400).send({ error: 'collection is required' })
+      return null
+    }
+    if (ids.length === 0) {
+      reply.code(400).send({ error: 'ids are required' })
+      return null
+    }
+    if (ids.length > BULK_PUSH_MAX) {
+      reply.code(400).send({
+        error: `At most ${BULK_PUSH_MAX} records per run — every one is a partner request`
+      })
+      return null
+    }
+    if (!(await builtinAllowed(collection, key, req))) {
+      reply.code(403).send({ error: 'This action is not available to you here' })
+      return null
+    }
+    if (!req.isAdmin && !(await can(req.user as User, 'update', collection))) {
+      reply.code(403).send({ error: 'Forbidden' })
+      return null
+    }
+    return { collection, ids, dryRun: body.dry_run === true }
+  }
+
+  app.post<{
+    Body: {
+      collection?: string
+      action_id?: string
+      ids?: Array<string | number>
+      payload?: Record<string, unknown> | null
+      dry_run?: boolean
+    }
+  }>('/bulk-actions/push', { preHandler: [requireAuth] }, async (req, reply) => {
+    const g = await pushGate(req, reply, 'push')
+    if (!g) return
+    const actionId = String(req.body?.action_id ?? '').trim()
+    if (!actionId) return reply.code(400).send({ error: 'action_id is required' })
+    const payload =
+      req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : null
+    let result: Awaited<ReturnType<typeof runItemActionOver>>
+    try {
+      result = await runItemActionOver({
+        actionId,
+        collection: g.collection,
+        ids: g.ids,
+        payload,
+        req,
+        dryRun: g.dryRun
+      })
+    } catch (err) {
+      const code = (err as { statusCode?: number }).statusCode ?? 400
+      return reply.code(code).send({ error: err instanceof Error ? err.message : String(err) })
+    }
+    if (!g.dryRun)
+      await logActivity({
+        action: 'bulk-action-execute',
+        user: req.user?.id,
+        collection: g.collection,
+        comment: `push ${actionId} on ${g.ids.length} item(s): ${result.succeeded} done, ${result.skipped} skipped, ${result.failed} failed`,
+        req
+      })
+    return { data: result }
+  })
+
+  app.post<{
+    Body: { collection?: string; ids?: Array<string | number>; dry_run?: boolean }
+  }>('/bulk-actions/retry-push', { preHandler: [requireAuth] }, async (req, reply) => {
+    const g = await pushGate(req, reply, 'retry-push')
+    if (!g) return
+    const result = await retryFailedPushes({
+      collection: g.collection,
+      ids: g.ids,
+      req,
+      dryRun: g.dryRun
+    })
+    if (!g.dryRun)
+      await logActivity({
+        action: 'bulk-action-execute',
+        user: req.user?.id,
+        collection: g.collection,
+        comment: `retry-push on ${g.ids.length} item(s): ${result.succeeded} landed, ${result.skipped} skipped, ${result.failed} failed`,
+        req
+      })
+    return { data: result }
   })
 
   // ── Built-ins (override state per collection) ─────────────────────────────

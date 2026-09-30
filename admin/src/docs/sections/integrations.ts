@@ -340,6 +340,52 @@ GET  /api/external-apis/contracts                     // targets
       type: 'p',
       text: "Monitoring → Inbound Mappings defines a key an integration POSTs its OWN payload shape to. The mapping's rules are the import-template header-rule format (trim / remap / expression / lookup / const; source = a key on the posted object) and its target is a collection; mode `create` always inserts, `upsert` matches on the listed mapped fields first. `POST /api/inbound/<key>` takes one object or an array (≤500) from any authenticated caller and writes through the items service AS THAT CALLER — permissions, validation, hooks, activity all apply. The reply lists per-entry `created | updated | rejected` with the mapped values and issues (207 when some entries were rejected, 422 when all were). The editor's “Try a payload” panel dry-runs the rules as currently edited."
     },
+    { type: 'h3', id: 'integration-events-inbound-children', text: 'Child rows' },
+    {
+      type: 'p',
+      text: "A mapping may also fill one-to-many fields. Each child set names the field, the payload path that holds the rows (`order.lines`; a single object reads as one row) and its own row rules — the import-template line format, with an optional row filter; `{{$resolved.<field>}}` reads a value the record rules produced. The record and all its rows go to the items service as ONE nested payload, so the write is all or nothing: a refused row removes everything, and the entry's result carries `child_error {field, index, message}` naming the payload row. On an upsert that finds the record, a set either adds its rows (`append`) or replaces the record's rows with exactly these (`replace`). Record rules may read nested payload keys with dots (`customer.name`)."
+    },
+    {
+      type: 'pre',
+      code: `"children": [
+  {
+    "target_field": "lines",            // a one-to-many field of the mapping's collection
+    "source": "order.lines",            // where the rows are in the payload
+    "row_filter": { "column": "qty", "op": "nnull" },
+    "columns": [                        // same rule steps as the record rules
+      { "target": "quantity", "source": "qty", "steps": [] },
+      { "target": "sku", "source": "code", "steps": [{ "type": "trim" }] }
+    ],
+    "on_update": "append"               // or "replace"
+  }
+]
+// result entry: { ..., "children": [{ "field": "lines", "found": 3, "rows": 2 }],
+//                 "child_error": { "field": "lines", "index": 1, "message": "…" } }`
+    },
+    { type: 'h3', id: 'integration-events-inbound-fixtures', text: 'Fixtures' },
+    {
+      type: 'p',
+      text: 'Fixtures are named partner payloads saved with the mapping (a column on the mapping row, so they travel with it through config copies, snapshots and diffs; at most 20, 64 KB each). Add one from a recent call to the endpoint — any token or API-key call kept its body in the request log — or paste it. Each fixture says what a correct mapping does with it: be written, or be refused (a known-bad payload kept as a guard). The editor re-runs every fixture whenever the rules, child rows or response change, saved or not, and shows green or red with the reason (`Entry 2: lines row 3 — price is required`). A run never writes: would-be creates go through the create pipeline (rules, validation, required fields) without the database insert, so a type or foreign-key refusal only shows on a real call.'
+    },
+    {
+      type: 'pre',
+      code: `GET    /api/inbound-mappings/:id/fixtures/candidates      // recent calls with a stored body
+POST   /api/inbound-mappings/:id/fixtures                 // { name, payload, expect: write|reject } or { log_id }
+PATCH  /api/inbound-mappings/:id/fixtures/:fid            // { name?, payload?, expect? }
+DELETE /api/inbound-mappings/:id/fixtures/:fid
+POST   /api/inbound-mappings/:id/fixtures/run             // { rules?, children?, response_template?, response_status? }
+// → { fixtures: [{ id, name, expect, pass, reason, run, response }], passed, failed }`
+    },
+    { type: 'h3', id: 'integration-events-inbound-response', text: 'Response shaping' },
+    {
+      type: 'p',
+      text: 'A partner that already parses an envelope keeps it: `response_template` is Liquid (the transition-payload filters, `jsonify` among them) rendered over `record` (the first record written), `records`, `created`, `updated`, `rejected`, `created_ids`, `updated_ids`, `errors` (index, message, issues, child), `results` and `outcome`. Output that parses as JSON is sent as JSON; anything else as text (XML when it starts with `<`). `response_status` maps the outcome — `success` (all written), `partial`, `rejected` — to a status; unset keeps 200 / 207 / 422, and it applies with or without a template. With no template the body is the standard `{data: {results, created, updated, rejected}}`. A template that fails to render never turns a landed write into an error: the standard body goes out. The dry-run tester and every fixture show the response the partner would get.'
+    },
+    {
+      type: 'pre',
+      code: `"response_template": "{\\"accepted\\": {{ created }}, \\"orderId\\": {{ record.id | jsonify }}, \\"errors\\": {{ errors | map: 'message' | jsonify }}}",
+"response_status": { "success": 201, "rejected": 400 }`
+    },
     { type: 'h2', id: 'integration-events-replay-inbound', text: 'Replaying an inbound request' },
     {
       type: 'p',
@@ -353,6 +399,55 @@ GET  /api/external-apis/contracts                     // targets
     {
       type: 'p',
       text: "`GET /api/flows/:id/versions/:version/diff?against=current|N` returns the flow-level field changes plus added / removed / changed operations between two definitions; the flow editor's Versions card has a Diff button per version. Saving a flow whose definition matches the latest version mints no new version. Flows can also trigger on `field-watch` — fired whenever a watched field changes through the items service, with collection, item, field, watch_name, old and new in the payload."
+    }
+  ]
+}
+
+export const integrationsOutboundTooling: DocSection = {
+  id: 'outbound-call-tooling',
+  label: 'Outbound Call Tooling',
+  content: [
+    { type: 'h1', id: 'outbound-call-tooling', text: 'Outbound Call Tooling' },
+    {
+      type: 'p',
+      text: 'Everything an external API does on the wire is visible from its editor (External APIs → open an API): a flight recorder of every request, redaction rules, health probes with uptime, service levels, a record mode for mocks, and contracts proposed from real traffic.'
+    },
+    { type: 'h2', id: 'outbound-flight-recorder', text: 'Flight recorder' },
+    {
+      type: 'p',
+      text: 'Every request an external API makes is recorded — partner calls through `callExternalApi` (with or without a call log), mocked answers, OAuth token fetches, health and token probes, editor test calls and SDK calls. Partner calls ride the always-on `nivaro_outbound_log` row (which now also keeps url, endpoint, trigger, headers and bodies); everything that is not a partner call lands in `nivaro_outbound_side_log` so it never moves partner health, failure signals or SLOs. Headers and bodies are kept 24 hours and blanked after; call rows stay 31 days for SLOs.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '`GET /api/external-apis/:id/recorder?hours=&kind=&failed=1` — the timeline, newest first. kind = call · mock · token · health · token_probe · test · lookup.',
+        '`GET /api/external-apis/:id/recorder/:source/:rowId` — one request with headers, bodies and a Copy-as-curl (source = call | side).'
+      ]
+    },
+    { type: 'h2', id: 'outbound-redaction', text: 'Redaction and Copy as curl' },
+    {
+      type: 'p',
+      text: 'Anything whose name looks like a credential (authorization, cookie, *token*, *secret*, *key*, …) is always masked in headers, JSON bodies and query strings. `redaction` on the API adds its own rules: `{ "headers": ["x-partner-session"], "body_paths": ["customer.email", "items[].card", "*.ssn"] }` — header and query parameter names, and JSON body paths where `[]` walks every array element and `*` every key. The rules apply when a call is stored (recorder, call log, recorded mock answers) and again when it is shown. Copy as curl turns every masked value into a `<REDACTED:name>` placeholder for the operator to fill in; the recorder never held the real secret.'
+    },
+    { type: 'h2', id: 'outbound-health', text: 'Health probes and uptime' },
+    {
+      type: 'p',
+      text: '`health_path` (plus `health_method` GET | HEAD and `health_expect_status`, default 200) turns probing on. The `external-api-health-probes` job probes every such API every 5 minutes on deployed instances (Run now works anywhere) and the editor has Probe now (`POST /api/external-apis/:id/probe`). An OAuth client-credentials API has its token endpoint probed separately first. The newest verdict is stamped on the API (`health_last_ok`, `health_last_at`, `health_last_detail`), `GET /api/external-apis/:id/uptime?hours=24` returns hourly buckets, and the Integrations console Partners card shows a 24-hour uptime strip. Mocked APIs are not probed.'
+    },
+    { type: 'h2', id: 'outbound-slo', text: 'Service levels and alerts' },
+    {
+      type: 'p',
+      text: '`GET /api/external-apis/:id/slo?days=1|7|30` returns calls, p50 / p95 latency, error rate and availability (from probes when the API has any in the window, else from calls) with a daily trend. Mocked answers never count. Three metric definitions — External API error rate, p95 latency and availability — use the `external_api_slo` metric source; in the Alert Manager scope a rule by API name (or id) and window in minutes (default 15), e.g. "error rate above 5% over 15 minutes". Rules on these metrics are evaluated after every 5-minute probe cycle as well as on their own schedule.'
+    },
+    { type: 'h2', id: 'outbound-mock-record', text: 'Recording mock answers' },
+    {
+      type: 'p',
+      text: 'Mock mode per instance gains `record: true` ("Record live answers" in the Mock mode card). While mock mode is off and record is on, every real answer the API gives on this instance with a status below 500 and a body under 64 KB becomes a rule for its method and exact path (`recorded_at` stamped, newest first, 200 rules at most; an unchanged answer writes nothing). Credential-looking values and the API\'s body paths are masked in the recorded body. Turn mock mode on later and the recorded answers replay when the partner host is down.'
+    },
+    { type: 'h2', id: 'outbound-contract-infer', text: 'Contract from real traffic' },
+    {
+      type: 'p',
+      text: 'On a saved endpoint, "Generate from the last 50 calls" (`POST /api/external-apis/endpoints/:eid/contract/infer`) reads the last successful answers the endpoint gave — recorder bodies (24 hours) and the call log (30 days), matched by endpoint id or by method + path template — and proposes the contract they already satisfy: the statuses seen, and every path present in every answer with the type it always had (a path that was ever null keeps no type). Nothing is saved until the admin uses the proposal and saves the endpoint.'
     }
   ]
 }

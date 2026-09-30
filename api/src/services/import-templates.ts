@@ -1,6 +1,7 @@
 import type {
   ImportDisperseConfig,
   ImportHeaderRule,
+  ImportLineConfig,
   ImportLookupCreate,
   ImportNestedConfig,
   ImportStep,
@@ -805,6 +806,33 @@ export function collectCreateMisses(
   }
 
   return misses
+}
+
+/**
+ * The line phase on its own, for callers that bring rows from somewhere other
+ * than a sheet (an inbound mapping's child array): `row_filter`, then the
+ * columns batched across every kept row, `$resolved.*` reading the header's
+ * resolved values. Disperse and nested are sheet features and do not run.
+ * `sourceIndex` is the 0-based index of the row in `rows`.
+ */
+export async function runLineColumns(
+  lineMap: Pick<ImportLineConfig, 'row_filter' | 'columns'>,
+  rows: Record<string, unknown>[],
+  resolvedCtx: Record<string, unknown>,
+  lookup: LookupFetcher,
+  issues: ImportIssue[],
+  ruleIdFor: (rowNumber: number, target: string) => string
+): Promise<{ sourceIndex: number; values: Record<string, unknown> }[]> {
+  const filtered = filterRows(rows, lineMap.row_filter)
+  const results = await runColumnsBatched(
+    lineMap.columns,
+    filtered,
+    resolvedCtx,
+    lookup,
+    issues,
+    ruleIdFor
+  )
+  return results.map((r) => ({ sourceIndex: r.rowNumber - 1, values: r.values }))
 }
 
 export async function runImportPipeline(opts: {

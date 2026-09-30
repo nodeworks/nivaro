@@ -341,6 +341,26 @@ export async function buildImpactReport(collection: string, field: string): Prom
         })
         .select('name')) as Array<{ name: string }>
       return rows.map((r) => ({ surface: 'alert-definitions', ref: r.name }))
+    }),
+
+    // API callers (#608) that named this field in the logged window — an
+    // integration's request, not config, but the break lands the same way.
+    // Callers that only read the whole collection are left out (every list
+    // read with no field list would otherwise match). Bounded: the scan must
+    // never hold the delete dialog.
+    scan('api-callers', async () => {
+      const { callersUsingField } = await import('./partner-dependencies.js')
+      const callers = await Promise.race([
+        callersUsingField(collection, field),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 15_000))
+      ])
+      return callers
+        .filter((c) => !c.whole_collection)
+        .map((c) => ({
+          surface: 'api-callers',
+          ref: c.label,
+          detail: `${c.modes.join(' + ')} · ${c.calls} call${c.calls === 1 ? '' : 's'} · last ${c.last_seen.slice(0, 10)}${c.partner ? '' : ' · person on a token'}`
+        }))
     })
   ])
 

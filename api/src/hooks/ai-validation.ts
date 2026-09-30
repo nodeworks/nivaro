@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { chainFields } from '../services/chain-columns.js'
 import { embedText, getEmbeddableFields, searchEmbeddings } from '../services/embeddings.js'
 import { deferEffect } from '../services/unit-of-work.js'
 import { hooks } from './registry.js'
@@ -234,6 +235,7 @@ async function notifyUser(
   try {
     const rows = (await db('nivaro_notifications')
       .insert({
+        ...(await chainFields('nivaro_notifications')),
         recipient,
         subject,
         status: 'inbox',

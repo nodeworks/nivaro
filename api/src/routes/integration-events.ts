@@ -147,7 +147,11 @@ export async function integrationEventsRoutes(app: FastifyInstance) {
     if (!CHAIN_ID_RE.test(chainId)) return reply.code(400).send({ error: 'Invalid chain id' })
     try {
       const path = await buildChainPath(chainId, { isAdmin: true })
-      if (!path) return reply.code(404).send({ error: 'Chain not found' })
+      if (!path) {
+        return reply.code(404).send({
+          error: 'Nothing was recorded on this chain — no writes, moves, pushes or messages'
+        })
+      }
       return reply.send({ data: path })
     } catch (err) {
       req.log.warn({ err, chainId }, 'integration chain path failed')

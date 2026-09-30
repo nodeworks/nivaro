@@ -21,7 +21,7 @@ import { originOfRow } from './note-authorship.js'
 
 export interface NoteEntry {
   id: string
-  source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external' | 'import'
+  source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external' | 'import' | 'inbound'
   label: string
   text: string
   user: string | null
@@ -45,6 +45,14 @@ export interface NoteEntry {
   }
   /** Who wrote it (#518) — only 'person' entries come from human sources. */
   origin?: 'person' | 'machine' | 'import' | 'integration'
+  /** Inbound entries (#609): a token / API-key caller's write, and the
+   *  activity row that opens the request behind it. */
+  inbound?: {
+    activity_id: number
+    caller_key: string
+    caller_kind: 'api_key' | 'token' | 'account'
+    fields: string[]
+  }
 }
 
 export interface NoteSourceCtx {

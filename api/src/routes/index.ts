@@ -72,6 +72,7 @@ import { exportPresetRoutes } from './export-presets.js'
 import { extensionEventRoutes } from './extension-events.js'
 import { extensionRegistryRoutes } from './extension-registry.js'
 import { extensionsRoutes } from './extensions.js'
+import { externalApiObservabilityRoutes } from './external-api-observability.js'
 import { externalApisRoutes } from './external-apis.js'
 import { featureFlagRoutes } from './feature-flags.js'
 import { fieldConfigRoutes } from './field-config.js'
@@ -132,6 +133,7 @@ import { opsRedisRoutes } from './ops-redis.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsTaskRoutes } from './ops-tasks.js'
 import { pagesRoutes } from './pages.js'
+import { partnerDependencyRoutes } from './partner-dependencies.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
@@ -150,6 +152,7 @@ import { queuesRoutes } from './queues.js'
 import { readinessRoutes } from './readiness.js'
 import { realtimeRoutes, recordViewersRoutes } from './realtime.js'
 import { recordGraphRoutes } from './record-graph.js'
+import { recordIntegrationsRoutes } from './record-integrations.js'
 import { recordLinkRoutes } from './record-links.js'
 import { recordMergeRoutes } from './record-merge.js'
 import { recordMetaRoutes } from './record-meta.js'
@@ -158,7 +161,6 @@ import { recordTemplatesRoutes } from './record-templates.js'
 import { recordViewRoutes } from './record-views.js'
 import { referencedByRoutes } from './referenced-by.js'
 import { releaseRunsRoutes } from './release-runs.js'
-import { runbookRoutes } from './runbooks.js'
 import { remindersRoutes } from './reminders.js'
 import { reportStudioRoutes } from './report-studio.js'
 import { reportsRoutes } from './reports.js'
@@ -167,6 +169,7 @@ import { revisionsRoutes } from './revisions.js'
 import { rolesRoutes } from './roles.js'
 import { rulesRoutes } from './rules.js'
 import { rumRoutes } from './rum.js'
+import { runbookRoutes } from './runbooks.js'
 import { savedViewsRoutes } from './saved-views.js'
 import { scheduledChangesRoutes } from './scheduled-changes.js'
 import { scheduledReportsRoutes } from './scheduled-reports.js'
@@ -306,6 +309,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(dashboardFeedRoutes, { prefix: '/dashboard' })
   await app.register(accessRequestRoutes)
   await app.register(lastTouchRoutes)
+  // What the record form shows about partner integrations (#609 #615 #616 #617).
+  await app.register(recordIntegrationsRoutes)
   await app.register(recordViewRoutes)
   await app.register(meNotificationRoutes)
   await app.register(recordLinkRoutes)
@@ -398,6 +403,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(presenceAdminRoutes, { prefix: '/presence' })
   await app.register(presenceOnlineRoutes, { prefix: '/presence' })
   await app.register(externalApisRoutes, { prefix: '/external-apis' })
+  await app.register(externalApiObservabilityRoutes, { prefix: '/external-apis' })
   await app.register(webhooksRoutes, { prefix: '/webhooks' })
   await app.register(searchRoutes, { prefix: '/search' })
   await app.register(commentsRoutes, { prefix: '/comments' })
@@ -493,6 +499,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(globalSearchRoutes, { prefix: '/global-search' })
   await app.register(savedViewsRoutes, { prefix: '/saved-views' })
   await app.register(apiAnalyticsRoutes, { prefix: '/api-analytics' })
+  await app.register(partnerDependencyRoutes, { prefix: '/partner-dependencies' })
   await app.register(dataQualityRoutes, { prefix: '/data-quality' })
   await app.register(issuesRoutes, { prefix: '/issues' })
   await app.register(devToolsRoutes, { prefix: '/dev-tools' })

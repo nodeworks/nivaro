@@ -6,6 +6,7 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
+import { PushBulkButtons } from './PushBulkButtons'
 
 /**
  * Registry bulk actions (GET /bulk-actions/available) rendered as buttons in
@@ -87,6 +88,8 @@ export function guardMatches(
 export interface BulkTarget {
   collection: string
   id: string | number
+  /** Optional display label — names the row in per-row result lists. */
+  label?: string | null
 }
 
 export interface BulkRunResult {
@@ -240,7 +243,18 @@ export function BulkActionButtons({
     }
   }
 
-  if (actions.length === 0) return null
+  // #620 — integration pushes ('push' / 'retry-push' built-ins) ride along
+  // on every surface that renders the registry buttons.
+  const pushButtons = (
+    <PushBulkButtons
+      targets={targets}
+      enabledKeys={enabledKeys}
+      tone={tone}
+      disabled={disabled || !!running}
+      onDone={(r) => onDone?.({ ...r, action: PUSH_ACTION_STUB })}
+    />
+  )
+  if (actions.length === 0) return pushButtons
 
   const run = async (a: AvailableBulkAction & { collections: string[] }) => {
     const id = `${a.source}:${a.key}`
@@ -459,6 +473,21 @@ export function BulkActionButtons({
           </Popover>
         )
       })}
+      {pushButtons}
     </>
   )
+}
+
+/** onDone's `action` for a push run — the hosts only read the counts. */
+const PUSH_ACTION_STUB: AvailableBulkAction = {
+  key: 'push',
+  source: 'builtin',
+  collection: null,
+  label: 'Push',
+  icon: null,
+  variant: 'default',
+  kind: 'builtin',
+  require_reason: false,
+  confirm_text: null,
+  summary: 'Integration push'
 }

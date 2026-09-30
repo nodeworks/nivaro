@@ -17,12 +17,14 @@ export function summarySentence(
   const records = new Set<string>()
   let pushes = 0
   let failedPushes = 0
+  const told = new Set<string>()
   walk(path.root, (n) => {
     if (n.kind === 'write' && n.record) records.add(`${n.record.collection}:${n.record.item}`)
     if (n.kind === 'push') {
       pushes++
       if (n.failed) failedPushes++
     }
+    if (n.kind === 'notify' && n.detail?.type === 'notify') told.add(n.detail.recipient)
   })
   const parts = [ev?.label, ev?.item_label].filter(Boolean) as string[]
   parts.push(`${records.size} ${records.size === 1 ? 'record' : 'records'} changed`)
@@ -30,6 +32,7 @@ export function summarySentence(
     const failed = failedPushes ? ` (${failedPushes} failed)` : ''
     parts.push(`${pushes} ${pushes === 1 ? 'push' : 'pushes'}${failed}`)
   }
+  if (told.size) parts.push(`${told.size} ${told.size === 1 ? 'person' : 'people'} told`)
   return parts.join(' · ')
 }
 

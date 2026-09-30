@@ -18,6 +18,7 @@ import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
+import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 import { UserAvatar } from '../UserAvatar'
@@ -57,6 +58,9 @@ interface PipelineTransition {
   from_state: string | null
   group_label: string | null
   condition_rules?: unknown[]
+  /** How many partner pushes the transition carries (#616) — the header
+   *  pre-flights only these. */
+  pushes?: number
 }
 interface PipelineHistoryEntry {
   id: number
@@ -2279,7 +2283,7 @@ function PipelineTransitionButtonsInner({
             const tx = txs[0]
             const running =
               executeTransition.isPending && executeTransition.variables?.transition_id === tx.id
-            return (
+            const button = (
               <Button
                 key={label}
                 size='sm'
@@ -2292,6 +2296,21 @@ function PipelineTransitionButtonsInner({
                 {running && <Loader2 className='h-3 w-3 animate-spin' />}
                 {label}
               </Button>
+            )
+            // #616 — a step that sends something to a partner says, before
+            // it is pressed, whether what it sends is complete.
+            if (!(tx.pushes && tx.pushes > 0)) return button
+            return (
+              <span key={label} className='inline-flex items-center gap-1'>
+                {button}
+                <PushReadinessChip
+                  collection={collection}
+                  itemId={item}
+                  transitionId={tx.id}
+                  label={label}
+                  compact
+                />
+              </span>
             )
           }
           return (

@@ -11,6 +11,7 @@ import {
   type QueueGate,
   queueGatesFor
 } from './queue-access.js'
+import { applyIntegrationsToCache, integrationsFilterBuckets } from './queue-integrations.js'
 import {
   applyTypedExtraPredicate,
   decodeCachedExtra,
@@ -798,6 +799,10 @@ export async function fetchMaterializedQueueItems(
   // "Unseen changes" (#643): the record-unseen rule as a predicate on the
   // cache's own (collection, item_id) — see applyUnseenToCache.
   if (wantsUnseenFilter(filters)) applyUnseenToCache(baseNoState, user.id)
+  // #630 — integration partners: the obligations ledger as a predicate on the
+  // cache's own (collection, item_id) — see applyIntegrationsToCache.
+  const integrationBuckets = integrationsFilterBuckets(filters.integrations)
+  if (integrationBuckets) applyIntegrationsToCache(baseNoState, integrationBuckets)
   const labelList = asList(filters.label)
   if (labelList.length > 0) {
     baseNoState.where(function () {

@@ -1422,3 +1422,279 @@ export async function recordSubmission(
     return null
   }
 }
+
+// ─── Read-only preview (#615 / #616) ────────────────────────────────────────
+//
+// What a transition's partner pushes WOULD do, without doing it: the same
+// applicability gates, guard, context queries and template render the real
+// run uses, then a comparison with the payload the partner last received.
+// Nothing is sent, written, journaled or opened on the obligation ledger.
+
+export interface ErpActionPreview {
+  index: number
+  api_id: number | null
+  endpoint_path: string | null
+  method: string
+  blocking: boolean
+  push_when: PushWhen | null
+  /**
+   * would_push   — every gate passes and push_when says send.
+   * unchanged    — push_when would hold it back (nothing it watches moved).
+   * not_applicable — skip_when_empty / skip_unless_any: not for this record.
+   * guard        — a guard rule fails, so the push is skipped.
+   * not_configured / template_error — the action cannot produce a payload.
+   */
+  status:
+    | 'would_push'
+    | 'unchanged'
+    | 'not_applicable'
+    | 'guard'
+    | 'not_configured'
+    | 'template_error'
+  reason: string | null
+  guard_failed?: { field: string; op: string; value: unknown; actual: unknown } | null
+  /** An earlier push on the same transition writes back onto the record
+   *  first, so this action's guard and payload may read differently then. */
+  after_earlier_writeback: boolean
+  body: Record<string, unknown> | null
+  /** The newest landed (accepted / pending) push to the same api + endpoint. */
+  last: {
+    submission_id: number
+    status: string
+    at: string
+    body: unknown
+    change_signature: string | null
+  } | null
+  /** Paths a contract requires that the rendered payload leaves empty. */
+  contract_missing: string[]
+}
+
+async function lastLandedSubmission(
+  collection: string,
+  item: string,
+  apiId: number,
+  endpointPath: string
+): Promise<ErpActionPreview['last']> {
+  try {
+    const rows = (await db('nivaro_erp_submissions')
+      .where({ collection, item: String(item), external_api: apiId })
+      .whereIn('status', ['accepted', 'pending'])
+      .orderBy('created_at', 'desc')
+      .limit(25)
+      .select('id', 'status', 'created_at', 'payload', 'change_signature')) as Array<{
+      id: number
+      status: string
+      created_at: Date | string
+      payload: string | null
+      change_signature: string | null
+    }>
+    for (const r of rows) {
+      let parsed: { endpoint_path?: string; body?: unknown } | null = null
+      try {
+        parsed = r.payload ? JSON.parse(r.payload) : null
+      } catch {
+        parsed = null
+      }
+      if (!parsed || parsed.endpoint_path !== endpointPath) continue
+      return {
+        submission_id: Number(r.id),
+        status: r.status,
+        at: new Date(r.created_at).toISOString(),
+        body: parsed.body ?? null,
+        change_signature: r.change_signature
+      }
+    }
+  } catch {
+    /* history unreadable — reads as "never sent" */
+  }
+  return null
+}
+
+export async function previewErpActions(opts: {
+  transition: { id: string; label: string; actions: string | null }
+  instance: { collection: string; item: string }
+  newStateObj: { key: string; label: string } | null
+  userId: string | null
+  /** Shared across several transitions of one record: the record and each
+   *  distinct context query set are read once, not once per transition. */
+  cache?: Map<string, Promise<unknown>>
+}): Promise<ErpActionPreview[]> {
+  const actions = parseActions(opts.transition.actions)
+  const { collection, item } = opts.instance
+  const cached = <T>(key: string, load: () => Promise<T>): Promise<T> => {
+    if (!opts.cache) return load()
+    let p = opts.cache.get(key) as Promise<T> | undefined
+    if (!p) {
+      p = load()
+      opts.cache.set(key, p)
+    }
+    return p
+  }
+  const record = await cached('record', async () => {
+    try {
+      return ((await db(collection).where({ id: item }).first()) ?? {}) as Record<string, unknown>
+    } catch {
+      return {} as Record<string, unknown>
+    }
+  })
+  const out: ErpActionPreview[] = []
+  let earlierWriteback = false
+  for (const [index, action] of actions.entries()) {
+    if (action.type !== 'erp_submit') {
+      if (action.type === 'create_record') earlierWriteback = true
+      continue
+    }
+    const base: ErpActionPreview = {
+      index,
+      api_id: null,
+      endpoint_path: action.endpoint_path ?? null,
+      method: action.method ?? 'POST',
+      blocking: action.blocking === true,
+      push_when: action.push_when ?? null,
+      status: 'would_push',
+      reason: null,
+      guard_failed: null,
+      after_earlier_writeback: earlierWriteback,
+      body: null,
+      last: null,
+      contract_missing: []
+    }
+    if (action.on_success?.set || action.on_success_children?.length) earlierWriteback = true
+    const apiId = action.external_api ? await resolveExternalApiId(action.external_api) : null
+    base.api_id = apiId
+    if (!apiId || !action.endpoint_path || !action.payload_template) {
+      out.push({
+        ...base,
+        status: 'not_configured',
+        reason: skipReason(
+          'not_configured',
+          !apiId ? 'external_api' : !action.endpoint_path ? 'endpoint_path' : 'payload_template'
+        )
+      })
+      continue
+    }
+    const context = await cached(`ctx:${JSON.stringify(action.context ?? {})}`, () =>
+      buildContext(action.context, item, record, opts.userId)
+    )
+    if (action.skip_when_empty) {
+      const gate = context[action.skip_when_empty]
+      if (gate == null || (Array.isArray(gate) && gate.length === 0)) {
+        out.push({
+          ...base,
+          status: 'not_applicable',
+          reason: skipReason('skip_when_empty', action.skip_when_empty)
+        })
+        continue
+      }
+    }
+    if (Array.isArray(action.skip_unless_any) && action.skip_unless_any.length > 0) {
+      const walk = (ref: string): unknown => {
+        let cur: unknown = { record, context }
+        for (const seg of ref.split('.')) {
+          if (cur == null || typeof cur !== 'object') return undefined
+          cur = (cur as Record<string, unknown>)[seg]
+        }
+        return cur
+      }
+      const anySet = action.skip_unless_any.some((ref) => {
+        const v = walk(ref)
+        return v != null && String(v).trim() !== ''
+      })
+      if (!anySet) {
+        out.push({
+          ...base,
+          status: 'not_applicable',
+          reason: skipReason('skip_unless_any', action.skip_unless_any.join(', '))
+        })
+        continue
+      }
+    }
+    base.last = await cached(`last:${apiId}:${action.endpoint_path}`, () =>
+      lastLandedSubmission(collection, item, apiId, action.endpoint_path as string)
+    )
+    const guard = Array.isArray(action.guard) ? action.guard : []
+    const failedRule = guard.find((r) => !evalConditionRule(r, record))
+    if (failedRule) {
+      out.push({
+        ...base,
+        status: 'guard',
+        reason: skipReason(
+          'guard',
+          `${failedRule.field} ${failedRule.op ?? 'eq'} ${JSON.stringify(failedRule.value ?? null)}`
+        ),
+        guard_failed: {
+          field: failedRule.field,
+          op: String(failedRule.op ?? 'eq'),
+          value: failedRule.value ?? null,
+          actual: record[failedRule.field] ?? null
+        }
+      })
+      continue
+    }
+    const scope = {
+      record,
+      context,
+      state: opts.newStateObj,
+      responses: [],
+      response: null
+    }
+    let body: Record<string, unknown>
+    try {
+      const rendered = await engine.parseAndRender(action.payload_template, scope)
+      body = JSON.parse(rendered) as Record<string, unknown>
+    } catch (err) {
+      out.push({
+        ...base,
+        status: 'template_error',
+        reason: skipReason('template_error', err instanceof Error ? err.message : String(err))
+      })
+      continue
+    }
+    base.body = body
+    if (action.push_when) {
+      const signature =
+        action.push_when.payload === true
+          ? payloadSignature(body)
+          : changeSignature(record, action.push_when.fields)
+      const go = shouldPush({
+        pushWhen: action.push_when,
+        stateChanged: !!opts.newStateObj,
+        signature,
+        lastSignature: base.last?.change_signature ?? null
+      })
+      if (!go) {
+        base.status = 'unchanged'
+        base.reason = skipReason(
+          'push_when',
+          action.push_when.payload === true
+            ? 'payload unchanged since the last landed push'
+            : `no change in ${(action.push_when.fields ?? []).join(', ') || 'the watched fields'}`
+        )
+      }
+    }
+    try {
+      const apiRow = (await db('nivaro_external_apis')
+        .where({ id: Number(apiId) })
+        .first('outbound_contract')) as { outbound_contract: string | null } | undefined
+      const contract = apiRow?.outbound_contract
+        ? (JSON.parse(apiRow.outbound_contract) as { required?: string[] })
+        : null
+      if (contract?.required?.length) {
+        base.contract_missing = contract.required.filter((path) => {
+          const v = String(path)
+            .split('.')
+            .reduce<unknown>(
+              (cur, seg) =>
+                cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined,
+              body
+            )
+          return v === undefined || v === null || v === ''
+        })
+      }
+    } catch {
+      /* contract check is advisory */
+    }
+    out.push(base)
+  }
+  return out
+}

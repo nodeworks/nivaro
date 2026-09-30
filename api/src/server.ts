@@ -1372,6 +1372,37 @@ export async function buildServer() {
         }
       )
 
+      // #612 / #603 — external API health probes every 5 minutes (token
+      // endpoint + health path, side traffic on the flight recorder), then the
+      // metric-alert rules that read external-API SLOs, so a "error rate over
+      // 5% for 15 minutes" rule reacts within one probe cycle.
+      app.cron.schedule(
+        'external-api-health-probes',
+        '*/5 * * * *',
+        async () => {
+          const { runHealthProbes } = await import('./services/external-api-health.js')
+          const results = await runHealthProbes()
+          const { runMetricAlertChecks } = await import('./services/metric-alerts.js')
+          const alerts = await runMetricAlertChecks(app, 'all', { sourceType: 'external_api_slo' })
+          app.log.info(
+            {
+              probed: results.length,
+              failing: results.filter((r) => !r.ok && !r.skipped).length,
+              alerts
+            },
+            'external API health probed'
+          )
+        },
+        {
+          dryRun: async () => {
+            const { healthProbeTargets } = await import('./services/external-api-health.js')
+            return {
+              would_probe: (await healthProbeTargets()).map((t) => `${t.name} ${t.path}`)
+            }
+          }
+        }
+      )
+
       // Headline snapshots (#851): the dashboard's budget headline figures,
       // once for the whole year and once per zone, upserted one row per day
       // into nivaro_dashboard_snapshots. Off until nivaro_settings.dashboard_headline

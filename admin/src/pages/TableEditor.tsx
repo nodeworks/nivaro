@@ -1537,12 +1537,26 @@ function FieldsTab({
                 const res = await api.get<{
                   data: {
                     total: number
-                    surfaces: Array<{ surface: string; hits: Array<{ ref: string }> }>
+                    surfaces: Array<{
+                      surface: string
+                      hits: Array<{ ref: string; detail?: string }>
+                    }>
                   }
                 }>(`/schema/impact/${tableName}/${col.name}`)
                 const impact = res.data.data
-                if (impact.total > 0) {
-                  const lines = impact.surfaces
+                // Integrations that named the field in the request log (#608)
+                // are callers, not configuration — listed apart, with detail.
+                const callers = impact.surfaces.find((sf) => sf.surface === 'api-callers')
+                const config = impact.surfaces.filter((sf) => sf.surface !== 'api-callers')
+                const configTotal = config.reduce((n, sf) => n + sf.hits.length, 0)
+                if (callers && callers.hits.length > 0) {
+                  impactNote += `\n\n⚠ ${callers.hits.length} API caller(s) used this field in the last 14 days:\n${callers.hits
+                    .slice(0, 8)
+                    .map((h) => `  • ${h.ref}${h.detail ? ` (${h.detail})` : ''}`)
+                    .join('\n')}${callers.hits.length > 8 ? `\n  +${callers.hits.length - 8} more` : ''}\n`
+                }
+                if (configTotal > 0) {
+                  const lines = config
                     .map(
                       (sf) =>
                         `  • ${sf.surface}: ${sf.hits
@@ -1551,7 +1565,7 @@ function FieldsTab({
                           .join(', ')}${sf.hits.length > 3 ? ` +${sf.hits.length - 3} more` : ''}`
                     )
                     .join('\n')
-                  impactNote = `\n\n⚠ ${impact.total} configuration reference(s) will break:\n${lines}\n`
+                  impactNote += `\n\n⚠ ${configTotal} configuration reference(s) will break:\n${lines}\n`
                 }
               } catch {
                 impactNote = '\n\n(Impact scan unavailable — references were not checked.)'

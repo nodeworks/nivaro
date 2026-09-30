@@ -17,6 +17,14 @@ import {
   resolveInstanceRow,
   writeApiCallLog
 } from '../services/external-apis.js'
+import { bustRedactionCache, redactionFor } from '../services/outbound-recorder.js'
+import {
+  buildCurl,
+  parseRedaction,
+  redactBody,
+  redactHeaders,
+  redactUrl
+} from '../services/outbound-redaction.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { maskBodySecrets } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
@@ -46,6 +54,14 @@ interface ExternalApiRow {
   owner_user?: string | null
   ack_grace_minutes?: number
   skip_grace_minutes?: number
+  // Migration 382 — redaction rules (#605) and health probe config (#612).
+  redaction?: string | null
+  health_path?: string | null
+  health_method?: string | null
+  health_expect_status?: number | null
+  health_last_ok?: boolean | number | null
+  health_last_at?: Date | null
+  health_last_detail?: string | null
   created_at: Date
   updated_at: Date
 }
@@ -300,6 +316,14 @@ function serializeForRead(row: ExternalApiRow) {
     owner_user: row.owner_user ?? null,
     ack_grace_minutes: row.ack_grace_minutes ?? 60,
     skip_grace_minutes: row.skip_grace_minutes ?? 30,
+    // #605 — per-API redaction rules; #612 — health probe config + last verdict.
+    redaction: parseRedaction(row.redaction ?? null),
+    health_path: row.health_path ?? null,
+    health_method: row.health_method ?? null,
+    health_expect_status: row.health_expect_status ?? null,
+    health_last_ok: row.health_last_ok == null ? null : !!row.health_last_ok,
+    health_last_at: row.health_last_at ?? null,
+    health_last_detail: row.health_last_detail ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -563,8 +587,12 @@ export async function externalApisRoutes(app: FastifyInstance) {
       } | null
       mock_config: Record<
         string,
-        { enabled?: boolean; rules?: unknown[]; fallback?: unknown }
+        { enabled?: boolean; record?: boolean; rules?: unknown[]; fallback?: unknown }
       > | null
+      redaction: { headers?: unknown; body_paths?: unknown } | null
+      health_path: string | null
+      health_method: string | null
+      health_expect_status: number | null
       instance_overrides: Record<
         string,
         {
@@ -655,7 +683,13 @@ export async function externalApisRoutes(app: FastifyInstance) {
                 .code(400)
                 .send({ error: `mock_config.${k}.rules: path must be a string` })
           }
-          out[k] = { enabled: !!v.enabled, rules, fallback: v.fallback ?? undefined }
+          // #604 — `record` turns live answers into rules; never while mocking.
+          out[k] = {
+            enabled: !!v.enabled,
+            ...(v.record && !v.enabled ? { record: true } : {}),
+            rules,
+            fallback: v.fallback ?? undefined
+          }
         }
         patch.mock_config = Object.keys(out).length ? JSON.stringify(out) : null
       }
@@ -666,6 +700,32 @@ export async function externalApisRoutes(app: FastifyInstance) {
         body.instance_overrides,
         existing.instance_overrides
       )
+    }
+    // #605 — redaction rules: header / query names and JSON body paths.
+    if (body.redaction !== undefined) {
+      const r = parseRedaction(body.redaction)
+      patch.redaction = r.headers.length || r.body_paths.length ? JSON.stringify(r) : null
+    }
+    // #612 — health probe: a path on the API's own host, GET or HEAD, expected status.
+    if (body.health_path !== undefined) {
+      const hp = typeof body.health_path === 'string' ? body.health_path.trim() : ''
+      if (hp && (/^[a-z]+:\/\//i.test(hp) || hp.length > 500))
+        return reply
+          .code(400)
+          .send({ error: 'health_path must be a path on the API host, e.g. /health' })
+      patch.health_path = hp || null
+    }
+    if (body.health_method !== undefined) {
+      const m = String(body.health_method ?? '').toUpperCase()
+      if (m && m !== 'GET' && m !== 'HEAD')
+        return reply.code(400).send({ error: 'health_method must be GET or HEAD' })
+      patch.health_method = m || null
+    }
+    if (body.health_expect_status !== undefined) {
+      const st = body.health_expect_status
+      if (st != null && (!Number.isInteger(st) || st < 100 || st > 599))
+        return reply.code(400).send({ error: 'health_expect_status must be an HTTP status' })
+      patch.health_expect_status = st ?? null
     }
     if (body.base_url !== undefined) patch.base_url = body.base_url
     if (body.description !== undefined) patch.description = body.description
@@ -696,6 +756,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
     if (body.skip_grace_minutes !== undefined) patch.skip_grace_minutes = body.skip_grace_minutes
 
     await db('nivaro_external_apis').where({ id }).update(patch)
+    if ('redaction' in patch) bustRedactionCache(id)
     const row = (await db('nivaro_external_apis').where({ id }).first()) as ExternalApiRow
     await logActivity({
       action: 'update',
@@ -756,7 +817,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
     let fetchError: string | null = null
 
     try {
-      const auth = await resolveAuth(row.auth_type, cfg)
+      const auth = await resolveAuth(row.auth_type, cfg, {
+        apiId: row.id,
+        triggeredBy: 'test'
+      })
 
       // Build URL: join base_url + path, then apply auth + caller query params.
       const base = row.base_url.replace(/\/+$/, '')
@@ -826,6 +890,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
         writeApiCallLog({
           api_id: row.id,
           triggered_by: 'test',
+          record: 'test',
           method,
           url: url.toString(),
           request_headers: headers,
@@ -851,6 +916,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       await writeApiCallLog({
         api_id: row.id,
         triggered_by: 'test',
+        record: 'test',
         method,
         url: (() => {
           try {
@@ -1176,7 +1242,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const startMs = Date.now()
 
     try {
-      const auth = await resolveAuth(api.auth_type, cfg)
+      const auth = await resolveAuth(api.auth_type, cfg, {
+        apiId: api.id,
+        triggeredBy: 'sdk'
+      })
 
       const base = api.base_url.replace(/\/+$/, '')
       const suffix = endpoint.path
@@ -1245,6 +1314,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
         api_id: api.id,
         endpoint_id: endpoint.id,
         triggered_by: 'sdk',
+        record: 'lookup',
         method,
         url: url.toString(),
         request_headers: headers,
@@ -1264,6 +1334,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
         api_id: api.id,
         endpoint_id: endpoint.id,
         triggered_by: 'sdk',
+        record: 'lookup',
         method: endpoint.method,
         url: (() => {
           try {
@@ -1312,7 +1383,10 @@ export async function externalApisRoutes(app: FastifyInstance) {
     const startMs = Date.now()
 
     try {
-      const auth = await resolveAuth(api.auth_type, cfg)
+      const auth = await resolveAuth(api.auth_type, cfg, {
+        apiId: api.id,
+        triggeredBy: 'sdk'
+      })
 
       const base = api.base_url.replace(/\/+$/, '')
       const suffix = path ? (path.startsWith('/') ? path : `/${path}`) : ''
@@ -1367,6 +1441,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       await writeApiCallLog({
         api_id: api.id,
         triggered_by: 'sdk',
+        record: 'lookup',
         method,
         url: url.toString(),
         request_headers: headers,
@@ -1385,6 +1460,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
       await writeApiCallLog({
         api_id: api.id,
         triggered_by: 'sdk',
+        record: 'lookup',
         method,
         url: (() => {
           try {
@@ -1747,7 +1823,27 @@ export async function externalApisRoutes(app: FastifyInstance) {
         .where({ id: Number(req.params.logId) })
         .first()) as LogRow | undefined
       if (!row) return reply.code(404).send({ error: 'Not found' })
-      return { data: serializeLog(row) }
+      // #605 — the API's redaction rules apply on the way out too, and the
+      // entry carries a Copy-as-curl with every masked value a placeholder.
+      const rules = await redactionFor(row.api_id)
+      const out = serializeLog(row)
+      const reqHeaders = redactHeaders(out.request_headers, rules)
+      const reqBody = redactBody(out.request_body, rules, Number.MAX_SAFE_INTEGER)
+      return {
+        data: {
+          ...out,
+          request_headers: reqHeaders,
+          request_body: reqBody,
+          response_headers: redactHeaders(out.response_headers, rules),
+          response_body: redactBody(out.response_body, rules, Number.MAX_SAFE_INTEGER),
+          curl: buildCurl({
+            method: out.method,
+            url: redactUrl(out.url, rules),
+            request_headers: reqHeaders,
+            request_body: reqBody
+          })
+        }
+      }
     }
   )
 

@@ -1155,7 +1155,7 @@ export function RuleEditor({
 
 // ─── Line config sub-sections ──────────────────────────────────────────────
 
-function RowFilterEditor({
+export function RowFilterEditor({
   value,
   onChange
 }: {

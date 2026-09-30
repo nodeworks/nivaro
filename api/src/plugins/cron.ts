@@ -1,7 +1,7 @@
 import { Cron } from 'croner'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
-import { startChain } from '../services/chain.js'
+import { newChainId, startChain } from '../services/chain.js'
 import { startJobRun } from '../services/job-runs.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -426,11 +426,12 @@ export class CronManager {
         // its own clock — the tick is a no-op while the chain stands.
         if (this.chains.has(id)) return
         if (opts?.quiet) {
+          const chainId = newChainId()
           try {
-            await startChain(`cron:${id}`, () => fn())
+            await startChain(`cron:${id}`, () => fn(), chainId)
           } catch (err) {
             console.error({ err, cronId: id }, 'Cron job error')
-            const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
+            const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
             await run.fail(err)
           }
           return
@@ -438,7 +439,10 @@ export class CronManager {
         // Every tick lands in nivaro_job_runs (best-effort) so the Background
         // Jobs console and per-extension health read one source of truth.
         await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
-          const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
+          // The run records the chain its tick starts (#707), so the console
+          // can open "what it wrote" for exactly this run.
+          const chainId = newChainId()
+          const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
           this.runningSince.set(id, Date.now())
           const watchdog = setTimeout(() => {
             raiseCronIssue(
@@ -448,7 +452,7 @@ export class CronManager {
           }, budget)
           try {
             // Every tick is its own integration event chain.
-            await startChain(`cron:${id}`, () => fn())
+            await startChain(`cron:${id}`, () => fn(), chainId)
             await run.complete()
             this.triggerChained(id)
           } catch (err) {
@@ -503,15 +507,17 @@ export class CronManager {
   async runNow(id: string, triggeredBy?: string | null): Promise<boolean> {
     const entry = this.entries.get(id)
     if (!entry) return false
+    const chainId = newChainId()
     const run = await startJobRun('cron', id, {
       extensionId: entry.extensionId,
-      triggeredBy: triggeredBy ?? null
+      triggeredBy: triggeredBy ?? null,
+      chainId
     })
     try {
       // A NEW chain even when run-now comes from an HTTP request: the job's
       // writes are the cron's, not the admin click's (the click is recorded
       // on nivaro_job_runs.triggered_by).
-      await startChain(`cron:${id}`, () => entry.fn())
+      await startChain(`cron:${id}`, () => entry.fn(), chainId)
       await run.complete()
       this.triggerChained(id)
     } catch (err) {

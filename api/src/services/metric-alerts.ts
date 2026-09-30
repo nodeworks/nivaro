@@ -31,6 +31,16 @@ export type MetricSource =
       /** Plain-column equality / in-list filters applied to the count. */
       filter?: Record<string, unknown>
     }
+  | {
+      /**
+       * #603 — an external API's SLO over a rolling window: error_rate (%),
+       * p95_ms / p50_ms, availability (%), calls. Rule filters: `api` (name
+       * or id; blank = every API together) and `window_minutes` (default 15).
+       */
+      type: 'external_api_slo'
+      metric: 'error_rate' | 'p95_ms' | 'p50_ms' | 'availability' | 'calls'
+      window_minutes?: number
+    }
 
 export function parseJsonSafe<T>(v: unknown): T | null {
   if (v == null) return null
@@ -69,6 +79,18 @@ export async function resolveMetricValue(
   filters: Record<string, unknown> | null
 ): Promise<number | null> {
   try {
+    if (source.type === 'external_api_slo') {
+      const f = filters ?? {}
+      const first = (v: unknown) => (Array.isArray(v) ? v[0] : v)
+      const api = first(f.api)
+      const win = Number(first(f.window_minutes)) || source.window_minutes || 15
+      const { resolveApiSloMetric } = await import('./external-api-health.js')
+      return await resolveApiSloMetric(
+        source.metric,
+        api == null || api === '' ? null : (api as string | number),
+        win
+      )
+    }
     if (source.type === 'custom_query') {
       const params: Record<string, unknown> = { ...(source.params ?? {}) }
       const f = filters ?? {}
@@ -133,7 +155,9 @@ interface RuleRow {
 
 export async function runMetricAlertChecks(
   app: FastifyInstance,
-  frequency: 'hourly' | 'daily' | 'weekly' | 'all' = 'all'
+  frequency: 'hourly' | 'daily' | 'weekly' | 'all' = 'all',
+  /** Only rules whose definition reads this source type (the 5-minute probe cron passes 'external_api_slo'). */
+  opts: { sourceType?: MetricSource['type'] } = {}
 ): Promise<{ evaluated: number; fired: number; resolved: number; skipped: number }> {
   const q = db('nivaro_metric_alert_rules as r')
     .join('nivaro_metric_definitions as d', 'd.id', 'r.definition_id')
@@ -158,6 +182,7 @@ export async function runMetricAlertChecks(
 
   for (const rule of rules) {
     const source = parseJsonSafe<MetricSource>(rule.metric_source)
+    if (opts.sourceType && source?.type !== opts.sourceType) continue
     if (!source) {
       results.skipped++
       continue
@@ -222,6 +247,7 @@ function fmtValue(value: number, unit: string): string {
   if (unit === 'dollar') return `$${num}`
   if (unit === 'percent') return `${num}%`
   if (unit === 'days') return `${num}d`
+  if (unit === 'ms') return `${num} ms`
   return num
 }
 

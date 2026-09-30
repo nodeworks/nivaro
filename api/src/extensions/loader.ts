@@ -251,7 +251,9 @@ const CHAIN_TABLES: ReadonlySet<string> = new Set<ChainTable>([
   'nivaro_erp_submission_attempts',
   'nivaro_external_api_logs',
   'nivaro_workflow_history',
-  'nivaro_flow_runs'
+  'nivaro_flow_runs',
+  'nivaro_notifications',
+  'nivaro_mail_log'
 ])
 
 /** ctx.chain — shared by the self-hosted and cloud ctx builds. */

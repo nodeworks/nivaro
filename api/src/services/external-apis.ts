@@ -2,7 +2,16 @@ import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
-import { maskBodySecrets, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
+import {
+  type CallDetail,
+  mockRecordOn,
+  outboundDetailFields,
+  recordMockAnswer,
+  recordSideCall,
+  redactionFor
+} from './outbound-recorder.js'
+import { maskJsonPaths, redactHeaders } from './outbound-redaction.js'
+import { maskBodySecrets, maskQueryString, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
 
 export type { CallOptions, CallResult } from '@nivaro/extension-kit'
@@ -226,10 +235,30 @@ export interface ApiCallLogEntry {
   duration_ms?: number | null
   error?: string | null
   user_id?: string | null
+  /** #626 — also keep this call on the flight recorder as side traffic (editor test calls). */
+  record?: 'test' | 'lookup'
 }
 
 export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
+  if (entry.record) {
+    void recordSideCall({
+      api_id: entry.api_id,
+      kind: entry.record,
+      method: entry.method,
+      url: entry.url,
+      status: entry.response_status ?? null,
+      duration_ms: entry.duration_ms ?? 0,
+      error: entry.error ?? null,
+      triggered_by: entry.triggered_by,
+      request_headers: entry.request_headers ?? null,
+      request_body: entry.request_body ?? null,
+      response_headers: entry.response_headers ?? null,
+      response_body: entry.response_body ?? null
+    })
+  }
   try {
+    // #605 — the API's own redaction rules ride on top of the platform masking.
+    const rules = await redactionFor(entry.api_id)
     await db('nivaro_external_api_logs').insert({
       api_id: entry.api_id,
       endpoint_id: entry.endpoint_id ?? null,
@@ -237,19 +266,21 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
       method: entry.method,
       url: entry.url,
       request_headers: entry.request_headers
-        ? JSON.stringify(maskHeaders(entry.request_headers))
+        ? JSON.stringify(redactHeaders(maskHeaders(entry.request_headers), rules))
         : null,
       // Bodies are masked like headers — a partner that takes its token in
       // the JSON body (or echoes one back) must not leave it on a log screen.
-      request_body: truncate(maskBodySecrets(entry.request_body)),
+      request_body: truncate(maskJsonPaths(maskBodySecrets(entry.request_body), rules.body_paths)),
       response_status: entry.response_status ?? null,
       // The partner's own response can carry a session cookie or an echoed
       // auth header — mask it exactly like the request side, not just the
       // credentials WE sent.
       response_headers: entry.response_headers
-        ? JSON.stringify(maskHeaders(entry.response_headers))
+        ? JSON.stringify(redactHeaders(maskHeaders(entry.response_headers), rules))
         : null,
-      response_body: truncate(maskBodySecrets(entry.response_body)),
+      response_body: truncate(
+        maskJsonPaths(maskBodySecrets(entry.response_body), rules.body_paths)
+      ),
       duration_ms: entry.duration_ms ?? null,
       error: entry.error ?? null,
       user_id: entry.user_id ?? null,
@@ -269,7 +300,9 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
  *  from the Test button while the flow path worked. */
 export async function resolveAuth(
   authType: AuthType,
-  cfg: Record<string, unknown> | null
+  cfg: Record<string, unknown> | null,
+  /** #626 — record the token fetch on this API's flight recorder. */
+  rec?: { apiId: number; kind?: 'token' | 'token_probe'; triggeredBy?: string }
 ): Promise<{ headers: Record<string, string>; queryParams: Record<string, string> }> {
   const headers: Record<string, string> = {}
   const queryParams: Record<string, string> = {}
@@ -303,20 +336,51 @@ export async function resolveAuth(
       // client_id may live in token_headers instead (header-credential token
       // endpoints) — token_url alone is enough to attempt the exchange.
       if (c?.token_url) {
-        const res = await fetch(c.token_url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            ...(c.token_headers ?? {})
-          },
-          body: new URLSearchParams({
-            grant_type: 'client_credentials',
-            ...(c.client_id ? { client_id: c.client_id } : {}),
-            ...(c.client_secret ? { client_secret: c.client_secret } : {}),
-            ...(c.scope ? { scope: c.scope } : {}),
-            ...(c.audience ? { audience: c.audience } : {})
-          })
+        const tokenHeaders: Record<string, string> = {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          ...(c.token_headers ?? {})
+        }
+        const form = new URLSearchParams({
+          grant_type: 'client_credentials',
+          ...(c.client_id ? { client_id: c.client_id } : {}),
+          ...(c.client_secret ? { client_secret: c.client_secret } : {}),
+          ...(c.scope ? { scope: c.scope } : {}),
+          ...(c.audience ? { audience: c.audience } : {})
         })
+        const t0 = Date.now()
+        // #626 — every token fetch lands on the flight recorder (side traffic,
+        // never counted as a partner call); the form body is stored with its
+        // secret values masked.
+        const note = (
+          status: number | null,
+          error: string | null,
+          resBody?: string,
+          resH?: Record<string, string>
+        ) => {
+          if (!rec) return
+          void recordSideCall({
+            api_id: rec.apiId,
+            kind: rec.kind ?? 'token',
+            method: 'POST',
+            url: c.token_url,
+            status,
+            ok: error == null && status != null && status >= 200 && status < 300,
+            duration_ms: Date.now() - t0,
+            error,
+            triggered_by: rec.triggeredBy ?? null,
+            request_headers: tokenHeaders,
+            request_body: maskQueryString(form.toString()),
+            response_headers: resH ?? null,
+            response_body: resBody ?? null
+          })
+        }
+        let res: Response
+        try {
+          res = await fetch(c.token_url, { method: 'POST', headers: tokenHeaders, body: form })
+        } catch (err) {
+          note(null, err instanceof Error ? err.message : String(err))
+          throw err
+        }
         // A failed exchange must stop the call: sending the request with no
         // Authorization only turns "our credentials are wrong" into a partner
         // 401 that reads like their fault.
@@ -327,11 +391,17 @@ export async function resolveAuth(
         } catch {
           /* non-JSON token response — handled below */
         }
+        const resH: Record<string, string> = {}
+        res.headers.forEach((v, k) => {
+          resH[k] = v
+        })
         if (!res.ok || !body.access_token) {
           const why =
             body.error_description || body.error || text.slice(0, 200) || 'no access_token'
+          note(res.status, `Token exchange failed: ${why}`, text, resH)
           throw new Error(`Token exchange failed (HTTP ${res.status}): ${why}`)
         }
+        note(res.status, null, text, resH)
         headers.Authorization = `Bearer ${body.access_token}`
       }
       break
@@ -465,17 +535,22 @@ interface EndpointDefRow {
 /** Outbound HTTP log (#124): one light row per call, ALWAYS — fire-and-forget
  *  so logging can never fail a call; powers the /integration-health outbound
  *  section and per-endpoint latency trends (#422). Pruned at 14 days. */
-function logOutbound(entry: {
-  api_id: number
-  api_name: string
-  method: string
-  path: string
-  status: number | null
-  duration_ms: number
-  error?: string | null
-}): void {
-  void db('nivaro_outbound_log')
-    .insert({
+function logOutbound(
+  entry: {
+    api_id: number
+    api_name: string
+    method: string
+    path: string
+    status: number | null
+    duration_ms: number
+    error?: string | null
+  },
+  /** #626 — the flight recorder's detail for this call (redacted on write). */
+  detail?: CallDetail
+): void {
+  void (async () => {
+    const extra = detail ? await outboundDetailFields(entry.api_id, detail) : {}
+    await db('nivaro_outbound_log').insert({
       api_id: entry.api_id,
       api_name: entry.api_name.slice(0, 255),
       method: entry.method.slice(0, 12),
@@ -484,9 +559,10 @@ function logOutbound(entry: {
       ok: entry.status != null && entry.status >= 200 && entry.status < 300,
       duration_ms: entry.duration_ms,
       error: entry.error ? String(entry.error).slice(0, 500) : null,
-      created_at: new Date()
+      created_at: new Date(),
+      ...extra
     })
-    .catch(() => {})
+  })().catch(() => {})
 }
 
 export async function callExternalApi(
@@ -548,15 +624,26 @@ export async function callExternalApi(
     if (picked.delay_ms > 0)
       await new Promise((r) => setTimeout(r, Math.min(10_000, picked.delay_ms)))
     const durationMs = Date.now() - t0
-    logOutbound({
-      api_id: row.id,
-      api_name: row.name,
-      method,
-      path: `${mockPath} [mock]`,
-      status: picked.status,
-      duration_ms: durationMs,
-      error: picked.status >= 400 ? 'mocked failure' : null
-    })
+    logOutbound(
+      {
+        api_id: row.id,
+        api_name: row.name,
+        method,
+        path: `${mockPath} [mock]`,
+        status: picked.status,
+        duration_ms: durationMs,
+        error: picked.status >= 400 ? 'mocked failure' : null
+      },
+      {
+        url: `mock://${row.name}${mockPath}`,
+        endpoint_id: epId ?? null,
+        triggered_by: options._log?.triggeredBy ?? null,
+        request_headers: { ...extraHeaders },
+        request_body:
+          body === undefined ? null : typeof body === 'string' ? body : JSON.stringify(body),
+        response_body: picked.body == null ? null : JSON.stringify(picked.body)
+      }
+    )
     if (options._log) {
       await writeApiCallLog({
         api_id: row.id,
@@ -583,7 +670,10 @@ export async function callExternalApi(
 
   const cfg = parseJson<Record<string, unknown>>(row.auth_config)
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
-  const auth = await resolveAuth(row.auth_type, cfg)
+  const auth = await resolveAuth(row.auth_type, cfg, {
+    apiId: row.id,
+    triggeredBy: options._log?.triggeredBy
+  })
 
   const base = row.base_url.replace(/\/+$/, '')
   const suffix = path ? (path.startsWith('/') ? path : `/${path}`) : ''
@@ -669,15 +759,24 @@ export async function callExternalApi(
   const durationMs = Date.now() - startMs
 
   if (fetchError || !res) {
-    logOutbound({
-      api_id: row.id,
-      api_name: row.name,
-      method,
-      path: suffix || '/',
-      status: null,
-      duration_ms: durationMs,
-      error: fetchError
-    })
+    logOutbound(
+      {
+        api_id: row.id,
+        api_name: row.name,
+        method,
+        path: suffix || '/',
+        status: null,
+        duration_ms: durationMs,
+        error: fetchError
+      },
+      {
+        url: url.toString(),
+        endpoint_id: epId ?? null,
+        triggered_by: options._log?.triggeredBy ?? null,
+        request_headers: reqHeaders,
+        request_body: reqBodyStr
+      }
+    )
     if (options._log) {
       await writeApiCallLog({
         api_id: row.id,
@@ -710,14 +809,34 @@ export async function callExternalApi(
     }
   }
 
-  logOutbound({
-    api_id: row.id,
-    api_name: row.name,
-    method,
-    path: suffix || '/',
-    status: res.status,
-    duration_ms: durationMs
-  })
+  logOutbound(
+    {
+      api_id: row.id,
+      api_name: row.name,
+      method,
+      path: suffix || '/',
+      status: res.status,
+      duration_ms: durationMs
+    },
+    {
+      url: url.toString(),
+      endpoint_id: epId ?? null,
+      triggered_by: options._log?.triggeredBy ?? null,
+      request_headers: reqHeaders,
+      request_body: reqBodyStr,
+      response_headers: resHeaders,
+      response_body: text
+    }
+  )
+  // #604 — record mode: this live answer becomes a mock rule for this instance.
+  if (mockRecordOn(stored)) {
+    void recordMockAnswer(row.id, {
+      method,
+      path: suffix || '/',
+      status: res.status,
+      bodyText: text
+    })
+  }
   if (options._log) {
     await writeApiCallLog({
       api_id: row.id,

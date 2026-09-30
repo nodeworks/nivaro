@@ -97,6 +97,12 @@ export interface PartnerCard {
   flags: { test_endpoint: boolean; mock: boolean; auth_failing: boolean }
   owner: { id: string; name: string } | null
   obligations: { sent: number; pending: number; failed: number; missing: number; overdue: number }
+  /** #612 — health-probe uptime over 24h; null when the API is not probed. */
+  uptime24?: {
+    pct: number | null
+    probes: number
+    buckets: Array<{ at: string; ok: number; failed: number }>
+  } | null
 }
 
 export interface PartnersSummary {
@@ -236,6 +242,8 @@ export type PathStepKind =
   | 'push'
   | 'attempt'
   | 'partner_call'
+  | 'notify'
+  | 'mail'
   | 'group'
 
 /** What a step opens to: field changes, a push, a partner call, a flow run,
@@ -262,6 +270,27 @@ export type PathDetail =
     }
   | { type: 'flow'; status: string; halted_at?: string | null; error?: string | null }
   | { type: 'transition'; from?: string | null; to?: string | null; comment?: string | null }
+  | {
+      type: 'notify'
+      recipient: string
+      /** Admins only; null for everyone else. */
+      subject: string | null
+      category?: string | null
+      lane?: string | null
+      channels: Array<{ channel: string; status: string; reason?: string | null }>
+    }
+  | {
+      type: 'mail'
+      status: string
+      /** Admins only; null for everyone else. */
+      subject: string | null
+      template?: string | null
+      /** Addresses — admins only; null for everyone else. */
+      to?: string | null
+      recipients: number
+      mail_log_id: number
+      error?: string | null
+    }
 
 /** One step of an event's path, with the steps it set off under it. */
 export interface PathNode {

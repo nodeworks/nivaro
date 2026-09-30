@@ -32,6 +32,7 @@ export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
 export * from './sections/queues.js'
 export * from './sections/record-insights.js'
+export * from './sections/record-integrations.js'
 export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
@@ -210,6 +211,7 @@ import {
   integrationsCrossTriggers,
   integrationsErp,
   integrationsEvents,
+  integrationsOutboundTooling,
   integrationsParallelBranches,
   integrationsSyncJobs
 } from './sections/integrations.js'
@@ -309,6 +311,7 @@ import {
 } from './sections/platform-additions.js'
 import { queuesGuide } from './sections/queues.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
+import { recordIntegrations } from './sections/record-integrations.js'
 import {
   apiCollections,
   apiFiles,
@@ -736,7 +739,9 @@ export const navSections: NavGroup[] = [
       integrationsConsole,
       integrationsErp,
       integrationObligations,
+      recordIntegrations,
       integrationsEvents,
+      integrationsOutboundTooling,
       integrationsSyncJobs,
       integrationsConnector,
       integrationsParallelBranches,

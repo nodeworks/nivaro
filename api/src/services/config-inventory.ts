@@ -260,6 +260,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_chat_saved',
   'nivaro_record_links',
   'nivaro_outbound_log',
+  'nivaro_outbound_side_log',
   'nivaro_announcement_acks',
   'nivaro_announcement_deliveries',
   'nivaro_report_annotations',

@@ -338,6 +338,22 @@ async function main() {
       } catch (err) {
         log(`sdk coverage: not run (${err.message})`)
       }
+      // Report only (#608): fields partners used in the logged window that
+      // the schema no longer has, or deprecates. Never blocks a release.
+      try {
+        const { stdout } = sh('npx', ['tsx', 'src/scripts/partners-check.ts', '--summary'], {
+          cwd: resolve(ROOT, 'api'),
+          quiet: true
+        })
+        log(
+          String(stdout)
+            .split('\n')
+            .filter((l) => l.startsWith('partners check'))
+            .pop() ?? 'partners check: no summary'
+        )
+      } catch (err) {
+        log(`partners check: not run (${err.message})`)
+      }
       emit('preflight', 'ok')
     } else emit('preflight', 'skip', `resumed from ${FROM}`)
 

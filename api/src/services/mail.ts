@@ -4,6 +4,7 @@ import { Liquid } from 'liquidjs'
 import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { chainFields } from './chain-columns.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
 
@@ -505,21 +506,28 @@ function logMail(
   }
 ): Promise<number | null> {
   const addr = (Array.isArray(to) ? to.join(', ') : String(to)).slice(0, 1000)
-  return db('nivaro_mail_log')
-    .insert({
-      to: addr,
-      subject: String(subject ?? '').slice(0, 500),
-      template: opts?.template ? String(opts.template).slice(0, 120) : null,
-      collection: opts?.collection ? String(opts.collection).slice(0, 255) : null,
-      item: opts?.item != null ? String(opts.item).slice(0, 255) : null,
-      status,
-      error: opts?.error
-        ? String(opts.error instanceof Error ? opts.error.message : opts.error).slice(0, 2000)
-        : null,
-      body: opts?.body ? String(opts.body).slice(0, 200_000) : null,
-      created_at: new Date()
-    })
-    .returning('id')
+  // #706 — a mail sent inside a chain is a step of it (probed per tenant, so a
+  // database behind migration 385 keeps logging).
+  return chainFields('nivaro_mail_log')
+    .catch(() => ({}))
+    .then((chain) =>
+      db('nivaro_mail_log')
+        .insert({
+          ...chain,
+          to: addr,
+          subject: String(subject ?? '').slice(0, 500),
+          template: opts?.template ? String(opts.template).slice(0, 120) : null,
+          collection: opts?.collection ? String(opts.collection).slice(0, 255) : null,
+          item: opts?.item != null ? String(opts.item).slice(0, 255) : null,
+          status,
+          error: opts?.error
+            ? String(opts.error instanceof Error ? opts.error.message : opts.error).slice(0, 2000)
+            : null,
+          body: opts?.body ? String(opts.body).slice(0, 200_000) : null,
+          created_at: new Date()
+        })
+        .returning('id')
+    )
     .then((rows: unknown) => {
       const first = Array.isArray(rows) ? rows[0] : rows
       const id = first && typeof first === 'object' ? (first as { id?: unknown }).id : first

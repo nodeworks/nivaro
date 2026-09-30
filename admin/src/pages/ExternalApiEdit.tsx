@@ -17,6 +17,12 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import {
+  ContractFromTraffic,
+  FlightRecorderCard,
+  HealthSloCard,
+  RedactionCard
+} from '@/components/external-api-observability'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -527,8 +533,8 @@ export function ExternalApiEditPage() {
           </label>
         </div>
         <p className='text-[12px] text-slate-400'>
-          Ack grace: how long a 2xx response may sit unacknowledged before the reconcile sweep
-          calls it overdue.
+          Ack grace: how long a 2xx response may sit unacknowledged before the reconcile sweep calls
+          it overdue.
         </p>
         <p className='text-[12px] text-slate-400'>
           Skip grace: how long a deliberate skip may stand while the data the guard checked still
@@ -546,6 +552,17 @@ export function ExternalApiEditPage() {
         />
       )}
       {!isNew && data && (
+        <HealthSloCard apiId={data.id} data={data as Parameters<typeof HealthSloCard>[0]['data']} />
+      )}
+      {!isNew && data && (
+        <RedactionCard
+          apiId={data.id}
+          redaction={
+            (data as { redaction?: { headers?: string[]; body_paths?: string[] } | null }).redaction
+          }
+        />
+      )}
+      {!isNew && data && (
         <InstanceOverridesCard
           apiId={data.id}
           data={
@@ -557,6 +574,7 @@ export function ExternalApiEditPage() {
         />
       )}
       {!isNew && data && <ConnectorCard apiId={data.id} apiName={data.name} />}
+      {!isNew && data && <FlightRecorderCard apiId={data.id} />}
       {!isNew && data && <ApiCallLogsCard apiId={data.id} />}
       {!isNew && data && (
         <PluginSlot
@@ -868,13 +886,16 @@ function EndpointEditor({
   onChange,
   onSave,
   onCancel,
-  isSaving
+  isSaving,
+  endpointId
 }: {
   form: EndpointForm
   onChange: (f: EndpointForm) => void
   onSave: () => void
   onCancel: () => void
   isSaving: boolean
+  /** Saved endpoints only — #623 proposes a contract from its recent calls. */
+  endpointId?: number
 }) {
   const showBody = BODY_METHODS.has(form.method)
   const set = (patch: Partial<EndpointForm>) => onChange({ ...form, ...patch })
@@ -1001,6 +1022,9 @@ function EndpointEditor({
         />
         {!contractValid(form.contract) && (
           <p className='text-[11px] text-red-600'>Contract must be a JSON object.</p>
+        )}
+        {endpointId != null && (
+          <ContractFromTraffic endpointId={endpointId} onUse={(c) => set({ contract: c })} />
         )}
       </div>
       <div className='flex justify-end gap-2 pt-1'>
@@ -1304,6 +1328,7 @@ function ContractChip({
 // ─── #66 — Mock mode card ────────────────────────────────────────────────────
 type MockInstance = {
   enabled?: boolean
+  record?: boolean
   rules?: Array<{
     method?: string
     path?: string
@@ -1324,12 +1349,15 @@ function MockModeCard({
   const inst = data.current_instance ?? 'default'
   const mine = data.mock_config?.[inst]
   const [enabled, setEnabled] = useState(!!mine?.enabled)
+  // #604 — record mode: real answers become rules for this instance.
+  const [record, setRecord] = useState(!!mine?.record)
   const [rulesText, setRulesText] = useState(JSON.stringify(mine?.rules ?? [], null, 2))
   const [fallbackText, setFallbackText] = useState(
     mine?.fallback ? JSON.stringify(mine.fallback, null, 2) : ''
   )
   useEffect(() => {
     setEnabled(!!mine?.enabled)
+    setRecord(!!mine?.record)
     setRulesText(JSON.stringify(mine?.rules ?? [], null, 2))
     setFallbackText(mine?.fallback ? JSON.stringify(mine.fallback, null, 2) : '')
   }, [mine])
@@ -1349,13 +1377,24 @@ function MockModeCard({
       api.patch(`/external-apis/${apiId}`, {
         mock_config: {
           ...(data.mock_config ?? {}),
-          [inst]: { enabled, rules: rules.v ?? [], fallback: fallback.v }
+          [inst]: {
+            enabled,
+            record: record && !enabled,
+            rules: rules.v ?? [],
+            fallback: fallback.v
+          }
         }
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['external-api', String(apiId)] })
       queryClient.invalidateQueries({ queryKey: ['external-apis'] })
-      toast.success(enabled ? `Mock mode ON for ${inst}` : `Mock mode off for ${inst}`)
+      toast.success(
+        enabled
+          ? `Mock mode ON for ${inst}`
+          : record
+            ? `Recording live answers on ${inst}`
+            : `Mock mode off for ${inst}`
+      )
     },
     onError: (err: { response?: { data?: { error?: string } } }) =>
       toast.error(err.response?.data?.error ?? 'Failed to save mock config')
@@ -1383,6 +1422,28 @@ function MockModeCard({
           <Switch checked={enabled} onCheckedChange={setEnabled} data-mock-switch />
           {enabled ? 'On' : 'Off'}
         </label>
+      </div>
+      <div
+        className='mt-3 flex items-start justify-between gap-3 rounded-md border border-slate-200 px-3 py-2 dark:border-border'
+        data-mock-record
+      >
+        <div>
+          <p className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
+            Record live answers
+          </p>
+          <p className='text-[11.5px] text-slate-400'>
+            While mock mode is off, every real answer this API gives on{' '}
+            <span className='font-mono'>{inst}</span> (status below 500, under 64 KB) is saved as a
+            rule for its method and path — turn mock mode on later to replay them when the host is
+            down. Credential-looking values and this API's redaction paths are masked.
+          </p>
+        </div>
+        <Switch
+          checked={record && !enabled}
+          disabled={enabled}
+          onCheckedChange={setRecord}
+          data-mock-record-switch
+        />
       </div>
       <div className='mt-3 grid gap-3 lg:grid-cols-[1fr_260px]'>
         <div>
@@ -1950,6 +2011,7 @@ function EndpointsCard({ apiId }: { apiId: number }) {
             {expandedId === ep.id ? (
               <div className='p-3'>
                 <EndpointEditor
+                  endpointId={ep.id}
                   form={editForms[ep.id] ?? epToForm(ep)}
                   onChange={(f) => setEditForms((prev) => ({ ...prev, [ep.id]: f }))}
                   onSave={() =>

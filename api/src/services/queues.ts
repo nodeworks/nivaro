@@ -34,6 +34,7 @@ import {
   loadAddendums
 } from './pipeline-subject.js'
 import { applyQueueGate, queueGateFor } from './queue-access.js'
+import { integrationsFilterBuckets, integrationsMatchKeys } from './queue-integrations.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
 
@@ -3022,8 +3023,18 @@ export async function fetchQueueItems(
   )
   // "Unseen changes" (#643): one batched read over the scoped rows.
   const unseenMap = wantsUnseen(options.filters) ? await unseenForItems(user.id, scoped) : null
-  const keepUnseen = (list: QueueItem[]) =>
-    unseenMap ? list.filter((i) => unseenMap.has(`${i.collection}:${i.item_id}`)) : list
+  // #630 — integration partners (failed / pending / never …): one batched
+  // read over the obligations ledger, filtered in memory like unseen.
+  const integrationBuckets = integrationsFilterBuckets(options.filters?.integrations)
+  const integrationKeys = integrationBuckets
+    ? await integrationsMatchKeys(scoped, integrationBuckets)
+    : null
+  const keepUnseen = (list: QueueItem[]) => {
+    let out = unseenMap ? list.filter((i) => unseenMap.has(`${i.collection}:${i.item_id}`)) : list
+    if (integrationKeys)
+      out = out.filter((i) => integrationKeys.has(`${i.collection}:${i.item_id}`))
+    return out
+  }
   const filtered = keepUnseen(
     options.filters ? applyColumnFilters(scoped, options.filters) : scoped
   )

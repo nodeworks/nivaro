@@ -1,4 +1,3 @@
-import { markBootPhase } from '../services/boot-phases.js'
 import {
   execute,
   type GraphQLSchema,
@@ -14,6 +13,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
+import { markBootPhase } from '../services/boot-phases.js'
 import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { buildGraphQLSchema } from '../services/schema-builder.js'
 
@@ -135,6 +135,12 @@ async function lookupPersistedQuery(key: { id?: unknown; hash?: string }): Promi
 
   pqCache.set(cacheKey, { query, expires: Date.now() + PQ_CACHE_TTL_MS })
   return query
+}
+
+/** The served schema (built once, shared) — for readers such as the partner
+ *  dependency map (#608) that walk documents against it. */
+export function getGraphQLSchema(): Promise<GraphQLSchema> {
+  return getSchema()
 }
 
 export async function rebuildGraphQLSchema(): Promise<void> {

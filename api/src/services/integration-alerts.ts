@@ -214,20 +214,137 @@ function isRoutableRecord(collection: string): boolean {
   return !!collection && !/^nivaro_/i.test(collection)
 }
 
-export async function alertUnmetObligations(): Promise<{ notified: number }> {
+/** Who hears about one unmet row: the API's owner plus the record's
+ *  resolved owners, uppercased and deduped. Shared by the real sweep and the
+ *  arming preview so the two can never disagree about a recipient. */
+function recipientsFor(
+  r: ObligationAlertRow,
+  apiOwners: Map<string, string | null>,
+  recordOwners: Map<string, string[]>
+): Set<string> {
+  const recipients = new Set<string>()
+  const apiOwner = apiOwners.get(r.api)
+  if (apiOwner) recipients.add(apiOwner.toUpperCase())
+  for (const uid of recordOwners.get(recordKey(r.collection, r.item)) ?? []) recipients.add(uid)
+  return recipients
+}
+
+/** What the first notification cycle would do (#772) — read before an admin
+ *  turns `integration_notifications_enabled` on. */
+export interface AlertPlan {
+  /** Unmet obligations this cycle would consider (dedupe window passed). */
+  obligations: number
+  /** Messages it would send — one per (obligation, recipient). */
+  messages: number
+  /** Obligations nobody can be told about (no API owner, no open record). */
+  recipientless: number
+  recipients: Array<{ id: string; name: string; messages: number }>
+  /** The obligations themselves, oldest first (capped with the batch). */
+  rows: Array<{
+    id: number
+    api: string
+    kind: string
+    collection: string
+    item: string
+    outcome: string
+    reason: string | null
+    recipients: number
+  }>
+}
+
+/** Display names for a set of (uppercased) user ids — one query. */
+async function userNames(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (ids.length === 0) return out
+  try {
+    const rows = (await db('nivaro_users')
+      .whereIn('id', ids)
+      .select('id', 'first_name', 'last_name', 'email')) as Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    for (const u of rows) {
+      const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || u.id
+      out.set(String(u.id).toUpperCase(), name)
+    }
+  } catch {
+    // names are decoration — ids still read
+  }
+  return out
+}
+
+/**
+ * The unmet-obligation sweep. With `dryRun` it computes exactly what a real
+ * cycle would do — same rows, same dedupe rule, same recipients — and
+ * returns it as a plan: it claims nothing, stamps nothing and sends nothing,
+ * and it runs whether or not the switch is on (the preview exists precisely
+ * for before it is).
+ */
+export async function alertUnmetObligations(
+  opts: { dryRun?: boolean } = {}
+): Promise<{ notified: number; plan?: AlertPlan }> {
+  const dryRun = opts.dryRun === true
   const app = _app
-  if (!app) return { notified: 0 }
-  if (!(await notificationsEnabled())) return { notified: 0 }
+  if (!dryRun) {
+    if (!app) return { notified: 0 }
+    if (!(await notificationsEnabled())) return { notified: 0 }
+  }
 
   const now = new Date()
   const rows = await fetchUnmetRows(BATCH)
   const due = rows.filter((r) => shouldNotify(r, now, DEDUPE_HOURS))
-  if (due.length === 0) return { notified: 0 }
+  if (due.length === 0) {
+    return dryRun
+      ? {
+          notified: 0,
+          plan: { obligations: 0, messages: 0, recipientless: 0, recipients: [], rows: [] }
+        }
+      : { notified: 0 }
+  }
 
   const [apiOwners, recordOwners] = await Promise.all([
     apiOwnerMap().catch(() => new Map<string, string | null>()),
     batchRecordOwners(due.map((r) => ({ collection: r.collection, item: r.item })))
   ])
+
+  if (dryRun) {
+    const perUser = new Map<string, number>()
+    let messages = 0
+    let recipientless = 0
+    const planRows: AlertPlan['rows'] = []
+    for (const r of due) {
+      const recipients = recipientsFor(r, apiOwners, recordOwners)
+      if (recipients.size === 0) recipientless++
+      for (const uid of recipients) perUser.set(uid, (perUser.get(uid) ?? 0) + 1)
+      messages += recipients.size
+      planRows.push({
+        id: r.id,
+        api: r.api,
+        kind: r.kind,
+        collection: r.collection,
+        item: r.item,
+        outcome: r.outcome,
+        reason: r.reason,
+        recipients: recipients.size
+      })
+    }
+    const names = await userNames([...perUser.keys()])
+    return {
+      notified: 0,
+      plan: {
+        obligations: due.length,
+        messages,
+        recipientless,
+        recipients: [...perUser.entries()]
+          .map(([id, n]) => ({ id, name: names.get(id) ?? id, messages: n }))
+          .sort((a, b) => b.messages - a.messages || a.name.localeCompare(b.name)),
+        rows: planRows
+      }
+    }
+  }
+  if (!app) return { notified: 0 }
 
   const cutoff = dedupeCutoff(now, DEDUPE_HOURS)
   let notified = 0
@@ -255,10 +372,7 @@ export async function alertUnmetObligations(): Promise<{ notified: number }> {
     }
     if (!claimed) continue
 
-    const recipients = new Set<string>()
-    const apiOwner = apiOwners.get(r.api)
-    if (apiOwner) recipients.add(apiOwner.toUpperCase())
-    for (const uid of recordOwners.get(recordKey(r.collection, r.item)) ?? []) recipients.add(uid)
+    const recipients = recipientsFor(r, apiOwners, recordOwners)
     if (recipients.size === 0) {
       recipientless++
       continue

@@ -116,6 +116,23 @@ export const BUILTIN_BULK_ACTIONS: BuiltinBulkAction[] = [
     defaultAccess: { mode: 'everyone' }
   },
   {
+    key: 'push',
+    label: 'Push…',
+    summary:
+      'Run a registered push (an item action such as "Push to <partner>") on every selected record',
+    surfaces: ['browser', 'queue'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
+    key: 'retry-push',
+    label: 'Retry failed pushes',
+    summary: "Re-send each selected record's latest failed push, partner by partner",
+    surfaces: ['browser', 'queue'],
+    variant: 'default',
+    defaultAccess: { mode: 'everyone' }
+  },
+  {
     key: 'claim',
     label: 'Claim',
     summary: 'Claim the selected queue items for yourself',

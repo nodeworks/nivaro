@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { Button } from '../ui/button'
 
 /**
@@ -26,15 +27,11 @@ interface ItemActionMeta {
     confirm_label?: string
     input?: { label: string; placeholder?: string; required?: boolean }
   }
+  /** The action can pre-flight this record (#616): a readiness chip shows. */
+  has_preflight?: boolean
 }
 
-export function ItemActionButtons({
-  collection,
-  itemId
-}: {
-  collection: string
-  itemId: string
-}) {
+export function ItemActionButtons({ collection, itemId }: { collection: string; itemId: string }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [runningId, setRunningId] = useState<string | null>(null)
@@ -43,7 +40,9 @@ export function ItemActionButtons({
     queryKey: ['item-actions', collection, itemId],
     queryFn: () =>
       client
-        .request<{ data: ItemActionMeta[] }>(get('/item-actions/registered', { collection, item: itemId }))
+        .request<{ data: ItemActionMeta[] }>(
+          get('/item-actions/registered', { collection, item: itemId })
+        )
         .then((r) => r.data ?? []),
     staleTime: 5 * 60_000
   })
@@ -95,30 +94,40 @@ export function ItemActionButtons({
   return (
     <>
       {actions.map((a) => (
-        <Button
-          key={a.id}
-          type='button'
-          size='sm'
-          variant={a.variant ?? 'outline'}
-          className='gap-1.5'
-          disabled={runningId !== null}
-          onClick={() => {
-            if (a.confirm) {
-              setNote('')
-              setConfirming(a)
-              return
-            }
-            setRunningId(a.id)
-            execute.mutate({ action: a })
-          }}
-        >
-          {runningId === a.id ? (
-            <Loader2 className='h-3.5 w-3.5 animate-spin' />
-          ) : (
-            <Play className='h-3.5 w-3.5' />
+        <span key={a.id} className='inline-flex items-center gap-1'>
+          <Button
+            type='button'
+            size='sm'
+            variant={a.variant ?? 'outline'}
+            className='gap-1.5'
+            disabled={runningId !== null}
+            onClick={() => {
+              if (a.confirm) {
+                setNote('')
+                setConfirming(a)
+                return
+              }
+              setRunningId(a.id)
+              execute.mutate({ action: a })
+            }}
+          >
+            {runningId === a.id ? (
+              <Loader2 className='h-3.5 w-3.5 animate-spin' />
+            ) : (
+              <Play className='h-3.5 w-3.5' />
+            )}
+            {a.label}
+          </Button>
+          {a.has_preflight && (
+            <PushReadinessChip
+              collection={collection}
+              itemId={String(itemId)}
+              itemActionId={a.id}
+              label={a.label}
+              compact
+            />
           )}
-          {a.label}
-        </Button>
+        </span>
       ))}
       {confirming &&
         createPortal(
@@ -157,12 +166,7 @@ export function ItemActionButtons({
                 </div>
               )}
               <div className='mt-4 flex justify-end gap-2'>
-                <Button
-                  type='button'
-                  size='sm'
-                  variant='ghost'
-                  onClick={() => setConfirming(null)}
-                >
+                <Button type='button' size='sm' variant='ghost' onClick={() => setConfirming(null)}>
                   Cancel
                 </Button>
                 <Button

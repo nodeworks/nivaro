@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { type AnomalyResult, evaluateAnomalyAlert } from '../services/anomaly.js'
+import { chainFields } from '../services/chain-columns.js'
 import { sendMail } from '../services/mail.js'
 import { hooks } from './registry.js'
 
@@ -79,6 +80,7 @@ async function notifyAlertSubscribers(
       try {
         const rows = await db('nivaro_notifications')
           .insert({
+            ...(await chainFields('nivaro_notifications')),
             recipient: sub.user,
             subject,
             status: 'inbox',

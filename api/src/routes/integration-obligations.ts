@@ -192,6 +192,69 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
     }
   })
 
+  // Arming preview (#772): what the FIRST cycle of each Phase-2 pass would do
+  // if its switch were on right now — owners who would be told, submissions
+  // that would retry (by error class), missing obligations that would
+  // re-fire. Every pass runs in dry-run mode: it claims nothing, stamps
+  // nothing and sends nothing, whatever the switches say.
+  app.get('/integration-obligations/arming-preview', { preHandler: requireAdmin }, async () => {
+    const alerts = await import('../services/integration-alerts.js')
+    const remediation = await import('../services/integration-remediation.js')
+    const [notificationsOn, remediationOn, alertRun, retryRun, refireRun] = await Promise.all([
+      alerts.notificationsEnabled(),
+      remediation.remediationEnabled(),
+      alerts.alertUnmetObligations({ dryRun: true }),
+      remediation.runRetryPass({ dryRun: true }),
+      remediation.runMissingRefirePass({ dryRun: true })
+    ])
+    const { resolveFriendlyId } = await import('../services/workflow-transitions.js')
+    const labelOf = async (collection: string | null, item: string | null, kind: string | null) => {
+      if (!collection || item == null) return null
+      if (/^nivaro_/i.test(collection)) return `${kind ?? collection} · ${item}`
+      return resolveFriendlyId(collection, item).catch(() => `${collection} #${item}`)
+    }
+    const LABELLED = 50
+    const labelled = async <T extends { collection: string | null; item: string | null }>(
+      rows: T[],
+      kindOf: (r: T) => string | null
+    ) =>
+      Promise.all(
+        rows.map(async (r, i) => ({
+          ...r,
+          label: i < LABELLED ? await labelOf(r.collection, r.item, kindOf(r)) : null
+        }))
+      )
+    const alertPlan = alertRun.plan ?? null
+    const retryPlan = retryRun.plan ?? null
+    const refirePlan = refireRun.plan ?? null
+    return {
+      data: {
+        notifications: {
+          enabled: notificationsOn,
+          plan: alertPlan && {
+            ...alertPlan,
+            rows: await labelled(alertPlan.rows, (r) => r.kind)
+          }
+        },
+        remediation: {
+          enabled: remediationOn,
+          retry: retryPlan && {
+            ...retryPlan,
+            retry: await labelled(retryPlan.retry, (r) => r.kind),
+            waiting: await labelled(retryPlan.waiting, (r) => r.kind),
+            give_up: await labelled(retryPlan.give_up, (r) => r.kind)
+          },
+          refire: refirePlan && {
+            ...refirePlan,
+            refire: await labelled(refirePlan.refire, (r) => r.kind),
+            queued: await labelled(refirePlan.queued, (r) => r.kind)
+          }
+        },
+        generated_at: new Date().toISOString()
+      }
+    }
+  })
+
   // Which collections have ANY registered obligation kind — a cheap,
   // long-cacheable probe so the collection browser and queue columns know
   // whether to even ask for a given collection, the same "probe once, don't
@@ -371,7 +434,12 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       // The kind's human label ("Fusion — transfer order submitted") rides
       // along so the record banner never has to humanize a machine key.
       const data = (
-        rows as Array<{ api: string; kind: string; trigger: string | null; trigger_ref: string | null }>
+        rows as Array<{
+          api: string
+          kind: string
+          trigger: string | null
+          trigger_ref: string | null
+        }>
       ).map(({ trigger_ref, ...r }) => {
         const tx =
           r.trigger === 'transition' && trigger_ref

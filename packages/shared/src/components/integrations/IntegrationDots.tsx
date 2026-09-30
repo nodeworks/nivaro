@@ -20,11 +20,11 @@ const TONE_WORD: Record<'positive' | 'warning' | 'danger' | 'neutral', string> =
   neutral: 'unknown'
 }
 
-/** The filter-pill set the collection browser offers (its own conditions[]
- *  round trip to `/items/:collection` — the queue has no equivalent server
- *  path, so it gets the column but not the filter). Values are the same
- *  bucket names `applyIntegrationsFilter` (api/src/services/items.ts) reads,
- *  so a picked value needs no translation before it rides a condition. */
+/** The filter set the collection browser (a `$integrations` condition to
+ *  `/items/:collection`) and the queue (`filters.integrations`, #630 —
+ *  services/queue-integrations.ts) both offer. Values are the bucket names
+ *  `applyIntegrationsFilter` (api/src/services/items.ts) reads, so a picked
+ *  value needs no translation on either surface. */
 export const INTEGRATIONS_FILTER_OPTIONS = [
   { value: 'danger', label: 'Overdue, failed or missing' },
   { value: 'warning', label: 'Pending or skipped' },

@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { chainFields } from './chain-columns.js'
 import { getApp } from './io-holder.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
@@ -144,6 +145,7 @@ export async function findOrCreateFromOIDC(profile: {
           return
         }
         await db('nivaro_notifications').insert({
+          ...(await chainFields('nivaro_notifications')),
           recipient: newId,
           subject: 'Welcome!',
           status: 'inbox',

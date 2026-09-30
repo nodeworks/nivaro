@@ -14,6 +14,8 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
+import { CallerChangesSection } from './CallerChanges'
+import { PartnerDependenciesPanel } from './PartnerDependencies'
 
 /**
  * Per-request API log — the list behind the /api-analytics aggregates, and
@@ -601,7 +603,7 @@ function Segment({
  */
 // #67 — the stored body of an inbound write + replay it (as the admin who
 // clicks, in-process) either verbatim or after editing.
-function ReplayBlock({ row }: { row: ApiLogRow }) {
+export function ReplayBlock({ row }: { row: ApiLogRow }) {
   const client = useNivaroClient()
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(() => {
@@ -928,6 +930,30 @@ export function InboundCallersView({ hours: initialHours = 24 }: { hours?: numbe
             )
           })}
         </div>
+      )}
+
+      {/* #609 — what the picked caller actually changed, record by record. */}
+      {picked && (picked.kind === 'api_key' ? picked.api_key_id != null : !!picked.user) && (
+        <CallerChangesSection
+          key={picked.key}
+          caller={{
+            key:
+              picked.kind === 'api_key'
+                ? `k${picked.api_key_id}`
+                : `u${String(picked.user).toUpperCase()}`,
+            label: picked.label
+          }}
+          hours={Math.max(hours, 24)}
+        />
+      )}
+
+      {/* #608 — what the picked caller depends on (collections, fields, operations). */}
+      {picked && (
+        <PartnerDependenciesPanel
+          key={`deps-${picked.key}`}
+          callerKey={picked.key}
+          label={picked.label}
+        />
       )}
 
       <AuthFailuresSection

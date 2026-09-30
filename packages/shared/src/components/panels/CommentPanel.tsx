@@ -19,6 +19,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { formatRelative } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
+import { InboundRequestPopover } from '../integrations/InboundRequest'
 import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
@@ -342,7 +343,7 @@ function MentionTextarea({
  *  the transition, change or addendum that captured it. */
 interface RelatedNote {
   id: string
-  source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external' | 'import'
+  source: 'transition' | 'change_reason' | 'addendum' | 'note' | 'external' | 'import' | 'inbound'
   label: string
   text: string
   context: string | null
@@ -366,6 +367,14 @@ interface RelatedNote {
     rows: number
     action: 'create' | 'update'
   } | null
+  /** Inbound entries (#609): a token / API-key caller's write + the
+   *  activity row that opens the request behind it. */
+  inbound?: {
+    activity_id: number
+    caller_key: string
+    caller_kind: 'api_key' | 'token' | 'account'
+    fields: string[]
+  } | null
 }
 
 /** #3 — who wrote the entry, for the thread's filter chips. */
@@ -376,6 +385,7 @@ function noteKindOf(entry: { kind: 'comment' } | { kind: 'related'; note: Relate
     case 'note':
       return 'people'
     case 'external':
+    case 'inbound':
       return 'integration'
     default:
       return 'system'
@@ -475,7 +485,7 @@ function RecordedNote({
       ? 'border-nvr-cyan/30 bg-nvr-cyan/[0.06] text-nvr-navy dark:text-nvr-cyan'
       : note.source === 'addendum'
         ? 'border-amber-200 bg-amber-50/60 text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-400'
-        : note.source === 'external'
+        : note.source === 'external' || note.source === 'inbound'
           ? 'border-sky-200 bg-sky-50/70 text-sky-700 dark:border-sky-900/40 dark:bg-sky-900/10 dark:text-sky-300'
           : note.source === 'import'
             ? 'border-emerald-200 bg-emerald-50/70 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/10 dark:text-emerald-300'
@@ -520,6 +530,24 @@ function RecordedNote({
               <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
             ))}
           <span className='text-[11px] text-slate-400'>{formatRelative(note.created_at)}</span>
+          {note.source === 'inbound' && note.inbound && (
+            <InboundRequestPopover
+              activityId={note.inbound.activity_id}
+              callerName={note.label}
+              collection={collection}
+              itemId={item}
+              align='end'
+            >
+              <button
+                type='button'
+                data-note-inbound-request={note.inbound.activity_id}
+                className='ml-auto rounded px-1.5 py-px text-[10.5px] font-medium text-sky-700 transition-colors hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-900/20'
+                data-tip='The request this caller sent, and everything it set off'
+              >
+                Request
+              </button>
+            </InboundRequestPopover>
+          )}
           {note.source === 'external' && note.status === 'error' && (
             <span className='rounded bg-red-50 px-1 text-[10px] font-medium text-red-700 dark:bg-red-500/10 dark:text-red-400'>
               error

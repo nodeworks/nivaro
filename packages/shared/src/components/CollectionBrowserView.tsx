@@ -74,6 +74,7 @@ import {
   useAvailableBulkActions,
   useBuiltinGate
 } from './bulk/BulkActionButtons'
+import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
@@ -743,6 +744,15 @@ export function RowActionsMenu({
       return verdict !== false
     })
   }, [open, bulkData, collection, bulkEnabledKeys, row])
+  // #622 — integration pushes for this row: registered item actions that
+  // apply to the record, and a retry when a partner's latest push failed.
+  const { pushActions, failedPartners } = useRowPushActions({
+    collection,
+    id,
+    open,
+    bulkData,
+    bulkEnabledKeys
+  })
   const stateById = useMemo(
     () => new Map((instance?.states ?? []).map((st) => [st.id, st])),
     [instance]
@@ -793,6 +803,8 @@ export function RowActionsMenu({
     picked: string | null
     /** Set when the confirm is for a registry action rather than a transition. */
     action?: AvailableBulkAction
+    /** #622 — set when the confirm is an integration push / retry. */
+    push?: RowPushOp
   } | null>(null)
   const [reason, setReason] = useState('')
   useEffect(() => {
@@ -882,6 +894,37 @@ export function RowActionsMenu({
     }
   })
 
+  // #622 — one-record push / retry through the bulk endpoints (the built-in
+  // switch, access, update permission and per-record gates all apply).
+  const pushMut = useMutation({
+    mutationFn: ({ op, note }: { op: RowPushOp; note?: string }) =>
+      runRowPush(client, collection, id, op, note).then((outcome) => ({ op, outcome })),
+    onSuccess: ({ op, outcome }) => {
+      setOpen(false)
+      const label = op.kind === 'push' ? op.action.label : 'Retry'
+      if (!outcome) toast.info(`${label}: nothing ran`)
+      else if (outcome.outcome === 'fail')
+        toast.error(`${label} failed`, { description: outcome.reason, duration: 10000 })
+      else if (outcome.outcome === 'skip') toast.info(`${label}: ${outcome.reason ?? 'skipped'}`)
+      else toast.success(outcome.reason ?? label)
+      for (const key of [
+        'row-push-state',
+        'erp-submissions',
+        'cbv-integrations-summary',
+        'queue-integrations-summary',
+        'integration-obligations',
+        'item-actions'
+      ])
+        void qc.invalidateQueries({ queryKey: [key] })
+      invalidateCbvRowQueries(qc, collection)
+      onAfterTransition?.()
+    },
+    onError: (err: unknown) => {
+      const resp = (err as { response?: { error?: string } }).response
+      toast.error(resp?.error ?? (err instanceof Error ? err.message : 'Push failed'))
+    }
+  })
+
   const item = (label: string, onClick: () => void, danger = false) => (
     <button
       type='button'
@@ -934,6 +977,17 @@ export function RowActionsMenu({
                     {confirm.action.confirm_text ?? confirm.action.summary}
                   </p>
                 )}
+                {confirm.push && (
+                  <p
+                    className='mb-1.5 px-1 text-[11.5px] leading-snug text-slate-500 dark:text-slate-400'
+                    data-row-push-confirm={confirm.push.kind}
+                  >
+                    {confirm.push.kind === 'push'
+                      ? (confirm.push.action.confirm?.body ??
+                        `Sends this record to the partner now — a real request, the same one the record’s ${confirm.push.action.label} button sends.`)
+                      : `Re-sends the stored request to ${confirm.push.partners.join(', ')}.`}
+                  </p>
+                )}
                 {confirm.options.length > 1 && (
                   <div className='mb-1.5 space-y-0.5'>
                     {confirm.options.map((t) => (
@@ -957,28 +1011,41 @@ export function RowActionsMenu({
                     ))}
                   </div>
                 )}
-                <textarea
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder={
-                    confirm.action?.require_reason
-                      ? 'Reason (required — recorded on the record’s history)…'
-                      : 'Reason (optional)…'
-                  }
-                  rows={2}
-                  className='w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                />
+                {(!confirm.push ||
+                  (confirm.push.kind === 'push' && confirm.push.action.confirm?.input)) && (
+                  <textarea
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder={
+                      confirm.push?.kind === 'push'
+                        ? (confirm.push.action.confirm?.input?.placeholder ??
+                          confirm.push.action.confirm?.input?.label ??
+                          '')
+                        : confirm.action?.require_reason
+                          ? 'Reason (required — recorded on the record’s history)…'
+                          : 'Reason (optional)…'
+                    }
+                    rows={2}
+                    className='w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                  />
+                )}
                 <div className='mt-1.5 flex gap-1.5'>
                   <button
                     type='button'
                     disabled={
-                      confirm.action
-                        ? actionMut.isPending ||
-                          (confirm.action.require_reason && reason.trim().length === 0)
-                        : !confirm.picked || transitionMut.isPending
+                      confirm.push
+                        ? pushMut.isPending ||
+                          (confirm.push.kind === 'push' &&
+                            !!confirm.push.action.confirm?.input?.required &&
+                            reason.trim().length === 0)
+                        : confirm.action
+                          ? actionMut.isPending ||
+                            (confirm.action.require_reason && reason.trim().length === 0)
+                          : !confirm.picked || transitionMut.isPending
                     }
                     onClick={() => {
-                      if (confirm.action)
+                      if (confirm.push) pushMut.mutate({ op: confirm.push, note: reason })
+                      else if (confirm.action)
                         actionMut.mutate({ action: confirm.action, comment: reason })
                       else if (confirm.picked)
                         transitionMut.mutate({ transitionId: confirm.picked, comment: reason })
@@ -988,7 +1055,13 @@ export function RowActionsMenu({
                       confirm.action?.variant === 'danger' ? 'bg-red-600' : 'bg-nvr-cyan'
                     }`}
                   >
-                    {transitionMut.isPending || actionMut.isPending ? 'Applying…' : 'Confirm'}
+                    {transitionMut.isPending || actionMut.isPending || pushMut.isPending
+                      ? 'Applying…'
+                      : confirm.push?.kind === 'push'
+                        ? (confirm.push.action.confirm?.confirm_label ?? 'Send')
+                        : confirm.push
+                          ? 'Retry'
+                          : 'Confirm'}
                   </button>
                   <button
                     type='button'
@@ -1086,6 +1159,55 @@ export function RowActionsMenu({
                         {a.label}
                       </button>
                     ))}
+                  </>
+                )}
+                {(pushActions.length > 0 || failedPartners.length > 0) && (
+                  <>
+                    {divider}
+                    <p className='px-3 pb-0.5 pt-1 text-[9.5px] font-bold uppercase tracking-wider text-slate-400'>
+                      Integrations
+                    </p>
+                    {pushActions.map((a) => (
+                      <button
+                        key={a.id}
+                        type='button'
+                        data-row-push-action={a.id}
+                        title={`Push now — ${a.label}`}
+                        onClick={() =>
+                          setConfirm({
+                            label: a.label,
+                            options: [],
+                            picked: null,
+                            push: { kind: 'push', action: a }
+                          })
+                        }
+                        className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                    {failedPartners.length > 0 && (
+                      <button
+                        type='button'
+                        data-row-retry-push={failedPartners.join(',')}
+                        title={`Latest push failed: ${failedPartners.join(', ')}`}
+                        onClick={() =>
+                          setConfirm({
+                            label: 'Retry last failed push',
+                            options: [],
+                            picked: null,
+                            push: { kind: 'retry', partners: failedPartners }
+                          })
+                        }
+                        className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950'
+                      >
+                        <span
+                          aria-hidden
+                          className='h-1.5 w-1.5 shrink-0 rounded-full bg-red-500'
+                        />
+                        <span className='min-w-0 flex-1 truncate'>Retry last failed push</span>
+                      </button>
+                    )}
                   </>
                 )}
                 {divider}

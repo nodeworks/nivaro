@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { withChainStep } from './chain.js'
+import { chainFields } from './chain-columns.js'
 import { sendMail } from './mail.js'
 import {
   actionsFor,
@@ -817,7 +819,9 @@ export async function notifyUser(
           category: decision.category,
           lane,
           delivery: JSON.stringify(delivery),
-          detail
+          detail,
+          // #706 — the row is a step of whatever chain told this person.
+          ...(await chainFields('nivaro_notifications'))
         })
         .returning('*')
       const rawId = (notif as { id?: unknown } | undefined)?.id
@@ -866,7 +870,9 @@ export async function notifyUser(
       }
     }
 
-    if (channels.email || channels.sms) {
+    // The email / SMS this notification sends hangs under the inbox row in
+    // the event path (#706): "told X in-app, then emailed them".
+    const sendOtherChannels = async () => {
       const user = (await db('nivaro_users').where({ id: userId }).first()) as
         | { email: string | null; first_name: string | null; phone?: string | null }
         | undefined
@@ -940,6 +946,10 @@ export async function notifyUser(
         const ok = await sendSms(user.phone, `${opts.subject}\n${opts.message}`.slice(0, 1600))
         await stampDelivery(notifId, { sms: { status: ok ? 'sent' : 'failed' } })
       }
+    }
+    if (channels.email || channels.sms) {
+      if (notifId != null) await withChainStep(`notification:${notifId}`, sendOtherChannels)
+      else await sendOtherChannels()
     }
   } catch (err) {
     // Notifications are non-critical — never break the calling flow
