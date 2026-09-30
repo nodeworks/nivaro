@@ -27,22 +27,23 @@ import {
 } from '../ui/dropdown-menu'
 import { Sheet, SheetContent } from '../ui/sheet'
 import { CollectionImportPanel } from './CollectionImportPanel'
+import { DefinitionHealthPanel } from './DefinitionHealthPanel'
 import { DefinitionsPanel } from './DefinitionsPanel'
 import { NewImportDialog } from './NewImportDialog'
 import { RunDetailSheet } from './RunDetailSheet'
 import { LIVE_POLL_MS, STATUS_STYLE, StatusPill, useElapsed } from './run-parts'
 import {
+  definitionTitle,
+  formatDuration,
   type ImportDefinition,
   type ImportProgressEvent,
   type ImportRealtimeAdapter,
   type ImportRun,
   type ImportRunStatus,
   type ImportStats,
+  importMode,
   RUN_STATUSES,
-  definitionTitle,
-  formatDuration,
-  runnerName,
-  importMode
+  runnerName
 } from './types'
 
 export type { ImportProgressEvent, ImportRealtimeAdapter, ImportRun } from './types'
@@ -247,7 +248,9 @@ export function ImportConsole({
   const definitionsQuery = useQuery({
     queryKey: ['staged-import-definitions'],
     queryFn: () =>
-      client.request(get<{ data: ImportDefinition[] }>('/staged-imports/definitions', { all: true }))
+      client.request(
+        get<{ data: ImportDefinition[] }>('/staged-imports/definitions', { all: true })
+      )
   })
   const definitions = useMemo(
     () => definitionsQuery.data?.data ?? [],
@@ -572,6 +575,14 @@ export function ImportConsole({
             />
           )}
 
+          {isAdmin && definitions.length > 0 && (
+            <DefinitionHealthPanel
+              definitions={definitions}
+              selectedKey={importKey}
+              onSelectKey={setImportKey}
+            />
+          )}
+
           {/* ── Insight strip. Left half filters, right half reports. ────── */}
           <div className='flex flex-wrap items-stretch divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
             <StatusSegment
@@ -636,8 +647,8 @@ export function ImportConsole({
                 </h3>
                 <p className='mt-1.5 text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
                   An import reads a file and brings its rows into the records it is defined for.
-                  Runs are queued here and picked up by the worker within a few seconds, one at a
-                  time.
+                  Runs are queued here and picked up by the worker within a few seconds. Runs that
+                  share a staging table go one at a time; others run side by side.
                 </p>
                 {isAdmin && (
                   <div className='mt-4 flex items-center gap-2'>

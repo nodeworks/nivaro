@@ -2,22 +2,24 @@ import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
-import { parseServiceConfig, runServiceImport, type ServiceImportSummary } from '../services/staged-import-service.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFileBuffer } from '../services/files.js'
-import {
-  hasRunReports,
-  parseRunReport,
-  rebuildRunReport
-} from '../services/import-run-report.js'
-import { executeRevert, planRevert } from '../services/import-run-revert.js'
 import {
   getImportProcessor,
   isProcessorKey,
   listImportProcessors,
   runImportProcessor
 } from '../services/import-processors.js'
+import { parseRecalcRollups } from '../services/import-rollups.js'
+import { hasRunReports, parseRunReport, rebuildRunReport } from '../services/import-run-report.js'
+import { executeRevert, planRevert } from '../services/import-run-revert.js'
+import { describeStagingTables, purgeStagingTable } from '../services/staged-import-purge.js'
+import {
+  parseServiceConfig,
+  runServiceImport,
+  type ServiceImportSummary
+} from '../services/staged-import-service.js'
 import {
   parseStagingColumns,
   parseValidationConfig,
@@ -420,6 +422,49 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       for (const f of ['label', 'description', 'staging_table', 'procedure', 'loader', 'sort']) {
         if (b[f] !== undefined) patch[f] = b[f]
       }
+      if (
+        patch.loader !== undefined &&
+        patch.loader !== null &&
+        !['bulk', 'bulk_only', 'insert'].includes(String(patch.loader))
+      ) {
+        return reply.code(400).send({ error: 'loader must be insert, bulk or bulk_only' })
+      }
+      // #802 lock group, #719 rollup collections, #846 staging purge window.
+      if (b.lock_group !== undefined) {
+        const g = b.lock_group == null ? '' : String(b.lock_group).trim()
+        if (g.length > 120) return reply.code(400).send({ error: 'lock_group is too long' })
+        patch.lock_group = g || null
+      }
+      if (b.recalc_rollups !== undefined) {
+        const cols = parseRecalcRollups(b.recalc_rollups)
+        if (cols.length > 0) {
+          const known = new Set(
+            (
+              (await db('nivaro_collections')
+                .whereIn('collection', cols)
+                .pluck('collection')) as string[]
+            ).map((c) => c.toLowerCase())
+          )
+          const missing = cols.filter((c) => !known.has(c.toLowerCase()))
+          if (missing.length > 0) {
+            return reply.code(400).send({ error: `Unknown collection(s): ${missing.join(', ')}` })
+          }
+        }
+        patch.recalc_rollups = cols.length > 0 ? JSON.stringify(cols) : null
+      }
+      if (b.staging_purge_days !== undefined) {
+        if (b.staging_purge_days === null || b.staging_purge_days === '') {
+          patch.staging_purge_days = null
+        } else {
+          const n = Number(b.staging_purge_days)
+          if (!Number.isInteger(n) || n < 0 || n > 3650) {
+            return reply
+              .code(400)
+              .send({ error: 'staging_purge_days must be a whole number of days (blank or 0 = keep)' })
+          }
+          patch.staging_purge_days = n
+        }
+      }
       // Config fields arrive as objects or JSON strings; both normalize to a
       // stored JSON string (or null to clear). Bad JSON is a 400, not a save.
       for (const f of ['staging_columns', 'validation'] as const) {
@@ -507,6 +552,94 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         req
       })
       return { data: await getImportDefinition(String(row.key)) }
+    }
+  )
+
+  // #650 — per-definition health: error rate, row trend and the observed
+  // cadence over a window. Staleness (expected cadence) comes from the
+  // import-stale signal, which the client reads beside this.
+  app.get('/definition-health', { preHandler: requireAdmin }, async (req) => {
+    const days = Math.max(
+      1,
+      Math.min(Number((req.query as { days?: string }).days ?? 30) || 30, 365)
+    )
+    const since = new Date(Date.now() - days * 86_400_000)
+    const rows = (await db('nivaro_import_queue')
+      .where('created_at', '>=', since)
+      .orderBy('id', 'asc')
+      .limit(20_000)
+      .select(
+        'id',
+        'import_key',
+        'status',
+        'row_count',
+        'duration',
+        'finished_at',
+        'created_at'
+      )) as Array<Record<string, unknown>>
+    const byKey = new Map<string, Array<Record<string, unknown>>>()
+    for (const r of rows) {
+      const k = String(r.import_key ?? '')
+      const list = byKey.get(k) ?? []
+      list.push(r)
+      byKey.set(k, list)
+    }
+    const median = (xs: number[]) => {
+      if (xs.length === 0) return null
+      const s = [...xs].sort((a, b) => a - b)
+      const m = Math.floor(s.length / 2)
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+    }
+    const data = [...byKey.entries()].map(([key, list]) => {
+      const finished = list.filter((r) => r.status === 'completed' || r.status === 'error')
+      const errors = list.filter((r) => r.status === 'error').length
+      const done = list
+        .filter((r) => r.status === 'completed' && r.finished_at)
+        .map((r) => new Date(r.finished_at as string).getTime())
+      const gaps: number[] = []
+      for (let i = 1; i < done.length; i++) gaps.push((done[i] - done[i - 1]) / 3_600_000)
+      return {
+        key,
+        runs: list.length,
+        finished: finished.length,
+        errors,
+        error_rate: finished.length ? errors / finished.length : null,
+        observed_gap_hours: median(gaps),
+        recent: list.slice(-12).map((r) => ({
+          id: Number(r.id),
+          status: String(r.status),
+          row_count: r.row_count == null ? null : Number(r.row_count),
+          duration: r.duration == null ? null : Number(r.duration),
+          at: (r.finished_at ?? r.created_at) as string
+        }))
+      }
+    })
+    return { data, days }
+  })
+
+  // #846 — staging tables: size, last run, when each empties.
+  app.get('/staging-tables', { preHandler: requireAdmin }, async () => ({
+    data: await describeStagingTables()
+  }))
+
+  app.post<{ Params: { id: string } }>(
+    '/definitions/:id/purge-staging',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const table = String(row.staging_table || `staging_${row.key}`)
+      const info = (await describeStagingTables()).find(
+        (t) => t.table.toLowerCase() === table.toLowerCase()
+      )
+      if (!info?.exists) return reply.code(404).send({ error: `${table} does not exist` })
+      if (info.busy) {
+        return reply
+          .code(409)
+          .send({ error: `A run of ${table} is queued or running — empty it once that finishes.` })
+      }
+      await purgeStagingTable(info, req.user?.id ?? null, 'emptied by hand')
+      return { data: { table, rows: info.rows, size_kb: info.size_kb } }
     }
   )
 
@@ -722,7 +855,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       .distinct('collection')) as Array<{ collection: string }>
     const names: string[] = []
     for (const r of rows) {
-      if (await can(req.user as never, 'read', String(r.collection))) names.push(String(r.collection))
+      if (await can(req.user as never, 'read', String(r.collection)))
+        names.push(String(r.collection))
     }
     return { all: false, names }
   }
@@ -920,7 +1054,17 @@ export async function stagedImportRoutes(app: FastifyInstance) {
           'revert_note'
         )) as StoredItem[]
       const out: string[] = [
-        ['what happened', 'record', 'collection', 'record id', 'file row', 'field', 'before', 'after', 'note']
+        [
+          'what happened',
+          'record',
+          'collection',
+          'record id',
+          'file row',
+          'field',
+          'before',
+          'after',
+          'note'
+        ]
           .map(csvCell)
           .join(',')
       ]
@@ -928,12 +1072,20 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         for (const it of await presentItems(rows.slice(i, i + 500))) {
           const head = [it.kind, it.label, it.collection, it.item_id, it.row]
           if (it.changes.length === 0) {
-            out.push([...head, '', '', '', it.message ?? it.revert_note ?? ''].map(csvCell).join(','))
+            out.push(
+              [...head, '', '', '', it.message ?? it.revert_note ?? ''].map(csvCell).join(',')
+            )
             continue
           }
           for (const c of it.changes) {
             out.push(
-              [...head, c.label, c.from_known ? c.from : '(not kept)', c.to, it.message ?? it.revert_note ?? '']
+              [
+                ...head,
+                c.label,
+                c.from_known ? c.from : '(not kept)',
+                c.to,
+                it.message ?? it.revert_note ?? ''
+              ]
                 .map(csvCell)
                 .join(',')
             )
@@ -950,7 +1102,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       })
       return reply
         .header('content-type', 'text/csv; charset=utf-8')
-        .header('content-disposition', `attachment; filename="import-run-${runId}${q.kind ? `-${q.kind}` : ''}.csv"`)
+        .header(
+          'content-disposition',
+          `attachment; filename="import-run-${runId}${q.kind ? `-${q.kind}` : ''}.csv"`
+        )
         .send(`\uFEFF${out.join('\r\n')}`)
     }
   )
@@ -960,7 +1115,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     '/:id/unmatched.csv',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      const row = await db('nivaro_import_queue').where('id', req.params.id).select('report').first()
+      const row = await db('nivaro_import_queue')
+        .where('id', req.params.id)
+        .select('report')
+        .first()
       const report = parseRunReport(row?.report)
       if (!report) return reply.code(404).send({ error: 'This run kept no report' })
       const out = [['column', 'value in the file', 'what the import did'].map(csvCell).join(',')]
@@ -969,7 +1127,10 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       }
       return reply
         .header('content-type', 'text/csv; charset=utf-8')
-        .header('content-disposition', `attachment; filename="import-run-${req.params.id}-unmatched.csv"`)
+        .header(
+          'content-disposition',
+          `attachment; filename="import-run-${req.params.id}-unmatched.csv"`
+        )
         .send(`\uFEFF${out.join('\r\n')}`)
     }
   )
@@ -986,7 +1147,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         return reply.code(409).send({ error: 'This run already has its own report' })
       }
       const out = await rebuildRunReport(runId)
-      if (!out) return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
+      if (!out)
+        return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
       if (out.items === 0) {
         return reply.code(404).send({
           error:
@@ -1012,7 +1174,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     left: plan.items
       .filter((i) => ['changed-since', 'gone', 'nothing-recorded', 'partly'].includes(i.verdict))
       .slice(0, 50)
-      .map((i) => ({ id: i.id, label: i.label, collection: i.collection, item_id: i.item_id, note: i.note }))
+      .map((i) => ({
+        id: i.id,
+        label: i.label,
+        collection: i.collection,
+        item_id: i.item_id,
+        note: i.note
+      }))
   })
 
   /** What a revert would do. Writes nothing. */
@@ -1022,9 +1190,12 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const runId = Number(req.params.id)
       if (!Number.isInteger(runId)) return reply.code(400).send({ error: 'Bad run id' })
-      if (!(await hasRunReports())) return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
+      if (!(await hasRunReports()))
+        return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
       const ids = Array.isArray((req.body as { item_ids?: unknown })?.item_ids)
-        ? ((req.body as { item_ids: unknown[] }).item_ids.map(Number).filter(Number.isInteger) as number[])
+        ? ((req.body as { item_ids: unknown[] }).item_ids
+            .map(Number)
+            .filter(Number.isInteger) as number[])
         : undefined
       return { data: revertSummary(await planRevert(runId, ids)) }
     }
@@ -1036,20 +1207,24 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const runId = Number(req.params.id)
       if (!Number.isInteger(runId)) return reply.code(400).send({ error: 'Bad run id' })
-      if (!(await hasRunReports())) return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
+      if (!(await hasRunReports()))
+        return reply.code(409).send({ error: 'Run reports are not available on this database yet' })
       const run = await runQuery().select(RUN_COLUMNS).where('q.id', runId).first()
       if (!run) return reply.code(404).send({ error: 'Not found' })
       if (run.status === 'running' || run.status === 'queued') {
         return reply.code(409).send({ error: 'That import has not finished' })
       }
       const ids = Array.isArray((req.body as { item_ids?: unknown })?.item_ids)
-        ? ((req.body as { item_ids: unknown[] }).item_ids.map(Number).filter(Number.isInteger) as number[])
+        ? ((req.body as { item_ids: unknown[] }).item_ids
+            .map(Number)
+            .filter(Number.isInteger) as number[])
         : undefined
       const plan = await planRevert(runId, ids)
       const work = plan.remove + plan.restore + plan.partly
       if (work === 0) {
         return reply.code(409).send({
-          error: 'Nothing can be reverted: every record was already reverted, changed again since the import, or kept no earlier values.',
+          error:
+            'Nothing can be reverted: every record was already reverted, changed again since the import, or kept no earlier values.',
           data: revertSummary(plan)
         })
       }
@@ -1091,7 +1266,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
           })
           if (job.id != null) clearCancel(job.id)
           const summary = await finish(outcome)
-          if (outcome.failed > 0 && outcome.removed + outcome.restored === 0) await job.fail(summary)
+          if (outcome.failed > 0 && outcome.removed + outcome.restored === 0)
+            await job.fail(summary)
           else await job.complete(summary)
         } catch (err) {
           await job.fail(err)
@@ -1166,7 +1342,14 @@ export async function stagedImportRoutes(app: FastifyInstance) {
             dryRun: true
           })
         } catch (err) {
-          dryRun = { created: 0, updated: 0, unchanged: 0, skipped: {}, failed: 1, log: `Dry run failed: ${(err as Error).message}` }
+          dryRun = {
+            created: 0,
+            updated: 0,
+            unchanged: 0,
+            skipped: {},
+            failed: 1,
+            log: `Dry run failed: ${(err as Error).message}`
+          }
         }
       }
     }
@@ -1193,7 +1376,14 @@ export async function stagedImportRoutes(app: FastifyInstance) {
           samples: r.samples
         }
       } catch (err) {
-        dryRun = { created: 0, updated: 0, unchanged: 0, skipped: {}, failed: 1, log: `Dry run failed: ${(err as Error).message}` }
+        dryRun = {
+          created: 0,
+          updated: 0,
+          unchanged: 0,
+          skipped: {},
+          failed: 1,
+          log: `Dry run failed: ${(err as Error).message}`
+        }
       }
     }
 
@@ -1213,9 +1403,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         staging_table: table,
         staging_columns: stagingColumns,
         unknown_columns:
-          compareWithTable && stagingColumns ? columns.filter((c) => !stagingColumns.includes(c)) : [],
+          compareWithTable && stagingColumns
+            ? columns.filter((c) => !stagingColumns.includes(c))
+            : [],
         missing_columns:
-          compareWithTable && stagingColumns ? stagingColumns.filter((c) => !columns.includes(c)) : [],
+          compareWithTable && stagingColumns
+            ? stagingColumns.filter((c) => !columns.includes(c))
+            : [],
         validation,
         dry_run: dryRun
       }

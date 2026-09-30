@@ -76,8 +76,10 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Daily — closes access requests nobody acted on within 14 days and tells the requester.',
   'directory-sync':
     'Nightly — checks every user against the Microsoft directory; people the directory no longer has are suspended (Settings → Microsoft → Directory sync). Skips itself until the switch is on and the app token carries User.Read.All.',
+  'staged-import-staging-purge':
+    "Daily — empties a staged import's staging table the number of days after its last completed run that its definition sets (opt-in; unset = kept), never while a run of that table is queued or running.",
   'staged-imports':
-    'Every 10 seconds — starts the next queued staged import (file → staging table → stored procedure) when nothing else is running.',
+    'Every 10 seconds — starts queued staged imports (file → staging table → stored procedure); runs of the same lock group (default: the staging table) never overlap, other groups run side by side.',
   'erp-auto-retry':
     'Every 10 minutes — retries failed ERP submissions (external system pushes) that are eligible for automatic retry.',
   'maintenance-windows':

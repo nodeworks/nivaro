@@ -27,8 +27,13 @@ type Draft = {
   description: string
   staging_table: string
   procedure: string
-  loader: '' | 'bulk' | 'insert'
+  loader: '' | 'bulk' | 'bulk_only' | 'insert'
   sort: string
+  lock_group: string
+  /** Comma list of collections (#719). */
+  recalc_rollups: string
+  /** '' or '0' = keep (opt-in purge). */
+  staging_purge_days: string
   is_active: boolean
   staging_columns: string
   validation: string
@@ -68,6 +73,16 @@ function toDraft(d: ImportDefinition | null): Draft {
     procedure: d?.procedure ?? '',
     loader: d?.loader ?? '',
     sort: String(d?.sort ?? 0),
+    lock_group: d?.lock_group ?? '',
+    recalc_rollups: (() => {
+      try {
+        const v = d?.recalc_rollups ? JSON.parse(d.recalc_rollups) : []
+        return Array.isArray(v) ? v.map(String).join(', ') : ''
+      } catch {
+        return ''
+      }
+    })(),
+    staging_purge_days: d?.staging_purge_days == null ? '' : String(d.staging_purge_days),
     is_active: d?.is_active ?? true,
     staging_columns: prettyJson(d?.staging_columns),
     validation: prettyJson(d?.validation),
@@ -290,6 +305,13 @@ export function DefinitionsPanel({
         procedure: draft.procedure.trim() || null,
         loader: draft.loader || null,
         sort: Number(draft.sort) || 0,
+        lock_group: draft.lock_group.trim() || null,
+        recalc_rollups: draft.recalc_rollups
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean),
+        staging_purge_days:
+          draft.staging_purge_days.trim() === '' ? null : Number(draft.staging_purge_days),
         is_active: draft.is_active,
         staging_columns: draft.staging_columns.trim() || null,
         validation: draft.validation.trim() || null,
@@ -461,17 +483,19 @@ export function DefinitionsPanel({
                       <span className='font-mono'> · {selected.processor}</span>
                     )}
                   </p>
-                ) : selected && (
-                  <p className='mt-0.5 font-mono text-[11px] text-slate-400'>
-                    {selected.staging_table || `staging_${selected.key}`}
-                    {selected.procedure && (
-                      <>
-                        {' '}
-                        <ArrowRight className='inline h-3 w-3 -translate-y-px' />{' '}
-                        {selected.procedure}
-                      </>
-                    )}
-                  </p>
+                ) : (
+                  selected && (
+                    <p className='mt-0.5 font-mono text-[11px] text-slate-400'>
+                      {selected.staging_table || `staging_${selected.key}`}
+                      {selected.procedure && (
+                        <>
+                          {' '}
+                          <ArrowRight className='inline h-3 w-3 -translate-y-px' />{' '}
+                          {selected.procedure}
+                        </>
+                      )}
+                    </p>
+                  )
                 )}
               </div>
               <label className='flex shrink-0 items-center gap-2 text-[12px] text-slate-600 dark:text-muted-foreground'>
@@ -538,19 +562,72 @@ export function DefinitionsPanel({
 
               <Field
                 label='Loader'
-                hint='Bulk pushes a file to the share and BULK INSERTs it; insert batches rows directly. Ignored in service mode.'
+                hint='Bulk pushes a file to the share and BULK INSERTs it, falling back to batched inserts (and saying so in the run log) when the share or BULK INSERT is unavailable. Bulk only fails instead. Insert batches rows directly.'
               >
                 <SimpleSelect
                   value={draft.loader}
                   onChange={(v) => setDraft((d) => ({ ...d, loader: v as Draft['loader'] }))}
                   options={[
                     { value: '', label: 'Deployment default' },
-                    { value: 'bulk', label: 'Bulk (file share)' },
+                    { value: 'bulk', label: 'Bulk, else insert' },
+                    { value: 'bulk_only', label: 'Bulk only (fail without the share)' },
                     { value: 'insert', label: 'Insert (batched)' }
                   ]}
                   className='h-8 text-[12.5px]'
                 />
               </Field>
+
+              <Field
+                label='Lock group'
+                hint={`Runs in one group never overlap; other groups run side by side. Blank = the staging table (${
+                  draft.staging_table.trim() || (draft.key ? `staging_${draft.key}` : 'staging_…')
+                }).`}
+              >
+                <Input
+                  value={draft.lock_group}
+                  onChange={(e) => setDraft((d) => ({ ...d, lock_group: e.target.value }))}
+                  placeholder='Same as the staging table'
+                  className='h-8 font-mono text-[12px]'
+                  data-def-lock-group
+                />
+              </Field>
+
+              <Field
+                label='Empty staging after'
+                hint='Days after the newest completed run. Blank = keep the last file in the table (nothing is emptied unless you set this).'
+              >
+                <div className='flex items-center gap-2'>
+                  <Input
+                    value={draft.staging_purge_days}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        staging_purge_days: e.target.value.replace(/[^\d]/g, '')
+                      }))
+                    }
+                    inputMode='numeric'
+                    placeholder='Keep'
+                    className='h-8 w-20 text-right font-mono text-[12px]'
+                    data-def-purge-days
+                  />
+                  <span className='text-[12px] text-muted-foreground'>days</span>
+                </div>
+              </Field>
+
+              {!draft.processor && (
+                <Field
+                  label='Recalculate rollups for'
+                  hint='Collections the procedure writes, comma separated. After each run the stored rollups those rows feed are recomputed (a procedure bypasses the hooks that normally do it).'
+                >
+                  <Input
+                    value={draft.recalc_rollups}
+                    onChange={(e) => setDraft((d) => ({ ...d, recalc_rollups: e.target.value }))}
+                    placeholder='e.g. line_items, purchase_orders'
+                    className='h-8 font-mono text-[12px]'
+                    data-def-recalc-rollups
+                  />
+                </Field>
+              )}
 
               <Field
                 label='Processor'

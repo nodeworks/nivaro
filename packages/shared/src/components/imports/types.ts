@@ -30,7 +30,7 @@ export interface ImportRun {
   procedure: string | null
   /** null / 'proc' = stored procedure, 'service', or a registered processor key. */
   processor?: string | null
-  loader: 'bulk' | 'insert' | null
+  loader: 'bulk' | 'bulk_only' | 'insert' | null
   definition_active: boolean | null
   file_name: string | null
   file_size: string | number | null
@@ -46,7 +46,7 @@ export interface ImportDefinition {
   description: string | null
   staging_table: string | null
   procedure: string | null
-  loader: 'bulk' | 'insert' | null
+  loader: 'bulk' | 'bulk_only' | 'insert' | null
   file_types: string | null
   is_active: boolean
   sort: number
@@ -64,6 +64,28 @@ export interface ImportDefinition {
   /** JSON array of flow ids run in order after a successful run (migration 294). */
   post_run_flows?: string | null
   receipt?: string | null
+  /** #802 — runs sharing a group never overlap; null = the staging table. */
+  lock_group?: string | null
+  /** #719 — JSON string[] of collections the procedure writes (rollups recomputed). */
+  recalc_rollups?: string | null
+  /** #846 — days after the last completed run the staging table is emptied; opt-in, null/0 = keep. */
+  staging_purge_days?: number | null
+  staging_purged_at?: string | null
+}
+
+/** GET /staged-imports/staging-tables (#846). */
+export interface StagingTableInfo {
+  table: string
+  exists: boolean
+  rows: number
+  size_kb: number
+  definitions: Array<{ id: number; key: string; label: string | null }>
+  purge_days: number
+  last_completed_at: string | null
+  purge_due_at: string | null
+  purged_at: string | null
+  busy: boolean
+  reason: string
 }
 
 export interface ImportValidationIssue {

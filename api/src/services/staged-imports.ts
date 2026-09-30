@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import * as XLSX from 'xlsx'
 import { db } from '../db/index.js'
 import { getImportProcessor, runImportProcessor } from './import-processors.js'
+import { describeRollupRecalc, parseRecalcRollups, recalcRollupsFedBy } from './import-rollups.js'
 import {
   type ImportRunItem,
   type ImportRunReport,
@@ -29,7 +30,9 @@ const execFileAsync = promisify(execFile)
  * the load stage alone is a valid import.
  */
 
-export type StagingLoader = 'bulk' | 'insert'
+/** 'bulk' falls back to 'insert' when the share or BULK INSERT is unavailable
+ *  (#803); 'bulk_only' pins the bulk loader and fails loudly instead. */
+export type StagingLoader = 'bulk' | 'bulk_only' | 'insert'
 
 export interface ImportDefinition {
   id: number
@@ -58,6 +61,24 @@ export interface ImportDefinition {
   /** JSON array of nivaro_flows ids run in order after a successful run
    *  (migration 294). null/[] = nothing beyond the generic trigger. */
   post_run_flows?: string | null
+  /** #802 — runs sharing a group never overlap; NULL = the staging table. */
+  lock_group?: string | null
+  /** #719 — JSON string[] of collections the procedure writes; their stored
+   *  rollups are recomputed after a run. */
+  recalc_rollups?: string | null
+  /** #846 — empty the staging table this many days after the newest completed
+   *  run. Opt-in: NULL or 0 = keep. */
+  staging_purge_days?: number | null
+  staging_purged_at?: string | Date | null
+}
+
+/** The group a definition's runs serialise within (#802). Procedures truncate
+ *  a shared staging table, so the default group IS the staging table. */
+export function lockGroupOf(
+  def: Pick<ImportDefinition, 'lock_group' | 'staging_table' | 'key'>
+): string {
+  const g = def.lock_group?.trim()
+  return (g || def.staging_table || `staging_${def.key}`).toLowerCase()
 }
 
 const FLOW_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -392,25 +413,63 @@ function keepsStaging(raw: unknown): boolean {
   }
 }
 
+/** Why a bulk load could not happen on THIS host — the share, smbclient or
+ *  BULK INSERT itself — as opposed to a problem with the file (an unknown
+ *  column, a conversion error), which the insert loader would hit too. */
+export function bulkUnavailableReason(err: unknown): string | null {
+  const msg = describeSqlError(err)
+  const patterns: Array<[RegExp, string]> = [
+    [/needs SAMBA_USER/i, 'the SMB share is not configured on this host'],
+    [/smbclient is not installed/i, 'smbclient is not installed on this host'],
+    [/smbclient upload failed/i, 'the SMB share could not be reached'],
+    [
+      /do(es)? not have permission to use the bulk load|bulkadmin|ADMINISTER BULK OPERATIONS/i,
+      'this login may not run BULK INSERT'
+    ],
+    [
+      /Cannot bulk load because the file|could not be opened|Operating system error/i,
+      'SQL Server could not read the file on the share'
+    ]
+  ]
+  for (const [re, why] of patterns) if (re.test(msg)) return why
+  return null
+}
+
 /** Fill the staging table and return how long it took. Batched inserts are
  *  the default — they need nothing outside the database. The bulk loader
  *  (a file on an SMB share + BULK INSERT) runs only when a definition or
  *  IMPORT_LOADER names it: it needs `smbclient` on the host and SAMBA_*
- *  credentials, neither of which a deployed image carries. */
+ *  credentials, neither of which a deployed image carries. When it cannot run
+ *  here the load continues on batched inserts and `note` says so, unless the
+ *  definition pins 'bulk_only'. */
 async function loadStaging(
   definition: Pick<ImportDefinition, 'loader'>,
   table: string,
   rows: Array<Record<string, string>>,
   columns: string[],
   declaredNames: string[] | null
-): Promise<number> {
+): Promise<{ ms: number; note: string | null }> {
   const began = Date.now()
   await ensureStagingTable(table, columns, declaredNames)
   const loader: StagingLoader =
     definition.loader ?? ((process.env.IMPORT_LOADER as StagingLoader) || 'insert')
-  if (loader === 'bulk') await loadViaShare(table, rows, columns)
-  else await loadChunked(table, rows, columns)
-  return Date.now() - began
+  let note: string | null = null
+  if (loader === 'bulk' || loader === 'bulk_only') {
+    try {
+      await loadViaShare(table, rows, columns)
+    } catch (err) {
+      const why = loader === 'bulk' ? bulkUnavailableReason(err) : null
+      if (!why) throw err
+      // BULK INSERT is one transaction, but start from an empty table anyway:
+      // the insert loader must never append to a half-written load.
+      await db(table).del()
+      await loadChunked(table, rows, columns)
+      note = `Bulk load unavailable (${why}) — loaded with batched inserts instead.`
+    }
+  } else {
+    await loadChunked(table, rows, columns)
+  }
+  return { ms: Date.now() - began, note }
 }
 
 async function loadViaShare(
@@ -655,6 +714,10 @@ export async function runStagedImport({
   // records and only what differs is written. No procedure runs over a
   // staging table; the table is loaded only when the definition asks for a
   // copy of the file there (a follow-up procedure or flow reads it).
+  let loadNote: string | null = null
+  const withNote = (log: string | undefined) =>
+    loadNote ? [loadNote, log].filter(Boolean).join('\n') : log
+
   if (definition.processor === 'service') {
     const cfg = parseServiceConfig(definition.service_config)
     if (!cfg)
@@ -662,7 +725,9 @@ export async function runStagedImport({
     let loadMs: number | null = null
     if (cfg.keep_staging) {
       await onProgress?.('preparing')
-      loadMs = await loadStaging(definition, table, rows, columns, declaredNames)
+      const loaded = await loadStaging(definition, table, rows, columns, declaredNames)
+      loadMs = loaded.ms
+      loadNote = loaded.note
     }
     if (runId != null) await recordRanVia(runId, 'service')
     await onProgress?.('importing')
@@ -683,7 +748,7 @@ export async function runStagedImport({
     return {
       rowCount: rows.length,
       durationSeconds,
-      summary: summary.log,
+      summary: withNote(summary.log),
       affected: summary.affected,
       matched: summary.matched
     }
@@ -706,7 +771,9 @@ export async function runStagedImport({
   let loadMs: number | null = null
   if (!processor || keepsStaging(definition.service_config)) {
     await onProgress?.('preparing')
-    loadMs = await loadStaging(definition, table, rows, columns, declaredNames)
+    const loaded = await loadStaging(definition, table, rows, columns, declaredNames)
+    loadMs = loaded.ms
+    loadNote = loaded.note
   }
 
   if (runId != null) {
@@ -739,7 +806,7 @@ export async function runStagedImport({
     return {
       rowCount: rows.length,
       durationSeconds,
-      summary: result.log,
+      summary: withNote(result.log),
       affected: result.affected
     }
   }
@@ -749,17 +816,29 @@ export async function runStagedImport({
     await runLongSql(`EXEC ${definition.procedure}`)
   }
 
+  const notes: string[] = []
+  if (loadNote) notes.push(loadNote)
+  // The extension that owns the processor did not load here: the procedure
+  // ran instead, and the run says so.
+  if (wantsProcessor) {
+    notes.push(
+      `Ran the procedure ${definition.procedure}: the processor "${definition.processor}" is not registered on this instance.`
+    )
+  }
+  // #719 — the procedure wrote raw rows; recompute the stored rollups they feed.
+  const rollupCollections = definition.procedure
+    ? parseRecalcRollups(definition.recalc_rollups)
+    : []
+  if (rollupCollections.length > 0) {
+    await onProgress?.('importing', { phase: 'rollups' })
+    notes.push(describeRollupRecalc(await recalcRollupsFedBy(rollupCollections)))
+  }
+
   const durationSeconds = Math.round((Date.now() - began) / 1000)
   await onProgress?.('completed', { row_count: rows.length, duration: durationSeconds })
   return {
     rowCount: rows.length,
     durationSeconds,
-    // The extension that owns the processor did not load here: the procedure
-    // ran instead, and the run says so.
-    ...(wantsProcessor
-      ? {
-          summary: `Ran the procedure ${definition.procedure}: the processor "${definition.processor}" is not registered on this instance.`
-        }
-      : {})
+    ...(notes.length > 0 ? { summary: [`Imported ${rows.length} rows.`, ...notes].join('\n') } : {})
   }
 }

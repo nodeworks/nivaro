@@ -7,6 +7,8 @@ import type { ImportDefinition } from './staged-imports.js'
 import {
   describeSqlError,
   getImportDefinition,
+  listImportDefinitions,
+  lockGroupOf,
   parsePostRunFlows,
   runStagedImport,
   scrubSecrets
@@ -113,6 +115,24 @@ export function registerStagedImportWorker(app: FastifyInstance): void {
       ticking = false
     }
   })
+  // #846 — empty staging tables a set number of days after their last run.
+  app.cron.schedule(
+    'staged-import-staging-purge',
+    '20 4 * * *',
+    async () => {
+      const { runStagingPurge } = await import('./staged-import-purge.js')
+      const { purged } = await runStagingPurge()
+      if (purged.length > 0) {
+        app.log.info({ purged }, 'staging tables purged')
+      }
+    },
+    {
+      dryRun: async () => {
+        const { runStagingPurge } = await import('./staged-import-purge.js')
+        return runStagingPurge({ dryRun: true })
+      }
+    }
+  )
 }
 
 /** A queued row is only claimable by a worker that can actually READ its
@@ -125,64 +145,97 @@ export function registerStagedImportWorker(app: FastifyInstance): void {
  *  of sitting queued forever. */
 const UNREADABLE_GRACE_MS = 60 * 60 * 1000
 
-async function drainOnce(app: FastifyInstance): Promise<void> {
-  const inFlight = await db('nivaro_import_queue')
-    .where('status', 'running')
-    .count({ c: '*' })
-    .first()
-  if (Number(inFlight?.c ?? 0) > 0) return
+/** How many runs one process drives at once (#802). Runs in the same lock
+ *  group never overlap whatever this says. */
+const MAX_PARALLEL = Math.max(1, Number(process.env.IMPORT_MAX_PARALLEL ?? 3) || 3)
 
-  const queued = await db('nivaro_import_queue')
+/** Run ids this process is driving right now. */
+const driving = new Set<string>()
+
+type QueueRow = Record<string, any>
+
+async function drainOnce(app: FastifyInstance): Promise<void> {
+  if (driving.size >= MAX_PARALLEL) return
+
+  // #802 — runs serialise per LOCK GROUP (default: the staging table), not
+  // globally: procedures truncate a shared staging table, so two runs of one
+  // table must not overlap, but runs on different tables may.
+  const defs = new Map(
+    (await listImportDefinitions(false)).map((d) => [String(d.key).toLowerCase(), d])
+  )
+  const groupOf = (key: unknown): string => {
+    const d = defs.get(String(key ?? '').toLowerCase())
+    return d ? lockGroupOf(d) : `key:${String(key ?? '').toLowerCase()}`
+  }
+  const running = (await db('nivaro_import_queue')
+    .where('status', 'running')
+    .select('id', 'import_key')) as QueueRow[]
+  const busy = new Set(running.map((r) => groupOf(r.import_key)))
+
+  const queued = (await db('nivaro_import_queue')
     .where('status', 'queued')
     .orderBy('sort')
     .orderBy('id')
-    .limit(20)
+    .limit(50)) as QueueRow[]
   if (queued.length === 0) return
 
-  let next: (typeof queued)[number] | null = null
-  let buffer: Buffer | null = null
+  // Per group, only the FIRST queued row may start — a later run of the same
+  // table must never overtake an earlier one that is waiting on its file.
+  const blocked = new Set<string>()
   for (const row of queued) {
-    if (!row.file) {
-      next = row
-      break // claimed; the no-file error path below reports it
-    }
-    try {
-      const stored = await getFile(String(row.file))
-      if (!stored) {
-        next = row
-        break // file row deleted — claim and report, no host will do better
+    if (driving.size >= MAX_PARALLEL) return
+    const group = groupOf(row.import_key)
+    if (busy.has(group) || blocked.has(group)) continue
+
+    let buffer: Buffer | null = null
+    if (row.file) {
+      try {
+        const stored = await getFile(String(row.file))
+        // A deleted file row: claim and report — no host will do better.
+        if (stored) buffer = await readFileBuffer(stored)
+      } catch {
+        // Can't read the bytes from THIS host — leave it for the worker that
+        // can, unless it has been unreadable for so long that no one can.
+        const age = Date.now() - new Date((row.created_at as string) ?? Date.now()).getTime()
+        if (age > UNREADABLE_GRACE_MS) {
+          await db('nivaro_import_queue').where('id', row.id).update({
+            status: 'error',
+            finished_at: new Date(),
+            updated_at: new Date(),
+            logs: 'No import worker could read the uploaded file within an hour — it was likely uploaded to a host whose worker is not running, or its storage was lost. Re-upload the file.'
+          })
+          await notifyCreator(
+            app,
+            row,
+            `${label(row)} import failed`,
+            'No import worker could read the uploaded file. Re-upload it from the Import Console.'
+          )
+        } else {
+          blocked.add(group)
+        }
+        // Keep scanning: a row of another group must not starve behind it.
+        continue
       }
-      buffer = await readFileBuffer(stored)
-      next = row
-      break
-    } catch {
-      // Can't read the bytes from THIS host — leave it for the worker that
-      // can, unless it has been unreadable for so long that no one can.
-      const age = Date.now() - new Date(row.created_at ?? Date.now()).getTime()
-      if (age > UNREADABLE_GRACE_MS) {
-        await db('nivaro_import_queue').where('id', row.id).update({
-          status: 'error',
-          finished_at: new Date(),
-          updated_at: new Date(),
-          logs: 'No import worker could read the uploaded file within an hour — it was likely uploaded to a host whose worker is not running, or its storage was lost. Re-upload the file.'
-        })
-        await notifyCreator(
-          app,
-          row,
-          `${label(row)} import failed`,
-          'No import worker could read the uploaded file. Re-upload it from the Import Console.'
-        )
-      }
-      // Keep scanning: a later row uploaded to THIS host must not starve
-      // behind one this host cannot read.
     }
+
+    // Claim atomically: another worker process may be scanning the same queue.
+    const claimed = await db('nivaro_import_queue')
+      .where({ id: row.id, status: 'queued' })
+      .update({ status: 'running', started_at: new Date(), updated_at: new Date() })
+    if (Number(claimed) !== 1) continue
+    busy.add(group)
+    const id = String(row.id)
+    driving.add(id)
+    void runOne(app, row, buffer).finally(() => driving.delete(id))
   }
-  if (!next) return
+}
 
-  await db('nivaro_import_queue')
-    .where('id', next.id)
-    .update({ status: 'running', started_at: new Date(), updated_at: new Date() })
-
+async function runOne(
+  app: FastifyInstance,
+  next: QueueRow,
+  preloaded: Buffer | null
+): Promise<void> {
+  let buffer = preloaded
   const began = Date.now()
   try {
     const definition = await getImportDefinition(String(next.import_key))
