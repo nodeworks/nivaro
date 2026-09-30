@@ -210,6 +210,29 @@ export async function recordViewRoutes(app: FastifyInstance) {
   // collapses to now, so a refresh inside the session grace (which deliberately
   // keeps the baseline stable) no longer re-renders the same recap. Anything
   // that changes AFTER the dismissal still shows on the next open.
+  /** #643 — which of these records changed since the caller last opened
+   *  them (someone else's edit, transition or comment). Lists put a dot on
+   *  those rows. Records never opened are never reported. */
+  app.post<{ Body: { collection?: string; ids?: unknown } }>(
+    '/record-views/unseen',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const collection = String(req.body?.collection ?? '')
+      if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
+        return reply.code(400).send({ error: 'Not a valid collection' })
+      }
+      if (!(await can(req.user!, 'read', collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const ids = Array.isArray(req.body?.ids)
+        ? req.body.ids.filter((v) => typeof v === 'string' || typeof v === 'number').slice(0, 2000)
+        : []
+      const { unseenChangesFor } = await import('../services/record-unseen.js')
+      const map = await unseenChangesFor(req.user!.id, collection, ids as Array<string | number>)
+      return reply.send({ data: Object.fromEntries(map) })
+    }
+  )
+
   app.post<{ Params: { collection: string; id: string } }>(
     '/record-views/:collection/:id/dismiss',
     { preHandler: requireAuth },

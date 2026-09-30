@@ -2324,7 +2324,9 @@ export function applyIntegrationsFilter(q: QB, collection: string, rawValue: unk
 export async function applyConditions(
   q: QB,
   conditions: Array<FilterCondition | OrCondition>,
-  collection: string
+  collection: string,
+  /** The reader — only the `$unseen` path needs it (their own watermarks). */
+  userId?: string | null
 ) {
   for (const cond of conditions) {
     // OR group: each branch is a normal path condition; the group ANDs with
@@ -2414,6 +2416,23 @@ export async function applyConditions(
       q.where(function (this: QB) {
         applyRiskRules(this, collection, rules, applyRuleConditions)
       })
+      continue
+    }
+    // Virtual path: changed since the reader last opened it (#643) — edited,
+    // moved or commented on by someone else after their newest open. A record
+    // the reader never opened never matches; without a reader nothing does.
+    if (cond.path[0] === '$unseen' && cond.path.length === 1) {
+      const wantUnseen = cond.value !== false && cond.value !== 'false' && cond.value !== 0
+      if (!userId) {
+        if (wantUnseen) q.whereRaw('1 = 0')
+        continue
+      }
+      const { whereUnseen } = await import('./record-unseen.js')
+      if (wantUnseen) whereUnseen(q as never, collection, collection, userId)
+      else
+        q.whereNot(function (this: QB) {
+          whereUnseen(this as never, collection, collection, userId)
+        })
       continue
     }
     // Content-presence virtual paths (#397/#398): $has_comments / $has_tasks /
@@ -3047,8 +3066,8 @@ export async function readItems(
   await applyUserScopes(countQ, collection, user)
 
   if (conditions?.length) {
-    await applyConditions(q, conditions, collection)
-    await applyConditions(countQ, conditions, collection)
+    await applyConditions(q, conditions, collection, user?.id)
+    await applyConditions(countQ, conditions, collection, user?.id)
   }
   // Rows after the cursor — the page only; the count is of the whole set.
   if (keyset) applyKeyset(q, collection, keyset)

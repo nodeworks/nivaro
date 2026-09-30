@@ -745,6 +745,26 @@ export const adminUxListSignals: DocSection = {
     {
       type: 'p',
       text: 'An O2M whose rows are MEMBERSHIPS — one row per (member, scope), where a blank scope means "every scope" — can set `options.membership_set: {key_field, value_field, empty_label?, key_label?, value_label?}` on the inline-table field. The grid is replaced by one line per member with its scopes as a multi-select (toggle chips up to ten options, a searchable checklist beyond). Storage is unchanged: nothing picked = a single row with a blank scope; picks = one row per picked value. The first pick re-points the blank row and clearing the last pick blanks it again, so a member never drops out mid-edit. Writes are immediate and go through the items API.'
+    },
+    { type: 'h2', id: 'list-signals-unseen', text: 'Changed since you looked' },
+    {
+      type: 'p',
+      text: 'The collection browser marks a row with a small dot when someone else edited it, moved it through its pipeline or commented on it after you last opened it. Hover the dot for who and when. A record you never opened carries no dot. The filter menu offers "Changed since I last looked" (condition path `$unseen`), which narrows the list server-side to those records (`POST /record-views/unseen` answers the dots for a page of ids).'
+    },
+    { type: 'h2', id: 'list-signals-formula-columns', text: 'Formula columns' },
+    {
+      type: 'p',
+      text: 'Columns → "＋ Formula column" adds a calculated column over the row: `{{amount}} - {{allocated_total}}`, with dotted tokens reading related values. It uses the same expression engine as grid formula columns, is computed on the page (not sortable or filterable) and is kept in the view — save the view to keep it. CSV export includes it.'
+    },
+    { type: 'h2', id: 'list-signals-role-default', text: 'Default view per role' },
+    {
+      type: 'p',
+      text: 'Besides the one collection default everyone gets, an admin can make a saved view the default for one role from the ★ menu on its pill. Members of that role open the browser on it; everyone else keeps the collection default. A role has one default per collection, so picking another view for the same role moves it (`nivaro_saved_views.default_for_role`).'
+    },
+    { type: 'h2', id: 'list-signals-tree', text: 'Tree view and hierarchy scope' },
+    {
+      type: 'p',
+      text: 'A collection with a tree setup (Table Editor → Tree) offers a Tree button beside Map: an indented list with add-child and move-under-another-parent actions, drag-to-reorder among siblings when an order field is set, and an org chart of the same tree. A collection that sits under a parent in a Hierarchy (Hierarchies page) offers "Scope by <parent>": pick a parent record and the list narrows to its children, through the parent key or the hierarchy\'s junction. Admin also adds its spreadsheet, calendar and Gantt views here; the older classic browser (`/collections/:c/classic`) now redirects to this one.'
     }
   ]
 }

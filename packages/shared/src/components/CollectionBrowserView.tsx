@@ -16,6 +16,7 @@ import {
   FileText,
   Loader2,
   Map as MapIcon,
+  Network,
   Pin,
   RotateCw,
   Rows2,
@@ -47,6 +48,7 @@ import {
   formatDateFilter,
   parseDateFilter
 } from '../lib/date-filter'
+import { evaluateNumeric, extractExpressionTokens } from '../lib/expression'
 import {
   type ColumnFormatConfig,
   countFromResolved,
@@ -74,6 +76,10 @@ import {
 } from './bulk/BulkActionButtons'
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
+import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
+import { FormulaColumnAdder } from './cbv/FormulaColumnAdder'
+import { HierarchyScopePicker, useHierarchyScope } from './cbv/HierarchyScope'
+import { ViewDefaultMenu } from './cbv/ViewDefaultMenu'
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
 import { FilterControl } from './DataTable'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
@@ -100,9 +106,9 @@ import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
  * bulk bar (delete / update field / pipeline transition), pipeline state
  * badges, total-count pagination, and CSV export.
  *
- * Deliberately skipped from admin: grid/tree/calendar/gantt view modes,
- * hierarchy scoping, AI query, at-risk/SLA columns, presets, merge,
- * picker-exclusions, imports, extension bulk actions.
+ * It also carries the tree view (collections with a tree config), hierarchy
+ * parent scope and Ask the table. Host apps add their own display modes
+ * through `extraViews` (admin: spreadsheet, calendar, Gantt).
  */
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -251,6 +257,8 @@ type SavedViewColumn =
       agg?: 'sum'
       /** Shown to admins only (curation: the value still rides the read). */
       admin_only?: boolean
+      /** #644 — a formula column (`__f:` key): `{{a}} - {{b}}` over the row. */
+      formula?: string
     }
 
 interface SavedView {
@@ -259,6 +267,11 @@ interface SavedView {
   user: string
   is_shared: boolean
   is_default?: boolean
+  /** #672 — the role this view is the default for (wins for its members). */
+  default_for_role?: string | null
+  default_for_role_name?: string | null
+  /** The server's answer: this is the CALLER's role default. */
+  role_default?: boolean
   filters: ActiveFilter[] | null
   sort: string | null
   columns: SavedViewColumn[] | null
@@ -365,6 +378,17 @@ export interface CollectionBrowserViewProps {
   initialConditions?: Array<{ path: string[]; op: string; value: unknown; label?: string }>
   /** Override row-open behavior; defaults to NavigationContext itemUrl. */
   onOpenItem?: (id: string | number) => void
+  /** Ask the table this question once on open (e.g. a command-palette
+   *  hand-off, `?ai=` on the host route). */
+  initialAiPrompt?: string
+  /** Host-supplied display modes beside the table (e.g. a spreadsheet or
+   *  calendar the host app owns). Each renders instead of the table. */
+  extraViews?: Array<{
+    key: string
+    label: string
+    icon?: React.ReactNode
+    render: () => React.ReactNode
+  }>
   showCreate?: boolean
   className?: string
 }
@@ -2629,7 +2653,8 @@ function FilterBar({
                           ['$has_comments', 'Has comments'],
                           ['$has_tasks', 'Has open tasks'],
                           ['$has_failed_push', 'Has a failed integration push'],
-                          ['$missing_required', 'Missing required fields']
+                          ['$missing_required', 'Missing required fields'],
+                          ['$unseen', 'Changed since I last looked']
                         ] as Array<[string, string]>
                       ).map(([pathKey, label]) => (
                         <button
@@ -3711,6 +3736,8 @@ export function CollectionBrowserView({
   initialFilters,
   initialConditions,
   onOpenItem,
+  initialAiPrompt,
+  extraViews,
   showCreate = true,
   className
 }: CollectionBrowserViewProps) {
@@ -3725,6 +3752,8 @@ export function CollectionBrowserView({
   const [sort, setSort] = useState<string>(initialSort ?? '')
   const [displayColumns, setDisplayColumns] = useState<string[] | null>(initialColumns ?? null)
   const [columnLabels, setColumnLabels] = useState<Record<string, string>>({})
+  // #644 formula columns: `__f:<n>` key → expression.
+  const [columnFormulas, setColumnFormulas] = useState<Record<string, string>>({})
   const [renamingCol, setRenamingCol] = useState<string | null>(null)
   const [columnFormats, setColumnFormats] = useState<Record<string, ColumnFormatConfig>>({})
   const [columnAggs, setColumnAggs] = useState<Record<string, 'sum'>>({})
@@ -3840,6 +3869,16 @@ export function CollectionBrowserView({
     setAiResult(null)
     setAiPrompt('')
   }
+  // One-shot hand-off (command palette → `?ai=`): ask once, show the answer.
+  const aiHandoffRan = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once per mount
+  useEffect(() => {
+    if (!initialAiPrompt || aiHandoffRan.current) return
+    aiHandoffRan.current = true
+    setAiOpen(true)
+    setAiPrompt(initialAiPrompt)
+    aiAsk.mutate(initialAiPrompt)
+  }, [initialAiPrompt])
   // Right-click a cell → filter to / exclude / group by. Exclusions live in
   // their own list because MSSQL's _neq/_ncontains drop NULL rows — each one
   // compiles to an OR with _null so "everything except X" keeps blanks.
@@ -3908,6 +3947,7 @@ export function CollectionBrowserView({
     setSort(initialSort ?? '')
     setDisplayColumns(initialColumns ?? null)
     setColumnLabels({})
+    setColumnFormulas({})
     setColumnFormats({})
     setColumnAggs({})
     setSelectedIds([])
@@ -4081,8 +4121,10 @@ export function CollectionBrowserView({
     const wanted = displayColumns ?? nonHidden.slice(0, 7).map((f) => f.field)
     // Dotted keys are related-value columns resolved server-side; plain keys
     // must exist on the collection.
-    return wanted.filter((k) => k.includes('.') || fieldByName.has(k))
-  }, [displayColumns, nonHidden, fieldByName])
+    return wanted.filter(
+      (k) => k.includes('.') || fieldByName.has(k) || (k.startsWith('__f:') && !!columnFormulas[k])
+    )
+  }, [displayColumns, nonHidden, fieldByName, columnFormulas])
 
   // ── Column pinning ─────────────────────────────────────────────────────────
   // Per-column pin (left/right/none), incl. the synthetic State / Owners /
@@ -4108,11 +4150,35 @@ export function CollectionBrowserView({
   /** Header label: user rename → dotted breadcrumb → title-cased field. */
   const columnLabel = (key: string) =>
     columnLabels[key] ??
-    (key.includes('.')
-      ? key.split('.').map(titleCase).join(' › ')
-      : key === 'id'
-        ? 'ID'
-        : titleCase(key))
+    (key.startsWith('__f:')
+      ? (columnFormulas[key] ?? 'Formula')
+      : key.includes('.')
+        ? key.split('.').map(titleCase).join(' › ')
+        : key === 'id'
+          ? 'ID'
+          : titleCase(key))
+
+  // #644 — a formula column's value for one row. Plain tokens read the row;
+  // dotted ones read the bulk resolve-paths answer. Numeric-looking strings
+  // (decimals arrive as "1107.4400") count as numbers.
+  const formulaRef = (row: Record<string, unknown>, ref: string): unknown => {
+    const v = ref.includes('.')
+      ? resolvedData?.rows?.[String(row.id)]?.[ref]?.value
+      : (row as Record<string, unknown>)[ref]
+    return typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v
+  }
+  const formulaValue = (row: Record<string, unknown>, key: string): number | null => {
+    const f = columnFormulas[key]
+    return f ? evaluateNumeric(f, (ref) => formulaRef(row, ref)) : null
+  }
+  const formulaTip = (row: Record<string, unknown>, key: string): string | undefined => {
+    const f = columnFormulas[key]
+    if (!f) return undefined
+    return f.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_m, ref: string) => {
+      const v = formulaRef(row, ref)
+      return v == null || v === '' ? '—' : String(v)
+    })
+  }
 
   // ── Alias (O2M/M2M) + dotted related columns → bulk resolve-paths ─────────
   const aliasInfos = useMemo(
@@ -4222,6 +4288,11 @@ export function CollectionBrowserView({
   const debouncedColFilters = useDebounced(colFilters, 350)
   // Session-only toggle (not part of saved views): show only records being amended.
   const [addendumsOnly, setAddendumsOnly] = useState(false)
+  // #743 — hierarchy parent scope + alternate views (tree / host views).
+  const [hierarchyParentId, setHierarchyParentId] = useState<string | number | null>(null)
+  const hierarchy = useHierarchyScope(collection, hierarchyParentId)
+  const [altView, setAltView] = useState<string | null>(null)
+  const { data: treeConfig } = useTreeConfig(collection)
   // Highlight-rule pills ("On hold", "Sent back"): the same nivaro_at_risk_rules
   // rows that tint rows also FILTER the list through the `$at_risk` condition
   // (OR across picked rules). Session-only, like the addendums pill.
@@ -4244,7 +4315,11 @@ export function CollectionBrowserView({
         if (b) conds.push({ path: f.path, op: '_lte', value: isDateType ? `${b}T23:59:59` : b })
         continue
       }
-      if (f.path[0]?.startsWith('$has_') || f.path[0] === '$missing_required') {
+      if (
+        f.path[0]?.startsWith('$has_') ||
+        f.path[0] === '$missing_required' ||
+        f.path[0] === '$unseen'
+      ) {
         // Presence filters (#397/#398): the server reads the VALUE's
         // truthiness, so NOT flips the value rather than the operator.
         conds.push({ path: f.path, op: '_eq', value: !f.not })
@@ -4350,6 +4425,7 @@ export function CollectionBrowserView({
     }
     // Records being amended: an addendum still in flight (draft/submitted/review).
     if (addendumsOnly) conds.push({ path: ['$addendums'], op: '_eq', value: 'active' })
+    if (hierarchy.condition) conds.push(hierarchy.condition)
     if (riskFilter.length === 1) conds.push({ path: ['$at_risk'], op: '_eq', value: riskFilter[0] })
     else if (riskFilter.length > 1)
       (conds as unknown[]).push({
@@ -4364,6 +4440,7 @@ export function CollectionBrowserView({
     linkConds,
     cellExcludes,
     addendumsOnly,
+    hierarchy.condition,
     riskFilter
   ])
   // Any filter change resets to page 1 (the query key already refetches).
@@ -4579,6 +4656,24 @@ export function CollectionBrowserView({
     staleTime: 30_000,
     retry: false
   })
+  // #643 — rows someone else changed since this viewer last opened them.
+  // One batched read per page; a record they never opened carries no mark.
+  const { data: unseenMap } = useQuery({
+    queryKey: ['cbv-unseen', collection, pageIdsKey],
+    queryFn: () =>
+      client
+        .request<{
+          data: Record<string, { changed_at: string; by: string | null; kinds: string[] }>
+        }>(post('/record-views/unseen', { collection, ids: pageIdsKey.split(',') }))
+        .then((r) => r.data ?? {})
+        .catch(
+          () => ({}) as Record<string, { changed_at: string; by: string | null; kinds: string[] }>
+        ),
+    enabled: !!collection && !collection.startsWith('nivaro_') && pageIdsKey.length > 0,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+    retry: false
+  })
   // Integration obligations — probed ONCE (long-lived, unscoped by collection:
   // the registry rarely changes) so the column never asks per row, the same
   // shape as the at-risk rules probe. The Integrations column only exists
@@ -4659,9 +4754,22 @@ export function CollectionBrowserView({
     () => effectiveColumns.filter((k) => k.includes('.')),
     [effectiveColumns]
   )
+  // Dotted references inside formula columns (#644) ride the same bulk read.
+  const formulaPaths = useMemo(
+    () =>
+      effectiveColumns
+        .filter((k) => k.startsWith('__f:'))
+        .flatMap((k) => extractExpressionTokens(columnFormulas[k] ?? ''))
+        .filter((t) => t.includes('.')),
+    [effectiveColumns, columnFormulas]
+  )
   const resolveList = useMemo(
-    () => [...new Set([...dottedCols, ...Object.values(aliasPathByField)])].slice(0, 20),
-    [dottedCols, aliasPathByField]
+    () =>
+      [...new Set([...dottedCols, ...Object.values(aliasPathByField), ...formulaPaths])].slice(
+        0,
+        20
+      ),
+    [dottedCols, aliasPathByField, formulaPaths]
   )
   const rowIdsKey = rows.map((r) => String(r.id)).join(',')
   const { data: resolvedData } = useQuery({
@@ -4991,7 +5099,12 @@ export function CollectionBrowserView({
       )
       setColumnAdminOnly(adminOnly)
       const keys = v.columns.map(viewColumnKey).filter((k) => isAdmin || !adminOnly.has(k))
-      const valid = keys.filter((k) => k.includes('.') || fieldByName.has(k))
+      const formulas: Record<string, string> = {}
+      for (const c of v.columns)
+        if (typeof c !== 'string' && c.formula && c.key.startsWith('__f:'))
+          formulas[c.key] = c.formula
+      setColumnFormulas(formulas)
+      const valid = keys.filter((k) => k.includes('.') || fieldByName.has(k) || !!formulas[k])
       if (valid.length > 0) setDisplayColumns(valid)
       const labels: Record<string, string> = {}
       const formats: Record<string, ColumnFormatConfig> = {}
@@ -5027,7 +5140,7 @@ export function CollectionBrowserView({
   // "Default" = the collection's server-set default view when one exists,
   // else the built-in baseline (initialColumns / first-N fields).
   const clearView = () => {
-    const def = views.find((v) => v.is_default)
+    const def = views.find((v) => v.role_default) ?? views.find((v) => v.is_default)
     if (def) {
       applyView(def)
       return
@@ -5037,6 +5150,7 @@ export function CollectionBrowserView({
     setSort(initialSort ?? '')
     setDisplayColumns(initialColumns ?? null)
     setColumnLabels({})
+    setColumnFormulas({})
     setColumnFormats({})
     setColumnAggs({})
     setColumnPins(null)
@@ -5056,10 +5170,21 @@ export function CollectionBrowserView({
         const tint = columnTints[k]
         const width = columnWidths[k]
         const agg = columnAggs[k]
-        if (!label && !format && !pin && !tint?.length && !width && !agg && !columnAdminOnly.has(k))
+        const formula = columnFormulas[k]
+        if (
+          !label &&
+          !format &&
+          !pin &&
+          !tint?.length &&
+          !width &&
+          !agg &&
+          !formula &&
+          !columnAdminOnly.has(k)
+        )
           return k
         return {
           key: k,
+          ...(formula ? { formula } : {}),
           ...(label ? { label } : {}),
           ...(format ? { format } : {}),
           ...(pin ? { pin } : {}),
@@ -5091,7 +5216,8 @@ export function CollectionBrowserView({
   useEffect(() => {
     if (defaultAppliedRef.current || views.length === 0 || nonHidden.length === 0) return
     defaultAppliedRef.current = true
-    const def = views.find((v) => v.is_default)
+    // A default for the viewer's role (#672) wins over the collection default.
+    const def = views.find((v) => v.role_default) ?? views.find((v) => v.is_default)
     if (def && activeViewId == null) applyView(def)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [views, nonHidden])
@@ -5163,6 +5289,12 @@ export function CollectionBrowserView({
     mutationFn: ({ id, on }: { id: number; on: boolean }) =>
       client.request(patch(`/saved-views/${id}`, { is_default: on })),
     onSuccess: invalidateViews
+  })
+  const setRoleDefault = useMutation({
+    mutationFn: ({ id, role }: { id: number; role: string | null }) =>
+      client.request(patch(`/saved-views/${id}`, { default_for_role: role })),
+    onSuccess: invalidateViews,
+    onError: (err) => toast.error(`Could not set the role default: ${(err as Error).message}`)
   })
   // "Set default" in the column picker: write the CURRENT state onto the
   // collection's is_default view (creating one named "Default" if none).
@@ -5256,6 +5388,22 @@ export function CollectionBrowserView({
       }
       const cellFor = (r: Record<string, unknown>, c: string) => {
         const cfg = columnFormats[c]
+        if (c.startsWith('__f:')) {
+          const f = columnFormulas[c]
+          const num = f
+            ? evaluateNumeric(f, (ref) => {
+                const v = ref.includes('.')
+                  ? exportResolved[String(r.id)]?.[ref]?.value
+                  : (r as Record<string, unknown>)[ref]
+                return typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v
+              })
+            : null
+          return num == null
+            ? ''
+            : cfg
+              ? formatValue(String(num), cfg)
+              : Math.round(num * 100) / 100
+        }
         if (c.includes('.') || c in aliasPathByField) {
           const path = c.includes('.') ? c : aliasPathByField[c]
           const v = exportResolved[String(r.id)]?.[path]?.value ?? ''
@@ -5429,9 +5577,14 @@ export function CollectionBrowserView({
       | 'integrations'
       | 'tasks'
       | 'actions'
+      | 'formula'
   }
   const baseColDescs: CbvColDesc[] = [
-    ...effectiveColumns.map((k) => ({ key: k, kind: 'data' as const })),
+    ...effectiveColumns.map((k) =>
+      k.startsWith('__f:')
+        ? { key: k, kind: 'formula' as const }
+        : { key: k, kind: 'data' as const }
+    ),
     ...(hasPipeline
       ? [
           { key: '__state__', kind: 'state' as const },
@@ -5959,10 +6112,49 @@ export function CollectionBrowserView({
             fields={effectiveColumns}
           />
         )}
+        {hierarchy.parent && (
+          <HierarchyScopePicker
+            parent={hierarchy.parent}
+            value={hierarchyParentId}
+            onChange={(id) => {
+              setHierarchyParentId(id)
+              setPage(1)
+            }}
+          />
+        )}
+        {[
+          ...(treeConfig
+            ? [{ key: 'tree', label: 'Tree', icon: <Network className='h-3.5 w-3.5' /> }]
+            : []),
+          ...(extraViews ?? []).map((v) => ({ key: v.key, label: v.label, icon: v.icon }))
+        ].map((v) => (
+          <button
+            key={v.key}
+            type='button'
+            onClick={() => {
+              setMapMode(false)
+              setAltView((cur) => (cur === v.key ? null : v.key))
+            }}
+            aria-pressed={altView === v.key}
+            data-cbv-view-toggle={v.key}
+            title={altView === v.key ? 'Back to the table' : `Show as ${v.label.toLowerCase()}`}
+            className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+              altView === v.key
+                ? 'border-[#00ceff66] bg-[#00ceff14] text-[#007a99] dark:text-nvr-cyan'
+                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+            }`}
+          >
+            {v.icon}
+            {v.label}
+          </button>
+        ))}
         {geo && (
           <button
             type='button'
-            onClick={() => setMapMode((v) => !v)}
+            onClick={() => {
+              setAltView(null)
+              setMapMode((v) => !v)
+            }}
             title={mapMode ? 'Back to the table' : 'Show these records on a map'}
             className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
               mapMode
@@ -6420,6 +6612,22 @@ export function CollectionBrowserView({
                     />
                   </div>
                 )}
+                <div className='mt-1 border-t border-slate-100 pt-1.5 dark:border-slate-800'>
+                  <p className='px-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                    ＋ Formula column
+                  </p>
+                  <FormulaColumnAdder
+                    fields={nonHidden.map((f) => f.field)}
+                    onAdd={(label, formula) => {
+                      let n = 1
+                      while (columnFormulas[`__f:${n}`]) n++
+                      const key = `__f:${n}`
+                      setColumnFormulas((m) => ({ ...m, [key]: formula }))
+                      setColumnLabels((l) => ({ ...l, [key]: label }))
+                      setDisplayColumns([...effectiveColumns, key])
+                    }}
+                  />
+                </div>
               </div>
               {/* Presets footer — save current layout, or write it as the collection default */}
               <div className='shrink-0 border-t border-slate-100 p-1.5 dark:border-slate-800'>
@@ -6808,7 +7016,7 @@ export function CollectionBrowserView({
       {/* Saved views — the baseline "Default" pill only renders while no
           is_default view exists (once one does, its own ★ pill IS the default) */}
       <div className='flex shrink-0 flex-wrap items-center gap-1.5 border-b border-slate-100 bg-white px-4 py-1.5 dark:border-slate-800 dark:bg-slate-900'>
-        {!views.some((v) => v.is_default) && (
+        {!views.some((v) => v.is_default || v.role_default) && (
           <button
             type='button'
             onClick={clearView}
@@ -6830,15 +7038,31 @@ export function CollectionBrowserView({
                 : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
             }`}
           >
-            {v.is_default && (
-              <span title='Collection default view' className='text-[#00a5cc]'>
+            {(v.is_default || v.role_default) && (
+              <span
+                title={
+                  v.role_default
+                    ? `Default for your role (${v.default_for_role_name ?? 'role'})`
+                    : 'Collection default view'
+                }
+                className='text-[#00a5cc]'
+              >
                 ★
               </span>
             )}
-            {v.is_shared && !v.is_default && <span title='Shared'>⚭</span>}
+            {v.is_shared && !v.is_default && !v.role_default && <span title='Shared'>⚭</span>}
             <button type='button' onClick={() => applyView(v)}>
               {v.name}
             </button>
+            {v.default_for_role && (
+              <span
+                data-view-role-default={v.default_for_role}
+                title={`Default view for ${v.default_for_role_name ?? 'a role'}`}
+                className='rounded bg-[#00ceff1a] px-1 text-[10.5px] text-[#04516b] dark:text-nvr-cyan'
+              >
+                {v.default_for_role_name ?? 'role'} default
+              </span>
+            )}
             {activeViewId === v.id && (
               <>
                 <button
@@ -6894,17 +7118,13 @@ export function CollectionBrowserView({
                   )}
                 </button>
                 {isAdmin && (
-                  <button
-                    type='button'
-                    onClick={() => setDefaultView.mutate({ id: v.id, on: !v.is_default })}
-                    title={v.is_default ? 'Unset collection default' : 'Make collection default'}
-                    aria-label={`Toggle default ${v.name}`}
-                    className={
-                      v.is_default ? 'text-[#00a5cc]' : 'text-slate-400 hover:text-[#00a5cc]'
-                    }
-                  >
-                    ★
-                  </button>
+                  <ViewDefaultMenu
+                    name={v.name}
+                    isDefault={!!v.is_default}
+                    roleId={v.default_for_role ?? null}
+                    onCollectionDefault={(on) => setDefaultView.mutate({ id: v.id, on })}
+                    onRoleDefault={(role) => setRoleDefault.mutate({ id: v.id, role })}
+                  />
                 )}
                 <button
                   type='button'
@@ -6986,6 +7206,31 @@ export function CollectionBrowserView({
         </div>
       )}
 
+      {altView === 'tree' && treeConfig ? (
+        <div className='flex min-h-0 flex-1 flex-col p-4 pt-3'>
+          <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'>
+            <CollectionTree
+              collection={collection}
+              config={treeConfig}
+              onOpen={(id) => openRow(id)}
+              onAddChild={
+                showCreate && bc.allow_create !== false
+                  ? (parentId) =>
+                      openTarget({
+                        collection,
+                        itemId: 'new',
+                        prefill: { [treeConfig.parent_field]: parentId }
+                      })
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+      ) : altView && extraViews?.some((v) => v.key === altView) ? (
+        <div className='flex min-h-0 flex-1 flex-col p-4 pt-3' data-cbv-extra-view={altView}>
+          {extraViews.find((v) => v.key === altView)?.render()}
+        </div>
+      ) : null}
       {mapMode && geo ? (
         <div className='flex min-h-0 flex-1 flex-col p-4 pt-3'>
           <MapView
@@ -7001,7 +7246,15 @@ export function CollectionBrowserView({
       ) : null}
       {/* Table card — fills the remaining page height; the table scrolls
           inside it with sticky headers, pagination pinned at the bottom */}
-      <div className={mapMode && geo ? 'hidden' : 'flex min-h-0 flex-1 flex-col p-4 pt-3'}>
+      <div
+        className={
+          (mapMode && geo) ||
+          (altView === 'tree' && treeConfig) ||
+          (altView && extraViews?.some((v) => v.key === altView))
+            ? 'hidden'
+            : 'flex min-h-0 flex-1 flex-col p-4 pt-3'
+        }
+      >
         <div className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'>
           {/* Refetch overlay — rows stay visible (placeholderData) but dim so
               paginate/sort/filter visibly does something */}
@@ -7091,7 +7344,9 @@ export function CollectionBrowserView({
                                         ? 'Integrations'
                                         : col.kind === 'tasks'
                                           ? 'Tasks'
-                                          : ''
+                                          : col.kind === 'formula'
+                                            ? columnLabel(key)
+                                            : ''
                         return (
                           <th
                             key={key}
@@ -7470,6 +7725,7 @@ export function CollectionBrowserView({
                       const isSelected = selectedIds.includes(id)
                       const state = pipelineData?.instances?.[String(id)]
                       const risk = riskMap[String(id)]
+                      const unseen = unseenMap?.[String(id)]
                       const riskTint =
                         !isSelected && risk ? rowHighlightClass(risk.color) : undefined
                       // Pinned cells need an OPAQUE bg — tinted rows carry the tint
@@ -7496,6 +7752,13 @@ export function CollectionBrowserView({
                               className={`sticky left-0 z-[1] w-9 px-3 py-1.5 ${stickyBg}`}
                               onClick={(e) => e.stopPropagation()}
                             >
+                              {unseen && (
+                                <span
+                                  data-cbv-unseen
+                                  data-tip={unseenTip(unseen)}
+                                  className='absolute left-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-nvr-cyan'
+                                />
+                              )}
                               <input
                                 type='checkbox'
                                 checked={isSelected}
@@ -7683,6 +7946,26 @@ export function CollectionBrowserView({
                                     </span>
                                   ) : (
                                     <span className='text-[11px] text-slate-400'>—</span>
+                                  )}
+                                </td>
+                              )
+                            }
+                            if (col.kind === 'formula') {
+                              const value = formulaValue(row, key)
+                              return (
+                                <td
+                                  key={key}
+                                  style={pinStyle(key)}
+                                  data-cbv-formula-cell={key}
+                                  data-tip={formulaTip(row, key)}
+                                  className={`whitespace-nowrap px-3 py-1.5 text-right tabular-nums text-slate-700 dark:text-slate-200 ${pinCls(key, 'z-[1]', stickyBg)}`}
+                                >
+                                  {value == null ? (
+                                    <span className='text-slate-300 dark:text-slate-600'>—</span>
+                                  ) : columnFormats[key] ? (
+                                    formatValue(String(value), columnFormats[key])
+                                  ) : (
+                                    fmtNum(Math.round(value * 100) / 100)
                                   )}
                                 </td>
                               )
@@ -8232,4 +8515,24 @@ export interface CollectionBrowserColumn {
   label?: string
   format?: 'currency' | 'date' | 'datetime' | 'text'
   filterable?: boolean
+}
+
+/** #643 — "Changed by Beth 2h ago · edited, moved" for the unseen dot. */
+function unseenTip(u: { changed_at: string; by: string | null; kinds: string[] }): string {
+  const words: Record<string, string> = {
+    edit: 'edited',
+    transition: 'moved',
+    comment: 'commented on'
+  }
+  const what = u.kinds.map((k) => words[k] ?? k).join(', ')
+  const mins = Math.max(0, Math.round((Date.now() - new Date(u.changed_at).getTime()) / 60_000))
+  const ago =
+    mins < 1
+      ? 'just now'
+      : mins < 60
+        ? `${mins}m ago`
+        : mins < 1440
+          ? `${Math.round(mins / 60)}h ago`
+          : `${Math.round(mins / 1440)}d ago`
+  return `Changed since you last opened it — ${what}${u.by ? ` by ${u.by}` : ''}, ${ago}`
 }

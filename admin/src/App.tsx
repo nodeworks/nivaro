@@ -48,9 +48,6 @@ const ActivityPage = lazy(() =>
 const ActivityDetailPage = lazy(() =>
   import('@/pages/ActivityDetail').then((m) => ({ default: m.ActivityDetailPage }))
 )
-const CollectionBrowserPage = lazy(() =>
-  import('@/pages/CollectionBrowser').then((m) => ({ default: m.CollectionBrowserPage }))
-)
 const CollectionBrowserV2Page = lazy(() =>
   import('@/pages/CollectionBrowserV2').then((m) => ({ default: m.CollectionBrowserV2Page }))
 )
@@ -351,6 +348,12 @@ function WorkflowTemplateRedirect() {
   return <Navigate to={`/pipelines/${id ?? ''}`} replace />
 }
 
+/** #743 — the classic browser was retired; old links land on the shared one. */
+function ClassicBrowserRedirect() {
+  const { collection } = useParams<{ collection: string }>()
+  return <Navigate to={`/collections/${collection ?? ''}`} replace />
+}
+
 const ApprovalsPage = lazy(() =>
   import('@/pages/Approvals').then((m) => ({ default: m.ApprovalsPage }))
 )
@@ -497,7 +500,7 @@ export default function App() {
                   <Route path='collections/:collection' element={<CollectionBrowserV2Page />} />
                   <Route
                     path='collections/:collection/classic'
-                    element={<CollectionBrowserPage />}
+                    element={<ClassicBrowserRedirect />}
                   />
                   <Route path='collections/:collection/s/:slug' element={<SlugResolverPage />} />
                   <Route

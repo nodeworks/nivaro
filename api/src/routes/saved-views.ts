@@ -15,6 +15,7 @@ interface SavedViewRow {
   is_shared: boolean | number
   is_default: boolean | number
   role: string | null
+  default_for_role?: string | null
   created_at: Date
 }
 
@@ -40,8 +41,32 @@ function formatView(row: SavedViewRow) {
     sort: parseJson(row.sort),
     columns: parseJson(row.columns),
     is_shared: !!row.is_shared,
-    is_default: !!row.is_default
+    is_default: !!row.is_default,
+    default_for_role: row.default_for_role ?? null
   }
+}
+
+const sameId = (a: unknown, b: unknown) =>
+  a != null && b != null && String(a).toUpperCase() === String(b).toUpperCase()
+
+/**
+ * #672 — a role-level default. Setting it makes the view shared (members of
+ * the role must be able to see it) and clears any other view holding the
+ * same role's default on this collection. Admin only. Returns an error
+ * message, or null when the value is acceptable.
+ */
+async function claimRoleDefault(
+  collection: string,
+  roleId: string | null,
+  exceptId: number | null
+): Promise<string | null> {
+  if (!roleId) return null
+  const role = await db('nivaro_roles').where({ id: roleId }).first('id')
+  if (!role) return 'Role not found'
+  const q = db('nivaro_saved_views').where({ collection }).where('default_for_role', roleId)
+  if (exceptId != null) q.whereNot('id', exceptId)
+  await q.update({ default_for_role: null })
+  return null
 }
 
 export async function savedViewsRoutes(app: FastifyInstance) {
@@ -67,7 +92,28 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       })
       .orderBy('created_at', 'asc')) as SavedViewRow[]
 
-    return reply.send({ data: rows.map(formatView) })
+    // Name the role a view is the default for, and say whether that default
+    // is the caller's (the browser applies it before the collection default).
+    const roleIds = [...new Set(rows.map((r) => r.default_for_role).filter(Boolean))] as string[]
+    const roleNames = new Map<string, string>()
+    if (roleIds.length) {
+      for (const r of (await db('nivaro_roles')
+        .whereIn('id', roleIds)
+        .select('id', 'name')) as Array<{
+        id: string
+        name: string
+      }>)
+        roleNames.set(String(r.id).toUpperCase(), r.name)
+    }
+    return reply.send({
+      data: rows.map((r) => ({
+        ...formatView(r),
+        default_for_role_name: r.default_for_role
+          ? (roleNames.get(String(r.default_for_role).toUpperCase()) ?? null)
+          : null,
+        role_default: sameId(r.default_for_role, userRole)
+      }))
+    })
   })
 
   // POST / — create a view owned by the current user
@@ -81,6 +127,7 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       is_shared?: boolean
       is_default?: boolean
       role?: string | null
+      default_for_role?: string | null
     }
 
     const { collection, name } = body
@@ -94,6 +141,13 @@ export async function savedViewsRoutes(app: FastifyInstance) {
     if (wantsDefault) {
       await db('nivaro_saved_views').where({ collection }).update({ is_default: false })
     }
+    const roleDefault = body.default_for_role || null
+    if (roleDefault) {
+      if (!req.isAdmin)
+        return reply.code(403).send({ error: 'Only admins can set a role default view' })
+      const err = await claimRoleDefault(collection, roleDefault, null)
+      if (err) return reply.code(400).send({ error: err })
+    }
 
     const [row] = (await db('nivaro_saved_views')
       .insert({
@@ -103,9 +157,10 @@ export async function savedViewsRoutes(app: FastifyInstance) {
         sort: toJsonStr(body.sort),
         columns: toJsonStr(body.columns),
         user: req.user!.id,
-        is_shared: wantsDefault ? true : !!body.is_shared,
+        is_shared: wantsDefault || roleDefault ? true : !!body.is_shared,
         is_default: wantsDefault,
-        role: body.role ?? null,
+        role: roleDefault ? null : (body.role ?? null),
+        default_for_role: roleDefault,
         created_at: new Date()
       })
       .returning('*')) as unknown as [SavedViewRow]
@@ -142,9 +197,23 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       is_shared?: boolean
       is_default?: boolean
       role?: string | null
+      default_for_role?: string | null
     }
 
     const update: Record<string, unknown> = {}
+    if (body.default_for_role !== undefined) {
+      if (!req.isAdmin)
+        return reply.code(403).send({ error: 'Only admins can set a role default view' })
+      const roleDefault = body.default_for_role || null
+      const err = await claimRoleDefault(view.collection, roleDefault, view.id)
+      if (err) return reply.code(400).send({ error: err })
+      update.default_for_role = roleDefault
+      if (roleDefault) {
+        // Members of the role must be able to see their default.
+        update.is_shared = true
+        update.role = null
+      }
+    }
     if (body.is_default !== undefined) {
       if (!req.isAdmin) {
         return reply.code(403).send({ error: 'Only admins can set the default view' })
@@ -167,7 +236,7 @@ export async function savedViewsRoutes(app: FastifyInstance) {
     if (body.sort !== undefined) update.sort = toJsonStr(body.sort)
     if (body.columns !== undefined) update.columns = toJsonStr(body.columns)
     if (body.is_shared !== undefined) update.is_shared = !!body.is_shared
-    if (body.role !== undefined) update.role = body.role ?? null
+    if (body.role !== undefined && update.role === undefined) update.role = body.role ?? null
 
     if (Object.keys(update).length === 0) {
       return reply.send({ data: formatView(view) })
