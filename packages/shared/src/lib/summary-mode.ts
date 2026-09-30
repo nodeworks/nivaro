@@ -5,16 +5,22 @@
  *
  *   { default: 'edit' | 'summary',
  *     rules: [{ roles?: uuid[] | null, states?: key[] | null,
- *               states_op?: 'in' | 'not_in', mode: 'edit' | 'summary' }] }
+ *               states_op?: 'in' | 'not_in',
+ *               conditions?: [{field, op, value}] | null,   // #737
+ *               mode: 'edit' | 'summary' }] }
  *
  * Rules are evaluated in order, first match wins, `default` when none match.
- * A null/empty `roles` or `states` list means "any". `states` may contain
+ * A null/empty `roles` or `states` list means "any"; `conditions` judge the
+ * record's own values (ALL must hold — the at-risk rule ops, see
+ * record-conditions.ts): "on hold → Summary", "requisition over X → Summary". `states` may contain
  * NO_STATE ('__none__') to match a record that has no pipeline instance.
  * New records ALWAYS open in Edit — there is nothing to summarise yet.
  *
  * The server validates the same shape (api/src/services/summary-mode.ts);
  * this module is the CLIENT evaluator and the Table Editor's type source.
  */
+
+import { normalizeRecordConditions, type RecordCondition, recordMatchesAll } from './record-conditions'
 
 export type SummaryMode = 'summary' | 'edit'
 export type SummaryStatesOp = 'in' | 'not_in'
@@ -23,6 +29,7 @@ export interface SummaryModeRule {
   roles?: string[] | null
   states?: string[] | null
   states_op?: SummaryStatesOp
+  conditions?: RecordCondition[] | null
   mode: SummaryMode
 }
 
@@ -48,6 +55,7 @@ export function normalizeSummaryModeRules(raw: unknown): SummaryModeRules {
         roles: Array.isArray(rr.roles) ? rr.roles.map(String) : null,
         states: Array.isArray(rr.states) ? rr.states.map(String) : null,
         states_op: rr.states_op === 'not_in' ? 'not_in' : 'in',
+        conditions: normalizeRecordConditions(rr.conditions),
         mode: rr.mode === 'summary' ? 'summary' : 'edit'
       })
     }
@@ -63,9 +71,18 @@ export const summaryRulesNeedRole = (cfg: SummaryModeRules | null | undefined) =
 export const summaryRulesNeedState = (cfg: SummaryModeRules | null | undefined) =>
   !!cfg?.rules.some((r) => (r.states?.length ?? 0) > 0)
 
+/** True when any rule judges the record's values — the evaluator then needs the record. */
+export const summaryRulesNeedRecord = (cfg: SummaryModeRules | null | undefined) =>
+  !!cfg?.rules.some((r) => (r.conditions?.length ?? 0) > 0)
+
 export function resolveSummaryMode(
   cfg: SummaryModeRules | null | undefined,
-  ctx: { role: string | null; stateKey: string | null; isNew: boolean }
+  ctx: {
+    role: string | null
+    stateKey: string | null
+    isNew: boolean
+    record?: Record<string, unknown> | null
+  }
 ): SummaryMode {
   if (ctx.isNew || !cfg) return 'edit'
   const role = ctx.role ? ctx.role.toLowerCase() : null
@@ -78,6 +95,10 @@ export function resolveSummaryMode(
       const inSet = states.includes(stateVal)
       const ok = rule.states_op === 'not_in' ? !inSet : inSet
       if (!ok) continue
+    }
+    if ((rule.conditions?.length ?? 0) > 0) {
+      // A rule about the record's values never matches a record not read yet.
+      if (!ctx.record || !recordMatchesAll(ctx.record, rule.conditions)) continue
     }
     return rule.mode
   }

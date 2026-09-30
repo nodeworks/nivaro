@@ -22,7 +22,7 @@ export const summaryMode: DocSection = {
     { type: 'h3', text: 'Which mode a record opens in' },
     {
       type: 'p',
-      text: 'Data Model → collection → Settings → Form UX. Turn on "Summary mode" to show the switch, then set the default (Edit or Summary) and any number of rules. A rule combines a role list and a state test: "when role is X and state is / is not [states] → open in Summary|Edit". Leave roles empty to match any role, states empty to match any state. "No state yet" matches a record that has no pipeline instance. Rules run top to bottom and the first match wins; when none match the default applies.'
+      text: 'Data Model → collection → Settings → Form UX. Turn on "Summary mode" to show the switch, then set the default (Edit or Summary) and any number of rules. A rule combines a role list, a state test and conditions on the record's own values: "when role is X, state is / is not [states] and On Hold is true → open in Summary|Edit". Leave roles empty to match any role, states empty to match any state. "No state yet" matches a record that has no pipeline instance. Rules run top to bottom and the first match wins; when none match the default applies.'
     },
     {
       type: 'pre',
@@ -52,6 +52,10 @@ export const summaryMode: DocSection = {
           "Pipeline state keys, plus the sentinel '__none__' for records with no instance. Empty or omitted = any state."
         ],
         ['rules[].states_op', "'in' (default) or 'not_in' — inverts the state test."],
+        [
+          'rules[].conditions',
+          "Record values that must ALL hold: [{field, op, value}] with the row-highlight ops (eq, neq, gt, gte, lt, lte, contains, null, nnull). A value may name another field ('{{budget}} * 0.9'). Omitted = any record. At most 10 per rule."
+        ],
         ['rules[].mode', "'edit' or 'summary' — the mode to open in when the rule matches."]
       ]
     },

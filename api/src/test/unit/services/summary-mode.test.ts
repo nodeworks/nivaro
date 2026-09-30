@@ -17,8 +17,14 @@ describe('parseSummaryModeRules', () => {
     )
     expect(cfg.default).toBe('summary')
     expect(cfg.rules).toEqual([
-      { roles: null, states: ['started', '__none__'], states_op: 'in', mode: 'edit' },
-      { roles: null, states: null, states_op: 'in', mode: 'edit' }
+      {
+        roles: null,
+        states: ['started', '__none__'],
+        states_op: 'in',
+        conditions: null,
+        mode: 'edit'
+      },
+      { roles: null, states: null, states_op: 'in', conditions: null, mode: 'edit' }
     ])
   })
   it('never throws on garbage', () => {
@@ -37,14 +43,19 @@ describe('validateSummaryModeRules', () => {
     expect(v.error).toBeUndefined()
     expect(v.value).toEqual({
       default: 'summary',
-      rules: [{ roles: [ROLE], states: ['started'], states_op: 'in', mode: 'edit' }]
+      rules: [
+        { roles: [ROLE], states: ['started'], states_op: 'in', conditions: null, mode: 'edit' }
+      ]
     })
   })
   it('stores nothing for the empty default', () => {
     expect(validateSummaryModeRules({ default: 'edit', rules: [] })).toEqual({ value: null })
     expect(validateSummaryModeRules(null)).toEqual({ value: null })
     expect(validateSummaryModeRules({ rules: [{ roles: [], states: [], mode: 'edit' }] })).toEqual({
-      value: { default: 'edit', rules: [{ roles: null, states: null, states_op: 'in', mode: 'edit' }] }
+      value: {
+        default: 'edit',
+        rules: [{ roles: null, states: null, states_op: 'in', conditions: null, mode: 'edit' }]
+      }
     })
   })
   it('rejects bad shapes with a message', () => {
@@ -64,3 +75,28 @@ describe('validateSummaryModeRules', () => {
     )
   })
 })
+
+describe('record conditions (#737)', () => {
+  it('keeps valid conditions and refuses bad ones', () => {
+    const v = validateSummaryModeRules({
+      rules: [
+        { mode: 'summary', conditions: [{ field: 'is_on_hold', op: 'eq', value: true }] }
+      ]
+    })
+    expect(v.value?.rules[0].conditions).toEqual([{ field: 'is_on_hold', op: 'eq', value: true }])
+    expect(
+      validateSummaryModeRules({ rules: [{ mode: 'summary', conditions: [{ field: 'a b', op: 'eq' }] }] })
+        .error
+    ).toMatch(/field name/)
+    expect(
+      validateSummaryModeRules({ rules: [{ mode: 'summary', conditions: [{ field: 'a', op: 'like' }] }] })
+        .error
+    ).toMatch(/op must be/)
+    expect(
+      validateSummaryModeRules({
+        rules: [{ mode: 'summary', conditions: [{ field: 'a', op: 'eq', value: { x: 1 } }] }]
+      }).error
+    ).toMatch(/string, number or boolean/)
+  })
+})
+

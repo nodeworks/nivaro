@@ -6,15 +6,23 @@
  *
  *   { default: 'edit' | 'summary',
  *     rules: [{ roles?: uuid[], states?: key[], states_op?: 'in'|'not_in',
+ *               conditions?: [{field, op, value}],   // #737, at-risk ops
  *               mode: 'edit' | 'summary' }] }
  */
 
 export type SummaryMode = 'summary' | 'edit'
 
+export interface SummaryModeCondition {
+  field: string
+  op: (typeof CONDITION_OPS)[number]
+  value?: string | number | boolean | null
+}
+
 export interface SummaryModeRule {
   roles: string[] | null
   states: string[] | null
   states_op: 'in' | 'not_in'
+  conditions: SummaryModeCondition[] | null
   mode: SummaryMode
 }
 
@@ -24,6 +32,10 @@ export interface SummaryModeRules {
 }
 
 export const NO_STATE = '__none__'
+// The at-risk rule ops (routes/at-risk.ts) — one vocabulary for "a record like this".
+export const CONDITION_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'null', 'nnull'] as const
+const MAX_CONDITIONS = 10
+const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/
 const MAX_RULES = 20
 const MAX_LIST = 50
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -53,6 +65,14 @@ export function parseSummaryModeRules(raw: unknown): SummaryModeRules {
         roles: Array.isArray(rr.roles) ? rr.roles.map(String) : null,
         states: Array.isArray(rr.states) ? rr.states.map(String) : null,
         states_op: rr.states_op === 'not_in' ? 'not_in' : 'in',
+        conditions: Array.isArray(rr.conditions)
+          ? rr.conditions.filter(
+              (c) =>
+                !!c &&
+                typeof c.field === 'string' &&
+                (CONDITION_OPS as readonly string[]).includes(String(c.op))
+            )
+          : null,
         mode: rr.mode === 'summary' ? 'summary' : 'edit'
       })
     }
@@ -130,7 +150,52 @@ export function validateSummaryModeRules(
     if (op !== undefined && op !== 'in' && op !== 'not_in') {
       return { error: `summary_mode_rules.rules[${i}].states_op must be 'in' or 'not_in'` }
     }
-    rules.push({ roles, states, states_op: op === 'not_in' ? 'not_in' : 'in', mode: rr.mode })
+    let conditions: SummaryModeCondition[] | null = null
+    if (rr.conditions != null) {
+      if (!Array.isArray(rr.conditions)) {
+        return { error: `summary_mode_rules.rules[${i}].conditions must be an array` }
+      }
+      if (rr.conditions.length > MAX_CONDITIONS) {
+        return { error: `summary_mode_rules.rules[${i}].conditions: at most ${MAX_CONDITIONS}` }
+      }
+      conditions = []
+      for (const [j, c] of rr.conditions.entries()) {
+        const cc = (c ?? {}) as Record<string, unknown>
+        const where = `summary_mode_rules.rules[${i}].conditions[${j}]`
+        if (typeof cc.field !== 'string' || !FIELD_RE.test(cc.field)) {
+          return { error: `${where}.field must be a field name` }
+        }
+        if (!(CONDITION_OPS as readonly string[]).includes(String(cc.op))) {
+          return { error: `${where}.op must be one of ${CONDITION_OPS.join(', ')}` }
+        }
+        const v = cc.value
+        if (
+          v !== undefined &&
+          v !== null &&
+          typeof v !== 'string' &&
+          typeof v !== 'number' &&
+          typeof v !== 'boolean'
+        ) {
+          return { error: `${where}.value must be a string, number or boolean` }
+        }
+        if (typeof v === 'string' && v.length > 200) {
+          return { error: `${where}.value is too long` }
+        }
+        conditions.push({
+          field: cc.field,
+          op: cc.op as SummaryModeCondition['op'],
+          ...(v !== undefined ? { value: v as SummaryModeCondition['value'] } : {})
+        })
+      }
+      if (conditions.length === 0) conditions = null
+    }
+    rules.push({
+      roles,
+      states,
+      states_op: op === 'not_in' ? 'not_in' : 'in',
+      conditions,
+      mode: rr.mode
+    })
   }
   if (def === 'edit' && rules.length === 0) return { value: null }
   return { value: { default: def, rules } }

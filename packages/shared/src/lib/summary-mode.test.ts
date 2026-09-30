@@ -3,6 +3,7 @@ import {
   NO_STATE,
   normalizeSummaryModeRules,
   resolveSummaryMode,
+  summaryRulesNeedRecord,
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from './summary-mode'
@@ -66,3 +67,32 @@ describe('resolveSummaryMode', () => {
     expect(summaryRulesNeedState(null)).toBe(false)
   })
 })
+
+describe('record conditions (#737)', () => {
+  const cfg = normalizeSummaryModeRules({
+    default: 'edit',
+    rules: [
+      { conditions: [{ field: 'is_on_hold', op: 'eq', value: true }], mode: 'summary' },
+      { conditions: [{ field: 'requisition_amount', op: 'gt', value: 50000 }], mode: 'summary' }
+    ]
+  })
+  it('needs the record', () => {
+    expect(summaryRulesNeedRecord(cfg)).toBe(true)
+  })
+  it('on hold opens in summary', () => {
+    const ctx = { role: null, stateKey: 'started', isNew: false }
+    expect(resolveSummaryMode(cfg, { ...ctx, record: { is_on_hold: 1 } })).toBe('summary')
+    expect(resolveSummaryMode(cfg, { ...ctx, record: { is_on_hold: false } })).toBe('edit')
+  })
+  it('an amount over the line opens in summary', () => {
+    const ctx = { role: null, stateKey: null, isNew: false }
+    expect(resolveSummaryMode(cfg, { ...ctx, record: { requisition_amount: '60000.00' } })).toBe(
+      'summary'
+    )
+    expect(resolveSummaryMode(cfg, { ...ctx, record: { requisition_amount: 100 } })).toBe('edit')
+  })
+  it('an unread record never matches a condition rule', () => {
+    expect(resolveSummaryMode(cfg, { role: null, stateKey: null, isNew: false })).toBe('edit')
+  })
+})
+

@@ -4749,11 +4749,166 @@ function IntegrityBadgeSection({ tableName }: { tableName: string }) {
  *  by viewer role and/or the record's pipeline state; first match wins, new
  *  records always Edit). The changes tray is per layout and lives on the
  *  Layouts tab. */
+type SummaryConditionDraft = {
+  field: string
+  op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'null' | 'nnull'
+  value?: string | number | boolean | null
+}
 type SummaryModeRuleDraft = {
   roles: string[] | null
   states: string[] | null
   states_op: 'in' | 'not_in'
+  conditions: SummaryConditionDraft[] | null
   mode: 'summary' | 'edit'
+}
+const SUMMARY_CONDITION_OPS: Array<[SummaryConditionDraft['op'], string]> = [
+  ['eq', 'is'],
+  ['neq', 'is not'],
+  ['gt', 'is over'],
+  ['gte', 'is at least'],
+  ['lt', 'is under'],
+  ['lte', 'is at most'],
+  ['contains', 'contains'],
+  ['null', 'is empty'],
+  ['nnull', 'is filled']
+]
+
+/** "true"/"false" as booleans, plain numbers as numbers, the rest as typed. */
+function conditionValue(raw: string): string | number | boolean {
+  const t = raw.trim()
+  if (t === 'true') return true
+  if (t === 'false') return false
+  if (t !== '' && !Number.isNaN(Number(t)) && !t.startsWith('{{')) return Number(t)
+  return raw
+}
+
+/** #737 — the record-value half of a Summary Mode rule: ALL must hold. */
+function SummaryConditionsEditor({
+  conditions,
+  fields,
+  disabled,
+  onChange
+}: {
+  conditions: SummaryConditionDraft[] | null
+  fields: Array<{ field: string; label: string }>
+  disabled: boolean
+  onChange: (next: SummaryConditionDraft[] | null) => void
+}) {
+  const list = conditions ?? []
+  const [picking, setPicking] = useState<number | 'new' | null>(null)
+  const labelOf = (f: string) => fields.find((x) => x.field === f)?.label ?? f
+  const set = (i: number, patch: Partial<SummaryConditionDraft>) =>
+    onChange(list.map((c, j) => (j === i ? { ...c, ...patch } : c)))
+  const fieldPicker = (idx: number | 'new', current: string | null) => (
+    <Popover open={picking === idx} onOpenChange={(o) => setPicking(o ? idx : null)}>
+      <PopoverTrigger asChild>
+        <Button
+          variant='outline'
+          size='sm'
+          role='combobox'
+          disabled={disabled}
+          className='h-6 gap-1 px-2 text-[11.5px] font-normal'
+          data-summary-condition-field={current ?? 'new'}
+        >
+          {current ? labelOf(current) : (
+            <>
+              <Plus className='h-3 w-3' /> Add field
+            </>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className='w-[240px] p-0' align='start'>
+        <Command>
+          <CommandInput placeholder='Search fields…' className='h-8 text-[12px]' />
+          <CommandList>
+            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+              No such field
+            </CommandEmpty>
+            <CommandGroup>
+              {fields.map((f) => (
+                <CommandItem
+                  key={f.field}
+                  value={`${f.label} ${f.field}`}
+                  onSelect={() => {
+                    setPicking(null)
+                    if (idx === 'new') onChange([...list, { field: f.field, op: 'eq', value: '' }])
+                    else set(idx, { field: f.field })
+                  }}
+                  className='text-[12px]'
+                >
+                  {f.label}
+                  <span className='ml-auto font-mono text-[10.5px] text-slate-400'>{f.field}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+  return (
+    <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-summary-conditions>
+      <span className='text-[11.5px] text-slate-500'>record</span>
+      {list.length === 0 && (
+        <span className='text-[11.5px] italic text-slate-400'>any record</span>
+      )}
+      {list.map((c, i) => (
+        <span
+          key={`${i}-${c.field}`}
+          data-summary-condition
+          className='inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-1 py-0.5'
+        >
+          {fieldPicker(i, c.field)}
+          <Select
+            value={c.op}
+            onValueChange={(v) => set(i, { op: v as SummaryConditionDraft['op'] })}
+            disabled={disabled}
+          >
+            <SelectTrigger className='h-6 w-[96px] text-[11.5px]'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SUMMARY_CONDITION_OPS.map(([op, label]) => (
+                <SelectItem key={op} value={op}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {c.op !== 'null' && c.op !== 'nnull' && (
+            <Input
+              defaultValue={c.value == null ? '' : String(c.value)}
+              key={`${c.field}-${String(c.value)}`}
+              disabled={disabled}
+              placeholder='value'
+              aria-label={`${labelOf(c.field)} value`}
+              onBlur={(e) => {
+                const v = conditionValue(e.target.value)
+                if (v !== c.value) set(i, { value: v })
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              }}
+              className='h-6 w-[110px] px-1.5 text-[11.5px]'
+            />
+          )}
+          <button
+            type='button'
+            aria-label='Remove condition'
+            disabled={disabled}
+            onClick={() => {
+              const next = list.filter((_, j) => j !== i)
+              onChange(next.length > 0 ? next : null)
+            }}
+            className='rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700'
+          >
+            <X className='h-3 w-3' />
+          </button>
+        </span>
+      ))}
+      {list.length < 10 && fieldPicker('new', null)}
+    </div>
+  )
 }
 type SummaryModeRulesDraft = { default: 'summary' | 'edit'; rules: SummaryModeRuleDraft[] }
 const NO_STATE_KEY = '__none__'
@@ -4771,7 +4926,17 @@ function FormUxSection({
     queryFn: () =>
       api
         .get<{
-          data: { read_mode_toggle?: boolean; summary_mode_rules?: SummaryModeRulesDraft | null }
+          data: {
+            read_mode_toggle?: boolean
+            summary_mode_rules?: SummaryModeRulesDraft | null
+            fields?: Array<{
+              field: string
+              type?: string | null
+              interface?: string | null
+              label?: string | null
+              hidden?: boolean
+            }>
+          }
         }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
     enabled: !!tableName
@@ -4809,6 +4974,8 @@ function FormUxSection({
             roles: Array.isArray(r.roles) && r.roles.length > 0 ? r.roles : null,
             states: Array.isArray(r.states) && r.states.length > 0 ? r.states : null,
             states_op: r.states_op === 'not_in' ? 'not_in' : 'in',
+            conditions:
+              Array.isArray(r.conditions) && r.conditions.length > 0 ? r.conditions : null,
             mode: r.mode === 'summary' ? 'summary' : 'edit'
           }))
         : []
@@ -4827,6 +4994,7 @@ function FormUxSection({
           roles: null,
           states: null,
           states_op: 'in',
+          conditions: null,
           mode: cfg.default === 'summary' ? 'edit' : 'summary'
         }
       ]
@@ -4836,6 +5004,21 @@ function FormUxSection({
   const stateLabel = (key: string) =>
     key === NO_STATE_KEY ? 'No state yet' : (states.find((s) => s.key === key)?.label ?? key)
   const stateOptions = [{ key: NO_STATE_KEY, label: 'No state yet' }, ...states]
+  // Plain columns a rule can judge (#737) — no alias lists, nothing hidden.
+  const conditionFields = useMemo(
+    () =>
+      (meta?.fields ?? [])
+        .filter(
+          (f) =>
+            !f.hidden &&
+            f.field !== 'id' &&
+            f.type !== 'alias' &&
+            !String(f.interface ?? '').startsWith('list-')
+        )
+        .map((f) => ({ field: f.field, label: f.label || titleCase(f.field) }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [meta]
+  )
   const busy = saveMut.isPending || meta === undefined
   const toggleOn = meta?.read_mode_toggle === true
 
@@ -4995,8 +5178,9 @@ function FormUxSection({
             <div>
               <p className='text-[12.5px] font-medium text-slate-700'>Opens in</p>
               <p className='mt-0.5 text-[12px] text-slate-500'>
-                Which mode a saved record opens in. Rules run top to bottom, the first match wins,
-                otherwise the default. New records always open in Edit.
+                Which mode a saved record opens in, by role, pipeline state and the record's own
+                values (on hold, an amount over a line). Rules run top to bottom, the first match
+                wins, otherwise the default. New records always open in Edit.
               </p>
             </div>
             <div className='flex items-center gap-2'>
@@ -5057,6 +5241,12 @@ function FormUxSection({
                       searchPlaceholder='Search states…'
                     />
                   </div>
+                  <SummaryConditionsEditor
+                    conditions={r.conditions}
+                    fields={conditionFields}
+                    disabled={busy}
+                    onChange={(next) => updateRule(i, { conditions: next })}
+                  />
                 </div>
                 <span className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
                   open in

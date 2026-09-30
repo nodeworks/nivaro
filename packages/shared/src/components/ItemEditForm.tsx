@@ -78,6 +78,7 @@ import {
   normalizeSummaryModeRules,
   resolveSummaryMode,
   type SummaryModeRules,
+  summaryRulesNeedRecord,
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
@@ -7352,13 +7353,16 @@ export function ItemEditForm({
     if (summaryResolvedFor.current === key || isNew || !summaryRules) return
     if (summaryNeedsRole && currentUserData === undefined && !currentUserError) return
     if (summaryNeedsState && pipelineInstanceData === undefined && !pipelineInstanceError) return
+    // A rule on the record's own values (#737) waits for the record.
+    if (summaryRulesNeedRecord(summaryRules) && itemData === undefined && !itemLoadError) return
     const stateId = pipelineInstanceData?.instance?.current_state ?? null
     const stateKey = pipelineInstanceData?.states?.find((s) => s.id === stateId)?.key ?? null
     summaryResolvedFor.current = key
     const mode = resolveSummaryMode(summaryRules, {
       role: currentUserData?.role ? String(currentUserData.role) : null,
       stateKey,
-      isNew
+      isNew,
+      record: itemData ?? null
     })
     if (mode === 'summary') setReadModeRaw(true)
     setSummaryResolvedKey(key)
@@ -7371,7 +7375,9 @@ export function ItemEditForm({
     currentUserData,
     currentUserError,
     pipelineInstanceData,
-    pipelineInstanceError
+    pipelineInstanceError,
+    itemData,
+    itemLoadError
   ])
   // Summary mode collapses the right-hand rail by default — the read
   // view is the summary; the rail would repeat it. Restore whatever the rail
