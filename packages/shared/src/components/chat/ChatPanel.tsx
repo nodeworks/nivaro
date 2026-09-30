@@ -968,7 +968,7 @@ function DmPeerLine({ peerId, name }: { peerId: string; name: string }) {
 
 export function ChatRoomView({
   room,
-  label,
+  label: labelProp,
   onBack,
   onOpenSettings,
   renderMessageBody,
@@ -990,6 +990,29 @@ export function ChatRoomView({
   const th = useTheme()
   const client = useNivaroClient()
   const me = cfg.me
+  // A DM opened from a link before it holds a message is not in the room
+  // list, so the host only has the room key to call it. Name it after the
+  // other person instead (same query key as the user card, so it is shared).
+  const labelPeer = me ? dmPeer(room, me.id) : null
+  const labelIsKey =
+    !labelProp.trim() || labelProp.toLowerCase() === room.toLowerCase() || /^dm:/i.test(labelProp)
+  const { data: labelPeerCard } = useQuery({
+    queryKey: ['user-card', labelPeer],
+    queryFn: () =>
+      client
+        .request<{
+          data: { first_name: string | null; last_name: string | null; email: string } | null
+        }>(get(`/users/${labelPeer}/card`))
+        .then((r) => r.data ?? null),
+    enabled: !!labelPeer && labelIsKey,
+    staleTime: 120_000
+  })
+  const label =
+    labelIsKey && labelPeer
+      ? [labelPeerCard?.first_name, labelPeerCard?.last_name].filter(Boolean).join(' ') ||
+        labelPeerCard?.email ||
+        'Direct message'
+      : labelProp
   const [anchor, setAnchor] = useState<ChatAnchor>(anchorProp)
   useEffect(() => setAnchor(anchorProp), [anchorProp])
   const { messages, loading, hasOlder, hasNewer, loadOlder, loadingOlder } = useChatMessages(
