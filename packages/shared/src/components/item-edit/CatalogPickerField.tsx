@@ -579,7 +579,28 @@ export function CatalogPickerField({
     enabled: !isNew,
     staleTime: 15_000
   })
-  const pendingRows = isNew && staging ? staging.getPendingRows(relatedCollection, manyField) : []
+  // #734 — with the outer form's O2M staging present, EVERY quantity commit
+  // stages (new rows queue, saved rows queue an edit or a delete) and lands
+  // with the record's Save; Cancel discards. Standalone hosts without
+  // staging keep the live writes.
+  const stagedSaved = !isNew && !!staging
+  const pendingRows = staging ? staging.getPendingRows(relatedCollection, manyField) : []
+  const pendingEdits = stagedSaved
+    ? staging.getPendingEdits(relatedCollection, manyField)
+    : new Map<string, Record<string, unknown>>()
+  const pendingEditsKey = JSON.stringify([...pendingEdits.entries()])
+  // Saved rows as the form will save them: queued edits overlaid.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pendingEditsKey is the content key of pendingEdits
+  const effectiveChildRows = useMemo(
+    () =>
+      pendingEdits.size === 0
+        ? childRows
+        : childRows.map((r) => {
+            const e = pendingEdits.get(String(r.id))
+            return e ? { ...r, ...e } : r
+          }),
+    [childRows, pendingEditsKey]
+  )
   // Saved rows removed via the Summary ✕ stage into the outer form's O2M
   // delete queue — nothing is deleted server-side until Save; Undo un-stages.
   const queuedDeletes =
@@ -588,12 +609,12 @@ export function CatalogPickerField({
   // catalogId → saved row / pending index
   const savedByCatalogId = useMemo(() => {
     const map = new Map<string, Record<string, unknown>>()
-    for (const r of childRows) {
+    for (const r of effectiveChildRows) {
       const v = r[config.item_field]
       if (v != null) map.set(String(v), r)
     }
     return map
-  }, [childRows, config.item_field])
+  }, [effectiveChildRows, config.item_field])
   const pendingIdxByCatalogId = useMemo(() => {
     const map = new Map<string, number>()
     pendingRows.forEach((r, i) => {
@@ -605,14 +626,16 @@ export function CatalogPickerField({
 
   // Picked rows (saved or pending) in a uniform shape for the summary table
   const pickedEntries = useMemo(() => {
-    if (isNew)
-      return pendingRows
-        .filter((r) => r[config.item_field] != null)
-        .map((r) => ({ key: String(r[config.item_field]), row: r }))
-    return childRows
+    const queued = pendingRows
       .filter((r) => r[config.item_field] != null)
       .map((r) => ({ key: String(r[config.item_field]), row: r }))
-  }, [isNew, pendingRows, childRows, config.item_field])
+    if (isNew) return queued
+    const saved = effectiveChildRows
+      .filter((r) => r[config.item_field] != null)
+      .map((r) => ({ key: String(r[config.item_field]), row: r }))
+    const savedKeys = new Set(saved.map((e) => e.key))
+    return [...saved, ...queued.filter((e) => !savedKeys.has(e.key))]
+  }, [isNew, pendingRows, effectiveChildRows, config.item_field])
 
   // Labels for picked items OUTSIDE the filtered catalog (arbitrary adds)
   const missingLabelIds = useMemo(
@@ -1160,13 +1183,11 @@ export function CatalogPickerField({
     pinnedRowsData.find((r) => String(r.id) === catalogId) ?? { id: catalogId }
 
   const currentQty = (catalogId: string): number | null => {
-    if (isNew) {
-      const idx = pendingIdxByCatalogId.get(catalogId)
-      if (idx === undefined) return null
-      return Number(pendingRows[idx]?.[qtyField] ?? 0)
-    }
-    const row = savedByCatalogId.get(catalogId)
-    return row ? Number(row[qtyField] ?? 0) : null
+    const row = isNew ? undefined : savedByCatalogId.get(catalogId)
+    if (row) return queuedDeletes.has(String(row.id)) ? null : Number(row[qtyField] ?? 0)
+    const idx = pendingIdxByCatalogId.get(catalogId)
+    if (idx === undefined) return null
+    return Number(pendingRows[idx]?.[qtyField] ?? 0)
   }
 
   const sectionValue = (row: Record<string, unknown>): string => {
@@ -1289,7 +1310,39 @@ export function CatalogPickerField({
     if ((prev ?? 0) === qty) return
     const rel = qty > 0 ? await relatedCopies(catalogId) : {}
 
-    if (isNew) {
+    if (stagedSaved && staging) {
+      const saved = savedByCatalogId.get(catalogId)
+      if (saved?.id != null) {
+        const rid = String(saved.id)
+        if (qty === 0) {
+          staging.cancelPendingEdit(relatedCollection, manyField, rid)
+          staging.queueDelete(relatedCollection, manyField, rid)
+          return
+        }
+        if (queuedDeletes.has(rid)) staging.cancelPendingDelete(relatedCollection, manyField, rid)
+        const payload = buildRowPayload(catalogId, qty, catalogRow, rel)
+        // Manually-edited columns survive qty commits (the live path's rule).
+        for (const f of editableFields) {
+          if (saved[f] != null && saved[f] !== '') payload[f] = saved[f]
+        }
+        for (const [dst, formula] of Object.entries(config.compute_fields ?? {})) {
+          const v = evalClientFormula(formula, { ...saved, ...payload })
+          if (v !== null) payload[dst] = v
+        }
+        const raw = childRows.find((r) => String(r.id) === rid) ?? {}
+        const changes = Object.fromEntries(
+          Object.entries(payload).filter(([k, v]) => String(v ?? '') !== String(raw[k] ?? ''))
+        )
+        if (Object.keys(changes).length === 0) {
+          staging.cancelPendingEdit(relatedCollection, manyField, rid)
+        } else {
+          staging.cancelPendingEdit(relatedCollection, manyField, rid)
+          staging.queueEdit(relatedCollection, manyField, rid, changes)
+        }
+        return
+      }
+    }
+    if (isNew || stagedSaved) {
       const idx = pendingIdxByCatalogId.get(catalogId)
       if (qty === 0) {
         if (idx !== undefined) staging?.removeRow(relatedCollection, manyField, idx)
@@ -1359,14 +1412,26 @@ export function CatalogPickerField({
       }
       return next
     }
-    if (isNew) {
+    const existing = isNew ? undefined : savedByCatalogId.get(catalogId)
+    if (existing?.id == null) {
       const idx = pendingIdxByCatalogId.get(catalogId)
       if (idx === undefined) return
       staging?.updateRow(relatedCollection, manyField, idx, recompute(pendingRows[idx]))
       return
     }
-    const existing = savedByCatalogId.get(catalogId)
-    if (existing?.id == null) return
+    if (stagedSaved && staging) {
+      const next = recompute(existing)
+      const raw = childRows.find((r) => String(r.id) === String(existing.id)) ?? {}
+      const changes = Object.fromEntries(
+        Object.entries(next).filter(
+          ([k, v]) => k !== 'id' && String(v ?? '') !== String(raw[k] ?? '')
+        )
+      )
+      staging.cancelPendingEdit(relatedCollection, manyField, String(existing.id))
+      if (Object.keys(changes).length > 0)
+        staging.queueEdit(relatedCollection, manyField, String(existing.id), changes)
+      return
+    }
     setSavingIds((p) => new Set(p).add(catalogId))
     try {
       const { id: _id, ...body } = recompute(existing)
@@ -1856,6 +1921,17 @@ export function CatalogPickerField({
                           labelFor(e.key),
                           'shrink-0 font-semibold text-slate-800 dark:text-slate-100'
                         )}
+                        {stagedSaved &&
+                          !isStagedDelete &&
+                          (rowDbId == null || pendingEdits.has(rowDbId)) && (
+                            <span
+                              data-catalog-staged={rowDbId == null ? 'new' : 'edited'}
+                              data-tip='Applies when you save the record'
+                              className='shrink-0 rounded bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800 dark:bg-amber-400/15 dark:text-amber-300'
+                            >
+                              {rowDbId == null ? 'New' : 'Edited'}
+                            </span>
+                          )}
                         {submissionError && (
                           <span
                             className='shrink-0'
