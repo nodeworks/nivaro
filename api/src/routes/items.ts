@@ -1534,49 +1534,6 @@ export async function itemsRoutes(app: FastifyInstance) {
       return handleError(err, reply)
     }
   })
-
-  // GET /items/:collection/:id/field-history/:field — field change history
-  app.get('/:collection/:id/field-history/:field', async (req, reply) => {
-    const { collection, id, field } = req.params as {
-      collection: string
-      id: string
-      field: string
-    }
-
-    const rows = (await db('nivaro_revisions as r')
-      .join('nivaro_activity as a', 'r.activity', 'a.id')
-      .where('a.collection', collection)
-      .where('a.item', id)
-      .whereIn('a.action', ['update', 'create'])
-      .orderBy('a.timestamp', 'desc')
-      .limit(50)
-      .select('r.id as revision_id', 'a.timestamp', 'r.data', 'a.user as user_id')) as Array<{
-      revision_id: number
-      timestamp: Date
-      data: string | Record<string, unknown>
-      user_id: string | null
-    }>
-
-    const history = rows.map((row) => {
-      let parsed: Record<string, unknown> = {}
-      try {
-        parsed =
-          typeof row.data === 'string'
-            ? (JSON.parse(row.data) as Record<string, unknown>)
-            : (row.data as Record<string, unknown>)
-      } catch {
-        parsed = {}
-      }
-      return {
-        revision_id: row.revision_id,
-        timestamp: row.timestamp,
-        value: parsed[field] ?? null,
-        user_id: row.user_id
-      }
-    })
-
-    return reply.send({ data: history })
-  })
 }
 
 // ─── Sandbox key simulation (#166) ───────────────────────────────────────────

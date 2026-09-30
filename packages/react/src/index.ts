@@ -34,7 +34,6 @@ export type {
   HeaderWidgetInfo,
   IntegrationDotsProps,
   IntegrationObligationsViewProps,
-  IntegrationStatusBannerProps,
   ItemEditAuthContextValue,
   ItemEditFormProps,
   ItemLinkTarget,
@@ -248,7 +247,6 @@ export {
   type IntegrationSignalRow,
   type IntegrationSignalsSnapshot,
   type IntegrationSignalView,
-  IntegrationStatusBanner,
   IntegrationsConsole,
   type IntegrationsConsoleProps,
   type IntegrationsConsoleTab,
@@ -341,6 +339,10 @@ export {
   RecentRecordsRail,
   RecordChatActions,
   RecordDrilldownSheet,
+  RecordGraphExplorer,
+  type RecordGraphGroup,
+  type RecordGraphNode,
+  RecordGraphSheet,
   RecordGridEditor,
   RecordGridWidgetBody,
   RecordReadView,
@@ -545,9 +547,3 @@ export type {
   UseNivaroFormOptions,
   UseNivaroFormReturn
 } from './types'
-export {
-  RecordGraphExplorer,
-  type RecordGraphGroup,
-  type RecordGraphNode,
-  RecordGraphSheet
-} from '@nivaro/shared'

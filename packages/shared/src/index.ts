@@ -2,7 +2,6 @@ export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
-export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
@@ -51,18 +50,19 @@ export {
   CustomStatusEditor,
   formatStatusExpiry
 } from './components/CustomStatusEditor'
+export { ChatAnalyticsView } from './components/chat/ChatAnalyticsView'
 export {
   ChatAppearAwayRow,
   ChatChannelBrowser,
   ChatChannelSettings,
   ChatPanel,
-  isChatPanelPinned,
   ChatProvider,
   type ChatProviderProps,
   ChatRoomList,
   ChatRoomView,
   ChatSideView,
-  type ChatTheme
+  type ChatTheme,
+  isChatPanelPinned
 } from './components/chat/ChatPanel'
 export * from './components/chat/chat-core'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from './components/chat/chat-core'
@@ -140,15 +140,11 @@ export {
 } from './components/integrations/IntegrationDots'
 export type { IntegrationObligationsViewProps } from './components/integrations/IntegrationObligationsView'
 export { IntegrationObligationsView } from './components/integrations/IntegrationObligationsView'
-export type {
-  IntegrationLineActions,
-  IntegrationStatusBannerProps
-} from './components/integrations/IntegrationStatusBanner'
+export type { IntegrationLineActions } from './components/integrations/IntegrationStatusLines'
 export {
-  IntegrationStatusBanner,
   IntegrationStatusLines,
   useRecordObligations
-} from './components/integrations/IntegrationStatusBanner'
+} from './components/integrations/IntegrationStatusLines'
 export type { ChangeReasonChallenge } from './components/item-edit/ChangeReasonDialog'
 export {
   ChangeReasonDialog,
@@ -165,6 +161,12 @@ export { FieldRenderer } from './components/item-edit/FieldRenderer'
 export { UserChip, UserRosterCluster } from './components/item-edit/GroupSection'
 export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'
 export { InlineTableField } from './components/item-edit/InlineTableField'
+export {
+  type PlanGridHost,
+  PlanGridHostContext,
+  type PlanGridRowHistoryArgs,
+  usePlanGridHost
+} from './components/item-edit/PlanGridHost'
 export {
   QUEUE_RETURN_KEY,
   QueueReturnChip,
@@ -261,16 +263,6 @@ export {
   useScopeDimensions
 } from './components/pipeline/teamScopes'
 export { BrowserPushCard } from './components/profile/BrowserPushCard'
-export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './lib/view-as'
-export { SupportRequestDialog } from './components/support/SupportRequestDialog'
-export { SupportView } from './components/support/SupportView'
-export { StatusPill as SupportStatusPill, TicketDetailSheet } from './components/support/TicketDetailSheet'
-export type {
-  SupportCategory,
-  SupportSummary,
-  SupportTicket,
-  SupportTicketDetail
-} from './components/support/types'
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
 export { SectionCard as ProfileSectionCard } from './components/profile/primitives'
@@ -306,6 +298,18 @@ export { type ReadViewLayout, RecordReadView } from './components/RecordReadView
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
+export { SupportRequestDialog } from './components/support/SupportRequestDialog'
+export { SupportView } from './components/support/SupportView'
+export {
+  StatusPill as SupportStatusPill,
+  TicketDetailSheet
+} from './components/support/TicketDetailSheet'
+export type {
+  SupportCategory,
+  SupportSummary,
+  SupportTicket,
+  SupportTicketDetail
+} from './components/support/types'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer } from './components/TipLayer'
 export { UserAvatar } from './components/UserAvatar'
@@ -420,14 +424,9 @@ export {
   translateScopeValues,
   useMyScopes
 } from './lib/use-my-scopes'
-export {
-  type PlanGridHost,
-  PlanGridHostContext,
-  type PlanGridRowHistoryArgs,
-  usePlanGridHost
-} from './components/item-edit/PlanGridHost'
 export { useOnlineUsers } from './lib/use-online-users'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'
+export { canViewAs, registerViewAsOpener, type ViewAsOpener, viewAs } from './lib/view-as'
 export * from './types'

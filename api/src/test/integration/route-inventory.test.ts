@@ -159,6 +159,16 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/import-templates/test' }
 ]
 
+/**
+ * Routes removed on purpose (#773 dead-code pass, 2026-09-30). The items
+ * field-history route read any record's field values with no read-permission
+ * check; /field-history/:collection/:id/:field is its gated replacement.
+ */
+const REMOVED_ROUTES: Array<{ method: string; path: string }> = [
+  { method: 'GET', path: '/api/items/:collection/:id/field-history/:field' },
+  { method: 'GET', path: '/api/revisions/deleted-o2m' }
+]
+
 describe('Route inventory — frontend-called routes must exist', () => {
   it('registers every required route', async () => {
     const app = Fastify({ logger: false })
@@ -190,6 +200,8 @@ describe('Route inventory — frontend-called routes must exist', () => {
       )
     }
     expect(missing).toHaveLength(0)
+    const back = REMOVED_ROUTES.filter((r) => seen.has(`${r.method} ${r.path}`))
+    expect(back.map((r) => `${r.method} ${r.path}`)).toEqual([])
     await app.close()
   }, 60_000)
 })

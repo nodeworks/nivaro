@@ -24,11 +24,6 @@ import { roleForTone } from './IntegrationObligationsView'
  * disagree about what "overdue" looks like.
  */
 
-export interface IntegrationStatusBannerProps {
-  collection: string
-  itemId: string | number
-}
-
 /** Send-now on one line of the banner. Shown only for the three outcomes
  *  that mean "the partner still does not have it" (failed/missing/overdue —
  *  `bannerLines`' own `tone === 'danger'` is exactly that set), and only
@@ -131,21 +126,6 @@ export function useRecordObligations(collection: string, itemId: string | number
   }
 }
 
-export function IntegrationStatusBanner({ collection, itemId }: IntegrationStatusBannerProps) {
-  const { lines, remediationEnabled } = useRecordObligations(collection, itemId)
-  if (lines.length === 0) return null
-  return (
-    <div className='nvr-expand-in' data-integration-banner>
-      <IntegrationStatusLines
-        collection={collection}
-        itemId={itemId}
-        lines={lines}
-        remediationEnabled={remediationEnabled}
-      />
-    </div>
-  )
-}
-
 /** What a reader can DO about a line (Rob 2026-09-24: "the partner status
  *  messages should be actionable"). Every host that renders the lines
  *  passes what it can offer; a missing callback simply hides that action. */
@@ -182,7 +162,7 @@ export function IntegrationStatusLines({
   lines,
   remediationEnabled,
   actions
-}: IntegrationStatusBannerProps & {
+}: { collection: string; itemId: string | number } & {
   lines: ReturnType<typeof bannerLines>
   remediationEnabled: boolean
   actions?: IntegrationLineActions

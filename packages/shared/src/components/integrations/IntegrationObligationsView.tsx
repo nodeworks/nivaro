@@ -62,7 +62,7 @@ const OUTCOME_OPTIONS = [
 
 /** Maps a filter tone onto the shared `COLOR_ROLES` name QueryTable's
  *  `colorPair` resolves — `null` for `neutral` renders as a plain card with
- *  no accent, never a bare slate wash. Exported so `IntegrationStatusBanner`
+ *  no accent, never a bare slate wash. Exported so `IntegrationStatusLines`
  *  (the record banner, same tone→colorPair idiom) imports this instead of
  *  keeping its own duplicate. */
 export function roleForTone(
@@ -314,7 +314,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
     staleTime: 30_000
   })
   // Read once, here — never a second probe per row of the list table below.
-  // Top-level sibling of `data`, same envelope position IntegrationStatusBanner
+  // Top-level sibling of `data`, same envelope position IntegrationStatusLines
   // reads from /record/:c/:i.
   const remediationEnabled = summary?.remediation_enabled === true
   const notificationsEnabled = summary?.notifications_enabled === true
@@ -326,9 +326,10 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
   // before the real answer lands would be a flicker of a wrong claim.
   const offSwitches = summaryLoading
     ? []
-    : [!notificationsEnabled && 'notifications off', !remediationEnabled && 'remediation off'].filter(
-        (x): x is string => !!x
-      )
+    : [
+        !notificationsEnabled && 'notifications off',
+        !remediationEnabled && 'remediation off'
+      ].filter((x): x is string => !!x)
 
   // A filter change makes the current page meaningless — go back to the top
   // of the newly-scoped set rather than showing "page 3" of a filter that
@@ -378,7 +379,8 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
   // no collection display-template metadata to prefer over it.
   const collectionOptions = useMemo(() => {
     const seen = new Map<string, string>()
-    for (const k of kindsForFilter) if (!seen.has(k.collection)) seen.set(k.collection, titleCase(k.collection))
+    for (const k of kindsForFilter)
+      if (!seen.has(k.collection)) seen.set(k.collection, titleCase(k.collection))
     return [...seen.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label))
@@ -418,7 +420,8 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
       : 'all'
 
   const selectTab = (bucket: 'all' | 'waiting' | 'inbound') => {
-    const list = bucket === 'waiting' ? tabsForApi.waiting : bucket === 'inbound' ? tabsForApi.inbound : []
+    const list =
+      bucket === 'waiting' ? tabsForApi.waiting : bucket === 'inbound' ? tabsForApi.inbound : []
     setFilters((f) => ({ ...f, kind: list.length > 0 ? list.join(',') : null }))
   }
 
@@ -618,10 +621,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
             ariaLabel='Filter by collection'
             value={filters.collection ?? ''}
             onChange={(v) => setFilters((f) => ({ ...f, collection: v || null }))}
-            options={[
-              { value: '', label: 'Every collection' },
-              ...collectionOptions
-            ]}
+            options={[{ value: '', label: 'Every collection' }, ...collectionOptions]}
           />
         </div>
         <div data-obligation-filter='age' className='flex items-center gap-1.5'>

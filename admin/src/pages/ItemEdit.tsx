@@ -653,7 +653,7 @@ export function ItemEditPage() {
   const extraTopContent = (
     <>
       {/* ErpStatusBadge removed — ItemEditForm's banner stack carries the
-          submission status now: IntegrationStatusBanner says whether each
+          submission status now: IntegrationStatusLines (the Integrations chip) says whether each
           partner was told, and ErpFailureBanner (mounted directly under it)
           keeps the payload/response view and the Retry button. The pill
           was redundant with both. */}

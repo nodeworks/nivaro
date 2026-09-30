@@ -150,7 +150,7 @@ export function ErpFailureBanner({
       void qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
       // The server moves the submission's linked obligation synchronously
       // (propagateSubmissionStatus, called from the /retry route) — without
-      // this, IntegrationStatusBanner would keep showing the pre-retry
+      // this, IntegrationStatusLines (the Integrations chip) would keep showing the pre-retry
       // outcome until its own staleTime lapsed.
       void qc.invalidateQueries({
         queryKey: ['integration-obligations', 'record', collection, String(itemId)]

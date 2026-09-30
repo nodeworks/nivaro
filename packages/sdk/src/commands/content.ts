@@ -663,22 +663,6 @@ export function cloneItem(
   return cmd('POST', `/items/${collection}/${id}/clone`, undefined, options)
 }
 
-export interface FieldHistoryEntry {
-  revision_id: number
-  timestamp: ISODate
-  value: unknown
-  user_id: UUID | null
-}
-
-/** Change history of a single field (latest 50 revisions). */
-export function readFieldHistory(
-  collection: string,
-  id: string | number,
-  field: string
-): Command<{ data: FieldHistoryEntry[] }> {
-  return cmd('GET', `/items/${collection}/${id}/field-history/${field}`)
-}
-
 /** Restore an item's state from a revision snapshot. */
 export function rollbackRevision(
   revisionId: number
@@ -767,8 +751,7 @@ export interface FieldChangeEntry {
 /**
  * One field's actual value changes (newest first, max 25) mined from revision
  * deltas — consecutive identical values are deduped, M2O FKs resolve to display
- * labels. Distinct from `readFieldHistory`, which reads the older
- * /items/…/field-history route.
+ * labels.
  */
 export function readFieldChangeHistory(
   collection: string,

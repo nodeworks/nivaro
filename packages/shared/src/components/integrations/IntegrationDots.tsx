@@ -9,7 +9,7 @@ import { roleForTone } from './IntegrationObligationsView'
  * `__addendums__` column precedent) and hands each row its own slice.
  *
  * `roleForTone` comes from `IntegrationObligationsView` (the board) so this,
- * the board and `IntegrationStatusBanner` can never disagree about what
+ * the board and `IntegrationStatusLines (the Integrations chip)` can never disagree about what
  * "overdue" looks like.
  */
 

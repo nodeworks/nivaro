@@ -15,7 +15,6 @@ import {
 import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
-import { registerSlaHooks, setApp as setSlaApp } from './hooks/sla.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
 import { loadEventFlows } from './routes/flows.js'
@@ -37,7 +36,6 @@ async function main() {
     registerActivityHooks()
     registerFieldWatchHooks()
     registerNotificationSubscriptionHooks()
-    registerSlaHooks()
     registerPipelineAutostartHooks()
     registerAlertHooks()
     registerEmbeddingHooks()
@@ -93,7 +91,6 @@ async function main() {
     await bootPhase('Event flows', () => loadEventFlows(app))
     setFieldWatchApp(app)
     setSubscriptionApp(app)
-    setSlaApp(app)
     setAlertApp(app)
     setEmbeddingApp(app)
     setCrossTriggerApp(app)

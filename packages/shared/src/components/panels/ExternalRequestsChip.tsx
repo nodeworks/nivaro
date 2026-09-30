@@ -10,7 +10,7 @@ import { type ErpSubmission, SubmissionRow } from '../integrations/console/Submi
 import {
   IntegrationStatusLines,
   useRecordObligations
-} from '../integrations/IntegrationStatusBanner'
+} from '../integrations/IntegrationStatusLines'
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
 
@@ -71,7 +71,7 @@ export function ExternalRequestsChip({
       void qc.invalidateQueries({ queryKey: ['erp-submission-attempts'] })
       // Same server-side sync as ErpFailureBanner's retry — the submission's
       // linked obligation moves right away (propagateSubmissionStatus), so
-      // IntegrationStatusBanner needs to hear about it too.
+      // IntegrationStatusLines (the Integrations chip) needs to hear about it too.
       void qc.invalidateQueries({
         queryKey: ['integration-obligations', 'record', collection, String(itemId)]
       })
