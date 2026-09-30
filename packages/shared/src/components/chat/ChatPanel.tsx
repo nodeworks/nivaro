@@ -462,6 +462,32 @@ function Avatar({
 }
 
 /**
+ * The other person in a 1:1 DM, in the room header: their photo with the
+ * presence badge, opening the same user card as a message avatar. The
+ * assistant has no card — its avatar is shown plain.
+ */
+function DmHeaderAvatar({ peerId, name }: { peerId: string; name: string }) {
+  const bot = useChatBotInfo()
+  const isBot =
+    peerId === '__bot__' ||
+    (!!bot.bot_user_id && String(bot.bot_user_id).toUpperCase() === peerId.toUpperCase())
+  const avatar = <Avatar id={peerId} name={name} size={28} />
+  if (isBot) return avatar
+  return (
+    <UserChip userId={peerId}>
+      <button
+        type='button'
+        className='shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        aria-label={`${name} — profile`}
+        data-chat-dm-header-avatar
+      >
+        {avatar}
+      </button>
+    </UserChip>
+  )
+}
+
+/**
  * Live record chip for an entity token inside a message — the token plus the
  * record's CURRENT pipeline state as a colored pill, resolved lazily and
  * cached per token. Falls back to the plain link when the token doesn't
@@ -1884,6 +1910,9 @@ export function ChatRoomView({
         {((roomInfo?.kind === 'channel' && !roomInfo.channel?.is_direct) ||
           (roomInfo?.kind === 'global' && (roomInfo.channel?.icon || roomInfo.channel?.color))) && (
           <ChannelTile icon={roomInfo?.channel?.icon} color={roomInfo?.channel?.color} size={24} />
+        )}
+        {me && dmPeer(room, me.id) && (
+          <DmHeaderAvatar peerId={dmPeer(room, me.id) as string} name={label} />
         )}
         <div className='min-w-0 flex-1'>
           <p className='flex items-center gap-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
