@@ -472,12 +472,14 @@ function DmHeaderAvatar({ peerId, name }: { peerId: string; name: string }) {
     peerId === '__bot__' ||
     (!!bot.bot_user_id && String(bot.bot_user_id).toUpperCase() === peerId.toUpperCase())
   const avatar = <Avatar id={peerId} name={name} size={28} />
-  if (isBot) return avatar
+  if (isBot) return <span className='mr-1 inline-flex shrink-0'>{avatar}</span>
   return (
     <UserChip userId={peerId}>
       <button
         type='button'
-        className='shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+        // The presence badge sits on the avatar's edge — room so it does not
+        // crowd the name.
+        className='mr-1 shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
         aria-label={`${name} — profile`}
         data-chat-dm-header-avatar
       >
