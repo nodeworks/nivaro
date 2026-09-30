@@ -1,5 +1,7 @@
+import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { logActivity } from './activity.js'
 import { can } from './permissions.js'
 
 /**
@@ -67,7 +69,11 @@ export interface TrashRow {
  * Re-insert a trashed row with its original id. Requires create permission on
  * the collection (admins bypass). Throws statusCode-tagged errors.
  */
-export async function restoreTrashRow(user: User, trashId: number): Promise<{ item_id: string }> {
+export async function restoreTrashRow(
+  user: User,
+  trashId: number,
+  req?: FastifyRequest
+): Promise<{ item_id: string }> {
   const row = (await db('nivaro_trash').where({ id: trashId }).first()) as TrashRow | undefined
   if (!row) throw Object.assign(new Error('Trash entry not found'), { statusCode: 404 })
 
@@ -140,7 +146,73 @@ export async function restoreTrashRow(user: User, trashId: number): Promise<{ it
   }
 
   await db('nivaro_trash').where({ id: trashId }).del()
+  await afterRestore(user, row, insertData, req)
   return { item_id: row.item_id }
+}
+
+/**
+ * #837 — what a create through the items service leaves behind, minus what a
+ * restore must NOT repeat. The record comes back with its history continued:
+ * a `restore` activity row (chain-stamped, credited to whoever restored it)
+ * and a full revision, per the collection's audit level; its integrity is
+ * re-checked (and its parents'); a materialized queue picks the row up again;
+ * open views refresh. Deliberately NOT run: creation notifications and
+ * subscriptions, pipeline auto-start, automatic transitions, webhooks and
+ * flows — the record is not new, and the people and partners told about it
+ * the first time must not be told again. Every step is best-effort: the row
+ * is back, and a side effect that fails must not report the restore failed.
+ */
+async function afterRestore(
+  user: User,
+  row: TrashRow,
+  inserted: Record<string, unknown>,
+  req?: FastifyRequest
+): Promise<void> {
+  const collection = row.collection
+  const item = String(row.item_id)
+  const fresh = ((await db(collection)
+    .where({ id: row.item_id })
+    .first()
+    .catch(() => null)) ?? inserted) as Record<string, unknown>
+  try {
+    const { auditLevelOf } = await import('../hooks/activity.js')
+    const level = await auditLevelOf(collection)
+    if (level !== 'none') {
+      const deletedOn = new Date(row.deleted_at).toISOString().slice(0, 10)
+      const activity = await logActivity({
+        action: 'restore',
+        user: user.id,
+        collection,
+        item,
+        comment: `Restored from trash (deleted ${deletedOn})`,
+        req
+      })
+      if (level === 'all') {
+        const { writeRevision } = await import('./revisions.js')
+        await writeRevision({ activity, collection, item, data: fresh, delta: null })
+      }
+    }
+  } catch {
+    /* history is best-effort here, as in the activity hook */
+  }
+  try {
+    const { noteRawWrite } = await import('../hooks/record-integrity.js')
+    noteRawWrite(collection, item, fresh)
+  } catch {
+    /* the nightly sweep catches it */
+  }
+  try {
+    const { syncMaterializedQueueItem } = await import('./queue-materialization.js')
+    await syncMaterializedQueueItem(collection, item)
+  } catch {
+    /* a rematerialize repairs the cache */
+  }
+  try {
+    const { broadcastCollectionUpdate } = await import('./realtime.js')
+    broadcastCollectionUpdate(undefined, collection, item, { action: 'create' })
+  } catch {
+    /* live refresh only */
+  }
 }
 
 /** Purge trash rows older than the retention window. Returns purged count.

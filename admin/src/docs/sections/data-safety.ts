@@ -21,6 +21,8 @@ DELETE /api/trash/:id          # purge immediately`
         'Restore keeps the original primary key (identity insert), so surviving references still point at the record.',
         'Dependent rows removed by the original delete (cascades, SET NULL) are not resurrected — only the record itself returns.',
         'Restore needs create permission on the collection; an occupied id refuses with 409.',
+        "The record's history continues: a restore writes a `restore` activity row (credited to whoever restored it, on the request's event chain) and a full revision, per the collection's audit level — the History panel reads \"restored this record from trash\". Stored rollups, the record's tasks, its integrity check, materialized queue rows and open views all catch up.",
+        'A restore is not a create: creation notifications and subscriptions, pipeline auto-start, automatic transitions, webhooks and flows do not run again, so nobody is told about the record twice.',
         'UI: the Trash page in the System nav, with per-collection filter pills.'
       ]
     }

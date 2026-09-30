@@ -59,7 +59,11 @@ interface Revision {
 /** A snapshot row (create / update / delete with a stored copy) — the rows
  *  the diff, time-travel and time-lapse tools can work from. Events have none. */
 const isSnapshot = (r: Revision) =>
-  r.id != null && (r.action === 'create' || r.action === 'update' || r.action === 'delete')
+  r.id != null &&
+  (r.action === 'create' ||
+    r.action === 'update' ||
+    r.action === 'delete' ||
+    r.action === 'restore')
 const isEvent = (r: Revision) => !isSnapshot(r)
 const rowKey = (r: Revision) =>
   r.id != null
@@ -696,6 +700,7 @@ function FieldChangeList({
 
 const ACTION_DOT: Record<string, string> = {
   create: 'bg-emerald-500',
+  restore: 'bg-emerald-500',
   update: 'bg-nvr-cyan',
   delete: 'bg-red-500'
 }
@@ -708,6 +713,7 @@ function revisionUserName(rev: Revision): string {
 
 function revisionSentence(rev: Revision, humanCount: number, systemCount: number): string {
   if (rev.action === 'create') return 'created this record'
+  if (rev.action === 'restore') return 'restored this record from trash'
   if (rev.action === 'delete') return 'deleted this record'
   if (humanCount > 0) return `changed ${humanCount} field${humanCount === 1 ? '' : 's'}`
   if (systemCount > 0) return 'updated system fields'
@@ -855,7 +861,8 @@ function RevisionRow({
   const [showNotes, setShowNotes] = useState(false)
   const [o2mRestoring, setO2MRestoring] = useState<string | null>(null)
   const isUpdate = revision.action === 'update'
-  const isCreate = revision.action === 'create'
+  // A restore brings the whole record back — it reads like a create.
+  const isCreate = revision.action === 'create' || revision.action === 'restore'
   const isDelete = revision.action === 'delete'
   const sideBefore: Record<string, unknown> = isDelete
     ? (revision.data ?? {})

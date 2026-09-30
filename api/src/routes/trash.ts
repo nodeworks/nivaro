@@ -134,7 +134,7 @@ export async function trashRoutes(app: FastifyInstance) {
           continue
         }
         try {
-          const result = await restoreTrashRow(req.user!, trashId)
+          const result = await restoreTrashRow(req.user!, trashId, req)
           results.push({
             id: trashId,
             ok: true,
@@ -176,14 +176,8 @@ export async function trashRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
       try {
-        const result = await restoreTrashRow(req.user!, trashId)
-        await logActivity({
-          action: 'trash-restore',
-          collection: row.collection,
-          item: result.item_id,
-          user: req.user!.id,
-          comment: `Restored from trash entry ${trashId}`
-        })
+        // The restore writes its own `restore` activity row + revision (#837).
+        const result = await restoreTrashRow(req.user!, trashId, req)
         return reply.send({ data: { restored: true, collection: row.collection, ...result } })
       } catch (err) {
         const status = (err as { statusCode?: number }).statusCode ?? 500
