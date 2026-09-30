@@ -30,7 +30,7 @@ import {
   Video,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
@@ -208,7 +208,65 @@ function useTheme(): ChatTheme {
   return ChatThemeContext.current
 }
 
-function Avatar({ id, name, size = 32 }: { id: string; name: string | null; size?: number }) {
+type PresenceState = 'online' | 'idle' | 'offline'
+
+/**
+ * One person's presence as the Online tab reads it: /presence/online is the
+ * classifier (it weighs last_active against the row's is_idle bit and decides
+ * who this viewer may see); the host's online list only stands in until that
+ * query has answered.
+ */
+function usePresenceOf(id: string): { state: PresenceState; title: string } {
+  const cfg = useContext(ChatConfigContext)
+  const extras = usePresenceExtras()
+  const uid = String(id).toUpperCase()
+  if (extras.loaded) {
+    const px = extras.byUser.get(uid)
+    if (!px) return { state: 'offline', title: 'Offline' }
+    return px.is_idle
+      ? { state: 'idle', title: idleLabel(px) }
+      : { state: 'online', title: 'Online' }
+  }
+  const u = cfg?.onlineUsers.find((o) => String(o.user_id).toUpperCase() === uid)
+  if (!u) return { state: 'offline', title: 'Offline' }
+  return u.is_idle ? { state: 'idle', title: idleLabel(u) } : { state: 'online', title: 'Online' }
+}
+
+/** Online = solid green; idle = hollow amber (a weaker state, so it reads
+ *  weaker than online rather than competing with it); offline = grey. */
+function PresenceBadge({ id, size }: { id: string; size: number }) {
+  const { state, title } = usePresenceOf(id)
+  const dot = size >= 30 ? 10 : 8
+  return (
+    <span
+      className={cn(
+        'absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-white dark:border-card',
+        state === 'online'
+          ? 'bg-emerald-400'
+          : state === 'idle'
+            ? 'border-amber-400 bg-white dark:border-amber-400 dark:bg-card'
+            : 'bg-slate-300 dark:bg-slate-600'
+      )}
+      style={{ width: dot, height: dot }}
+      title={title}
+      data-chat-presence={state}
+    />
+  )
+}
+
+function Avatar({
+  id,
+  name,
+  size = 32,
+  presence = true
+}: {
+  id: string
+  name: string | null
+  size?: number
+  /** Show the online / idle / offline badge (off for the bot and non-people). */
+  presence?: boolean
+}) {
+  const bot = useChatBotInfo()
   const disc = (
     <span
       className='flex shrink-0 items-center justify-center rounded-full font-semibold text-[#04263b]'
@@ -223,13 +281,23 @@ function Avatar({ id, name, size = 32 }: { id: string; name: string | null; size
       {chatInitials(name)}
     </span>
   )
-  return (
+  const avatar = (
     <UserAvatar
       userId={id}
       fallback={disc}
       style={{ width: size, height: size }}
       alt={name ?? ''}
     />
+  )
+  const isBot =
+    id === '__bot__' ||
+    (!!bot.bot_user_id && String(bot.bot_user_id).toUpperCase() === String(id).toUpperCase())
+  if (!presence || isBot) return avatar
+  return (
+    <span className='relative inline-flex shrink-0' style={{ width: size, height: size }}>
+      {avatar}
+      <PresenceBadge id={id} size={size} />
+    </span>
   )
 }
 
@@ -1930,9 +1998,6 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
   const canEdit = isAdmin || (!!meId && String(channel.created_by ?? '').toUpperCase() === meId)
   const { users } = useUserSearch(debounced, open && canEdit && !!search.trim())
   const memberIds = new Set(members.map((m) => String(m.user).toUpperCase()))
-  const online = new Map(
-    cfg.onlineUsers.map((u) => [String(u.user_id).toUpperCase(), u.is_idle ? 'idle' : 'online'])
-  )
   const nameOf = (m: {
     first_name: string | null
     last_name: string | null
@@ -1982,7 +2047,6 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
           {sorted.map((m) => {
             const uid = String(m.user).toUpperCase()
             const nm = nameOf(m)
-            const state = online.get(uid)
             const isMe = uid === meId
             const isOwner = String(channel.created_by ?? '').toUpperCase() === uid
             return (
@@ -1991,18 +2055,7 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
                 className='group flex items-center gap-2 px-3 py-1.5'
                 data-chat-group-member={m.user}
               >
-                <span className='relative shrink-0'>
-                  <Avatar id={m.user} name={nm} size={26} />
-                  {state && (
-                    <span
-                      className={cn(
-                        'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-card',
-                        state === 'online' ? 'bg-emerald-500' : 'bg-amber-400'
-                      )}
-                      title={state === 'online' ? 'Online' : 'Idle'}
-                    />
-                  )}
-                </span>
+                <Avatar id={m.user} name={nm} size={26} />
                 <span className='min-w-0 flex-1'>
                   <span className='block truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
                     {nm}
@@ -2519,19 +2572,6 @@ export function ChatRoomList({
                     return (
                       <span className='relative shrink-0' data-chat-room-avatar={state}>
                         <Avatar id={peer} name={r.label} size={32} />
-                        <span
-                          className={cn(
-                            'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-card',
-                            state === 'online'
-                              ? 'bg-emerald-500'
-                              : state === 'idle'
-                                ? 'bg-amber-400'
-                                : 'bg-slate-300 dark:bg-slate-600'
-                          )}
-                          title={
-                            state === 'online' ? 'Online' : state === 'idle' ? 'Idle' : 'Offline'
-                          }
-                        />
                       </span>
                     )
                   })()}
@@ -3405,19 +3445,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                         title='Send a direct message'
                         className='flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted/50'
                       >
-                        <span className='relative'>
-                          <Avatar id={u.user_id} name={u.display_name} />
-                          <span
-                            className={cn(
-                              'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white dark:border-card',
-                              // Hollow amber rather than a second solid colour: idle
-                              // is a weaker state than online, and should read that
-                              // way at a glance rather than competing with it.
-                              isIdle ? 'border-amber-400 bg-white dark:bg-card' : 'bg-emerald-400'
-                            )}
-                            title={isIdle ? idleLabel(idleSrc) : 'Online'}
-                          />
-                        </span>
+                        <Avatar id={u.user_id} name={u.display_name} />
                         <span className='min-w-0 flex-1'>
                           <span className='block truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
                             {u.display_name ?? 'Unknown user'}
