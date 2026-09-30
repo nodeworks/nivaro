@@ -600,7 +600,9 @@ export function LoginPage() {
                 <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
                   {error === 'suspended'
                     ? 'Your account is suspended — usually because the directory no longer lists it, a retention rule ran, or an administrator set it. Ask an administrator: the reason is shown on your account page, and they can restore access.'
-                    : 'Authentication failed. Please try again or contact IT support.'}
+                    : error === 'session_expired'
+                      ? 'Your session ended — it reached the time limit or sat idle longer than this instance allows. Sign in again to carry on.'
+                      : 'Authentication failed. Please try again or contact IT support.'}
                 </div>
               )}
 

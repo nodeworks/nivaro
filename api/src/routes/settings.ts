@@ -122,6 +122,8 @@ const allowedSettingsKeys = [
   // Hours an open record may sit before a manager's team view calls it stuck
   // (#1031); blank = 240
   'team_stuck_hours',
+  // Sign-in session max age + idle timeout, default and per role (#665)
+  'session_policy',
   // Deprecation policy for the API surface (#613): days a field stays
   // deprecated before it may be removed; blank = 14, 0 = no policy
   'graphql_deprecation_days',
@@ -295,6 +297,21 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { bustTeamSettings } = await import('../services/team.js')
       reply.raw.once('finish', () => bustTeamSettings())
+    }
+
+    // Session policy (#665): validated strictly, stored as JSON text, cache
+    // busted once the write lands so the next request is judged by it.
+    if ('session_policy' in patch) {
+      const { validateSessionPolicy, parseSessionPolicy, bustSessionPolicy } = await import(
+        '../services/session-policy.js'
+      )
+      const err = validateSessionPolicy(patch.session_policy)
+      if (err) return reply.code(400).send({ error: err })
+      const parsed = parseSessionPolicy(patch.session_policy)
+      const empty =
+        !parsed || (parsed.max_age_hours == null && parsed.idle_minutes == null && !parsed.roles)
+      patch.session_policy = empty ? null : JSON.stringify(parsed)
+      reply.raw.once('finish', () => bustSessionPolicy())
     }
 
     // Integration obligations epoch: coerce to a real Date (the client sends

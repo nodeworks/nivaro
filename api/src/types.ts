@@ -201,6 +201,10 @@ declare module '@fastify/session' {
     returnTo?: string
     /** One-time directory connect in flight (Settings → Microsoft → Connect). */
     directoryConnect?: { state: string; redirectUri: string; returnTo: string }
+    /** Session policy (#665): first request this session was seen on (ms). */
+    loginAt?: number
+    /** Session policy (#665): newest authenticated request (ms). */
+    lastSeenAt?: number
   }
 }
 

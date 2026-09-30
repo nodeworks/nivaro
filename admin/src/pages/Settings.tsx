@@ -764,6 +764,203 @@ function NewUserRolesCard() {
   )
 }
 
+// ─── Session policy (#665) ───────────────────────────────────────────────────
+// Max age + idle timeout for signed-in browser sessions, with optional
+// per-role overrides. Blank = no limit (the SESSION_TTL env stays the outer
+// bound). Tokens and API keys are not sessions and are never affected.
+
+interface SessionLimitsDraft {
+  max_age_hours: string
+  idle_minutes: string
+}
+
+function readSessionPolicy(raw: unknown): {
+  base: SessionLimitsDraft
+  roles: Array<{ role: string } & SessionLimitsDraft>
+} {
+  let v: unknown = raw
+  if (typeof v === 'string') {
+    try {
+      v = JSON.parse(v)
+    } catch {
+      v = null
+    }
+  }
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+  const str = (x: unknown) => (x == null ? '' : String(x))
+  const roles = (o.roles && typeof o.roles === 'object' ? o.roles : {}) as Record<
+    string,
+    Record<string, unknown>
+  >
+  return {
+    base: { max_age_hours: str(o.max_age_hours), idle_minutes: str(o.idle_minutes) },
+    roles: Object.entries(roles).map(([role, e]) => ({
+      role: role.toUpperCase(),
+      max_age_hours: str(e?.max_age_hours),
+      idle_minutes: str(e?.idle_minutes)
+    }))
+  }
+}
+
+function SessionPolicyCard() {
+  const queryClient = useQueryClient()
+  const { data: settings } = useSettings()
+  const { data: roles = [] } = useQuery<Role[]>({
+    queryKey: ['roles'],
+    queryFn: () => api.get<{ data: Role[] }>('/roles').then((r) => r.data.data)
+  })
+  const stored = (settings as { session_policy?: unknown } | undefined)?.session_policy
+  const [draft, setDraft] = useState(() => readSessionPolicy(stored))
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    if (!dirty) setDraft(readSessionPolicy(stored))
+  }, [stored, dirty])
+  const save = useMutation({
+    mutationFn: () => {
+      const num = (x: string) => (x.trim() === '' ? null : Number(x))
+      const body = {
+        max_age_hours: num(draft.base.max_age_hours),
+        idle_minutes: num(draft.base.idle_minutes),
+        roles: Object.fromEntries(
+          draft.roles
+            .filter((r) => r.role)
+            .map((r) => [
+              r.role,
+              { max_age_hours: num(r.max_age_hours), idle_minutes: num(r.idle_minutes) }
+            ])
+        )
+      }
+      return api.patch('/settings', { session_policy: body })
+    },
+    onSuccess: () => {
+      setDirty(false)
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      toast.success('Session policy saved — it applies from the next request')
+    },
+    onError: (e: unknown) =>
+      toast.error(
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Could not save the session policy'
+      )
+  })
+  const edit = (fn: (d: typeof draft) => typeof draft) => {
+    setDraft((d) => fn(d))
+    setDirty(true)
+  }
+  const used = new Set(draft.roles.map((r) => r.role))
+  const free = roles.filter((r) => !used.has(String(r.id).toUpperCase()))
+  const roleName = (id: string) =>
+    roles.find((r) => String(r.id).toUpperCase() === id)?.name ?? 'Unknown role'
+  const limitInputs = (
+    v: SessionLimitsDraft,
+    onChange: (patch: Partial<SessionLimitsDraft>) => void,
+    key: string
+  ) => (
+    <div className='grid grid-cols-2 gap-3'>
+      <div>
+        <Label className='text-[11px] text-muted-foreground'>Max age (hours)</Label>
+        <Input
+          data-session-max-age={key}
+          inputMode='numeric'
+          className='mt-1 h-8'
+          placeholder='No limit'
+          value={v.max_age_hours}
+          onChange={(e) => onChange({ max_age_hours: e.target.value })}
+        />
+      </div>
+      <div>
+        <Label className='text-[11px] text-muted-foreground'>Idle timeout (minutes)</Label>
+        <Input
+          data-session-idle={key}
+          inputMode='numeric'
+          className='mt-1 h-8'
+          placeholder='No limit'
+          value={v.idle_minutes}
+          onChange={(e) => onChange({ idle_minutes: e.target.value })}
+        />
+      </div>
+    </div>
+  )
+  return (
+    <div data-session-policy className='mt-8 border-t border-slate-200 pt-6 dark:border-border'>
+      <h3 className='mb-1 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+        Sessions
+      </h3>
+      <p className='mb-4 max-w-[72ch] text-[12px] text-muted-foreground'>
+        How long someone stays signed in. Max age counts from sign-in; the idle timeout counts from
+        their last request. A role row beats the default for that role, field by field. Leave a box
+        blank for no limit. API keys and tokens are not affected.
+      </p>
+      <div className='space-y-4'>
+        <div>
+          <p className='mb-1.5 text-[12px] font-medium'>Everyone</p>
+          {limitInputs(
+            draft.base,
+            (patch) => edit((d) => ({ ...d, base: { ...d.base, ...patch } })),
+            'default'
+          )}
+        </div>
+        {draft.roles.map((r, i) => (
+          <div key={r.role} data-session-role={r.role}>
+            <div className='mb-1.5 flex items-center justify-between'>
+              <p className='text-[12px] font-medium'>{roleName(r.role)}</p>
+              <button
+                type='button'
+                className='text-[11px] text-muted-foreground hover:text-red-600'
+                onClick={() => edit((d) => ({ ...d, roles: d.roles.filter((_, j) => j !== i) }))}
+              >
+                Remove
+              </button>
+            </div>
+            {limitInputs(
+              r,
+              (patch) =>
+                edit((d) => ({
+                  ...d,
+                  roles: d.roles.map((x, j) => (j === i ? { ...x, ...patch } : x))
+                })),
+              r.role
+            )}
+          </div>
+        ))}
+        <div className='flex flex-wrap items-center gap-2'>
+          {free.length > 0 && (
+            <Select
+              value=''
+              onValueChange={(v) =>
+                edit((d) => ({
+                  ...d,
+                  roles: [...d.roles, { role: v, max_age_hours: '', idle_minutes: '' }]
+                }))
+              }
+            >
+              <SelectTrigger className='h-8 w-[220px]' data-session-add-role>
+                <SelectValue placeholder='Add a rule for a role…' />
+              </SelectTrigger>
+              <SelectContent>
+                {free.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id).toUpperCase()}>
+                    {r.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button
+            size='sm'
+            className='h-8'
+            data-session-save
+            disabled={!dirty || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? 'Saving…' : 'Save session policy'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SsoProvidersSection() {
   const queryClient = useQueryClient()
   interface DefaultProvider {
@@ -1189,6 +1386,7 @@ function SsoProvidersSection() {
           </div>
         )}
         <NewUserRolesCard />
+        <SessionPolicyCard />
       </div>
     </div>
   )

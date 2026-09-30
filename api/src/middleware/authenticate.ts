@@ -391,6 +391,34 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
     throw httpError(401, 'Unauthorized', 'ACCOUNT_NOT_ACTIVE')
   }
 
+  // Session policy (#665): max age + idle timeout, per role. Only sessions are
+  // judged — tokens and API keys carry their own expiry.
+  const { getSessionPolicy, limitsFor, judgeSession } = await import(
+    '../services/session-policy.js'
+  )
+  const policy = await getSessionPolicy()
+  const now = Date.now()
+  if (policy) {
+    const verdict = judgeSession(
+      limitsFor(policy, user.role as string | null),
+      { loginAt: req.session.loginAt, lastSeenAt: req.session.lastSeenAt },
+      now
+    )
+    if (!verdict.ok) {
+      await req.session.destroy()
+      req.authMethod = 'session'
+      throw httpError(
+        401,
+        verdict.reason === 'idle'
+          ? 'Your session ended after a period of inactivity. Sign in again.'
+          : 'Your session reached its time limit. Sign in again.',
+        'SESSION_EXPIRED'
+      )
+    }
+  }
+  if (!req.session.loginAt) req.session.loginAt = now
+  req.session.lastSeenAt = now
+
   await hydrateRole(req, user)
   req.authMethod = 'session'
 }

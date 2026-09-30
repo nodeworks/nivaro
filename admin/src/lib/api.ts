@@ -38,7 +38,9 @@ api.interceptors.response.use(
       localStorage.removeItem('control_token')
       localStorage.removeItem('control_email')
       const redirect = window.location.pathname + window.location.search
-      window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
+      // A session the policy ended (#665) says why on the login page.
+      const expired = err.response?.data?.code === 'SESSION_EXPIRED' ? '&error=session_expired' : ''
+      window.location.href = `/login?redirect=${encodeURIComponent(redirect)}${expired}`
     }
 
     // User extension interceptors — one returning true stops further user processing
