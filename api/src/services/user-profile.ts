@@ -1,6 +1,6 @@
-import { onOwnersChanged } from '../db/owner-signal.js'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { onOwnersChanged } from '../db/owner-signal.js'
 import { listScopeDimensions, resolveScopeLabelsForUsers } from './user-scopes.js'
 
 /**
@@ -562,6 +562,8 @@ type WorkingOnRaw = Array<{
   state_color: string | null
   sla_status: 'ok' | 'warning' | 'breached' | null
   aging_hours: number | null
+  /** Hours left before the SLA breaches (negative once breached); null without a rule. */
+  remaining_hours?: number | null
 }>
 
 // A transition, a manual owner, a delegate or an owner group changed.
@@ -586,6 +588,7 @@ export async function buildWorkingOn(
     state_color: string | null
     sla_status: 'ok' | 'warning' | 'breached' | null
     aging_hours: number | null
+    remaining_hours?: number | null
   }>
   total: number
   hidden: number
@@ -643,12 +646,19 @@ async function resolveWorkingOnMany(userIds: string[]): Promise<Map<string, Work
       byCollection.get(c)!.add(String(it.item_id))
     }
   }
-  const sla = new Map<string, { status: string | null; elapsed_hours: number }>()
+  const sla = new Map<
+    string,
+    { status: string | null; elapsed_hours: number; remaining_hours?: number | null }
+  >()
   const labels = new Map<string, string>()
   for (const [c, idSet] of byCollection) {
     const ids = [...idSet]
     const batch = await computeStatusBatch(c, ids).catch(
-      () => ({}) as Record<string, { status: string | null; elapsed_hours: number }>
+      () =>
+        ({}) as Record<
+          string,
+          { status: string | null; elapsed_hours: number; remaining_hours?: number | null }
+        >
     )
     for (const [id, e] of Object.entries(batch)) sla.set(`${c}:${id}`, e)
     const rows = await selectInChunks(ids, 1500, (chunk) =>
@@ -677,7 +687,8 @@ async function resolveWorkingOnMany(userIds: string[]): Promise<Map<string, Work
         state_label: labels.get(key) ?? null,
         state_color: (it.state_color as string | null) ?? null,
         sla_status: (e?.status as 'ok' | 'warning' | 'breached' | null) ?? null,
-        aging_hours: e?.elapsed_hours == null ? null : Math.round(e.elapsed_hours * 10) / 10
+        aging_hours: e?.elapsed_hours == null ? null : Math.round(e.elapsed_hours * 10) / 10,
+        remaining_hours: e?.remaining_hours ?? null
       }
     })
     enriched.sort(
@@ -730,10 +741,22 @@ export async function computeOooExposure(userId: string) {
  * viewers can see different numbers for the same person, the same rule the
  * Working on card follows.
  */
+export interface TeamLoadRecord {
+  collection: string
+  item_id: string
+  label: string
+  state_label: string | null
+  state_color: string | null
+  sla_status: 'ok' | 'warning' | 'breached' | null
+  aging_hours: number | null
+}
+
 export async function buildTeamLoad(
   managerId: string,
   viewer: { id: string; isAdmin: boolean; role?: string | null },
-  cap = 50
+  cap = 50,
+  /** Admin view of a team (#1033): these people instead of the manager's reports. */
+  opts: { memberIds?: string[]; stuckHours?: number } = {}
 ): Promise<{
   reports: Array<{
     id: string
@@ -751,13 +774,24 @@ export async function buildTeamLoad(
     hidden: number
     oldest_hours: number | null
     uncovered: boolean
+    /** Open records unmoved for at least `stuck_hours` (#1031). */
+    stuck: number
+    /** The three oldest open records, oldest first (#1031). */
+    oldest: TeamLoadRecord[]
+    /** Records that went past SLA within the last seven days (#1034). */
+    breached_week: number
   }>
   total_reports: number
   truncated: boolean
+  stuck_hours: number
 }> {
+  const stuckHours: number = opts.stuckHours ?? (await (await import('./team.js')).teamStuckHours())
   const rows = (await db('nivaro_users as u')
     .leftJoin('nivaro_users as d', 'd.id', 'u.delegate_id')
-    .where('u.manager_id', managerId)
+    .modify((q) => {
+      if (opts.memberIds) q.whereIn('u.id', opts.memberIds.length ? opts.memberIds : ['__none__'])
+      else q.where('u.manager_id', managerId)
+    })
     .where((w) => w.where('u.is_redacted', false).orWhereNull('u.is_redacted'))
     // The same people the profile's direct-reports list shows a colleague
     // (active, human); an admin also sees suspended reports still holding work.
@@ -819,6 +853,18 @@ export async function buildTeamLoad(
             x.aging_hours == null ? m : m == null ? x.aging_hours : Math.max(m, x.aging_hours),
           null
         )
+        const byAge = items
+          .filter((x) => x.aging_hours != null)
+          .sort((a, b) => (b.aging_hours ?? 0) - (a.aging_hours ?? 0))
+        const stuck = byAge.filter((x) => (x.aging_hours ?? 0) >= stuckHours).length
+        // Went past SLA within the week: breached, and by less than 168 hours.
+        const breachedWeek = items.filter(
+          (x) =>
+            x.sla_status === 'breached' &&
+            x.remaining_hours != null &&
+            x.remaining_hours <= 0 &&
+            x.remaining_hours > -168
+        ).length
         const windowOut =
           !!r.ooo_start &&
           new Date(r.ooo_start).getTime() <= now &&
@@ -853,7 +899,18 @@ export async function buildTeamLoad(
           oldest_hours: oldest,
           // Out (or suspended) with work waiting and nobody covering: the
           // records stall until they are back.
-          uncovered: (out || r.status === 'suspended') && !delegateLive && (load?.total ?? 0) > 0
+          uncovered: (out || r.status === 'suspended') && !delegateLive && (load?.total ?? 0) > 0,
+          stuck,
+          oldest: byAge.slice(0, 3).map((x) => ({
+            collection: x.collection,
+            item_id: x.item_id,
+            label: x.label,
+            state_label: x.state_label,
+            state_color: x.state_color,
+            sla_status: x.sla_status,
+            aging_hours: x.aging_hours
+          })),
+          breached_week: breachedWeek
         }
       })
     )
@@ -866,5 +923,10 @@ export async function buildTeamLoad(
       b.open - a.open ||
       a.name.localeCompare(b.name)
   )
-  return { reports, total_reports: rows.length, truncated: rows.length > shown.length }
+  return {
+    reports,
+    total_reports: rows.length,
+    truncated: rows.length > shown.length,
+    stuck_hours: stuckHours
+  }
 }

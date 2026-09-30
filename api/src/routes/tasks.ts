@@ -638,8 +638,15 @@ export async function tasksRoutes(app: FastifyInstance) {
         | undefined
       if (!t) return reply.code(404).send({ error: 'Not found' })
       const me = req.user!.id
-      if (!req.isAdmin && !same(t.created_by, me))
-        return reply.code(403).send({ error: 'Only the person who asked can nudge' })
+      // The requester, an admin, or the assignee's manager (#1035).
+      if (!req.isAdmin && !same(t.created_by, me)) {
+        const { isManagerOf } = await import('../services/team.js')
+        const manages = !!t.assignee && (await isManagerOf(me, String(t.assignee)))
+        if (!manages)
+          return reply
+            .code(403)
+            .send({ error: 'Only the person who asked, or the assignee’s manager, can nudge' })
+      }
       if (!ACTIVE_STATUSES.includes(t.status))
         return reply.code(409).send({ error: `Task is already ${t.status}` })
       const cols = await taskColumns()

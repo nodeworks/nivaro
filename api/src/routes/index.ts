@@ -3,8 +3,8 @@ import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
-import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
+import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
 import { accessAuditsRoutes } from './access-audits.js'
@@ -45,6 +45,7 @@ import { configConformanceRecordRoutes, configConformanceRoutes } from './config
 import { configDiffRoutes } from './config-diff.js'
 import { configHealthRoutes } from './config-health.js'
 import { configSearchRoutes } from './config-search.js'
+import { configSeedRoutes } from './config-seeds.js'
 import { contentExportRoutes } from './content-export.js'
 import { coverageGapsRoutes } from './coverage-gaps.js'
 import { cronRoutes } from './cron.js'
@@ -105,8 +106,6 @@ import { itemActionsRoutes } from './item-actions.js'
 import { itemLocksRoutes } from './item-locks.js'
 import { itemsRoutes } from './items.js'
 import { jobRunRoutes } from './job-runs.js'
-import { configSeedRoutes } from './config-seeds.js'
-import { opsTaskRoutes } from './ops-tasks.js'
 import { journeyRoutes } from './journeys.js'
 import { lastTouchRoutes } from './last-touch.js'
 import { legalHoldRoutes } from './legal-holds.js'
@@ -131,6 +130,7 @@ import { opsDbRoutes } from './ops-db.js'
 import { opsLogsRoutes } from './ops-logs.js'
 import { opsRedisRoutes } from './ops-redis.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
+import { opsTaskRoutes } from './ops-tasks.js'
 import { pagesRoutes } from './pages.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
@@ -187,9 +187,10 @@ import { stagedImportRoutes } from './staged-imports.js'
 import { streamRoutes } from './stream.js'
 import { subRowsRoutes } from './sub-rows.js'
 import { submissionFormsRoutes } from './submission-forms.js'
-import { syncJobsRoutes } from './sync-jobs.js'
 import { supportRoutes } from './support.js'
+import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
+import { teamMiscRoutes, teamUserRoutes } from './team.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
@@ -296,6 +297,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(coverageGapsRoutes)
   await app.register(inactiveUserLinkRoutes, { prefix: '/inactive-user-links' })
   await app.register(delegationRoutes)
+  // A manager's view of their direct reports (#1030–#1043): /delegation/team,
+  // /delegation/:userId/remind, /access-requests/:id/vouch.
+  await app.register(teamMiscRoutes)
   await app.register(myWorkRoutes)
   await app.register(dashboardFeedRoutes, { prefix: '/dashboard' })
   await app.register(accessRequestRoutes)
@@ -366,6 +370,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })
   await app.register(usersRoutes, { prefix: '/users' })
+  await app.register(teamUserRoutes, { prefix: '/users' })
   await app.register(directoryRoutes, { prefix: '/directory' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
   await app.register(rolesRoutes, { prefix: '/roles' })

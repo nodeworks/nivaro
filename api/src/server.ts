@@ -1580,6 +1580,22 @@ export async function buildServer() {
         })
       }
 
+      // Managers (#1034, #1037): the Monday "Your team this week" summary
+      // section, and the hourly check of each manager's own team alert lines.
+      {
+        const { registerTeamDigest, runTeamAlerts } = await import('./services/team.js')
+        registerTeamDigest()
+        app.cron.schedule(
+          'team-alerts',
+          '50 * * * *',
+          async () => {
+            const r = await runTeamAlerts(app)
+            if ('sent' in r && r.sent) app.log.info(`team-alerts: ${r.sent} alert(s) sent`)
+          },
+          { dryRun: async () => runTeamAlerts(app, { dryRun: true }) }
+        )
+      }
+
       app.cron.schedule(
         'rollup-drift-sweep',
         '20 3 * * *',

@@ -210,7 +210,8 @@ export async function resolveTargetUrl(
       case 'my_work':
         return linkTo('my_work', {}, opts)
       case 'home':
-        return linkTo('home', {}, opts)
+        // ?focus=<widget key> lands on that dashboard card (#866).
+        return withFocus(await linkTo('home', {}, opts))
       case 'external':
         return spec.url ?? null
       default:

@@ -757,6 +757,10 @@ export async function authRoutes(app: FastifyInstance) {
         // admin access to the roles API.
         role_name: req.userRole?.name ?? null,
         app_access: req.userRole?.app_access ?? false,
+        // Offers the manager widgets on the dashboard (#1030).
+        has_reports: await import('../services/team.js')
+          .then((m) => m.hasReports(req.user!.id))
+          .catch(() => false),
         ...(req.masqueradeAdminId ? { masquerade: true } : {})
       }
     })

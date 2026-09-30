@@ -44,6 +44,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every 30 minutes — finds breached SLA records whose escalation ladder has a tier due and notifies the tier target (owner, manager, named user) once per episode.',
   'task-reminders':
     'Tasks due tomorrow get one reminder to their assignee; tasks 3+ days overdue tell the requester and the assignee’s manager once.',
+  'team-alerts':
+    'Hourly — for every manager who set team alert lines on their dashboard: past-SLA per person, out with nobody covering, stuck records, quiet reports. One notice per report and rule per day.',
   'task-done-when-sweep':
     'Closes open tasks whose “done when” condition the record now meets (catches writes the after-save check never sees).',
   'line-sla-sweep':

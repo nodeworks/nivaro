@@ -380,12 +380,29 @@ export async function usersRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       const id = req.params.id === 'me' ? req.user!.id : req.params.id
-      const data = await buildTeamLoad(id, {
-        id: req.user!.id,
-        isAdmin: !!req.isAdmin,
-        role: (req.user as { role?: string | null } | undefined)?.role ?? null,
-        ...(req.user as object)
-      } as never)
+      // Admins may view any team (#1033): ?team=<nivaro_user_groups id>.
+      const teamId = (req.query as { team?: string } | undefined)?.team
+      let memberIds: string[] | undefined
+      if (teamId) {
+        if (!req.isAdmin) return reply.code(403).send({ error: 'Only admins can view a team' })
+        memberIds = (
+          (await db('nivaro_user_group_members')
+            .where('group_id', teamId)
+            .select('user')
+            .catch(() => [])) as Array<{ user: string }>
+        ).map((m) => String(m.user))
+      }
+      const data = await buildTeamLoad(
+        id,
+        {
+          id: req.user!.id,
+          isAdmin: !!req.isAdmin,
+          role: (req.user as { role?: string | null } | undefined)?.role ?? null,
+          ...(req.user as object)
+        } as never,
+        50,
+        { memberIds }
+      )
       return reply.send({ data })
     }
   )
@@ -832,6 +849,40 @@ export async function usersRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'chat_email_fallback must be true, false or null' })
       }
       patch.chat_email_fallback = v === true ? true : null
+    }
+    if ('team_alerts' in body) {
+      // #1037 — the lines a manager wants to hear about when their team crosses them.
+      const { normalizeTeamAlerts } = await import('../services/team.js')
+      const r = normalizeTeamAlerts(body.team_alerts)
+      if ('error' in r) return reply.code(400).send({ error: r.error })
+      patch.team_alerts = r.value
+    }
+    if ('one_on_one' in body) {
+      // #1039 — when the manager last held a 1:1 with each report: { <user id>: 'YYYY-MM-DD' }.
+      // The client sends the whole map (merged on its side); null clears it.
+      const raw = body.one_on_one
+      if (raw === null) {
+        patch.one_on_one = null
+      } else if (typeof raw !== 'object' || Array.isArray(raw)) {
+        return reply.code(400).send({ error: 'one_on_one must be an object or null' })
+      } else {
+        const entries = Object.entries(raw as Record<string, unknown>)
+        if (entries.length > 200) {
+          return reply.code(400).send({ error: 'one_on_one holds more than 200 people' })
+        }
+        const clean: Record<string, string> = {}
+        for (const [k, v] of entries) {
+          if (!/^[0-9a-f-]{36}$/i.test(k)) {
+            return reply.code(400).send({ error: 'one_on_one keys must be user ids' })
+          }
+          if (v == null) continue
+          if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+            return reply.code(400).send({ error: 'one_on_one values must be YYYY-MM-DD dates' })
+          }
+          clean[k.toUpperCase()] = v
+        }
+        patch.one_on_one = Object.keys(clean).length ? clean : null
+      }
     }
     if (Object.keys(patch).length === 0) {
       return reply.code(400).send({ error: 'No supported preference keys in body' })

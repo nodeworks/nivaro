@@ -119,6 +119,9 @@ const allowedSettingsKeys = [
   // Where email links land for non-admins (services/app-links.ts)
   'portal_url',
   'transition_guard_seconds',
+  // Hours an open record may sit before a manager's team view calls it stuck
+  // (#1031); blank = 240
+  'team_stuck_hours',
   // Deprecation policy for the API surface (#613): days a field stays
   // deprecated before it may be removed; blank = 14, 0 = no policy
   'graphql_deprecation_days',
@@ -274,6 +277,24 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { bustTransitionGuardCache } = await import('../services/transition-guard.js')
       reply.raw.once('finish', () => bustTransitionGuardCache())
+    }
+
+    // Team view "stuck" threshold (#1031): whole hours, blank = default.
+    if ('team_stuck_hours' in patch) {
+      const raw = patch.team_stuck_hours
+      if (raw == null || raw === '') {
+        patch.team_stuck_hours = null
+      } else {
+        const n = Number(raw)
+        if (!Number.isInteger(n) || n < 1 || n > 24 * 365) {
+          return reply
+            .code(400)
+            .send({ error: 'team_stuck_hours must be a whole number of hours from 1 to 8760' })
+        }
+        patch.team_stuck_hours = n
+      }
+      const { bustTeamSettings } = await import('../services/team.js')
+      reply.raw.once('finish', () => bustTeamSettings())
     }
 
     // Integration obligations epoch: coerce to a real Date (the client sends
