@@ -2055,6 +2055,38 @@ export function InlineTableField({
   }, [editState, readOnly])
   const [saving, setSaving] = useState(false)
   const [uniqueError, setUniqueError] = useState<string | null>(null)
+  // #736 — nested members that did not save after their line was created.
+  const [nestedSaveError, setNestedSaveError] = useState<NestedSaveFailure | null>(null)
+  const [nestedRetrying, setNestedRetrying] = useState(false)
+  async function retryNestedMembers() {
+    if (!nestedSaveError) return
+    setNestedRetrying(true)
+    const left: NestedSaveFailure['groups'] = []
+    let firstError = ''
+    for (const g of nestedSaveError.groups) {
+      const rest: Record<string, unknown>[] = []
+      for (const member of g.members) {
+        try {
+          await client.request(post(`/items/${g.collection}`, { ...member, [g.fkField]: g.rowId }))
+        } catch (err) {
+          rest.push(member)
+          if (!firstError) firstError = serverErrorText(err)
+        }
+      }
+      if (rest.length) left.push({ ...g, members: rest })
+    }
+    setNestedRetrying(false)
+    qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+    const n = left.reduce((a, g) => a + g.members.length, 0)
+    setNestedSaveError(
+      n > 0
+        ? {
+            text: `${n} ${left.map((g) => g.label).join(', ')} row${n === 1 ? '' : 's'} still did not save — ${firstError}`,
+            groups: left
+          }
+        : null
+    )
+  }
   const [crChallenge, setCrChallenge] = useState<{
     challenge: ChangeReasonChallenge
     retry: (reason: string) => Promise<void>
@@ -5441,22 +5473,59 @@ export function InlineTableField({
             })
           )
         }
-        if (newRowId != null && o2mEntries.length) {
+        // Grandchild members (#736): a member that fails is kept and named in
+        // the grid's error line with a Retry — never dropped in silence.
+        if (o2mEntries.length) {
+          const failed: NestedSaveFailure['groups'] = []
+          let firstError = ''
+          let total = 0
+          let lost = 0
           for (const [key, members] of o2mEntries) {
             const fieldName = key.slice('__o2m_'.length)
+            const memberList = Array.isArray(members) ? (members as Record<string, unknown>[]) : []
+            if (memberList.length === 0) continue
+            total += memberList.length
             const grandRel = childRelations.find(
               (r) => r.one_collection === relatedCollection && r.one_field === fieldName
             )
-            if (!grandRel?.many_collection || !grandRel.many_field) continue
-            const memberList = Array.isArray(members) ? (members as Record<string, unknown>[]) : []
-            for (const member of memberList) {
-              await client.request(
-                post(`/items/${grandRel.many_collection}`, {
-                  ...member,
-                  [grandRel.many_field]: newRowId
-                })
-              )
+            if (newRowId == null || !grandRel?.many_collection || !grandRel.many_field) {
+              lost += memberList.length
+              continue
             }
+            const rest: Record<string, unknown>[] = []
+            for (const member of memberList) {
+              try {
+                await client.request(
+                  post(`/items/${grandRel.many_collection}`, {
+                    ...member,
+                    [grandRel.many_field]: newRowId
+                  })
+                )
+              } catch (err) {
+                rest.push(member)
+                if (!firstError) firstError = serverErrorText(err)
+              }
+            }
+            if (rest.length)
+              failed.push({
+                label: titleCase(fieldName),
+                collection: grandRel.many_collection,
+                fkField: grandRel.many_field,
+                rowId: newRowId,
+                members: rest
+              })
+          }
+          const unsaved = failed.reduce((n, g) => n + g.members.length, 0)
+          if (lost > 0) {
+            setNestedSaveError({
+              text: `The line saved, but ${lost} of ${total} nested row${total === 1 ? '' : 's'} could not be attached — the server did not return the new line's id. Open the line and add them again.`,
+              groups: []
+            })
+          } else if (unsaved > 0) {
+            setNestedSaveError({
+              text: `${unsaved} of ${total} ${failed.map((g) => g.label).join(', ')} row${total === 1 ? '' : 's'} did not save — ${firstError}`,
+              groups: failed
+            })
           }
         }
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
@@ -9272,6 +9341,32 @@ export function InlineTableField({
             {uniqueError}
           </div>
         )}
+        {nestedSaveError && (
+          <div
+            data-grid-nested-save-error=''
+            className='flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-red-100 bg-red-50 px-3 py-1.5 text-[11px] text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'
+          >
+            <span className='min-w-0 flex-1'>{nestedSaveError.text}</span>
+            {nestedSaveError.groups.length > 0 && (
+              <button
+                type='button'
+                data-grid-nested-retry=''
+                disabled={nestedRetrying}
+                onClick={() => void retryNestedMembers()}
+                className='font-semibold underline-offset-2 hover:underline disabled:opacity-50'
+              >
+                {nestedRetrying ? 'Retrying…' : 'Retry'}
+              </button>
+            )}
+            <button
+              type='button'
+              onClick={() => setNestedSaveError(null)}
+              className='text-red-500/80 hover:text-red-700 dark:text-red-300/80 dark:hover:text-red-200'
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {activeView === 'original' && !isEditingNew && !readOnly && (
           <div className='border-t border-slate-100 px-3 py-1.5'>
             <button
@@ -9681,4 +9776,21 @@ function SpreadAcrossRowsButton(props: {
       )}
     </span>
   )
+}
+
+interface NestedSaveFailure {
+  text: string
+  groups: Array<{
+    label: string
+    collection: string
+    fkField: string
+    rowId: unknown
+    members: Record<string, unknown>[]
+  }>
+}
+
+/** The server's own words for a refused write (SDK errors carry the body as `response`). */
+function serverErrorText(err: unknown): string {
+  const e = err as { response?: { error?: string; message?: string }; message?: string }
+  return e?.response?.error ?? e?.response?.message ?? e?.message ?? 'the server refused it'
 }
