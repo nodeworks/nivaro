@@ -109,19 +109,41 @@ export async function handleBotMention(
 
   let reply: string
   try {
-    reply = await answerQuestion(asker, question, roomContext)
+    reply = await answerQuestion(app, asker, question, roomContext, room)
   } catch (err) {
     app.log.warn({ err }, 'chat bot failed')
     reply = "Sorry — I couldn't answer that right now."
   }
 
+  const id = await postBotMessage(app, room, reply)
+  if (id != null) {
+    void logActivity({
+      action: 'chat-bot-reply',
+      user: await botUserId(),
+      collection: 'chat_messages',
+      item: String(id),
+      comment: `room ${room} · asked by ${asker.email ?? asker.id}`
+    })
+  }
+}
+
+/** Post a message into a room as the assistant and push it to the room's
+ *  sockets (and both DM participants). Returns the new message id, or null
+ *  when the bot is off or the insert failed. */
+export async function postBotMessage(
+  app: FastifyInstance,
+  room: string,
+  text: string
+): Promise<number | null> {
+  const botName = await chatBotName()
+  if (!botName) return null
   try {
     const sender = await botUserId()
     const senderName = botName
     const [inserted] = await db('chat_messages')
       .insert({
         room,
-        message: reply.slice(0, 4000),
+        message: text.slice(0, 4000),
         sender,
         sender_name: senderName,
         date_created: new Date()
@@ -134,7 +156,7 @@ export async function handleBotMention(
     const row = {
       id,
       room,
-      message: reply.slice(0, 4000),
+      message: text.slice(0, 4000),
       sender,
       sender_name: senderName,
       date_created: new Date().toISOString()
@@ -146,15 +168,10 @@ export async function handleBotMention(
         app.io?.to(`user:${p}`).emit('chat:message', row)
       }
     }
-    void logActivity({
-      action: 'chat-bot-reply',
-      user: sender,
-      collection: 'chat_messages',
-      item: String(id),
-      comment: `room ${room} · asked by ${asker.email ?? asker.id}`
-    })
+    return id
   } catch (err) {
-    app.log.warn({ err }, 'chat bot reply insert failed')
+    app.log.warn({ err }, 'chat bot message insert failed')
+    return null
   }
 }
 
@@ -293,9 +310,11 @@ const SET_REMINDER_TOOL: Anthropic.Tool = {
 }
 
 async function answerQuestion(
+  app: FastifyInstance,
   asker: User,
   question: string,
-  roomContext?: string
+  roomContext?: string,
+  room?: string
 ): Promise<string> {
   const { getAiModelSettings } = await import('./ai-client.js')
   const { chatModel: model } = await getAiModelSettings()
@@ -306,6 +325,8 @@ async function answerQuestion(
     './ai-chat.js'
   )
   const systemPrompt = await buildChatSystemPrompt(asker)
+  const { userTimeZone, formatForPerson } = await import('./user-time.js')
+  const zone = await userTimeZone(asker)
 
   const contextBlock = roomContext
     ? `Recent messages in this chat room (oldest first):\n${roomContext}\n\n`
@@ -313,7 +334,7 @@ async function answerQuestion(
   const convo: Anthropic.MessageParam[] = [
     {
       role: 'user',
-      content: `${contextBlock}Current time: ${new Date().toISOString()}\n\n${question}\n\n(You are answering inside a chat room — keep it to a few sentences of plain text, no markdown headers or tables. You may use set_reminder when asked to remind the user of something.)`
+      content: `${contextBlock}Current time: ${new Date().toISOString()} (UTC) — ${formatForPerson(new Date(), zone)} for this person (${zone}). Resolve relative times like "in 5 minutes" or "Friday 9am" in their zone.\n\n${question}\n\n(You are answering inside a chat room — keep it to a few sentences of plain text, no markdown headers or tables. You may use set_reminder when asked to remind the user of something.)`
     }
   ]
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -355,16 +376,23 @@ async function answerQuestion(
             .slice(0, 500)
           if (Number.isNaN(when.getTime()) || !note) throw new Error('Invalid reminder')
           if (when.getTime() < Date.now()) throw new Error('That time is in the past')
-          await db('nivaro_reminders').insert({
-            user: asker.id,
+          const { createReminder } = await import('./reminders.js')
+          await createReminder(app, {
+            user: String(asker.id),
             note,
-            remind_at: when,
-            created_at: new Date()
+            remindAt: when,
+            room: room ?? null
           })
           results.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: JSON.stringify({ scheduled_for: when.toISOString(), note })
+            // The person-facing time is handed over ready to quote, so the
+            // reply never falls back to the UTC ISO string.
+            content: JSON.stringify({
+              scheduled_for: formatForPerson(when, zone),
+              time_zone: zone,
+              note
+            })
           })
           continue
         }

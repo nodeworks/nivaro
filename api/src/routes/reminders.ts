@@ -38,17 +38,13 @@ export async function remindersRoutes(app: FastifyInstance) {
     if (at.getTime() < Date.now() - 60_000) {
       return reply.code(400).send({ error: 'remind_at is in the past' })
     }
-    await db('nivaro_reminders').insert({
-      user: req.user!.id,
+    const { createReminder } = await import('../services/reminders.js')
+    const id = await createReminder(app, {
+      user: String(req.user!.id),
       note: note.slice(0, 1000),
-      room: null,
-      remind_at: at,
-      sent: 0
+      remindAt: at
     })
-    const row = (await db('nivaro_reminders')
-      .where({ user: req.user!.id })
-      .orderBy('id', 'desc')
-      .first()) as ReminderRow
+    const row = (await db('nivaro_reminders').where({ id }).first()) as ReminderRow
     return reply.code(201).send({ data: row })
   })
 
@@ -73,6 +69,8 @@ export async function remindersRoutes(app: FastifyInstance) {
           return reply.code(400).send({ error: 'remind_at must be a valid datetime' })
         }
         patch.remind_at = at
+        const { armReminderTimer } = await import('../services/reminders.js')
+        armReminderTimer(app, row.id, at)
       }
       if (Object.keys(patch).length > 0) {
         await db('nivaro_reminders').where({ id: row.id }).update(patch)

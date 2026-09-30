@@ -1156,31 +1156,19 @@ export async function buildServer() {
         })
       })
 
-      // Chat-bot reminders — "@bot remind me Friday about X". Due rows deliver
-      // via notifyUser (in-app + web push) and mark sent; failures retry next tick.
-      app.cron.schedule('chat-reminders', '*/5 * * * *', async () => {
-        const { db } = await import('./db/index.js')
-        const due = (await db('nivaro_reminders')
-          .where('sent', false)
-          .where('remind_at', '<=', new Date())
-          .limit(50)) as Array<{ id: number; user: string; note: string; room: string | null }>
-        if (due.length === 0) return
-        const { notifyUser } = await import('./services/notification-channels.js')
-        for (const r of due) {
-          try {
-            await notifyUser(app, String(r.user), {
-              subject: 'Reminder',
-              message: r.note,
-              sender: null,
-              collection: r.room ? '__chat__' : null,
-              item: r.room ? String(r.room) : null
-            })
-            await db('nivaro_reminders').where('id', r.id).update({ sent: true })
-          } catch (err) {
-            app.log.warn({ err, reminder: r.id }, 'reminder delivery failed')
-          }
-        }
-      })
+      // Reminders (the chat bot's set_reminder + /reminders): every 20 seconds,
+      // so "remind me in a minute" lands within the minute. The request that
+      // sets a near-term reminder also arms a timer (services/reminders.ts),
+      // which is what delivers on a dev laptop where crons do not tick.
+      app.cron.schedule(
+        'chat-reminders',
+        '*/20 * * * * *',
+        async () => {
+          const { deliverDueReminders } = await import('./services/reminders.js')
+          await deliverDueReminders(app)
+        },
+        { quiet: true }
+      )
 
       app.cron.schedule('fk-integrity-sweep', '40 3 * * *', async () => {
         const { detectDanglingFks } = await import('./services/fk-integrity.js')
@@ -1213,6 +1201,8 @@ export async function buildServer() {
           grace_min: number
         }> = []
         for (const j of jobs) {
+          // Quiet jobs record only failures — no row is not a miss.
+          if (j.quiet) continue
           const expected = app.cron.expectedPreviousRun(j.id)
           if (!expected) continue
           const next = j.nextRun ? new Date(j.nextRun).getTime() : null

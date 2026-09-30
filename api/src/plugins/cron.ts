@@ -51,6 +51,8 @@ export interface CronEntry {
   /** #54 — chained: runs right after this job completes instead of on its
    *  own schedule (the schedule stays registered as the revert target). */
   after?: string | null
+  /** Records only failed ticks (see ScheduleOpts.quiet). */
+  quiet?: boolean
 }
 
 type CronFn = () => void | Promise<void>
@@ -74,6 +76,10 @@ export interface ScheduleOpts {
   /** #32 — what a tick WOULD do, with nothing written: returns a report
    *  (string or JSON) the Background Jobs page shows. Optional. */
   dryRun?: () => Promise<unknown>
+  /** A high-frequency job (seconds apart) whose ticks mostly find nothing to
+   *  do: only FAILED ticks are recorded in nivaro_job_runs, so it neither
+   *  floods the run history nor reads as missed. */
+  quiet?: boolean
 }
 
 /** Throws with croner's own message when the expression is not valid. */
@@ -341,6 +347,16 @@ export class CronManager {
         // Chained (#54): this job runs after another one completes, not on
         // its own clock — the tick is a no-op while the chain stands.
         if (this.chains.has(id)) return
+        if (opts?.quiet) {
+          try {
+            await startChain(`cron:${id}`, () => fn())
+          } catch (err) {
+            console.error({ err, cronId: id }, 'Cron job error')
+            const run = await startJobRun('cron', id, { extensionId: opts?.extensionId })
+            await run.fail(err)
+          }
+          return
+        }
         // Every tick lands in nivaro_job_runs (best-effort) so the Background
         // Jobs console and per-extension health read one source of truth.
         await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
@@ -511,7 +527,8 @@ export class CronManager {
         // list() rebuilds entries — every annotate()/option field must be
         // copied here or the registry silently drops it (the first cron bug).
         supports_dry_run: !!this.entries.get(id)?.dryRun,
-        after: this.chains.get(id) ?? null
+        after: this.chains.get(id) ?? null,
+        quiet: this.entries.get(id)?.scheduleOpts?.quiet === true
       })
     )
   }

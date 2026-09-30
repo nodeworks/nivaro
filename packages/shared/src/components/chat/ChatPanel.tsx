@@ -1567,12 +1567,11 @@ export function ChatRoomView({
                           const seen = seenBy(m)
                           if (seen.length === 0) return null
                           return (
-                            <span
-                              className={cn('font-medium', th.accentText)}
-                              data-tip={`Seen by ${seen.map((sb) => sb.name || 'someone').join(', ')}`}
-                            >
-                              Seen by {seen.length}
-                            </span>
+                            <SeenByPopover
+                              seen={seen}
+                              channelId={roomInfo?.channel?.id ?? null}
+                              senderId={String(m.sender ?? '')}
+                            />
                           )
                         })()}
                       {isLastMine &&
@@ -1783,6 +1782,111 @@ function humanLabel(value: string | null | undefined): string | null {
   const v = value?.trim()
   if (!v || UUID_RE.test(v)) return null
   return v
+}
+
+/** Short, local, 12-hour: "8:04 PM" today, "Mon 8:04 PM" this week, else "Sep 21, 8:04 PM". */
+function readTime(iso: string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  if (d.toDateString() === now.toDateString()) return time
+  const days = (now.getTime() - d.getTime()) / 86_400_000
+  if (days < 6) return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`
+  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`
+}
+
+/**
+ * "Seen by N" under your own message in a group: click it for who has read it
+ * and who has not yet. A read watermark records when someone last caught up
+ * on the room, so the time shown is when they read up to (at least) this
+ * message — not the exact second their eyes passed over it.
+ */
+function SeenByPopover({
+  seen,
+  channelId,
+  senderId
+}: {
+  seen: Array<{ user: string; last_read_at: string; name: string }>
+  channelId: number | null
+  senderId: string
+}) {
+  const th = useTheme()
+  const [open, setOpen] = useState(false)
+  // Members only matter once the list is open (who has NOT read it yet).
+  const { members } = useChannelMembers(open ? channelId : null)
+  const seenIds = new Set(seen.map((s) => String(s.user).toUpperCase()))
+  const notYet = members.filter((mb) => {
+    const id = String(mb.user).toUpperCase()
+    return id !== senderId.toUpperCase() && !seenIds.has(id)
+  })
+  const sorted = [...seen].sort(
+    (a, b) => new Date(a.last_read_at).getTime() - new Date(b.last_read_at).getTime()
+  )
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          className={cn(
+            'font-medium underline decoration-dotted underline-offset-2 hover:decoration-solid',
+            th.accentText
+          )}
+          aria-label={`Seen by ${seen.length} — show who`}
+          data-chat-seen-by={seen.length}
+        >
+          Seen by {seen.length}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align='end'
+        sideOffset={4}
+        className={cn('w-[240px] p-0', th.surface)}
+        data-chat-seen-by-panel
+      >
+        <p className='border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400 dark:border-border'>
+          Seen by {seen.length}
+        </p>
+        <div className='max-h-[260px] overflow-y-auto py-1'>
+          {sorted.map((s) => (
+            <div key={s.user} className='flex items-center gap-2 px-3 py-1.5'>
+              <Avatar id={s.user} name={s.name || null} size={22} />
+              <span className='min-w-0 flex-1 truncate text-[12px] text-slate-700 dark:text-slate-200'>
+                {s.name || 'Someone'}
+              </span>
+              <span
+                className='shrink-0 text-[10.5px] tabular-nums text-slate-400'
+                data-tip={`Last read the conversation ${new Date(s.last_read_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}`}
+              >
+                {readTime(s.last_read_at)}
+              </span>
+            </div>
+          ))}
+          {notYet.length > 0 && (
+            <>
+              <p className='px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400'>
+                Not seen yet · {notYet.length}
+              </p>
+              {notYet.map((mb) => {
+                const nm =
+                  [mb.first_name, mb.last_name].filter(Boolean).join(' ') || mb.email || 'Someone'
+                return (
+                  <div key={mb.user} className='flex items-center gap-2 px-3 py-1.5 opacity-70'>
+                    <Avatar id={mb.user} name={nm} size={22} />
+                    <span className='min-w-0 flex-1 truncate text-[12px] text-slate-600 dark:text-slate-300'>
+                      {nm}
+                    </span>
+                  </div>
+                )
+              })}
+            </>
+          )}
+        </div>
+        <p className='border-t border-slate-100 px-3 py-1.5 text-[10.5px] leading-snug text-slate-400 dark:border-border'>
+          Times are when each person last caught up on this conversation.
+        </p>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 /**

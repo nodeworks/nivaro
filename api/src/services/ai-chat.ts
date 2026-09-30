@@ -1285,10 +1285,12 @@ export async function buildChatSystemPrompt(
   user: User,
   opts: { playbooks?: string } = {}
 ): Promise<string> {
-  const [readable, settings, queries] = await Promise.all([
+  const { userTimeZone, timeInstructions } = await import('./user-time.js')
+  const [readable, settings, queries, zone] = await Promise.all([
     readableCollections(user),
     settingsRow(),
-    savedQueryCatalogue(user)
+    savedQueryCatalogue(user),
+    userTimeZone(user as { preferences?: unknown })
   ])
   const guide = settings?.ai_chat_guide?.trim()
   const lines = readable.map((c) =>
@@ -1298,7 +1300,9 @@ export async function buildChatSystemPrompt(
   )
   return `${CHAT_SYSTEM_PROMPT}
 
-Today is ${new Date().toISOString().slice(0, 10)} — resolve "this year", "last month" and similar against that date.
+Today is ${new Date().toLocaleDateString('en-CA', { timeZone: zone })} — resolve "this year", "last month" and similar against that date.
+
+${timeInstructions(zone)}
 
 Charts: when the answer is a breakdown or a series of 2–30 numbers (per state, per month, per vendor), add ONE fenced block with the language tag "chart" after the prose, holding JSON {"type": "bar"|"line"|"pie", "title": "…", "data": [{"label": "…", "value": 123}]} — value a plain number, labels short. Never chart a single figure or a list of records.
 ${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}${opts.playbooks ? `\n${opts.playbooks}\n` : ''}

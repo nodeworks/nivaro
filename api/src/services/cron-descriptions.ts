@@ -51,7 +51,7 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
   'broadcast-ack-chasers':
     'Hourly — reminds users who have not acknowledged a must-acknowledge broadcast, and tells its author how many are outstanding.',
   'chat-reminders':
-    'Every 5 minutes — delivers reminders the chat bot set ("remind me Friday 9am") as in-app notifications.',
+    'Every 20 seconds — delivers due reminders ("remind me Friday 9am") as a notification and, when set from chat, a message from the assistant in that chat. Records only failed ticks.',
   'outbox-worker':
     'Every minute — retries notification and email deliveries that failed and were parked in the outbox.',
   'extension-events-sweep':
