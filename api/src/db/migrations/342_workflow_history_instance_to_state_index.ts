@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { runLongSql } from '../../services/run-long.js'
+import { isMssql } from '../dialect.js'
 
 /**
  * nivaro_workflow_history (instance, to_state) INCLUDE ([timestamp]).
@@ -29,7 +30,9 @@ import { runLongSql } from '../../services/run-long.js'
  */
 export const config = { transaction: false }
 
-export async function up(_knex: Knex): Promise<void> {
+export async function up(knex: Knex): Promise<void> {
+  // A performance index only: other dialects skip it (#757).
+  if (!isMssql(knex)) return
   await runLongSql(
     `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_nivaro_workflow_history_instance_to_state')
        CREATE INDEX ix_nivaro_workflow_history_instance_to_state
@@ -39,6 +42,7 @@ export async function up(_knex: Knex): Promise<void> {
 }
 
 export async function down(knex: Knex): Promise<void> {
+  if (!isMssql(knex)) return
   await knex.raw(`
     IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_nivaro_workflow_history_instance_to_state')
     DROP INDEX ix_nivaro_workflow_history_instance_to_state ON nivaro_workflow_history

@@ -64,6 +64,11 @@ export function HeaderTools({ children }: { children: ReactNode }) {
         t.closest('[data-radix-popper-content-wrapper]')
       )
         return
+      // A dialog opened FROM a tool (Clone, Import) is portaled to body; a
+      // click inside it must not fold the panel and unmount the dialog. A
+      // dialog that HOSTS the form (a drill sheet) is not one of those.
+      const dlg = t.closest('[role="dialog"]')
+      if (dlg && !dlg.contains(wrapRef.current)) return
       setOpen(false)
     }
     // A row that closes the More menu (data-nvr-menu-close) is done with the
@@ -172,7 +177,8 @@ export function HeaderMenu({
         t.closest('[data-nvr-header-menu-panel]') ||
         t.closest('[data-nvr-header-menu-btn]') ||
         t.closest('[data-radix-popper-content-wrapper]') ||
-        t.closest('[role="dialog"]')
+        // A dialog opened from a menu row, not one hosting the form.
+        (t.closest('[role="dialog"]') && !t.closest('[role="dialog"]')?.contains(btnRef.current))
       )
         return
       setOpen(false)

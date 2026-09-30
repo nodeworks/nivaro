@@ -177,7 +177,7 @@ function plan(cfg, ch) {
   const lines = []
   const add = (stage, text) => lines.push({ stage, text })
 
-  add('preflight', 'on main · `gh` signed in · api, admin and shared typecheck (an untracked probe under api/src breaks the image build)')
+  add('preflight', 'on main · `gh` signed in · lint:traps clean · api, admin and shared typecheck (an untracked probe under api/src breaks the image build)')
   if (ch.headTag.startsWith('v')) add('release', `HEAD is already tagged ${ch.headTag} — reuse it, mint nothing`)
   else {
     if (wantKit) add('release', `pnpm kit:release ${BUMP}   (packages/extension-kit changed — extensions built outside the monorepo compile against the npm package)`)
@@ -314,6 +314,14 @@ async function main() {
           })
         )
       )
+      // Known traps (#727) and T-SQL migrations with no dialect guard (#757):
+      // each one has cost a session before, so a finding stops the release.
+      try {
+        sh('node', ['scripts/lint-traps.mjs'], { cwd: ROOT, quiet: true })
+        log('lint:traps clean')
+      } catch (err) {
+        throw new StageError(`lint:traps found known traps — run pnpm lint:traps (${err.message})`)
+      }
       // Report only: which routes the published SDK cannot reach, and which
       // of its commands reach nothing. A gap never blocks a release.
       try {

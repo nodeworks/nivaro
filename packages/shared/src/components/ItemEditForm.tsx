@@ -9624,6 +9624,7 @@ export function ItemEditForm({
                                                   </Button>
                                                 )}
                                                 {effectiveShowClone && (
+                                                  // lint-traps-ok: self-triggered; HeaderTools ignores clicks inside dialogs it opened
                                                   <CloneDialog
                                                     collection={collection}
                                                     itemId={itemId}
