@@ -31,6 +31,7 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent } from '../ui/sheet'
+import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import type { ImportJob, ImportJobStatus } from './types'
 
@@ -612,6 +613,8 @@ function ImportWizard({
   const [aiConfidence, setAiConfidence] = useState<Record<string, number>>({})
   const [strategy, setStrategy] = useState('skip')
   const [idField, setIdField] = useState('')
+  // #748 — write through the items service (rules, validation, history).
+  const [throughItems, setThroughItems] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [savedMappingNote, setSavedMappingNote] = useState<string | null>(null)
@@ -786,7 +789,8 @@ function ImportWizard({
           transforms: Object.fromEntries(Object.entries(colTransforms).filter(([, t]) => t)),
           duplicate_strategy: strategy,
           id_field: idField || undefined,
-          file_name: fileName || 'import.csv'
+          file_name: fileName || 'import.csv',
+          through_items: throughItems
         })
       ),
     onSuccess: (res) => onCreated(res.data.id),
@@ -1144,6 +1148,26 @@ function ImportWizard({
                 className='h-8 text-[12.5px]'
               />
             </div>
+            <div className='flex items-start gap-2.5 rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'>
+              <Switch
+                id='csv-through-items'
+                checked={throughItems}
+                onCheckedChange={setThroughItems}
+                className='mt-0.5'
+                data-csv-through-items
+              />
+              <label htmlFor='csv-through-items' className='cursor-pointer'>
+                <span className='block text-[12px] font-medium text-slate-800 dark:text-foreground'>
+                  Apply rules and keep history
+                </span>
+                <span className='block text-[11px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                  Each row is saved the way the form saves it: field rules, validation, automations,
+                  and a revision on every record, credited to you. Rows that break a rule are
+                  reported instead of written. Unchanged fields are left alone. Slower on large
+                  files.
+                </span>
+              </label>
+            </div>
             <div className='space-y-1.5'>
               <Label className='text-[11.5px]'>Match records on</Label>
               <PickCombobox
@@ -1469,6 +1493,10 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                 </h3>
                 {[
                   { label: 'Duplicates', value: job.duplicate_strategy },
+                  {
+                    label: 'Written',
+                    value: job.through_items ? 'Through the items service' : 'Directly (raw)'
+                  },
                   { label: 'Matched on', value: job.id_field ?? '— always create' },
                   {
                     label: 'Started',
@@ -1526,13 +1554,18 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                         const ids = ((job as { created_ids?: unknown[] }).created_ids ?? [])
                           .map(String)
                           .join(',')
-                        nav.navigate(`/collections/${job.collection}?ids=${encodeURIComponent(ids)}`)
+                        nav.navigate(
+                          `/collections/${job.collection}?ids=${encodeURIComponent(ids)}`
+                        )
                       }}
                       className='inline-flex h-8 items-center gap-1.5 rounded-md border border-[#00ceff66] bg-[#00ceff0d] px-3 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
                     >
                       View the {((job as { created_ids?: unknown[] }).created_ids ?? []).length}{' '}
                       created record
-                      {((job as { created_ids?: unknown[] }).created_ids ?? []).length === 1 ? '' : 's'} →
+                      {((job as { created_ids?: unknown[] }).created_ids ?? []).length === 1
+                        ? ''
+                        : 's'}{' '}
+                      →
                     </button>
                   </section>
                 )}
@@ -1545,7 +1578,6 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
     </Sheet>
   )
 }
-
 
 // ─── Failed-row repair (#152) ────────────────────────────────────────────────
 // Failed rows come back mapped through the job's column map; edit cells
@@ -1621,10 +1653,15 @@ function FailedRowRepair({
               const draft = drafts[r.row] ?? r.values
               const state = done[r.row]
               return (
-                <tr key={r.row} className='border-t border-red-100 align-top dark:border-red-900/50'>
+                <tr
+                  key={r.row}
+                  className='border-t border-red-100 align-top dark:border-red-900/50'
+                >
                   <td className='px-2 py-1 font-mono tabular-nums text-slate-400'>
                     {r.row}
-                    <p className='max-w-[120px] whitespace-normal text-[10px] text-red-500'>{r.error}</p>
+                    <p className='max-w-[120px] whitespace-normal text-[10px] text-red-500'>
+                      {r.error}
+                    </p>
                   </td>
                   {fields.map((f) => (
                     <td key={f} className='px-1 py-1'>
@@ -1652,7 +1689,9 @@ function FailedRowRepair({
                           Resubmit
                         </button>
                         {state && state !== 'ok' && (
-                          <p className='max-w-[140px] whitespace-normal text-[9.5px] text-red-500'>{state}</p>
+                          <p className='max-w-[140px] whitespace-normal text-[9.5px] text-red-500'>
+                            {state}
+                          </p>
                         )}
                       </div>
                     )}

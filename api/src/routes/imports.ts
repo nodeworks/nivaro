@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { createOne } from '../services/items.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { createOne, updateOne } from '../services/items.js'
+import type { User } from '../types.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ function formatJob(job: Record<string, unknown>) {
     ...rest,
     column_map: parseJson(job.column_map),
     errors: parseJson(job.errors),
+    through_items: !!job.through_items,
     created_ids: createdIds
   }
 }
@@ -185,6 +187,28 @@ function applyColumnTransform(v: unknown, t: string | undefined): unknown {
   }
 }
 
+/** Does a stored value already equal what the file carries? Empty and null
+ *  agree; numbers compare as numbers, dates by instant or calendar day. */
+function sameCell(was: unknown, next: unknown): boolean {
+  const empty = (x: unknown) => x == null || (typeof x === 'string' && x.trim() === '')
+  if (empty(was) && empty(next)) return true
+  if (empty(was) || empty(next)) return false
+  const text = String(next).trim()
+  if (was instanceof Date) {
+    const d = new Date(text)
+    return (
+      (!Number.isNaN(d.getTime()) && d.getTime() === was.getTime()) ||
+      text.slice(0, 10) === was.toISOString().slice(0, 10)
+    )
+  }
+  if (typeof was === 'boolean') {
+    const t = text.toLowerCase()
+    return was ? t === 'true' || t === '1' : t === 'false' || t === '0'
+  }
+  if (typeof was === 'number') return Number(text) === was
+  return String(was).trim() === text
+}
+
 async function processImportJob(jobId: string, app: FastifyInstance) {
   try {
     await db('nivaro_import_jobs').where({ id: jobId }).update({
@@ -230,6 +254,17 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
       }
     }
 
+    // #748 — opt-in per job: rows go through the items service (field rules,
+    // validation, hooks, revisions, activity attributed to whoever queued the
+    // job) instead of raw inserts. Unchanged fields are not re-written.
+    const throughItems = !!job.through_items
+    const actor = throughItems
+      ? ((await db('nivaro_users').where('id', job.created_by).first()) as User | undefined)
+      : undefined
+    if (throughItems && !actor)
+      throw new Error('This job writes as whoever queued it, and that user no longer exists')
+    const stamp = `import:CSV ${String(job.file_name ?? 'file').replace(/:/g, ' ')}:job-${jobId}`
+
     let created = 0
     let updated = 0
     let skipped = 0
@@ -239,6 +274,14 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
     // of exactly the fields the import touched — enough to undo, no more.
     const rbCreated: Array<{ id: unknown }> = []
     const rbUpdated: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }> = []
+
+    const insertRow = async (collection: string, rowData: Record<string, unknown>) => {
+      if (!actor) return insertReturningId(collection, rowData)
+      const made = (await createOne(actor, collection, { ...rowData, _change_reason: stamp })) as {
+        id?: unknown
+      } | null
+      return made?.id ?? null
+    }
 
     for (let i = 0; i < dataLines.length; i++) {
       try {
@@ -271,20 +314,39 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
               const prior: Record<string, unknown> = {}
               for (const k of Object.keys(rowData))
                 prior[k] = (existing as Record<string, unknown>)[k]
-              await db(collection)
-                .where({ [idField]: rowData[idField] })
-                .update(rowData)
-              rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
-              updated++
+              if (actor) {
+                // Only fields that actually differ; an unchanged row writes nothing.
+                const patch: Record<string, unknown> = {}
+                for (const [k, v] of Object.entries(rowData)) {
+                  const was = (existing as Record<string, unknown>)[k]
+                  if (!sameCell(was, v)) patch[k] = v
+                }
+                if (Object.keys(patch).length === 0) {
+                  skipped++
+                } else {
+                  await updateOne(actor, collection, String((existing as { id: unknown }).id), {
+                    ...patch,
+                    _change_reason: stamp
+                  })
+                  rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
+                  updated++
+                }
+              } else {
+                await db(collection)
+                  .where({ [idField]: rowData[idField] })
+                  .update(rowData)
+                rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
+                updated++
+              }
             } else {
               skipped++
             }
           } else {
-            rbCreated.push({ id: await insertReturningId(collection, rowData) })
+            rbCreated.push({ id: await insertRow(collection, rowData) })
             created++
           }
         } else {
-          rbCreated.push({ id: await insertReturningId(collection, rowData) })
+          rbCreated.push({ id: await insertRow(collection, rowData) })
           created++
         }
       } catch (err) {
@@ -375,6 +437,8 @@ interface CreateJobInput {
   id_field?: string
   file_name?: string
   created_by: string | null
+  /** #748 — write through the items service (rules, validation, history). */
+  through_items?: boolean
 }
 
 /** Header signature for mapping memory: sorted + lowercased so column order
@@ -436,6 +500,7 @@ async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
     column_map: input.column_map ? JSON.stringify(input.column_map) : null,
     duplicate_strategy: input.duplicate_strategy ?? 'skip',
     id_field: input.id_field ?? null,
+    ...(input.through_items ? { through_items: true } : {}),
     status: 'pending',
     processed_rows: 0,
     created_rows: 0,
@@ -711,6 +776,7 @@ export async function importsRoutes(app: FastifyInstance) {
       duplicate_strategy?: string
       id_field?: string
       file_name?: string
+      through_items?: boolean
     }
 
     const { collection, csv_data, column_map, duplicate_strategy, id_field, file_name } = body
@@ -726,6 +792,7 @@ export async function importsRoutes(app: FastifyInstance) {
         duplicate_strategy,
         id_field,
         file_name,
+        through_items: body.through_items === true,
         created_by: req.user?.id ?? null
       },
       app
@@ -753,6 +820,7 @@ export async function importsRoutes(app: FastifyInstance) {
       column_map?: Record<string, string>
       duplicate_strategy?: string
       id_field?: string
+      through_items?: boolean
       file_name?: string
     }
 
@@ -785,6 +853,7 @@ export async function importsRoutes(app: FastifyInstance) {
         column_map: body.column_map,
         duplicate_strategy: body.duplicate_strategy,
         id_field: body.id_field,
+        through_items: body.through_items === true,
         file_name: fileName,
         created_by: req.user?.id ?? null
       },
@@ -920,9 +989,23 @@ export async function importsRoutes(app: FastifyInstance) {
       }
       for (const u of updatedList) {
         try {
-          await db(collection)
-            .where({ [u.key_field]: u.key })
-            .update(u.prior)
+          if (job.through_items) {
+            // The import wrote through the items service; the undo does too, so
+            // the record's history shows both.
+            const rec = (await db(collection)
+              .where({ [u.key_field]: u.key })
+              .first('id')) as { id: unknown } | undefined
+            if (!rec) throw new Error('record no longer exists')
+            const { updateOne: update } = await import('../services/items.js')
+            await update(user, collection, String(rec.id), {
+              ...u.prior,
+              _change_reason: `Import rollback (job ${id})`
+            })
+          } else {
+            await db(collection)
+              .where({ [u.key_field]: u.key })
+              .update(u.prior)
+          }
           restored++
         } catch (err) {
           failures.push(`restore ${u.key}: ${err instanceof Error ? err.message : String(err)}`)

@@ -355,7 +355,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
     { type: 'h2', id: 'imports-collection', text: 'Collection imports' },
     {
       type: 'p',
-      text: 'The row-by-row CSV importer. Rows go through the normal item API, so validation rules, hooks, row-level security and activity logging all apply. Jobs process in the background with live progress counters.'
+      text: 'The row-by-row CSV importer. Jobs process in the background with live progress counters. By default rows are written directly (fast, no per-record history). Switch on "Apply rules and keep history" in the options step and each row is saved through the items service instead, as the queuing admin: field rules, validation, hooks and automations run, every record gets an activity row stamped `import:CSV <file>:job-<id>` and a revision, a row that breaks a rule is reported instead of written, and an existing record whose mapped fields already hold the file\'s values is left untouched (counted as skipped). Rolling such a job back restores through the items service too, so the history shows both. The diff preview is the same either way. `POST /api/imports` and `/from-url` take `through_items: true`.'
     },
     {
       type: 'table',

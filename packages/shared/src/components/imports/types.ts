@@ -361,4 +361,6 @@ export interface ImportJob {
   started_at: string | null
   completed_at: string | null
   rolled_back_at?: string | null
+  /** #748 — rows were written through the items service. */
+  through_items?: boolean
 }
