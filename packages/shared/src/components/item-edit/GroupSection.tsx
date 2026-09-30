@@ -473,6 +473,42 @@ function SummaryUserName({ userId }: { userId: string }) {
   )
 }
 
+/**
+ * Close a floating user card/roster the moment the person looks elsewhere.
+ * Two gaps the Radix dismiss layer leaves: it listens for the outside press
+ * in the BUBBLE phase, so any grid/editor that stops pointerdown propagation
+ * (resize handles, map layers, forecast cells…) swallowed the click; and a
+ * press in an iframe, devtools or another window never reaches the document
+ * at all — only a window blur says focus left. Capture phase + blur cover both.
+ * `inside(target)` = the press belongs to the card (or its own trigger, which
+ * toggles it itself).
+ */
+function useDismissOnOutside(
+  active: boolean,
+  inside: (target: Element) => boolean,
+  close: () => void
+) {
+  const insideRef = useRef(inside)
+  insideRef.current = inside
+  const closeRef = useRef(close)
+  closeRef.current = close
+  useEffect(() => {
+    if (!active) return
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null
+      if (t && insideRef.current(t)) return
+      closeRef.current()
+    }
+    const onBlur = () => closeRef.current()
+    document.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [active])
+}
+
 // Compact owners — no label, tiny inline style, used inside SummaryStrip
 /** Stacked avatar cluster (+N) with a hover/pinnable portal roster whose rows
  *  are UserChips — the single user-display primitive for owners/user lists.
@@ -518,19 +554,16 @@ export function UserRosterCluster({
     }
     if (x !== pos.x || y !== pos.y) setPos({ x, y })
   }, [open, pos])
-  React.useEffect(() => {
-    if (open !== 'pin') return
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node
-      const el = t as HTMLElement
+  useDismissOnOutside(
+    !!open,
+    (t) =>
       // Clicks inside the user-card popover (portaled by Radix) keep the
       // roster mounted — closing would unmount the card mid-click.
-      if (el.closest?.('[data-radix-popper-content-wrapper]')) return
-      if (!panelRef.current?.contains(t) && !anchorRef.current?.contains(t)) setOpen(null)
-    }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [open])
+      !!t.closest?.('[data-radix-popper-content-wrapper]') ||
+      !!panelRef.current?.contains(t) ||
+      !!anchorRef.current?.contains(t),
+    () => setOpen(null)
+  )
   const initials = (n: string) =>
     n
       .split(' ')
@@ -766,8 +799,10 @@ function UserCardPopover({
   navigate,
   profileUrl,
   online,
+  cardId,
   onAction
 }: {
+  cardId?: string
   user: UserCardData | null | undefined
   userId: string
   initials: string
@@ -809,7 +844,11 @@ function UserCardPopover({
     : null
 
   return (
-    <PopoverContent align='start' className='w-72 p-0 overflow-hidden'>
+    <PopoverContent
+      align='start'
+      className='w-72 p-0 overflow-hidden'
+      data-nvr-user-card={cardId ?? ''}
+    >
       {/* Header */}
       <div className='flex items-center gap-3 p-4 bg-gradient-to-br from-nvr-cyan/8 to-nvr-cyan/4 dark:from-nvr-cyan/10 dark:to-transparent border-b border-slate-100 dark:border-border'>
         <UserAvatar
@@ -976,6 +1015,19 @@ export function UserChip({
   // Host-aware profile route: absent = admin's /users/:id, null = no page.
   const profileUrl = userUrl ? userUrl(userId) : `/users/${userId}`
   const [open, setOpen] = useState(false)
+  // One id per chip instance: a press on ANOTHER chip's trigger must close
+  // this card, a press on this chip's own trigger is Radix's toggle.
+  const chipId = React.useId()
+  useDismissOnOutside(
+    open,
+    (t) =>
+      !!t.closest?.(`[data-nvr-user-card="${CSS.escape(chipId)}"]`) ||
+      !!t.closest?.(`[data-nvr-user-chip="${CSS.escape(chipId)}"]`) ||
+      // Anything else floating above the card (a tooltip, a nested menu).
+      (!!t.closest?.('[data-radix-popper-content-wrapper]') &&
+        !t.closest?.('[data-nvr-user-card]')),
+    () => setOpen(false)
+  )
 
   const { data: user, isLoading } = useQuery<UserCardData | null>({
     queryKey: ['user-card', userId],
@@ -1023,7 +1075,7 @@ export function UserChip({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+      <PopoverTrigger asChild data-nvr-user-chip={chipId}>
         {children ? (
           children
         ) : size === 'compact' ? (
@@ -1071,6 +1123,7 @@ export function UserChip({
         navigate={navigate}
         profileUrl={profileUrl}
         online={online}
+        cardId={chipId}
         onAction={() => setOpen(false)}
       />
     </Popover>
