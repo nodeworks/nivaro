@@ -106,6 +106,35 @@ run's log is `.release-runs/<id>.log`; resume it from a terminal with
 A chain started from a terminal is invisible to the card's lock — do not click
 Release while one runs.
 
+### Promoting to production
+
+The release chain stops at staging. **Promote to production** on the same card
+lists the last eight versions a finished, verified release run took to staging.
+Picking one runs `node scripts/promote-production.mjs --version <v> --events`
+(plan only) and shows what production runs now, the migrations production will
+run at boot, and anything that blocks: the image tag missing from the
+registry, no deployment commit for that version on the source branch, staging
+never having answered with it, or production already running it or something
+newer. Typing the version back starts the real run (`--go`, same lock and
+detached-process rules as a release): in a throwaway `git worktree` it merges
+the deploy commit into the production branch, writes the version into the pin
+file and pushes, then polls production until it answers the version twice.
+
+It needs a `production` block in `release-chain.config.json` (see
+`release-chain.config.example.json`), and the production pipeline must read the
+pin file — for EFP, `efp-nivaro`'s `deploy_production` job exports
+`NIVARO_VERSION=$(cat .docker/nivaro-version)`.
+
+### Runbooks
+
+Below the Release card, **Runbooks** lists the long operator scripts extensions
+declare (`runbooks` on the extension's export — EFP's go-live chain is one).
+A target is typed (for the go-live chain, `DB_DATABASE`), a **Dry run** comes
+first, and **Run** stays disabled until a dry run of that target finished in the
+last 24 hours; the target is typed back to start. Runs live under
+`.runbook-runs/`, survive the API restarting, and can be cancelled or resumed
+at the step that failed.
+
 ## SDK coverage
 
 `pnpm --filter @nivaro/api run sdk:coverage` registers the route tree in

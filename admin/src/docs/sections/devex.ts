@@ -1458,7 +1458,7 @@ this.emitFile({ type: 'asset', fileName: 'version.json',
     },
     {
       type: 'note',
-      text: 'Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. See docs/RELEASING.md.'
+      text: 'Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. Its Promote to production section moves a version a release run verified on staging to production (scripts/promote-production.mjs: check the image, the staging deploy commit and what production runs; merge into the production branch and pin the version; poll production) — the version is typed back first. Below it, Runbooks runs the long operator scripts extensions declare. See docs/RELEASING.md.'
     },
     {
       type: 'h2',

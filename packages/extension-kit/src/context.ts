@@ -349,6 +349,32 @@ export interface ExtensionEnvDecl {
   secret?: boolean
 }
 
+/**
+ * A long, multi-step operator script the admin Runbooks console runs as a
+ * detached process and watches (#720) — local development only. The script
+ * is started with `npx tsx <script> <args> --events` from the api directory
+ * and reports through `@@steps [names]` / `@@event {step, status, secs?,
+ * lines?}` lines and a final `### DONE …` or `### FAILED at <step>: …`.
+ */
+export interface ExtensionRunbookDecl {
+  /** Slug, unique within the extension. */
+  key: string
+  label: string
+  description?: string
+  /** Path relative to the api directory, inside this extension's folder. */
+  script: string
+  /** Arguments of the dry run — the report the console demands first. */
+  dry_args: string[]
+  /** Arguments of the real run. */
+  go_args: string[]
+  /** The flag that resumes at a step (`--from`); absent = no resume. */
+  resume_flag?: string
+  /** Environment variable the operator points at a target (DB_DATABASE). */
+  target_env?: string
+  /** Targets refused outright (production is run by hand). */
+  refuse_targets?: string[]
+}
+
 /** The default export of an extension's entry module. */
 export interface ExtensionDefinition {
   id: string
@@ -368,4 +394,6 @@ export interface ExtensionDefinition {
   healthCheck?(): Promise<{ ok: boolean; note?: string }>
   /** The environment variables this extension reads. */
   env?: ExtensionEnvDecl[]
+  /** Operator runbooks the admin Runbooks console runs (#720). */
+  runbooks?: ExtensionRunbookDecl[]
 }

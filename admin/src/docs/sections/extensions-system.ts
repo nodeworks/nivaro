@@ -196,6 +196,39 @@ Authorization: Bearer <admin-token>
   ],
   async register(ctx) { … }
 }`
+    },
+    { type: 'h3', id: 'ext-overview-runbooks', text: 'Runbooks' },
+    {
+      type: 'p',
+      text: 'A long, multi-step operator script (a data conversion, a cutover chain) can be declared as a runbook. The admin Environments page lists it under Runbooks and runs it from the machine the API runs on — local development only — as a detached process, so a run that takes hours outlives the API restarting. The console shows each step, how long it took and what it said, the log tail, and offers Cancel and Resume from the step that failed.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A real run needs a finished dry run of the same target from the last 24 hours, and the target typed back.',
+        'One runbook runs at a time on the machine. A target listed in `refuse_targets` is refused.',
+        'The script is started as `npx tsx <script> <args> --events` from the api directory, with `target_env` set to the target. It prints `@@steps ["a","b"]`, then `@@event {"step","status":"start|ok|fail|skip|refused","secs","lines"}` per step, and ends with `### DONE — <summary>` or `### FAILED at <step>: <reason>`.',
+        'Resume passes `resume_flag` and the failed step name; the script skips the steps before it.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `export default {
+  id: 'my-extension',
+  runbooks: [
+    {
+      key: 'convert',
+      label: 'Data conversion',
+      script: 'extensions/my-extension/scripts/convert.ts',
+      dry_args: ['--dry-run'],
+      go_args: ['--execute'],
+      resume_flag: '--from',
+      target_env: 'DB_DATABASE',
+      refuse_targets: ['shared_dev']
+    }
+  ],
+  async register(ctx) { … }
+}`
     }
   ]
 }
