@@ -77,6 +77,7 @@ import {
   type DirectoryChannel,
   dmPeer,
   dmRoom,
+  GENERAL_CHANNEL_ID,
   openDmWith,
   REACTION_EMOJI,
   type RoomInfo,
@@ -1331,7 +1332,9 @@ export function ChatRoomView({
     !!channel && !!me && String(channel.created_by ?? '').toUpperCase() === me.id.toUpperCase()
   const announceClosed =
     channel?.announce && !ownsChannel && !isAdmin
-      ? 'Only the channel owner and admins post here. Hover a message and reply in its thread.'
+      ? channel.id === GENERAL_CHANNEL_ID
+        ? 'Only admins post here. Hover a message and reply in its thread.'
+        : 'Only the channel owner and admins post here. Hover a message and reply in its thread.'
       : null
   const showWelcome =
     !!channel?.welcome_note &&
@@ -1878,8 +1881,9 @@ export function ChatRoomView({
         >
           <ChevronLeft className='h-4 w-4' strokeWidth={2} />
         </button>
-        {roomInfo?.kind === 'channel' && !roomInfo.channel?.is_direct && (
-          <ChannelTile icon={roomInfo.channel?.icon} color={roomInfo.channel?.color} size={24} />
+        {((roomInfo?.kind === 'channel' && !roomInfo.channel?.is_direct) ||
+          (roomInfo?.kind === 'global' && (roomInfo.channel?.icon || roomInfo.channel?.color))) && (
+          <ChannelTile icon={roomInfo?.channel?.icon} color={roomInfo?.channel?.color} size={24} />
         )}
         <div className='min-w-0 flex-1'>
           <p className='flex items-center gap-1 truncate text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
@@ -2804,7 +2808,10 @@ export function ChatChannelSettings({
   const debounced = useDebouncedValue(memberSearch, 250)
   const { users } = useUserSearch(debounced, visibility === 'private')
 
-  const canEdit = isAdmin || (!!cfg.me && String(channel.created_by ?? '') === String(cfg.me.id))
+  // General (id 0) has no owner — only admins dress it.
+  const isGeneral = channel.id === GENERAL_CHANNEL_ID
+  const canEdit =
+    isAdmin || (!isGeneral && !!cfg.me && String(channel.created_by ?? '') === String(cfg.me.id))
   const memberIds = new Set(members.map((m) => String(m.user).toUpperCase()))
   const dirty =
     name !== label ||
@@ -2859,65 +2866,76 @@ export function ChatChannelSettings({
               />
             </label>
 
-            <div>
-              <span className='mb-1 block text-[11px] font-medium text-slate-400'>
-                Who can see it
-              </span>
-              <div className='flex flex-wrap gap-1.5'>
-                {(
-                  [
-                    ['open', 'Anyone'],
-                    ['role', 'One role'],
-                    ['private', 'Invite only']
-                  ] as const
-                ).map(([v, l]) => (
-                  <button
-                    key={v}
-                    type='button'
-                    onClick={() => setVisibility(v)}
+            {!isGeneral && (
+              <div>
+                <span className='mb-1 block text-[11px] font-medium text-slate-400'>
+                  Who can see it
+                </span>
+                <div className='flex flex-wrap gap-1.5'>
+                  {(
+                    [
+                      ['open', 'Anyone'],
+                      ['role', 'One role'],
+                      ['private', 'Invite only']
+                    ] as const
+                  ).map(([v, l]) => (
+                    <button
+                      key={v}
+                      type='button'
+                      onClick={() => setVisibility(v)}
+                      className={cn(
+                        'rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors',
+                        visibility === v
+                          ? th.accentSoft
+                          : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-muted'
+                      )}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                </div>
+                {visibility === 'role' && (
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
                     className={cn(
-                      'rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors',
-                      visibility === v
-                        ? th.accentSoft
-                        : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-muted'
+                      'mt-2 h-8 w-full rounded-md px-2 text-[12.5px] outline-none',
+                      th.input
                     )}
                   >
-                    {l}
-                  </button>
-                ))}
+                    <option value=''>Choose a role…</option>
+                    {roles.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
-              {visibility === 'role' && (
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                  className={cn(
-                    'mt-2 h-8 w-full rounded-md px-2 text-[12.5px] outline-none',
-                    th.input
-                  )}
-                >
-                  <option value=''>Choose a role…</option>
-                  {roles.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
+            )}
 
             <div className='flex items-center gap-2'>
               <button
                 type='button'
                 disabled={!dirty || update.isPending || (visibility === 'role' && !role)}
                 onClick={() =>
-                  update.mutate({
-                    name: name.trim() || label,
-                    topic: topic.trim() || null,
-                    visibility,
-                    role: visibility === 'role' ? role : null,
-                    icon: look.icon,
-                    color: look.color
-                  })
+                  update.mutate(
+                    isGeneral
+                      ? {
+                          name: name.trim() || label,
+                          topic: topic.trim() || null,
+                          icon: look.icon,
+                          color: look.color
+                        }
+                      : {
+                          name: name.trim() || label,
+                          topic: topic.trim() || null,
+                          visibility,
+                          role: visibility === 'role' ? role : null,
+                          icon: look.icon,
+                          color: look.color
+                        }
+                  )
                 }
                 className={cn(
                   'rounded-md px-2.5 py-1 text-[12px] font-medium disabled:opacity-40',
@@ -2926,13 +2944,19 @@ export function ChatChannelSettings({
               >
                 {update.isPending ? 'Saving…' : 'Save'}
               </button>
-              <button
-                type='button'
-                onClick={() => update.mutate({ is_archived: true })}
-                className='ml-auto rounded-md px-2 py-1 text-[11.5px] font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40'
-              >
-                Archive channel
-              </button>
+              {isGeneral ? (
+                <span className='ml-auto text-[11px] text-slate-400'>
+                  Open to everyone · cannot be archived
+                </span>
+              ) : (
+                <button
+                  type='button'
+                  onClick={() => update.mutate({ is_archived: true })}
+                  className='ml-auto rounded-md px-2 py-1 text-[11.5px] font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40'
+                >
+                  Archive channel
+                </button>
+              )}
             </div>
             {update.isError && (
               <p className='text-[11.5px] text-red-500'>{(update.error as Error).message}</p>
@@ -2945,11 +2969,13 @@ export function ChatChannelSettings({
           <p className='text-[12px] leading-relaxed text-slate-500 dark:text-slate-400'>
             {channel.topic || 'No topic set.'}
             <br />
-            {channel.visibility === 'private'
-              ? 'Invite only — you were added by the channel owner.'
-              : channel.visibility === 'role'
-                ? 'Everyone with a particular role can see this channel.'
-                : 'Anyone in the portal can find and join this channel.'}
+            {isGeneral
+              ? 'Everyone in the portal can find and join General.'
+              : channel.visibility === 'private'
+                ? 'Invite only — you were added by the channel owner.'
+                : channel.visibility === 'role'
+                  ? 'Everyone with a particular role can see this channel.'
+                  : 'Anyone in the portal can find and join this channel.'}
           </p>
         )}
 
@@ -3388,7 +3414,8 @@ export function ChatRoomList({
                       </span>
                     )
                   })()}
-                  {r.kind === 'channel' && !r.channel?.is_direct ? (
+                  {(r.kind === 'channel' && !r.channel?.is_direct) ||
+                  (r.kind === 'global' && (r.channel?.icon || r.channel?.color)) ? (
                     <ChannelTile icon={r.channel?.icon} color={r.channel?.color} size={32} />
                   ) : (
                     <span
@@ -4596,9 +4623,9 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
           <ChatChannelBrowser
             onOpen={(room, label, channel) => {
               setSettingsOpen(false)
-              // General rides the directory with id 0 — it has no channel row,
-              // so no settings/members surface behind it.
-              setActiveRoom({ room, label, channel: channel.id > 0 ? channel : undefined })
+              // General rides the directory with id 0; its settings live on the
+              // instance (PATCH /chat/channels/0), so it carries a channel too.
+              setActiveRoom({ room, label, channel })
               setTab('chat')
             }}
           />

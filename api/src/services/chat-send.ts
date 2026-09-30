@@ -5,7 +5,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { linkTo } from './app-links.js'
-import { canSeeRoom, channels, parseRoom } from './chat.js'
+import { canSeeRoom, channels, generalChannel, parseRoom } from './chat.js'
 import { recordChatSend, recordChatSendFailure } from './chat-health.js'
 import { parseTimeRefs, type TimeRef } from './chat-time-refs.js'
 
@@ -264,10 +264,12 @@ async function postInner(
 
   // Announcement channels: members read, react and reply in threads.
   const parsedRoom = parseRoom(room)
-  if (parsedRoom.kind === 'channel' && !system && !parentId) {
-    const ch = (await channels()).get(parsedRoom.channelKey ?? '') as
-      | (Record<string, unknown> & { created_by?: string | null })
-      | undefined
+  if ((parsedRoom.kind === 'channel' || parsedRoom.kind === 'global') && !system && !parentId) {
+    const ch = (
+      parsedRoom.kind === 'global'
+        ? await generalChannel()
+        : (await channels()).get(parsedRoom.channelKey ?? '')
+    ) as (Record<string, unknown> & { created_by?: string | null }) | undefined
     if (ch?.announce) {
       const owner = String(ch.created_by ?? '').toUpperCase() === String(senderId).toUpperCase()
       if (!owner && !actor.isAdmin) {

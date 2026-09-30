@@ -182,6 +182,83 @@ let channelCache: { at: number; byKey: Map<string, ChatChannel> } | null = null
 export function clearChatCaches(): void {
   typeCache = null
   channelCache = null
+  generalCache = null
+}
+
+// ── General (the `global` room) ─────────────────────────────────────────────
+// General has no nivaro_chat_channels row — its dressing lives on
+// nivaro_settings.chat_general (migration 373). It is presented as a channel
+// with id 0 so the same settings panel, intro, welcome note and announce rule
+// apply. Visibility is fixed (everyone), there is no owner — admins edit it.
+
+export const GENERAL_CHANNEL_ID = 0
+const GENERAL_DEFAULT_NAME = 'General'
+let generalCache: { at: number; channel: ChatChannel; customName: boolean } | null = null
+
+/** The stored General settings, parsed. Empty object when unset or unreadable. */
+async function readGeneralSettings(): Promise<Record<string, unknown>> {
+  try {
+    const row = (await db('nivaro_settings').where('id', 1).first('chat_general')) as
+      | { chat_general?: string | null }
+      | undefined
+    if (!row?.chat_general) return {}
+    const v = JSON.parse(String(row.chat_general))
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  } catch {
+    // A database behind migration 373 has no column — General stays plain.
+    return {}
+  }
+}
+
+async function loadGeneral(): Promise<{ channel: ChatChannel; customName: boolean }> {
+  if (generalCache && Date.now() - generalCache.at < TTL_MS) return generalCache
+  const s = await readGeneralSettings()
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
+  const name = str(s.name)
+  const channel: ChatChannel = {
+    id: GENERAL_CHANNEL_ID,
+    key: 'general',
+    name: name ?? GENERAL_DEFAULT_NAME,
+    topic: str(s.topic),
+    visibility: 'open',
+    role: null,
+    created_by: null,
+    is_archived: false,
+    is_direct: false,
+    icon: str(s.icon),
+    color: str(s.color),
+    announce: !!s.announce,
+    description: str(s.description),
+    links: jsonList<{ label: string; url: string }>(s.links),
+    welcome_note: str(s.welcome_note),
+    default_roles: jsonList<string>(s.default_roles).map((x) => String(x).toUpperCase())
+  }
+  generalCache = { at: Date.now(), channel, customName: !!name }
+  return generalCache
+}
+
+/** General as a channel (id 0). */
+export async function generalChannel(): Promise<ChatChannel> {
+  return (await loadGeneral()).channel
+}
+
+/**
+ * Save General's settings. `patch` holds validated values (see the route);
+ * keys set to null/empty drop back to the default.
+ */
+export async function saveGeneralSettings(patch: Record<string, unknown>): Promise<ChatChannel> {
+  const current = await readGeneralSettings()
+  const next: Record<string, unknown> = { ...current }
+  for (const [k, v] of Object.entries(patch)) {
+    const empty = v == null || v === '' || v === false || (Array.isArray(v) && v.length === 0)
+    if (empty) delete next[k]
+    else next[k] = v
+  }
+  await db('nivaro_settings')
+    .where('id', 1)
+    .update({ chat_general: Object.keys(next).length ? JSON.stringify(next) : null })
+  generalCache = null
+  return generalChannel()
 }
 
 async function roomTypes(): Promise<Map<string, RoomType>> {
@@ -393,6 +470,7 @@ export async function listRooms(
       ]) as Promise<string[]>,
     channels()
   ])
+  const general = await loadGeneral()
 
   const byRoom = new Map(memberships.map((m) => [m.room, m]))
   // Archive is personal: an archived room lives only in the Archived list, so
@@ -434,11 +512,22 @@ export async function listRooms(
   const out: RoomSummary[] = listed.map((room) => {
     const parsed = parseRoom(room)
     const membership = byRoom.get(room)
-    const channel = parsed.kind === 'channel' ? chans.get(parsed.channelKey ?? '') : undefined
+    const channel =
+      parsed.kind === 'channel'
+        ? chans.get(parsed.channelKey ?? '')
+        : parsed.kind === 'global'
+          ? general.channel
+          : undefined
     return {
       room,
       kind: parsed.kind,
-      label: channel?.name ?? dmNames.get(room) ?? null,
+      // General's label is the host's own unless an admin renamed it.
+      label:
+        parsed.kind === 'global'
+          ? general.customName
+            ? general.channel.name
+            : null
+          : (channel?.name ?? dmNames.get(room) ?? null),
       channel: channel
         ? {
             id: channel.id,
@@ -641,7 +730,8 @@ export async function autoJoinDefaultChannels(user: User): Promise<void> {
   autoJoinChecked.set(key, Date.now())
   if (!(await hasColumnCached('nivaro_chat_channels', 'default_roles'))) return
   const role = String(user.role).toUpperCase()
-  const wanted = [...(await channels()).values()].filter(
+  const general = await generalChannel()
+  const wanted = [general, ...(await channels()).values()].filter(
     (c) => !c.is_archived && !c.is_direct && (c.default_roles ?? []).includes(role)
   )
   if (wanted.length === 0) return
@@ -652,7 +742,7 @@ export async function autoJoinDefaultChannels(user: User): Promise<void> {
       .catch(() => [])) as string[]
   )
   for (const c of wanted) {
-    const room = `ch:${c.key}`
+    const room = c === general ? GLOBAL_ROOM : `ch:${c.key}`
     if (done.has(room)) continue
     try {
       await db('nivaro_chat_auto_joins').insert({ user: user.id, room, joined_at: new Date() })
@@ -682,19 +772,6 @@ export interface DirectoryChannel extends ChatChannel {
   members: number
 }
 
-/** General as a directory row: id 0, never a nivaro_chat_channels row. */
-const GENERAL_DIRECTORY_ROW: ChatChannel = {
-  id: 0,
-  key: 'general',
-  name: 'General',
-  topic: 'Everyone — join to see it in your sidebar',
-  visibility: 'open',
-  role: null,
-  created_by: null,
-  is_archived: false,
-  is_direct: false
-}
-
 /**
  * Channels the user could join. Private ones appear only to members, so the
  * directory never advertises a room's existence to someone who cannot enter.
@@ -702,11 +779,17 @@ const GENERAL_DIRECTORY_ROW: ChatChannel = {
 export async function listDirectory(user: User, search?: string): Promise<DirectoryChannel[]> {
   // Group DMs are conversations, not channels — the directory never lists
   // them (members see them in the sidebar via their membership rows).
+  // General rides the directory as id 0 (never a nivaro_chat_channels row).
+  const generalBase = await generalChannel()
+  const general: ChatChannel = {
+    ...generalBase,
+    topic: generalBase.topic ?? 'Everyone — join to see it in your sidebar'
+  }
   const all = [
-    GENERAL_DIRECTORY_ROW,
+    general,
     ...[...(await channels()).values()].filter((c) => !c.is_archived && !c.is_direct)
   ]
-  const roomOf = (c: ChatChannel) => (c === GENERAL_DIRECTORY_ROW ? GLOBAL_ROOM : `ch:${c.key}`)
+  const roomOf = (c: ChatChannel) => (c === general ? GLOBAL_ROOM : `ch:${c.key}`)
   const mine = new Set(
     (await db('nivaro_chat_memberships').where('user', user.id).pluck('room')) as string[]
   )

@@ -10,9 +10,13 @@ import {
   channels,
   cleanChannelLinks,
   clearChatCaches,
+  GENERAL_CHANNEL_ID,
+  GLOBAL_ROOM,
+  generalChannel,
   listDirectory,
   listRooms,
-  parseRoom
+  parseRoom,
+  saveGeneralSettings
 } from '../services/chat.js'
 import { botUserId, chatBotName } from '../services/chat-bot.js'
 import { recordChatDelivery } from '../services/chat-health.js'
@@ -1028,6 +1032,25 @@ export async function chatRoutes(app: FastifyInstance) {
   })
 
   app.patch<{ Params: { id: string } }>('/channels/:id', async (req, reply) => {
+    if (String(req.params.id) === String(GENERAL_CHANNEL_ID)) {
+      // General has no owner — admins dress it.
+      if (!req.isAdmin) return reply.code(403).send({ error: 'Only an admin can change General' })
+      const result = generalSettingsPatch(req.body as Record<string, unknown>)
+      if ('error' in result) return reply.code(400).send({ error: result.error })
+      const changed = Object.keys(result.patch)
+      const data = changed.length ? await saveGeneralSettings(result.patch) : await generalChannel()
+      await logActivity({
+        action: 'chat-channel-update',
+        user: req.user?.id,
+        collection: 'nivaro_chat_channels',
+        item: GENERAL_AUDIT_ITEM,
+        comment: changed.length
+          ? `changed ${changed.map((k) => k.replace(/_/g, ' ')).join(', ')}`
+          : undefined,
+        req
+      })
+      return { data }
+    }
     const row = await db('nivaro_chat_channels').where('id', req.params.id).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     // Creator or admin — the same mutation posture queues use.
@@ -1073,40 +1096,40 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** Members of a private channel, so an owner can see who is in it. */
   app.get<{ Params: { id: string } }>('/channels/:id/members', async (req, reply) => {
-    const row = await db('nivaro_chat_channels').where('id', req.params.id).first()
+    const row = await channelTarget(req.params.id)
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    if (!(await canSeeRoom(req.user!, `ch:${row.key}`))) return reply.code(403).send(forbidden)
+    if (!(await canSeeRoom(req.user!, row.room))) return reply.code(403).send(forbidden)
     const rows = await db('nivaro_chat_memberships as m')
       .leftJoin('nivaro_users as u', 'u.id', 'm.user')
-      .where('m.room', `ch:${row.key}`)
+      .where('m.room', row.room)
       .select('m.user', 'u.first_name', 'u.last_name', 'u.email', 'm.joined_at')
     return { data: rows }
   })
 
   /** Add someone to a private channel (owner/admin only). */
   app.post<{ Params: { id: string } }>('/channels/:id/members', async (req, reply) => {
-    const row = await db('nivaro_chat_channels').where('id', req.params.id).first()
+    const row = await channelTarget(req.params.id)
     if (!row) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && String(row.created_by ?? '') !== String(req.user?.id)) {
       return reply.code(403).send({ error: 'Only the channel owner or an admin can add members' })
     }
     const b = req.body as { user_id?: string }
     if (!b.user_id) return reply.code(400).send({ error: 'user_id is required' })
-    await upsertMembership(String(b.user_id), `ch:${row.key}`, {})
+    await upsertMembership(String(b.user_id), row.room, {})
     void logActivity({
       action: 'chat-channel-member-add',
       user: req.user?.id ?? null,
       collection: 'nivaro_chat_channels',
-      item: String(row.id),
+      item: row.auditItem,
       comment: `${b.user_id} added to #${row.key}`
     })
-    return reply.code(201).send({ data: { room: `ch:${row.key}`, user: b.user_id } })
+    return reply.code(201).send({ data: { room: row.room, user: b.user_id } })
   })
 
   app.delete<{ Params: { id: string; userId: string } }>(
     '/channels/:id/members/:userId',
     async (req, reply) => {
-      const row = await db('nivaro_chat_channels').where('id', req.params.id).first()
+      const row = await channelTarget(req.params.id)
       if (!row) return reply.code(404).send({ error: 'Not found' })
       const self = String(req.params.userId) === String(req.user?.id)
       if (!self && !req.isAdmin && String(row.created_by ?? '') !== String(req.user?.id)) {
@@ -1114,14 +1137,12 @@ export async function chatRoutes(app: FastifyInstance) {
           .code(403)
           .send({ error: 'Only the channel owner or an admin can remove members' })
       }
-      await db('nivaro_chat_memberships')
-        .where({ user: req.params.userId, room: `ch:${row.key}` })
-        .del()
+      await db('nivaro_chat_memberships').where({ user: req.params.userId, room: row.room }).del()
       void logActivity({
         action: 'chat-channel-member-remove',
         user: req.user?.id ?? null,
         collection: 'nivaro_chat_channels',
-        item: String(row.id),
+        item: row.auditItem,
         comment: `${req.params.userId} removed from #${row.key}`
       })
       return { data: { removed: true } }
@@ -1212,7 +1233,7 @@ export async function chatRoutes(app: FastifyInstance) {
   /** Add every member of a Team or a role to a channel, skipping people
    *  already in it and suspended/redacted accounts. Owner or admin. */
   app.post<{ Params: { id: string } }>('/channels/:id/members/bulk', async (req, reply) => {
-    const row = await db('nivaro_chat_channels').where('id', req.params.id).first()
+    const row = await channelTarget(req.params.id)
     if (!row) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && String(row.created_by ?? '') !== String(req.user?.id)) {
       return reply.code(403).send({ error: 'Only the channel owner or an admin can add members' })
@@ -1239,7 +1260,7 @@ export async function chatRoutes(app: FastifyInstance) {
     } else {
       return reply.code(400).send({ error: 'team_id or role_id is required' })
     }
-    const room = `ch:${row.key}`
+    const room = row.room
     const active = new Set(
       (
         (await db('nivaro_users')
@@ -1262,7 +1283,7 @@ export async function chatRoutes(app: FastifyInstance) {
       action: 'chat-channel-member-add',
       user: req.user?.id ?? null,
       collection: 'nivaro_chat_channels',
-      item: String(row.key),
+      item: row.auditItem,
       comment: `${toAdd.length} added from ${source} to #${row.key}`
     })
     return { data: { added: toAdd.length, skipped, source } }
@@ -1270,13 +1291,13 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** Joins, leaves, renames and settings changes for a channel (#975). */
   app.get<{ Params: { id: string } }>('/channels/:id/audit', async (req, reply) => {
-    const row = await db('nivaro_chat_channels').where('id', req.params.id).first()
+    const row = await channelTarget(req.params.id)
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    if (!(await canSeeRoom(req.user!, `ch:${row.key}`))) return reply.code(403).send(forbidden)
+    if (!(await canSeeRoom(req.user!, row.room))) return reply.code(403).send(forbidden)
     const rows = (await db('nivaro_activity as a')
       .leftJoin('nivaro_users as u', 'u.id', 'a.user')
       .where('a.collection', 'nivaro_chat_channels')
-      .whereIn('a.item', [String(row.key), String(row.id)])
+      .whereIn('a.item', row.general ? [row.auditItem] : [row.key, String(row.id)])
       .orderBy('a.timestamp', 'desc')
       .limit(100)
       .select(
@@ -1725,6 +1746,84 @@ async function hasTable(t: string): Promise<boolean> {
  * New channel fields (#935/#936/#960/#961) from a request body. Default roles
  * are admin-only: they add people to a channel without asking them.
  */
+/** Activity item for General — channel keys are [a-z0-9-], so this never collides. */
+const GENERAL_AUDIT_ITEM = '__general__'
+
+interface ChannelTarget {
+  id: number
+  key: string
+  room: string
+  created_by: string | null
+  general: boolean
+  auditItem: string
+}
+
+/** A channel by id, or General for id 0 (the `global` room, no channel row). */
+async function channelTarget(id: string): Promise<ChannelTarget | null> {
+  if (String(id) === String(GENERAL_CHANNEL_ID)) {
+    return {
+      id: GENERAL_CHANNEL_ID,
+      key: 'general',
+      room: GLOBAL_ROOM,
+      created_by: null,
+      general: true,
+      auditItem: GENERAL_AUDIT_ITEM
+    }
+  }
+  const row = (await db('nivaro_chat_channels').where('id', id).first()) as
+    | { id: number; key: string; created_by?: string | null }
+    | undefined
+  if (!row) return null
+  return {
+    id: Number(row.id),
+    key: String(row.key),
+    room: `ch:${row.key}`,
+    created_by: row.created_by ?? null,
+    general: false,
+    auditItem: String(row.key)
+  }
+}
+
+/**
+ * Validate a General settings body. Visibility and archive are fixed for
+ * General (everyone, always), so those keys are refused rather than ignored.
+ */
+function generalSettingsPatch(
+  b: Record<string, unknown>
+): { patch: Record<string, unknown> } | { error: string } {
+  if (b.is_archived) return { error: 'General cannot be archived' }
+  if (b.visibility !== undefined && b.visibility !== 'open') {
+    return { error: 'General is always open to everyone' }
+  }
+  const patch: Record<string, unknown> = {}
+  const text = (v: unknown, max: number) => (v ? String(v).trim().slice(0, max) || null : null)
+  if (b.name !== undefined) {
+    const name = text(b.name, 80)
+    // Renaming back to the default stores nothing — the host label applies.
+    patch.name = name && name !== 'General' ? name : null
+  }
+  if (b.topic !== undefined) patch.topic = text(b.topic, 250)
+  if (b.description !== undefined) patch.description = text(b.description, 2000)
+  if (b.welcome_note !== undefined) patch.welcome_note = text(b.welcome_note, 2000)
+  if (b.announce !== undefined) patch.announce = !!b.announce
+  if (b.icon !== undefined || b.color !== undefined) {
+    const look = channelLookPatch(b)
+    if ('error' in look) return { error: look.error }
+    Object.assign(patch, look.patch)
+  }
+  if (b.links !== undefined) {
+    const links = cleanChannelLinks(b.links)
+    if (links === null) return { error: 'Links need a full http(s) address or an app path' }
+    patch.links = links
+  }
+  if (b.default_roles !== undefined) {
+    patch.default_roles = Array.isArray(b.default_roles)
+      ? [...new Set(b.default_roles.map((r) => String(r).toUpperCase()))].slice(0, 50)
+      : []
+  }
+  return { patch }
+}
+
 async function channelExtrasPatch(
   b: Record<string, unknown>,
   isAdmin: boolean

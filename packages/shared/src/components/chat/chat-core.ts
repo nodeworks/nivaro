@@ -134,6 +134,10 @@ export function useChatConfig(): ChatConfig {
   return cfg
 }
 
+/** General (the `global` room) presents as channel id 0 — its settings live on
+ *  the instance, edited by admins through PATCH /chat/channels/0. */
+export const GENERAL_CHANNEL_ID = 0
+
 export const CHAT_DEFAULTS = {
   collections: { messages: 'chat_messages', reads: 'chat_last_read', presence: 'user_presence' },
   globalRoom: 'global',
@@ -606,7 +610,8 @@ function toRoomInfos(data: ServerRoom[], meId: string | undefined, cfg: ChatConf
     const kind: RoomInfo['kind'] = r.kind === 'unknown' ? 'entity' : r.kind
     const label =
       kind === 'global'
-        ? cfg.globalLabel
+        ? // The server names General only when an admin renamed it.
+          (r.label ?? cfg.globalLabel)
         : kind === 'dm'
           ? // The server resolves the peer's name from the user table; the
             // message sender is only a fallback for hosts that don't send one.

@@ -95,8 +95,8 @@ export function ChannelExtrasEditor({
             <Megaphone className='h-3.5 w-3.5' /> Announcements only
           </span>
           <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
-            Only the channel owner and admins post. Everyone else can read, react and reply in
-            threads.
+            {channel.id === 0 ? 'Only admins post.' : 'Only the channel owner and admins post.'}{' '}
+            Everyone else can read, react and reply in threads.
           </span>
         </span>
       </label>
