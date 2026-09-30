@@ -342,6 +342,7 @@ export {
   RelatedRecordsPanel,
   RelationCombobox,
   ReportView,
+  ReportWidgetCard,
   ReviewListWidget,
   RevisionsPanel,
   ROW_HIGHLIGHT_TINTS,

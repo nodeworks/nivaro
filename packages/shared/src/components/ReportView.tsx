@@ -3713,6 +3713,41 @@ const WidgetCard = memo(function WidgetCard({
 
 // ── ReportView ────────────────────────────────────────────────────────────────
 
+/**
+ * One saved report widget on its own, outside its report's grid — how a host
+ * places a report widget on a dashboard canvas (#1044). The widget is drawn at
+ * column 0 of an absent grid, so its report-grid placement does nothing and
+ * the card fills whatever cell holds it. Drill-through goes to the host's
+ * DrilldownContext when there is one.
+ */
+export function ReportWidgetCard({
+  reportId,
+  widget,
+  dateRange = null,
+  entityFilters = []
+}: {
+  reportId: string
+  widget: ReportWidget
+  dateRange?: ReportDateRange | null
+  entityFilters?: ReportEntityFilter[]
+}) {
+  const outerDrill = useDrilldown()
+  const onDrill = useCallback(
+    (t: { collection: string; itemId: string; title?: string }) => outerDrill?.open(t),
+    [outerDrill]
+  )
+  const placed = useMemo(() => ({ ...widget, x: 0 }), [widget])
+  return (
+    <WidgetCard
+      reportId={reportId}
+      widget={placed}
+      dateRange={dateRange}
+      entityFilters={entityFilters}
+      onDrill={outerDrill ? onDrill : undefined}
+    />
+  )
+}
+
 export function ReportView({
   reportId,
   showFilterBar = true,

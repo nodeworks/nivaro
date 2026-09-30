@@ -23,7 +23,7 @@ export interface DashboardItem {
   y: number
   w: number
   h: number
-  /** Section title (kind 'section'). */
+  /** Section title (kind 'section'); a report widget's name (kind 'widget'). */
   title?: string
   /** Section folded to its header (kind 'section'). */
   collapsed?: boolean
@@ -75,6 +75,13 @@ function normalizeItem(
     if (typeof r.key !== 'string' || r.key.trim() === '' || r.key.length > 80)
       return { error: `${path}.key must name a widget` }
     item.key = r.key.trim()
+    // A widget placed from a report (#1044) carries its own name — the host
+    // cannot know a report widget's title from the key alone.
+    if (r.title != null) {
+      if (typeof r.title !== 'string') return { error: `${path}.title must be text` }
+      const t = r.title.trim().slice(0, 80)
+      if (t) item.title = t
+    }
   }
   if (kind === 'section') {
     if (depth > 0) return { error: `${path}: a section cannot sit inside a section` }

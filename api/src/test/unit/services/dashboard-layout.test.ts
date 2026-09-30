@@ -135,6 +135,22 @@ describe('normalizeDashboardLayout', () => {
   })
 })
 
+describe('widget titles (#1044)', () => {
+  it('keeps a trimmed title on a widget placed from a report', () => {
+    const r = normalizeDashboardLayout({
+      version: 1,
+      items: [widget('a', { key: 'rp:12', title: '  Spend velocity  ' })]
+    })
+    expect(r.error).toBeUndefined()
+    expect(r.layout!.items[0].title).toBe('Spend velocity')
+  })
+  it('refuses a title that is not text', () => {
+    expect(
+      normalizeDashboardLayout({ version: 1, items: [widget('a', { key: 'rp:12', title: 5 })] }).error
+    ).toMatch(/title must be text/)
+  })
+})
+
 describe('normalizeDashboardRoleDefaults', () => {
   it('upper-cases role ids and validates each layout', () => {
     const r = normalizeDashboardRoleDefaults({
