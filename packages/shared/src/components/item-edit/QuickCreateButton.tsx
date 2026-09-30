@@ -1,8 +1,8 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient, useParentDraft } from '../../context'
-import { post } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { titleCase } from '../../lib/utils'
 
@@ -18,7 +18,10 @@ export interface QuickCreateConfig {
     field: string
     label?: string
     required?: boolean
-    /** '$parent.<field>' (parent draft value) or a literal — hidden seed, no input. */
+    /** '$parent.<field>' (parent draft value) or a literal — hidden seed, no input.
+     *  When `field` is a many-to-many alias on the target, the seed becomes its
+     *  links: a scalar ('$parent.funding_year') links one record, an array
+     *  ('$parent.funding_years') links each (#799). */
     from?: unknown
   }>
 }
@@ -40,6 +43,35 @@ export function QuickCreateButton({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Which seed targets are many-to-many aliases on the created record — the
+  // server takes an id array there and writes the junction rows (#799).
+  const { data: m2mAliases } = useQuery<Set<string>>({
+    queryKey: ['quick-create-m2m', targetCollection],
+    queryFn: () =>
+      client
+        .request<{
+          data: {
+            relations?: Array<{
+              one_collection?: string | null
+              one_field?: string | null
+              junction_field?: string | null
+            }>
+          }
+        }>(get(`/collections/${targetCollection}`))
+        .then(
+          (r) =>
+            new Set(
+              (r.data?.relations ?? [])
+                .filter(
+                  (rel) =>
+                    rel.one_collection === targetCollection && !!rel.one_field && !!rel.junction_field
+                )
+                .map((rel) => String(rel.one_field))
+            )
+        ),
+    enabled: open,
+    staleTime: 5 * 60_000
+  })
   const inputFields = (config.fields ?? []).filter((f) => f.from === undefined)
   const seedFields = (config.fields ?? []).filter((f) => f.from !== undefined)
 
@@ -62,6 +94,11 @@ export function QuickCreateButton({
     const payload: Record<string, unknown> = {}
     for (const f of seedFields) {
       const v = resolveSeed(f.from)
+      if (m2mAliases?.has(f.field)) {
+        const ids = linkIds(v)
+        if (ids.length > 0) payload[f.field] = ids
+        continue
+      }
       if (v !== null && v !== undefined && v !== '') payload[f.field] = v
     }
     for (const f of inputFields) {
@@ -135,7 +172,8 @@ export function QuickCreateButton({
             </button>
             <button
               type='button'
-              disabled={saving}
+              // Wait for the target's relations so a many-to-many seed is sent as links.
+              disabled={saving || (seedFields.length > 0 && !m2mAliases)}
               onClick={() => void create()}
               className='inline-flex h-7 items-center gap-1 rounded bg-[#00ceff] px-2.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50'
             >
@@ -147,4 +185,15 @@ export function QuickCreateButton({
       )}
     </div>
   )
+}
+
+/** A seed value as related ids: one id, an id array, or `{id}` objects. */
+function linkIds(v: unknown): Array<string | number> {
+  const list = Array.isArray(v) ? v : [v]
+  const out: Array<string | number> = []
+  for (const e of list) {
+    const id = e != null && typeof e === 'object' ? (e as { id?: unknown }).id : e
+    if ((typeof id === 'string' && id !== '') || typeof id === 'number') out.push(id)
+  }
+  return out
 }
