@@ -35,6 +35,7 @@ import { playNotificationSound } from '../lib/notification-sound'
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
+import { BrowserPushCard } from './profile/BrowserPushCard'
 import { DelegationCard } from './profile/DelegationCard'
 import { TeamLoadCard } from './profile/PersonExtras'
 
@@ -1388,7 +1389,8 @@ export function ProfileView({
   userId,
   className,
   initialTab,
-  extra
+  extra,
+  pushServiceWorker = '/sw.js'
 }: {
   userId?: string | null
   className?: string
@@ -1396,15 +1398,25 @@ export function ProfileView({
   initialTab?: 'overview' | 'access' | 'activity' | 'tools'
   /** Host-only cards for the OWN profile (a browser-push card, say), rendered in the right column. */
   extra?: React.ReactNode
+  /** Service worker the Browser notifications card registers (same origin); false hides the card. */
+  pushServiceWorker?: string | false
 }) {
   const auth = useItemEditAuth()
   const isOwn = !userId || (auth?.userId != null && String(auth.userId) === String(userId))
   if (!isOwn)
     return <PersonProfile userId={userId as string} className={className} initialTab={initialTab} />
-  return <OwnProfile className={className} extra={extra} />
+  return <OwnProfile className={className} extra={extra} pushServiceWorker={pushServiceWorker} />
 }
 
-function OwnProfile({ className, extra }: { className?: string; extra?: React.ReactNode }) {
+function OwnProfile({
+  className,
+  extra,
+  pushServiceWorker
+}: {
+  className?: string
+  extra?: React.ReactNode
+  pushServiceWorker: string | false
+}) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const isOwn = true
@@ -1728,6 +1740,9 @@ function OwnProfile({ className, extra }: { className?: string; extra?: React.Re
             <TeamLoadCard userId='me' />
             <NotificationSourcesCard />
             <SecurityCard />
+            {pushServiceWorker !== false && (
+              <BrowserPushCard serviceWorkerPath={pushServiceWorker} />
+            )}
             {extra}
           </div>
         </div>
