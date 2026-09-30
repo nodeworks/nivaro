@@ -1,5 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Check, ChevronDown, CopyPlus as CopyDown, Loader2 } from 'lucide-react'
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  CopyPlus as CopyDown,
+  Loader2,
+  Paperclip,
+  X
+} from 'lucide-react'
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
@@ -25,7 +33,7 @@ export interface TransitionRequirementFieldMeta {
   type: string | null
   /** M2M alias fields edit via junction writes and render a multi-select;
    *  m2o record fields render a single-select over related_collection. */
-  kind?: 'm2m' | 'm2o'
+  kind?: 'm2m' | 'm2o' | 'file' | 'files'
   related_collection?: string
   junction?: string
   fk_to_child?: string
@@ -151,6 +159,9 @@ function fmtDisplay(v: unknown, format?: 'currency' | 'number'): string {
 
 type FieldValue = string | string[]
 
+/** Fields whose value is a list of related ids (junction writes, #814). */
+const isListKind = (f: TransitionRequirementFieldMeta) => f.kind === 'm2m' || f.kind === 'files'
+
 function recordEntryKey(entry: TransitionRecordFieldsEntry): string {
   return rowKey(entry.collection, `record:${entry.item}`)
 }
@@ -167,7 +178,14 @@ function snapshotValues(
   for (const entry of payload) {
     if (entry.type === 'record_fields') {
       const fieldValues: Record<string, FieldValue> = {}
-      for (const f of entry.fields) fieldValues[f.field] = toInputValue(entry.values[f.field])
+      for (const f of entry.fields) {
+        const raw = entry.values[f.field]
+        fieldValues[f.field] = isListKind(f)
+          ? Array.isArray(raw)
+            ? raw.map(String)
+            : []
+          : toInputValue(raw)
+      }
       snapshot[recordEntryKey(entry)] = fieldValues
       continue
     }
@@ -191,6 +209,112 @@ function snapshotValues(
     }
   }
   return snapshot
+}
+
+/** The server's display for a file field: a name, or [{id, name}]. */
+function fileNamesOf(display: unknown): Record<string, string> {
+  if (Array.isArray(display)) {
+    const out: Record<string, string> = {}
+    for (const d of display as Array<{ id?: unknown; name?: unknown }>) {
+      if (d?.id != null) out[String(d.id)] = String(d.name ?? d.id)
+    }
+    return out
+  }
+  return typeof display === 'string' ? { __single__: display } : {}
+}
+
+/** #814 — a record-level file / files requirement: upload, list, remove. */
+function FileUploadCell({
+  multiple,
+  ids,
+  initialNames,
+  onChange
+}: {
+  multiple: boolean
+  ids: string[]
+  initialNames: Record<string, string>
+  onChange: (ids: string[]) => void
+}) {
+  const client = useNivaroClient()
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const nameOf = (id: string) =>
+    names[id] ?? initialNames[id] ?? (!multiple ? initialNames.__single__ : undefined) ?? id
+  async function add(list: FileList | null) {
+    if (!list?.length) return
+    setUploading(true)
+    setError(null)
+    const added: string[] = []
+    try {
+      for (const f of Array.from(list).slice(0, multiple ? 20 : 1)) {
+        const r = await client.upload(f)
+        const id = String(r.id)
+        added.push(id)
+        setNames((p) => ({ ...p, [id]: f.name }))
+      }
+    } catch {
+      setError('A file could not be uploaded')
+    } finally {
+      setUploading(false)
+      if (inputRef.current) inputRef.current.value = ''
+    }
+    if (added.length) onChange(multiple ? [...ids, ...added] : added.slice(0, 1))
+  }
+  return (
+    <div className='space-y-1.5' data-requirement-file={multiple ? 'files' : 'file'}>
+      {ids.length > 0 && (
+        <ul className='space-y-1'>
+          {ids.map((id) => (
+            <li
+              key={id}
+              className='flex items-center gap-1.5 rounded border border-slate-200 px-2 py-1 text-[12px] text-slate-700 dark:border-border dark:text-slate-200'
+            >
+              <Paperclip className='h-3 w-3 shrink-0 text-slate-400' />
+              <span className='min-w-0 flex-1 truncate'>{nameOf(id)}</span>
+              <button
+                type='button'
+                aria-label={`Remove ${nameOf(id)}`}
+                onClick={() => onChange(ids.filter((x) => x !== id))}
+                className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
+              >
+                <X className='h-3 w-3' />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(multiple || ids.length === 0) && (
+        <>
+          <input
+            ref={inputRef}
+            type='file'
+            multiple={multiple}
+            className='hidden'
+            onChange={(e) => void add(e.target.files)}
+          />
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            disabled={uploading}
+            onClick={() => inputRef.current?.click()}
+            className='h-8 gap-1.5 text-[12px]'
+            data-requirement-upload
+          >
+            {uploading ? (
+              <Loader2 className='h-3.5 w-3.5 animate-spin' />
+            ) : (
+              <Paperclip className='h-3.5 w-3.5' />
+            )}
+            {uploading ? 'Uploading…' : multiple ? 'Add files' : 'Upload a file'}
+          </Button>
+        </>
+      )}
+      {error && <p className='text-[11px] text-red-600'>{error}</p>}
+    </div>
+  )
 }
 
 // ─── Portal dropdown panel ───────────────────────────────────────────────────
@@ -565,6 +689,7 @@ export function TransitionRequirementsDialog({
       return entry.fields.some((f) => {
         if (isWaived(rk, f)) return false
         const v = values[rk]?.[f.field]
+        if (isListKind(f)) return !Array.isArray(v) || v.length === 0
         return !(typeof v === 'string' ? v : '').trim()
       })
     }
@@ -596,17 +721,58 @@ export function TransitionRequirementsDialog({
               const current = values[rk] ?? {}
               const saved = savedRef.current[rk] ?? {}
               const changed: Record<string, unknown> = {}
+              const linkChanges: Array<{
+                meta: TransitionRequirementFieldMeta
+                add: string[]
+                remove: string[]
+              }> = []
               for (const f of entry.fields) {
+                if (isListKind(f)) {
+                  const cur = Array.isArray(current[f.field]) ? (current[f.field] as string[]) : []
+                  const was = Array.isArray(saved[f.field]) ? (saved[f.field] as string[]) : []
+                  const add = cur.filter((v) => !was.includes(v))
+                  const remove = was.filter((v) => !cur.includes(v))
+                  if (add.length > 0 || remove.length > 0) linkChanges.push({ meta: f, add, remove })
+                  continue
+                }
                 if (current[f.field] !== saved[f.field]) {
                   changed[f.field] =
-                    f.kind === 'm2o'
+                    f.kind === 'm2o' || f.kind === 'file'
                       ? String(current[f.field] ?? '') || null
                       : coerceForPatch(String(current[f.field] ?? ''), f.type)
                 }
               }
-              if (Object.keys(changed).length === 0) return { rk, ok: true as const }
+              if (Object.keys(changed).length === 0 && linkChanges.length === 0)
+                return { rk, ok: true as const }
               try {
-                await client.request(patch(`/items/${entry.collection}/${entry.item}`, changed))
+                if (Object.keys(changed).length > 0)
+                  await client.request(patch(`/items/${entry.collection}/${entry.item}`, changed))
+                // Record-level many-to-many / files (#814): junction rows.
+                for (const { meta, add, remove } of linkChanges) {
+                  if (!meta.junction || !meta.fk_to_child || !meta.junction_field) continue
+                  if (remove.length > 0) {
+                    const existing = await client.request<{
+                      data: Array<Record<string, unknown>>
+                    }>(
+                      get(`/items/${meta.junction}`, {
+                        limit: 500,
+                        filter: JSON.stringify({ [meta.fk_to_child]: { _eq: entry.item } })
+                      })
+                    )
+                    for (const j of existing.data ?? []) {
+                      if (remove.includes(String(j[meta.junction_field])))
+                        await client.request(del(`/items/${meta.junction}/${j.id}`))
+                    }
+                  }
+                  for (const relatedId of add) {
+                    await client.request(
+                      post(`/items/${meta.junction}`, {
+                        [meta.fk_to_child]: entry.item,
+                        [meta.junction_field]: relatedId
+                      })
+                    )
+                  }
+                }
                 queryClient.invalidateQueries({
                   queryKey: ['item', entry.collection, String(entry.item)]
                 })
@@ -777,6 +943,21 @@ export function TransitionRequirementsDialog({
                               meta={f}
                               selected={typeof v === 'string' ? v : ''}
                               onChange={(id) => setFieldValue(rk, f.field, id)}
+                            />
+                          ) : f.kind === 'm2m' ? (
+                            <M2MPickCell
+                              meta={f}
+                              selected={Array.isArray(v) ? v : []}
+                              onChange={(ids) => setFieldValue(rk, f.field, ids)}
+                            />
+                          ) : f.kind === 'file' || f.kind === 'files' ? (
+                            <FileUploadCell
+                              multiple={f.kind === 'files'}
+                              ids={Array.isArray(v) ? v : typeof v === 'string' && v ? [v] : []}
+                              initialNames={fileNamesOf(entry.display[f.field])}
+                              onChange={(ids) =>
+                                setFieldValue(rk, f.field, f.kind === 'files' ? ids : (ids[0] ?? ''))
+                              }
                             />
                           ) : entry.copy_to_lines?.[f.field] ? (
                             <div className='flex items-center gap-1.5'>

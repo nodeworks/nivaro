@@ -146,8 +146,10 @@ export interface RequirementFieldMeta {
    *  dialog renders a multi-select and writes junction rows instead of a
    *  scalar PATCH. Completeness = at least one junction row per child.
    *  'm2o' marks an FK field — record-level or on the child row — the dialog
-   *  renders a single-select over related_collection. */
-  kind?: 'm2m' | 'm2o'
+   *  renders a single-select over related_collection. 'file' / 'files' (#814,
+   *  record-level) mark a file FK / a many-to-many to files: the dialog
+   *  renders an upload control instead of a picker. */
+  kind?: 'm2m' | 'm2o' | 'file' | 'files'
   related_collection?: string
   junction?: string
   fk_to_child?: string
@@ -841,11 +843,95 @@ async function evaluateRecordFieldsEntry(
       ? entry.title
       : 'Required before continuing'
 
+  // Relations touching the record: M2O legs, and alias legs + their junction
+  // companions — a many-to-many field (#814) is not a column, so it must stay
+  // out of the record SELECT (a failed select used to fail the entry OPEN).
+  type RelRow = {
+    many_collection: string
+    many_field: string
+    one_collection: string | null
+    one_field: string | null
+    junction_field: string | null
+  }
+  let rels: RelRow[] = []
+  try {
+    rels = (await database('nivaro_relations')
+      .where((q) =>
+        q.where('many_collection', recordCollection).orWhere('one_collection', recordCollection)
+      )
+      .select(
+        'many_collection',
+        'many_field',
+        'one_collection',
+        'one_field',
+        'junction_field'
+      )) as RelRow[]
+    const aliasLegs = rels.filter(
+      (r) => r.one_collection === recordCollection && r.junction_field != null
+    )
+    if (aliasLegs.length > 0) {
+      const companions = (await database('nivaro_relations')
+        .whereIn(
+          'many_collection',
+          aliasLegs.map((r) => r.many_collection)
+        )
+        .select(
+          'many_collection',
+          'many_field',
+          'one_collection',
+          'one_field',
+          'junction_field'
+        )) as RelRow[]
+      for (const c of companions) {
+        if (!rels.some((r) => r.many_collection === c.many_collection && r.many_field === c.many_field))
+          rels.push(c)
+      }
+    }
+  } catch {
+    rels = []
+  }
+  const FILE_COLLECTIONS = new Set(['nivaro_files', 'directus_files'])
+  const asFiles = (c: string) => (c === 'directus_files' ? 'nivaro_files' : c)
+  const m2oByField = new Map<string, string>()
+  const m2mByField = new Map<
+    string,
+    { junction: string; fkToRecord: string; junctionField: string; related: string }
+  >()
+  for (const f of requiredFields) {
+    const m2o = rels.find(
+      (r) => r.many_collection === recordCollection && r.many_field === f && r.junction_field == null
+    )
+    if (m2o?.one_collection) {
+      m2oByField.set(f, m2o.one_collection)
+      continue
+    }
+    const alias = rels.find(
+      (r) =>
+        r.one_collection === recordCollection &&
+        r.junction_field != null &&
+        (r.one_field === f || r.many_collection === f)
+    )
+    if (alias?.junction_field) {
+      const companion = rels.find(
+        (r) => r.many_collection === alias.many_collection && r.many_field === alias.junction_field
+      )
+      if (companion?.one_collection && IDENTIFIER_RE.test(alias.many_collection)) {
+        m2mByField.set(f, {
+          junction: alias.many_collection,
+          fkToRecord: alias.many_field,
+          junctionField: alias.junction_field,
+          related: companion.one_collection
+        })
+      }
+    }
+  }
+  const scalarFields = requiredFields.filter((f) => !m2mByField.has(f))
+
   let record: Record<string, unknown> | undefined
   try {
     record = (await database(recordCollection)
       .where({ id: itemId })
-      .first(['id', ...requiredFields])) as Record<string, unknown> | undefined
+      .first(['id', ...scalarFields])) as Record<string, unknown> | undefined
   } catch (err) {
     if (strict) throw err
     logger.warn(
@@ -855,61 +941,107 @@ async function evaluateRecordFieldsEntry(
     return null
   }
   if (!record) return null
+
+  // Many-to-many values = the related ids the record links to now.
+  const m2mValues = new Map<string, string[]>()
+  for (const [f, cfg] of m2mByField) {
+    try {
+      const rows = (await database(cfg.junction)
+        .where(cfg.fkToRecord, itemId)
+        .select(cfg.junctionField)) as Array<Record<string, unknown>>
+      m2mValues.set(
+        f,
+        rows.map((r) => r[cfg.junctionField]).filter((v) => v != null).map(String)
+      )
+    } catch (err) {
+      if (strict) throw err
+      m2mValues.set(f, [])
+    }
+  }
+
   const optional = entry.optional === true
+  const isEmptyField = (f: string) =>
+    m2mByField.has(f) ? (m2mValues.get(f)?.length ?? 0) === 0 : isEmptyRequirementValue(record![f])
   // A required entry with everything filled doesn't block; an optional entry
   // is included regardless (its inputs render for editing/copy-to-lines).
-  if (!optional && !requiredFields.some((f) => isEmptyRequirementValue(record![f]))) return null
+  if (!optional && !requiredFields.some(isEmptyField)) return null
 
-  let fieldInfoRows: Array<{ field: string; label: string | null; type: string | null }> = []
+  let fieldInfoRows: Array<{
+    field: string
+    label: string | null
+    type: string | null
+    interface: string | null
+  }> = []
   try {
     fieldInfoRows = (await database('nivaro_fields')
       .where({ collection: recordCollection })
-      .select('field', 'label', 'type')) as typeof fieldInfoRows
+      .select('field', 'label', 'type', 'interface')) as typeof fieldInfoRows
   } catch {
     fieldInfoRows = []
   }
   const infoByField = new Map(fieldInfoRows.map((r) => [r.field, r]))
-
-  // M2O detection so the dialog can render pickers for FK fields.
-  let rels: Array<{ many_field: string; one_collection: string | null }> = []
-  try {
-    rels = (await database('nivaro_relations')
-      .where({ many_collection: recordCollection })
-      .whereNull('junction_field')
-      .select('many_field', 'one_collection')) as typeof rels
-  } catch {
-    rels = []
-  }
-  const m2oByField = new Map(
-    rels.filter((r) => r.one_collection).map((r) => [r.many_field, r.one_collection as string])
-  )
+  const FILE_INTERFACES = new Set(['file', 'file-image'])
 
   const fieldMeta: RequirementFieldMeta[] = requiredFields.map((f) => {
     const info = infoByField.get(f)
     const override = labelsOverride[f]
     const label = (typeof override === 'string' && override.trim()) || info?.label || f
+    const base = { field: f, label, type: info?.type ?? null }
+    const m2m = m2mByField.get(f)
+    if (m2m) {
+      return {
+        ...base,
+        type: 'm2m',
+        kind: FILE_COLLECTIONS.has(m2m.related) ? ('files' as const) : ('m2m' as const),
+        related_collection: asFiles(m2m.related),
+        junction: m2m.junction,
+        fk_to_child: m2m.fkToRecord,
+        junction_field: m2m.junctionField
+      }
+    }
     const related = m2oByField.get(f)
-    return related
-      ? {
-          field: f,
-          label,
-          type: info?.type ?? null,
-          kind: 'm2o' as const,
-          related_collection: related
-        }
-      : { field: f, label, type: info?.type ?? null }
+    if ((related && FILE_COLLECTIONS.has(related)) || FILE_INTERFACES.has(info?.interface ?? '')) {
+      return { ...base, kind: 'file' as const, related_collection: 'nivaro_files' }
+    }
+    return related ? { ...base, kind: 'm2o' as const, related_collection: related } : base
   })
 
   const values: Record<string, unknown> = {}
-  for (const f of requiredFields) values[f] = record[f] ?? null
-
-  // Display labels for m2o values that are already set.
-  const display: Record<string, unknown> = {}
   for (const f of requiredFields) {
-    const related = m2oByField.get(f)
-    const raw = record[f]
-    if (!related || raw == null) continue
+    values[f] = m2mByField.has(f) ? (m2mValues.get(f) ?? []) : (record[f] ?? null)
+  }
+
+  // Display labels: m2o values that are set; file names for file fields.
+  const display: Record<string, unknown> = {}
+  const fileName = async (id: unknown): Promise<string | null> => {
     try {
+      const row = (await database('nivaro_files')
+        .where({ id })
+        .first('title', 'filename_download')) as
+        | { title?: string | null; filename_download?: string | null }
+        | undefined
+      return row ? (row.title || row.filename_download || null) : null
+    } catch {
+      return null
+    }
+  }
+  for (const meta of fieldMeta) {
+    const f = meta.field
+    const raw = values[f]
+    try {
+      if (meta.kind === 'file') {
+        if (raw != null && raw !== '') display[f] = (await fileName(raw)) ?? String(raw)
+        continue
+      }
+      if (meta.kind === 'files') {
+        const ids = Array.isArray(raw) ? raw : []
+        display[f] = await Promise.all(
+          ids.slice(0, 50).map(async (id) => ({ id: String(id), name: (await fileName(id)) ?? String(id) }))
+        )
+        continue
+      }
+      const related = m2oByField.get(f)
+      if (!related || raw == null) continue
       const template = (await getCollection(related))?.display_template ?? null
       const row = (await database(related).where({ id: raw }).first('*')) as
         | Record<string, unknown>
