@@ -1133,7 +1133,15 @@ export const dataIntegrityGuide: DocSection = {
         ],
         [
           'Not an available option',
-          'A cascade-filtered picker holds a value its parent would no longer offer (a sub type outside the chosen project type).'
+          "A cascade-filtered picker holds a value its parent would no longer offer (a sub type outside the chosen project type). Cascades whose filter column is a dotted path or walks a to-many alias (`regions.region`, `filter_via_many`) are compiled per record with the form's own cascade builder, so a project outside the record's zone is found too."
+        ],
+        [
+          'Not an option the picker offers',
+          'A picker narrowed by its own `option_filter` holds a value that filter excludes. A filter with `$parent.<field>` tokens is resolved per record the way the form resolves it — from the record itself when it carries those fields, else from the record a grid shows it under — so "shipping location outside the request\'s region" is found. When a cascade already reported the same field, the cascade finding stands alone.'
+        ],
+        [
+          'Lines breaking a field rule',
+          'A line in an inline grid breaks its own required flag or validation rule ("Line 3: Qty is required") — only on columns the grid shows (its child table layout, with that layout\'s required overrides) and only on the lines its `row_filter` shows. Calendar-relative rules are left to the moment a line is typed. Reported on the parent record under the grid.'
         ],
         [
           'Broken display label',

@@ -6,12 +6,15 @@ import {
   integrityCheckCounts,
   integrityChecksFor
 } from './integrity-checks.js'
+import { buildCascade, type CascadeRule, resolveOptionFilter } from './picker-rules.js'
 import { getLabels } from './queues.js'
 import { reachableGroupedLayouts } from './reachable-layouts.js'
 import { failingLints } from './row-lints.js'
 import {
+  type GridFieldConfig,
   type GridLintConfig,
   type GridRuleConfig,
+  gridFieldConfigsFor,
   gridLintConfigsFor,
   gridRuleConfigsFor,
   parentContextFrom,
@@ -43,6 +46,26 @@ import { applyValidationRule, type ValidationRule } from './validation-rules.js'
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const CHUNK = 500
 const DEFAULT_ROW_CAP = 5000
+/** Distinct per-row filters judged per chunk for one rule (#747): rows that
+ *  share a parent share a filter, so this is rarely reached. */
+const MAX_FILTER_GROUPS = 200
+
+/** #747 — a cascade whose filter column is a dotted path or walks a to-many
+ *  alias: compiled per row through the form's own cascade builder and judged
+ *  with applyFilterToQuery. */
+export interface PathCascadeCheck extends CascadeCheck {
+  rule: CascadeRule
+}
+
+/** #747 — an option_filter with `$parent.<field>` tokens. The tokens read the
+ *  record itself when it carries those fields, else the record a grid shows it
+ *  under (`parentVia` = the row's FK to that record). */
+export interface ParentOptionFilterCheck extends OptionFilterCheck {
+  tokens: string[]
+  parentVia: { fk: string; collection: string } | null
+  /** Token fields that are M2M aliases on the context collection. */
+  aliases: Record<string, { table: string; srcFk: string; tgtFk: string }>
+}
 
 export interface CascadeCheck {
   field: string
@@ -118,7 +141,9 @@ interface CompiledChecks {
   validation: Array<{ field: string; label: string; rules: ValidationRule[] }>
   dateOffsets: DateOffsetCheck[]
   cascades: CascadeCheck[]
+  pathCascades: PathCascadeCheck[]
   optionFilters: OptionFilterCheck[]
+  parentOptionFilters: ParentOptionFilterCheck[]
   /** Display-template parts — a record whose parts all resolve empty renders
    *  as its internal id everywhere labels are used. */
   displayTokens: DisplayToken[]
@@ -128,6 +153,8 @@ interface CompiledChecks {
   /** Inline-grid row lints (`options.row_lints`) — the grid's amber triangle,
    *  judged per saved line. Never auto-fixed. */
   rowLints: RowLintCheck[]
+  /** #817 — inline-grid lines' own required flags + validation rules. */
+  rowFields: RowFieldCheck[]
   /** Extension-registered checks (services/integrity-checks.ts) — judged over
    *  the batch's ids by the extension that owns the domain. */
   external: IntegrityCheck[]
@@ -136,6 +163,10 @@ interface CompiledChecks {
 }
 
 export interface RowLintCheck extends GridLintConfig {
+  lineField: string | null
+}
+
+export interface RowFieldCheck extends GridFieldConfig {
   lineField: string | null
 }
 
@@ -299,7 +330,10 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     requiredFields: [],
     validation: [],
     cascades: [],
+    pathCascades: [],
+    rowFields: [],
     optionFilters: [],
+    parentOptionFilters: [],
     displayTokens: [],
     dateOffsets: [],
     rowRules: [],
@@ -423,15 +457,19 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
         filter_column?: string
         filter_is_m2m?: boolean
         filter_via_many?: boolean
+        value_map?: Record<string, unknown>
+        value_map_default?: unknown
+        show_all_if_no_parent?: boolean
       }>
     }>(f.dependency_config)
     for (const c of dep?.cascade_filters ?? []) {
       if (!c.parent_field || !c.filter_column) continue
-      if (c.filter_column.includes('.') || c.filter_via_many) {
-        out.skipped.push(`${f.field}: cascade via ${c.filter_column} (dotted/via-many path)`)
+      const isPath = c.filter_column.includes('.') || !!c.filter_via_many
+      if (
+        !IDENT.test(c.parent_field) ||
+        !c.filter_column.split('.').every((seg) => IDENT.test(seg))
+      )
         continue
-      }
-      if (!IDENT.test(c.parent_field) || !IDENT.test(c.filter_column)) continue
       // The cascaded field is either a plain M2O column or an M2M alias —
       // an alias's "value" is its junction set, each link checked.
       let target: string | null = null
@@ -473,6 +511,12 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
         check.parentIsM2M = true
         check.parentJunction = parentAlias
       }
+      // #747 — dotted / via-many paths: the form's own cascade builder makes
+      // the filter per row and applyFilterToQuery judges it.
+      if (isPath) {
+        out.pathCascades.push({ ...check, rule: c as CascadeRule })
+        continue
+      }
       // The filter column's mode comes from the TARGET's schema, never from
       // the config flag — the client's filter compiler resolves alias columns
       // transparently, so real configs routinely omit filter_is_m2m on
@@ -505,10 +549,13 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
     }>(f.options)
     const filter = opts?.option_filter
     if (!filter || typeof filter !== 'object' || Array.isArray(filter)) continue
-    if (JSON.stringify(filter).includes('$parent.')) {
-      out.skipped.push(`${f.field}: option_filter reads the parent record ($parent tokens)`)
-      continue
-    }
+    const tokenFields = [
+      ...new Set(
+        [...JSON.stringify(filter).matchAll(/"\$parent\.([A-Za-z_][A-Za-z0-9_]*)"/g)].map(
+          (m) => m[1]
+        )
+      )
+    ]
     const m2o = (await db('nivaro_relations')
       .where({ many_collection: collection, many_field: f.field })
       .whereNull('junction_field')
@@ -568,13 +615,59 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
         })
       }
     }
-    out.optionFilters.push({
+    const base: OptionFilterCheck = {
       field: f.field,
       fieldLabel: labelFor(f.field),
       target: m2o.one_collection,
       filter: filter as Record<string, unknown>,
       pinnedSources
-    })
+    }
+    if (tokenFields.length === 0) {
+      out.optionFilters.push(base)
+      continue
+    }
+    // #747 — which record do the tokens read? The record itself when it
+    // carries every token field (a column or an M2M alias), else the record
+    // a grid shows it under: an FK on this collection whose target has an
+    // O2M alias back over it (it IS a grid child) and carries the fields.
+    const carries = async (ctx: string) => {
+      const aliases: ParentOptionFilterCheck['aliases'] = {}
+      for (const t of tokenFields) {
+        if (t === 'id') continue
+        if (await hasPhysicalColumn(ctx, t)) continue
+        const a = await resolveAlias(ctx, t)
+        if (!a) return null
+        aliases[t] = { table: a.table, srcFk: a.srcFk, tgtFk: a.tgtFk }
+      }
+      return aliases
+    }
+    let parentVia: ParentOptionFilterCheck['parentVia'] = null
+    let aliases = await carries(collection)
+    if (!aliases) {
+      const gridParents = (await db('nivaro_relations')
+        .where({ many_collection: collection })
+        .whereNull('junction_field')
+        .whereNotNull('one_field')
+        .select('many_field', 'one_collection')) as Array<{
+        many_field: string
+        one_collection: string | null
+      }>
+      for (const g of gridParents) {
+        if (!g.one_collection || !IDENT.test(g.one_collection) || !IDENT.test(g.many_field))
+          continue
+        const found = await carries(g.one_collection)
+        if (found) {
+          aliases = found
+          parentVia = { fk: g.many_field, collection: g.one_collection }
+          break
+        }
+      }
+    }
+    if (!aliases) {
+      out.skipped.push(`${f.field}: option_filter reads $parent fields no record carries`)
+      continue
+    }
+    out.parentOptionFilters.push({ ...base, tokens: tokenFields, parentVia, aliases })
   }
 
   // ── inline-grid row rules ────────────────────────────────────────────────
@@ -612,6 +705,12 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
       ? 'line_number'
       : null
     out.rowRules.push({ ...cfg, lineField, childFields })
+  }
+  for (const cfg of await gridFieldConfigsFor(collection).catch(() => [] as GridFieldConfig[])) {
+    const lineField = (await hasPhysicalColumn(cfg.childCollection, 'line_number'))
+      ? 'line_number'
+      : null
+    out.rowFields.push({ ...cfg, lineField })
   }
   for (const cfg of await gridLintConfigsFor(collection).catch(() => [] as GridLintConfig[])) {
     const lineField = (await hasPhysicalColumn(cfg.childCollection, 'line_number'))
@@ -741,14 +840,10 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
     }>(f.dependency_config)
     for (const c of dep?.cascade_filters ?? []) {
       if (!c.parent_field || !c.filter_column) continue
-      if (c.filter_column.includes('.') || c.filter_via_many) e.skipped++
-      else e.cascade++
+      e.cascade++
     }
     const optFilter = parseJson<{ option_filter?: unknown }>(f.options)?.option_filter
-    if (optFilter && typeof optFilter === 'object') {
-      if (JSON.stringify(optFilter).includes('$parent.')) e.skipped++
-      else e.cascade++
-    }
+    if (optFilter && typeof optFilter === 'object') e.cascade++
   }
   // Grids with row rules on ACTIVE grouped layouts — one query, LIKE-narrowed
   // to the handful of assignment rows that carry them.
@@ -835,9 +930,17 @@ async function columnsFor(
     if (!c.childIsM2M) columns.add(c.field)
     if (!c.parentIsM2M) columns.add(c.parent_field)
   }
-  for (const o of checks.optionFilters) {
+  for (const c of checks.pathCascades) {
+    if (!c.childIsM2M) columns.add(c.field)
+    if (!c.parentIsM2M) columns.add(c.parent_field)
+  }
+  for (const o of [...checks.optionFilters, ...checks.parentOptionFilters]) {
     columns.add(o.field)
     for (const p of o.pinnedSources) columns.add(p.childFk)
+  }
+  for (const o of checks.parentOptionFilters) {
+    if (o.parentVia) columns.add(o.parentVia.fk)
+    else for (const t of o.tokens) if (!o.aliases[t]) columns.add(t)
   }
   for (const t of checks.displayTokens) {
     columns.add(t.hops.length > 0 ? t.hops[0].fk : t.leaf)
@@ -1054,8 +1157,74 @@ async function evaluateRows(
     }
     return hits
   }
+  // #747 — dotted / via-many cascades: the form's builder makes each row's
+  // filter; rows that share a filter share one query.
+  const pathCascadeOne = async (c: PathCascadeCheck): Promise<CascadeHit[]> => {
+    if (!c.childIsM2M && !physical.has(c.field)) return []
+    const childSets = new Map<string, Set<string>>()
+    if (c.childIsM2M && c.childJunction) {
+      const j = c.childJunction
+      for (const [k, v] of setsFromLinks(await links(j.table, j.srcFk, j.tgtFk), j.srcFk, j.tgtFk))
+        childSets.set(k, v)
+    } else {
+      for (const row of rows) {
+        const v = row[c.field]
+        if (v != null && v !== '') childSets.set(String(row.id), new Set([String(v)]))
+      }
+    }
+    const parentOf = new Map<string, unknown>()
+    if (c.parentIsM2M && c.parentJunction) {
+      const j = c.parentJunction
+      for (const [k, v] of setsFromLinks(await links(j.table, j.srcFk, j.tgtFk), j.srcFk, j.tgtFk))
+        parentOf.set(k, [...v])
+    } else if (physical.has(c.parent_field)) {
+      for (const row of rows) parentOf.set(String(row.id), row[c.parent_field])
+    } else {
+      return []
+    }
+    const groups = new Map<string, { filter: Record<string, unknown>; rowIds: string[] }>()
+    for (const row of rows) {
+      const id = String(row.id)
+      if (!childSets.get(id)?.size) continue
+      const { filter } = buildCascade([c.rule], () => parentOf.get(id))
+      // No parent value: the picker shows everything — not a failure.
+      if (!filter) continue
+      const key = JSON.stringify(filter)
+      let g = groups.get(key)
+      if (!g) {
+        g = { filter, rowIds: [] }
+        groups.set(key, g)
+      }
+      g.rowIds.push(id)
+    }
+    const { applyFilterToQuery } = await import('./items.js')
+    const hits: CascadeHit[] = []
+    for (const g of [...groups.values()].slice(0, MAX_FILTER_GROUPS)) {
+      const vals = [...new Set(g.rowIds.flatMap((id) => [...(childSets.get(id) ?? [])]))]
+      let available: Set<string>
+      try {
+        const q = db(c.target)
+          .whereIn('id', vals as never[])
+          .select('id')
+        await applyFilterToQuery(q, g.filter, c.target)
+        available = new Set(((await q) as Array<{ id: unknown }>).map((x) => String(x.id)))
+      } catch {
+        return [] // a filter the compiler cannot express is not a data fault
+      }
+      for (const id of g.rowIds) {
+        const bad = [...(childSets.get(id) ?? [])].filter((v) => !available.has(v)).length
+        if (bad > 0) hits.push({ rowId: id, c, bad })
+      }
+    }
+    return hits
+  }
   const cascades = async (): Promise<RecordFinding[]> => {
-    const hits = (await Promise.all(checks.cascades.map(cascadeOne))).flat()
+    const hits = (
+      await Promise.all([
+        ...checks.cascades.map(cascadeOne),
+        ...checks.pathCascades.map(pathCascadeOne)
+      ])
+    ).flat()
     const agg = new Map<
       string,
       { field: string; fieldLabel: string; isM2M: boolean; badCount: number; parents: string[] }
@@ -1186,6 +1355,63 @@ async function evaluateRows(
     ).flat()
 
   // ── option_filter availability: the picker's own narrowing ──────────────
+  // Per-row pinned defaults: row → parent (childFk) → parent_field → the
+  // parent_collection record's source_field.
+  const pinnedDefaults = async (c: OptionFilterCheck): Promise<Map<string, Set<string>>> => {
+    const pinnedByRow = new Map<string, Set<string>>()
+    for (const src of c.pinnedSources) {
+      if (!physical.has(src.childFk)) continue
+      const parentIds = [
+        ...new Set(
+          rows
+            .map((r) => r[src.childFk])
+            .filter((v) => v != null && v !== '')
+            .map(String)
+        )
+      ]
+      if (parentIds.length === 0) continue
+      // Which collection holds the parent rows? The child's FK target.
+      const childRel = (await db('nivaro_relations')
+        .where({ many_collection: collection, many_field: src.childFk })
+        .whereNull('junction_field')
+        .first('one_collection')
+        .catch(() => null)) as { one_collection: string | null } | null
+      if (!childRel?.one_collection || !IDENT.test(childRel.one_collection)) continue
+      const parents = (await selectInChunks(parentIds, 1500, (chunk) =>
+        db(childRel.one_collection as string)
+          .whereIn('id', chunk as never[])
+          .select('id', src.parentField)
+      ).catch(() => [])) as Array<Record<string, unknown>>
+      const linkIds = [
+        ...new Set(
+          parents
+            .map((p) => p[src.parentField])
+            .filter((v) => v != null)
+            .map(String)
+        )
+      ]
+      if (linkIds.length === 0) continue
+      const linked = (await selectInChunks(linkIds, 1500, (chunk) =>
+        db(src.parentCollection)
+          .whereIn('id', chunk as never[])
+          .select('id', src.sourceField)
+      ).catch(() => [])) as Array<Record<string, unknown>>
+      const defaultOf = new Map(linked.map((l) => [String(l.id), l[src.sourceField]]))
+      const parentLink = new Map(parents.map((p) => [String(p.id), p[src.parentField]]))
+      for (const row of rows) {
+        const pid = row[src.childFk]
+        if (pid == null) continue
+        const link = parentLink.get(String(pid))
+        const def = link == null ? null : defaultOf.get(String(link))
+        if (def == null || def === '') continue
+        const key = String(row.id)
+        if (!pinnedByRow.has(key)) pinnedByRow.set(key, new Set())
+        pinnedByRow.get(key)?.add(String(def))
+      }
+    }
+    return pinnedByRow
+  }
+
   const optionFilters = async (): Promise<RecordFinding[]> => {
     const out: RecordFinding[] = []
     if (checks.optionFilters.length === 0) return out
@@ -1211,59 +1437,7 @@ async function evaluateRows(
       } catch {
         continue // a filter the compiler cannot express is not a data fault
       }
-      // Per-row pinned defaults: row → parent (childFk) → parent_field →
-      // the parent_collection record's source_field.
-      const pinnedByRow = new Map<string, Set<string>>()
-      for (const src of c.pinnedSources) {
-        if (!physical.has(src.childFk)) continue
-        const parentIds = [
-          ...new Set(
-            rows
-              .map((r) => r[src.childFk])
-              .filter((v) => v != null && v !== '')
-              .map(String)
-          )
-        ]
-        if (parentIds.length === 0) continue
-        // Which collection holds the parent rows? The child's FK target.
-        const childRel = (await db('nivaro_relations')
-          .where({ many_collection: collection, many_field: src.childFk })
-          .whereNull('junction_field')
-          .first('one_collection')
-          .catch(() => null)) as { one_collection: string | null } | null
-        if (!childRel?.one_collection || !IDENT.test(childRel.one_collection)) continue
-        const parents = (await selectInChunks(parentIds, 1500, (chunk) =>
-          db(childRel.one_collection as string)
-            .whereIn('id', chunk as never[])
-            .select('id', src.parentField)
-        ).catch(() => [])) as Array<Record<string, unknown>>
-        const linkIds = [
-          ...new Set(
-            parents
-              .map((p) => p[src.parentField])
-              .filter((v) => v != null)
-              .map(String)
-          )
-        ]
-        if (linkIds.length === 0) continue
-        const linked = (await selectInChunks(linkIds, 1500, (chunk) =>
-          db(src.parentCollection)
-            .whereIn('id', chunk as never[])
-            .select('id', src.sourceField)
-        ).catch(() => [])) as Array<Record<string, unknown>>
-        const defaultOf = new Map(linked.map((l) => [String(l.id), l[src.sourceField]]))
-        const parentLink = new Map(parents.map((p) => [String(p.id), p[src.parentField]]))
-        for (const row of rows) {
-          const pid = row[src.childFk]
-          if (pid == null) continue
-          const link = parentLink.get(String(pid))
-          const def = link == null ? null : defaultOf.get(String(link))
-          if (def == null || def === '') continue
-          const key = String(row.id)
-          if (!pinnedByRow.has(key)) pinnedByRow.set(key, new Set())
-          pinnedByRow.get(key)?.add(String(def))
-        }
-      }
+      const pinnedByRow = await pinnedDefaults(c)
       for (const row of rows) {
         const v = row[c.field]
         if (v == null || v === '') continue
@@ -1275,6 +1449,113 @@ async function evaluateRows(
           rule: 'option-filter',
           message: `${c.fieldLabel} holds a value the picker no longer offers`
         })
+      }
+    }
+    return out
+  }
+
+  // #747 — `$parent` option filters: each row's filter is resolved off the
+  // record the picker reads (the row itself, or the grid's parent record),
+  // with the form's own token rules; rows sharing a filter share a query.
+  const parentOptionFilters = async (): Promise<RecordFinding[]> => {
+    const out: RecordFinding[] = []
+    if (checks.parentOptionFilters.length === 0) return out
+    const { applyFilterToQuery } = await import('./items.js')
+    for (const c of checks.parentOptionFilters) {
+      if (!physical.has(c.field)) continue
+      const valued = rows.filter((r) => r[c.field] != null && r[c.field] !== '')
+      if (valued.length === 0) continue
+      // Context record per row: its id, plain token columns, alias id sets.
+      const ctxIdOf = new Map<string, string | null>()
+      let ctxRows: Map<string, Record<string, unknown>>
+      if (c.parentVia) {
+        const via = c.parentVia
+        if (!physical.has(via.fk)) continue
+        const pids = [
+          ...new Set(
+            valued
+              .map((r) => r[via.fk])
+              .filter((v) => v != null && v !== '')
+              .map(String)
+          )
+        ]
+        const plain = c.tokens.filter((t) => t !== 'id' && !c.aliases[t])
+        const fetched = pids.length
+          ? ((await selectInChunks(pids, 1500, (chunk) =>
+              db(via.collection)
+                .whereIn('id', chunk as never[])
+                .select('id', ...plain)
+            )) as Array<Record<string, unknown>>)
+          : []
+        ctxRows = new Map(fetched.map((p) => [String(p.id), p]))
+        for (const r of valued) {
+          const pid = r[via.fk]
+          ctxIdOf.set(String(r.id), pid == null || pid === '' ? null : String(pid))
+        }
+      } else {
+        ctxRows = new Map(valued.map((r) => [String(r.id), r]))
+        for (const r of valued) ctxIdOf.set(String(r.id), String(r.id))
+      }
+      const ctxIds = [...new Set([...ctxIdOf.values()].filter((v): v is string => !!v))]
+      const aliasSets = new Map<string, Map<string, Set<string>>>()
+      for (const [t, j] of Object.entries(c.aliases)) {
+        const linked = ctxIds.length
+          ? ((await selectInChunks(ctxIds, 1500, (chunk) =>
+              db(j.table)
+                .whereIn(j.srcFk, chunk as never[])
+                .select(j.srcFk, j.tgtFk)
+            )) as Array<Record<string, unknown>>)
+          : []
+        aliasSets.set(t, setsFromLinks(linked, j.srcFk, j.tgtFk))
+      }
+      const groups = new Map<string, { filter: Record<string, unknown>; rowIds: string[] }>()
+      for (const r of valued) {
+        const ctxId = ctxIdOf.get(String(r.id))
+        if (!ctxId) continue // no parent record: the picker has nothing to read
+        const base = ctxRows.get(ctxId) ?? {}
+        const draft: Record<string, unknown> = { ...base }
+        for (const [t, sets] of aliasSets) {
+          // The form merges a settled alias as its id array — empty included.
+          draft[t] = [...(sets.get(ctxId) ?? [])].map((v) => (/^\d+$/.test(v) ? Number(v) : v))
+        }
+        const filter = resolveOptionFilter(c.filter, draft, ctxId)
+        if (!filter) continue // every clause pruned: the picker shows all
+        const key = JSON.stringify(filter)
+        let g = groups.get(key)
+        if (!g) {
+          g = { filter, rowIds: [] }
+          groups.set(key, g)
+        }
+        g.rowIds.push(String(r.id))
+      }
+      if (groups.size === 0) continue
+      const rowById = new Map(valued.map((r) => [String(r.id), r]))
+      const pinnedByRow = await pinnedDefaults(c)
+      for (const g of [...groups.values()].slice(0, MAX_FILTER_GROUPS)) {
+        const vals = [...new Set(g.rowIds.map((id) => String(rowById.get(id)?.[c.field])))]
+        let available: Set<string>
+        try {
+          const q = db(c.target)
+            .whereIn('id', vals as never[])
+            .select('id')
+          await applyFilterToQuery(q, g.filter, c.target)
+          available = new Set(((await q) as Array<{ id: unknown }>).map((x) => String(x.id)))
+        } catch {
+          break // a filter the compiler cannot express is not a data fault
+        }
+        for (const id of g.rowIds) {
+          const sv = String(rowById.get(id)?.[c.field])
+          if (available.has(sv) || pinnedByRow.get(id)?.has(sv)) continue
+          out.push({
+            item_id: id,
+            field: c.field,
+            rule: 'option-filter',
+            message: `${c.fieldLabel} holds a value the picker no longer offers for this record's ${c.tokens
+              .filter((t) => t !== 'id')
+              .map(label)
+              .join(', ')}`
+          })
+        }
       }
     }
     return out
@@ -1298,16 +1579,40 @@ async function evaluateRows(
       )
     ).flat()
 
-  const [m2m, cas, opt, disp, rr, rl, ext] = await Promise.all([
+  // ── #817 inline-grid lines: their own required flags + validation ────
+  const rowFields = async (): Promise<RecordFinding[]> =>
+    (
+      await Promise.all(
+        checks.rowFields.map(async (fc) => {
+          try {
+            return await evaluateRowFieldCheck(fc, rows)
+          } catch (err) {
+            console.warn(
+              `conformance row-field check skipped for ${collection}.${fc.aliasField}:`,
+              err
+            )
+            return []
+          }
+        })
+      )
+    ).flat()
+
+  const [m2m, cas, opt, popt, disp, rr, rl, rf, ext] = await Promise.all([
     m2mRequired(),
     cascades(),
     optionFilters(),
+    parentOptionFilters(),
     display(),
     rowRules(),
     rowLints(),
+    rowFields(),
     external()
   ])
-  return [...scalar, ...m2m, ...cas, ...opt, ...disp, ...rr, ...rl, ...ext]
+  // A field narrowed both by a cascade and by a `$parent` option filter over
+  // the same parent reports the fault once — as the cascade.
+  const cascaded = new Set(cas.map((f) => `${f.item_id}|${f.field}`))
+  const poptOnly = popt.filter((f) => !cascaded.has(`${f.item_id}|${f.field}`))
+  return [...scalar, ...m2m, ...cas, ...opt, ...poptOnly, ...disp, ...rr, ...rl, ...rf, ...ext]
 }
 
 // compileChecks walks field config + layouts + relations (~120 reads, 6s
@@ -1379,11 +1684,14 @@ export async function hasChecks(collection: string): Promise<boolean> {
     checks.requiredFields.length +
       checks.validation.length +
       checks.cascades.length +
+      checks.pathCascades.length +
       checks.optionFilters.length +
+      checks.parentOptionFilters.length +
       checks.displayTokens.length +
       checks.dateOffsets.length +
       checks.rowRules.length +
       checks.rowLints.length +
+      checks.rowFields.length +
       checks.external.length >
     0
   )
@@ -1690,6 +1998,58 @@ async function evaluate(
  * line naming each stored-vs-derived disagreement. FK values are shown as
  * labels so "Task is X — rules derive Y" reads like the form does.
  */
+async function evaluateRowFieldCheck(
+  fc: RowFieldCheck,
+  parents: Array<Record<string, unknown>>
+): Promise<RecordFinding[]> {
+  const out: RecordFinding[] = []
+  const parentIds = parents.map((p) => String(p.id))
+  const { applyFilterToQuery } = await import('./items.js')
+  const cols = [
+    ...new Set([
+      'id',
+      fc.fkField,
+      ...(fc.lineField ? [fc.lineField] : []),
+      ...fc.fields.map((f) => f.field)
+    ])
+  ]
+  const children = await selectInChunks(parentIds, 1000, async (ids) => {
+    const q = db(fc.childCollection).whereIn(fc.fkField, ids).orderBy('id').select(cols)
+    if (fc.rowFilter) await applyFilterToQuery(q, fc.rowFilter, fc.childCollection)
+    return (await q) as Array<Record<string, unknown>>
+  })
+  for (const line of children) {
+    const fails: string[] = []
+    for (const f of fc.fields) {
+      if (f.required) {
+        const msg = applyValidationRule({ type: 'required' }, line[f.field], f.label)
+        if (msg) {
+          fails.push(msg)
+          continue
+        }
+      }
+      for (const rule of f.rules) {
+        const msg = applyValidationRule(rule as unknown as ValidationRule, line[f.field], f.label, line)
+        if (msg) {
+          fails.push(msg)
+          break
+        }
+      }
+    }
+    if (fails.length === 0) continue
+    const lineNo = fc.lineField ? line[fc.lineField] : null
+    const head =
+      lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(line.id)}`
+    out.push({
+      item_id: String(line[fc.fkField]),
+      field: fc.aliasField,
+      rule: 'row-field',
+      message: `${head}: ${fails.join('; ')}`
+    })
+  }
+  return out
+}
+
 async function evaluateRowLintCheck(
   lc: RowLintCheck,
   parents: Array<Record<string, unknown>>

@@ -97,6 +97,14 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
   'row-lint': {
     label: 'Lines failing a lint',
     cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+  },
+  'row-field': {
+    label: 'Lines breaking a field rule',
+    cls: 'bg-red-500/10 text-red-700 dark:text-red-400'
+  },
+  'option-filter': {
+    label: 'Not an option the picker offers',
+    cls: 'bg-purple-500/10 text-purple-700 dark:text-purple-400'
   }
 }
 

@@ -279,3 +279,161 @@ export async function planRowRuleChanges(opts: {
   }
   return plan
 }
+
+/** #817 — a grid's per-line field rules: the child collection's `required`
+ *  flags and `validation_rules`, gated on what the grid actually shows (its
+ *  child table layout, when it has one) and narrowed by its `row_filter`. */
+export interface GridFieldCheck {
+  field: string
+  label: string
+  required: boolean
+  rules: Array<Record<string, unknown>>
+}
+
+export interface GridFieldConfig {
+  aliasField: string
+  label: string | null
+  layoutId: number
+  parentCollection: string
+  childCollection: string
+  fkField: string
+  /** The grid's own `row_filter` — only the lines it shows are judged. */
+  rowFilter: Record<string, unknown> | null
+  fields: GridFieldCheck[]
+}
+
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Inline-table grids on the parent's ACTIVE grouped layout whose lines carry
+ *  a required flag or a validation rule on a column the grid shows. */
+export async function gridFieldConfigsFor(parentCollection: string): Promise<GridFieldConfig[]> {
+  const layout = (await db('nivaro_collection_layouts')
+    .where({ collection: parentCollection, layout_type: 'grouped', is_active: true })
+    .first('id')) as { id: number } | undefined
+  if (!layout) return []
+  const [assignments, parentFields, rels] = await Promise.all([
+    db('nivaro_layout_field_assignments')
+      .where('layout_id', layout.id)
+      .where('is_visible', true)
+      .select('field', 'label_override', 'overrides') as Promise<
+      Array<{ field: string; label_override: string | null; overrides: string | null }>
+    >,
+    db('nivaro_fields')
+      .where('collection', parentCollection)
+      .select('field', 'interface', 'options') as Promise<
+      Array<{ field: string; interface: string | null; options: unknown }>
+    >,
+    db('nivaro_relations')
+      .where('one_collection', parentCollection)
+      .whereNull('junction_field')
+      .select('one_field', 'many_collection', 'many_field') as Promise<
+      Array<{ one_field: string | null; many_collection: string; many_field: string }>
+    >
+  ])
+  const fieldRow = new Map(parentFields.map((f) => [f.field, f]))
+  const out: GridFieldConfig[] = []
+  for (const a of assignments) {
+    const overrides = parseJson<{
+      label?: string
+      interface?: string
+      options?: Record<string, unknown>
+    }>(a.overrides)
+    const base = fieldRow.get(a.field)
+    const baseOpts = parseJson<Record<string, unknown>>(base?.options) ?? {}
+    const iface = overrides?.interface ?? base?.interface
+    if (iface !== 'inline-table') continue
+    const opts = { ...baseOpts, ...(overrides?.options ?? {}) }
+    // A catalog picker is not a line grid.
+    if (opts.catalog_mode) continue
+    const rel = rels.find((r) => r.one_field === a.field || r.many_collection === a.field)
+    if (!rel || !IDENT_RE.test(rel.many_collection) || !IDENT_RE.test(rel.many_field)) continue
+    const child = rel.many_collection
+    const physical = new Set(
+      (
+        (await db('information_schema.columns')
+          .where('table_name', child)
+          .pluck('column_name')) as string[]
+      ).map((c) => c.toLowerCase())
+    )
+    const childFields = (await db('nivaro_fields')
+      .where('collection', child)
+      .select('field', 'label', 'required', 'hidden', 'validation_rules', 'readonly')) as Array<{
+      field: string
+      label: string | null
+      required: unknown
+      hidden: unknown
+      readonly: unknown
+      validation_rules: unknown
+    }>
+    // What the grid shows: its child table layout's visible assignments (with
+    // their own required overrides), else every non-hidden field.
+    const tableLayoutId = Number(opts.layout_id) || null
+    const shown = new Map<string, { required?: boolean; label?: string }>()
+    if (tableLayoutId) {
+      const tl = (await db('nivaro_layout_field_assignments')
+        .where('layout_id', tableLayoutId)
+        .where('is_visible', true)
+        .select('field', 'label_override', 'overrides')) as Array<{
+        field: string
+        label_override: string | null
+        overrides: string | null
+      }>
+      for (const t of tl) {
+        const o = parseJson<{ required?: boolean; label?: string; readonly?: boolean }>(t.overrides)
+        if (o?.readonly) continue
+        shown.set(t.field, {
+          required: o?.required,
+          label: o?.label || t.label_override || undefined
+        })
+      }
+    } else {
+      for (const f of childFields) {
+        if (!(f.hidden === true || f.hidden === 1)) shown.set(f.field, {})
+      }
+    }
+    const fields: GridFieldCheck[] = []
+    for (const f of childFields) {
+      if (f.field === 'id' || f.field === rel.many_field) continue
+      if (!IDENT_RE.test(f.field) || !physical.has(f.field.toLowerCase())) continue
+      if (f.readonly === true || f.readonly === 1) continue
+      const s = shown.get(f.field)
+      if (!s) continue
+      const rules = (parseJson<Array<Record<string, unknown>>>(f.validation_rules) ?? []).filter(
+        // Calendar-relative rules judge the day a line is typed, not a saved
+        // line forever after.
+        (r) => r && typeof r === 'object' && !String(r.type ?? '').includes('days_from_today')
+      )
+      const required = s.required ?? (f.required === true || f.required === 1)
+      if (!required && rules.length === 0) continue
+      fields.push({
+        field: f.field,
+        label:
+          s.label || f.label || f.field.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        required,
+        rules
+      })
+    }
+    if (fields.length === 0) continue
+    const rf = opts.row_filter
+    // A row_filter that reads the open record cannot be judged here.
+    if (rf && JSON.stringify(rf).includes('$parent.')) continue
+    let rowFilter: Record<string, unknown> | null = null
+    if (rf && typeof rf === 'object' && !Array.isArray(rf)) {
+      rowFilter = {}
+      for (const [k, v] of Object.entries(rf as Record<string, unknown>)) {
+        rowFilter[k] = v !== null && typeof v === 'object' ? v : { _eq: v }
+      }
+    }
+    out.push({
+      aliasField: a.field,
+      label: overrides?.label || a.label_override || null,
+      layoutId: layout.id,
+      parentCollection,
+      childCollection: child,
+      fkField: rel.many_field,
+      rowFilter,
+      fields
+    })
+  }
+  return out
+}

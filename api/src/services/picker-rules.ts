@@ -24,7 +24,7 @@
  */
 import { db } from '../db/index.js'
 
-interface CascadeRule {
+export interface CascadeRule {
   parent_field: string
   filter_column: string
   filter_is_m2m?: boolean
@@ -230,7 +230,7 @@ function resolveTokens(
   return { v: node, ok: true }
 }
 
-function resolveOptionFilter(
+export function resolveOptionFilter(
   filter: Record<string, unknown>,
   row: Record<string, unknown>,
   id: unknown
@@ -251,7 +251,7 @@ function resolveOptionFilter(
  *  buildCascadeFilter without the inherited-parent-filter branch). A parent
  *  the picker requires (`show_all_if_no_parent: false`) that is empty is
  *  returned so the refusal can name it. */
-function buildCascade(
+export function buildCascade(
   rules: CascadeRule[],
   parentValue: (f: string) => unknown
 ): { filter: Record<string, unknown> | null; missingRequired: string[] } {
