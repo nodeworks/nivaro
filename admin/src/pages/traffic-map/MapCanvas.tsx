@@ -385,7 +385,9 @@ function buildData(
         partner: false
       }
     })
-    if (view.expanded && folded.length) {
+    if (view.expanded) {
+      // the expanded group keeps a node (its members past MAX_CALLERS fold into it) so it can be
+      // collapsed again
       for (const [k] of folded) callerNode.set(k, view.expanded)
       perGroup.set(view.expanded, {
         rps: folded.reduce((a, [, r]) => a + r, 0),
@@ -396,8 +398,13 @@ function buildData(
     callers.push(
       ...groups.map(([g, v]) => ({
         id: g,
-        label: g === view.expanded ? `Other ${appGroupLabel(g)}` : appGroupLabel(g),
-        sub: `${plural(v.n, g === 'app:cron' ? 'source' : 'caller')} · select to expand`,
+        label: g === view.expanded ? `${appGroupLabel(g)}, expanded` : appGroupLabel(g),
+        sub:
+          g === view.expanded
+            ? v.n
+              ? `${plural(v.n, 'more')} · select to collapse`
+              : 'select to collapse'
+            : `${plural(v.n, g === 'app:cron' ? 'source' : 'caller')} · select to expand`,
         rps: v.rps,
         partner: false,
         kind: 'group'

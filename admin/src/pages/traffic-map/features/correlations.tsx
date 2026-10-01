@@ -187,7 +187,7 @@ register(canvasLayers, {
       if (!a || !b || (a.x === b.x && a.y === b.y)) continue
       const hot =
         active?.kind === 'entity' && (active.id === p.a || active.id === p.b) ? true : !active
-      const bulge = 26 + Math.min(70, Math.abs(a.y - b.y) * 0.18)
+      const bulge = 40 + Math.min(70, Math.abs(a.y - b.y) * 0.18)
       ctx.globalAlpha = hot ? 0.9 : 0.35
       ctx.strokeStyle = tokens.inferred
       ctx.lineWidth = 1.4 + p.r

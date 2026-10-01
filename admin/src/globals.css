@@ -573,7 +573,7 @@ tr.nvr-row-flash > td {
 /* Summary strip, secondary row: the registry tiles render the primary tile shape; here their
    figures step down a size so the built-in six stay the primary read. */
 .traffic-map [data-tm-strip-more] > * {
-  flex: 1 1 210px;
+  flex: 1 1 180px;
 }
 .traffic-map [data-tm-strip-more] .text-\[22px\] {
   font-size: 17px;
