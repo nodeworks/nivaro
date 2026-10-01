@@ -127,7 +127,6 @@ export const obsHealthDashboard: DocSection = {
 {
   "db":        { "ok": true, "latency_ms": 4 },
   "redis":     { "ok": true },
-  "inngest":   { "ok": true },
   "migrations":{ "ok": true, "pending": 0 },
   "sockets":   { "connected": 12 }
 }`

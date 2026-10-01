@@ -589,22 +589,6 @@ export async function opsDbRoutes(app: FastifyInstance) {
     }
   })
 
-  // #311 — Inngest panel: best-effort read of the self-hosted Inngest API.
-  app.get('/inngest', async (_req, reply) => {
-    const base = process.env.INNGEST_API_URL || 'http://localhost:8288'
-    try {
-      const ctrl = new AbortController()
-      const t = setTimeout(() => ctrl.abort(), 4000)
-      const res = await fetch(`${base}/v1/events?limit=20`, { signal: ctrl.signal })
-      clearTimeout(t)
-      if (!res.ok) return reply.send({ unavailable: `Inngest answered ${res.status}` })
-      const body = (await res.json()) as { data?: unknown[] }
-      return reply.send({ data: { base, recent_events: (body.data ?? []).slice(0, 20) } })
-    } catch {
-      return reply.send({ unavailable: `Inngest unreachable at ${base} (set INNGEST_API_URL)` })
-    }
-  })
-
   // #457 — dangling-FK repair wizard: the nightly sweep detects; these routes
   // list live and FIX in bulk. Repoint is deliberately NOT offered — picking a
   // new parent is a data decision, not a repair.

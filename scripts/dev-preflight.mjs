@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Dev launcher — start only the pieces of the stack that are not already up.
 //
-// `pnpm dev` used to run redis + inngest + api + admin unconditionally under
+// `pnpm dev` used to run redis + api + admin unconditionally under
 // concurrently with --kill-others-on-fail: a hand-started API on 3055 made the
 // new API child die on EADDRINUSE, which killed everything else, and the
 // natural next move (kill the old one) threw away the session someone was
@@ -24,7 +24,6 @@ const MODE = (process.env.DEV_PREFLIGHT ?? 'attach').toLowerCase()
 
 const PIECES = [
   { name: 'redis', port: 6379, color: 'cyan', cmd: 'pnpm dev:redis' },
-  { name: 'inngest', port: 8288, color: 'magenta', cmd: 'wait-on tcp:6379 && pnpm dev:inngest' },
   { name: 'api', port: 3055, color: 'blue', cmd: 'wait-on tcp:6379 && pnpm dev:api' },
   { name: 'admin', port: 3056, color: 'green', cmd: 'pnpm --filter @nivaro/admin dev' }
 ]

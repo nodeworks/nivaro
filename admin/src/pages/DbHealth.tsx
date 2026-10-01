@@ -230,7 +230,6 @@ export function DbHealthPage() {
     )
   const heat =
     useOps<Array<{ hour: number; path: string; avg_ms: number; n: number }>>('/ops-db/latency-heat')
-  const inngest = useOps<{ base: string; recent_events: unknown[] }>('/ops-db/inngest')
   const danglingFks = useOps<{
     checked_relations: number
     dangling_relations: number
@@ -933,18 +932,6 @@ export function DbHealthPage() {
                   </code>
                 ])}
               />
-            </Panel>
-
-            <Panel title='Inngest' sub='Self-hosted Inngest reachability + recent events (#311)'>
-              {inngest.data?.unavailable ? (
-                <Unavailable reason={inngest.data.unavailable} />
-              ) : (
-                <p className='text-[12.5px]'>
-                  Reachable at{' '}
-                  <code className='font-mono text-[11.5px]'>{inngest.data?.data?.base}</code> ·{' '}
-                  {(inngest.data?.data?.recent_events ?? []).length} recent event(s)
-                </p>
-              )}
             </Panel>
           </div>
 

@@ -145,7 +145,7 @@ class SettingsS3Driver implements StorageDriver {
         Authorization: `AWS4-HMAC-SHA256 Credential=${this.cfg.access_key_id}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
       },
       // Node's fetch accepts a Buffer body directly.
-      ...(body ? { body: body as unknown as BodyInit } : {}),
+      ...(body ? { body: body as unknown as RequestInit['body'] } : {}),
       signal: AbortSignal.timeout(30_000)
     })
   }
@@ -256,7 +256,7 @@ class SettingsAzureBlobDriver implements StorageDriver {
     return fetch(this.url(key), {
       method,
       headers,
-      ...(body ? { body: body as unknown as BodyInit } : {}),
+      ...(body ? { body: body as unknown as RequestInit['body'] } : {}),
       signal: AbortSignal.timeout(30_000)
     })
   }

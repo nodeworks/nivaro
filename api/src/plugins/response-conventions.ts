@@ -23,7 +23,6 @@ const ENVELOPE_EXEMPT: RegExp[] = [
   /^\/api\/graphql/,
   /^\/api\/analytics\/pageview/, // public tracker contract: bare { id }
   /^\/api\/widget/,
-  /^\/api\/inngest/,
   /^\/api\/scim\//, // SCIM RFC shapes
   /^\/api\/dev-tools\//,
   /^\/api\/zapier\//,

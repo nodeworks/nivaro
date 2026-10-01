@@ -19,7 +19,6 @@ import { apiLoggerPlugin } from './plugins/api-logger.js'
 import { chainPlugin } from './plugins/chain.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
-import { inngestPlugin } from './plugins/inngest.js'
 import { legacyCompatRoutes } from './plugins/legacy-compat.js'
 import { rateLimitPlugin } from './plugins/rate-limit.js'
 import { redisPlugin } from './plugins/redis.js'
@@ -305,9 +304,6 @@ export async function buildServer() {
     })()
   }
 
-  // ─── Inngest ──────────────────────────────────────────────────────────────
-  await app.register(inngestPlugin)
-
   // ─── Cron (self-hosted only) ───────────────────────────────────────────────
   // In cloud mode, background crons use the static DB (no request context).
   // Per-tenant cron scheduling is handled by the cloud provisioning system.
@@ -536,7 +532,6 @@ export async function buildServer() {
       loadExtensions({
         app,
         database: db,
-        inngest: app.inngest,
         logger: app.log,
         callExternalApi
       })
@@ -563,13 +558,12 @@ export async function buildServer() {
   }
 
   // ─── Cloud extensions ─────────────────────────────────────────────────────
-  // Loaded AFTER cron + inngest plugins so ctx.app.cron and app.inngest are available.
+  // Loaded AFTER the cron plugin so ctx.app.cron is available.
   if (process.env.CLOUD_META_DB_URL) {
     setApp(app)
     await loadCloudExtensions({
       app,
       database: db,
-      inngest: app.inngest,
       logger: app.log,
       callExternalApi,
       cloud: {

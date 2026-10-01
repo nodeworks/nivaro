@@ -1467,7 +1467,7 @@ this.emitFile({ type: 'asset', fileName: 'version.json',
     },
     {
       type: 'p',
-      text: '`pnpm dev` runs `scripts/dev-preflight.mjs`: it asks each port first (Redis 6379, Inngest 8288, API 3055, admin 3056) and starts only the pieces nothing is listening on, naming what it attached to. It never stops a process it did not start — a hand-started API keeps serving, and edits still reload through its own watch. Orphaned watchers (`vite build --watch`, `tsc --watch`, `tsx watch` whose parent shell is gone) are reported with their pid because they rewrite `dist` from an old checkout; stopping one is your call. `pnpm dev:check` reports without launching; `pnpm dev:all` is the old unconditional launcher; `DEV_PREFLIGHT=off pnpm dev` skips the port check.'
+      text: '`pnpm dev` runs `scripts/dev-preflight.mjs`: it asks each port first (Redis 6379, API 3055, admin 3056) and starts only the pieces nothing is listening on, naming what it attached to. It never stops a process it did not start — a hand-started API keeps serving, and edits still reload through its own watch. Orphaned watchers (`vite build --watch`, `tsc --watch`, `tsx watch` whose parent shell is gone) are reported with their pid because they rewrite `dist` from an old checkout; stopping one is your call. `pnpm dev:check` reports without launching; `pnpm dev:all` is the old unconditional launcher; `DEV_PREFLIGHT=off pnpm dev` skips the port check.'
     }
   ]
 }

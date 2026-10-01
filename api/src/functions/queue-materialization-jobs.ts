@@ -1,5 +1,4 @@
 import { db } from '../db/index.js'
-import { inngest } from '../plugins/inngest.js'
 import {
   type AtRiskRuleRow,
   evaluateRows,
@@ -22,14 +21,104 @@ import {
 } from '../services/queues.js'
 import type { User } from '../types.js'
 
+// ── Running a backfill ───────────────────────────────────────────────────────
+//
+// A backfill runs in the process that asked for it, recorded as a job run
+// (kind 'backfill') on the Background Jobs console, and can be cancelled from
+// there between sources and chunks.
+//
+// One backfill per queue at a time, across every process: a Redis lock
+// (`nvr:queue-backfill:<queue>`) when Redis is attached, an in-process set
+// otherwise. A request that arrives while one runs is not dropped — it marks
+// the queue for one more pass, which starts when the running one finishes, so
+// a source edit made mid-run always lands in the cache.
+
+const BACKFILL_LOCK_MS = 30 * 60_000
+const runningHere = new Set<string>()
+const rerunHere = new Set<string>()
+
+interface LockRedis {
+  set(...args: unknown[]): Promise<unknown>
+  del(key: string): Promise<unknown>
+  getdel?(key: string): Promise<string | null>
+  get(key: string): Promise<string | null>
+}
+
+async function backfillRedis(): Promise<LockRedis | null> {
+  try {
+    const { getApp } = await import('../services/io-holder.js')
+    return ((getApp() as { redis?: LockRedis } | null)?.redis ?? null) as LockRedis | null
+  } catch {
+    return null
+  }
+}
+
+async function takeBackfillLock(queueId: string): Promise<boolean> {
+  if (runningHere.has(queueId)) return false
+  const redis = await backfillRedis()
+  if (redis) {
+    try {
+      const ok = await redis.set(`nvr:queue-backfill:${queueId}`, '1', 'PX', BACKFILL_LOCK_MS, 'NX')
+      if (ok !== 'OK') return false
+    } catch {
+      // Redis unreachable: fall back to this process's own guard.
+    }
+  }
+  runningHere.add(queueId)
+  return true
+}
+
+async function markRerun(queueId: string): Promise<void> {
+  rerunHere.add(queueId)
+  const redis = await backfillRedis()
+  await redis
+    ?.set(`nvr:queue-backfill:rerun:${queueId}`, '1', 'PX', BACKFILL_LOCK_MS)
+    .catch(() => {})
+}
+
+/** Release the lock; true when another pass was asked for meanwhile. */
+async function releaseBackfillLock(queueId: string): Promise<boolean> {
+  runningHere.delete(queueId)
+  let again = rerunHere.delete(queueId)
+  const redis = await backfillRedis()
+  if (redis) {
+    try {
+      const flag = `nvr:queue-backfill:rerun:${queueId}`
+      const v = await redis.get(flag)
+      if (v) {
+        again = true
+        await redis.del(flag)
+      }
+      await redis.del(`nvr:queue-backfill:${queueId}`)
+    } catch {
+      /* the lock expires on its own */
+    }
+  }
+  return again
+}
+
+/** Start (or queue one more pass of) a queue's backfill. Never throws; the
+ *  work runs in the background and is recorded as a job run. */
 export async function enqueueQueueMaterializationBackfill(queueId: string): Promise<void> {
   try {
-    await inngest.send({ name: 'queues/materialization.backfill', data: { queueId } })
+    if (!(await takeBackfillLock(queueId))) {
+      await markRerun(queueId)
+      return
+    }
+    void (async () => {
+      let again = true
+      while (again) {
+        try {
+          await runQueueMaterializationBackfill(queueId)
+        } catch (err) {
+          console.warn(`Queue materialization backfill failed for ${queueId}`, err)
+        }
+        again = await releaseBackfillLock(queueId)
+        if (again && !(await takeBackfillLock(queueId))) again = false
+      }
+    })()
   } catch (err) {
-    console.warn(
-      `Queue materialization backfill not enqueued for ${queueId} (Inngest offline?)`,
-      err
-    )
+    console.warn(`Queue materialization backfill not started for ${queueId}`, err)
   }
 }
 
@@ -206,15 +295,12 @@ async function buildCollectionSourceRows(
 }
 
 // Idempotent single-chunk writer, shared by all four source types — the delete-then-
-// insert-then-select-then-owner-insert body for exactly one chunk's worth of rows, no
-// `step` dependency. Rows are grouped by collection within the chunk (only
+// insert-then-select-then-owner-insert body for exactly one chunk's worth of rows. Rows are grouped by collection within the chunk (only
 // `owned_by_me` mixes collections in one source) so the delete/select can use plain
 // whereIn instead of a large OR expansion.
 //
-// Callers are responsible for chunking (WRITE_CHUNK_SIZE) and for the surrounding
-// Inngest step boundary — this function itself never calls step.run, so it can be
-// invoked in a tight loop from inside a single already-open step (see
-// queueMaterializationBackfill below) without violating Inngest's no-nested-steps rule.
+// Callers are responsible for chunking (WRITE_CHUNK_SIZE); see
+// runQueueMaterializationBackfill below.
 export async function writeMaterializedRowChunk(
   queueId: string,
   sourceId: number,
@@ -318,35 +404,24 @@ export async function buildSourceRows(
   return rows
 }
 
-export const queueMaterializationBackfill = inngest.createFunction(
-  {
-    id: 'queue-materialization-backfill',
-    // fetchQueueItems enqueues a new backfill event on every request while a queue is
-    // over-threshold and not yet materialized, with no de-dupe — without this,
-    // concurrent runs for the same queue can collide on the (queue_id, source_id,
-    // collection, item_id) unique constraint during chunk writes. Keyed per-queue so
-    // different queues still backfill in parallel.
-    concurrency: { key: 'event.data.queueId', limit: 1 }
-  },
-  { event: 'queues/materialization.backfill' },
-  async ({ event, step }) => {
-    const queueId = (event.data as { queueId: string }).queueId
-    // Job-run bookkeeping via memoized steps — Inngest replays the function
-    // body on every step round, so a bare insert here would write one row per
-    // replay. A run that dies permanently stays 'running' with an old
-    // started_at, which the console renders as stale rather than lying.
-    const jobRunId = await step.run('job-run-start', async () => {
-      const { startJobRun } = await import('../services/job-runs.js')
-      return (await startJobRun('backfill', queueId, { label: 'Queue materialization' })).id
-    })
-    const finishJobRun = async (status: string, outcome: string) => {
-      if (jobRunId == null) return
-      await db('nivaro_job_runs')
-        .where('id', jobRunId)
-        .update({ status, outcome, finished_at: new Date() })
-        .catch(() => {})
-    }
+class BackfillCancelled extends Error {}
 
+/**
+ * Rebuild one queue's cache: wipe its rows, resolve every source as the queue's
+ * owner, write the rows in 1,000-row chunks, mark the queue materialized.
+ * Callers go through enqueueQueueMaterializationBackfill, which holds the
+ * per-queue lock; this does the work and the job-run bookkeeping.
+ */
+export async function runQueueMaterializationBackfill(
+  queueId: string
+): Promise<{ queueId: string; sourceCount: number }> {
+  const { startJobRun } = await import('../services/job-runs.js')
+  const { isCancelled, clearCancel } = await import('../services/job-cancel.js')
+  const run = await startJobRun('backfill', queueId, { label: 'Queue materialization' })
+  const checkCancel = () => {
+    if (run.id != null && isCancelled(run.id)) throw new BackfillCancelled()
+  }
+  try {
     // Backfill runs as the queue's own owner, not a synthetic system user. Queue-level
     // visibility (canReadQueue, already the gate for who can see the queue at all) is
     // the access-control boundary for materialized queues — the owner configured these
@@ -359,69 +434,50 @@ export const queueMaterializationBackfill = inngest.createFunction(
       | { owner: string }
       | undefined
     if (!queueRow) {
-      await step.run('job-run-complete', () => finishJobRun('completed', 'queue no longer exists'))
+      await run.complete('queue no longer exists')
       return { queueId, sourceCount: 0 }
     }
     const ownerUser = (await db('nivaro_users').where({ id: queueRow.owner }).first()) as
       | User
       | undefined
     if (!ownerUser) {
-      await step.run('job-run-complete', () => finishJobRun('completed', 'queue owner missing'))
+      await run.complete('queue owner missing')
       return { queueId, sourceCount: 0 }
     }
 
-    await step.run('wipe-existing-rows', async () => {
-      await db('nivaro_queue_items').where({ queue_id: queueId }).delete()
-    })
+    await db('nivaro_queue_items').where({ queue_id: queueId }).delete()
 
     const sources = (await db<QueueSourceRow>('nivaro_queue_sources')
       .where({ queue_id: queueId })
       .orderBy('sort')) as QueueSourceRow[]
 
-    for (const source of sources) {
-      // Resolution AND the chunked writes are merged into ONE step per source. They used
-      // to be separate steps (resolve-source-N returning the full rows array, then N
-      // further per-chunk write steps) — but Inngest serializes a step.run return value to
-      // JSON and ships it over HTTP, and for a large queue (~20k rows) that payload landed
-      // around 7.4MB, over Inngest's step-output size limit; the step failed instantly
-      // (0ms, before any work even started) on every attempt, an unrecoverable loop. Doing
-      // the writes inline here means the step returns only a row count — tiny regardless of
-      // queue size — while the actual DB writes still go through the exact same idempotent
-      // delete-then-insert-then-select-then-owner-insert logic as before, just invoked as
-      // plain in-step code instead of as separate step.run calls (Inngest doesn't support
-      // nested step.run inside an already-running step body).
-      //
-      // Retry-safety tradeoff: a mid-write failure now retries this ENTIRE source's
-      // resolve-and-write (Inngest replays the whole function body on retry, and only
-      // step.run results are memoized — so failing partway through this step re-does
-      // everything inside it), not just the one failed chunk as before. This is still safe,
-      // not a regression into the original bare-insert bug: writeMaterializedRowChunk is
-      // still delete-then-insert per chunk, so redoing the whole source on retry is
-      // idempotent, just potentially slower.
-      //
-      // Because resolution and writing now happen inside the same step, rows never cross
-      // the Inngest step-output JSON boundary — entered_state_at stays a real Date the
-      // whole way through, so the previous rehydration step (`new Date(r.entered_state_at)`)
-      // is no longer needed and has been removed.
-      await step.run(`resolve-and-write-source-${source.id}`, async () => {
-        const rows = await buildSourceRows(source, ownerUser)
-        for (let i = 0; i < rows.length; i += WRITE_CHUNK_SIZE) {
-          await writeMaterializedRowChunk(queueId, source.id, rows.slice(i, i + WRITE_CHUNK_SIZE))
-        }
-        return rows.length
-      })
+    let written = 0
+    for (const [i, source] of sources.entries()) {
+      checkCancel()
+      const rows = await buildSourceRows(source, ownerUser)
+      for (let c = 0; c < rows.length; c += WRITE_CHUNK_SIZE) {
+        checkCancel()
+        // Delete-then-insert per chunk: idempotent, so a re-run is safe.
+        await writeMaterializedRowChunk(queueId, source.id, rows.slice(c, c + WRITE_CHUNK_SIZE))
+      }
+      written += rows.length
+      run.progress({ sources_done: i + 1, sources: sources.length, rows: written })
     }
 
     // A write to an item that occurs after this job resolved its source but before this
     // final step runs could be missed if that item is never written again — accepted
     // limitation for now, the item will self-correct on its next write.
-    await step.run('mark-materialized', async () => {
-      await db('nivaro_queues').where({ id: queueId }).update({ materialized: true })
-    })
-    await step.run('job-run-complete', () =>
-      finishJobRun('completed', `${sources.length} source(s) rebuilt`)
-    )
-
+    await db('nivaro_queues').where({ id: queueId }).update({ materialized: true })
+    await run.complete(`${sources.length} source(s) rebuilt, ${written} row(s)`)
     return { queueId, sourceCount: sources.length }
+  } catch (err) {
+    if (err instanceof BackfillCancelled) {
+      await run.complete('cancelled — the queue keeps reading live until the next rebuild')
+      return { queueId, sourceCount: 0 }
+    }
+    await run.fail(err)
+    throw err
+  } finally {
+    if (run.id != null) clearCancel(run.id)
   }
-)
+}

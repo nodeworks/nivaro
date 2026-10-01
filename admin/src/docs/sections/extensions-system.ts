@@ -253,7 +253,6 @@ export const extContext: DocSection = {
       rows: [
         ['app', 'FastifyInstance', 'Register routes, decorators, hooks. Scoped to /api prefix.'],
         ['database', 'Knex', 'MSSQL connection via Knex query builder.'],
-        ['inngest', 'Inngest', 'Async job orchestration. Register functions, send events.'],
         ['logger', 'FastifyBaseLogger', 'Structured pino logger prefixed with extension id.']
       ]
     },
@@ -415,7 +414,7 @@ ctx.cron.unschedule('daily-report');`
     },
     {
       type: 'note',
-      text: 'Cron jobs run in-process. For heavy or long-running work, fire an Inngest event from the cron callback and handle the work in an Inngest function.'
+      text: 'Cron jobs run in-process and are recorded on the Background Jobs page. With several API processes, only the one holding the scheduler lease fires them. Mark long full-table work as heavy so it waits its turn instead of piling onto the connection pool.'
     }
   ]
 }
@@ -455,45 +454,6 @@ export const extRoutes: DocSection = {
   ]
 }
 
-export const extInngest: DocSection = {
-  id: 'ext-inngest',
-  label: 'Inngest Functions',
-  content: [
-    { type: 'h1', id: 'ext-inngest', text: 'Inngest Functions' },
-    {
-      type: 'p',
-      text: 'Inngest is mounted at `/api/inngest`. Register functions by adding them to the functions array in `api/src/plugins/inngest.ts`, or create them from within an extension.'
-    },
-    {
-      type: 'pre',
-      code: `const sendReport = ctx.inngest.createFunction(
-  { id: 'send-daily-report' },
-  { event: 'app/report.requested' },
-  async ({ event, step }) => {
-    const { userId } = event.data as { userId: string };
-
-    const user = await step.run('load-user', async () => {
-      return ctx.database('nivaro_users').where({ id: userId }).first();
-    });
-
-    await step.run('send-email', async () => {
-      // nodemailer logic here
-    });
-
-    return { sent: true };
-  },
-);
-
-// Send the event from a cron job or route:
-await ctx.inngest.send({ name: 'app/report.requested', data: { userId: '...' } });`
-    },
-    {
-      type: 'warn',
-      text: 'In development, Inngest requires the local dev server (`npx inngest-cli dev`) to be running for functions to execute. Set `INNGEST_EVENT_KEY=local` and `INNGEST_SIGNING_KEY=local` in .env to bypass cloud auth.'
-    }
-  ]
-}
-
 export const extExample: DocSection = {
   id: 'ext-example',
   label: 'Full Example',
@@ -501,7 +461,7 @@ export const extExample: DocSection = {
     { type: 'h1', id: 'ext-example', text: 'Full Example Extension' },
     {
       type: 'note',
-      text: 'Working examples for all extension types (inngest, socket.io, UI plugins, flows) live in `examples/my-project/extensions/`. Copy any folder into `api/extensions/` to activate it.'
+      text: 'Working examples for all extension types (socket.io, UI plugins, flows, bulk and item actions) live in `examples/my-project/extensions/`. Copy any folder into `api/extensions/` to activate it.'
     },
     {
       type: 'pre',

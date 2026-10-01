@@ -19,7 +19,7 @@ const ADMIN_PAGES: { label: string; path: string; keywords?: string }[] = [
   { label: 'Roles', path: '/roles', keywords: 'permissions policies rbac' },
   { label: 'Workspaces', path: '/workspaces' },
   { label: 'Pipelines', path: '/pipelines', keywords: 'owner matrix' },
-  { label: 'Flows', path: '/flows', keywords: 'automation inngest' },
+  { label: 'Flows', path: '/flows', keywords: 'automation' },
   { label: 'Workflows', path: '/workflows', keywords: 'state machine' },
   { label: 'Webhooks', path: '/webhooks' },
   { label: 'Rules', path: '/rules', keywords: 'automation conditions' },

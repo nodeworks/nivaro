@@ -398,10 +398,10 @@ export interface DeadLetter {
   payload: Record<string, unknown> | null
   failed_at: string
   retry_count: number
-  source: 'flow-run' | 'inngest'
+  source: 'flow-run'
 }
 
-/** Failed flow runs + Inngest failures (best-effort). */
+/** Failed flow runs. */
 export function listDeadLetters(): Command<{ data: DeadLetter[]; error?: string }> {
   return cmd('GET', '/dead-letters')
 }

@@ -1609,7 +1609,7 @@ await nivaro.request(deleteRule(rule.id))
 
 ## SDK — Flow Runs
 
-Flows are Inngest-backed automations (schedules, webhooks, manual triggers). View execution history, logs, and errors via the SDK.
+Flows are automations (schedules, events, webhooks, manual triggers). View execution history, logs, and errors via the SDK.
 
 ```typescript
 import { readFlowRuns, readFlowRun, triggerFlowRun } from '@nivaro/sdk'
@@ -1949,7 +1949,7 @@ await nivaro.request(evaluateAlerts())
 | readAlertLog(alertId?) | GET /alerts/log | Admin |
 | evaluateAlerts() | POST /alerts/evaluate | Admin |
 
-> **Note:** Alerts are evaluated every 5 minutes by an Inngest cron job. Anomaly detection uses statistical analysis (standard deviation multipliers) to identify unusual values. Cooldown prevents the same alert from firing multiple times within a time window.
+> **Note:** Alerts are evaluated every 5 minutes by a scheduled job. Anomaly detection uses statistical analysis (standard deviation multipliers) to identify unusual values. Cooldown prevents the same alert from firing multiple times within a time window.
 
 ---
 

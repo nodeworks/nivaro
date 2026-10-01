@@ -481,7 +481,7 @@ export type QueueScope = 'mine' | 'unowned' | 'all' | 'claimed'
 
 export const QUEUE_SANITY_CEILING = 20000
 export const PROMOTION_THRESHOLD = 5000
-// Backfill resolves sources in a background Inngest job, so it gets a far higher
+// Backfill resolves sources in a background job run, so it gets a far higher
 // circuit breaker than interactive reads — the materialized cache must hold the
 // FULL matching set or its SQL-aggregate stats would inherit the interactive cap
 // (a 50k-row source materializing only 20k rows made the stat strip report 20,000).

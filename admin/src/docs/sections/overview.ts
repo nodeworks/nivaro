@@ -21,7 +21,7 @@ export const whatIsNivaro: DocSection = {
         ['Roles / Permissions', 'RBAC via nivaro_roles + nivaro_policies'],
         ['Auth (OIDC)', 'openid-client with Microsoft OIDC (PKCE flow)'],
         ['Extensions', 'Plugin loader at api/extensions/'],
-        ['Flows / Automation', 'Inngest + in-process flow executor'],
+        ['Flows / Automation', 'In-process flow executor'],
         ['WebSockets / Real-time', 'Socket.io + Redis pub/sub adapter'],
         ['File Management', 'multer + local storage + nivaro_files'],
         ['Activity Log', 'nivaro_activity + nivaro_revisions'],
@@ -52,7 +52,7 @@ export const architecture: DocSection = {
         ],
         ['Sessions / Cache', 'Redis (ioredis) — sessions stored as sess:<id> keys'],
         ['Auth', 'openid-client PKCE flow — Microsoft OIDC'],
-        ['Job Queue', 'Inngest — event-driven background jobs and flows'],
+        ['Background jobs', 'In-process scheduler with a Redis leader lease; every run recorded'],
         ['WebSockets', 'Socket.io + @socket.io/redis-adapter'],
         ['Admin UI', 'React 19 + Vite 6 + shadcn/ui + Tanstack Query v5'],
         ['Linter / Formatter', 'Biome v2 — replaces ESLint + Prettier']
@@ -69,7 +69,7 @@ export const architecture: DocSection = {
 │   ├── db/               # Knex instance + migrations
 │   ├── extensions/       # Extension loader
 │   ├── middleware/        # authenticate.ts (req.user, req.isAdmin)
-│   ├── plugins/          # inngest, redis, cron, socketio
+│   ├── plugins/          # redis, cron, socketio
 │   ├── routes/           # REST endpoints
 │   └── services/         # Business logic (permissions, items, etc.)
 └── admin/src/
@@ -196,7 +196,6 @@ export const userFlows: DocSection = {
           'Started by clicking "Run Flow" in the UI or calling POST /api/flows/:id/trigger'
         ],
         ['schedule', 'Runs on a cron schedule. Specify a cron expression in Trigger Options.'],
-        ['event', 'Triggered by an Inngest event name (planned).'],
         ['webhook', 'Triggered by an incoming HTTP request (planned).'],
         [
           'workflow-transition',
@@ -320,7 +319,7 @@ export const userExtensions: DocSection = {
     { type: 'h1', id: 'extensions', text: 'Extensions' },
     {
       type: 'p',
-      text: "Extensions are Node.js plugins that extend Nivaro's behavior — custom routes, hooks, scheduled jobs, and Inngest functions. The Extensions page shows all discovered plugins and their status."
+      text: "Extensions are Node.js plugins that extend Nivaro's behavior — custom routes, hooks, scheduled jobs, flow operations and more. The Extensions page shows all discovered plugins and their status."
     },
     {
       type: 'table',

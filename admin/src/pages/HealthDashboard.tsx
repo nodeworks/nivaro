@@ -18,7 +18,6 @@ import { cn } from '@/lib/utils'
 interface DetailedHealth {
   db: { ok: boolean; latency_ms: number }
   redis: { ok: boolean; latency_ms: number }
-  inngest: { ok: boolean | 'unknown' }
   migrations: { latest: string | null; count: number }
   sockets: { connections: number | null }
   uptime_s: number
@@ -407,12 +406,6 @@ export function HealthDashboardPage() {
               title='Redis'
               ok={data.redis.ok}
               detail={`${data.redis.latency_ms} ms`}
-            />
-            <SubsystemCard
-              icon={Activity}
-              title='Inngest'
-              ok={data.inngest.ok}
-              detail={data.inngest.ok === 'unknown' ? 'No health URL configured' : undefined}
             />
             <InfoCard
               icon={Wifi}

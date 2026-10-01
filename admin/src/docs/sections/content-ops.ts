@@ -75,7 +75,7 @@ export const contentOpsScheduledChanges: DocSection = {
     { type: 'h1', id: 'content-ops-scheduled-changes', text: 'Content Scheduling' },
     {
       type: 'p',
-      text: 'Scheduled changes let you queue a field update, workflow transition, or publish/unpublish action to execute at a future date and time. Changes are stored in `nivaro_scheduled_changes` with a `pending` status and can be executed manually or via Inngest automation.'
+      text: 'Scheduled changes let you queue a field update, workflow transition, or publish/unpublish action to execute at a future date and time. Changes are stored in `nivaro_scheduled_changes` with a `pending` status and are executed manually (POST /:id/execute or the Execute button) — nothing runs them automatically at scheduled_at yet.'
     },
     { type: 'h3', text: 'Managing in the admin UI' },
     {
@@ -136,7 +136,7 @@ Authorization: Bearer <admin-token>
     },
     {
       type: 'note',
-      text: 'Automatic Inngest-based execution runs at the scheduled_at time. Manual execution via POST /:id/execute is available regardless of schedule.'
+      text: 'Pending changes do not run on their own yet: execute them via POST /:id/execute, which works regardless of the scheduled time.'
     }
   ]
 }

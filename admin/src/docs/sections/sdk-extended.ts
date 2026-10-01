@@ -338,7 +338,7 @@ export const sdkFlowRuns: DocSection = {
     { type: 'h1', id: 'sdk-flow-runs', text: 'SDK — Flow Runs' },
     {
       type: 'p',
-      text: 'Flows are Inngest-backed automations (schedules, webhooks, manual triggers). View execution history, logs, and errors via the SDK.'
+      text: 'Flows are automations (schedules, events, webhooks, manual triggers). View execution history, logs, and errors via the SDK.'
     },
     {
       type: 'pre',
@@ -874,7 +874,7 @@ await nivaro.request(evaluateAlerts())`
     },
     {
       type: 'note',
-      text: 'Alerts are evaluated every 5 minutes by an Inngest cron job. Anomaly detection uses statistical analysis (standard deviation multipliers) to identify unusual values. Cooldown prevents the same alert from firing multiple times within a time window.'
+      text: 'Alerts are evaluated every 5 minutes by a scheduled job. Anomaly detection uses statistical analysis (standard deviation multipliers) to identify unusual values. Cooldown prevents the same alert from firing multiple times within a time window.'
     }
   ]
 }

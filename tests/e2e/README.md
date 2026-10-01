@@ -7,7 +7,7 @@ Playwright + axe-core accessibility test suite for Nivaro CMS.
 Both the API and Admin UI must be running before executing tests:
 
 ```bash
-pnpm dev        # starts Redis + Inngest + API (:3055) + Admin (:3056) concurrently
+pnpm dev        # starts Redis + API (:3055) + Admin (:3056), attaching to any already running
 ```
 
 Or start services individually:

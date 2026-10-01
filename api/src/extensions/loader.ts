@@ -538,7 +538,7 @@ export function registrationMembers(
     /** Run long SQL on the handed-in (tenant) connection, not the default pool. */
     runLongOnTenant?: boolean
   }
-): Omit<ExtensionContext, 'app' | 'database' | 'inngest' | 'logger' | 'settings' | 'cloud'> {
+): Omit<ExtensionContext, 'app' | 'database' | 'logger' | 'settings' | 'cloud'> {
   const { note, own, cronPrefix, runLongOnTenant } = opts
   return {
     events: {

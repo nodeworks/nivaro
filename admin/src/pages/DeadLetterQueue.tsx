@@ -18,7 +18,7 @@ type DeadLetter = {
   payload: Record<string, unknown> | null
   failed_at: string | null
   retry_count: number
-  source: 'flow-run' | 'inngest'
+  source: 'flow-run'
 }
 
 const ERROR_TRUNCATE_AT = 100
@@ -126,9 +126,6 @@ function DeadLetterRow({ letter }: { letter: DeadLetter }) {
                 <span>
                   Run ID: <code className='font-mono'>{letter.id}</code>
                 </span>
-                <Badge variant='secondary' className='text-[10px]'>
-                  {letter.source === 'flow-run' ? 'flow run' : 'inngest'}
-                </Badge>
               </div>
             </div>
           </td>
@@ -208,13 +205,6 @@ export function DeadLetterQueuePage() {
       </div>
 
       <div className='flex-1 overflow-y-auto p-6'>
-        {data?.error && (
-          <div className='mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-[12px] text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-400'>
-            <AlertCircle className='h-3.5 w-3.5 shrink-0' />
-            Inngest API unreachable — showing flow-run failures only.
-          </div>
-        )}
-
         {isLoading ? (
           <div className='space-y-px overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
             {[1, 2, 3].map((k) => (

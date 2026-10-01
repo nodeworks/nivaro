@@ -12,7 +12,6 @@ import {
 } from '../extensions/loader.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
-import { inngest } from '../plugins/inngest.js'
 import { logActivity } from '../services/activity.js'
 import { callExternalApi } from '../services/external-apis.js'
 
@@ -49,12 +48,6 @@ const BUILTIN_EXTENSIONS: MarketplaceEntry[] = [
     version: '1.0.0',
     builtin: true,
     description: 'Registers custom flow operations and triggers via the flows extension registry.'
-  },
-  {
-    name: 'example-inngest',
-    version: '1.0.0',
-    builtin: true,
-    description: 'Shows how to enqueue and handle background jobs through the Inngest client.'
   },
   {
     name: 'example-socketio',
@@ -653,7 +646,6 @@ export async function extensionsRoutes(app: FastifyInstance) {
       const loaded = await scanNewExtensions({
         app,
         database: db,
-        inngest,
         logger: app.log,
         callExternalApi
       })
@@ -716,7 +708,6 @@ export async function extensionsRoutes(app: FastifyInstance) {
     const newIds = await scanNewExtensions({
       app,
       database: db,
-      inngest,
       logger: app.log,
       callExternalApi
     })

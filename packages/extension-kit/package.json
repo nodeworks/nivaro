@@ -34,14 +34,10 @@
   },
   "peerDependencies": {
     "fastify": "^5",
-    "inngest": "^3",
     "knex": "^3"
   },
   "peerDependenciesMeta": {
     "fastify": {
-      "optional": true
-    },
-    "inngest": {
       "optional": true
     },
     "knex": {
@@ -51,7 +47,6 @@
   "devDependencies": {
     "@types/node": "^22.15.21",
     "fastify": "^5.3.3",
-    "inngest": "^3.32.0",
     "knex": "^3.1.0",
     "typescript": "^5.8.3",
     "vitest": "^2.1.0"

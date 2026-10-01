@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
-vi.mock('../../../plugins/inngest.js', () => ({
-  inngest: { createFunction: vi.fn(), send: vi.fn() }
-}))
 
 import { db } from '../../../db/index.js'
 import {

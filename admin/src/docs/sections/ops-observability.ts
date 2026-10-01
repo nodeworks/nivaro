@@ -28,7 +28,7 @@ export const dbHealthDocs: DocSection = {
         ],
         [
           'Degradation map',
-          'What stops working when each dependency (database, Redis, Inngest, SMTP) goes down. Database and Redis are probed live.'
+          'What stops working when each dependency (database, Redis, SMTP) goes down. Database and Redis are probed live.'
         ],
         [
           'Top expensive SQL',
@@ -65,7 +65,6 @@ export const dbHealthDocs: DocSection = {
           'Dangling foreign keys',
           'Registered relations whose FK values point at rows that no longer exist, with guarded repair actions.'
         ],
-        ['Inngest', 'Whether the job runner answers, and how many recent events it reports.'],
         [
           'Redundant indexes',
           'An index whose key list is a strict prefix of another index on the same table — it answers nothing the wider one cannot and taxes every write. Filtered and unique coverers are never counted as covering. Drop goes through the same guarded path as unused indexes.'
@@ -113,7 +112,7 @@ export const dbHealthDocs: DocSection = {
     { type: 'h2', id: 'proc-transaction-guards', text: 'Open transactions on the pool' },
     {
       type: 'p',
-      text: "A stored procedure that opens a transaction without `SET XACT_ABORT ON` and then fails leaves the transaction open: the batch stops, the connection goes back to the pool mid-transaction, and the next caller on that connection inherits it. Every raw EXEC path now rolls an open transaction back on the same connection before releasing it (custom queries, rule `exec_procedure` actions, long-running statements), and the readiness check `proc-transaction-guards` lists every procedure with `BEGIN TRAN` that carries neither `SET XACT_ABORT ON` nor a CATCH that rolls back. `GET /api/ops-db/proc-transaction-lint` is the list as JSON. A request-timeout cancellation skips a CATCH, which is why the connection-level rollback stays."
+      text: 'A stored procedure that opens a transaction without `SET XACT_ABORT ON` and then fails leaves the transaction open: the batch stops, the connection goes back to the pool mid-transaction, and the next caller on that connection inherits it. Every raw EXEC path now rolls an open transaction back on the same connection before releasing it (custom queries, rule `exec_procedure` actions, long-running statements), and the readiness check `proc-transaction-guards` lists every procedure with `BEGIN TRAN` that carries neither `SET XACT_ABORT ON` nor a CATCH that rolls back. `GET /api/ops-db/proc-transaction-lint` is the list as JSON. A request-timeout cancellation skips a CATCH, which is why the connection-level rollback stays.'
     },
     { type: 'h2', id: 'erp-payload-retention', text: 'ERP push payload retention' },
     {

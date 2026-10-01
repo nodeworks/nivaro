@@ -102,7 +102,6 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
         created_by: req.user!.id,
         created_at: now,
         updated_at: now
-        // NOTE: Inngest integration for auto-execution is a future enhancement.
         // For now, scheduled changes must be executed manually via POST /:id/execute.
       })
       .returning('id')

@@ -20,10 +20,9 @@ export function getMetaDb(): Knex {
 // Subdomains that are not tenant slugs — route through without tenant resolution.
 const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
 
-// Paths that work without a tenant DB (health check, Inngest, admin provision).
+// Paths that work without a tenant DB (health check, admin provision).
 const TENANT_FREE_PATHS = [
   '/health',
-  '/api/inngest',
   '/admin/provision',
   '/admin/migrate',
   '/admin/migration-status',
@@ -920,13 +919,11 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             .header('cache-control', 'no-store')
             .send(provisioningPage(row.name))
         } else {
-          reply
-            .code(503)
-            .send({
-              error: 'Workspace is being provisioned',
-              slug: row.slug,
-              status: 'provisioning'
-            })
+          reply.code(503).send({
+            error: 'Workspace is being provisioned',
+            slug: row.slug,
+            status: 'provisioning'
+          })
         }
         return
       }

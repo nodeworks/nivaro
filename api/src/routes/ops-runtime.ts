@@ -98,20 +98,9 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       }
     }
     const redis = (app as unknown as { redis?: { ping: () => Promise<string> } }).redis
-    // Inngest — same resolution as /health: configured health URL, dev-server
-    // fallback in development, otherwise honestly unprobed.
-    const inngestHealthUrl =
-      config.INNGEST_HEALTH_URL ??
-      (config.NODE_ENV === 'development' ? 'http://localhost:8288/health' : null)
-    const [dbStatus, redisStatus, inngestStatus, smtpStatus] = await Promise.all([
+    const [dbStatus, redisStatus, smtpStatus] = await Promise.all([
       probe(() => db.raw('SELECT 1')),
       redis ? probe(() => redis.ping()) : Promise.resolve('down' as const),
-      inngestHealthUrl
-        ? probe(async () => {
-            const res = await fetch(inngestHealthUrl, { signal: AbortSignal.timeout(2500) })
-            if (!res.ok) throw new Error(String(res.status))
-          })
-        : Promise.resolve('unprobed' as const),
       probeSmtp().catch(() => 'down' as const)
     ])
     const rows = [
@@ -126,12 +115,6 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
         status: redisStatus,
         impact_when_down:
           'Sessions require re-login; rate limiting fails OPEN; WS tokens, masquerade tokens and the event journal stop; custom-query result caching off; instance roster empty. Core reads/writes keep working.'
-      },
-      {
-        subsystem: 'Inngest',
-        status: inngestStatus,
-        impact_when_down:
-          'Queue materialization backfills, scheduled flows and scheduled changes stop executing; everything interactive is unaffected.'
       },
       {
         subsystem: 'SMTP',

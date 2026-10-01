@@ -617,7 +617,6 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
   const ctx: TestContext = {
     app: app as unknown as ExtensionApp,
     database,
-    inngest: {} as ExtensionContext['inngest'],
     logger: logger as unknown as ExtensionContext['logger'],
     user,
     calls,

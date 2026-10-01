@@ -18,7 +18,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Extension System** — drop a folder into `api/extensions/`, no restart needed
 - **Flow Extension API** — extensions register custom operation types and trigger types; appear in the flow editor with schema-driven config UI
 - **External API Flow Operation** — call any configured External API or custom URL from a flow, with SSRF protection
-- **Inngest Jobs** — durable background functions (cron + event-triggered)
+- **Background Jobs** — scheduled jobs, backfills and remediations run in-process, recorded with outcome and history; one process fires scheduled jobs (Redis lease) so replicas never double-run them
 - **AI Features** — field generation and record summarization via Claude, fill a new record from a document (SOW, quote, spreadsheet → fields, lines, schedule, reviewed before save)
 - **Dashboards & KPI Builder** — drag-and-drop widget grid
 - **Audit Log & Revisions** — full snapshot + delta per mutation
@@ -166,7 +166,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 | Auth | openid-client PKCE — Microsoft OIDC |
 | Sessions | Redis (ioredis) + @fastify/session |
 | Real-time | Socket.io + @socket.io/redis-adapter |
-| Jobs | Inngest self-hosted (Postgres + Redis) |
+| Jobs | In-process scheduler (croner) with a Redis leader lease; every run recorded in `nivaro_job_runs` |
 | Admin UI | React 19 + Vite 6 + shadcn/ui (Tailwind v3) |
 | SDK | `@nivaro/sdk` — ESM, fully typed |
 | Linter | Biome v2 |
@@ -196,7 +196,7 @@ pnpm dev
 # Admin → http://localhost:3056
 ```
 
-`pnpm dev` starts Redis (Docker), Inngest dev server, API, and admin concurrently.
+`pnpm dev` starts Redis (Docker), the API and the admin, attaching to any that are already running.
 
 ### Full stack via Docker
 
@@ -209,11 +209,10 @@ pnpm dev:docker:down   # stop and remove
 
 | Command | Description |
 |---|---|
-| `pnpm dev` | Redis + Inngest + API (:3055) + admin (:3056) |
+| `pnpm dev` | Redis + API (:3055) + admin (:3056) |
 | `pnpm dev:api` | API only |
 | `pnpm dev:admin` | Admin UI only |
 | `pnpm dev:redis` | Redis in Docker on :6379 |
-| `pnpm dev:inngest` | Inngest dev server on :8288 |
 | `pnpm dev:docker` | Full stack via Docker Compose |
 | `pnpm dev:www` | Static www site via browser-sync on :3057 |
 | `pnpm build` | Compile API (tsc) + build admin (vite) |
@@ -280,16 +279,11 @@ services:
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379
-      INNGEST_BASE_URL: http://inngest:8288
-      INNGEST_EVENT_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
-      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
     volumes:
       - ./extensions:/app/api/extensions
       - uploads:/app/uploads
     depends_on:
       redis:
-        condition: service_healthy
-      inngest:
         condition: service_healthy
 
   redis:
@@ -303,43 +297,10 @@ services:
       timeout: 3s
       retries: 5
 
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: inngest
-      POSTGRES_PASSWORD: inngest
-      POSTGRES_DB: inngest
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U inngest -d inngest"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  inngest:
-    image: inngest/inngest:latest
-    command: inngest start --host 0.0.0.0
-    ports:
-      - "8288:8288"
-    environment:
-      INNGEST_EVENT_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
-      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY_DOCKER:-deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe}
-      INNGEST_POSTGRES_URI: postgres://inngest:inngest@postgres:5432/inngest
-      INNGEST_REDIS_URI: redis://redis:6379
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
 volumes:
   uploads:
   redis_data:
-  postgres_data:
 ```
-
-Set `INNGEST_SIGNING_KEY_DOCKER` to a real 64-character hex string in production.
 
 See `examples/my-project/` for a full working example with a custom extension.
 
@@ -442,7 +403,7 @@ export default {
 }
 ```
 
-See `examples/my-project/extensions/` for examples including `example-inngest`, `example-socketio`, `example-ui-plugin`, and `example-flows` (demonstrating the flows API).
+See `examples/my-project/extensions/` for examples including `example-socketio`, `example-ui-plugin`, and `example-flows` (demonstrating the flows API).
 
 ---
 
@@ -460,8 +421,6 @@ Key variables — see `.env.example` for the full list.
 | `OIDC_REDIRECT_URI` | e.g. `http://localhost:3055/api/auth/callback` |
 | `SESSION_SECRET` | 32+ character random string |
 | `COOKIE_SECURE=false` | Must be `false` for plain HTTP (Docker default) |
-| `INNGEST_EVENT_KEY` / `INNGEST_SIGNING_KEY` | `local` for dev; real hex for production |
-| `INNGEST_SIGNING_KEY_DOCKER` | Production override — prevents `local` leaking into Docker |
 | `PUBLIC_URL` | e.g. `http://localhost:3055` |
 | `ANTHROPIC_API_KEY` | Optional — enables AI features |
 

@@ -263,7 +263,6 @@
           <a class="docs-nav-item" data-section="ext-hooks" href="#ext-hooks">Hooks</a>
           <a class="docs-nav-item" data-section="ext-routes" href="#ext-routes">Custom Routes</a>
           <a class="docs-nav-item" data-section="ext-cron" href="#ext-cron">Cron Jobs</a>
-          <a class="docs-nav-item" data-section="ext-inngest" href="#ext-inngest">Inngest Functions</a>
           <a class="docs-nav-item" data-section="ext-external-apis" href="#ext-external-apis">External API Calls</a>
           <a class="docs-nav-item" data-section="ext-flows" href="#ext-flows">Custom Flow Ops &amp; Triggers</a>
           <a class="docs-nav-item" data-section="ext-example" href="#ext-example">Full Example</a>
@@ -6736,34 +6735,6 @@ ctx.cron.unschedule('daily-report');</code></pre>
           <p class="doc-p">When an extension is disabled via the Extensions page, all of its cron jobs are automatically paused. They resume when the extension is re-enabled.</p>
           <div class="doc-note">Cron jobs run in-process. For heavy or long-running work, fire an Inngest event from the cron callback and handle the work in an Inngest function.</div>
           <!-- /SYNC:ext-cron -->
-        </div>
-
-        <div class="doc-section" id="s-ext-inngest" data-toc='[{"id":"ext-inngest","label":"Inngest Functions"}]'>
-          <!-- SYNC:ext-inngest -->
-          <h1 class="doc-h1" id="ext-inngest">Inngest Functions</h1>
-          <p class="doc-p">Inngest is mounted at <code class="doc-code">/api/inngest</code>. Register functions by adding them to the functions array in <code class="doc-code">api/src/plugins/inngest.ts</code>, or create them from within an extension.</p>
-          <pre class="doc-pre"><code>const sendReport = ctx.inngest.createFunction(
-  { id: 'send-daily-report' },
-  { event: 'app/report.requested' },
-  async ({ event, step }) =&gt; {
-    const { userId } = event.data as { userId: string };
-
-    const user = await step.run('load-user', async () =&gt; {
-      return ctx.database('nivaro_users').where({ id: userId }).first();
-    });
-
-    await step.run('send-email', async () =&gt; {
-      // nodemailer logic here
-    });
-
-    return { sent: true };
-  },
-);
-
-// Send the event from a cron job or route:
-await ctx.inngest.send({ name: 'app/report.requested', data: { userId: '...' } });</code></pre>
-          <div class="doc-note doc-warn">In development, Inngest requires the local dev server (<code class="doc-code">npx inngest-cli dev</code>) to be running for functions to execute. Set <code class="doc-code">INNGEST_EVENT_KEY=local</code> and <code class="doc-code">INNGEST_SIGNING_KEY=local</code> in .env to bypass cloud auth.</div>
-          <!-- /SYNC:ext-inngest -->
         </div>
 
         <div class="doc-section" id="s-ext-external-apis" data-toc='[{"id":"ext-external-apis","label":"External API Calls"}]'>

@@ -1,8 +1,8 @@
 /**
  * Cooperative job cancellation (#302, the honest scope): heavy in-process
  * loops (rollup backfills, find-replace) check a cancel flag between chunks
- * and stop cleanly — killable without killing the API. True child-process
- * isolation stays with Inngest (queue materialization already runs there).
+ * and stop cleanly — killable without killing the API (queue
+ * materialization backfills check it between sources and chunks).
  * Flags are in-process, matching where the loops run.
  */
 

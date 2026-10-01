@@ -32,7 +32,7 @@ const PAGES: { label: string; path: string; keywords?: string }[] = [
   { label: 'Roles', path: '/roles', keywords: 'permissions policies rbac' },
   { label: 'Workspaces', path: '/workspaces' },
   { label: 'Pipelines', path: '/pipelines', keywords: 'owner matrix' },
-  { label: 'Flows', path: '/flows', keywords: 'automation inngest' },
+  { label: 'Flows', path: '/flows', keywords: 'automation' },
   { label: 'Webhooks', path: '/webhooks' },
   { label: 'Rules', path: '/rules', keywords: 'automation conditions' },
   { label: 'Blackout Dates', path: '/blackout-dates' },
@@ -212,8 +212,13 @@ export function CommandPalette() {
   })
 
   const q = query.trim()
-  const allPages = [...PAGES, ...extPalette.map((e) => ({ label: e.label, path: e.path, keywords: e.extension }))]
-  const pageMatches = q ? allPages.filter((p) => matchesQuery(p, q)).slice(0, 8) : allPages.slice(0, 8)
+  const allPages = [
+    ...PAGES,
+    ...extPalette.map((e) => ({ label: e.label, path: e.path, keywords: e.extension }))
+  ]
+  const pageMatches = q
+    ? allPages.filter((p) => matchesQuery(p, q)).slice(0, 8)
+    : allPages.slice(0, 8)
   const records = debouncedQuery.length >= 2 ? (searchData?.records ?? []) : []
   const serverActions = debouncedQuery.length >= 2 ? (searchData?.actions ?? []) : []
   const semantic = debouncedQuery.length >= 4 ? (searchData?.semantic ?? []) : []

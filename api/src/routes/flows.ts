@@ -1,11 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { deferEffect } from '../services/unit-of-work.js'
 import { db } from '../db/index.js'
 import type { HookAction } from '../hooks/registry.js'
 import { hooks } from '../hooks/registry.js'
 import { requireAdmin } from '../middleware/authenticate.js'
-import { inngest } from '../plugins/inngest.js'
 import { logActivity } from '../services/activity.js'
 import { executeFlow } from '../services/flow-executor.js'
 import { flowHealth } from '../services/flow-health.js'
@@ -16,6 +14,7 @@ import {
   reconcile,
   registerScheduleResync
 } from '../services/row-schedules.js'
+import { deferEffect } from '../services/unit-of-work.js'
 
 interface Flow {
   id: string
@@ -276,23 +275,6 @@ function flowCronId(flowId: string) {
   return `${FLOW_CRON_PREFIX}${flowId}`
 }
 
-async function sendFlowEvent(
-  log: FastifyInstance['log'],
-  flowId: string,
-  flowName: string,
-  trigger: string,
-  payload?: Record<string, unknown>
-) {
-  try {
-    await inngest.send({
-      name: 'cms/flow.triggered',
-      data: { flowId, flowName, trigger, payload: payload ?? {} }
-    })
-  } catch (err) {
-    log.warn({ err, flowId }, 'Flow event not delivered to Inngest (dev server may be offline)')
-  }
-}
-
 function scheduleFlow(app: FastifyInstance, flow: Flow) {
   const opts = flow.trigger_options
     ? (JSON.parse(flow.trigger_options) as Record<string, unknown>)
@@ -311,7 +293,6 @@ function scheduleFlow(app: FastifyInstance, flow: Flow) {
       payload: {},
       log: app.log
     })
-    await sendFlowEvent(app.log, flow.id, flow.name, 'schedule')
   })
 }
 
@@ -344,7 +325,6 @@ registerScheduleResync('flows', async (app) => {
           payload: {},
           log: app.log
         })
-        await sendFlowEvent(app.log, flow.id, flow.name, 'schedule')
       }
     })
   }
@@ -1017,7 +997,6 @@ export async function flowsRoutes(app: FastifyInstance) {
       log: app.log,
       userId: req.user?.id
     })
-    await sendFlowEvent(app.log, id, flow.name, 'manual', payload)
     await logActivity({
       action: 'run',
       collection: 'nivaro_flows',

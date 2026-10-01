@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import type { Inngest } from 'inngest'
 import type { Knex } from 'knex'
 import type { FlowOpRegistration, FlowTriggerRegistration } from './flows.js'
 import type { ExtensionHookHandler, HookAction } from './hooks.js'
@@ -108,7 +107,6 @@ export type ExtensionApp = FastifyInstance & { cron: ExtensionCronManager }
 export interface ExtensionContext {
   app: ExtensionApp
   database: Knex
-  inngest: Inngest
   logger: FastifyInstance['log']
   /** Admin-editable extension settings — declared on the export. Values are
    *  parsed by the declared type (number/boolean), 30s cache. */

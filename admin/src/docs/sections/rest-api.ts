@@ -1233,7 +1233,7 @@ export const apiFlows: DocSection = {
     { type: 'h1', id: 'flows-api', text: 'Flows API' },
     {
       type: 'p',
-      text: 'Manage Inngest-backed flows — automated workflows with triggers and operations.'
+      text: 'Manage flows — automated workflows with triggers and operations.'
     },
     {
       type: 'table',
@@ -1477,7 +1477,6 @@ Authorization: Bearer <token>
 {
   "db": { "ok": true, "latency_ms": 4 },
   "redis": { "ok": true },
-  "inngest": { "ok": true },
   "migrations": { "ok": true, "pending": 0 },
   "sockets": { "connected": 42 }
 }`
