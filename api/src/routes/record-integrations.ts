@@ -7,12 +7,26 @@ import {
 } from '../services/inbound-attribution.js'
 import { outboundPreview, transitionPreflight } from '../services/integration-preview.js'
 import { can } from '../services/permissions.js'
+import { ADDENDUM_COLLECTION, resolvePipelineSubject } from '../services/pipeline-subject.js'
 import { registerNoteSource } from '../services/record-notes.js'
 
 const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 function recordCollectionOk(collection: string): boolean {
   return COLLECTION_RE.test(collection) && !/^nivaro_/i.test(collection)
+}
+
+/**
+ * The collection whose read permission decides who may ask about a pipeline
+ * step. An addendum runs its own workflow instance, so its step buttons ask
+ * about the addendum row; the addendum is part of its parent record, and
+ * whoever may read the parent may read this. Null = not a record we answer for.
+ */
+async function pipelineGateCollection(collection: string, item: string): Promise<string | null> {
+  if (collection !== ADDENDUM_COLLECTION) return recordCollectionOk(collection) ? collection : null
+  const subject = await resolvePipelineSubject(collection, item).catch(() => null)
+  if (!subject || subject.collection === ADDENDUM_COLLECTION) return null
+  return recordCollectionOk(subject.collection) ? subject.collection : null
 }
 
 /**
@@ -78,11 +92,10 @@ export async function recordIntegrationsRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { collection, item } = req.params
       const transitionId = String(req.query.transition_id ?? '')
-      if (!recordCollectionOk(collection))
-        return reply.code(400).send({ error: 'Not a valid collection' })
       if (!transitionId) return reply.code(400).send({ error: 'transition_id is required' })
-      if (!(await can(req.user!, 'read', collection)))
-        return reply.code(403).send({ error: 'Forbidden' })
+      const gate = await pipelineGateCollection(collection, item)
+      if (!gate) return reply.code(400).send({ error: 'Not a valid collection' })
+      if (!(await can(req.user!, 'read', gate))) return reply.code(403).send({ error: 'Forbidden' })
       const data = await transitionPreflight(collection, item, transitionId, req.user?.id ?? null)
       if (!data) return reply.code(404).send({ error: 'No such transition for this record' })
       return reply.send({ data })
