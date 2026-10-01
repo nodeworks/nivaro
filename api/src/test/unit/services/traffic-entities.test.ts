@@ -215,3 +215,17 @@ describe('helpers', () => {
     expect(callerKeyFor({ authMethod: null, userId: null })).toBe('anon')
   })
 })
+
+describe('R30 route templates never carry a token', () => {
+  it('turns long mixed alphanumeric runs into :id but keeps words', () => {
+    expect(
+      routeTemplate('GET', `/api/submission-forms/public/${'0123456789abcdef'.repeat(3)}`)
+    ).toBe('GET /api/submission-forms/public/:id')
+    expect(routeTemplate('POST', '/api/items/workflows/resolve-paths')).toBe(
+      'POST /api/items/workflows/resolve-paths'
+    )
+    expect(routeTemplate('POST', '/api/pages/home/widget-data')).toBe(
+      'POST /api/pages/home/widget-data'
+    )
+  })
+})

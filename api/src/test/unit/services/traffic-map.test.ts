@@ -13,6 +13,7 @@ import {
   buildFrame,
   buildSnapshot,
   drainEvents,
+  EVENT_BUFFER_CAP,
   errorCode,
   LANE_ENTITY_CAP,
   matchExtensionRoute,
@@ -20,7 +21,9 @@ import {
   noteRequest,
   noteWrite,
   resetTrafficMap,
-  setExtensionRoutes
+  seenCallerKeys,
+  setExtensionRoutes,
+  sweepIdle
 } from '../../../services/traffic-map.js'
 
 const T0 = 1_800_000_000 // epoch seconds
@@ -321,5 +324,108 @@ describe('controller rulings', () => {
       at: T0 * 1000
     })
     expect(drainEvents()[0].route).toBe('other write')
+  })
+})
+
+describe('fix round 1', () => {
+  const snap = (w: 60 | 300 | 900 = 60) =>
+    buildSnapshot(w, { sockets: 0, users: 0, journalSeq: null })
+  it('1: the event buffer is capped, keeps errors, and reports the overflow as dropped', () => {
+    req({ path: '/api/items/workflows/1', status: 500 })
+    for (let i = 0; i < 50_000; i++) req()
+    const f = buildFrame(T0, { sockets: 0, journalSeq: null })
+    expect(f.events).toHaveLength(40)
+    expect(f.events[0].kind).toBe('error')
+    expect(f.events_dropped).toBe(50_001 - 40)
+    expect(EVENT_BUFFER_CAP).toBeLessThanOrEqual(200)
+    for (let i = 0; i < 1000; i++) req()
+    expect(drainEvents().length).toBeLessThanOrEqual(EVENT_BUFFER_CAP)
+  })
+  it('2: idle callers and partner nodes are swept, db/redis/store kept', () => {
+    req()
+    vi.mocked(currentTraceMeta).mockReturnValue(null)
+    noteOutbound({ apiId: 8, apiName: 'X', status: 200, durationMs: 1, at: T0 * 1000 })
+    advanceTo(T0 + 1000)
+    sweepIdle(T0 + 1000)
+    expect(seenCallerKeys()).toEqual([])
+    const ids = snap(900).down.map((d) => d.id)
+    expect(ids).not.toContain('ext:8')
+  })
+  it('3: a stale top-key is evicted so the 21st key gets its own row', () => {
+    for (let i = 0; i < 20; i++) req({ userId: `u${i}` })
+    advanceTo(T0 + 1000)
+    req({ userId: 'new', at: (T0 + 1000) * 1000 })
+    expect(snap(60).entities[0].callers[0].key).toBe('uNEW')
+  })
+  it('4: cron writes and trace-less outbound calls count for caller cron with edges', () => {
+    noteWrite({
+      collection: 'forecasts',
+      item: 1,
+      action: 'update',
+      changedFields: [],
+      at: T0 * 1000
+    })
+    noteOutbound({ apiId: 1, apiName: 'A', status: null, durationMs: 5, at: T0 * 1000 })
+    const f = buildFrame(T0, { sockets: 0, journalSeq: null })
+    expect(f.edges_in['cron>items']).toBe(1)
+    expect(f.edges_in['cron>other']).toBe(1)
+    const cron = snap().callers.find((c) => c.key === 'cron')
+    expect(cron).toMatchObject({ req: 2, error: 1 })
+  })
+  it('5: events use the entity the counts landed on', () => {
+    for (let i = 0; i < LANE_ENTITY_CAP; i++) req({ path: `/api/items/c${i}` })
+    drainEvents()
+    req({ path: '/api/items/overflow_one' })
+    expect(drainEvents()[0].entity).toBe('__other__')
+  })
+  it('6: the 60s window includes the previous minute bucket', () => {
+    req({ at: (T0 + 30) * 1000 })
+    advanceTo(T0 + 65)
+    expect(snap(60).entities[0].routes[0].n).toBe(1)
+  })
+  it('7: an outbound-only entity stays alive while active', () => {
+    vi.mocked(currentTraceMeta).mockReturnValue({
+      id: 'r',
+      urlHint: '/api/items/forecasts',
+      userId: null
+    })
+    advanceTo(T0 + 500)
+    noteOutbound({ apiId: 5, apiName: 'L', status: 200, durationMs: 1, at: (T0 + 500) * 1000 })
+    advanceTo(T0 + 1000)
+    noteOutbound({ apiId: 5, apiName: 'L', status: 200, durationMs: 1, at: (T0 + 1000) * 1000 })
+    sweepIdle(T0 + 1500)
+    expect(snap(900).entities.some((e) => e.key === 'items/forecasts')).toBe(true)
+  })
+  it('8: an event older than the ring is dropped', () => {
+    advanceTo(T0 + 2000)
+    req({ at: T0 * 1000 })
+    expect(snap(900).entities).toEqual([])
+  })
+  it('9: a JSON code that is not a token falls back to the regex', () => {
+    expect(errorCode('{"code":"x1","error":"BAD_THING"}')).toBe('BAD_THING')
+  })
+  it('10: write routes never carry a token', () => {
+    vi.mocked(currentTraceMeta).mockReturnValue({
+      id: 'r',
+      urlHint: `/api/submission-forms/public/${'a1'.repeat(24)}`,
+      userId: null
+    })
+    noteWrite({
+      collection: 'nivaro_submissions',
+      item: 1,
+      action: 'create',
+      changedFields: [],
+      at: T0 * 1000
+    })
+    expect(drainEvents()[0].route).toBe('/api/submission-forms/public/:id')
+  })
+  it('11: outbound from a GET pages route lands on pages/<slug>', () => {
+    vi.mocked(currentTraceMeta).mockReturnValue({
+      id: 'r',
+      urlHint: '/api/pages/home',
+      userId: 'u1'
+    })
+    noteOutbound({ apiId: 4, apiName: 'P', status: 200, durationMs: 1, at: T0 * 1000 })
+    expect(snap().entities.some((e) => e.key === 'pages/home')).toBe(true)
   })
 })

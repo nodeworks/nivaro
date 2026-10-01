@@ -119,6 +119,8 @@ const partnerNames = new Map<number, string>()
 const edgesIn = new Map<string, number>() // this second only
 const edgesOut = new Map<string, number>()
 let pendingEvents: TrafficEventWire[] = []
+let bufferDropped = 0
+export const EVENT_BUFFER_CAP = 200
 let nowSec = Math.floor(Date.now() / 1000)
 let frameNo = 0
 const bootedAt = Date.now()
@@ -147,7 +149,11 @@ function catchUp(r: Ring, sec: number): void {
   }
   r.lastSec = sec
 }
+function isStale(sec: number): boolean {
+  return sec < nowSec - (RING_SECONDS - 1)
+}
 function bump(r: Ring, sec: number, slot: number, n = 1): void {
+  if (sec < r.lastSec - (RING_SECONDS - 1)) return
   catchUp(r, sec)
   r.counts[(sec % RING_SECONDS) * SLOTS + slot] += n
   r.touchedSec = sec
@@ -166,6 +172,17 @@ function bumpMinute(map: Map<string, MinuteSeries>, key: string, sec: number): v
   let arr = map.get(key)
   if (!arr) {
     if (map.size >= TOP_KEYS_CAP) {
+      const cur = Math.floor(sec / 60)
+      for (const [k, v] of map) {
+        let newest = -1
+        for (let i = 0; i < MINUTE_BUCKETS; i++) if (v.m[i] > newest) newest = v.m[i]
+        if (k !== '__other__' && newest < cur - (MINUTE_BUCKETS - 1)) {
+          map.delete(k)
+          break
+        }
+      }
+    }
+    if (map.size >= TOP_KEYS_CAP) {
       key = '__other__'
       arr = map.get(key)
     }
@@ -183,7 +200,7 @@ function bumpMinute(map: Map<string, MinuteSeries>, key: string, sec: number): v
   if (arr.c[i] < 65535) arr.c[i]++
 }
 function sumMinute(arr: MinuteSeries, windowS: number, sec: number): number {
-  const minutes = Math.max(1, Math.ceil(windowS / 60))
+  const minutes = Math.min(MINUTE_BUCKETS, Math.ceil(windowS / 60) + 1)
   const cur = Math.floor(sec / 60)
   let s = 0
   for (let k = 0; k < minutes; k++) {
@@ -222,7 +239,7 @@ export function errorCode(text: string | null | undefined): string | null {
   if (!text) return null
   try {
     const j = JSON.parse(text)
-    if (j && typeof j.code === 'string' && j.code) return j.code.slice(0, 60)
+    if (j && typeof j.code === 'string' && /^[A-Z_]{4,}$/.test(j.code)) return j.code.slice(0, 60)
   } catch {
     /* not JSON */
   }
@@ -237,11 +254,7 @@ function recordOfPath(path: string): string | null {
 }
 /** R29c: a route template without a method (the trace does not carry one). */
 function templateOfHint(hint: string): string {
-  return normalizePath(hint)
-    .split('/')
-    .map((x) => (ID_SEG.test(x) || x === 'new' ? ':id' : x))
-    .join('/')
-    .slice(0, 200)
+  return routeTemplate('GET', hint).slice(4)
 }
 
 function getEntity(lane: TrafficLane, entity: string): EntityState {
@@ -288,6 +301,14 @@ function getDown(id: DownId, label?: string): NodeState {
 }
 function pushEvent(ev: TrafficEventWire): void {
   pendingEvents.push(ev)
+  if (pendingEvents.length <= EVENT_BUFFER_CAP) return
+  // Over the cap: drop the lowest-priority (then oldest) event, error>create>delete>update>read.
+  let worst = 0
+  for (let i = 1; i < pendingEvents.length; i++) {
+    if (PRIORITY[pendingEvents[i].kind] > PRIORITY[pendingEvents[worst].kind]) worst = i
+  }
+  pendingEvents.splice(worst, 1)
+  bufferDropped++
 }
 function secOf(atMs: number): number {
   const s = Math.floor(atMs / 1000)
@@ -369,6 +390,7 @@ function applyRequest(
   route: string,
   code: string | null
 ): void {
+  if (isStale(Math.floor(ev.at / 1000))) return
   const sec = secOf(ev.at)
   const e = getEntity(c.lane, c.entity)
   const isErr = ev.status >= 400
@@ -406,7 +428,7 @@ function applyRequest(
     pushEvent({
       t: ev.at,
       lane: c.lane,
-      entity: c.entity,
+      entity: e.entity,
       kind: 'error',
       caller,
       route,
@@ -419,7 +441,7 @@ function applyRequest(
     pushEvent({
       t: ev.at,
       lane: c.lane,
-      entity: c.entity,
+      entity: e.entity,
       kind: 'read',
       caller,
       route,
@@ -476,6 +498,7 @@ function callerFromTrace(): { caller: CallerKey; via: string } {
 
 export function noteWrite(ev: TrafficWriteEvent): void {
   try {
+    if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
     const lane: TrafficLane = /^(nivaro_|directus_|sys)/.test(ev.collection) ? 'system' : 'items'
     const e = getEntity(lane, ev.collection.slice(0, 120))
@@ -487,6 +510,7 @@ export function noteWrite(ev: TrafficWriteEvent): void {
       // R4: a write inside a request is already counted by noteRequest.
       bumpMinute(e.callers, caller, sec)
       bump(getCaller(caller), sec, K.req)
+      edgesIn.set(`cron>${lane}`, (edgesIn.get(`cron>${lane}`) ?? 0) + 1)
     }
     const hint = currentTraceMeta()?.urlHint
     const route = hint ? templateOfHint(hint) : `${via} write`
@@ -519,6 +543,7 @@ export function noteWrite(ev: TrafficWriteEvent): void {
 
 export function noteOutbound(ev: TrafficOutboundEvent): void {
   try {
+    if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
     const id: DownId = `ext:${ev.apiId}`
     partnerNames.set(ev.apiId, ev.apiName)
@@ -527,17 +552,29 @@ export function noteOutbound(ev: TrafficOutboundEvent): void {
     bump(dn, sec, K.req)
     if (failed) bump(dn, sec, K.error)
     sample(dn, ev.durationMs)
-    const hint = currentTraceMeta()?.urlHint ?? null
-    const c = hint
-      ? classifyRequest({
-          method: 'POST',
-          path: hint,
-          extensionId: matchExtensionRoute(null, hint)
-        })
-      : null
+    const meta = currentTraceMeta()
+    const hint = meta?.urlHint ?? null
+    let c: Classified | null = null
+    if (hint) {
+      // The trace carries a URL, not a verb: try GET, then POST for routes only POST classifies.
+      const extensionId = matchExtensionRoute(null, hint)
+      c = classifyRequest({ method: 'GET', path: hint, extensionId })
+      if (!c || c.lane === 'other') {
+        const p = classifyRequest({ method: 'POST', path: hint, extensionId })
+        if (p && (!c || p.lane !== 'other')) c = p
+      }
+    }
     const e = c ? getEntity(c.lane, c.entity) : getEntity('other', 'cron')
+    e.lastSeen = sec
     bumpMinute(e.downs, id, sec)
     edgesOut.set(`${e.lane}>${id}`, (edgesOut.get(`${e.lane}>${id}`) ?? 0) + 1)
+    if (!meta) {
+      // No request behind it: a cron / background call (spec §4).
+      const cn = getCaller('cron')
+      bump(cn, sec, K.req)
+      if (failed) bump(cn, sec, K.error)
+      edgesIn.set(`cron>${e.lane}`, (edgesIn.get(`cron>${e.lane}`) ?? 0) + 1)
+    }
   } catch {
     /* never */
   }
@@ -547,10 +584,14 @@ export function noteOutbound(ev: TrafficOutboundEvent): void {
 export function advanceTo(sec: number): void {
   if (sec > nowSec) nowSec = sec
 }
-export function drainEvents(): TrafficEventWire[] {
-  const out = pendingEvents
+function takeEvents(): { events: TrafficEventWire[]; dropped: number } {
+  const out = { events: pendingEvents, dropped: bufferDropped }
   pendingEvents = []
+  bufferDropped = 0
   return out
+}
+export function drainEvents(): TrafficEventWire[] {
+  return takeEvents().events
 }
 const PRIORITY: Record<string, number> = { error: 0, create: 1, delete: 2, update: 3, read: 4 }
 function pickEvents(all: TrafficEventWire[]): { events: TrafficEventWire[]; dropped: number } {
@@ -608,7 +649,10 @@ export function buildFrame(
     const s = secondOf(d, sec)
     if (s[K.req]) ds[key] = [s[K.req], s[K.error], pct(d, 0.95)]
   }
-  const { events, dropped } = pickEvents(drainEvents())
+  const taken = takeEvents()
+  const picked = pickEvents(taken.events)
+  const events = picked.events
+  const dropped = picked.dropped + taken.dropped
   const frame: FrameWire = {
     v: 1,
     at: new Date(sec * 1000).toISOString(),
@@ -815,6 +859,19 @@ export function seenPartnerIds(): number[] {
 /** Hourly sweep: forget entities idle for 15 minutes so capped lanes free their slots. */
 export function sweepIdle(sec = nowSec): number {
   let removed = 0
+  for (const [key, c] of callers) {
+    if (sec - c.touchedSec >= RING_SECONDS) {
+      callers.delete(key)
+      removed++
+    }
+  }
+  for (const [key, d] of downs) {
+    if (key === 'db' || key === 'redis' || key === 'store') continue
+    if (sec - d.touchedSec >= RING_SECONDS) {
+      downs.delete(key)
+      removed++
+    }
+  }
   for (const [key, e] of entities) {
     if (sec - e.lastSeen >= RING_SECONDS && e.entity !== '__other__') {
       entities.delete(key)
@@ -834,6 +891,7 @@ export function resetTrafficMap(): void {
   edgesIn.clear()
   edgesOut.clear()
   pendingEvents = []
+  bufferDropped = 0
   frameNo = 0
   nowSec = 0
   extCompiled = []

@@ -204,6 +204,12 @@ export function entityKey(lane: TrafficLane, entity: string): string {
   return `${lane}/${entity}`
 }
 
+/** R30: share/dashboard/form tokens must never reach a route template. */
+function looksLikeToken(seg: string): boolean {
+  for (const run of seg.match(/[A-Za-z0-9]{12,}/g) ?? []) if (/\d/.test(run)) return true
+  return false
+}
+
 /** `PATCH /api/items/workflows/:id` — id-shaped segments become `:id` so routes aggregate. */
 export function routeTemplate(
   method: string,
@@ -218,7 +224,7 @@ export function routeTemplate(
   }
   const tpl = p
     .split('/')
-    .map((s) => (ID_RE.test(s) ? ':id' : s))
+    .map((s) => (ID_RE.test(s) || looksLikeToken(s) ? ':id' : s))
     .join('/')
   return `${m} ${tpl.slice(0, 200)}`
 }
