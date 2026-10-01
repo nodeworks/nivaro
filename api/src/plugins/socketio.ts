@@ -59,6 +59,11 @@ interface SocketMeta {
 const socketMeta = new Map<string, SocketMeta>()
 let _ioRef: SocketIOServer | null = null
 
+/** The person a socket authenticated as on THIS node (null before auth or elsewhere). */
+export function socketUserOf(socketId: string): { id: string; name: string } | null {
+  return socketMeta.get(socketId)?.user ?? null
+}
+
 /**
  * Remote client reload (#285, targeted 2026-09-25): tell every connected
  * client — or only the named people, or only one app's clients — to show a

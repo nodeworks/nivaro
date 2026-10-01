@@ -9,6 +9,7 @@ import { replayRoutes } from './replay.js'
 import { requestLensesRoutes } from './request-lenses.js'
 import { snapshotRoutes } from './snapshots.js'
 import { topologyRoutes } from './topology.js'
+import { trafficViewRoutes } from './view.js'
 
 /**
  * Extra Traffic Map routes, one plugin per feature. Registered by trafficMapRoutes AFTER its
@@ -31,7 +32,8 @@ const FEATURES: FastifyPluginAsync[] = [
   compareRoutes,
   digestRoutes,
   replayRoutes,
-  topologyRoutes
+  topologyRoutes,
+  trafficViewRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {

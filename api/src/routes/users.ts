@@ -951,6 +951,23 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.traffic_digest = v === true ? true : null
     }
+    if ('traffic_pins' in body) {
+      // #1125 — the Traffic Map watch list: entity keys (`<lane>/<entity>`), at most 40.
+      const v = body.traffic_pins
+      if (v !== null && !Array.isArray(v)) {
+        return reply.code(400).send({ error: 'traffic_pins must be a list of entity keys or null' })
+      }
+      const keys = [...new Set((v ?? []) as unknown[])]
+      if (
+        keys.length > 40 ||
+        keys.some((k) => typeof k !== 'string' || !/^[a-z]{2,12}\/[^\s]{1,160}$/.test(k))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: 'traffic_pins must hold at most 40 entity keys like items/workflows' })
+      }
+      patch.traffic_pins = keys.length ? keys : null
+    }
     if ('team_alerts' in body) {
       // #1037 — the lines a manager wants to hear about when their team crosses them.
       const { normalizeTeamAlerts } = await import('../services/team.js')
