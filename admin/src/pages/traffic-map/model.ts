@@ -33,32 +33,48 @@ export function laneOf(key: string): Lane {
 }
 
 class Ring {
-  counts = new Float64Array(RING * SLOTS)
+  counts: Float64Array
   p95 = 0
   last: number
-  constructor(sec: number) {
+  touched: number
+  constructor(
+    sec: number,
+    private slots = SLOTS
+  ) {
     this.last = sec
+    this.touched = sec
+    this.counts = new Float64Array(RING * slots)
   }
   catchUp(sec: number): void {
     if (sec <= this.last) return
     const gap = Math.min(sec - this.last, RING)
     for (let i = 1; i <= gap; i++) {
-      const idx = ((this.last + i) % RING) * SLOTS
-      this.counts.fill(0, idx, idx + SLOTS)
+      const idx = ((this.last + i) % RING) * this.slots
+      this.counts.fill(0, idx, idx + this.slots)
     }
     this.last = sec
   }
   add(sec: number, slots: number[]): void {
+    if (sec <= this.last - RING) return // older than the ring holds
     this.catchUp(sec)
-    const base = (sec % RING) * SLOTS
-    for (let k = 0; k < SLOTS && k < slots.length; k++) this.counts[base + k] += slots[k]
+    if (sec > this.touched) this.touched = sec
+    const base = (sec % RING) * this.slots
+    for (let k = 0; k < this.slots && k < slots.length; k++) this.counts[base + k] += slots[k]
+  }
+  /** Frames carry complete per-second totals, so applying one SETS its second (idempotent). */
+  set(sec: number, slots: number[]): void {
+    if (sec <= this.last - RING) return
+    this.catchUp(sec)
+    if (sec > this.touched) this.touched = sec
+    const base = (sec % RING) * this.slots
+    for (let k = 0; k < this.slots; k++) this.counts[base + k] = slots[k] ?? 0
   }
   sum(sec: number, win: number): number[] {
     this.catchUp(sec)
-    const out = [0, 0, 0, 0, 0, 0]
+    const out = new Array<number>(this.slots).fill(0)
     for (let i = 0; i < win; i++) {
-      const base = ((((sec - i) % RING) + RING) % RING) * SLOTS
-      for (let k = 0; k < SLOTS; k++) out[k] += this.counts[base + k]
+      const base = ((((sec - i) % RING) + RING) % RING) * this.slots
+      for (let k = 0; k < this.slots; k++) out[k] += this.counts[base + k]
     }
     return out
   }
@@ -68,11 +84,27 @@ class Ring {
     const out = new Array<number>(points).fill(0)
     for (let i = 0; i < win; i++) {
       const s = sec - win + 1 + i
-      const base = (((s % RING) + RING) % RING) * SLOTS
+      const base = (((s % RING) + RING) % RING) * this.slots
       out[Math.min(points - 1, Math.floor(i / per))] += this.counts[base + SLOT.req]
     }
     return out
   }
+}
+
+const FRAME_BUFFER = 5
+const PRUNE_EVERY = 60
+
+type Totals = {
+  req: number
+  read: number
+  create: number
+  update: number
+  delete: number
+  error: number
+  p50: number
+  p95: number
+  outbound_req: number
+  outbound_error: number
 }
 
 export class TrafficModel {
@@ -80,9 +112,18 @@ export class TrafficModel {
   private callers = new Map<string, Ring>()
   private downs = new Map<string, Ring>()
   private meta = new Map<string, SnapshotEntity>()
-  private edgeIn = new Map<string, Ring>() // slot 0 = count
+  private edgeIn = new Map<string, Ring>() // 1 slot: count
   private edgeOut = new Map<string, Ring>()
   private nowSec = Math.floor(Date.now() / 1000)
+  private snapSec = Number.NEGATIVE_INFINITY
+  private recent: Array<{ sec: number; f: TrafficFrame }> = []
+  private seenFrames: string[] = []
+  private framesSince = 0
+  private frameCount = 0
+  /** caller -> entity key -> last frame second a live event from that caller touched it. */
+  private callerSeen = new Map<string, Map<string, number>>()
+  snapshotTotals: TrafficSnapshot['totals'] | null = null
+  snapshotWindow = 60
   events: TrafficEventWire[] = []
   pulses = new Map<string, { kind: Kind; t: number }>()
   flashes = new Map<string, number>()
@@ -98,90 +139,132 @@ export class TrafficModel {
     return this.nowSec
   }
 
-  private ring(map: Map<string, Ring>, key: string): Ring {
+  private ring(map: Map<string, Ring>, key: string, slots = SLOTS): Ring {
     let r = map.get(key)
     if (!r) {
-      r = new Ring(this.nowSec)
+      r = new Ring(this.nowSec, slots)
       map.set(key, r)
     }
     return r
+  }
+
+  /** Spread `total` (per slot) evenly over each of the window's seconds. */
+  private spread(r: Ring, sec: number, win: number, total: number[]): void {
+    const per = total.map((n) => n / win)
+    for (let i = 0; i < win; i++) r.add(sec - win + 1 + i, per)
   }
 
   /** Replace every ring from the snapshot (reconnect / visibility return / window change). */
   applySnapshot(snap: TrafficSnapshot): void {
     const sec = Math.floor(new Date(snap.at).getTime() / 1000)
     this.nowSec = sec
+    this.snapSec = sec
     this.entities.clear()
     this.callers.clear()
     this.downs.clear()
     this.meta.clear()
     this.edgeIn.clear()
     this.edgeOut.clear()
+    this.callerSeen.clear()
+    this.framesSince = 0
+    this.snapshotTotals = snap.totals
+    this.snapshotWindow = snap.window_s
     this.instance = snap.instance
     this.nodeScope = snap.node_scope
     this.sockets = snap.sockets.count
     this.journalSeq = snap.journal_seq
     this.frameNo = snap.frame
     const win = snap.window_s
-    const per = win / 60
     for (const e of snap.entities) {
       const r = this.ring(this.entities, e.key)
       r.p95 = e.p95
-      this.meta.set(e.key, e)
-      const tot = e.req || 1
-      // spread each series bucket evenly over its seconds; kinds follow the window's mix
-      const mix = [1, e.read / tot, e.create / tot, e.update / tot, e.delete / tot, e.error / tot]
-      for (let b = 0; b < e.series.length; b++) {
-        const perSec = e.series[b] / per
-        for (let s = 0; s < per; s++) {
-          const at = sec - win + 1 + Math.floor(b * per) + s
-          r.add(
-            at,
-            mix.map((m) => m * perSec)
-          )
-        }
+      // copy: live frames mutate meta, and the caller's (react-query cached) snapshot must stay intact
+      this.meta.set(e.key, {
+        ...e,
+        recent_writes: [...e.recent_writes],
+        recent_errors: [...e.recent_errors]
+      })
+      // every kind total is spread by the series' shape (evenly when the series is empty),
+      // so a write-only entity with req === 0 still seeds its create/update/delete/error counts
+      const sTot = e.series.reduce((a, b) => a + b, 0)
+      const len = e.series.length || 1
+      const totals = [e.req, e.read, e.create, e.update, e.delete, e.error]
+      for (let i = 0; i < win; i++) {
+        const w =
+          sTot > 0
+            ? e.series[Math.min(len - 1, Math.floor((i * len) / win))] / ((win / len) * sTot)
+            : 1 / win
+        r.add(
+          sec - win + 1 + i,
+          totals.map((n) => n * w)
+        )
       }
       for (const [d, n] of Object.entries(e.down))
-        this.ring(this.edgeOut, `${e.lane}>${d}`).add(sec, [n])
-      for (const c of e.callers) this.ring(this.edgeIn, `${c.key}>${e.lane}`).add(sec, [c.n])
+        this.spread(this.ring(this.edgeOut, `${e.lane}>${d}`, 1), sec, win, [n])
+      for (const c of e.callers)
+        this.spread(this.ring(this.edgeIn, `${c.key}>${e.lane}`, 1), sec, win, [c.n])
     }
     for (const c of snap.callers)
-      this.ring(this.callers, c.key).add(sec, [c.req, 0, 0, 0, 0, c.error])
+      this.spread(this.ring(this.callers, c.key), sec, win, [c.req, 0, 0, 0, 0, c.error])
     for (const d of snap.down) {
       const r = this.ring(this.downs, d.id)
-      r.add(sec, [d.req, 0, 0, 0, 0, d.error])
+      this.spread(r, sec, win, [d.req, 0, 0, 0, 0, d.error])
       r.p95 = d.p95
       this.downLabels.set(d.id, d.label)
     }
+    // frames that arrived before the snapshot but are newer than it survive the replacement
+    for (const { sec: fs, f } of this.recent) if (fs > sec) this.applyFrameData(f, fs)
+  }
+
+  private applyFrameData(f: TrafficFrame, sec: number): void {
+    if (sec > this.nowSec) this.nowSec = sec
+    for (const [key, v] of Object.entries(f.entities)) {
+      const r = this.ring(this.entities, key)
+      r.set(sec, v.slice(0, 6))
+      if (v[6]) {
+        r.p95 = v[6]
+        const m = this.meta.get(key)
+        if (m) m.p95 = v[6]
+      }
+    }
+    for (const [key, v] of Object.entries(f.callers))
+      this.ring(this.callers, key).set(sec, [v[0], 0, 0, 0, 0, v[1]])
+    for (const [key, v] of Object.entries(f.down)) {
+      const r = this.ring(this.downs, key)
+      r.set(sec, [v[0], 0, 0, 0, 0, v[1]])
+      if (v[2]) r.p95 = v[2]
+    }
+    for (const [key, n] of Object.entries(f.edges_in)) this.ring(this.edgeIn, key, 1).set(sec, [n])
+    for (const [key, n] of Object.entries(f.edges_out))
+      this.ring(this.edgeOut, key, 1).set(sec, [n])
   }
 
   applyFrame(f: TrafficFrame): void {
     const sec = Math.floor(new Date(f.at).getTime() / 1000)
-    if (sec > this.nowSec) this.nowSec = sec
+    if (sec < this.snapSec) return // the snapshot already covers that second
+    const id = `${sec}|${f.frame}`
+    if (this.seenFrames.includes(id)) return // duplicate delivery
+    this.seenFrames.push(id)
+    if (this.seenFrames.length > 20) this.seenFrames.shift()
+    this.recent.push({ sec, f })
+    if (this.recent.length > FRAME_BUFFER) this.recent.shift()
+    this.framesSince++
     this.frameNo = f.frame
     this.lastFrameAt = Date.now()
     this.sockets = f.sockets
     if (f.journal_seq != null) this.journalSeq = f.journal_seq
     this.instance = f.instance || this.instance
-    for (const [key, v] of Object.entries(f.entities)) {
-      const r = this.ring(this.entities, key)
-      r.add(sec, v.slice(0, 6))
-      if (v[6]) r.p95 = v[6]
-      const m = this.meta.get(key)
-      if (m) m.p95 = v[6] ?? m.p95
+    this.applyFrameData(f, sec)
+    for (const [key, v] of Object.entries(f.entities))
       if (v[SLOT.error] > 0) this.flashes.set(key, Date.now())
-    }
-    for (const [key, v] of Object.entries(f.callers))
-      this.ring(this.callers, key).add(sec, [v[0], 0, 0, 0, 0, v[1]])
-    for (const [key, v] of Object.entries(f.down)) {
-      const r = this.ring(this.downs, key)
-      r.add(sec, [v[0], 0, 0, 0, 0, v[1]])
-      if (v[2]) r.p95 = v[2]
-    }
-    for (const [key, n] of Object.entries(f.edges_in)) this.ring(this.edgeIn, key).add(sec, [n])
-    for (const [key, n] of Object.entries(f.edges_out)) this.ring(this.edgeOut, key).add(sec, [n])
     for (const ev of f.events) {
       const key = `${ev.lane}/${ev.entity}`
+      let seen = this.callerSeen.get(ev.caller)
+      if (!seen) {
+        seen = new Map()
+        this.callerSeen.set(ev.caller, seen)
+      }
+      seen.set(key, sec)
       if (ev.kind === 'create' || ev.kind === 'update' || ev.kind === 'delete') {
         this.pulses.set(key, { kind: ev.kind, t: Date.now() })
         const m = this.meta.get(key)
@@ -217,6 +300,22 @@ export class TrafficModel {
     if (f.events.length) {
       const sorted = f.events.slice().sort((a, b) => b.t - a.t)
       this.events = [...sorted, ...this.events].slice(0, TICKER_CAP)
+    }
+    if (++this.frameCount % PRUNE_EVERY === 0) this.prune()
+  }
+
+  /** Drop everything idle for a full ring length so a long session cannot grow without bound. */
+  private prune(): void {
+    const cutoff = this.nowSec - RING
+    for (const map of [this.entities, this.callers, this.downs, this.edgeIn, this.edgeOut])
+      for (const [k, r] of map) if (r.touched <= cutoff) map.delete(k)
+    for (const k of [...this.meta.keys()]) if (!this.entities.has(k)) this.meta.delete(k)
+    const nowMs = Date.now()
+    for (const [k, v] of this.pulses) if (nowMs - v.t >= RING * 1000) this.pulses.delete(k)
+    for (const [k, t] of this.flashes) if (nowMs - t >= RING * 1000) this.flashes.delete(k)
+    for (const [c, seen] of this.callerSeen) {
+      for (const [k, s] of seen) if (s <= cutoff) seen.delete(k)
+      if (!seen.size) this.callerSeen.delete(c)
     }
   }
 
@@ -276,34 +375,50 @@ export class TrafficModel {
     const kinds: Kind[] = ['read', 'create', 'update', 'delete', 'error']
     const out = [0, 0, 0, 0, 0, 0]
     for (let k = 1; k <= 5; k++) if (f.kinds.has(kinds[k - 1])) out[k] = s[k]
+    // with a kind deselected `req` is a proxy: the sum of the selected kind slots
     out[0] = f.kinds.size === 5 ? s[0] : out[1] + out[2] + out[3] + out[4] + out[5]
     return out
   }
 
-  totals(
-    win: number,
-    f: Filters
-  ): {
-    req: number
-    read: number
-    create: number
-    update: number
-    delete: number
-    error: number
-    p95: number
-    outbound_req: number
-    outbound_error: number
-  } {
+  /**
+   * Entity passes the caller filter? The wire has no entity x caller per-second data, so this is
+   * APPROXIMATE: the entity's snapshot top-callers include the caller, or a live event from that
+   * caller touched it inside the window.
+   */
+  private callerTouches(caller: string, key: string, win: number): boolean {
+    if (this.meta.get(key)?.callers.some((c) => c.key === caller)) return true
+    const s = this.callerSeen.get(caller)?.get(key)
+    return s !== undefined && s > this.nowSec - win
+  }
+
+  /**
+   * Window totals. req/error come from the caller's ring when a caller filter is set. p50/p95:
+   * the snapshot's real totals while no frame has moved past it (same window); afterwards a
+   * request-weighted mean of the entities' latest p50/p95 (a live-only approximation).
+   */
+  totals(win: number, f: Filters): Totals {
     const t = [0, 0, 0, 0, 0, 0]
+    let w = 0
+    let p50 = 0
     let p95 = 0
     for (const key of this.entities.keys()) {
       const lane = laneOf(key)
       // lane `other` is never drawn but always counted in totals (R24)
       if (lane !== 'other' && !f.types.has(lane)) continue
+      if (f.caller && !this.callerTouches(f.caller, key, win)) continue
       const s = this.filteredSum(key, win, f)
       for (let k = 0; k < 6; k++) t[k] += s[k]
-      p95 = Math.max(p95, this.entityP95(key))
+      w += s[0]
+      p50 += s[0] * (this.meta.get(key)?.p50 ?? 0)
+      p95 += s[0] * this.entityP95(key)
     }
+    if (f.caller) {
+      const [r, e] = this.callerSum(f.caller, win)
+      t[0] = r
+      t[5] = e
+    }
+    const snap = this.snapshotTotals
+    const useSnap = snap && this.framesSince === 0 && win === this.snapshotWindow && !f.caller
     let outbound = 0
     let outboundErr = 0
     for (const id of this.downs.keys()) {
@@ -319,7 +434,8 @@ export class TrafficModel {
       update: t[3],
       delete: t[4],
       error: t[5],
-      p95,
+      p50: useSnap ? snap.p50 : w ? p50 / w : 0,
+      p95: useSnap ? snap.p95 : w ? p95 / w : 0,
       outbound_req: outbound,
       outbound_error: outboundErr
     }
@@ -352,6 +468,7 @@ export class TrafficModel {
     for (const key of this.entities.keys()) {
       const lane = laneOf(key)
       if (!f.types.has(lane)) continue
+      if (f.caller && !this.callerTouches(f.caller, key, win)) continue
       const s = this.filteredSum(key, win, f)
       const total = s[0]
       if (total <= 0) continue

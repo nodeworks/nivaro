@@ -186,6 +186,7 @@ export interface DownHistory {
   status_codes?: Record<string, number>
   top_paths?: Array<{ path: string; n: number }>
   note?: string
+  truncated?: boolean
 }
 export interface Filters {
   types: Set<Lane>

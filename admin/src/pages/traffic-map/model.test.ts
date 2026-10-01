@@ -215,3 +215,149 @@ describe('rulings', () => {
     expect(m.hot(60, f, 5)).toEqual([])
   })
 })
+
+describe('fix round 1', () => {
+  const quiet = (sec: number, n = 2, over: Partial<TrafficFrame> = {}): TrafficFrame =>
+    frame(sec, {
+      frame: sec,
+      entities: { 'items/workflows': [n, n, 0, 0, 0, 0, 100] },
+      callers: { uA: [n, 0] },
+      down: { db: [n, 0, 10] },
+      edges_in: { 'uA>items': n },
+      edges_out: { 'items>db': n },
+      events: [],
+      ...over
+    })
+  it('1 callers, down and edges seed spread so live frames do not stack', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snap())
+    for (let i = 1; i <= 30; i++) m.applyFrame(quiet(T0 + i))
+    expect(m.callerSum('uA', 60)[0]).toBe(110) // snapshot says uA made 100; 30 live s at 2 + 30 seeded s at 100/60
+    expect(m.downSum('db', 60)[0]).toBe(120)
+    expect(m.edges(60, defaultFilters()).out.get('items>db')).toBeCloseTo(2)
+    expect(m.edges(60, defaultFilters()).in.get('uA>items')).toBeCloseTo(110 / 60)
+  })
+  it('2 duplicate frame is idempotent', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snap())
+    m.applyFrame(quiet(T0 + 1, 5))
+    const a = m.entitySum('items/workflows', 60)[0]
+    m.applyFrame(quiet(T0 + 1, 5))
+    expect(m.entitySum('items/workflows', 60)[0]).toBe(a)
+    expect(m.events.length).toBe(0)
+  })
+  it('2 frame for an already-covered older second is ignored', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snap())
+    m.applyFrame(quiet(T0 - 5, 50))
+    expect(m.entitySum('items/workflows', 60)[0]).toBe(120)
+  })
+  it('2 a frame received before the snapshot but newer survives it', () => {
+    const m = new TrafficModel()
+    m.applyFrame(quiet(T0 + 1, 7))
+    m.applySnapshot(snap())
+    expect(m.entitySum('items/workflows', 60)[0]).toBe(120 - 2 + 7 - 0)
+  })
+  it('3 write-only entity with req 0 seeds its kind counts', () => {
+    const m = new TrafficModel()
+    const e = {
+      ...snap().entities[0],
+      req: 0,
+      read: 0,
+      create: 50,
+      update: 0,
+      error: 0,
+      series: new Array(60).fill(0)
+    }
+    m.applySnapshot(snap({ entities: [e] }))
+    expect(m.entitySum('items/workflows', 60)[2]).toBe(50)
+  })
+  it('4 caller filter drives totals and hot', () => {
+    const m = new TrafficModel()
+    const e2 = {
+      ...snap().entities[0],
+      key: 'items/other',
+      entity: 'other',
+      callers: [{ key: 'uZ', n: 5 }]
+    }
+    m.applySnapshot(snap({ entities: [snap().entities[0], e2] }))
+    const f = defaultFilters()
+    f.caller = 'k7'
+    expect(m.totals(60, f).req).toBe(20)
+    expect(m.totals(60, f).error).toBe(4)
+    expect(m.hot(60, f, 5).map((r) => r.key)).toEqual(['items/workflows'])
+    m.applyFrame(
+      quiet(T0 + 1, 2, {
+        events: [{ t: 1, lane: 'items', entity: 'other', kind: 'read', caller: 'k7', route: 'r' }]
+      })
+    )
+    expect(
+      m
+        .hot(60, f, 5)
+        .map((r) => r.key)
+        .sort()
+    ).toEqual(['items/other', 'items/workflows'])
+  })
+  it('5 stale add is ignored', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snap())
+    m.applyFrame(quiet(T0 + 2000, 1))
+    m.applyFrame(quiet(T0 + 1, 99))
+    expect(m.entitySum('items/workflows', 900)[0]).toBe(1)
+  })
+  it('6 the snapshot object is never mutated', () => {
+    const m = new TrafficModel()
+    const s = snap()
+    m.applySnapshot(s)
+    m.applyFrame(
+      quiet(T0 + 1, 2, {
+        events: [
+          {
+            t: 1,
+            lane: 'items',
+            entity: 'workflows',
+            kind: 'update',
+            caller: 'uA',
+            route: 'r',
+            record: '1'
+          }
+        ]
+      })
+    )
+    expect(s.entities[0].p95).toBe(500)
+    expect(s.entities[0].recent_writes).toHaveLength(0)
+    expect(m.entityMeta('items/workflows')?.recent_writes).toHaveLength(1)
+  })
+  it('7 p95 ignores zero and agrees between meta and ring', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snap())
+    m.applyFrame(quiet(T0 + 1, 2, { entities: { 'items/workflows': [1, 1, 0, 0, 0, 0, 0] } }))
+    expect(m.entityMeta('items/workflows')?.p95).toBe(500)
+    expect(m.entityP95('items/workflows')).toBe(500)
+  })
+  it('8 snapshot totals p50/p95 are kept until frames move on', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snap())
+    expect(m.snapshotTotals?.p95).toBe(500)
+    expect(m.totals(60, defaultFilters()).p50).toBe(100)
+    expect(m.totals(60, defaultFilters()).p95).toBe(500)
+    m.applyFrame(quiet(T0 + 1))
+    expect(m.totals(60, defaultFilters()).p95).toBeGreaterThan(0)
+  })
+  it('10 idle rings are pruned', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snap())
+    for (let i = 0; i < 60; i++)
+      m.applyFrame({
+        ...quiet(T0 + 1000 + i),
+        entities: { 'items/fresh': [1, 1, 0, 0, 0, 0, 5] },
+        callers: {},
+        down: {},
+        edges_in: {},
+        edges_out: {}
+      })
+    expect(m.entityKeys()).toEqual(['items/fresh'])
+    expect(m.entityMeta('items/workflows')).toBeNull()
+    expect(m.callerKeys()).toEqual([])
+  })
+})
