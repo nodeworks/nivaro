@@ -491,3 +491,68 @@ tr.nvr-row-flash > td {
     animation: none !important;
   }
 }
+
+/* Traffic Map — page tokens. The canvas reads the --tm-* set through layout.ts readTokens(),
+   so every colour on the page (panels, kind swatches, particles) comes from here. Kind colours
+   are data colours only; the -ink variants are their text forms, >= 4.5:1 on card, on
+   --tm-error-soft rows and on --tm-accent-soft selections in both themes. */
+.traffic-map {
+  --tm-bg: #f4f6f8;
+  --tm-card: #ffffff;
+  --tm-card-2: #f8fafc;
+  --tm-fg: #172940;
+  --tm-fg-2: #475569;
+  --tm-muted: #64748b;
+  --tm-line: #dbe2ea;
+  --tm-line-2: #eceff3;
+  --tm-accent: var(--nvr-cyan);
+  --tm-accent-ink: #0e7490;
+  --tm-accent-soft: rgb(var(--nvr-cyan-rgb) / 0.12);
+  --tm-read: #0891b2;
+  --tm-read-ink: #0e7490;
+  --tm-create: #15803d;
+  --tm-update: #b45309;
+  --tm-on-update: #ffffff;
+  --tm-delete: #475569;
+  --tm-error: #dc2626;
+  --tm-error-ink: #b91c1c;
+  --tm-error-soft: rgba(220, 38, 38, 0.1);
+  --tm-edge: rgba(23, 41, 64, 0.16);
+  --tm-node: #ffffff;
+  --tm-node-line: #cbd5e1;
+  --tm-skeleton: #eceff3;
+}
+.dark .traffic-map {
+  --tm-bg: hsl(var(--background));
+  --tm-card: hsl(var(--card));
+  --tm-card-2: #20242a;
+  --tm-fg: #edf0f3;
+  --tm-fg-2: #b9c0c9;
+  --tm-muted: #949ca8;
+  --tm-line: #3c4049;
+  --tm-line-2: #30343c;
+  --tm-accent-ink: #67e8f9;
+  --tm-accent-soft: rgb(var(--nvr-cyan-rgb) / 0.14);
+  --tm-read: #38cfe9;
+  --tm-read-ink: #38cfe9;
+  --tm-create: #86c98f;
+  --tm-update: #e0b45a;
+  --tm-on-update: #1b1e24;
+  --tm-delete: #a3adb8;
+  --tm-error: #f07070;
+  --tm-error-ink: #f59595;
+  --tm-error-soft: rgba(240, 112, 112, 0.14);
+  --tm-edge: rgba(237, 240, 243, 0.14);
+  --tm-node: #2c3137;
+  --tm-node-line: #4a5058;
+  --tm-skeleton: #30343c;
+}
+/* New ticker rows fade from the accent tint (state change, not decoration). */
+@keyframes tm-evin {
+  from { background-color: var(--tm-accent-soft); }
+  to { background-color: transparent; }
+}
+.traffic-map .tm-ev-fresh { animation: tm-evin 600ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .traffic-map .tm-ev-fresh { animation: none; }
+}

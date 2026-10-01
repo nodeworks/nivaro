@@ -171,6 +171,7 @@ const InboundMappingsPage = lazy(() =>
 )
 const BackgroundJobs = lazy(() => import('@/pages/BackgroundJobs'))
 const Realtime = lazy(() => import('@/pages/Realtime'))
+const TrafficMap = lazy(() => import('@/pages/traffic-map/TrafficMap'))
 
 const MonitorsPage = lazy(() => import('@/pages/Monitors'))
 const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
@@ -556,6 +557,7 @@ export default function App() {
                   <Route path='inbound-mappings' element={<InboundMappingsPage />} />
                   <Route path='background-jobs' element={<BackgroundJobs />} />
                   <Route path='realtime' element={<Realtime />} />
+                  <Route path='traffic-map' element={<TrafficMap />} />
                   <Route path='monitors' element={<MonitorsPage />} />
                   <Route path='security-center' element={<SecurityCenter />} />
                   <Route path='config-health' element={<ConfigHealth />} />
