@@ -7,7 +7,11 @@ import { NotificationBell } from '@/components/notification-bell'
 vi.mock('socket.io-client', () => ({
   io: () => ({
     on: vi.fn(),
+    off: vi.fn(),
+    onAny: vi.fn(),
+    offAny: vi.fn(),
     emit: vi.fn(),
+    connected: false,
     disconnect: vi.fn(),
   }),
 }))
