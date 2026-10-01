@@ -3,9 +3,10 @@ import { db } from '../db/index.js'
 import { extensionRoutes, loadedExtensionLabels } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getRealtimeStats } from '../plugins/socketio.js'
+import { selectInChunks } from '../services/db-batch.js'
 import { currentSeq } from '../services/event-journal.js'
 import { listTraces } from '../services/request-trace.js'
-import { LANES, type TrafficLane } from '../services/traffic-entities.js'
+import { LANES, pathTemplate, type TrafficLane } from '../services/traffic-entities.js'
 import {
   HISTORY_ROW_CAP,
   type HistoryRow,
@@ -52,6 +53,12 @@ interface Catalog {
 let catalogCache: { at: number; value: Catalog } | null = null
 let catalogInflight: Promise<Catalog> | null = null
 const CATALOG_TTL_MS = 60_000
+const ID_CHUNK = 1000
+/** History reads failing must not read as "no traffic" — the inspector shows its retry state. */
+const HISTORY_UNAVAILABLE = {
+  error: 'Traffic history could not be read right now',
+  code: 'TRAFFIC_HISTORY_UNAVAILABLE'
+}
 
 async function rowsBase<T>(
   fn: () => PromiseLike<unknown>,
@@ -86,14 +93,19 @@ async function buildCatalog(state: { failed: boolean }): Promise<Catalog> {
     rows<{ key: string; label: string | null }>(() =>
       db('nivaro_inbound_mappings').select('key', 'label')
     ),
+    // Every id list is chunked: MSSQL caps a statement at ~2,100 bound parameters.
     partnerIds.length
       ? rows<{ id: number; name: string }>(() =>
-          db('nivaro_external_apis').whereIn('id', partnerIds).select('id', 'name')
+          selectInChunks(partnerIds, ID_CHUNK, (chunk) =>
+            Promise.resolve(db('nivaro_external_apis').whereIn('id', chunk).select('id', 'name'))
+          )
         )
       : Promise.resolve([]),
     keyIds.length
       ? rows<{ id: number; name: string }>(() =>
-          db('nivaro_api_keys').whereIn('id', keyIds).select('id', 'name')
+          selectInChunks(keyIds, ID_CHUNK, (chunk) =>
+            Promise.resolve(db('nivaro_api_keys').whereIn('id', chunk).select('id', 'name'))
+          )
         )
       : Promise.resolve([]),
     userIds.length
@@ -104,9 +116,13 @@ async function buildCatalog(state: { failed: boolean }): Promise<Catalog> {
           email: string
           account_kind: string | null
         }>(() =>
-          db('nivaro_users')
-            .whereIn('id', userIds)
-            .select('id', 'first_name', 'last_name', 'email', 'account_kind')
+          selectInChunks(userIds, ID_CHUNK, (chunk) =>
+            Promise.resolve(
+              db('nivaro_users')
+                .whereIn('id', chunk)
+                .select('id', 'first_name', 'last_name', 'email', 'account_kind')
+            )
+          )
         )
       : Promise.resolve([])
   ])
@@ -243,7 +259,13 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
         }
         for (const l of n.like ?? []) b.orWhereRaw("path LIKE ? ESCAPE '\\'", [l])
       })
-      const logRows = (await Promise.resolve(q).catch(() => [])) as HistoryRow[]
+      let logRows: HistoryRow[]
+      try {
+        logRows = (await q) as HistoryRow[]
+      } catch (err) {
+        req.log.warn({ err }, 'traffic-map entity history read failed')
+        return reply.code(503).send(HISTORY_UNAVAILABLE)
+      }
       const body = summarizeHistory(
         logRows,
         lane,
@@ -303,14 +325,7 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
       }
       const since = new Date(Date.now() - hours * 3600_000)
       const bucketS = hours === 1 ? 60 : hours === 6 ? 300 : 900
-      const logRows = (await Promise.resolve(
-        db('nivaro_outbound_log')
-          .where('api_id', Number(m[1]))
-          .where('created_at', '>=', since)
-          .orderBy('created_at', 'desc')
-          .limit(HISTORY_ROW_CAP)
-          .select('method', 'path', 'status', 'ok', 'duration_ms', 'created_at')
-      ).catch(() => [])) as Array<{
+      let logRows: Array<{
         method: string
         path: string | null
         status: number | null
@@ -318,6 +333,17 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
         duration_ms: number
         created_at: Date
       }>
+      try {
+        logRows = await db('nivaro_outbound_log')
+          .where('api_id', Number(m[1]))
+          .where('created_at', '>=', since)
+          .orderBy('created_at', 'desc')
+          .limit(HISTORY_ROW_CAP)
+          .select('method', 'path', 'status', 'ok', 'duration_ms', 'created_at')
+      } catch (err) {
+        req.log.warn({ err }, 'traffic-map down-node history read failed')
+        return reply.code(503).send(HISTORY_UNAVAILABLE)
+      }
       const start = Math.floor(since.getTime() / 1000)
       const points = (hours * 3600) / bucketS
       const series = Array.from({ length: points }, (_, i) => ({
@@ -343,7 +369,8 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
           error++
         }
         series[i].lat.push(r.duration_ms)
-        const key = `${r.method} ${(r.path ?? '').split('?')[0].slice(0, 120)}`
+        // Templated like request routes, so `/orders/123` and `/orders/456` aggregate.
+        const key = `${String(r.method || 'GET').toUpperCase()} ${pathTemplate(r.path ?? '').slice(0, 120)}`
         paths.set(key, (paths.get(key) ?? 0) + 1)
         const code = String(r.status ?? 'network')
         codes[code] = (codes[code] ?? 0) + 1

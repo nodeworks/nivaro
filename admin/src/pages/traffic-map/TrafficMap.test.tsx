@@ -663,6 +663,101 @@ describe('history helpers', () => {
     expect(historyAvailable({ kind: 'lane', id: 'items' })).toBe(false)
     expect(historyAvailable({ kind: 'caller', id: 'uA' })).toBe(false)
     expect(historyAvailable({ kind: 'entity', id: 'items/__other__' })).toBe(false)
+    expect(historyAvailable({ kind: 'entity', id: 'other/__background__' })).toBe(false)
     expect(historyAvailable({ kind: 'down', id: 'db' })).toBe(true)
+  })
+})
+
+describe('final-review fixes', () => {
+  beforeEach(() => {
+    handlers.clear()
+    socketHandlers.clear()
+    getMock.mockReset()
+  })
+
+  it('a 503 from the history route shows the error state with the server message', async () => {
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes('/traffic-map/snapshot')) return { data: { data: snapshot } }
+      if (url.includes('/traffic-map/catalog')) return { data: { data: catalog } }
+      if (url.includes('/traffic-map/entity/items/workflows?hours=1')) {
+        throw Object.assign(new Error('Request failed with status code 503'), {
+          response: {
+            status: 503,
+            data: {
+              error: 'Traffic history could not be read right now',
+              code: 'TRAFFIC_HISTORY_UNAVAILABLE'
+            }
+          }
+        })
+      }
+      return { data: { data: {} } }
+    })
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByTestId('tm-inspector-name').textContent).toBe('workflows')
+    )
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: '1h' }))
+    })
+    await waitFor(() => expect(document.getElementById('tm-history-error')).not.toBeNull())
+    expect(screen.getByRole('alert').textContent).toMatch(/could not be read/)
+    expect(document.getElementById('tm-history-retry')).not.toBeNull()
+  })
+
+  it('refetches the catalog when a frame names an unknown caller, at most once a minute', async () => {
+    let now = 1_000_000_000_000
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      mockApi()
+      renderPage()
+      await waitFor(() =>
+        expect(screen.getByTestId('tm-inspector-name').textContent).toBe('workflows')
+      )
+      const catalogCalls = () =>
+        getMock.mock.calls.filter((c) => String(c[0]).includes('/traffic-map/catalog')).length
+      expect(catalogCalls()).toBe(1)
+      const onFrame = handlers.get('traffic-map:frame')
+      // A known caller never refetches.
+      act(() => {
+        onFrame?.({ ...emptyFrame(T0 + 1, 2, 1), callers: { uA: [1, 0] } })
+      })
+      now += 61_000
+      act(() => {
+        onFrame?.({ ...emptyFrame(T0 + 2, 3, 1), callers: { uA: [1, 0] } })
+      })
+      expect(catalogCalls()).toBe(1)
+      // An unknown caller does…
+      act(() => {
+        onFrame?.({ ...emptyFrame(T0 + 3, 4, 1), callers: { uNEWPERSON: [1, 0] } })
+      })
+      await waitFor(() => expect(catalogCalls()).toBe(2))
+      // …but not again inside the minute, even for another unknown partner.
+      act(() => {
+        onFrame?.({ ...emptyFrame(T0 + 4, 5, 1), down: { 'ext:42': [1, 0, 10] } })
+      })
+      expect(catalogCalls()).toBe(2)
+      now += 61_000
+      act(() => {
+        onFrame?.({ ...emptyFrame(T0 + 5, 6, 1), down: { 'ext:42': [1, 0, 10] } })
+      })
+      await waitFor(() => expect(catalogCalls()).toBe(3))
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('catalogMissing checks callers and partners, and a null catalog is missing', async () => {
+    const { catalogMissing } = await import('./TrafficMap')
+    const cat = { ...catalog, partners: { '3': 'MDSi' } } as never
+    expect(catalogMissing(null, [])).toBe(true)
+    expect(catalogMissing(cat, ['uA', 'cron'], ['db', 'ext:3'])).toBe(false)
+    expect(catalogMissing(cat, ['uB'])).toBe(true)
+    expect(catalogMissing(cat, [], ['ext:9'])).toBe(true)
+  })
+
+  it('labels the background pseudo-entity', async () => {
+    const { entityLabel } = await import('./EventTicker')
+    expect(entityLabel(null, 'other', '__background__')).toBe('Background jobs')
+    expect(entityLabel(catalog as never, 'other', '__background__')).toBe('Background jobs')
   })
 })

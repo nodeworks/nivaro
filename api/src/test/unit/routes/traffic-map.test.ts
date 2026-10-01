@@ -337,3 +337,126 @@ describe('catalog caching', () => {
     expect(calls).toBe(2) // good build now cached
   })
 })
+
+describe('final-review fixes', () => {
+  /** Like tableMock, but the named tables reject (a SQL failure). */
+  function failingTables(failing: Set<string>, rows: Record<string, unknown[]> = {}) {
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      const chain: Record<string, unknown> = {}
+      for (const m of [
+        'where',
+        'whereIn',
+        'whereNull',
+        'whereNot',
+        'orWhereRaw',
+        'orderBy',
+        'limit',
+        'select'
+      ])
+        chain[m] = vi.fn((a?: unknown) => {
+          if (typeof a === 'function') (a as (b: unknown) => void)(chain)
+          return chain
+        })
+      const p = failing.has(table)
+        ? Promise.reject(new Error('Timeout acquiring a connection'))
+        : Promise.resolve(rows[table] ?? [])
+      p.catch(() => {})
+      chain.catch = (fn: (e: unknown) => unknown) => p.catch(fn)
+      // biome-ignore lint/suspicious/noThenProperty: knex builders are thenable
+      chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => p.then(res, rej)
+      return chain
+    })
+  }
+
+  it('entity history: a failed log read is a 503 with a code, not "no traffic"', async () => {
+    failingTables(new Set(['nivaro_api_logs']))
+    const res = await buildApp().inject({
+      method: 'GET',
+      url: '/traffic-map/entity/items/workflows?hours=1'
+    })
+    expect(res.statusCode).toBe(503)
+    expect(res.json().code).toBe('TRAFFIC_HISTORY_UNAVAILABLE')
+  })
+  it('entity history: a failed issues read still answers (issues are an extra)', async () => {
+    failingTables(new Set(['nivaro_issues']))
+    const res = await buildApp().inject({
+      method: 'GET',
+      url: '/traffic-map/entity/items/workflows?hours=1'
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.issues).toEqual([])
+  })
+  it('down history: a failed outbound-log read is a 503 with a code', async () => {
+    failingTables(new Set(['nivaro_outbound_log']))
+    const res = await buildApp().inject({ method: 'GET', url: '/traffic-map/down/ext:3?hours=1' })
+    expect(res.statusCode).toBe(503)
+    expect(res.json().code).toBe('TRAFFIC_HISTORY_UNAVAILABLE')
+  })
+  it('down history: top paths are route templates, so id segments aggregate', async () => {
+    const at = new Date(Date.now() - 60_000)
+    const row = (path: string) => ({
+      method: 'post',
+      path,
+      status: 200,
+      ok: true,
+      duration_ms: 5,
+      created_at: at
+    })
+    tableMock({
+      nivaro_outbound_log: [
+        row('/orders/123'),
+        row('/orders/456?token=x'),
+        row('/users/jane@example.com')
+      ]
+    })
+    const d = (
+      await buildApp().inject({ method: 'GET', url: '/traffic-map/down/ext:3?hours=1' })
+    ).json().data
+    expect(d.top_paths[0]).toEqual({ path: 'POST /orders/:id', n: 2 })
+    expect(JSON.stringify(d)).not.toContain('jane@example.com')
+    expect(JSON.stringify(d)).not.toContain('token=x')
+  })
+  it('catalog: user ids are read in chunks under the bound-parameter cap', async () => {
+    resetTrafficCatalog()
+    for (let i = 0; i < 2500; i++) {
+      noteRequest(
+        req({
+          authMethod: 'session',
+          apiKeyId: null,
+          userId: `user-${String(i).padStart(5, '0')}`
+        }) as never
+      )
+    }
+    const chunkSizes: number[] = []
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
+      const chain: Record<string, unknown> = {}
+      let ids: string[] = []
+      chain.whereIn = vi.fn((_c: string, v: string[]) => {
+        ids = v
+        if (table === 'nivaro_users') chunkSizes.push(v.length)
+        return chain
+      })
+      chain.select = vi.fn(() => chain)
+      // biome-ignore lint/suspicious/noThenProperty: thenable builder
+      chain.then = (res: (v: unknown) => unknown) =>
+        res(
+          table === 'nivaro_users'
+            ? ids.map((id) => ({
+                id,
+                first_name: 'N',
+                last_name: id,
+                email: 'x@example.com',
+                account_kind: null
+              }))
+            : []
+        )
+      return chain
+    })
+    const res = await buildApp().inject({ method: 'GET', url: '/traffic-map/catalog' })
+    expect(res.statusCode).toBe(200)
+    expect(chunkSizes.length).toBe(3)
+    expect(Math.max(...chunkSizes)).toBeLessThanOrEqual(1000)
+    const callers = res.json().data.callers as Record<string, { label: string }>
+    expect(callers['uUSER-02499'].label).toBe('N USER-02499')
+  })
+})

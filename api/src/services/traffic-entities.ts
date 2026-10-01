@@ -222,11 +222,19 @@ export function routeTemplate(
     const op = graphqlOperation && OP_RE.test(graphqlOperation) ? graphqlOperation : 'anonymous'
     return `${m} ${p} · ${op}`
   }
-  const tpl = p
-    .split('/')
-    .map((s) => (ID_RE.test(s) || looksLikeToken(s) ? ':id' : s))
-    .join('/')
-  return `${m} ${tpl.slice(0, 200)}`
+  return `${m} ${pathTemplate(p)}`
+}
+
+/** A path with id / token / email segments replaced by `:id` (query string dropped), ≤ 200. */
+export function pathTemplate(path: string): string {
+  return (
+    normalizePath(path)
+      .split('/')
+      // A segment with '@' (raw or %40-encoded) is an email/UPN (`/api/directory/users/<email>`).
+      .map((s) => (ID_RE.test(s) || looksLikeToken(s) || /@|%40/i.test(s) ? ':id' : s))
+      .join('/')
+      .slice(0, 200)
+  )
 }
 
 export function callerKeyFor(src: {

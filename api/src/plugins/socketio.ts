@@ -152,6 +152,42 @@ export function getRecordViewerSnapshot(): Array<{
 // monitor flips). Allowlisted — a socket can't invent a privileged room name.
 const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors', 'firehose', 'flows', 'traffic-map'])
 
+/**
+ * Per-socket join/leave ordering for watch rooms. `admin:join` awaits a role lookup while
+ * `admin:leave` is synchronous, so a quick join + leave would otherwise land the join AFTER
+ * the leave and keep the socket in the room forever. Every join/leave bumps the room's
+ * generation; a join whose generation moved during its await is dropped.
+ */
+export function createWatchRoomGate(): {
+  join(room: string, allowed: () => Promise<boolean>, doJoin: () => void): Promise<boolean>
+  leave(room: string, doLeave: () => void): void
+} {
+  const gen = new Map<string, number>()
+  const bump = (room: string) => {
+    const g = (gen.get(room) ?? 0) + 1
+    gen.set(room, g)
+    return g
+  }
+  return {
+    async join(room, allowed, doJoin) {
+      const g = bump(room)
+      let ok = false
+      try {
+        ok = await allowed()
+      } catch {
+        ok = false
+      }
+      if (!ok || gen.get(room) !== g) return false
+      doJoin()
+      return true
+    },
+    leave(room, doLeave) {
+      bump(room)
+      doLeave()
+    }
+  }
+}
+
 export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const io = new SocketIOServer(app.server, {
     cors: { origin: '*', credentials: true },
@@ -277,20 +313,24 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
 
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
+    const watchGate = createWatchRoomGate()
     socket.on('admin:join', async (payload: { room?: string }) => {
       const room = payload?.room
       const user = authenticatedUser
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
-      try {
-        const role = await db('nivaro_roles').where({ id: user.role }).first()
-        if (role?.admin_access) socket.join(`watch:${room}`)
-      } catch {
-        /* silent */
-      }
+      await watchGate.join(
+        room,
+        async () => {
+          const role = await db('nivaro_roles').where({ id: user.role }).first()
+          return !!role?.admin_access
+        },
+        () => socket.join(`watch:${room}`)
+      )
     })
     socket.on('admin:leave', (payload: { room?: string }) => {
       const room = payload?.room
-      if (typeof room === 'string' && WATCH_ROOMS.has(room)) socket.leave(`watch:${room}`)
+      if (typeof room === 'string' && WATCH_ROOMS.has(room))
+        watchGate.leave(room, () => socket.leave(`watch:${room}`))
     })
 
     // Set once `auth` succeeds below; gates authenticated-only handlers

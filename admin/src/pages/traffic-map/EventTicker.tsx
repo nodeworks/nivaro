@@ -50,6 +50,7 @@ export function callerLabel(cat: TrafficCatalog | null, key: string): string {
 }
 export function entityLabel(cat: TrafficCatalog | null, lane: string, entity: string): string {
   if (entity === '__other__') return 'other'
+  if (entity === '__background__') return 'Background jobs'
   if (!cat) return entity
   if (lane === 'widgets') return cat.widgets[entity] ?? `widget ${entity}`
   if (lane === 'pages') return cat.pages[entity] ?? entity

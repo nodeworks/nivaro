@@ -11,6 +11,7 @@ import { instanceKey } from './settings-overrides.js'
 import {
   type CallerKey,
   type Classified,
+  type ClassifyInput,
   callerKeyFor,
   classifyRequest,
   type DownId,
@@ -29,6 +30,8 @@ export const TOP_KEYS_CAP = 20
 export const RECENT_CAP = 12
 export const LAT_SAMPLES = 240
 export const EVENTS_PER_FRAME = 40
+/** Pseudo-entity for partner calls with no request behind them (R36). */
+export const BACKGROUND_ENTITY = '__background__'
 export const NODE_SCOPE = 'this API process only (Redis adapter fans out sockets, not traffic)'
 const SLOTS = 6 // req, read, create, update, delete, error
 const K = { req: 0, read: 1, create: 2, update: 3, delete: 4, error: 5 } as const
@@ -325,15 +328,23 @@ export function setExtensionRoutes(map: Map<string, Array<{ method: string; url:
   extRoutes = map
   extSig = ''
 }
-/** R27: cheap signature (ext count + route count + urls length) so a growing live map recompiles. */
+const listIds = new WeakMap<object, number>()
+let nextListId = 1
+/**
+ * R27: a cheap signature so a growing (or reloaded) live map recompiles — O(extensions), never
+ * O(routes): per extension its route list's identity (a reload replaces the array) + length.
+ */
 function extSignature(): string {
-  let n = 0
-  let len = 0
+  let sig = String(extRoutes.size)
   for (const list of extRoutes.values()) {
-    n += list.length
-    for (const r of list) len += r.url.length
+    let id = listIds.get(list)
+    if (id === undefined) {
+      id = nextListId++
+      listIds.set(list, id)
+    }
+    sig += `|${id}:${list.length}`
   }
-  return `${extRoutes.size}:${n}:${len}`
+  return sig
 }
 function routeRegex(url: string): RegExp {
   const segs = url
@@ -369,6 +380,7 @@ function compileExt(): Array<{ ext: string; method: string; re: RegExp }> {
 }
 /** `method` null = any method (an outbound call's trace carries a URL, not a verb). */
 export function matchExtensionRoute(method: string | null, path: string): string | null {
+  if (extRoutes.size === 0) return null
   const p = normalizePath(path)
   const m = method ? method.toUpperCase() : null
   for (const r of compileExt()) if ((m === null || r.method === m) && r.re.test(p)) return r.ext
@@ -453,16 +465,35 @@ function applyRequest(
   }
 }
 
+/**
+ * Classify without the extension matcher first; only a request that falls through to the
+ * `other` lane is matched against extension routes (built-in lanes always win, so the result is
+ * identical to matching up front — this just keeps the matcher off the hot path).
+ */
+function classifyLazy(input: ClassifyInput, matchMethod: string | null): Classified | null {
+  const c = classifyRequest(input)
+  if (c?.lane !== 'other') return c
+  const extensionId = matchExtensionRoute(matchMethod, input.path)
+  return extensionId ? classifyRequest({ ...input, extensionId }) : c
+}
+
+/** Cloud mode: one process serves many tenants and no emitter runs, so record nothing (R31). */
+function inCloud(): boolean {
+  return !!process.env.CLOUD_META_DB_URL
+}
+
 export function noteRequest(ev: TrafficRequestEvent & { errorCode?: string | null }): void {
+  if (inCloud()) return
   try {
-    const extId = matchExtensionRoute(ev.method, ev.path)
-    const c = classifyRequest({
-      method: ev.method,
-      path: ev.path,
-      graphqlOperation: ev.graphqlOperation,
-      graphqlKind: ev.graphqlKind,
-      extensionId: extId
-    })
+    const c = classifyLazy(
+      {
+        method: ev.method,
+        path: ev.path,
+        graphqlOperation: ev.graphqlOperation,
+        graphqlKind: ev.graphqlKind
+      },
+      ev.method
+    )
     if (!c) return
     const caller = callerKeyFor({
       authMethod: ev.authMethod,
@@ -499,6 +530,7 @@ function callerFromTrace(): { caller: CallerKey; via: string } {
 }
 
 export function noteWrite(ev: TrafficWriteEvent): void {
+  if (inCloud()) return
   try {
     if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
@@ -544,6 +576,7 @@ export function noteWrite(ev: TrafficWriteEvent): void {
 }
 
 export function noteOutbound(ev: TrafficOutboundEvent): void {
+  if (inCloud()) return
   try {
     if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
@@ -558,15 +591,17 @@ export function noteOutbound(ev: TrafficOutboundEvent): void {
     const hint = meta?.urlHint ?? null
     let c: Classified | null = null
     if (hint) {
-      // The trace carries a URL, not a verb: try GET, then POST for routes only POST classifies.
-      const extensionId = matchExtensionRoute(null, hint)
-      c = classifyRequest({ method: 'GET', path: hint, extensionId })
+      // The trace carries a URL, not a verb: try GET (+ extension routes, any verb), then POST
+      // for routes only POST classifies.
+      c = classifyLazy({ method: 'GET', path: hint }, null)
       if (!c || c.lane === 'other') {
-        const p = classifyRequest({ method: 'POST', path: hint, extensionId })
+        const p = classifyRequest({ method: 'POST', path: hint })
         if (p && (!c || p.lane !== 'other')) c = p
       }
     }
-    const e = c ? getEntity(c.lane, c.entity) : getEntity('other', 'cron')
+    // R36: no request behind the call — a background job. `other/__background__` can never
+    // collide with a real route entity (`/api/cron` is `other/cron`).
+    const e = c ? getEntity(c.lane, c.entity) : getEntity('other', BACKGROUND_ENTITY)
     e.lastSeen = sec
     bumpMinute(e.downs, id, sec)
     edgesOut.set(`${e.lane}>${id}`, (edgesOut.get(`${e.lane}>${id}`) ?? 0) + 1)
@@ -781,7 +816,12 @@ export function buildSnapshot(
       key,
       lane: e.lane,
       entity: e.entity,
-      label: e.entity === '__other__' ? 'other' : e.entity,
+      label:
+        e.entity === '__other__'
+          ? 'other'
+          : e.entity === BACKGROUND_ENTITY
+            ? 'Background jobs'
+            : e.entity,
       system: e.lane === 'system',
       req: s[K.req],
       read: s[K.read],

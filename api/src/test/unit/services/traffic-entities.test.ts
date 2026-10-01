@@ -229,3 +229,15 @@ describe('R30 route templates never carry a token', () => {
     )
   })
 })
+
+describe('route templates never carry an email', () => {
+  it("masks any segment containing '@' or %40", () => {
+    expect(routeTemplate('GET', '/api/directory/users/jane.doe@example.com')).toBe(
+      'GET /api/directory/users/:id'
+    )
+    expect(routeTemplate('GET', '/api/directory/users/jane%40example.com')).toBe(
+      'GET /api/directory/users/:id'
+    )
+    expect(routeTemplate('POST', '/api/users/a@b/notify')).toBe('POST /api/users/:id/notify')
+  })
+})

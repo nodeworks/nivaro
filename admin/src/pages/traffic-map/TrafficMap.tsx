@@ -52,6 +52,25 @@ const WINDOWS = [
 ] as const
 /** No frame for this long while live = the socket dropped (frames arrive every second). */
 const STALE_MS = 6000
+/** The server caches the catalog for 60 s, so refetching more often gains nothing. */
+export const CATALOG_REFRESH_MS = 60_000
+
+/**
+ * True when the catalog has no label for a caller key or partner (`ext:<id>`) the live data
+ * names — e.g. a person who first called after the page loaded, or a new API key.
+ */
+export function catalogMissing(
+  cat: TrafficCatalog | null,
+  callerKeys: Iterable<string>,
+  downIds: Iterable<string> = []
+): boolean {
+  if (!cat) return true
+  for (const k of callerKeys) if (!cat.callers[k]) return true
+  for (const id of downIds) {
+    if (id.startsWith('ext:') && !cat.partners[id.slice(4)]) return true
+  }
+  return false
+}
 
 const CHIP =
   'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-[3px] text-[12px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tm-card)] disabled:cursor-not-allowed disabled:opacity-60'
@@ -86,51 +105,75 @@ export default function TrafficMap() {
   const eventsSeen = useRef(0)
   const snapSeq = useRef(0)
   const lastSnapAt = useRef(0)
+  const catalogRef = useRef<TrafficCatalog | null>(null)
+  const catalogAt = useRef(0)
+  const catalogBusy = useRef(false)
+  const alive = useRef(true)
 
-  const loadSnapshot = useCallback(async (win: number) => {
-    const id = ++snapSeq.current
-    lastSnapAt.current = Date.now()
-    try {
-      const res = await api.get(`/traffic-map/snapshot?window=${win}`)
-      if (id !== snapSeq.current) return // a newer request (window change) superseded this one
-      const snap = res.data.data as TrafficSnapshot
-      const m = modelRef.current
-      m.applySnapshot(snap)
-      lastSnapAt.current = Date.now()
-      peak.current = Math.max(peak.current, snap.sockets.count)
-      setUsers(snap.sockets.users)
-      setSelection((cur) => {
-        if (cur) return cur
-        const types = filtersRef.current.types
-        const busiest = snap.entities.find((e) => types.has(e.lane)) ?? snap.entities[0]
-        return busiest ? { kind: 'entity', id: busiest.key } : null
+  /** Throttled to one request per CATALOG_REFRESH_MS unless `force` (the mount). */
+  const refreshCatalog = useCallback((force = false) => {
+    if (catalogBusy.current) return
+    if (!force && Date.now() - catalogAt.current < CATALOG_REFRESH_MS) return
+    catalogAt.current = Date.now()
+    catalogBusy.current = true
+    api
+      .get('/traffic-map/catalog')
+      .then((r) => {
+        if (!alive.current) return
+        const c = r.data.data as TrafficCatalog
+        catalogRef.current = c
+        setCatalog(c)
       })
-      setSnapError(null)
-      setStale(false)
-      setReady(true)
-      setTick((t) => t + 1)
-    } catch (e) {
-      if (id !== snapSeq.current) return
-      setSnapError(errorText(e))
-    }
+      .catch(() => {})
+      .finally(() => {
+        catalogBusy.current = false
+      })
   }, [])
+
+  const loadSnapshot = useCallback(
+    async (win: number) => {
+      const id = ++snapSeq.current
+      lastSnapAt.current = Date.now()
+      try {
+        const res = await api.get(`/traffic-map/snapshot?window=${win}`)
+        if (id !== snapSeq.current) return // a newer request (window change) superseded this one
+        const snap = res.data.data as TrafficSnapshot
+        const m = modelRef.current
+        m.applySnapshot(snap)
+        lastSnapAt.current = Date.now()
+        peak.current = Math.max(peak.current, snap.sockets.count)
+        setUsers(snap.sockets.users)
+        setSelection((cur) => {
+          if (cur) return cur
+          const types = filtersRef.current.types
+          const busiest = snap.entities.find((e) => types.has(e.lane)) ?? snap.entities[0]
+          return busiest ? { kind: 'entity', id: busiest.key } : null
+        })
+        setSnapError(null)
+        setStale(false)
+        setReady(true)
+        setTick((t) => t + 1)
+        // Labels for anything seen since the last catalog read (throttled; the server caches).
+        refreshCatalog()
+      } catch (e) {
+        if (id !== snapSeq.current) return
+        setSnapError(errorText(e))
+      }
+    },
+    [refreshCatalog]
+  )
 
   useEffect(() => {
     void loadSnapshot(filters.win)
   }, [filters.win, loadSnapshot])
 
   useEffect(() => {
-    let alive = true
-    api
-      .get('/traffic-map/catalog')
-      .then((r) => {
-        if (alive) setCatalog(r.data.data as TrafficCatalog)
-      })
-      .catch(() => {})
+    alive.current = true
+    refreshCatalog(true)
     return () => {
-      alive = false
+      alive.current = false
     }
-  }, [])
+  }, [refreshCatalog])
 
   useEffect(() => {
     const leave = joinWatchRoom('traffic-map')
@@ -148,6 +191,9 @@ export default function TrafficMap() {
       }
       setStale(false)
       setTick((t) => t + 1)
+      // A caller or partner the catalog has no label for: refetch it (throttled).
+      const keys = [...Object.keys(f.callers ?? {}), ...(f.events ?? []).map((e) => e.caller)]
+      if (catalogMissing(catalogRef.current, keys, Object.keys(f.down ?? {}))) refreshCatalog()
       // frames resumed after a hole (a reconnect the local socket did not see): re-seed
       if (gap && Date.now() - lastSnapAt.current > STALE_MS)
         void loadSnapshot(filtersRef.current.win)
@@ -179,7 +225,7 @@ export default function TrafficMap() {
       document.removeEventListener('visibilitychange', onVis)
       clearInterval(watchdog)
     }
-  }, [loadSnapshot])
+  }, [loadSnapshot, refreshCatalog])
 
   const togglePause = () => {
     const next = !pausedRef.current

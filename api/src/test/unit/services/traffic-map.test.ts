@@ -518,3 +518,63 @@ describe('emitter frames', () => {
     ).toBe(true)
   })
 })
+
+describe('final-review fixes', () => {
+  const snap = () => buildSnapshot(60, { sockets: 0, users: 0, journalSeq: null })
+  it('cloud mode: note* calls record nothing (no emitter runs there)', () => {
+    const prev = process.env.CLOUD_META_DB_URL
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    try {
+      req()
+      noteWrite({
+        collection: 'workflows',
+        item: 1,
+        action: 'update',
+        changedFields: [],
+        at: T0 * 1000
+      })
+      noteOutbound({ apiId: 1, apiName: 'A', status: 200, durationMs: 5, at: T0 * 1000 })
+      expect(seenCallerKeys()).toEqual([])
+      expect(drainEvents()).toEqual([])
+      expect(snap().entities).toEqual([])
+      expect(snap().down).toEqual([])
+    } finally {
+      if (prev === undefined) delete process.env.CLOUD_META_DB_URL
+      else process.env.CLOUD_META_DB_URL = prev
+    }
+    req()
+    expect(seenCallerKeys()).toEqual(['uU1'])
+  })
+  it('R36: a trace-less partner call lands on other/__background__, apart from /api/cron', () => {
+    noteOutbound({ apiId: 3, apiName: 'P', status: 200, durationMs: 5, at: T0 * 1000 })
+    req({ path: '/api/cron/foo/run', method: 'POST' })
+    const s = snap()
+    const bg = s.entities.find((e) => e.key === 'other/__background__')
+    expect(bg?.label).toBe('Background jobs')
+    expect(bg?.down['ext:3']).toBe(1)
+    expect(s.entities.find((e) => e.key === 'other/cron')?.req).toBe(1)
+    expect(s.entities.find((e) => e.key === 'other/cron')?.down['ext:3']).toBeUndefined()
+  })
+  it('the extension matcher only runs for requests that fall through to other', () => {
+    const live = new Map<string, Array<{ method: string; url: string }>>([
+      // A greedy extension route that would swallow /api/items/... if it were matched first.
+      ['greedy', [{ method: 'GET', url: '/api/*' }]]
+    ])
+    setExtensionRoutes(live)
+    req({ path: '/api/items/workflows' })
+    req({ path: '/api/efp/anything' })
+    const keys = snap().entities.map((e) => e.key)
+    expect(keys).toContain('items/workflows')
+    expect(keys).toContain('extension/greedy')
+  })
+  it('a reloaded extension (new route array, same length) recompiles the matcher', () => {
+    const live = new Map<string, Array<{ method: string; url: string }>>([
+      ['a', [{ method: 'GET', url: '/api/old/:id' }]]
+    ])
+    setExtensionRoutes(live)
+    expect(matchExtensionRoute('GET', '/api/old/1')).toBe('a')
+    live.set('a', [{ method: 'GET', url: '/api/new/:id' }])
+    expect(matchExtensionRoute('GET', '/api/old/1')).toBeNull()
+    expect(matchExtensionRoute('GET', '/api/new/1')).toBe('a')
+  })
+})

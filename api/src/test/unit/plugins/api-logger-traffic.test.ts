@@ -7,7 +7,11 @@ vi.mock('../../../services/traffic-map.js', () => ({
   errorCode: () => null
 }))
 
-import { apiLoggerPlugin, INTERNAL_DISPATCH_HEADER } from '../../../plugins/api-logger.js'
+import {
+  apiLoggerPlugin,
+  INTERNAL_DISPATCH_HEADER,
+  internalDispatchTokens
+} from '../../../plugins/api-logger.js'
 import { noteRequest } from '../../../services/traffic-map.js'
 
 async function app() {
@@ -24,13 +28,21 @@ describe('api-logger -> traffic map', () => {
   beforeEach(() => vi.mocked(noteRequest).mockClear())
   it('counts internally dispatched requests', async () => {
     const a = await app()
-    await a.inject({
-      method: 'GET',
-      url: '/api/items/workflows',
-      headers: { [INTERNAL_DISPATCH_HEADER]: '1' }
-    })
-    expect(noteRequest).toHaveBeenCalledTimes(1)
-    await a.close()
+    // A REGISTERED dispatch token — an unregistered header value is just a wire request, which
+    // would make this test pass no matter where noteRequest sits.
+    const token = 'traffic-test-dispatch-token'
+    internalDispatchTokens.add(token)
+    try {
+      await a.inject({
+        method: 'GET',
+        url: '/api/items/workflows',
+        headers: { [INTERNAL_DISPATCH_HEADER]: token }
+      })
+      expect(noteRequest).toHaveBeenCalledTimes(1)
+    } finally {
+      internalDispatchTokens.delete(token)
+      await a.close()
+    }
   })
   it('does not count the outer /graphql alias but counts POST /files', async () => {
     const a = await app()

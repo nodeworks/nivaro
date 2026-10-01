@@ -256,7 +256,10 @@ export type HistoryState = 'idle' | 'loading' | 'error'
 export function historyAvailable(sel: Selection | null): boolean {
   if (!sel) return false
   if (sel.kind === 'down') return true
-  return sel.kind === 'entity' && !sel.id.endsWith('/__other__')
+  // `__other__` folds many entities; `__background__` has no request rows behind it.
+  return (
+    sel.kind === 'entity' && !sel.id.endsWith('/__other__') && !sel.id.endsWith('/__background__')
+  )
 }
 export function historyUrl(sel: Selection, hours: Hours): string {
   if (sel.kind === 'entity') {
