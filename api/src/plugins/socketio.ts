@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import { canSeeRoom } from '../services/chat.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { can } from '../services/permissions.js'
+import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -321,23 +322,42 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
     const watchGate = createWatchRoomGate()
-    socket.on('admin:join', async (payload: { room?: string }) => {
+    // Cloud: the Traffic Map room is per tenant (#1132); every other room keeps its name.
+    const watchRoomName = async (room: string): Promise<string | null> => {
+      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) return `watch:${room}`
+      const store = await socketTrafficStore(socket)
+      return store ? `watch:traffic-map:${store}` : null
+    }
+    const onAdminJoin = async (payload: { room?: string }) => {
       const room = payload?.room
       const user = authenticatedUser
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
+      // Self-hosted: no await before the gate, so a quick join + leave keeps its order.
+      const name =
+        room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL
+          ? `watch:${room}`
+          : await watchRoomName(room)
+      if (!name) return
       await watchGate.join(
         room,
         async () => {
           const role = await db('nivaro_roles').where({ id: user.role }).first()
           return !!role?.admin_access
         },
-        () => socket.join(`watch:${room}`)
+        () => socket.join(name)
       )
-    })
+    }
+    socket.on('admin:join', inSocketTenant(socket, onAdminJoin))
     socket.on('admin:leave', (payload: { room?: string }) => {
       const room = payload?.room
-      if (typeof room === 'string' && WATCH_ROOMS.has(room))
+      if (typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
+      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) {
         watchGate.leave(room, () => socket.leave(`watch:${room}`))
+        return
+      }
+      void watchRoomName(room).then((name) => {
+        if (name) watchGate.leave(room, () => socket.leave(name))
+      })
     })
 
     // Set once `auth` succeeds below; gates authenticated-only handlers
@@ -407,7 +427,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       await writePresence(userId, { is_online: false, last_seen: new Date() })
     }
 
-    socket.on('auth', async (payload: { token?: string }) => {
+    const onAuth = async (payload: { token?: string }) => {
       const token = payload?.token?.trim()
       if (!token) return
       try {
@@ -474,7 +494,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       } catch (err) {
         app.log.warn({ err }, 'Socket auth failed')
       }
-    })
+    }
+    // Cloud: auth runs in the socket's tenant context (#1132); self-hosted: unchanged.
+    socket.on('auth', inSocketTenant(socket, onAuth))
 
     socket.on('tenant:join', (tenantId: string) => {
       if (typeof tenantId === 'string' && tenantId.length > 0) {

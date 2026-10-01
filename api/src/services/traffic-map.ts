@@ -33,7 +33,17 @@ import {
   TOP_KEYS_CAP,
   topMinutes
 } from './traffic-ring.js'
-import { collectTaps, eachTap, resetTapState } from './traffic-taps.js'
+import {
+  collectTaps,
+  currentStoreId,
+  DEFAULT_STORE,
+  dropTapStore,
+  eachTap,
+  NO_STORE,
+  resetTapState,
+  storeForRequest,
+  withTrafficStore
+} from './traffic-taps.js'
 
 export { MINUTE_BUCKETS, RING_SECONDS, TOP_KEYS_CAP } from './traffic-ring.js'
 export const LANE_ENTITY_CAP = 40
@@ -136,23 +146,79 @@ interface NodeState extends Ring {
   label: string
 }
 
-const entities = new Map<string, EntityState>()
-const laneCount = new Map<TrafficLane, number>()
-const callers = new Map<CallerKey, NodeState>()
-const downs = new Map<string, NodeState>()
-const partnerNames = new Map<number, string>()
-/** Label + kind of down nodes recorded through noteDown (and their sweep). */
-const downMeta = new Map<string, { label?: string; kind?: string }>()
-/** Label + kind of non-request sources recorded through noteSource (keys in `callers`). */
-const sourceMeta = new Map<string, { label?: string; kind?: string }>()
-const edgesIn = new Map<string, number>() // this second only
-const edgesOut = new Map<string, number>()
-let pendingEvents: TrafficEventWire[] = []
-let bufferDropped = 0
+// ── per-store state (#1132) ──────────────────────────────────────────────────
+// Everything the map holds lives in a store: one per process self-hosted, one per tenant in
+// cloud mode (currentStoreId()). The names below are views onto the CURRENT store's maps, so the
+// recording / reading code reads exactly as it did with module globals.
+interface MapStore {
+  entities: Map<string, EntityState>
+  laneCount: Map<TrafficLane, number>
+  callers: Map<CallerKey, NodeState>
+  downs: Map<string, NodeState>
+  partnerNames: Map<number, string>
+  /** Label + kind of down nodes recorded through noteDown (and their sweep). */
+  downMeta: Map<string, { label?: string; kind?: string }>
+  /** Label + kind of non-request sources recorded through noteSource (keys in `callers`). */
+  sourceMeta: Map<string, { label?: string; kind?: string }>
+  edgesIn: Map<string, number> // this second only
+  edgesOut: Map<string, number>
+  pendingEvents: TrafficEventWire[]
+  bufferDropped: number
+  frameNo: number
+}
+const mapStores = new Map<string, MapStore>()
+function mkStore(): MapStore {
+  return {
+    entities: new Map(),
+    laneCount: new Map(),
+    callers: new Map(),
+    downs: new Map(),
+    partnerNames: new Map(),
+    downMeta: new Map(),
+    sourceMeta: new Map(),
+    edgesIn: new Map(),
+    edgesOut: new Map(),
+    pendingEvents: [],
+    bufferDropped: 0,
+    frameNo: 0
+  }
+}
+/** The current store (created on first use; outside any store reads/writes `default`). */
+function S(): MapStore {
+  const id = currentStoreId() || DEFAULT_STORE
+  let st = mapStores.get(id)
+  if (!st) {
+    st = mkStore()
+    mapStores.set(id, st)
+  }
+  return st
+}
+/** A Map-typed view that resolves to the current store's map on every access. */
+function storeMap<K, V>(pick: (st: MapStore) => Map<K, V>): Map<K, V> {
+  return new Proxy(new Map<K, V>(), {
+    get(_t, prop) {
+      const m = pick(S())
+      const v = Reflect.get(m, prop, m)
+      return typeof v === 'function' ? v.bind(m) : v
+    }
+  })
+}
+const entities = storeMap((st) => st.entities)
+const laneCount = storeMap((st) => st.laneCount)
+const callers = storeMap((st) => st.callers)
+const downs = storeMap((st) => st.downs)
+const partnerNames = storeMap((st) => st.partnerNames)
+const downMeta = storeMap((st) => st.downMeta)
+const sourceMeta = storeMap((st) => st.sourceMeta)
+const edgesIn = storeMap((st) => st.edgesIn)
+const edgesOut = storeMap((st) => st.edgesOut)
 export const EVENT_BUFFER_CAP = 200
 let nowSec = Math.floor(Date.now() / 1000)
-let frameNo = 0
 const bootedAt = Date.now()
+/** Store ids holding map state (the emitter, the sweep and cluster relays walk them). */
+export function trafficStoreIds(): string[] {
+  return [...mapStores.keys()]
+}
 
 function mkRing(): Ring {
   return {
@@ -257,7 +323,7 @@ function getDown(id: string, label?: string): NodeState {
 }
 /** Taps add ticker events here; they share the bounded buffer and its priority rule. */
 export function pushTrafficEvent(ev: TrafficEventWire): void {
-  if (inCloud()) return
+  if (noStore()) return
   try {
     pushEvent(ev)
   } catch {
@@ -265,6 +331,8 @@ export function pushTrafficEvent(ev: TrafficEventWire): void {
   }
 }
 function pushEvent(ev: TrafficEventWire): void {
+  const st = S()
+  const pendingEvents = st.pendingEvents
   pendingEvents.push(ev)
   if (pendingEvents.length <= EVENT_BUFFER_CAP) return
   // Over the cap: drop the lowest-priority (then oldest) event, error>create>delete>update>read.
@@ -273,7 +341,7 @@ function pushEvent(ev: TrafficEventWire): void {
     if (PRIORITY[pendingEvents[i].kind] > PRIORITY[pendingEvents[worst].kind]) worst = i
   }
   pendingEvents.splice(worst, 1)
-  bufferDropped++
+  st.bufferDropped++
 }
 function secOf(atMs: number): number {
   const s = Math.floor(atMs / 1000)
@@ -438,13 +506,20 @@ function classifyLazy(input: ClassifyInput, matchMethod: string | null): Classif
   return extensionId ? classifyRequest({ ...input, extensionId }) : c
 }
 
-/** Cloud mode: one process serves many tenants and no emitter runs, so record nothing (R31). */
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
+/**
+ * No store to record into: cloud mode outside a tenant request (R31). Self-hosted always has one;
+ * a cloud tenant records into its own store (#1132).
+ */
+function noStore(): boolean {
+  return currentStoreId() === NO_STORE
 }
 
 export function noteRequest(ev: TrafficRequestEvent & { errorCode?: string | null }): void {
-  if (inCloud()) return
+  const sid = storeForRequest(ev.req)
+  if (sid === NO_STORE) return
+  withTrafficStore(sid, () => recordRequest(ev))
+}
+function recordRequest(ev: TrafficRequestEvent & { errorCode?: string | null }): void {
   try {
     const c = classifyLazy(
       {
@@ -507,7 +582,7 @@ function callerFromTrace(): { caller: CallerKey; via: string } {
 }
 
 export function noteWrite(ev: TrafficWriteEvent): void {
-  if (inCloud()) return
+  if (noStore()) return
   try {
     if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
@@ -564,7 +639,7 @@ export function noteWrite(ev: TrafficWriteEvent): void {
 }
 
 export function noteOutbound(ev: TrafficOutboundEvent): void {
-  if (inCloud()) return
+  if (noStore()) return
   try {
     if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
@@ -637,7 +712,7 @@ export interface TrafficDownCall {
  * that should appear as one records itself with noteSource.
  */
 export function noteDown(d: TrafficDownCall): void {
-  if (inCloud()) return
+  if (noStore()) return
   try {
     const at = d.at ?? Date.now()
     if (isStale(Math.floor(at / 1000))) return
@@ -682,7 +757,7 @@ export interface TrafficSourceCall {
  * ring under its own key. The existing `cron` caller is left untouched.
  */
 export function noteSource(s: TrafficSourceCall): void {
-  if (inCloud()) return
+  if (noStore()) return
   try {
     const at = s.at ?? Date.now()
     if (isStale(Math.floor(at / 1000))) return
@@ -717,9 +792,10 @@ export function advanceTo(sec: number): void {
   if (sec > nowSec) nowSec = sec
 }
 function takeEvents(): { events: TrafficEventWire[]; dropped: number } {
-  const out = { events: pendingEvents, dropped: bufferDropped }
-  pendingEvents = []
-  bufferDropped = 0
+  const st = S()
+  const out = { events: st.pendingEvents, dropped: st.bufferDropped }
+  st.pendingEvents = []
+  st.bufferDropped = 0
   return out
 }
 export function drainEvents(): TrafficEventWire[] {
@@ -757,6 +833,8 @@ export interface FrameWire {
   journal_seq: number | null
   /** Tap figures for this second, by tap id (absent when no tap sent any). */
   ext?: Record<string, unknown>
+  /** The API process that built the frame (#1098; set by the emitter). */
+  node?: string
 }
 
 function secondOf(r: Ring, sec: number): number[] {
@@ -768,7 +846,7 @@ export function buildFrame(
   opts: { sockets: number; journalSeq: number | null }
 ): FrameWire {
   advanceTo(sec)
-  frameNo++
+  const frameNo = ++S().frameNo
   const ents: Record<string, number[]> = {}
   for (const [key, e] of entities) {
     if (e.touchedSec < sec) continue
@@ -878,6 +956,8 @@ export interface TrafficSnapshot {
   sources?: Array<{ id: string; label: string; kind: string; req: number; error: number }>
   /** Tap figures, by tap id (absent when none). */
   ext?: Record<string, unknown>
+  /** The API process the snapshot describes (#1098; absent before the emitter starts). */
+  node?: string
 }
 
 function topOf(
@@ -995,7 +1075,7 @@ export function buildSnapshot(
     at: new Date(sec * 1000).toISOString(),
     window_s: windowS,
     uptime_s: Math.round((Date.now() - bootedAt) / 1000),
-    frame: frameNo,
+    frame: S().frameNo,
     lanes: LANES.map((l) => ({ ...l })),
     entities: out,
     callers: callerRows,
@@ -1016,6 +1096,7 @@ export function buildSnapshot(
     journal_seq: opts.journalSeq
   }
   if (sourceRows.length) snap.sources = sourceRows.sort((a, b) => b.req - a.req)
+  if (thisNode) snap.node = thisNode
   const ext = collectTaps((t) => t.snapshot?.(windowS, sec))
   if (ext) snap.ext = ext
   return snap
@@ -1033,8 +1114,25 @@ export function seenPartnerIds(): number[] {
   return [...partnerNames.keys()]
 }
 
-/** Hourly sweep: forget entities idle for 15 minutes so capped lanes free their slots. */
+/**
+ * Hourly sweep: forget entities idle for 15 minutes so capped lanes free their slots — in every
+ * store; a tenant store left empty is dropped with its tap state (#1132).
+ */
 export function sweepIdle(sec = nowSec): number {
+  let removed = 0
+  const ids = new Set(trafficStoreIds())
+  if (!process.env.CLOUD_META_DB_URL) ids.add(DEFAULT_STORE)
+  for (const id of ids) {
+    removed += withTrafficStore(id, () => sweepStore(sec))
+    const st = mapStores.get(id)
+    if (id !== DEFAULT_STORE && st && !st.entities.size && !st.callers.size) {
+      mapStores.delete(id)
+      dropTapStore(id)
+    }
+  }
+  return removed
+}
+function sweepStore(sec: number): number {
   let removed = 0
   for (const [key, c] of callers) {
     if (sec - c.touchedSec >= RING_SECONDS) {
@@ -1063,18 +1161,7 @@ export function sweepIdle(sec = nowSec): number {
 }
 
 export function resetTrafficMap(): void {
-  entities.clear()
-  laneCount.clear()
-  callers.clear()
-  downs.clear()
-  partnerNames.clear()
-  downMeta.clear()
-  sourceMeta.clear()
-  edgesIn.clear()
-  edgesOut.clear()
-  pendingEvents = []
-  bufferDropped = 0
-  frameNo = 0
+  mapStores.clear()
   nowSec = 0
   extCompiled = []
   extSig = ''
@@ -1091,14 +1178,47 @@ interface IoLike {
 export const TRAFFIC_MAP_ROOM = 'watch:traffic-map'
 export const TRAFFIC_MAP_EVENT = 'traffic-map:frame'
 
+/** The socket room a store's frames go to: the historic room self-hosted, one per tenant else. */
+export function trafficRoomFor(storeId: string): string {
+  return storeId === DEFAULT_STORE ? TRAFFIC_MAP_ROOM : `${TRAFFIC_MAP_ROOM}:${storeId}`
+}
+
 /**
- * One tick per second. The ring clock always advances; a frame is built and emitted ONLY while
- * the room has a member. Frames are per node, so they go through io.local (never the adapter).
+ * Multi-node hook (#1098): set by the cluster relay when Redis is available. A node with local
+ * watchers announces it; a node another node is watching keeps building frames and publishes
+ * them, so the page can merge every API process. Idle clusters publish nothing.
+ */
+export interface TrafficCluster {
+  /** This node has watchers for `storeId` (called every watched tick). */
+  announce(storeId: string): void
+  /** Another node has watchers for `storeId`. */
+  watched(storeId: string): boolean
+  /** Hand a built frame to the other nodes. */
+  publish(storeId: string, frame: FrameWire): void
+}
+let cluster: TrafficCluster | null = null
+/** This process's node id, once the emitter started (snapshots carry it). */
+let thisNode: string | undefined
+export function setTrafficCluster(c: TrafficCluster | null): void {
+  cluster = c
+}
+
+/**
+ * One tick per second. The ring clock always advances; a frame is built ONLY while a store's
+ * room has a member here or on another node (#1098). Local frames go through io.local (never the
+ * adapter); other nodes get theirs through the cluster relay.
  */
 export function startTrafficMapEmitter(
-  opts: { intervalMs?: number; io?: () => IoLike | null; now?: () => number } = {}
+  opts: {
+    intervalMs?: number
+    io?: () => IoLike | null
+    now?: () => number
+    /** This process's id on the wire (frames carry it so pages can merge nodes). */
+    node?: string
+  } = {}
 ): () => void {
   const ioOf = opts.io ?? (() => getIo() as unknown as IoLike | null)
+  if (opts.node) thisNode = opts.node
   const nowMs = opts.now ?? (() => Date.now())
   let journalSeq: number | null = null
   let lastSeqPoll = 0
@@ -1110,25 +1230,36 @@ export function startTrafficMapEmitter(
       if (sec - 1 < nextFrameSec) return // same second already handled
       advanceTo(sec)
       const io = ioOf()
-      const watchers = io?.sockets?.adapter?.rooms?.get(TRAFFIC_MAP_ROOM)?.size ?? 0
-      if (!io || watchers === 0) {
-        discardTick()
-        nextFrameSec = sec
-        return
+      const ids = new Set(trafficStoreIds())
+      if (!process.env.CLOUD_META_DB_URL) ids.add(DEFAULT_STORE)
+      let watchedAny = false
+      for (const id of ids) {
+        withTrafficStore(id, () => {
+          const local = io?.sockets?.adapter?.rooms?.get(trafficRoomFor(id))?.size ?? 0
+          if (local > 0) cluster?.announce(id)
+          const remote = cluster?.watched(id) ?? false
+          if (!io || (local === 0 && !remote)) {
+            discardTick()
+            return
+          }
+          watchedAny = true
+          // Emit every completed second we have not sent (timer drift can skip one); cap the
+          // catch-up at 5 s, then skip ahead.
+          for (let s = Math.max(nextFrameSec, sec - 5); s <= sec - 1; s++) {
+            const frame = buildFrame(s, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
+            if (opts.node) frame.node = opts.node
+            if (local > 0) (io.local ?? io).to(trafficRoomFor(id)).emit(TRAFFIC_MAP_EVENT, frame)
+            if (remote) cluster?.publish(id, frame)
+          }
+        })
       }
-      if (sec - lastSeqPoll >= 5) {
+      if (watchedAny && sec - lastSeqPoll >= 5) {
         lastSeqPoll = sec
         void currentSeq()
           .then((v) => {
             journalSeq = v
           })
           .catch(() => {})
-      }
-      // Emit every completed second we have not sent (timer drift can skip one); cap the
-      // catch-up at 5 s, then skip ahead.
-      for (let s = Math.max(nextFrameSec, sec - 5); s <= sec - 1; s++) {
-        const frame = buildFrame(s, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
-        ;(io.local ?? io).to(TRAFFIC_MAP_ROOM).emit(TRAFFIC_MAP_EVENT, frame)
       }
       nextFrameSec = sec
     } catch {

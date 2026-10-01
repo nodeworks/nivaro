@@ -23,12 +23,12 @@ import {
   seenPartnerIds,
   seenSources
 } from '../services/traffic-map.js'
-import { trafficTaps } from '../services/traffic-taps.js'
+import { currentStoreId, NO_STORE, trafficTaps } from '../services/traffic-taps.js'
 import { trafficMapExtraRoutes } from './traffic-map-extras/index.js'
 
 /**
- * Traffic Map read routes (spec §6.2–6.3). Admin only. The aggregator is per process, so in
- * cloud mode (one process, many tenants) every route answers 404.
+ * Traffic Map read routes (spec §6.2–6.3). Admin only. The aggregator keeps one store per process
+ * self-hosted and one per tenant in cloud mode (#1132); the routes read the caller's store.
  */
 const WINDOWS = new Set([60, 300, 900])
 
@@ -57,8 +57,9 @@ interface Catalog {
   >
   down: Record<string, string>
 }
-let catalogCache: { at: number; value: Catalog } | null = null
-let catalogInflight: Promise<Catalog> | null = null
+/** Per store (#1132): a tenant's labels never reach another tenant. */
+const catalogCaches = new Map<string, { at: number; value: Catalog }>()
+const catalogInflights = new Map<string, Promise<Catalog>>()
 const CATALOG_TTL_MS = 60_000
 const ID_CHUNK = 1000
 /** History reads failing must not read as "no traffic" — the inspector shows its retry state. */
@@ -179,13 +180,43 @@ async function buildCatalog(state: { failed: boolean }): Promise<Catalog> {
 
 /** Test hook: drop the cached/in-flight catalog. */
 export function resetTrafficCatalog(): void {
-  catalogCache = null
-  catalogInflight = null
+  catalogCaches.clear()
+  catalogInflights.clear()
+}
+
+/**
+ * Cloud mode (#1132): the map is per tenant, so these routes answer for the caller's tenant.
+ * A feature route (traffic-map-extras/) is tenant-aware only when it says so with
+ * `config: { trafficTenantAware: true }` — anything else still answers 404 there.
+ */
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    /** A Traffic Map route that reads only the caller's store, so it may run in cloud mode. */
+    trafficTenantAware?: boolean
+  }
+}
+const CLOUD_ROUTES = new Set([
+  '/snapshot',
+  '/catalog',
+  '/entity-detail',
+  '/entity/:lane/:entity',
+  '/down/:id'
+])
+function cloudAllowed(req: { routeOptions?: { url?: string; config?: unknown } }): boolean {
+  if (
+    (req.routeOptions?.config as { trafficTenantAware?: boolean } | undefined)?.trafficTenantAware
+  )
+    return true
+  const url = req.routeOptions?.url ?? ''
+  const cut = url.indexOf('/traffic-map')
+  return CLOUD_ROUTES.has(cut >= 0 ? url.slice(cut + '/traffic-map'.length) : url)
 }
 
 export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
-  app.addHook('onRequest', async (_req, reply) => {
-    if (process.env.CLOUD_META_DB_URL) return reply.code(404).send({ error: 'Not found' })
+  app.addHook('onRequest', async (req, reply) => {
+    // Cloud: only tenant-aware routes, and only inside a tenant request (#1132).
+    if (process.env.CLOUD_META_DB_URL && (!cloudAllowed(req) || currentStoreId() === NO_STORE))
+      return reply.code(404).send({ error: 'Not found' })
   })
   app.addHook('preHandler', requireAdmin)
 
@@ -202,22 +233,25 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.get('/catalog', async () => {
-    if (catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS)
-      return { data: catalogCache.value }
+    const store = currentStoreId()
+    const cached = catalogCaches.get(store)
+    if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return { data: cached.value }
     // Single-flight: concurrent cold requests share one build.
-    if (!catalogInflight) {
+    let inflight = catalogInflights.get(store)
+    if (!inflight) {
       const state = { failed: false }
-      catalogInflight = buildCatalog(state)
+      inflight = buildCatalog(state)
         .then((value) => {
           // Cache only a fully successful build — a failed source must not stick for 60s.
-          if (!state.failed) catalogCache = { at: Date.now(), value }
+          if (!state.failed) catalogCaches.set(store, { at: Date.now(), value })
           return value
         })
         .finally(() => {
-          catalogInflight = null
+          catalogInflights.delete(store)
         })
+      catalogInflights.set(store, inflight)
     }
-    return { data: await catalogInflight }
+    return { data: await inflight }
   })
 
   const LANE_IDS = new Set<string>(LANES.map((l) => l.id))
@@ -335,7 +369,8 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
               .select('id', 'title', 'severity', 'status', 'occurrence_count', 'last_seen_at')
           ).catch(() => [])) as Array<Record<string, unknown>>)
         : []
-      const slow = listTraces(200)
+      // Request traces are per process, not per tenant: cloud mode leaves them out (#1132).
+      const slow = (process.env.CLOUD_META_DB_URL ? [] : listTraces(200))
         .filter((t) => traceBelongsTo(t, lane, entity, n.routePrefix, matchExtensionRoute))
         .slice(0, 5)
         .map((t) => ({ id: t.id, route: t.route, total_ms: t.total_ms, ts: t.ts }))

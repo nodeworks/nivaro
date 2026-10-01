@@ -821,6 +821,18 @@ type TenantResult =
   | { found: true; suspended: false; provisioning: true; row: { name: string; slug: string } }
   | { found: true; suspended: false; provisioning: false; db: Knex; slug: string; tenantId: string }
 
+/**
+ * The ready tenant behind a hostname, or null (unknown, suspended or provisioning). Sockets use it:
+ * socket.io connections never pass the tenant onRequest hook (#1132).
+ */
+export async function resolveReadyTenant(
+  hostname: string
+): Promise<{ db: Knex; slug: string; tenantId: string } | null> {
+  const r = await resolveTenant(hostname)
+  if (!r.found || r.suspended || r.provisioning) return null
+  return { db: r.db, slug: r.slug, tenantId: r.tenantId }
+}
+
 /** Resolves the tenant from the request hostname.
  *  Returns a discriminated union indicating not-found, suspended, provisioning, or active. */
 async function resolveTenant(hostname: string): Promise<TenantResult> {
@@ -929,7 +941,9 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
         }
         return
       }
-
+      // The Traffic Map records a finished request into its tenant's store (#1132); onResponse
+      // can run outside this AsyncLocalStorage context, so the tenant rides on the request.
+      ;(req as unknown as { nvrTenantId?: string }).nvrTenantId = result.tenantId || result.slug
       runWithTenantDb(result.db, result.slug, done, result.tenantId)
     })
     .catch((err: unknown) => done(err instanceof Error ? err : new Error(String(err))))

@@ -4,13 +4,14 @@
  * stream the map does and add their own figures to frames, snapshots and the inspector.
  *
  * A feature registers ONE tap from its own module (`registerTrafficTap({ id, … })`) and keeps its
- * state in `tapState(id, init)`, never in module globals — state is per store, so a tenant-scoped
- * map (#1132) can give each tenant its own without touching the taps. Taps run only where the map
- * records (never in cloud mode), each call is isolated (a throwing tap affects nothing else), and
- * every hook is optional. Counters: use MinuteCounter / SecondRing from traffic-ring.ts.
+ * state in `tapState(id, init)`, never in module globals — state is per store: one store when
+ * self-hosted, one per tenant in cloud mode (#1132). Taps run inside the store being recorded or
+ * read, each call is isolated (a throwing tap affects nothing else), and every hook is optional.
+ * Counters: use MinuteCounter / SecondRing from traffic-ring.ts.
  *
  * Ordering: taps run after the map has counted the event, in registration order.
  */
+import { getTenantId } from '../db/tenant-context.js'
 import type { TrafficKind, TrafficLane } from './traffic-entities.js'
 import type { TrafficOutboundEvent, TrafficRequestEvent, TrafficWriteEvent } from './traffic-map.js'
 
@@ -115,17 +116,58 @@ export function collectTaps(fn: (t: TrafficTap) => unknown): Record<string, unkn
 }
 
 // ── per-store tap state ─────────────────────────────────────────────────────
-const DEFAULT_STORE = 'default'
+/** The self-hosted store (one per process). */
+export const DEFAULT_STORE = 'default'
+/** No store to record into (cloud mode outside a tenant request): callers record nothing. */
+export const NO_STORE = ''
 const stores = new Map<string, Map<string, unknown>>()
+let storeOverride: string | null = null
 
-/** The store the current call records into. One store today; #1132 makes it per tenant. */
+function inCloud(): boolean {
+  return !!process.env.CLOUD_META_DB_URL
+}
+
+/** The store of one tenant (cloud mode). */
+export function tenantStoreId(tenantId: string): string {
+  return `t:${tenantId}`
+}
+
+/**
+ * The store the current call records into (#1132). Self-hosted: always `default`. Cloud: the
+ * request's tenant (`t:<tenantId>`, from the tenant AsyncLocalStorage), or NO_STORE outside a
+ * tenant request. `withTrafficStore` overrides it for the emitter, sweeps and Redis relays.
+ */
 export function currentStoreId(): string {
-  return DEFAULT_STORE
+  if (storeOverride !== null) return storeOverride
+  if (!inCloud()) return DEFAULT_STORE
+  const t = getTenantId()
+  return t ? tenantStoreId(t) : NO_STORE
+}
+
+/**
+ * The store a finished request belongs to: the tenant the tenant hook stamped on it (the
+ * onResponse hook may run outside the request's AsyncLocalStorage), else currentStoreId().
+ */
+export function storeForRequest(req: unknown): string {
+  if (!inCloud()) return storeOverride ?? DEFAULT_STORE
+  const stamped = (req as { nvrTenantId?: unknown } | null | undefined)?.nvrTenantId
+  return typeof stamped === 'string' && stamped ? tenantStoreId(stamped) : currentStoreId()
+}
+
+/** Run `fn` (synchronously) recording into / reading from store `id`. */
+export function withTrafficStore<T>(id: string, fn: () => T): T {
+  const prev = storeOverride
+  storeOverride = id
+  try {
+    return fn()
+  } finally {
+    storeOverride = prev
+  }
 }
 
 /** A tap's state in the current store, created by `init` on first use. */
 export function tapState<T>(tapId: string, init: () => T): T {
-  const storeId = currentStoreId()
+  const storeId = currentStoreId() || DEFAULT_STORE
   let store = stores.get(storeId)
   if (!store) {
     store = new Map()
@@ -133,6 +175,11 @@ export function tapState<T>(tapId: string, init: () => T): T {
   }
   if (!store.has(tapId)) store.set(tapId, init())
   return store.get(tapId) as T
+}
+
+/** Forget every tap's state in one store (an idle tenant store is dropped by the sweep). */
+export function dropTapStore(storeId: string): void {
+  stores.delete(storeId)
 }
 
 /** Drop every tap's state, then let each tap reset anything else it holds. */
