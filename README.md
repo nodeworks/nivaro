@@ -108,6 +108,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Page Builder** — low-code internal pages from table/KPI/markdown/iframe widgets, published at `/p/:slug`
 - **Rule & Formula Builders** — structured condition/action editor and token-chip formula editor with raw toggles
 - **API Analytics & Health Dashboard** — p50/p95 latency, error rates, and live subsystem health
+- **Traffic Map** — live flow map of API traffic by caller, lane, data store and partner, with per-entity history
 - **Data Quality & Issue Log** — per-collection quality rules with run history; central operational issue triage
 - **Privacy & Retention Policies** — configurable inactivity-based user redaction/deletion with dry-run preview, cron scheduling, PII field selection, exclusion lists, and full run audit log; redacted users automatically excluded from all pickers
 - **AI Content Validation** — natural-language rules per collection, soft warn or hard block (server-enforced 422)

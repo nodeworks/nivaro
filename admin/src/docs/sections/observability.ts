@@ -217,3 +217,49 @@ export const obsIssueLog: DocSection = {
     }
   ]
 }
+
+export const obsTrafficMap: DocSection = {
+  id: 'traffic-map',
+  label: 'Traffic Map',
+  content: [
+    { type: 'h1', id: 'traffic-map', text: 'Traffic Map' },
+    {
+      type: 'p',
+      text: 'The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API as this node sees it: callers on the left, API lanes in the middle (Items, Widgets, Pages, Custom queries, GraphQL, Inbound, Files, Extensions), data stores and partner APIs on the right. Edge width is requests per second; particles are individual requests coloured by kind; a node pulses on a write and flashes on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the particles off.'
+    },
+    { type: 'h2', id: 'traffic-map-sources', text: 'Where the numbers come from' },
+    {
+      type: 'ul',
+      items: [
+        'Requests: the api-logger hook classifies every response into a lane and an entity (collection, widget id, page slug, query slug, GraphQL operation, inbound key, file route or extension) and counts it into a 15-minute per-second ring in memory. Route templates replace id-shaped and token-like segments with :id, so no access token ever appears.',
+        'Internally dispatched requests are counted once: the root /graphql alias re-dispatches to /api/graphql, and the call is counted under its real GraphQL operation, not twice.',
+        'Writes: broadcastCollectionUpdate reports create/update/delete with the record id and the names of the fields written — never values. One PATCH that writes a parent and twenty lines counts as twenty-one writes.',
+        'Partner calls: every callExternalApi lands on its partner node and is attributed to the request that caused it.',
+        'History (1h / 6h / 24h in the inspector) is rolled up from nivaro_api_logs, nivaro_outbound_log and open nivaro_issues. It reads the newest 20,000 log rows and says so when it truncates. Open issues are matched by route family (the template), not per entity. History for GraphQL calls made through the root /graphql alias may show as anonymous.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/traffic-map/snapshot?window=60|300|900   → the rings for this node
+GET  /api/traffic-map/catalog                      → labels for entities, callers, partners
+GET  /api/traffic-map/entity/:lane/:entity?hours=  → rolled-up history + issues + slow traces
+GET  /api/traffic-map/down/:id?hours=              → partner call history (ext:<api id>)
+socket  admin:join {room: 'traffic-map'}  → one 'traffic-map:frame' per second while watched`
+    },
+    { type: 'h2', id: 'traffic-map-limits', text: 'Limits and scope' },
+    {
+      type: 'ul',
+      items: [
+        'Per node: the numbers are this API process only, and frames go only to watchers connected to this node.',
+        'Cloud mode (CLOUD_META_DB_URL set): the emitter does not start and every /api/traffic-map route answers 404, because one process serves many tenants and the aggregator is per process. Cloud tenants do not get the page.',
+        'A lane holds at most 40 entities (extras fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame (events_dropped counts the rest). Idle rings are swept after 15 minutes.',
+        "The caller filter uses the caller's own counts for totals; the hot table is approximate (entities whose top callers include that caller, or with a live event from it).",
+        '/issues/:id opens the Issues page on that issue, pinned on top when it is older than the newest 200.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Frames are built only while someone has the page open; nothing is written to the database on the request path.'
+    }
+  ]
+}

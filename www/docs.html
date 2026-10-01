@@ -543,6 +543,7 @@
         </button>
         <div class="docs-nav-items" id="group-obs">
           <a class="docs-nav-item" data-section="api-analytics" href="#api-analytics">API Analytics</a>
+          <a class="docs-nav-item" data-section="traffic-map" href="#traffic-map">Traffic Map</a>
           <a class="docs-nav-item" data-section="command-center" href="#command-center">Command Center</a>
           <a class="docs-nav-item" data-section="wallboard-pulse" href="#wallboard-pulse">Wallboard &amp; Pulse</a>
           <a class="docs-nav-item" data-section="record-graph" href="#record-graph">Record Graph Explorer</a>
@@ -15223,6 +15224,27 @@ POST /api/search/semantic/reindex
           <h2 class="doc-h2" id="api-analytics-inbound">Inbound integrations</h2>
           <p class="doc-p">Every request records how it authenticated, and a call that is not a browser session — a static-token user or a named API key — is by definition an integration. The Integrations page (Monitoring → Integrations → Inbound calls) rolls those callers up one card each: calls, errors, latency, last call, last error and top paths; picking a card scopes the request list to that caller. The Directus-era root aliases (<code class="doc-code">POST /files</code>, <code class="doc-code">POST /graphql</code>) that third-party integrations still use are logged like any <code class="doc-code">/api</code> route.</p>
           <!-- /SYNC:api-analytics -->
+        </div>
+
+        <div class="doc-section" id="s-traffic-map" data-toc='[{"id":"traffic-map","label":"Traffic Map"},{"id":"traffic-map-sources","label":"Where the numbers come from"},{"id":"traffic-map-limits","label":"Limits and scope"}]'>
+          <!-- SYNC:traffic-map -->
+          <h1 class="doc-h1" id="traffic-map">Traffic Map</h1>
+          <p class="doc-p">The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API as this node sees it: callers on the left, API lanes in the middle (Items, Widgets, Pages, Custom queries, GraphQL, Inbound, Files, Extensions), data stores and partner APIs on the right. Edge width is requests per second; particles are individual requests coloured by kind; a node pulses on a write and flashes on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the particles off.</p>
+          <h2 class="doc-h2" id="traffic-map-sources">Where the numbers come from</h2>
+          <ul class="doc-ul">
+            <li>Requests: the api-logger hook classifies every response into a lane and an entity and counts it into a 15-minute per-second ring in memory. Route templates replace id-shaped and token-like segments with :id, so no access token ever appears.</li>
+            <li>Internally dispatched requests are counted once: the root /graphql alias re-dispatches to /api/graphql, and the call is counted under its real GraphQL operation, not twice.</li>
+            <li>Writes: broadcastCollectionUpdate reports create/update/delete with the record id and the names of the fields written — never values.</li>
+            <li>Partner calls: every callExternalApi lands on its partner node and is attributed to the request that caused it.</li>
+            <li>History (1h / 6h / 24h in the inspector) is rolled up from nivaro_api_logs, nivaro_outbound_log and open nivaro_issues, reading the newest 20,000 log rows. Open issues are matched by route family, not per entity.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-limits">Limits and scope</h2>
+          <ul class="doc-ul">
+            <li>Per node: the numbers are this API process only, and frames go only to watchers connected to this node.</li>
+            <li>Cloud mode (CLOUD_META_DB_URL set): every /api/traffic-map route answers 404 and the page is unavailable.</li>
+            <li>A lane holds at most 40 entities (extras fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame. Idle rings are swept after 15 minutes.</li>
+          </ul>
+          <!-- /SYNC:traffic-map -->
         </div>
 
         <div class="doc-section" id="s-command-center" data-toc='[{"id":"command-center","label":"Command Center"},{"id":"command-center-map","label":"The live map"},{"id":"command-center-panels","label":"Flow board, people, and ticker"},{"id":"command-center-profile-capture","label":"Where office locations come from"}]'>
