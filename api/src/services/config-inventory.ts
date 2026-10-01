@@ -147,6 +147,7 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_export_presets',
   'nivaro_import_mappings',
   'nivaro_bulk_recipes',
+  'nivaro_task_categories', // support request types (admin-edited)
   'nivaro_queue_labels',
   'nivaro_settings_overrides',
   'nivaro_ai_playbooks'
@@ -261,6 +262,9 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_record_links',
   'nivaro_outbound_log',
   'nivaro_outbound_side_log',
+  'nivaro_chat_auto_joins',
+  'nivaro_chat_scheduled',
+  'nivaro_integration_obligations',
   'nivaro_announcement_acks',
   'nivaro_announcement_deliveries',
   'nivaro_report_annotations',
