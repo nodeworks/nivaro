@@ -1,10 +1,47 @@
 {
-  "generated_at": "2026-10-01T22:08:40.575Z",
+  "generated_at": "2026-10-01T23:31:23.002Z",
   "releases": [
+    {
+      "version": "0.2.13",
+      "tag": "v0.2.13",
+      "date": "2026-10-01T19:31:10-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "push readiness: say what the button sends, hide the badge when it sends nothing",
+              "hash": "6f2fe177"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "push readiness: corner badge on the button instead of a chip beside it",
+              "hash": "2bd9df07"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release card: skip non-run JSON in the runs folder",
+              "hash": "467f7952"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs",
+              "hash": "4a642714"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.2.12",
       "tag": "v0.2.12",
-      "date": "2026-10-01T18:08:29-04:00",
+      "date": "2026-10-01T18:08:40-04:00",
       "sections": [
         {
           "label": "Documentation",
