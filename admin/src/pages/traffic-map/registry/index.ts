@@ -10,6 +10,11 @@
  */
 
 // ── feature registrations (one line each) ──
+import '../features/nodes'
+import '../features/snapshots'
+import '../features/compare'
+import '../features/digest'
+import '../features/replay'
 
 export {
   type CanvasLayer,
