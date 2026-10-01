@@ -59,7 +59,12 @@ export function getSocket(): Socket {
     socket?.emit('client:hello', { reconnects: Math.max(0, reconnects), app: 'admin' })
     // Rejoin what this tab holds, then replay whatever happened while away.
     for (const room of joinedCollections) socket?.emit('collection:join', { collection: room })
-    for (const room of joinedWatchRooms) socket?.emit('admin:join', { room })
+    // Watch rooms ride the LEADER's socket only (a follower's own socket joining one would keep
+    // the server emitting to a tab that never relays it). The leader holds every tab's joins.
+    if (!leaderHandle || leaderHandle.isLeader()) {
+      for (const room of new Set([...leaderWatchRefs.keys(), ...localWatchRefs.keys()]))
+        socket?.emit('admin:join', { room })
+    }
     if (everAuthed && lastSeq > 0) {
       const cursor = lastSeq
       setTimeout(() => socket?.emit('catchup', { cursor }), Math.random() * 2000)
@@ -101,7 +106,14 @@ export function getSocket(): Socket {
 // Only the LEADER tab joins collection rooms + relays events to followers.
 // joinedCollections tracks bare collection names the leader must be in.
 const joinedCollections = new Set<string>()
-const joinedWatchRooms = new Set<string>()
+/** This tab's own watch-room joins, reference counted (two panels may watch one room). */
+const localWatchRefs = new Map<string, number>()
+/**
+ * Leader only: every tab's joins, reference counted. A follower closing its page sends
+ * `__leave_watch`; the leader leaves the server room only when the LAST watcher is gone —
+ * otherwise a second tab on the same page would stop receiving events.
+ */
+const leaderWatchRefs = new Map<string, number>()
 
 const RELAYED_EVENTS = new Set([
   'collection:update',
@@ -127,7 +139,10 @@ function ensureLeaderSocket() {
       for (const c of joinedCollections) {
         if (s.connected) s.emit('collection:join', { collection: c })
       }
-      for (const r of joinedWatchRooms) {
+      // Seed from this tab's own joins (they were sent to the previous leader as a follower).
+      leaderWatchRefs.clear()
+      for (const [r, n] of localWatchRefs) {
+        leaderWatchRefs.set(r, n)
         if (s.connected) s.emit('admin:join', { room: r })
       }
       s.onAny((event, payload) => {
@@ -139,11 +154,17 @@ function ensureLeaderSocket() {
           joinedCollections.add(String(payload))
           if (so.connected) so.emit('collection:join', { collection: payload })
         } else if (event === '__join_watch') {
-          joinedWatchRooms.add(String(payload))
-          if (so.connected) so.emit('admin:join', { room: payload })
+          const r = String(payload)
+          leaderWatchRefs.set(r, (leaderWatchRefs.get(r) ?? 0) + 1)
+          if (so.connected) so.emit('admin:join', { room: r })
         } else if (event === '__leave_watch') {
-          joinedWatchRooms.delete(String(payload))
-          if (so.connected) so.emit('admin:leave', { room: payload })
+          const r = String(payload)
+          const n = (leaderWatchRefs.get(r) ?? 0) - 1
+          if (n > 0) leaderWatchRefs.set(r, n)
+          else {
+            leaderWatchRefs.delete(r)
+            if (so.connected) so.emit('admin:leave', { room: r })
+          }
         } else {
           so.emit(event, payload)
         }
@@ -151,6 +172,7 @@ function ensureLeaderSocket() {
     },
     resignLeader() {
       // The socket stays up for chat; we just stop being the feed source.
+      leaderWatchRefs.clear()
     }
   })
   return leaderHandle
@@ -187,10 +209,15 @@ export const adminRealtime: RealtimeAdapter = {
 /** Join an admin watch room (traffic/jobs/monitors); returns leave fn. */
 export function joinWatchRoom(room: string): () => void {
   const handle = ensureLeaderSocket()
-  joinedWatchRooms.add(room)
+  localWatchRefs.set(room, (localWatchRefs.get(room) ?? 0) + 1)
   handle.emit('__join_watch', room)
+  let left = false
   return () => {
-    joinedWatchRooms.delete(room)
+    if (left) return // a double cleanup must not drop another watcher's reference
+    left = true
+    const n = (localWatchRefs.get(room) ?? 1) - 1
+    if (n > 0) localWatchRefs.set(room, n)
+    else localWatchRefs.delete(room)
     handle.emit('__leave_watch', room)
   }
 }

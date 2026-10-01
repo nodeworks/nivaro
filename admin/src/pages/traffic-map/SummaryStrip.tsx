@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { fmtRate } from './EventTicker'
+import { fmtCount, fmtRate } from './EventTicker'
 import { Sparkline } from './Sparkline'
 
 export interface StripData {
@@ -105,7 +105,7 @@ export function SummaryStrip({ d }: { d: StripData | null }) {
         testId='tm-strip-err'
       >
         <span className='truncate tabular-nums'>
-          {d.errN.toLocaleString()} in window
+          {fmtCount(d.errN)} in window
           {d.lastError ? (
             <>
               {' · '}
@@ -116,7 +116,8 @@ export function SummaryStrip({ d }: { d: StripData | null }) {
       </Tile>
       <Tile label='Writes' value={fmtRate(d.writesPerMin)} unit='/min' testId='tm-strip-writes'>
         <span className='truncate tabular-nums'>
-          {d.writesMix.create} created · {d.writesMix.update} updated · {d.writesMix.delete} deleted
+          {fmtCount(d.writesMix.create)} created · {fmtCount(d.writesMix.update)} updated ·{' '}
+          {fmtCount(d.writesMix.delete)} deleted
         </span>
       </Tile>
       <Tile
@@ -127,17 +128,17 @@ export function SummaryStrip({ d }: { d: StripData | null }) {
       >
         <span className='truncate tabular-nums'>
           {d.outboundErr ? (
-            <span className='text-[var(--tm-error-ink)]'>{d.outboundErr} failed</span>
+            <span className='text-[var(--tm-error-ink)]'>{fmtCount(d.outboundErr)} failed</span>
           ) : (
             'all landed'
           )}{' '}
           · {partners}
         </span>
       </Tile>
-      <Tile label='Sockets' value={d.sockets.toLocaleString()} testId='tm-strip-sockets'>
+      <Tile label='Sockets' value={fmtCount(d.sockets)} testId='tm-strip-sockets'>
         <span className='truncate tabular-nums'>
-          {d.users.toLocaleString()} {d.users === 1 ? 'person' : 'people'} · peak{' '}
-          {d.peak.toLocaleString()}
+          {fmtCount(d.users)} {Math.round(d.users) === 1 ? 'person' : 'people'} · peak{' '}
+          {fmtCount(d.peak)}
         </span>
       </Tile>
     </section>

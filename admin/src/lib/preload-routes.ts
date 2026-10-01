@@ -24,6 +24,7 @@ const loaders: Record<string, () => Promise<unknown>> = {
   '/files': () => import('@/pages/Files'),
   '/background-jobs': () => import('@/pages/BackgroundJobs'),
   '/realtime': () => import('@/pages/Realtime'),
+  '/traffic-map': () => import('@/pages/traffic-map/TrafficMap'),
   '/health': () => import('@/pages/HealthDashboard'),
   '/api-analytics': () => import('@/pages/ApiAnalytics'),
   '/notifications': () => import('@/pages/NotificationsCenter'),

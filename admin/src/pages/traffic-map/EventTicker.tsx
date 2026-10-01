@@ -28,6 +28,10 @@ export function fmtMs(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '—'
   return n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n)} ms`
 }
+/** Counts: whole numbers (snapshot seeding spreads counts as fractions, so always round). */
+export function fmtCount(n: number): string {
+  return Number.isFinite(n) ? Math.round(n).toLocaleString() : '—'
+}
 export function fmtPct(n: number): string {
   return Number.isFinite(n) ? `${n.toFixed(1)}%` : '—'
 }
@@ -90,23 +94,43 @@ function SkeletonRows({ n }: { n: number }) {
   )
 }
 
+const FADE_MS = 600
+const WINDOW_TEXT: Record<number, string> = { 60: '60 s', 300: '5 min', 900: '15 min' }
+
 export function EventTicker({
   events,
+  newestT,
+  win,
   catalog,
   total,
   loading
 }: {
   events: TrafficEventWire[]
+  /** Newest event time across the whole model (filtered out or not). */
+  newestT: number
+  win: number
   catalog: TrafficCatalog | null
   total: number
   loading: boolean
 }) {
-  // Stable row keys (so a row is not remounted as newer rows push it down) and a "seen" set so
-  // only rows that arrived since the last render get the accent fade.
+  // Stable row keys (so a row is not remounted as newer rows push it down).
   const ids = useRef(new WeakMap<TrafficEventWire, number>())
   const next = useRef(0)
-  const seen = useRef(new WeakSet<TrafficEventWire>())
+  // Fade only events that ARRIVED since the previous render: newer than the model's newest event
+  // then. Rows merely revealed by a filter change are older and never flash. The fade deadline is
+  // fixed at first sight, so a re-render inside the 600 ms neither restarts nor cuts it.
+  const lastNewest = useRef(Number.NEGATIVE_INFINITY)
+  const fadeUntil = useRef(new WeakMap<TrafficEventWire, number>())
   const rows = events.slice(0, TICKER_ROWS)
+  const now = Date.now()
+  const fadeOf = (ev: TrafficEventWire) => {
+    let until = fadeUntil.current.get(ev)
+    if (until === undefined) {
+      until = ev.t > lastNewest.current ? now + FADE_MS : 0
+      fadeUntil.current.set(ev, until)
+    }
+    return until > now
+  }
   const keyOf = (ev: TrafficEventWire) => {
     let id = ids.current.get(ev)
     if (id === undefined) {
@@ -116,8 +140,8 @@ export function EventTicker({
     return id
   }
   useEffect(() => {
-    for (const ev of rows) seen.current.add(ev)
-  })
+    if (newestT > lastNewest.current) lastNewest.current = newestT
+  }, [newestT])
 
   return (
     <section
@@ -142,7 +166,7 @@ export function EventTicker({
         ) : rows.length === 0 ? (
           <p className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]'>
             {total === 0
-              ? 'No traffic in the last 60 s. Requests appear here as they happen.'
+              ? `No traffic in the last ${WINDOW_TEXT[win] ?? `${win} s`}. Requests appear here as they happen.`
               : 'Nothing matches the current filters.'}
           </p>
         ) : (
@@ -151,7 +175,7 @@ export function EventTicker({
             const name = entityLabel(catalog, ev.lane, ev.entity)
             const isErr = ev.kind === 'error'
             const isRead = ev.kind === 'read'
-            const fresh = !isErr && !seen.current.has(ev)
+            const fresh = fadeOf(ev) && !isErr
             const quiet = isErr ? 'text-[var(--tm-fg-2)]' : 'text-[var(--tm-muted)]'
             return (
               <div

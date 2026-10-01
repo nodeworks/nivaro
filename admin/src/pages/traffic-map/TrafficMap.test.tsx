@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 
@@ -22,6 +22,8 @@ vi.mock('@/lib/socket', () => ({
 }))
 vi.mock('./MapCanvas', () => ({ MapCanvas: () => <div data-testid='map-canvas' /> }))
 
+import { HotEntities } from './HotEntities'
+import { SummaryStrip } from './SummaryStrip'
 import TrafficMap from './TrafficMap'
 
 const T0 = 1_800_000_000
@@ -250,5 +252,204 @@ describe('TrafficMap page', () => {
     })
     await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('renders counts and rates as whole or fixed numbers, never raw floats (D8)', async () => {
+    const odd = {
+      ...snapshot,
+      entities: [
+        {
+          ...snapshot.entities[0],
+          req: 7,
+          read: 3,
+          create: 1,
+          update: 2,
+          delete: 1,
+          error: 1,
+          series: Array.from({ length: 60 }, (_, i) => (i % 7 === 0 ? 3 : i % 3))
+        },
+        {
+          ...snapshot.entities[0],
+          key: 'items/regions',
+          entity: 'regions',
+          label: 'regions',
+          req: 13,
+          read: 9,
+          create: 1,
+          update: 1,
+          delete: 1,
+          error: 1,
+          series: Array.from({ length: 60 }, (_, i) => (i % 5) / 3)
+        }
+      ],
+      totals: { ...snapshot.totals, req: 20, read: 12, create: 2, update: 3, delete: 2, error: 2 }
+    }
+    getMock.mockImplementation(async (url: string) => ({
+      data: { data: url.includes('catalog') ? catalog : odd }
+    }))
+    render(<TrafficMap />)
+    await waitFor(() => expect(screen.getAllByTestId('tm-hot-row')).toHaveLength(2))
+    act(() => {
+      handlers.get('traffic-map:frame')?.({
+        ...emptyFrame(T0 + 1, 2, 3),
+        entities: { 'items/regions': [1, 0, 1, 0, 0, 0, 300] }
+      })
+    })
+    expect(screen.getByTestId('tm-strip-rps').textContent).toMatch(/^\d+\.\d$/)
+    expect(screen.getByText(/ created · /).textContent).toMatch(
+      /^\d+ created · \d+ updated · \d+ deleted$/
+    )
+    const strip = within(document.getElementById('tm-strip') as HTMLElement)
+    expect(strip.getByText(/^[\d.,]+ in window/).textContent).toMatch(/^\d+ in window/)
+    for (const row of screen.getAllByTestId('tm-hot-row')) {
+      const cells = row.querySelectorAll('td')
+      expect(cells[1].textContent).toMatch(/^\d+(\.\d)?$/)
+      expect(cells[2].textContent).toMatch(/^\d+$/)
+    }
+    // no float artefacts like 9.999999999999998 anywhere on the page
+    const texts: string[] = []
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    while (walker.nextNode()) texts.push(walker.currentNode.textContent ?? '')
+    expect(texts.filter((x) => /\d\.\d{3,}|NaN|Infinity/.test(x))).toEqual([])
+  })
+
+  it('announces only the selection, not every frame (no live region on the inspector)', async () => {
+    mockApi()
+    render(<TrafficMap />)
+    await waitFor(() => expect(screen.getByTestId('tm-inspector-name')).toBeInTheDocument())
+    expect(document.getElementById('tm-inspector')?.getAttribute('aria-live')).toBeNull()
+    expect(document.getElementById('tm-inspector-announce')?.textContent).toBe(
+      'Inspecting workflows'
+    )
+  })
+
+  it('drops frames while the tab is hidden and re-seeds on return (visibilitychange)', async () => {
+    let hidden = false
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+    try {
+      mockApi()
+      render(<TrafficMap />)
+      await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
+      const snapshotCalls = () =>
+        getMock.mock.calls.filter((c) => String(c[0]).includes('/snapshot')).length
+      hidden = true
+      act(() => {
+        handlers.get('traffic-map:frame')?.(emptyFrame(T0 + 1, 2, 9))
+      })
+      expect(screen.getByTestId('tm-strip-sockets').textContent).toBe('3')
+      expect(snapshotCalls()).toBe(1)
+      hidden = false
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      await waitFor(() => expect(snapshotCalls()).toBe(2))
+    } finally {
+      delete (document as unknown as { hidden?: boolean }).hidden
+    }
+  })
+
+  it('the empty ticker names the selected window', async () => {
+    mockApi()
+    render(<TrafficMap />)
+    await waitFor(() => expect(screen.getByText(/No traffic in the last 60 s/)).toBeInTheDocument())
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: '5m' }))
+    })
+    await waitFor(() =>
+      expect(screen.getByText(/No traffic in the last 5 min/)).toBeInTheDocument()
+    )
+  })
+
+  it('fades only newly arrived events, not older rows revealed by a filter', async () => {
+    mockApi()
+    render(<TrafficMap />)
+    await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'read' }))
+    })
+    const ev = (t: number, kind: string, record?: string) => ({
+      t,
+      lane: 'items',
+      entity: 'workflows',
+      kind,
+      caller: 'uA',
+      route: 'GET /api/items/workflows',
+      record
+    })
+    act(() => {
+      handlers.get('traffic-map:frame')?.({
+        ...emptyFrame(T0 + 1, 2, 3),
+        events: [ev((T0 + 1) * 1000, 'read')]
+      })
+    })
+    expect(document.querySelector('[data-tm-event="read"]')).toBeNull()
+    act(() => {
+      handlers.get('traffic-map:frame')?.({
+        ...emptyFrame(T0 + 2, 3, 3),
+        events: [ev((T0 + 2) * 1000, 'update', 'PW26-9')]
+      })
+    })
+    expect(document.querySelector('[data-tm-event="update"]')?.className).toMatch(/tm-ev-fresh/)
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'read' }))
+    })
+    const read = document.querySelector('[data-tm-event="read"]')
+    expect(read).not.toBeNull()
+    expect(read?.className).not.toMatch(/tm-ev-fresh/)
+  })
+
+  it('strip and hot table round fractional inputs (seeded counts are spread as fractions)', () => {
+    const f = 9.999999999999998
+    render(
+      <>
+        <SummaryStrip
+          d={{
+            rps: 1.4000000000000012,
+            series: [1, 2],
+            p95: 557.6,
+            p50: 99.4,
+            req: 120.00000000000001,
+            errN: f,
+            lastError: null,
+            writesPerMin: 12.000000000000002,
+            writesMix: { create: 1.4000000000000012, update: f, delete: 0.6000000000000001 },
+            outboundPerMin: 2.3333333333333335,
+            outboundErr: 1.0000000000000002,
+            partners: ['MDSi'],
+            sockets: 3,
+            users: 2.0000000000000004,
+            peak: 3
+          }}
+        />
+        <HotEntities
+          rows={[
+            {
+              key: 'items/workflows',
+              lane: 'items',
+              entity: 'workflows',
+              rps: 0.23333333333333334,
+              wpm: 1.4000000000000012,
+              p95: 558.3,
+              errPct: 2.857142857142857,
+              series: [1]
+            }
+          ]}
+          catalog={null}
+          selectedKey={null}
+          onSelect={() => {}}
+          loading={false}
+        />
+      </>
+    )
+    expect(screen.getByTestId('tm-strip-rps').textContent).toBe('1.4')
+    expect(screen.getByText(/ created · /).textContent).toBe('1 created · 10 updated · 1 deleted')
+    expect(screen.getByText(/^[\d.,]+ in window/).textContent).toBe('10 in window')
+    expect(screen.getByText(/failed/).textContent).toBe('1 failed')
+    expect(screen.getByTestId('tm-strip-writes').textContent).toBe('12')
+    const cells = screen.getByTestId('tm-hot-row').querySelectorAll('td')
+    expect(cells[1].textContent).toBe('0.2')
+    expect(cells[2].textContent).toBe('1')
+    expect(cells[3].textContent).toBe('558 ms')
+    expect(cells[4].textContent).toBe('2.9%')
   })
 })

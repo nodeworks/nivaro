@@ -241,10 +241,10 @@ export function Inspector({
   const facts: Array<[string, string, boolean]> = [
     ['Requests/s', fmtRate(d.rps), false],
     ['p95', fmtMs(d.p95), false],
-    ['Errors', fmtPct(d.errPct), d.errPct >= 5]
+    ['Errors', fmtPct(d.errPct), d.errPct >= 3]
   ]
   return (
-    <aside className={PANEL} aria-label='Inspector' aria-live='polite' id='tm-inspector'>
+    <aside className={PANEL} aria-label='Inspector' id='tm-inspector'>
       <div className='flex items-start justify-between gap-3 border-b border-[var(--tm-line-2)] px-3.5 py-2.5'>
         <div className='min-w-0'>
           <h2

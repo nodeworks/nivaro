@@ -209,17 +209,25 @@ export default function TrafficMap() {
       for (let i = 0; i < 60; i++) series[i] += s[i] ?? 0
     }
     const visibleEvents = m.visibleEvents(filters)
+    // Newest error code, counted the way the error total is: visible lanes plus `other` (R24).
     let lastError: string | null = null
-    const evErr = visibleEvents.find((e) => e.kind === 'error')
-    if (evErr) lastError = evErr.code ?? (evErr.status ? String(evErr.status) : null)
-    else {
-      let newest = ''
-      for (const k of m.entityKeys()) {
-        if (!filters.types.has(laneOf(k))) continue
-        const e = m.entityMeta(k)?.recent_errors[0]
-        if (e && e.at > newest) {
-          newest = e.at
-          lastError = e.code ?? String(e.status)
+    if (filters.kinds.has('error')) {
+      const evErr = m.events.find(
+        (e) =>
+          e.kind === 'error' && counted(e.lane) && (!filters.caller || e.caller === filters.caller)
+      )
+      if (evErr) lastError = evErr.code ?? (evErr.status ? String(evErr.status) : null)
+      else {
+        let newest = ''
+        for (const k of m.entityKeys()) {
+          if (!counted(laneOf(k))) continue
+          const e = m
+            .entityMeta(k)
+            ?.recent_errors.find((x) => !filters.caller || x.caller === filters.caller)
+          if (e && e.at > newest) {
+            newest = e.at
+            lastError = e.code ?? String(e.status)
+          }
         }
       }
     }
@@ -465,6 +473,9 @@ export default function TrafficMap() {
             paused={paused}
             stale={stale && !paused}
           />
+          <p className='sr-only' aria-live='polite' id='tm-inspector-announce'>
+            {inspector ? `Inspecting ${inspector.name}` : ''}
+          </p>
           {inspector && selection ? (
             <Inspector d={inspector} catalog={catalog} />
           ) : (
@@ -474,6 +485,8 @@ export default function TrafficMap() {
         <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-2'>
           <EventTicker
             events={view?.events ?? []}
+            newestT={m.events[0]?.t ?? 0}
+            win={win}
             catalog={catalog}
             total={eventsSeen.current}
             loading={!ready}

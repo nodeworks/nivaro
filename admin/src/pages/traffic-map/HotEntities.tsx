@@ -1,4 +1,4 @@
-import { entityLabel, fmtMs, fmtPct, fmtRate } from './EventTicker'
+import { entityLabel, fmtCount, fmtMs, fmtPct, fmtRate } from './EventTicker'
 import { Sparkline } from './Sparkline'
 import type { Lane, TrafficCatalog } from './types'
 import { LANE_LABEL } from './types'
@@ -127,7 +127,7 @@ export function HotEntities({
                     </span>
                   </td>
                   <td className='px-2.5 py-1.5 text-right'>{fmtRate(r.rps)}</td>
-                  <td className='px-2.5 py-1.5 text-right'>{r.wpm.toLocaleString()}</td>
+                  <td className='px-2.5 py-1.5 text-right'>{fmtCount(r.wpm)}</td>
                   <td className='whitespace-nowrap px-2.5 py-1.5 text-right'>{fmtMs(r.p95)}</td>
                   <td
                     className={`px-2.5 py-1.5 text-right ${
