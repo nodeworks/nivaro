@@ -46,7 +46,7 @@ import {
   splitStateField
 } from './record-state.js'
 import { enforceRelationLimits } from './relation-limits.js'
-import { span } from './request-trace.js'
+import { noteReadShape, span, timeAccessSync } from './request-trace.js'
 import {
   computeRollupTotal,
   computeRollupTotalBatch,
@@ -2917,6 +2917,9 @@ export async function readItems(
   const sort = keyset
     ? keyset.sorts.map((k) => `${k.desc ? '-' : ''}${k.column}`)
     : (query.sort ?? [])
+  // Traffic Map (#1135): the request's first list read leaves its filter / sort inputs by
+  // reference; the shape (paths + operators, never values) is derived after the response.
+  noteReadShape(collection, filter, sort, conditions)
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
   const { direct: directFields0, nested: nestedFieldMap } = parseFieldExpansion(fields)
@@ -3058,8 +3061,10 @@ export async function readItems(
 
   // Row-level security — policy row_filter conditions (no-op when policy has none)
   if (rowFilter) {
-    applyRowFilter(q, rowFilter, user)
-    applyRowFilter(countQ, rowFilter, user)
+    timeAccessSync(() => {
+      applyRowFilter(q, rowFilter, user)
+      applyRowFilter(countQ, rowFilter, user)
+    })
   }
   // Per-user dimensional scoping (restrict-mode user scopes)
   await applyUserScopes(q, collection, user)
@@ -3588,7 +3593,7 @@ export async function readOne(
     .select(selectCols as string[])
   await applyWorkspaceScope(q, collection, workspaceId)
 
-  if (rowFilter) applyRowFilter(q, rowFilter, user)
+  if (rowFilter) timeAccessSync(() => applyRowFilter(q, rowFilter, user))
   await applyUserScopes(q, collection, user)
 
   let item = (await q.first()) as Record<string, unknown> | undefined

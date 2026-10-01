@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { checkRecord, hasChecks, storeRecordResult } from '../services/config-conformance.js'
+import { noteDerivedWrite } from '../services/request-trace.js'
 import { hooks } from './registry.js'
 
 /**
@@ -22,6 +23,8 @@ const queue: Array<{ collection: string; id: string }> = []
 let running = 0
 
 function schedule(collection: string, id: string): void {
+  // Counted when queued, inside the write's request (the check itself runs after the response).
+  noteDerivedWrite('integrity')
   const key = `${collection}:${id}`
   const prior = pending.get(key)
   if (prior) clearTimeout(prior)

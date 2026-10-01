@@ -436,7 +436,13 @@ export interface GraphQLStamp {
   errors: number
   /** `Type.field` names the request selected that carry @deprecated. */
   deprecated: string[]
+  /** Every `Type.field` the document selects (introspection left out, capped) — the Traffic
+   *  Map's field heat (#1134). Absent when the type walker could not read the document. */
+  fields?: string[]
 }
+
+/** At most this many distinct `Type.field` names are kept per request for field heat. */
+const SELECTED_FIELDS_CAP = 300
 
 /** The operation a document runs (its name, else the first root field), its
  *  kind, and every @deprecated field it selects — the analytics identity of a
@@ -466,17 +472,24 @@ function describeOperation(
   try {
     const typeInfo = new TypeInfo(schema)
     const seen = new Set<string>()
+    const selected = new Set<string>()
     visit(
       document,
       visitWithTypeInfo(typeInfo, {
         Field() {
           const def = typeInfo.getFieldDef()
           const parent = typeInfo.getParentType()
-          if (def?.deprecationReason && parent) seen.add(`${parent.name}.${def.name}`)
+          if (!def || !parent) return
+          const name = `${parent.name}.${def.name}`
+          if (def.deprecationReason) seen.add(name)
+          if (selected.size < SELECTED_FIELDS_CAP && !def.name.startsWith('__')) {
+            if (!parent.name.startsWith('__')) selected.add(name)
+          }
         }
       })
     )
     stamp.deprecated = [...seen].slice(0, 20)
+    stamp.fields = [...selected]
   } catch {
     // a document the type walker cannot read still logs its operation
   }

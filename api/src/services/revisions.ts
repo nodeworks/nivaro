@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { noteDerivedWrite } from './request-trace.js'
 
 export interface Revision {
   id: number | null
@@ -71,6 +72,7 @@ export async function writeRevision(opts: {
       data: JSON.stringify(opts.data),
       delta: opts.delta ? JSON.stringify(opts.delta) : null
     })
+    noteDerivedWrite('revision')
   } catch (err) {
     console.error({ err }, 'Failed to write revision')
   }

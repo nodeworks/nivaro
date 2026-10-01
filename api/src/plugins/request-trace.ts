@@ -5,6 +5,8 @@ import {
   attachQueryTracing,
   beginTrace,
   finishTrace,
+  markSerializeEnd,
+  markSerializeStart,
   setWideTables
 } from '../services/request-trace.js'
 
@@ -62,6 +64,18 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     // from the ring buffer every time the page polled.
     if (path.startsWith('/api/traces')) return
     beginTrace(path, req)
+  })
+
+  // Serialization window (Traffic Map latency split, #1151): preSerialization only runs for
+  // object payloads, so a handler that sends a string reads 0. Callback hooks — no promise per
+  // request — and both are a WeakMap lookup that does nothing for an untraced request.
+  app.addHook('preSerialization', (req, _reply, payload, done) => {
+    markSerializeStart(req)
+    done(null, payload)
+  })
+  app.addHook('onSend', (req, _reply, payload, done) => {
+    markSerializeEnd(req)
+    done(null, payload)
   })
 
   app.addHook('onResponse', async (req, reply) => {

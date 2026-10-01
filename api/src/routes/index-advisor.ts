@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { execCustomQuerySql } from '../services/custom-query-exec.js'
+import { liveFilterColumns } from '../services/traffic-taps/read-shapes.js'
 
 /**
  * Index advisor. The hot filter columns are already declared in config —
@@ -23,6 +24,9 @@ interface Suggestion {
   rows: number
   reasons: string[]
   create_sql: string
+  /** Traffic Map evidence (#1135): reads on this process that filtered / sorted by the column
+   *  in the last 15 minutes. Absent when none did. */
+  live?: { filter: number; sort: number; ops: string[] }
 }
 
 const MIN_ROWS = 50_000
@@ -125,6 +129,18 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
     for (const b of bindings)
       add(b.collection, b.state_field, 'workflow state mirror (state filters)')
 
+    // #1135 — live evidence: what callers actually filtered and sorted by on this process in
+    // the last 15 minutes (Traffic Map read shapes; empty in cloud mode or when idle).
+    const live = new Map<string, { filter: number; sort: number; ops: string[] }>()
+    for (const l of liveFilterColumns(900)) {
+      const key = `${l.collection}.${l.column}`.toLowerCase()
+      live.set(key, { filter: l.filter, sort: l.sort, ops: l.ops })
+      const how = [l.filter ? `filtered ${l.filter}×` : '', l.sort ? `sorted ${l.sort}×` : '']
+        .filter(Boolean)
+        .join(', ')
+      add(l.collection, l.column, `live reads: ${how} in the last 15 min`)
+    }
+
     // #475 — the (collection, item) pair. Every correlated "which instance /
     // state / revision does this record have" lookup filters on both columns;
     // nivaro_workflow_instances carried only its PK and scanned 115k rows per
@@ -181,10 +197,13 @@ export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
         column,
         rows,
         reasons: [...reasons],
-        create_sql: createIndexSql(table, column)
+        create_sql: createIndexSql(table, column),
+        ...(live.has(key) ? { live: live.get(key) } : {})
       })
     }
-    suggestions.sort((a, z) => z.rows - a.rows)
+    // Live evidence first (a column callers use right now), then by table size.
+    const liveN = (s: Suggestion) => (s.live ? s.live.filter + s.live.sort : 0)
+    suggestions.sort((a, z) => liveN(z) - liveN(a) || z.rows - a.rows)
     return { data: { suggestions, min_rows: MIN_ROWS } }
   })
 

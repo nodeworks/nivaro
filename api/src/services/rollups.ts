@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { noteDerivedWrite } from './request-trace.js'
 
 function parseJson<T>(v: string | null | undefined): T | null {
   if (!v) return null
@@ -810,6 +811,7 @@ export async function recalcRollupsForParent(
     await db(entry.parentCollection)
       .where({ id: parentId })
       .update({ [entry.rollupField]: total })
+    noteDerivedWrite('rollup')
     // Cascade: is this parent row itself a contributor to a stored rollup on
     // ITS parent? Only when one of those rollups reads the field we just wrote.
     if (depth < MAX_CASCADE_DEPTH) {
