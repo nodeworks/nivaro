@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
-import { previewCronRuns } from '../plugins/cron.js'
+import { JobBusyError, previewCronRuns } from '../plugins/cron.js'
 import { logActivity } from '../services/activity.js'
 
 type OverrideRow = {
@@ -308,6 +308,16 @@ export async function cronRoutes(app: FastifyInstance) {
         return { data: { id, ran: true, duration_ms: Date.now() - startedAt } }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        // #1085 — an unsafe job already running elsewhere: refused, nothing ran.
+        if (err instanceof JobBusyError) {
+          await logActivity({
+            action: 'cron-run-now-refused',
+            user: req.user?.id,
+            req,
+            comment: `${id}: ${message.slice(0, 300)}`
+          })
+          return reply.code(409).send({ error: message, code: err.code, holder: err.holder })
+        }
         await logActivity({
           action: 'cron-run-now-failed',
           user: req.user?.id,

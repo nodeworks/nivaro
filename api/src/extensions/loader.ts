@@ -212,6 +212,25 @@ export interface ExtensionEntry {
   /** Capability manifest (#660) — declared list from the export; observed
    *  actuals live in the module map, composed by GET /extensions. */
   declared_capabilities?: string[]
+  /** #1089 — which build of the extension is loaded: the export's `build`,
+   *  else the `.release-sha` file a deploy writes beside it; null = unknown. */
+  build?: string | null
+}
+
+/** #1089 — the loaded build's identity (≤64 chars, trimmed). */
+export function resolveExtensionBuild(declared: unknown, dirPath: string): string | null {
+  const clean = (v: unknown) => {
+    const t = typeof v === 'string' ? v.trim() : ''
+    return t ? t.slice(0, 64) : null
+  }
+  const fromExport = clean(declared)
+  if (fromExport) return fromExport
+  try {
+    const p = join(dirPath, '.release-sha')
+    return existsSync(p) ? clean(readFileSync(p, 'utf-8')) : null
+  } catch {
+    return null
+  }
 }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -1171,7 +1190,8 @@ async function loadExtension(
       has_health_check: typeof ext.healthCheck === 'function',
       declared_capabilities: Array.isArray(ext.capabilities)
         ? ext.capabilities.map(String).slice(0, 30)
-        : undefined
+        : undefined,
+      build: resolveExtensionBuild(ext.build, dirPath)
     })
 
     // Load optional manifest.json for UI plugin support

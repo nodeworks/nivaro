@@ -229,6 +229,12 @@ export class CronLeader {
     return this.redis !== null
   }
 
+  /** Any attached Redis (competing or only observing) — for cluster-wide
+   *  locks that every process takes, ticking or not. */
+  client(): Redis | null {
+    return this.redis ?? this.observer
+  }
+
   /** Attach Redis for reading the holder without competing. */
   observe(redis: Redis): void {
     this.observer = redis
@@ -340,6 +346,93 @@ export class CronLeader {
   }
 }
 
+// ── Cluster-wide job locks (#1085, #1086) ────────────────────────────────────
+//
+// Two locks that hold across processes, each a Redis key carrying the holder's
+// identity, set with a short expiry and renewed while the work runs, so a
+// process that dies mid-job frees it within HOLD_MS:
+//
+//   nvr:cron:active:<id>  a job labelled idempotent:'unsafe' is running (or
+//                         queued for its turn) somewhere. A second start of it
+//                         (run-now, a chained run, a catch-up, the clock) is
+//                         refused instead of mailing or posting twice.
+//   nvr:cron:heavy        the one heavy-job slot. Heavy jobs on every process
+//                         take turns, so a run-now on a web replica never runs
+//                         alongside the worker's nightly heavy job.
+//
+// The unsafe marker fails CLOSED (a Redis error refuses the run — doubling an
+// unsafe job is the thing it exists to prevent); the heavy slot fails OPEN (it
+// protects the pool, and a Redis outage must not stop the nightly work).
+
+const ACTIVE_PREFIX = 'nvr:cron:active:'
+const HEAVY_KEY = 'nvr:cron:heavy'
+const HOLD_MS = 5 * 60_000
+const HOLD_RENEW_MS = 60_000
+const HEAVY_POLL_MS = 5_000
+const HEAVY_MAX_WAIT_MS = 2 * 60 * 60_000
+
+/** A job that may not run twice at once is already running (or queued). */
+export class JobBusyError extends Error {
+  readonly code = 'JOB_RUNNING'
+  constructor(
+    readonly jobId: string,
+    /** Who holds it: "<instance> (<how>)", or null when Redis could not say. */
+    readonly holder: string | null
+  ) {
+    super(
+      holder
+        ? `"${jobId}" is already running on ${holder}. It is marked unsafe to run twice, so this run was refused.`
+        : `Could not confirm "${jobId}" is not already running (Redis unreachable). It is marked unsafe to run twice, so this run was refused.`
+    )
+  }
+}
+
+/** A held Redis key, renewed until released. */
+export class ClusterHold {
+  private timer: ReturnType<typeof setInterval> | null = null
+  constructor(
+    private readonly redis: Redis,
+    readonly key: string,
+    readonly value: string
+  ) {
+    this.timer = setInterval(() => {
+      void this.redis.eval(RENEW_LUA, 1, key, value, String(HOLD_MS)).catch(() => {})
+    }, HOLD_RENEW_MS)
+    this.timer.unref?.()
+  }
+
+  /** SET NX; null when someone else holds the key. Throws on a Redis error. */
+  static async take(redis: Redis, key: string, value: string): Promise<ClusterHold | null> {
+    const res = await redis.set(key, value, 'PX', HOLD_MS, 'NX')
+    return res === 'OK' ? new ClusterHold(redis, key, value) : null
+  }
+
+  async release(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+    try {
+      await this.redis.eval(RELEASE_LUA, 1, this.key, this.value)
+    } catch {
+      /* expires on its own */
+    }
+  }
+}
+
+/** "<instance> (<how>)" → the holder text, from a lock value "<instance>|<how>|<nonce>". */
+function holderLabel(value: string | null): string | null {
+  if (!value) return null
+  const [inst, how] = value.split('|')
+  return how ? `${inst} (${how})` : inst
+}
+
+let holdSeq = 0
+function holdValue(how: string): string {
+  holdSeq += 1
+  return `${INSTANCE_ID}|${how}|${process.pid}.${holdSeq}`
+}
+
 /** The scheduled time a tick belongs to: the newest fire at or before now.
  *  Croner hands the callback the actual start time, which differs between
  *  processes by milliseconds; the scheduled time does not. */
@@ -384,7 +477,7 @@ export class CronManager {
   /** Lease status with the holder read fresh — for the admin surfaces. A
    *  replica with ticks off never competes but still names who leads. */
   async schedulerStatus(): Promise<
-    LeaderStatus & { ticks_enabled: boolean; development: boolean }
+    LeaderStatus & { ticks_enabled: boolean; development: boolean; heavy_slot: string | null }
   > {
     const st = this.leader.status()
     const ticks = cronTicksEnabled()
@@ -394,7 +487,8 @@ export class CronManager {
       is_leader: ticks && this.mayTick(),
       holder: holder ?? (st.coordinated ? null : ticks ? st.instance : null),
       ticks_enabled: ticks,
-      development: process.env.NODE_ENV === 'development'
+      development: process.env.NODE_ENV === 'development',
+      heavy_slot: await this.heavySlotHolder()
     }
   }
   /** May this process fire scheduled ticks right now? */
@@ -521,17 +615,88 @@ export class CronManager {
     if (meta.description) e.description = meta.description
     if (meta.gate) e.gate = meta.gate
   }
-  private runSerialized(heavy: boolean, work: () => Promise<void>): Promise<void> {
+  private runSerialized(
+    heavy: boolean,
+    work: () => Promise<void>,
+    label = 'scheduled'
+  ): Promise<void> {
     if (!heavy) return work()
     // #75 — a heavy job yields to interactive traffic: while the connection
     // pool is hot it waits (5s steps, 10 min cap) before taking its turn.
+    // #1086 — then it takes the cluster-wide heavy slot, so heavy jobs on
+    // other processes are never running at the same time.
     const yielding = async () => {
       await waitForPoolHeadroom()
-      await work()
+      await this.withHeavySlot(label, work)
     }
     const next = this.heavyChain.then(yielding, yielding)
     this.heavyChain = next.catch(() => {})
     return next
+  }
+
+  /** #1086 — run `work` holding the cluster-wide heavy-job slot. Waits its turn
+   *  (polling, 2 h cap, then runs anyway with a warning); without Redis, or
+   *  when Redis fails, it runs at once — the slot protects the pool, not data. */
+  async withHeavySlot(label: string, work: () => Promise<void>): Promise<void> {
+    const redis = this.leader.client()
+    if (!redis) return work()
+    const value = holdValue(label)
+    const started = Date.now()
+    let hold: ClusterHold | null = null
+    let warned = false
+    while (!hold) {
+      try {
+        hold = await ClusterHold.take(redis, HEAVY_KEY, value)
+      } catch {
+        return work() // Redis unreachable: fail open
+      }
+      if (hold) break
+      if (Date.now() - started >= HEAVY_MAX_WAIT_MS) {
+        console.warn(`[cron] heavy job "${label}" waited 2h for the heavy slot — running anyway`)
+        return work()
+      }
+      if (!warned) {
+        warned = true
+        const holder = holderLabel(await redis.get(HEAVY_KEY).catch(() => null))
+        console.log(
+          `[cron] heavy job "${label}" waits for the heavy slot (held by ${holder ?? 'another process'})`
+        )
+      }
+      await sleep(HEAVY_POLL_MS)
+    }
+    try {
+      await work()
+    } finally {
+      await hold.release()
+    }
+  }
+
+  /** Who holds the heavy slot right now (null = free / unknown). */
+  async heavySlotHolder(): Promise<string | null> {
+    const redis = this.leader.client()
+    if (!redis) return null
+    return holderLabel(await redis.get(HEAVY_KEY).catch(() => null))
+  }
+
+  /** #1085 — claim the cluster-wide "running" marker for an unsafe job.
+   *  Returns the hold (release it when done), null for a job that needs none,
+   *  or throws JobBusyError when it is held elsewhere or Redis cannot say. */
+  async claimUnsafeRun(id: string, how: string): Promise<ClusterHold | null> {
+    if (this.entries.get(id)?.idempotent !== 'unsafe') return null
+    const redis = this.leader.client()
+    if (!redis) return null
+    const key = `${ACTIVE_PREFIX}${id}`
+    let hold: ClusterHold | null
+    try {
+      hold = await ClusterHold.take(redis, key, holdValue(how))
+    } catch {
+      throw new JobBusyError(id, null)
+    }
+    if (hold) return hold
+    throw new JobBusyError(
+      id,
+      holderLabel(await redis.get(key).catch(() => null)) ?? 'another process'
+    )
   }
 
   // #54 — chains: childId → the job it runs after. Hydrated from
@@ -645,52 +810,64 @@ export class CronManager {
         if (!this.mayTick()) return
         if (this.leader.active && !(await this.leader.claimRun(id, scheduledFireTime(cronJob))))
           return
-        if (opts?.quiet) {
-          const chainId = newChainId()
-          try {
-            await startChain(
-              `cron:${id}`,
-              () => runAsTrafficSource(cronTrafficSource(id), fn),
-              chainId
-            )
-          } catch (err) {
-            console.error({ err, cronId: id }, 'Cron job error')
-            const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
-            await run.fail(err)
-          }
+        // #1085 — an unsafe job already running (a run-now elsewhere) skips this tick.
+        let unsafeHold: ClusterHold | null = null
+        try {
+          unsafeHold = await this.claimUnsafeRun(id, 'scheduled')
+        } catch (err) {
+          console.warn(`[cron] tick skipped: ${err instanceof Error ? err.message : err}`)
           return
         }
-        // Every tick lands in nivaro_job_runs (best-effort) so the Background
-        // Jobs console and per-extension health read one source of truth.
-        await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
-          // The run records the chain its tick starts (#707), so the console
-          // can open "what it wrote" for exactly this run.
-          const chainId = newChainId()
-          const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
-          this.runningSince.set(id, Date.now())
-          const watchdog = setTimeout(() => {
-            raiseCronIssue(
-              `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
-              'high'
-            )
-          }, budget)
-          try {
-            // Every tick is its own integration event chain.
-            await startChain(
-              `cron:${id}`,
-              () => runAsTrafficSource(cronTrafficSource(id), fn),
-              chainId
-            )
-            await run.complete()
-            this.triggerChained(id)
-          } catch (err) {
-            console.error({ err, cronId: id }, 'Cron job error')
-            await run.fail(err)
-          } finally {
-            clearTimeout(watchdog)
-            this.runningSince.delete(id)
+        try {
+          if (opts?.quiet) {
+            const chainId = newChainId()
+            try {
+              await startChain(
+                `cron:${id}`,
+                () => runAsTrafficSource(cronTrafficSource(id), fn),
+                chainId
+              )
+            } catch (err) {
+              console.error({ err, cronId: id }, 'Cron job error')
+              const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
+              await run.fail(err)
+            }
+            return
           }
-        })
+          // Every tick lands in nivaro_job_runs (best-effort) so the Background
+          // Jobs console and per-extension health read one source of truth.
+          await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
+            // The run records the chain its tick starts (#707), so the console
+            // can open "what it wrote" for exactly this run.
+            const chainId = newChainId()
+            const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
+            this.runningSince.set(id, Date.now())
+            const watchdog = setTimeout(() => {
+              raiseCronIssue(
+                `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
+                'high'
+              )
+            }, budget)
+            try {
+              // Every tick is its own integration event chain.
+              await startChain(
+                `cron:${id}`,
+                () => runAsTrafficSource(cronTrafficSource(id), fn),
+                chainId
+              )
+              await run.complete()
+              this.triggerChained(id)
+            } catch (err) {
+              console.error({ err, cronId: id }, 'Cron job error')
+              await run.fail(err)
+            } finally {
+              clearTimeout(watchdog)
+              this.runningSince.delete(id)
+            }
+          })
+        } finally {
+          await unsafeHold?.release()
+        }
       }
     )
 
@@ -735,26 +912,41 @@ export class CronManager {
   async runNow(id: string, triggeredBy?: string | null): Promise<boolean> {
     const entry = this.entries.get(id)
     if (!entry) return false
-    const chainId = newChainId()
-    const run = await startJobRun('cron', id, {
-      extensionId: entry.extensionId,
-      triggeredBy: triggeredBy ?? null,
-      chainId
-    })
+    // #1085 — an unsafe job running anywhere refuses a second start (throws
+    // JobBusyError before anything is recorded). #1086 — a heavy job waits for
+    // the cluster-wide heavy slot.
+    const unsafeHold = await this.claimUnsafeRun(
+      id,
+      triggeredBy ? 'run now' : 'chained or catch-up'
+    )
     try {
-      // A NEW chain even when run-now comes from an HTTP request: the job's
-      // writes are the cron's, not the admin click's (the click is recorded
-      // on nivaro_job_runs.triggered_by).
-      await startChain(
-        `cron:${id}`,
-        () => runAsTrafficSource(cronTrafficSource(id), entry.fn),
-        chainId
-      )
-      await run.complete()
-      this.triggerChained(id)
-    } catch (err) {
-      await run.fail(err)
-      throw err
+      const go = async () => {
+        const chainId = newChainId()
+        const run = await startJobRun('cron', id, {
+          extensionId: entry.extensionId,
+          triggeredBy: triggeredBy ?? null,
+          chainId
+        })
+        try {
+          // A NEW chain even when run-now comes from an HTTP request: the job's
+          // writes are the cron's, not the admin click's (the click is recorded
+          // on nivaro_job_runs.triggered_by).
+          await startChain(
+            `cron:${id}`,
+            () => runAsTrafficSource(cronTrafficSource(id), entry.fn),
+            chainId
+          )
+          await run.complete()
+          this.triggerChained(id)
+        } catch (err) {
+          await run.fail(err)
+          throw err
+        }
+      }
+      if (entry.heavy) await this.withHeavySlot(`${id} (run now)`, go)
+      else await go()
+    } finally {
+      await unsafeHold?.release()
     }
     return true
   }

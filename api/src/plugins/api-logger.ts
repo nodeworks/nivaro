@@ -142,6 +142,8 @@ function clientIp(req: { headers: Record<string, unknown>; ip: string }): string
 function shouldSkip(path: string, method: string): boolean {
   if (!path.startsWith('/api/')) return !(LEGACY_ALIASES.has(path) && method === 'POST')
   if (path.startsWith('/api/health')) return true
+  // #1088 — a Prometheus scrape every 15s is not traffic anyone reads here.
+  if (path === '/api/metrics' || path.startsWith('/api/metrics?')) return true
   if (path.startsWith('/api/api-analytics')) return true
   return false
 }

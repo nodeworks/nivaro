@@ -2,9 +2,12 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
+import { applyEnvFiles } from './env-files.js'
 
 // Load .env from the repo root (two levels up from api/src/)
 loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env') })
+// Then secrets from files (#1084): X_FILE variables and /run/secrets.
+applyEnvFiles()
 
 // In cloud mode the static DB connection is unused — all queries use per-request
 // tenant pools resolved from cloud_tenants. DB_* vars are therefore not required.

@@ -20,6 +20,7 @@ import { chainPlugin } from './plugins/chain.js'
 import { cronPlugin } from './plugins/cron.js'
 import { graphqlPlugin } from './plugins/graphql.js'
 import { legacyCompatRoutes } from './plugins/legacy-compat.js'
+import { metricsPlugin } from './plugins/metrics.js'
 import { rateLimitPlugin } from './plugins/rate-limit.js'
 import { redisPlugin } from './plugins/redis.js'
 import { requestTracePlugin } from './plugins/request-trace.js'
@@ -164,6 +165,8 @@ export async function buildServer() {
     return body
   })
   await app.register(apiLoggerPlugin)
+  // #1088 — Prometheus /api/metrics + per-route request histograms.
+  await app.register(metricsPlugin)
 
   // ─── Sessions ─────────────────────────────────────────────────────────────
   await registerSession(app)

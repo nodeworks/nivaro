@@ -38,6 +38,8 @@ type Extension = {
   requires?: string[]
   has_settings?: boolean
   has_health_check?: boolean
+  /** #1089 — the loaded build (export `build` or the .release-sha beside it). */
+  build?: string | null
   /** Capability manifest (#660): declared by the export vs observed by the loader. */
   capabilities?: { declared: string[]; observed: string[] }
   /** #76 — a build parked at <id>.next / the previous build kept at <id>.prev */
@@ -773,6 +775,14 @@ export function ExtensionsPage() {
                         <code className='font-mono text-[11px] text-slate-400 dark:text-muted-foreground'>
                           {ext.path}
                         </code>
+                        {ext.build && (
+                          <p
+                            className='mt-0.5 font-mono text-[10.5px] text-slate-500 dark:text-muted-foreground'
+                            data-ext-build={ext.build}
+                          >
+                            build {ext.build}
+                          </p>
+                        )}
                       </td>
                       <td className='px-4 py-3.5'>
                         <div className='flex items-center gap-1.5'>

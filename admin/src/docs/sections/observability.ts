@@ -214,6 +214,37 @@ export const obsHealthDashboard: DocSection = {
       text: 'Background Jobs names the instance that holds the lease. GET /api/job-runs/registry and GET /api/ops-runtime/roster return it as `scheduler` ({ instance, is_leader, holder, ticks_enabled }). A process with ticks off never competes: run web replicas with CRON_TICKS=off and one worker with it on.'
     },
     {
+      type: 'p',
+      text: 'Jobs labelled unsafe to run twice (the digests, broadcasts, chat sends and report deliveries) take a cluster-wide “running” marker in Redis while they run. A second start anywhere, whether run now, a chained run, a boot catch-up or the clock, is refused while the marker is held; run now answers 409 with code JOB_RUNNING and names the holder. If Redis cannot be asked, the run is refused too. The marker is renewed while the job runs and expires five minutes after a process dies.'
+    },
+    {
+      type: 'p',
+      text: 'Heavy jobs take turns across every process through one Redis slot, so a run now on a web replica never runs beside the worker’s nightly heavy job. A heavy job waits for the slot (up to two hours, then runs with a warning); if Redis is down it runs at once. `scheduler.heavy_slot` names the job holding the slot.'
+    },
+    { type: 'h2', id: 'health-metrics', text: 'Metrics for Prometheus' },
+    {
+      type: 'p',
+      text: 'GET /api/metrics returns the Prometheus text format for this process: version and instance, memory and CPU, event-loop delay since the previous scrape, request counts and a latency histogram by route pattern (/api/items/:collection, never a raw URL), the database pool (in use, waiting, ceiling, five-minute p95 wait) and whether the process holds the scheduler lease. A scraper reads it with `Authorization: Bearer <METRICS_TOKEN>`; without METRICS_TOKEN only signed-in administrators can. Scrapes are not written to the API request log.'
+    },
+    {
+      type: 'pre',
+      code: `# prometheus.yml
+scrape_configs:
+  - job_name: nivaro
+    metrics_path: /api/metrics
+    authorization: { credentials_file: /etc/prometheus/nivaro-metrics-token }
+    static_configs: [{ targets: ['nivaro-web:3055', 'nivaro-worker:3055'] }]`
+    },
+    { type: 'h2', id: 'health-secret-files', text: 'Secrets from files' },
+    {
+      type: 'p',
+      text: 'Any setting can come from a file instead of the environment. `X_FILE=/path` sets X from that file (set X or X_FILE, not both). Every file in /run/secrets whose name is an environment-variable name becomes that variable, which is where Docker Swarm mounts a secret under its target name; NIVARO_SECRETS_DIR moves the folder and `off` turns it off. A secret file replaces a value already in the environment and the log names the variable, never the value. One trailing newline is dropped. An unreadable file stops the process at boot.'
+    },
+    {
+      type: 'p',
+      text: 'GET /api/extensions also carries each extension’s `build`: the export’s own `build` value, or else the `.release-sha` file a deploy writes beside the extension. A deploy gate compares it with the release it mounted.'
+    },
+    {
       type: 'note',
       text: 'GET /api/health remains the lightweight unauthenticated liveness check; it reports latency as degraded, so do not use it for routing. The detailed endpoint requires authentication.'
     }

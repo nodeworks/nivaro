@@ -86,8 +86,19 @@ interface TarnPool {
   max?: number
 }
 
+/** The pool's counters right now (null = no tarn pool, e.g. in tests). */
+export function poolNow(): { used: number; pending: number; max: number } | null {
+  const pool = poolOf()
+  if (!pool) return null
+  return {
+    used: pool.numUsed?.() ?? 0,
+    pending: pool.numPendingAcquires?.() ?? 0,
+    max: pool.max ?? 0
+  }
+}
+
 function poolOf(): TarnPool | null {
-  const pool = (db.client as unknown as { pool?: TarnPool }).pool
+  const pool = (db?.client as unknown as { pool?: TarnPool } | undefined)?.pool
   return pool && typeof pool.on === 'function' ? pool : null
 }
 

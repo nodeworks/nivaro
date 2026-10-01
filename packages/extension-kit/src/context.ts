@@ -396,4 +396,8 @@ export interface ExtensionDefinition {
   env?: ExtensionEnvDecl[]
   /** Operator runbooks the admin Runbooks console runs (#720). */
   runbooks?: ExtensionRunbookDecl[]
+  /** Which build this is (a commit sha, a release id), shown on GET
+   *  /api/extensions so a deploy can check the expected build is mounted.
+   *  Omit it to use the `.release-sha` file beside the extension (#1089). */
+  build?: string
 }
