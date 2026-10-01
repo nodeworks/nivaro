@@ -20,10 +20,9 @@
  */
 
 import { db } from '../db/index.js'
+import { instanceKey } from './instance-key.js'
 
-export function instanceKey(): string {
-  return process.env.NIVARO_INSTANCE?.trim() || process.env.NODE_ENV?.trim() || 'default'
-}
+export { instanceKey }
 
 // ── Env layer (parsed once) ─────────────────────────────────────────────────
 let envParsed: Record<string, unknown> | null | undefined

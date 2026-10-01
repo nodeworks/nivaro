@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
-import { db } from '../db/index.js'
 import { config } from '../config.js'
+import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { bustLogRules, readLog } from '../services/log-ring.js'
@@ -30,7 +30,9 @@ function parseWhen(v: string): number | undefined {
   if (/^\d{10,}$/.test(s)) return Number(s)
   const rel = s.match(/^now-(\d+)([smhd])$/)
   if (rel) {
-    const mult = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[rel[2] as 's' | 'm' | 'h' | 'd']
+    const mult = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[
+      rel[2] as 's' | 'm' | 'h' | 'd'
+    ]
     return Date.now() - Number(rel[1]) * mult
   }
   const t = Date.parse(s)
@@ -42,23 +44,29 @@ export async function opsLogsRoutes(app: FastifyInstance) {
 
   // #156 — tail the in-process log ring (per replica; pino lines only —
   // console.* from crons goes to stdout, not the ring).
-  app.get<{ Querystring: { level?: string; q?: string; limit?: string; regex?: string; since?: string; until?: string } }>(
-    '/tail',
-    async (req, reply) => {
-      const levelMap: Record<string, number> = { debug: 20, info: 30, warn: 40, error: 50 }
-      return reply.send({
-        data: readLog({
-          level: levelMap[String(req.query.level ?? '')] ?? undefined,
-          q: req.query.q || undefined,
-          // #82 — regex + time window over the ring ('now-15m' relative forms accepted).
-          regex: req.query.regex === '1' || req.query.regex === 'true',
-          since: req.query.since ? parseWhen(req.query.since) : undefined,
-          until: req.query.until ? parseWhen(req.query.until) : undefined,
-          limit: Math.min(1000, Number(req.query.limit) || 300)
-        })
-      })
+  app.get<{
+    Querystring: {
+      level?: string
+      q?: string
+      limit?: string
+      regex?: string
+      since?: string
+      until?: string
     }
-  )
+  }>('/tail', async (req, reply) => {
+    const levelMap: Record<string, number> = { debug: 20, info: 30, warn: 40, error: 50 }
+    return reply.send({
+      data: readLog({
+        level: levelMap[String(req.query.level ?? '')] ?? undefined,
+        q: req.query.q || undefined,
+        // #82 — regex + time window over the ring ('now-15m' relative forms accepted).
+        regex: req.query.regex === '1' || req.query.regex === 'true',
+        since: req.query.since ? parseWhen(req.query.since) : undefined,
+        until: req.query.until ? parseWhen(req.query.until) : undefined,
+        limit: Math.min(1000, Number(req.query.limit) || 300)
+      })
+    })
+  })
 
   // #296 — where errors are being deliberately swallowed, and how often.
   app.get('/swallows', async (_req, reply) => {
@@ -234,7 +242,7 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       const win = Math.min(360, Number(req.query.window) || 60) * 60_000
       const from = new Date(around.getTime() - win)
       const to = new Date(around.getTime() + win)
-      const events: Array<{ at: string; kind: string; label: string }> = []
+      const events: Array<{ at: string; kind: string; label: string; link?: string }> = []
 
       const [issues, jobs, configWrites] = await Promise.all([
         db('nivaro_issues')
@@ -258,7 +266,7 @@ export async function opsLogsRoutes(app: FastifyInstance) {
           .whereNotIn('action', ['read', 'login'])
           .orderBy('timestamp', 'desc')
           .limit(80)
-          .select('action', 'collection', 'item', 'timestamp', 'user', 'comment')
+          .select('id', 'action', 'collection', 'item', 'timestamp', 'user', 'comment')
           .catch(() => [] as Array<Record<string, unknown>>)
       ])
       for (const i of issues) {
@@ -283,8 +291,10 @@ export async function opsLogsRoutes(app: FastifyInstance) {
         const comment = typeof a.comment === 'string' ? a.comment.trim() : ''
         events.push({
           at: new Date(a.timestamp as Date).toISOString(),
-          kind: 'config',
-          label: comment || `${a.action} on ${a.collection}${a.item ? ` #${a.item}` : ''}`
+          // #1053 — a config-epoch row is the change as a whole (area, who, the save behind it).
+          kind: a.action === 'config-epoch' ? 'config:change' : 'config',
+          label: comment || `${a.action} on ${a.collection}${a.item ? ` #${a.item}` : ''}`,
+          ...(a.id != null ? { link: `/activity/${a.id}` } : {})
         })
       }
       events.sort((a, b) => b.at.localeCompare(a.at))

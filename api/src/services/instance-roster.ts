@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { NIVARO_VERSION } from '../version.js'
+import { instanceKey } from './instance-key.js'
 
 /**
  * Instance roster (#297): every API process registers itself in Redis
@@ -26,6 +27,10 @@ async function beat(): Promise<void> {
         host: hostname(),
         pid: process.pid,
         version: NIVARO_VERSION,
+        // #1049 — the deployment slot and the process role (web / worker), so a gate can assert
+        // "2 web + 1 worker" and the mixed-version check compares like with like.
+        instance: instanceKey(),
+        role: process.env.NIVARO_ROLE?.trim() || null,
         node: process.version,
         started_at: new Date(Date.now() - process.uptime() * 1000).toISOString(),
         uptime_seconds: Math.round(process.uptime()),

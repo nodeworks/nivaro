@@ -1948,9 +1948,30 @@ export async function buildServer() {
       // and raise one summary issue with the names.
       try {
         const bootTime = new Date(Date.now() - process.uptime() * 1000)
+        // #1051 — only runs of THIS deployment slot whose process is no longer in the roster.
+        // The dev laptop shares its database with staging: unscoped, every laptop boot marked
+        // staging's in-flight runs interrupted. Rows from before migration 388 carry no
+        // instance: only a ticking (deployed) process sweeps those, never a dev laptop.
+        const { hasColumn } = await import('./lib/column-probe.js')
+        const { listInstances } = await import('./services/instance-roster.js')
+        const { instanceKey } = await import('./services/instance-key.js')
+        const { cronTicksEnabled } = await import('./services/cron-ticks.js')
+        const scoped = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
+        const live = scoped ? (await listInstances()).map((i) => String(i.id)).filter(Boolean) : []
+        const sweepsLegacy = cronTicksEnabled()
         const stranded = (await db('nivaro_job_runs')
           .where('status', 'running')
           .where('started_at', '<', bootTime)
+          .modify((q) => {
+            if (!scoped) return
+            q.where((w) => {
+              w.where((o) => {
+                o.where('instance', instanceKey())
+                if (live.length) o.whereNotIn('instance_id', live)
+              })
+              if (sweepsLegacy) w.orWhereNull('instance')
+            })
+          })
           .limit(50)
           .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>
         if (stranded.length > 0) {

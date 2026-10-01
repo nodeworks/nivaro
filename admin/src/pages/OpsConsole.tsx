@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, RefreshCw, TerminalSquare } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ChatHealthCard } from '@/components/chat-health-card'
 import { Button } from '@/components/ui/button'
@@ -160,12 +161,11 @@ export function OpsConsolePage() {
     queryKey: ['ops-incidents', incidentAt],
     queryFn: () =>
       api
-        .get<{ data: { events: Array<{ at: string; kind: string; label: string }> } }>(
-          '/ops-logs/incident-timeline',
-          {
-            params: incidentAt ? { around: new Date(incidentAt).toISOString() } : {}
-          }
-        )
+        .get<{
+          data: { events: Array<{ at: string; kind: string; label: string; link?: string }> }
+        }>('/ops-logs/incident-timeline', {
+          params: incidentAt ? { around: new Date(incidentAt).toISOString() } : {}
+        })
         .then((r) => r.data.data),
     enabled: false
   })
@@ -498,7 +498,19 @@ export function OpsConsolePage() {
                     >
                       {e.kind}
                     </span>
-                    <span className='min-w-0 flex-1'>{e.label}</span>
+                    {e.link ? (
+                      <Link
+                        to={e.link}
+                        className='min-w-0 flex-1 hover:underline'
+                        data-incident-kind={e.kind}
+                      >
+                        {e.label}
+                      </Link>
+                    ) : (
+                      <span className='min-w-0 flex-1' data-incident-kind={e.kind}>
+                        {e.label}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

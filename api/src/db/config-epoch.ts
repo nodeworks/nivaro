@@ -15,6 +15,8 @@
  * Leaf module: no import from db/index.ts (which imports this).
  */
 import type { Knex } from 'knex'
+// Leaf too (node modules only) — read for who made a configuration write (#1053).
+import { currentTraceMeta } from '../services/request-trace.js'
 
 const TABLE = 'nivaro_cache_epochs'
 export const CONFIG_EPOCH = '__config__'
@@ -58,10 +60,17 @@ const WATCHED = [
   'nivaro_settings_overrides',
   'nivaro_custom_queries',
   'nivaro_widgets',
-  'nivaro_integration_contracts'
+  'nivaro_integration_contracts',
+  // #1053 — flows are configuration too: an edit lands on the incident timeline.
+  'nivaro_flows',
+  'nivaro_flow_operations'
 ]
 
 const WATCHED_RE = new RegExp(`\\b(?:${WATCHED.join('|')})\\b`, 'i')
+const WATCHED_ALL_RE = new RegExp(`\\b(?:${WATCHED.join('|')})\\b`, 'gi')
+/** The table a DDL statement names (`alter table [x]`, `create table "x"`, …). */
+const DDL_TABLE_RE =
+  /\b(?:alter|create|drop|truncate)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?[["`]?(?:\w+[\]"`]?\.[["`]?)?(\w+)/i
 const DDL_RE = /^\s*(?:alter|create|drop|truncate)\b|\bsp_rename\b/i
 
 /** Exported for tests: does this statement change configuration? */
@@ -89,6 +98,107 @@ let missingUntil = 0
 let lastStatement: string | null = null
 let writesSeen = 0
 let moves = 0
+
+// ── #1053: what a run of configuration writes touched, and who made it ──────
+/** One configuration change as the incident timeline reads it: the epoch it moved to, the
+ *  tables a run of writes named, and the people / requests behind them. */
+export interface ConfigStamp {
+  epoch: number | null
+  tables: Array<{ table: string; writes: number }>
+  ddl: number
+  statements: number
+  users: string[]
+  paths: string[]
+  from: string
+  to: string
+  /** A cache bust asked for by hand (no write behind it). */
+  manual: boolean
+}
+
+interface RunAcc {
+  tables: Map<string, number>
+  ddl: number
+  statements: number
+  users: Set<string>
+  paths: Set<string>
+  from: number
+  to: number
+}
+let run: RunAcc | null = null
+const stampListeners = new Set<(stamp: ConfigStamp) => void | Promise<void>>()
+
+/** Called once per configuration change (a run of writes, on its trailing edge). */
+export function onConfigStamp(fn: (stamp: ConfigStamp) => void | Promise<void>): () => void {
+  stampListeners.add(fn)
+  return () => stampListeners.delete(fn)
+}
+
+/** Exported for tests: the configuration tables a statement names (DDL names its own table). */
+export function tablesInStatement(sql: string): string[] {
+  const flat = sql.replace(/[[\]"`]/g, '')
+  const out = new Set<string>()
+  for (const m of flat.matchAll(WATCHED_ALL_RE)) out.add(m[0].toLowerCase())
+  if (DDL_RE.test(sql)) {
+    const t = sql.match(DDL_TABLE_RE)?.[1]
+    if (t) out.add(t.toLowerCase())
+  }
+  return [...out]
+}
+
+function accumulate(sql: string): void {
+  const now = Date.now()
+  if (!run)
+    run = {
+      tables: new Map(),
+      ddl: 0,
+      statements: 0,
+      users: new Set(),
+      paths: new Set(),
+      from: now,
+      to: now
+    }
+  run.statements++
+  run.to = now
+  if (DDL_RE.test(sql)) run.ddl++
+  for (const t of tablesInStatement(sql)) run.tables.set(t, (run.tables.get(t) ?? 0) + 1)
+  try {
+    const meta = currentTraceMeta()
+    if (meta?.userId && run.users.size < 10) run.users.add(meta.userId)
+    if (meta?.urlHint && run.paths.size < 10) run.paths.add(meta.urlHint.slice(0, 160))
+  } catch {
+    /* outside a request: a script, a migration or a cron */
+  }
+}
+
+function emitStamp(epoch: number | null, manual: boolean): void {
+  const acc = run
+  run = null
+  if (stampListeners.size === 0) return
+  if (!acc && !manual) return
+  const now = new Date().toISOString()
+  const stamp: ConfigStamp = {
+    epoch,
+    tables: acc
+      ? [...acc.tables]
+          .map(([table, writes]) => ({ table, writes }))
+          .sort((a, b) => b.writes - a.writes)
+      : [],
+    ddl: acc?.ddl ?? 0,
+    statements: acc?.statements ?? 0,
+    users: acc ? [...acc.users] : [],
+    paths: acc ? [...acc.paths] : [],
+    from: acc ? new Date(acc.from).toISOString() : now,
+    to: acc ? new Date(acc.to).toISOString() : now,
+    manual
+  }
+  for (const fn of stampListeners) {
+    try {
+      void Promise.resolve(fn(stamp)).catch(() => {})
+    } catch {
+      /* a listener never breaks the write path */
+    }
+  }
+}
 
 function remember(name: string, value: number): void {
   let set = own.get(name)
@@ -142,6 +252,7 @@ export function noteConfigWrite(sql?: string): void {
   if (sql) {
     lastStatement = sql.replace(/\s+/g, ' ').slice(0, 160)
     writesSeen++
+    accumulate(sql)
   }
   dirty = true
   if (Date.now() - lastBumpAt >= MIN_GAP_MS) {
@@ -151,14 +262,18 @@ export function noteConfigWrite(sql?: string): void {
   if (pending) clearTimeout(pending)
   pending = setTimeout(() => {
     pending = null
-    if (dirty) void bump(CONFIG_EPOCH)
+    // #1053 — one stamp per run of writes, on its trailing edge (the leading move only clears
+    // caches early; the stamp waits until the run has said everything it touched).
+    if (dirty) void bump(CONFIG_EPOCH).then((v) => emitStamp(v, false))
   }, TRAILING_MS)
   pending.unref?.()
 }
 
 /** Move the configuration number now — for a bust someone asked for by hand. */
 export async function bumpConfigEpoch(): Promise<number | null> {
-  return bump(CONFIG_EPOCH)
+  const v = await bump(CONFIG_EPOCH)
+  emitStamp(v, true)
+  return v
 }
 
 /** Move any other named number (schedules, …). */
@@ -186,7 +301,14 @@ export function attachConfigEpoch(knexInstance: Knex): void {
         clearTimeout(pending)
         pending = null
       }
-      const flushed = dirty ? bump(CONFIG_EPOCH).catch(() => null) : Promise.resolve(null)
+      const flushed = dirty
+        ? bump(CONFIG_EPOCH)
+            .then((v) => {
+              emitStamp(v, false)
+              return v
+            })
+            .catch(() => null)
+        : Promise.resolve(null)
       return flushed.then(() => original(...args))
     }
   } catch {

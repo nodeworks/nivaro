@@ -3,31 +3,15 @@ import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import type { Redis } from 'ioredis'
 import { newChainId, startChain } from '../services/chain.js'
+import { cronTicksEnabled } from '../services/cron-ticks.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
-import { startJobRun } from '../services/job-runs.js'
+import { type JobRunTrigger, startJobRun } from '../services/job-runs.js'
 import { runAsTrafficSource, type TrafficSource } from '../services/traffic-source.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-/**
- * Whether scheduled jobs fire on the clock in THIS process.
- *
- * A development process shares its database with a deployed instance (the
- * dev laptop and staging both point at one database), so every clock-driven
- * job — digests, escalations, partner polls, the import worker, scheduled
- * flows — would run twice and mail people twice. Development processes
- * therefore keep their schedules registered (the roster, dry runs and
- * run-now all still work) but never tick; deployed instances tick.
- *
- * CRON_TICKS=on|off overrides either way (a self-hosted developer with their
- * own database sets `on`; a throwaway production-mode boot sets `off`).
- */
-export function cronTicksEnabled(): boolean {
-  const raw = (process.env.CRON_TICKS ?? '').trim().toLowerCase()
-  if (['on', 'true', '1', 'yes'].includes(raw)) return true
-  if (['off', 'false', '0', 'no'].includes(raw)) return false
-  return process.env.NODE_ENV !== 'development'
-}
+/** Whether this process ticks — see services/cron-ticks.ts (a leaf, read by job bookkeeping). */
+export { cronTicksEnabled }
 
 export interface CronEntry {
   id: string
@@ -734,7 +718,7 @@ export class CronManager {
     void (async () => {
       for (const kid of kids) {
         try {
-          await this.runNow(kid, null)
+          await this.runNow(kid, null, 'chained')
         } catch (err) {
           console.error({ err, cronId: kid, after: id }, 'Chained cron job error')
         }
@@ -829,7 +813,12 @@ export class CronManager {
               )
             } catch (err) {
               console.error({ err, cronId: id }, 'Cron job error')
-              const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
+              const run = await startJobRun('cron', id, {
+                extensionId: opts?.extensionId,
+                chainId,
+                trigger: 'schedule',
+                leaseHolder: this.leaseHolderNow()
+              })
               await run.fail(err)
             }
             return
@@ -840,7 +829,12 @@ export class CronManager {
             // The run records the chain its tick starts (#707), so the console
             // can open "what it wrote" for exactly this run.
             const chainId = newChainId()
-            const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
+            const run = await startJobRun('cron', id, {
+              extensionId: opts?.extensionId,
+              chainId,
+              trigger: 'schedule',
+              leaseHolder: this.leaseHolderNow()
+            })
             this.runningSince.set(id, Date.now())
             const watchdog = setTimeout(() => {
               raiseCronIssue(
@@ -903,13 +897,23 @@ export class CronManager {
     })
   }
 
+  /** #1051 — the scheduler lease holder as this process last saw it ('uncoordinated' = no Redis). */
+  private leaseHolderNow(): string {
+    return this.leader.active ? (this.leader.status().holder ?? INSTANCE_ID) : 'uncoordinated'
+  }
+
   /**
    * Run a scheduled job's handler immediately, out of band. Used by the admin
    * "run now" endpoint to re-run a failed nightly job (or to exercise one in a
    * test window) without waiting for its next tick. Errors propagate to the
    * caller so the endpoint can report them; the scheduled run is unaffected.
    */
-  async runNow(id: string, triggeredBy?: string | null): Promise<boolean> {
+  async runNow(
+    id: string,
+    triggeredBy?: string | null,
+    /** #1050 — recorded on the run; defaults to run-now. */
+    how: JobRunTrigger = 'run-now'
+  ): Promise<boolean> {
     const entry = this.entries.get(id)
     if (!entry) return false
     // #1085 — an unsafe job running anywhere refuses a second start (throws
@@ -925,7 +929,8 @@ export class CronManager {
         const run = await startJobRun('cron', id, {
           extensionId: entry.extensionId,
           triggeredBy: triggeredBy ?? null,
-          chainId
+          chainId,
+          trigger: how
         })
         try {
           // A NEW chain even when run-now comes from an HTTP request: the job's
@@ -978,7 +983,7 @@ export class CronManager {
           .first('id')
         if (recent) continue
         console.log(`[cron] catch-up run for overdue job "${entry.id}"`)
-        await this.runNow(entry.id, null)
+        await this.runNow(entry.id, null, 'catch-up')
       } catch (err) {
         console.warn(`[cron] catch-up for "${entry.id}" failed:`, err)
       }
