@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
+import { callerBreakerCheck } from '../services/traffic-breaker.js'
 import type { Role, User } from '../types.js'
 
 export interface ApiKeyScope {
@@ -330,6 +331,19 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
 }
 
 async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
+  await authenticateIdentity(req, reply)
+  // Traffic Map circuit breaker (#1157): a caller an admin paused or limited during an incident.
+  // No breaker set = a size check; the verdict is kept on the request (authenticate can run twice).
+  try {
+    await callerBreakerCheck(req)
+  } catch (err) {
+    const retry = (err as { retryAfter?: number }).retryAfter
+    if (retry) void reply.header('Retry-After', String(retry))
+    throw err
+  }
+}
+
+async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
   // Bearer auth — Authorization: Bearer <token>
   const authHeader = req.headers.authorization
   if (authHeader?.startsWith('Bearer ')) {

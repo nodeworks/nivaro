@@ -1,6 +1,7 @@
 // api/src/routes/traffic-map-extras/index.ts
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import { deepMeasurementRoutes } from './deep-measurement.js'
+import { trafficOpsRoutes } from './ops.js'
 import { requestLensesRoutes } from './request-lenses.js'
 
 /**
@@ -16,7 +17,8 @@ import { requestLensesRoutes } from './request-lenses.js'
 const FEATURES: FastifyPluginAsync[] = [
   // import { myFeatureRoutes } from './my-feature.js'  →  myFeatureRoutes,
   deepMeasurementRoutes,
-  requestLensesRoutes
+  requestLensesRoutes,
+  trafficOpsRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {

@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
 import { readMasquerade } from './masquerade'
+import { pageContextHeaders } from './page-context'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 
@@ -16,6 +17,9 @@ api.interceptors.request.use((config) => {
   // A "View as" tab acts as that person (lib/masquerade.ts).
   const masq = readMasquerade()
   if (masq && !config.headers.Authorization) config.headers.Authorization = `Bearer ${masq.token}`
+  // Which screen the call came from (Traffic Map #1113 / #1116) — a route pattern, never ids.
+  for (const [k, v] of Object.entries(pageContextHeaders('admin')))
+    if (!config.headers[k]) config.headers[k] = v
   return config
 })
 

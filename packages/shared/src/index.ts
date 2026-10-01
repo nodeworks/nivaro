@@ -414,6 +414,16 @@ export {
   toneForOutcome
 } from './lib/obligation-filters'
 export { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from './lib/open-in-tabs'
+export {
+  APP_HEADER,
+  installPageContextFetch,
+  LOAD_HEADER,
+  PAGE_HEADER,
+  PageContext,
+  pageContext,
+  pageContextHeaders,
+  pagePattern
+} from './lib/page-context'
 export * from './lib/queue-grouping'
 export {
   type CollectionUpdateEvent,

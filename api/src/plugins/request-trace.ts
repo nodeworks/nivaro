@@ -9,6 +9,7 @@ import {
   markSerializeStart,
   setWideTables
 } from '../services/request-trace.js'
+import { attachInflightQueries, inflightEnd, inflightStart } from '../services/traffic-inflight.js'
 
 /**
  * Scopes a phase-timing context to every /api/* request. Pairs with
@@ -29,6 +30,8 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     if (client && typeof client.on === 'function' && !clients.has(client)) {
       clients.add(client)
       attachQueryTracing(client as Parameters<typeof attachQueryTracing>[0])
+      // Traffic Map in-flight list (#1147): the statement each open request is running.
+      attachInflightQueries(client as Parameters<typeof attachInflightQueries>[0])
     }
   }
 
@@ -64,6 +67,12 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     // from the ring buffer every time the page polled.
     if (path.startsWith('/api/traces')) return
     beginTrace(path, req)
+    inflightStart(req)
+  })
+
+  // A client that went away never gets an onResponse — the in-flight entry ends here instead.
+  app.addHook('onRequestAbort', async (req) => {
+    inflightEnd(req)
   })
 
   // Serialization window (Traffic Map latency split, #1151): preSerialization only runs for
@@ -81,6 +90,7 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
   app.addHook('onResponse', async (req, reply) => {
     const path = (req.raw.url ?? req.url).split('?')[0]
     if (!path.startsWith('/api/') || path.startsWith('/api/traces')) return
+    inflightEnd(req)
     try {
       finishTrace({
         method: req.method,

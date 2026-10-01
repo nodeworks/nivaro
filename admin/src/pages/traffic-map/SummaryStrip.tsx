@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useContext } from 'react'
+import { TrafficMapContext } from './context'
 import { fmtCount, fmtRate } from './EventTicker'
 import { StripTiles } from './registry/stripTiles'
 import { Sparkline } from './Sparkline'
@@ -74,6 +75,11 @@ const STRIP_CLS =
   'grid grid-cols-2 gap-px md:grid-cols-3 min-[1280px]:grid-cols-6 overflow-hidden rounded-lg border border-[var(--tm-line)] bg-[var(--tm-line)]'
 
 export function SummaryStrip({ d }: { d: StripData | null }) {
+  // The window the series covers — the sparkline marks restarts / deploys / config writes in it.
+  const ctx = useContext(TrafficMapContext)
+  const range = ctx?.ready
+    ? { from: (ctx.model.now - ctx.win) * 1000, to: ctx.model.now * 1000 }
+    : undefined
   if (!d)
     return (
       <section aria-label='Summary' aria-busy='true' className={STRIP_CLS} id='tm-strip'>
@@ -91,7 +97,7 @@ export function SummaryStrip({ d }: { d: StripData | null }) {
   return (
     <section aria-label='Summary' className={STRIP_CLS} id='tm-strip'>
       <Tile label='Requests' value={fmtRate(d.rps)} unit='/s' testId='tm-strip-rps'>
-        <Sparkline data={d.series} className='h-[18px] min-w-0 flex-1' />
+        <Sparkline data={d.series} range={range} className='h-[18px] min-w-0 flex-1' />
       </Tile>
       <Tile label='p95 latency' value={p95} unit={p95Unit} testId='tm-strip-p95'>
         <span className='truncate tabular-nums'>
