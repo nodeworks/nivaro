@@ -9,7 +9,7 @@ import {
   Plus,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -303,6 +303,7 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['issues'] })
       qc.invalidateQueries({ queryKey: ['issues-summary'] })
+      qc.invalidateQueries({ queryKey: ['issue-full'] })
       toast.success('Issue updated')
     },
     onError: (err: { response?: { data?: { error?: string } } }) =>
@@ -344,7 +345,7 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
         <span className='text-muted-foreground'>
           Raised by{' '}
           <span className='font-medium text-foreground'>
-            {issue.raised_by_name || issue.raised_by_email || issue.raised_by}
+            {issue.raised_by_name || issue.raised_by_email || 'an unknown user'}
           </span>{' '}
           {formatRelative(issue.created_at)}
         </span>
@@ -534,27 +535,6 @@ export function IssuesPage() {
       api.get<{ data: Issue[] }>(`/issues${qs ? `?${qs}` : ''}`).then((r) => r.data.data)
   })
 
-  // A linked issue older than the newest 200 is not in the list: fetch it and pin it on top.
-  const linkedNum = linkedId && /^\d+$/.test(linkedId) ? Number(linkedId) : null
-  const linkedInList = linkedNum != null && issues.some((i) => i.id === linkedNum)
-  const { data: linkedIssue } = useQuery({
-    queryKey: ['issue-full', linkedNum],
-    queryFn: () => api.get<{ data: Issue }>(`/issues/${linkedNum}`).then((r) => r.data.data),
-    enabled: linkedNum != null && !isLoading && !linkedInList,
-    staleTime: 60_000
-  })
-  const rows = !linkedInList && linkedIssue ? [linkedIssue, ...issues] : issues
-
-  useEffect(() => {
-    if (linkedNum == null || linkedDone.current === linkedId) return
-    if (!rows.some((i) => i.id === linkedNum)) return
-    linkedDone.current = linkedId ?? null
-    setExpandedId(linkedNum)
-    requestAnimationFrame(() =>
-      document.getElementById(`issue-row-${linkedNum}`)?.scrollIntoView({ block: 'center' })
-    )
-  }, [linkedId, linkedNum, rows])
-
   const { data: summary } = useQuery<{
     by_status: Record<string, number>
     by_severity: Record<string, number>
@@ -573,6 +553,47 @@ export function IssuesPage() {
     queryFn: () => api.get<{ data: CmsUser[] }>('/users').then((r) => r.data.data),
     staleTime: 60_000
   })
+
+  // A linked issue older than the newest 200 is not in the list: fetch it and pin it on top.
+  // Keyed under ['issues'] so every invalidation after an edit refreshes the pinned row too.
+  const linkedNum = linkedId && /^\d+$/.test(linkedId) ? Number(linkedId) : null
+  const linkedInList = linkedNum != null && issues.some((i) => i.id === linkedNum)
+  const { data: linkedRaw, isError: linkedMissing } = useQuery({
+    queryKey: ['issues', 'linked', linkedNum],
+    queryFn: () => api.get<{ data: Issue }>(`/issues/${linkedNum}`).then((r) => r.data.data),
+    enabled: linkedNum != null && !isLoading && !linkedInList,
+    retry: false,
+    staleTime: 60_000
+  })
+  // The single-issue route returns the raw row: resolve names from the directory list.
+  const linkedIssue = useMemo(() => {
+    if (!linkedRaw) return null
+    const find = (id: string | null) =>
+      id ? users.find((u) => u.id.toLowerCase() === id.toLowerCase()) : undefined
+    const raiser = find(linkedRaw.raised_by)
+    const assignee = find(linkedRaw.assigned_to)
+    return {
+      ...linkedRaw,
+      raised_by_name: linkedRaw.raised_by_name ?? (raiser ? userLabel(raiser) : null),
+      raised_by_email: linkedRaw.raised_by_email ?? raiser?.email ?? null,
+      assigned_to_name: linkedRaw.assigned_to_name ?? (assignee ? userLabel(assignee) : null),
+      assigned_to_email: linkedRaw.assigned_to_email ?? assignee?.email ?? null
+    }
+  }, [linkedRaw, users])
+  const rows = useMemo(
+    () => (!linkedInList && linkedIssue ? [linkedIssue, ...issues] : issues),
+    [linkedInList, linkedIssue, issues]
+  )
+
+  useEffect(() => {
+    if (linkedNum == null || linkedDone.current === linkedId) return
+    if (!rows.some((i) => i.id === linkedNum)) return
+    linkedDone.current = linkedId ?? null
+    setExpandedId(linkedNum)
+    requestAnimationFrame(() =>
+      document.getElementById(`issue-row-${linkedNum}`)?.scrollIntoView({ block: 'center' })
+    )
+  }, [linkedId, linkedNum, rows])
 
   const { data: collections = [] } = useQuery({
     queryKey: ['collections'],
@@ -608,6 +629,7 @@ export function IssuesPage() {
             setCreating(false)
             qc.invalidateQueries({ queryKey: ['issues'] })
             qc.invalidateQueries({ queryKey: ['issues-summary'] })
+            qc.invalidateQueries({ queryKey: ['issue-full'] })
           }}
           onCancel={() => setCreating(false)}
         />
@@ -695,6 +717,7 @@ export function IssuesPage() {
                   setSelected(new Set())
                   qc.invalidateQueries({ queryKey: ['issues'] })
                   qc.invalidateQueries({ queryKey: ['issues-summary'] })
+                  qc.invalidateQueries({ queryKey: ['issue-full'] })
                 } catch {
                   toast.error('Bulk update failed')
                 } finally {
@@ -716,6 +739,14 @@ export function IssuesPage() {
         </div>
       )}
 
+      {linkedMissing && (
+        <p
+          id='issue-linked-missing'
+          className='shrink-0 border-b border-slate-200 bg-amber-50 px-6 py-2 text-[12px] text-amber-900 dark:border-border dark:bg-amber-500/10 dark:text-amber-200'
+        >
+          Issue #{linkedId} was not found. It may have been deleted.
+        </p>
+      )}
       {/* Table */}
       <div className='flex-1 overflow-y-auto'>
         {isLoading ? (
@@ -724,7 +755,7 @@ export function IssuesPage() {
               <div key={i} className='h-10 animate-pulse rounded-lg bg-muted' />
             ))}
           </div>
-        ) : issues.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className='flex flex-col items-center justify-center py-24 text-center'>
             <AlertOctagon className='mb-3 h-10 w-10 text-muted-foreground/40' />
             <p className='mb-1 text-sm font-medium'>No issues found</p>
@@ -739,9 +770,9 @@ export function IssuesPage() {
                 <th className='w-9 px-3 py-2'>
                   <input
                     type='checkbox'
-                    checked={issues.length > 0 && selected.size === issues.length}
+                    checked={rows.length > 0 && selected.size === rows.length}
                     onChange={(e) =>
-                      setSelected(e.target.checked ? new Set(issues.map((i) => i.id)) : new Set())
+                      setSelected(e.target.checked ? new Set(rows.map((i) => i.id)) : new Set())
                     }
                     className='h-3.5 w-3.5'
                   />

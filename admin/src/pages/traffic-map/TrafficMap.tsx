@@ -512,7 +512,8 @@ export default function TrafficMap() {
                 onHours: setHours,
                 available: canHistory,
                 data: historyQ.data ?? null,
-                state: historyQ.isError ? 'error' : historyQ.isFetching ? 'loading' : 'idle',
+                // a Retry after a failure shows the skeleton while it runs (isError holds until it lands)
+                state: historyQ.isFetching ? 'loading' : historyQ.isError ? 'error' : 'idle',
                 error: historyQ.error ? errorText(historyQ.error) : null,
                 onRetry: () => void historyQ.refetch()
               }}

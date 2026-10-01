@@ -22,7 +22,16 @@ vi.mock('@/lib/socket', () => ({
     off: vi.fn((event: string) => socketHandlers.delete(event))
   }))
 }))
-vi.mock('./MapCanvas', () => ({ MapCanvas: () => <div data-testid='map-canvas' /> }))
+// Down nodes are only selectable on the canvas: the stub offers one button for the db node.
+vi.mock('./MapCanvas', () => ({
+  MapCanvas: ({ onSelect }: { onSelect: (s: { kind: 'down'; id: string }) => void }) => (
+    <div data-testid='map-canvas'>
+      <button type='button' onClick={() => onSelect({ kind: 'down', id: 'db' })}>
+        pick db node
+      </button>
+    </div>
+  )
+}))
 
 import { HotEntities } from './HotEntities'
 import { SummaryStrip } from './SummaryStrip'
@@ -550,7 +559,7 @@ describe('inspector history', () => {
     expect(screen.queryByText(/KnexTimeoutError/)).toBeNull()
   })
 
-  it('shows an inline error with Retry, and a store node shows its note instead of a chart', async () => {
+  it('shows an inline error, and Retry shows the skeleton until the history lands', async () => {
     let fail = true
     getMock.mockImplementation(async (url: string) => {
       if (url.includes('/traffic-map/snapshot')) return { data: { data: snapshot } }
@@ -571,11 +580,76 @@ describe('inspector history', () => {
     await waitFor(() => expect(document.getElementById('tm-history-error')).not.toBeNull())
     expect(screen.getByRole('alert').textContent).toMatch(/boom/)
     fail = false
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const base = getMock.getMockImplementation() as (url: string) => Promise<unknown>
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes('/traffic-map/entity/')) await gate
+      return base(url)
+    })
     act(() => {
       fireEvent.click(document.getElementById('tm-history-retry') as HTMLElement)
     })
+    await waitFor(() => expect(screen.getByTestId('tm-history-loading')).toBeInTheDocument())
+    expect(document.getElementById('tm-history-error')).toBeNull()
+    release()
     await waitFor(() => expect(screen.getByTestId('tm-inspector-req').textContent).toBe('720'))
     expect(screen.getByText(/Requests per minute · last hour/)).toBeInTheDocument()
+  })
+})
+
+describe('inspector history — down nodes and live', () => {
+  beforeEach(() => {
+    handlers.clear()
+    socketHandlers.clear()
+    getMock.mockReset()
+  })
+
+  it('never asks for history while Live; a store node shows its note and a DB Health link', async () => {
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes('/traffic-map/snapshot')) return { data: { data: snapshot } }
+      if (url.includes('/traffic-map/catalog')) return { data: { data: catalog } }
+      if (url.includes('/traffic-map/down/db?hours=6'))
+        return {
+          data: {
+            data: {
+              key: 'db',
+              hours: 6,
+              series: [],
+              note: 'Per-request attribution only — see DB Health for server-side figures.'
+            }
+          }
+        }
+      return { data: { data: {} } }
+    })
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByTestId('tm-inspector-name').textContent).toBe('workflows')
+    )
+    const historyCalls = () =>
+      getMock.mock.calls.filter((c) => /\/traffic-map\/(entity|down)\//.test(String(c[0]))).length
+    expect(historyCalls()).toBe(0)
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'pick db node' }))
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('tm-inspector-name').textContent).toBe('SQL Server')
+    )
+    expect(historyCalls()).toBe(0)
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    })
+    await waitFor(() => expect(document.getElementById('tm-history-note')).not.toBeNull())
+    expect(screen.getByText(/Per-request attribution only/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open DB Health' })).toHaveAttribute(
+      'href',
+      '/db-health'
+    )
+    expect(screen.queryByTestId('tm-inspector-req')).toBeNull()
+    expect(document.querySelector('#tm-inspector svg')).toBeNull()
+    expect(historyCalls()).toBe(1)
   })
 })
 
