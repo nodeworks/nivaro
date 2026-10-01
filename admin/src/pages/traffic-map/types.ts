@@ -1,0 +1,200 @@
+export type Lane =
+  | 'items'
+  | 'widgets'
+  | 'pages'
+  | 'queries'
+  | 'graphql'
+  | 'inbound'
+  | 'files'
+  | 'extension'
+  | 'system'
+  | 'other'
+export type Kind = 'read' | 'create' | 'update' | 'delete' | 'error'
+export const KIND_ORDER: Kind[] = ['read', 'create', 'update', 'delete', 'error']
+/** Slot order inside every counts array on the wire. */
+export const SLOT = { req: 0, read: 1, create: 2, update: 3, delete: 4, error: 5 } as const
+export const LANE_ORDER: Lane[] = [
+  'items',
+  'widgets',
+  'pages',
+  'queries',
+  'graphql',
+  'inbound',
+  'files',
+  'extension',
+  'system',
+  'other'
+]
+export const LANE_LABEL: Record<Lane, string> = {
+  items: 'Items',
+  widgets: 'Widgets',
+  pages: 'Pages',
+  queries: 'Custom queries',
+  graphql: 'GraphQL',
+  inbound: 'Inbound',
+  files: 'Files',
+  extension: 'Extensions',
+  system: 'System',
+  other: 'Other'
+}
+
+export interface TrafficEventWire {
+  t: number
+  lane: Lane
+  entity: string
+  kind: Kind
+  caller: string
+  route: string
+  status?: number
+  ms?: number
+  record?: string
+  fields?: string[]
+  code?: string | null
+  via?: string
+}
+export interface TrafficFrame {
+  v: 1
+  at: string
+  instance: string
+  node_scope: string
+  frame: number
+  window_s: 1
+  entities: Record<string, number[]> // [req, read, create, update, delete, error, p95]
+  callers: Record<string, number[]> // [req, error]
+  down: Record<string, number[]> // [req, error, p95]
+  edges_in: Record<string, number>
+  edges_out: Record<string, number>
+  events: TrafficEventWire[]
+  events_dropped?: number
+  sockets: number
+  journal_seq: number | null
+}
+export interface RecentError {
+  at: string
+  status: number
+  code: string | null
+  route: string
+  caller: string
+  record: string | null
+}
+export interface RecentWrite {
+  at: string
+  action: 'create' | 'update' | 'delete'
+  record: string
+  fields: string[]
+  caller: string
+  via: string
+}
+export interface SnapshotEntity {
+  key: string
+  lane: Lane
+  entity: string
+  label: string
+  system: boolean
+  req: number
+  read: number
+  create: number
+  update: number
+  delete: number
+  error: number
+  p50: number
+  p95: number
+  series: number[]
+  routes: Array<{ route: string; n: number }>
+  callers: Array<{ key: string; n: number }>
+  down: Record<string, number>
+  recent_errors: RecentError[]
+  recent_writes: RecentWrite[]
+}
+export interface TrafficSnapshot {
+  instance: string
+  node_scope: string
+  at: string
+  window_s: number
+  uptime_s: number
+  frame: number
+  lanes: Array<{ id: Lane; label: string; route_hint: string }>
+  entities: SnapshotEntity[]
+  callers: Array<{ key: string; req: number; error: number }>
+  down: Array<{
+    id: string
+    label: string
+    kind: 'db' | 'cache' | 'storage' | 'partner'
+    req: number
+    error: number
+    p95: number
+  }>
+  totals: {
+    req: number
+    read: number
+    create: number
+    update: number
+    delete: number
+    error: number
+    p50: number
+    p95: number
+    outbound_req: number
+    outbound_error: number
+  }
+  sockets: { count: number; users: number }
+  journal_seq: number | null
+}
+export interface TrafficCatalog {
+  collections: Record<string, { label: string; system: boolean }>
+  widgets: Record<string, string>
+  pages: Record<string, string>
+  queries: Record<string, string>
+  inbound: Record<string, string>
+  extensions: Record<string, string>
+  partners: Record<string, string>
+  callers: Record<string, { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' }>
+  down: Record<string, string>
+}
+export interface EntityHistory {
+  key: string
+  hours: number
+  bucket_s: number
+  series: Array<{ t: string; req: number; error: number; p95: number }>
+  totals: {
+    req: number
+    read: number
+    write_requests: number
+    error: number
+    p50: number
+    p95: number
+  }
+  status_codes: Record<string, number>
+  top_routes: Array<{ route: string; n: number }>
+  top_callers: Array<{ key: string; n: number }>
+  issues: Array<{
+    id: number
+    title: string
+    severity: string
+    status: string
+    occurrence_count: number
+    last_seen_at: string | null
+  }>
+  slow_traces: Array<{ id: string; route: string; total_ms: number; ts: string }>
+  truncated: boolean
+}
+export interface DownHistory {
+  key: string
+  hours: number
+  bucket_s?: number
+  series: Array<{ t: string; req: number; error: number; p95: number }>
+  totals?: { req: number; error: number }
+  status_codes?: Record<string, number>
+  top_paths?: Array<{ path: string; n: number }>
+  note?: string
+}
+export interface Filters {
+  types: Set<Lane>
+  kinds: Set<Kind>
+  caller: string
+  win: 60 | 300 | 900
+}
+export type Selection =
+  | { kind: 'entity'; id: string }
+  | { kind: 'lane'; id: Lane }
+  | { kind: 'caller'; id: string }
+  | { kind: 'down'; id: string }
