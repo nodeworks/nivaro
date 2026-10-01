@@ -20,6 +20,8 @@ const COL_W = 164
 const ROW_H = 20
 const LANE_HEAD = 24
 const MIN_W = 860
+/** Band above the columns for the canvas captions (Callers / API lanes / Data and partners). */
+const TOP = 22
 
 export function computeLayout(input: {
   width: number
@@ -33,7 +35,7 @@ export function computeLayout(input: {
   const laneX = Math.round((W - laneW) / 2)
   const lanes: Record<string, Rect> = {}
   const ents: Record<string, Rect> = {}
-  let y = 14
+  let y = TOP + 4
   for (const lane of input.lanes) {
     const h = LANE_HEAD + lane.entities.length * ROW_H + 8
     lanes[lane.id] = { x: laneX, y, w: laneW, h }
@@ -45,12 +47,17 @@ export function computeLayout(input: {
     }
     y += h + 10
   }
-  const H = Math.max(y + 6, 320, 20 + input.downs.length * 40, 20 + input.callers.length * 44)
+  const H = Math.max(
+    y + 6,
+    320,
+    TOP + 10 + input.downs.length * 40,
+    TOP + 10 + input.callers.length * 44
+  )
   const place = (list: string[], x: number, h: number): Record<string, Rect> => {
     const out: Record<string, Rect> = {}
-    const gap = list.length > 1 ? (H - 20 - list.length * h) / (list.length - 1) : 0
+    const gap = list.length > 1 ? (H - TOP - 10 - list.length * h) / (list.length - 1) : 0
     list.forEach((id, i) => {
-      out[id] = { x, y: 10 + i * (h + Math.max(0, gap)), w: COL_W, h }
+      out[id] = { x, y: TOP + i * (h + Math.max(0, gap)), w: COL_W, h }
     })
     return out
   }
