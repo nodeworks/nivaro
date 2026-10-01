@@ -43,6 +43,7 @@ import '../features/nl-filter'
 import '../features/capture'
 import '../features/view-links'
 import '../features/people-lenses'
+import '../features/stale-tabs'
 
 export {
   type CanvasLayer,

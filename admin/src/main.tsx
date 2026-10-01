@@ -13,7 +13,11 @@ import { installPageContextFetch } from './lib/page-context'
 captureMasqueradeFromHash()
 installMasqueradeFetch()
 // Every fetch to the API (SDK clients included) says which screen it came from (#1113 / #1116).
-installPageContextFetch({ app: 'admin' })
+// #1048 / #1180 — and which build this tab runs, so old tabs can be counted and reloaded alone.
+installPageContextFetch({
+  app: 'admin',
+  build: typeof __NIVARO_ADMIN_BUILD__ === 'string' ? __NIVARO_ADMIN_BUILD__ : 'dev'
+})
 
 window.__NIVARO__ = {
   React,

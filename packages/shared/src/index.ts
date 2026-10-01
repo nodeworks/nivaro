@@ -369,6 +369,15 @@ export {
   useAutofillRuns
 } from './lib/autofill-runs'
 export * from './lib/catalog-item-open'
+export {
+  CLIENT_HEADER,
+  type ClientVersion,
+  clientVersion,
+  clientVersionHeader,
+  noteApiVersion,
+  noteApiVersionFrom,
+  setClientBuild
+} from './lib/client-version'
 export * from './lib/commands'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { useAfterIdle } from './lib/defer'

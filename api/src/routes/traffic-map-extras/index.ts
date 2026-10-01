@@ -10,6 +10,7 @@ import { peopleLensesRoutes } from './people-lenses.js'
 import { replayRoutes } from './replay.js'
 import { requestLensesRoutes } from './request-lenses.js'
 import { snapshotRoutes } from './snapshots.js'
+import { staleTabsRoutes } from './stale-tabs.js'
 import { topologyRoutes } from './topology.js'
 import { trafficViewRoutes } from './view.js'
 
@@ -37,7 +38,8 @@ const FEATURES: FastifyPluginAsync[] = [
   topologyRoutes,
   inspectorActionRoutes,
   trafficViewRoutes,
-  peopleLensesRoutes
+  peopleLensesRoutes,
+  staleTabsRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {

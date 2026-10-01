@@ -14,6 +14,13 @@
  * install it before any client is created, since a client keeps the `fetch` it was given).
  */
 
+import {
+  CLIENT_HEADER,
+  clientVersionHeader,
+  noteApiVersionFrom,
+  setClientBuild
+} from './client-version'
+
 export const PAGE_HEADER = 'x-nivaro-page'
 export const LOAD_HEADER = 'x-nivaro-load'
 export const APP_HEADER = 'x-nivaro-app'
@@ -65,11 +72,15 @@ export class PageContext {
       this.path = p
       this.load = randomId()
     }
-    return {
+    const out: Record<string, string> = {
       [APP_HEADER]: this.app,
       [PAGE_HEADER]: pagePattern(p),
       [LOAD_HEADER]: this.load
     }
+    // #1048 / #1180 — which build this tab runs (only once the host named its build).
+    const client = clientVersionHeader()
+    if (client) out[CLIENT_HEADER] = client
+    return out
   }
 }
 
@@ -108,9 +119,15 @@ let installed = false
  * Add the page headers to every `fetch` this tab makes to its API (same origin, or `apiBase`).
  * A request that already names a header keeps its own value. Idempotent.
  */
-export function installPageContextFetch(opts: { app: string; apiBase?: string | null }): void {
+export function installPageContextFetch(opts: {
+  app: string
+  apiBase?: string | null
+  /** #1048 / #1180 — the bundle this tab runs; adds the `x-nivaro-client` header. */
+  build?: string | null
+}): void {
   if (installed || typeof window === 'undefined' || typeof window.fetch !== 'function') return
   installed = true
+  if (opts.build !== undefined) setClientBuild(opts.build)
   const ctx = pageContext(opts.app)
   const original = window.fetch.bind(window)
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
@@ -120,6 +137,9 @@ export function installPageContextFetch(opts: { app: string; apiBase?: string | 
     )
     for (const [k, v] of Object.entries(ctx.headers(window.location.pathname)))
       if (!headers.has(k)) headers.set(k, v)
-    return original(input, { ...init, headers })
+    const pending = original(input, { ...init, headers })
+    // The first API answer tells the tab which API version it loaded against.
+    void pending.then(noteApiVersionFrom, () => {})
+    return pending
   }
 }

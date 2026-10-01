@@ -5,6 +5,12 @@ import { Redis } from 'ioredis'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { canSeeRoom } from '../services/chat.js'
+import {
+  type ClientVersion,
+  clientVersionFromHello,
+  currentBuilds,
+  olderReason
+} from '../services/client-version.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { can } from '../services/permissions.js'
 import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
@@ -55,6 +61,8 @@ interface SocketMeta {
   rtt: number | null
   reconnects: number
   app: string | null
+  /** #1048 — the build this tab runs (from client:hello); null = not reported. */
+  version: ClientVersion | null
 }
 const socketMeta = new Map<string, SocketMeta>()
 let _ioRef: SocketIOServer | null = null
@@ -73,13 +81,18 @@ export function socketUserOf(socketId: string): { id: string; name: string } | n
  * sockets connected HERE — the returned counts say what this node saw.
  */
 export function emitForceRefresh(
-  target: { userIds?: string[]; app?: string | null },
+  target: { userIds?: string[]; app?: string | null; older?: boolean },
   payload: { seconds: number; message: string }
 ): { sockets: number; users: number } {
   const io = _ioRef
   if (!io) return { sockets: 0, users: 0 }
   const userIds = (target.userIds ?? []).map((u) => String(u).toUpperCase())
   const app = target.app ? String(target.app).slice(0, 50) : null
+  // #1048 — only tabs on an older build (or loaded against an older API). Judged from this
+  // node's client:hello reports, so like the app filter it reaches sockets connected HERE.
+  const older = target.older === true
+  const current = older ? currentBuilds(socketMeta.values()) : new Map<string, string>()
+  const local = !!app || older
   const wanted = new Set(userIds)
   let sockets = 0
   const users = new Set<string>()
@@ -88,13 +101,14 @@ export function emitForceRefresh(
     if (!meta?.user) continue
     if (wanted.size && !wanted.has(meta.user.id.toUpperCase())) continue
     if (app && meta.app !== app) continue
+    if (older && !olderReason(meta.app, meta.version, current)) continue
     sockets++
     users.add(meta.user.id)
-    // App-filtered sends are local by construction; the others use rooms
+    // App- and version-filtered sends are local by construction; the others use rooms
     // below (cross-node), so skip the direct emit to avoid double delivery.
-    if (app) sock.emit('client:force-refresh', payload)
+    if (local) sock.emit('client:force-refresh', payload)
   }
-  if (!app) {
+  if (!local) {
     if (wanted.size)
       for (const u of userIds) io.to(`user:${u}`).emit('client:force-refresh', payload)
     else io.emit('client:force-refresh', payload)
@@ -115,7 +129,8 @@ export function getRealtimeStats(): {
         connectedAt: Date.now(),
         rtt: null,
         reconnects: 0,
-        app: null
+        app: null,
+        version: null
       }
       sockets.push({ id, ...meta, rooms: [...sock.rooms].filter((r) => r !== id) })
     }
@@ -128,6 +143,70 @@ export function getRealtimeStats(): {
     rooms.sort((a, b) => b.size - a.size)
   }
   return { sockets, rooms: rooms.slice(0, 100) }
+}
+
+/**
+ * #1048 — this node's open tabs grouped by the build they run: per app and build, how many
+ * sockets and people, whether it is the current build, and whether a "reload old tabs" would
+ * reach it. Sockets that never said which build (an older client) group under build null.
+ */
+export function getClientVersionGroups(): Array<{
+  app: string | null
+  build: string | null
+  api: string | null
+  sockets: number
+  users: number
+  current: boolean
+  older: 'build' | 'api' | null
+  newest_load: string | null
+}> {
+  const current = currentBuilds(socketMeta.values())
+  const groups = new Map<
+    string,
+    {
+      app: string | null
+      build: string | null
+      api: string | null
+      sockets: number
+      users: Set<string>
+      older: 'build' | 'api' | null
+      loaded: number | null
+    }
+  >()
+  for (const meta of socketMeta.values()) {
+    if (!meta.user) continue
+    const v = meta.version
+    const older = olderReason(meta.app, v, current)
+    const key = `${meta.app ?? ''}|${v?.build ?? ''}|${v?.api ?? ''}`
+    let g = groups.get(key)
+    if (!g) {
+      g = {
+        app: meta.app,
+        build: v?.build ?? null,
+        api: v?.api ?? null,
+        sockets: 0,
+        users: new Set(),
+        older,
+        loaded: null
+      }
+      groups.set(key, g)
+    }
+    g.sockets++
+    g.users.add(meta.user.id)
+    if (v?.loaded != null && (g.loaded == null || v.loaded > g.loaded)) g.loaded = v.loaded
+  }
+  return [...groups.values()]
+    .map((g) => ({
+      app: g.app,
+      build: g.build,
+      api: g.api,
+      sockets: g.sockets,
+      users: g.users.size,
+      current: !!g.build && current.get(g.app ?? 'app') === g.build && !g.older,
+      older: g.older,
+      newest_load: g.loaded != null ? new Date(g.loaded).toISOString() : null
+    }))
+    .sort((a, b) => (a.app ?? '').localeCompare(b.app ?? '') || b.sockets - a.sockets)
 }
 
 /** Local concurrency snapshot for the sampling cron (#275). */
@@ -283,7 +362,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       connectedAt: Date.now(),
       rtt: null,
       reconnects: 0,
-      app: null
+      app: null,
+      version: null
     })
     // Zombie socket reaper (#310): a connection that never authenticates is
     // holding a slot for nothing — drop it after 45s. Legit clients auth
@@ -308,11 +388,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (meta && typeof payload?.t === 'number') meta.rtt = Date.now() - payload.t
     })
     // Client self-report: reconnect count + which app (admin/headless host).
+    // #1048 — and which build the tab runs (build / api / tab / loaded, see client-version).
     socket.on('client:hello', (payload: { reconnects?: number; app?: string }) => {
       const meta = socketMeta.get(socket.id)
       if (!meta) return
       if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
       if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
+      const version = clientVersionFromHello(payload)
+      if (version.build || version.api || version.tab) meta.version = version
     })
 
     // Missed-event catch-up (#266): client sends its last-seen sequence after

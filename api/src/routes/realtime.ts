@@ -1,9 +1,15 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { emitForceRefresh, getRealtimeStats, getRecordViewerSnapshot } from '../plugins/socketio.js'
+import {
+  emitForceRefresh,
+  getClientVersionGroups,
+  getRealtimeStats,
+  getRecordViewerSnapshot
+} from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
+import { NIVARO_VERSION } from '../version.js'
 
 /**
  * Realtime observability + control (#270 diagnostics, #273 now-editing,
@@ -45,6 +51,9 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         node_scope: 'this API process only (Redis adapter fans out across nodes)',
         journal_seq: await currentSeq(),
         socket_count: stats.sockets.length,
+        // #1048 — open tabs by the build they run; `older` groups are what "Reload old tabs" reaches.
+        api_version: NIVARO_VERSION,
+        versions: getClientVersionGroups(),
         sockets: stats.sockets.map((s) => ({
           id: s.id,
           user:
@@ -54,6 +63,8 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
                 null)
               : ((s.user as string | null) ?? null),
           app: s.app,
+          build: s.version?.build ?? null,
+          api_version: s.version?.api ?? null,
           connected_seconds: Math.round((Date.now() - s.connectedAt) / 1000),
           rtt_ms: s.rtt,
           reconnects: s.reconnects,
@@ -111,7 +122,14 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
   // app), `app` reaches only one client app's sockets on this node —
   // e.g. everyone on the portal after a portal-only fix.
   app.post<{
-    Body: { seconds?: number; message?: string; user_ids?: string[]; app?: string }
+    Body: {
+      seconds?: number
+      message?: string
+      user_ids?: string[]
+      app?: string
+      /** #1048 — only tabs on an older build or loaded against an older API (this node). */
+      older?: boolean
+    }
   }>('/force-refresh', async (req) => {
     const seconds = Math.min(300, Math.max(5, Number(req.body?.seconds) || 30))
     const message = String(req.body?.message ?? '').slice(0, 300)
@@ -121,7 +139,8 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     if (Array.isArray(req.body?.user_ids) && userIds.length === 0)
       throw Object.assign(new Error('user_ids must name at least one user'), { statusCode: 400 })
     const appFilter = req.body?.app ? String(req.body.app).slice(0, 50) : null
-    const hit = emitForceRefresh({ userIds, app: appFilter }, { seconds, message })
+    const older = req.body?.older === true
+    const hit = emitForceRefresh({ userIds, app: appFilter, older }, { seconds, message })
     const names = userIds.length
       ? await db('nivaro_users')
           .whereIn('id', userIds)
@@ -130,17 +149,18 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
             rows.map((r) => `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.email)
           )
       : []
-    const scope = userIds.length
+    const who = userIds.length
       ? `to ${names.join(', ')}`
       : appFilter
         ? `to everyone on ${appFilter}`
         : 'to everyone'
+    const scope = older ? `${who} on an older version` : who
     await logActivity({
       action: 'client-force-refresh',
       user: req.user?.id,
       comment: `${scope} — ${seconds}s${message ? ` — ${message}` : ''} (${hit.sockets} tabs on this node)`,
       req
     })
-    return { data: { sent: true, seconds, targets: userIds.length, ...hit } }
+    return { data: { sent: true, seconds, targets: userIds.length, older, ...hit } }
   })
 }

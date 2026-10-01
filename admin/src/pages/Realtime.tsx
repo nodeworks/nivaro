@@ -23,6 +23,20 @@ interface SocketRow {
   reconnects: number
   room_count: number
   rooms: string[]
+  build?: string | null
+  api_version?: string | null
+}
+
+/** #1048 — open tabs grouped by the build they run (this node). */
+interface VersionGroup {
+  app: string | null
+  build: string | null
+  api: string | null
+  sockets: number
+  users: number
+  current: boolean
+  older: 'build' | 'api' | null
+  newest_load: string | null
 }
 
 export default function Realtime() {
@@ -83,7 +97,7 @@ export default function Realtime() {
 
 // ─── Force refresh (#285) ────────────────────────────────────────────────────
 
-type RefreshWho = 'everyone' | 'app' | 'people'
+type RefreshWho = 'everyone' | 'app' | 'people' | 'older'
 
 function ForceRefreshControl() {
   const [open, setOpen] = useState(false)
@@ -94,7 +108,7 @@ function ForceRefreshControl() {
   const [people, setPeople] = useState<Array<{ id: string; name: string }>>([])
   const [search, setSearch] = useState('')
   const [sending, setSending] = useState(false)
-  const { data: stats } = useQuery<{ sockets: SocketRow[] }>({
+  const { data: stats } = useQuery<{ sockets: SocketRow[]; versions?: VersionGroup[] }>({
     queryKey: ['realtime-stats'],
     queryFn: () => api.get('/realtime/stats').then((r) => r.data.data),
     enabled: open,
@@ -137,12 +151,13 @@ function ForceRefreshControl() {
           <p className='text-[12px] text-slate-600 dark:text-muted-foreground'>
             The targeted clients show a countdown, then reload. Use for a deploy that must land now.
           </p>
-          <div className='mt-2 flex gap-1' data-force-refresh-who={who}>
+          <div className='mt-2 flex flex-wrap gap-1' data-force-refresh-who={who}>
             {(
               [
                 ['everyone', 'Everyone'],
                 ['app', 'One app'],
-                ['people', 'Specific people']
+                ['people', 'Specific people'],
+                ['older', 'Old versions']
               ] as Array<[RefreshWho, string]>
             ).map(([key, label]) => (
               <button
@@ -150,7 +165,7 @@ function ForceRefreshControl() {
                 type='button'
                 onClick={() => setWho(key)}
                 className={cn(
-                  'rounded-md px-2 py-1 text-[11.5px] font-medium',
+                  'whitespace-nowrap rounded-md px-2 py-1 text-[11.5px] font-medium',
                   who === key
                     ? 'bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200'
                     : 'text-slate-500 hover:bg-muted dark:text-muted-foreground'
@@ -183,6 +198,7 @@ function ForceRefreshControl() {
               </span>
             </div>
           )}
+          {who === 'older' && <OlderTabsNote groups={stats?.versions ?? []} />}
           {who === 'people' && (
             <div className='mt-2'>
               {people.length > 0 && (
@@ -272,6 +288,7 @@ function ForceRefreshControl() {
                   }
                   if (who === 'app') body.app = app
                   if (who === 'people') body.user_ids = people.map((p) => p.id)
+                  if (who === 'older') body.older = true
                   const r = await api.post<{ data: { sockets: number; users: number } }>(
                     '/realtime/force-refresh',
                     body
@@ -302,6 +319,107 @@ function ForceRefreshControl() {
   )
 }
 
+// ─── Open tabs by version (#1048) ────────────────────────────────────────────
+
+function olderCount(groups: VersionGroup[]): { tabs: number; people: number } {
+  let tabs = 0
+  let people = 0
+  for (const g of groups) {
+    if (!g.older) continue
+    tabs += g.sockets
+    people += g.users
+  }
+  return { tabs, people }
+}
+
+function OlderTabsNote({ groups }: { groups: VersionGroup[] }) {
+  const { tabs, people } = olderCount(groups)
+  return (
+    <p
+      className='mt-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'
+      data-older-tabs={tabs}
+    >
+      {tabs > 0
+        ? `Reaches ${tabs} tab${tabs === 1 ? '' : 's'} (${people} ${people === 1 ? 'person' : 'people'}) still running an older build or loaded against an older API. Tabs on the current version are left alone.`
+        : 'No tab on this node runs an older version right now — nothing would reload.'}{' '}
+      Only sockets connected to this API node.
+    </p>
+  )
+}
+
+function versionStatus(g: VersionGroup): { label: string; tone: string } {
+  if (g.older === 'build')
+    return {
+      label: 'Older build',
+      tone: 'bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200'
+    }
+  if (g.older === 'api')
+    return {
+      label: 'Loaded before the API update',
+      tone: 'bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200'
+    }
+  if (g.current)
+    return {
+      label: 'Current',
+      tone: 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200'
+    }
+  return {
+    label: 'Not reported',
+    tone: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
+  }
+}
+
+function VersionsTable({ groups, apiVersion }: { groups: VersionGroup[]; apiVersion: string }) {
+  if (groups.length === 0) return null
+  return (
+    <div data-realtime-versions>
+      <h2 className='mb-1 text-[13px] font-medium'>Open tabs by version</h2>
+      <p className='mb-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+        This API runs {apiVersion}. The current build of each app is the one its newest page load
+        reported; a tab is older when it runs another build, or first talked to an older API. Use
+        Force client refresh → Old versions to reload just those.
+      </p>
+      <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
+        <table className='w-full text-[12px] tabular-nums'>
+          <thead>
+            <tr className='border-b border-slate-200 bg-slate-50 text-left text-[11px] text-slate-500 dark:border-border dark:bg-muted/40 dark:text-muted-foreground'>
+              <th className='px-3 py-2 font-medium'>App</th>
+              <th className='px-3 py-2 font-medium'>Build</th>
+              <th className='px-3 py-2 font-medium'>API it loaded against</th>
+              <th className='px-3 py-2 text-right font-medium'>Tabs</th>
+              <th className='px-3 py-2 text-right font-medium'>People</th>
+              <th className='px-3 py-2 font-medium'>Status</th>
+            </tr>
+          </thead>
+          <tbody className='divide-y divide-slate-100 dark:divide-border/60'>
+            {groups.map((g) => {
+              const st = versionStatus(g)
+              return (
+                <tr
+                  key={`${g.app}|${g.build}|${g.api}`}
+                  data-version-group={`${g.app ?? ''}:${g.build ?? ''}`}
+                  data-version-older={g.older ?? ''}
+                >
+                  <td className='px-3 py-1.5'>{g.app ?? '—'}</td>
+                  <td className='px-3 py-1.5 font-mono text-[11px]'>{g.build ?? '—'}</td>
+                  <td className='px-3 py-1.5 font-mono text-[11px]'>{g.api ?? '—'}</td>
+                  <td className='px-3 py-1.5 text-right'>{g.sockets}</td>
+                  <td className='px-3 py-1.5 text-right'>{g.users}</td>
+                  <td className='px-3 py-1.5'>
+                    <span className={cn('rounded-full px-2 py-0.5 text-[11px]', st.tone)}>
+                      {st.label}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // ─── Sockets & rooms (#270) ──────────────────────────────────────────────────
 
 function SocketsTab() {
@@ -311,6 +429,8 @@ function SocketsTab() {
     socket_count: number
     sockets: SocketRow[]
     rooms: Array<{ room: string; size: number }>
+    api_version?: string
+    versions?: VersionGroup[]
   }>({
     queryKey: ['realtime-stats'],
     queryFn: () => api.get('/realtime/stats').then((r) => r.data.data),
@@ -324,12 +444,14 @@ function SocketsTab() {
         {data.socket_count} socket(s) on this node · journal seq {data.journal_seq} ·{' '}
         {data.node_scope}
       </p>
+      <VersionsTable groups={data.versions ?? []} apiVersion={data.api_version ?? '—'} />
       <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
         <table className='w-full text-[12px] tabular-nums'>
           <thead>
             <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/40'>
               <th className='px-3 py-2'>User</th>
               <th className='px-3 py-2'>App</th>
+              <th className='px-3 py-2'>Build</th>
               <th className='px-3 py-2 text-right'>Connected</th>
               <th className='px-3 py-2 text-right'>RTT</th>
               <th className='px-3 py-2 text-right'>Reconnects</th>
@@ -341,6 +463,7 @@ function SocketsTab() {
               <tr key={s.id}>
                 <td className='px-3 py-1.5 font-mono text-[11px]'>{s.user ?? '(unauth)'}</td>
                 <td className='px-3 py-1.5'>{s.app ?? '—'}</td>
+                <td className='px-3 py-1.5 font-mono text-[11px]'>{s.build ?? '—'}</td>
                 <td className='px-3 py-1.5 text-right'>{formatDuration(s.connected_seconds)}</td>
                 <td className='px-3 py-1.5 text-right'>
                   {s.rtt_ms != null ? `${s.rtt_ms}ms` : '—'}

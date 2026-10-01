@@ -2,6 +2,7 @@ import { createLeaderSocket, type RealtimeAdapter } from '@nivaro/shared'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
 import { readMasquerade } from '@/lib/masquerade'
+import { clientVersion } from '@/lib/page-context'
 
 /**
  * One shared authenticated socket for chat + collection feeds + realtime
@@ -56,7 +57,12 @@ export function getSocket(): Socket {
     })
   })
   socket.on('auth:ok', () => {
-    socket?.emit('client:hello', { reconnects: Math.max(0, reconnects), app: 'admin' })
+    // #1048 — the same build signal every request carries (x-nivaro-client).
+    socket?.emit('client:hello', {
+      reconnects: Math.max(0, reconnects),
+      app: 'admin',
+      ...clientVersion()
+    })
     // Rejoin what this tab holds, then replay whatever happened while away.
     for (const room of joinedCollections) socket?.emit('collection:join', { collection: room })
     // Watch rooms ride the LEADER's socket only (a follower's own socket joining one would keep

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
@@ -6,7 +7,18 @@ const API_TARGET = process.env.NIVARO_API_TARGET || 'http://localhost:3055'
 
 const sharedSrc = fileURLToPath(new URL('../packages/shared/src', import.meta.url))
 
+/** #1048 / #1180 — the release this bundle was built for (the root manifest `pnpm release`
+ *  bumps); the dev server reports 'dev', which the API never judges as stale. */
+const rootManifest = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')
+) as { version?: string }
+
 export default defineConfig(({ command }) => ({
+  define: {
+    __NIVARO_ADMIN_BUILD__: JSON.stringify(
+      command === 'serve' ? 'dev' : process.env.VITE_APP_VERSION || rootManifest.version || 'dev'
+    )
+  },
   plugins: [
     react(),
     // Vite only watches the admin folder; files it serves from outside it
