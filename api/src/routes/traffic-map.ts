@@ -1,9 +1,18 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { loadedExtensionLabels } from '../extensions/loader.js'
+import { extensionRoutes, loadedExtensionLabels } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getRealtimeStats } from '../plugins/socketio.js'
 import { currentSeq } from '../services/event-journal.js'
+import { listTraces } from '../services/request-trace.js'
+import { LANES, type TrafficLane } from '../services/traffic-entities.js'
+import {
+  HISTORY_ROW_CAP,
+  type HistoryRow,
+  historyNarrowing,
+  issueRouteTemplates,
+  summarizeHistory
+} from '../services/traffic-history.js'
 import { buildSnapshot, seenCallerKeys, seenPartnerIds } from '../services/traffic-map.js'
 
 /**
@@ -35,17 +44,23 @@ interface Catalog {
   down: Record<string, string>
 }
 let catalogCache: { at: number; value: Catalog } | null = null
+let catalogInflight: Promise<Catalog> | null = null
 const CATALOG_TTL_MS = 60_000
 
-async function rows<T>(fn: () => PromiseLike<unknown>): Promise<T[]> {
+async function rowsBase<T>(
+  fn: () => PromiseLike<unknown>,
+  state?: { failed: boolean }
+): Promise<T[]> {
   try {
     return ((await fn()) as T[]) ?? []
   } catch {
+    if (state) state.failed = true
     return []
   }
 }
 
-async function buildCatalog(): Promise<Catalog> {
+async function buildCatalog(state: { failed: boolean }): Promise<Catalog> {
+  const rows = <T>(fn: () => PromiseLike<unknown>) => rowsBase<T>(fn, state)
   const callerKeys = seenCallerKeys()
   const keyIds = callerKeys
     .filter((k) => k.startsWith('k'))
@@ -131,6 +146,12 @@ async function buildCatalog(): Promise<Catalog> {
   return catalog
 }
 
+/** Test hook: drop the cached/in-flight catalog. */
+export function resetTrafficCatalog(): void {
+  catalogCache = null
+  catalogInflight = null
+}
+
 export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onRequest', async (_req, reply) => {
     if (process.env.CLOUD_META_DB_URL) return reply.code(404).send({ error: 'Not found' })
@@ -152,8 +173,187 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
   app.get('/catalog', async () => {
     if (catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS)
       return { data: catalogCache.value }
-    const value = await buildCatalog()
-    catalogCache = { at: Date.now(), value }
-    return { data: value }
+    // Single-flight: concurrent cold requests share one build.
+    if (!catalogInflight) {
+      const state = { failed: false }
+      catalogInflight = buildCatalog(state)
+        .then((value) => {
+          // Cache only a fully successful build — a failed source must not stick for 60s.
+          if (!state.failed) catalogCache = { at: Date.now(), value }
+          return value
+        })
+        .finally(() => {
+          catalogInflight = null
+        })
+    }
+    return { data: await catalogInflight }
   })
+
+  const LANE_IDS = new Set<string>(LANES.map((l) => l.id))
+  const ENTITY_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$/
+  const HOURS = new Set([1, 6, 24])
+
+  app.get<{ Params: { lane: string; entity: string }; Querystring: { hours?: string } }>(
+    '/entity/:lane/:entity',
+    async (req, reply) => {
+      const lane = req.params.lane as TrafficLane
+      const entity = String(req.params.entity)
+      const hours = Number(req.query.hours ?? 1)
+      if (!LANE_IDS.has(lane) || !ENTITY_RE.test(entity) || !HOURS.has(hours)) {
+        return reply
+          .code(400)
+          .send({ error: 'lane, entity or hours is not valid', code: 'HISTORY_PARAMS_INVALID' })
+      }
+      const extUrls =
+        lane === 'extension' ? (extensionRoutes.get(entity) ?? []).map((r) => r.url) : []
+      const since = new Date(Date.now() - hours * 3600_000)
+      const n = historyNarrowing(lane, entity, extUrls)
+      const q = db('nivaro_api_logs')
+        .where('created_at', '>=', since)
+        .orderBy('created_at', 'desc')
+        .limit(HISTORY_ROW_CAP)
+        .select(
+          'method',
+          'path',
+          'status',
+          'latency_ms',
+          'auth',
+          'api_key_id',
+          'user',
+          'graphql_operation',
+          'graphql_kind',
+          'created_at'
+        )
+      if (lane === 'extension' && !n.like?.length) {
+        return { data: summarizeHistory([], lane, entity, hours as 1 | 6 | 24) }
+      }
+      q.where((b) => {
+        if (n.column) {
+          b.where((g) => {
+            if (n.equals === null) g.whereNull(n.column as string)
+            else g.where(n.column as string, n.equals as string)
+            if (n.pathIn) g.whereIn('path', n.pathIn)
+          })
+        }
+        for (const l of n.like ?? []) b.orWhereRaw("path LIKE ? ESCAPE '\\'", [l])
+      })
+      const logRows = (await Promise.resolve(q).catch(() => [])) as HistoryRow[]
+      const body = summarizeHistory(logRows, lane, entity, hours as 1 | 6 | 24)
+      const templates = issueRouteTemplates(lane, entity, extUrls)
+      const issues = templates.length
+        ? ((await Promise.resolve(
+            db('nivaro_issues')
+              .where('source', 'server')
+              .whereNot('status', 'resolved')
+              .where((b) => {
+                for (const t of templates)
+                  b.orWhereRaw("title LIKE ? ESCAPE '\\'", [
+                    `%${t.replace(/[\\%_[]/g, (c) => `\\${c}`)}%`
+                  ])
+              })
+              .orderBy('last_seen_at', 'desc')
+              .limit(10)
+              .select('id', 'title', 'severity', 'status', 'occurrence_count', 'last_seen_at')
+          ).catch(() => [])) as Array<Record<string, unknown>>)
+        : []
+      const slow = listTraces(200)
+        .filter((t) => t.url.split('?')[0].startsWith(n.routePrefix))
+        .slice(0, 5)
+        .map((t) => ({ id: t.id, route: t.route, total_ms: t.total_ms, ts: t.ts }))
+      return { data: { ...body, issues, slow_traces: slow } }
+    }
+  )
+
+  app.get<{ Params: { id: string }; Querystring: { hours?: string } }>(
+    '/down/:id',
+    async (req, reply) => {
+      const id = String(req.params.id)
+      const hours = Number(req.query.hours ?? 1)
+      if (!HOURS.has(hours)) {
+        return reply
+          .code(400)
+          .send({ error: 'hours must be 1, 6 or 24', code: 'HISTORY_PARAMS_INVALID' })
+      }
+      if (id === 'db' || id === 'redis' || id === 'store') {
+        return {
+          data: {
+            key: id,
+            hours,
+            series: [],
+            note: 'Per-request attribution only — see DB Health for server-side figures.'
+          }
+        }
+      }
+      const m = id.match(/^ext:(\d{1,9})$/)
+      if (!m) {
+        return reply.code(400).send({ error: 'unknown down node', code: 'HISTORY_PARAMS_INVALID' })
+      }
+      const since = new Date(Date.now() - hours * 3600_000)
+      const bucketS = hours === 1 ? 60 : hours === 6 ? 300 : 900
+      const logRows = (await Promise.resolve(
+        db('nivaro_outbound_log')
+          .where('api_id', Number(m[1]))
+          .where('created_at', '>=', since)
+          .orderBy('created_at', 'desc')
+          .limit(HISTORY_ROW_CAP)
+          .select('method', 'path', 'status', 'ok', 'duration_ms', 'created_at')
+      ).catch(() => [])) as Array<{
+        method: string
+        path: string | null
+        status: number | null
+        ok: boolean | number
+        duration_ms: number
+        created_at: Date
+      }>
+      const start = Math.floor(since.getTime() / 1000)
+      const points = (hours * 3600) / bucketS
+      const series = Array.from({ length: points }, (_, i) => ({
+        t: new Date((start + i * bucketS) * 1000).toISOString(),
+        req: 0,
+        error: 0,
+        lat: [] as number[]
+      }))
+      const paths = new Map<string, number>()
+      const codes: Record<string, number> = {}
+      let error = 0
+      let total = 0
+      for (const r of logRows) {
+        const i = Math.floor(
+          (Math.floor(new Date(r.created_at).getTime() / 1000) - start) / bucketS
+        )
+        if (i < 0 || i >= points) continue
+        total++
+        const failed = !(r.ok === true || r.ok === 1)
+        series[i].req++
+        if (failed) {
+          series[i].error++
+          error++
+        }
+        series[i].lat.push(r.duration_ms)
+        const key = `${r.method} ${(r.path ?? '').split('?')[0].slice(0, 120)}`
+        paths.set(key, (paths.get(key) ?? 0) + 1)
+        const code = String(r.status ?? 'network')
+        codes[code] = (codes[code] ?? 0) + 1
+      }
+      const p95 = (a: number[]) =>
+        a.length
+          ? a.slice().sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * 0.95))]
+          : 0
+      return {
+        data: {
+          key: id,
+          hours,
+          bucket_s: bucketS,
+          series: series.map((s) => ({ t: s.t, req: s.req, error: s.error, p95: p95(s.lat) })),
+          totals: { req: total, error },
+          status_codes: codes,
+          top_paths: [...paths]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([path, n]) => ({ path, n })),
+          truncated: logRows.length >= HISTORY_ROW_CAP
+        }
+      }
+    }
+  )
 }
