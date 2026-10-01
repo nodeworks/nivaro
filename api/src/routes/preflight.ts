@@ -97,7 +97,7 @@ export function diffMigrations(files: string[], applied: string[]): Check {
   }
 }
 
-async function checkMigrations(): Promise<Check> {
+export async function checkMigrations(): Promise<Check> {
   let files: string[]
   try {
     files = (await migrationSource.getMigrations()).map((f) => migrationSource.getMigrationName(f))
@@ -132,7 +132,7 @@ async function checkMigrations(): Promise<Check> {
  * to attach produces an instance that boots perfectly and does none of that
  * extension's work — no crons, no hooks, no integrations. Nothing else notices.
  */
-function checkExtensions(): Check {
+export function checkExtensions(): Check {
   const required = (config.REQUIRED_EXTENSIONS ?? '')
     .split(',')
     .map((s) => s.trim())

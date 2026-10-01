@@ -25,7 +25,11 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
 
   // #297 — every registered API process (Redis-backed, 90s TTL).
   app.get('/roster', async (_req, reply) => {
-    return reply.send({ data: await listInstances() })
+    // #1080 — scheduler: which instance holds the cron lease (null = none).
+    return reply.send({
+      data: await listInstances(),
+      scheduler: app.cron ? await app.cron.schedulerStatus() : null
+    })
   })
 
   // #236 — in-process caches (PER REPLICA — the UI says so).
@@ -211,10 +215,14 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
-  // #299 — run the smoke suite on demand.
-  app.post('/smoke', async (_req, reply) => {
+  // #299 — run the smoke suite on demand. #1083 — `?strict=1` answers 503 when
+  // any check fails, so a deploy gate can branch on the status code alone
+  // (the Ops Console keeps the plain 200 and reads `ok`).
+  app.post<{ Querystring: { strict?: string } }>('/smoke', async (req, reply) => {
     const { runSmokeCheck } = await import('../services/maintenance-windows.js')
-    return reply.send({ data: await runSmokeCheck(app) })
+    const result = await runSmokeCheck(app)
+    const strict = ['1', 'true', 'yes'].includes(String(req.query.strict ?? '').toLowerCase())
+    return reply.code(strict && !result.ok ? 503 : 200).send({ data: result })
   })
 
   // #294 — clock skew sentinel: DB clock vs app clock, plus a DST audit of

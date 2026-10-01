@@ -23,7 +23,7 @@ const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http:/
 function createSocketRealtime(staticToken: string | null): QueueRealtimeAdapter {
   return {
     subscribe(collections, onUpdate) {
-      const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+      const socket = io(API_URL, { transports: ['websocket'], withCredentials: true })
       socket.on('connect', () => {
         if (staticToken) socket.emit('auth', { token: staticToken })
       })

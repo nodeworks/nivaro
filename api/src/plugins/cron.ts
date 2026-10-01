@@ -1,7 +1,9 @@
 import { Cron } from 'croner'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
+import type { Redis } from 'ioredis'
 import { newChainId, startChain } from '../services/chain.js'
+import { INSTANCE_ID } from '../services/instance-roster.js'
 import { startJobRun } from '../services/job-runs.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -171,6 +173,185 @@ async function waitForPoolHeadroom(): Promise<void> {
   }
 }
 
+// ── Scheduler leader lease (#1080) ───────────────────────────────────────────
+//
+// With more than one API replica ticking, every scheduled job would run once
+// per replica: digests mailed twice, partner polls doubled, nightly procs
+// racing each other. Only the process holding the lease fires on the clock.
+//
+// The lease is a Redis key holding this process's instance id, set with NX
+// and a 30s expiry, renewed every 10s with compare-and-pexpire and released
+// with compare-and-del on shutdown — a process can only ever renew or release
+// its OWN lease. It fails CLOSED: this process stops believing it leads a
+// couple of seconds before the key could expire, so a Redis outage ends its
+// ticks before anyone else could take over, never after.
+//
+// A per-tick run lock (`nvr:cron:run:<id>:<fire time>`) backs it up: during a
+// start-first deploy the outgoing and incoming worker can briefly overlap, and
+// the run lock makes one scheduled fire run exactly once even then.
+//
+// Run-now needs no lease: it is an explicit request, recorded on the job run.
+
+const LEASE_KEY = 'nvr:cron:leader'
+const LEASE_MS = 30_000
+const RENEW_MS = 10_000
+/** Stop believing we lead this long before the key could expire. */
+const LEASE_MARGIN_MS = 2_000
+const RUN_LOCK_MS = 10 * 60_000
+
+const RENEW_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
+const RELEASE_LUA =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+
+export interface LeaderStatus {
+  /** Coordination is on (a Redis client is attached and ticks are enabled). */
+  coordinated: boolean
+  instance: string
+  is_leader: boolean
+  /** The instance id holding the lease, as last read (null = nobody). */
+  holder: string | null
+  held_until: string | null
+}
+
+export class CronLeader {
+  private redis: Redis | null = null
+  /** Read-only handle: a process that does not compete can still say who leads. */
+  private observer: Redis | null = null
+  private heldUntil = 0
+  private holder: string | null = null
+  private timer: ReturnType<typeof setInterval> | null = null
+
+  constructor(readonly instanceId: string = INSTANCE_ID) {}
+
+  get active(): boolean {
+    return this.redis !== null
+  }
+
+  /** Attach Redis for reading the holder without competing. */
+  observe(redis: Redis): void {
+    this.observer = redis
+  }
+
+  /** The instance id holding the lease right now (null = nobody / unknown). */
+  async currentHolder(): Promise<string | null> {
+    const r = this.redis ?? this.observer
+    if (!r) return null
+    try {
+      return await r.get(LEASE_KEY)
+    } catch {
+      return this.holder
+    }
+  }
+
+  start(redis: Redis): void {
+    this.redis = redis
+    this.observer = redis
+    void this.renew()
+    if (!this.timer) {
+      this.timer = setInterval(() => void this.renew(), RENEW_MS)
+      this.timer.unref()
+    }
+  }
+
+  isLeader(now = Date.now()): boolean {
+    return this.heldUntil > now
+  }
+
+  /** One renew-or-acquire round. Exposed for tests. */
+  async renew(): Promise<void> {
+    const r = this.redis
+    if (!r) return
+    const began = Date.now()
+    try {
+      if (this.isLeader(began)) {
+        const ok = await r.eval(RENEW_LUA, 1, LEASE_KEY, this.instanceId, String(LEASE_MS))
+        if (Number(ok) === 1) {
+          this.heldUntil = began + LEASE_MS - LEASE_MARGIN_MS
+        } else {
+          this.heldUntil = 0
+          console.warn(`[cron] scheduler lease lost by ${this.instanceId} — ticks stop here`)
+        }
+      }
+      if (!this.isLeader()) {
+        const res = await r.set(LEASE_KEY, this.instanceId, 'PX', LEASE_MS, 'NX')
+        if (res === 'OK') {
+          this.heldUntil = began + LEASE_MS - LEASE_MARGIN_MS
+          console.log(
+            `[cron] scheduler lease taken by ${this.instanceId} — scheduled jobs tick here`
+          )
+        }
+      }
+      this.holder = await r.get(LEASE_KEY)
+    } catch {
+      // Redis unreachable: keep whatever is left of the current lease (it
+      // lapses on its own before the key can), never extend it.
+    }
+  }
+
+  /** Release the lease if we hold it — the next replica takes over at once. */
+  async stop(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+    const r = this.redis
+    const held = this.isLeader()
+    this.heldUntil = 0
+    if (!r || !held) return
+    try {
+      await r.eval(RELEASE_LUA, 1, LEASE_KEY, this.instanceId)
+    } catch {
+      /* the key expires on its own */
+    }
+  }
+
+  /**
+   * Claim one scheduled fire. True = run it. Keyed on the fire time, so two
+   * processes that both believe they lead (a start-first overlap) still run a
+   * given fire once. Fails closed on a Redis error.
+   */
+  async claimRun(id: string, fireTime: Date): Promise<boolean> {
+    const r = this.redis
+    if (!r) return true
+    try {
+      const res = await r.set(
+        `nvr:cron:run:${id}:${fireTime.toISOString()}`,
+        this.instanceId,
+        'PX',
+        RUN_LOCK_MS,
+        'NX'
+      )
+      return res === 'OK'
+    } catch {
+      return false
+    }
+  }
+
+  status(): LeaderStatus {
+    return {
+      coordinated: this.active,
+      instance: this.instanceId,
+      is_leader: this.active ? this.isLeader() : true,
+      holder: this.active ? this.holder : this.instanceId,
+      held_until: this.isLeader() ? new Date(this.heldUntil).toISOString() : null
+    }
+  }
+}
+
+/** The scheduled time a tick belongs to: the newest fire at or before now.
+ *  Croner hands the callback the actual start time, which differs between
+ *  processes by milliseconds; the scheduled time does not. */
+export function scheduledFireTime(job: Cron, now = new Date()): Date {
+  try {
+    const prev = job.previousRuns(1, new Date(now.getTime() + 1000))[0]
+    if (prev && now.getTime() - prev.getTime() < 60_000) return prev
+  } catch {
+    /* fall through */
+  }
+  return new Date(Math.round(now.getTime() / 1000) * 1000)
+}
+
 export class CronManager {
   private entries = new Map<string, InternalEntry>()
   private runningSince = new Map<string, number>()
@@ -187,6 +368,39 @@ export class CronManager {
   private instanceTz: string | null = null
   /** #831 — admin per-job zone overrides (cron id → IANA zone). */
   private tzOverrides = new Map<string, string>()
+  /** #1080 — the scheduler lease. Inactive (every tick allowed) until a Redis
+   *  client is attached, so tests and single-process tools keep working. */
+  readonly leader = new CronLeader()
+
+  /** Start competing for the scheduler lease. Only a process whose ticks are
+   *  enabled competes — a replica with ticks off must never hold it, or the
+   *  worker would never fire. */
+  startLeaderElection(redis: Redis): void {
+    this.leader.observe(redis)
+    if (!cronTicksEnabled()) return
+    this.leader.start(redis)
+  }
+  /** Lease status with the holder read fresh — for the admin surfaces. A
+   *  replica with ticks off never competes but still names who leads. */
+  async schedulerStatus(): Promise<
+    LeaderStatus & { ticks_enabled: boolean; development: boolean }
+  > {
+    const st = this.leader.status()
+    const ticks = cronTicksEnabled()
+    const holder = await this.leader.currentHolder()
+    return {
+      ...st,
+      is_leader: ticks && this.mayTick(),
+      holder: holder ?? (st.coordinated ? null : ticks ? st.instance : null),
+      ticks_enabled: ticks,
+      development: process.env.NODE_ENV === 'development'
+    }
+  }
+  /** May this process fire scheduled ticks right now? */
+  mayTick(): boolean {
+    if (!cronTicksEnabled()) return false
+    return this.leader.active ? this.leader.isLeader() : true
+  }
 
   /** Evaluate every job in `tz` (null = container) — re-creates each job
    *  whose effective zone changes. */
@@ -414,7 +628,7 @@ export class CronManager {
         },
         catch: true
       },
-      async () => {
+      async (cronJob) => {
         // Paused (#198): the schedule stays registered (so resume needs no
         // deploy) but ticks return without running or recording anything.
         if (this.pausedIds.has(id)) return
@@ -425,6 +639,11 @@ export class CronManager {
         // Chained (#54): this job runs after another one completes, not on
         // its own clock — the tick is a no-op while the chain stands.
         if (this.chains.has(id)) return
+        // #1080 — only the process holding the scheduler lease fires, and a
+        // given scheduled fire runs once even when two processes overlap.
+        if (!this.mayTick()) return
+        if (this.leader.active && !(await this.leader.claimRun(id, scheduledFireTime(cronJob))))
+          return
         if (opts?.quiet) {
           const chainId = newChainId()
           try {
@@ -540,6 +759,9 @@ export class CronManager {
    * detectors/cleanups should opt in.
    */
   async runCatchUps(): Promise<void> {
+    // #1080 — catch-ups are scheduled work: only the lease holder runs them
+    // (every replica booting would otherwise run every overdue nightly).
+    if (!this.mayTick()) return
     const { db } = await import('../db/index.js')
     for (const entry of this.entries.values()) {
       const hours = entry.catchUpHours
@@ -642,7 +864,14 @@ export const cronPlugin = fp(async (app: FastifyInstance) => {
 
   app.decorate('cron', manager)
 
+  // #1080 — compete for the scheduler lease when Redis is attached (it is
+  // registered before this plugin). Release it on close so the next replica
+  // takes over at once instead of waiting out the expiry.
+  const redis = (app as unknown as { redis?: Redis }).redis
+  if (redis) manager.startLeaderElection(redis)
+
   app.addHook('onClose', async () => {
+    await manager.leader.stop()
     manager.stopAll()
   })
 

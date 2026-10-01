@@ -128,6 +128,8 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
           errors_7d: errByJob.get(`cron:${c.id}`) ?? 0
         })),
         ticks_enabled: cronTicksEnabled(),
+        // #1080 — which process fires scheduled jobs (the lease holder).
+        scheduler: app.cron ? await app.cron.schedulerStatus() : null,
         running: await db('nivaro_job_runs')
           .where('status', 'running')
           .orderBy('id', 'desc')

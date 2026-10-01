@@ -40,7 +40,7 @@ async function authToken(): Promise<string | null> {
 export function getSocket(): Socket {
   if (socket) return socket
   socket = io(API_URL, {
-    transports: ['websocket', 'polling'],
+    transports: ['websocket'],
     withCredentials: true,
     reconnection: true,
     // Reconnect jitter (#332): after an API restart every open tab reconnects

@@ -60,7 +60,7 @@ export function PulsePage() {
   }, [seed])
 
   useEffect(() => {
-    const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+    const socket = io(API_URL, { transports: ['websocket'], withCredentials: true })
 
     socket.on('connect', async () => {
       let token = user?.static_token ?? null

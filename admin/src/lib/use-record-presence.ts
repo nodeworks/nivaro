@@ -36,7 +36,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
     if (!collection || !item || item === 'new') return
 
     const socket = io(API_URL, {
-      transports: ['websocket', 'polling'],
+      transports: ['websocket'],
       withCredentials: true,
       reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
       reconnectionDelayMax: 15_000,

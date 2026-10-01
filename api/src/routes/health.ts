@@ -5,10 +5,19 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { bootState } from '../services/boot-phases.js'
 import { requestDevRestart } from '../services/dev-extension-watch.js'
 import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
+import {
+  DB_BUDGET_MS,
+  judgeReady,
+  REDIS_BUDGET_MS,
+  type ReadyCheck,
+  timedCheck
+} from '../services/ready-probe.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { NIVARO_REACT_VERSION, NIVARO_VERSION } from '../version.js'
+import { checkExtensions, checkMigrations } from './preflight.js'
 
 let changelogCache: { generated_at?: string | null; releases: unknown[] } | null = null
 
@@ -84,6 +93,56 @@ export async function healthRoutes(app: FastifyInstance) {
     return reply.send({
       data: { ...changelogCache, running: NIVARO_VERSION }
     })
+  })
+
+  // GET /ready (#1081) — may the proxy route traffic here? Public, no auth
+  // (the proxy and deploy gate call it), and it names no host or credential.
+  // Migrations are checked until they read clean once: they cannot become
+  // pending again without a new image, so a clean answer is cached.
+  let migrationsClean = !!process.env.CLOUD_META_DB_URL
+  app.get('/ready', async (_req, reply) => {
+    const state = bootState()
+    const checks: ReadyCheck[] = []
+    if (state.shutting_down) {
+      checks.push({
+        id: 'boot',
+        ok: false,
+        summary: 'Shutting down — draining in-flight requests.'
+      })
+      return reply.code(503).send(judgeReady(checks))
+    }
+    checks.push({
+      id: 'boot',
+      ok: state.ready,
+      summary: state.ready ? 'Boot finished.' : 'Still booting.'
+    })
+    const [migrations, database, redis] = await Promise.all([
+      migrationsClean
+        ? Promise.resolve<ReadyCheck>({
+            id: 'migrations',
+            ok: true,
+            summary: 'No migrations pending.'
+          })
+        : checkMigrations().then<ReadyCheck>((c) => {
+            if (c.status === 'ok') migrationsClean = true
+            // Ledger AHEAD of the image (status fail, missing files) still
+            // serves fine until a restart — only PENDING files mean not ready.
+            const pending = Array.isArray(c.detail?.pending) ? c.detail.pending.length : 0
+            const unreadable = c.status === 'fail' && !Array.isArray(c.detail?.missing_files)
+            return {
+              id: 'migrations',
+              ok: pending === 0 && !unreadable,
+              summary: c.summary
+            }
+          }),
+      timedCheck('database', 'Database', DB_BUDGET_MS, () => db.raw('SELECT 1')),
+      timedCheck('redis', 'Redis', REDIS_BUDGET_MS, () => app.redis.ping())
+    ])
+    const ext = checkExtensions()
+    checks.push(migrations, { id: 'extensions', ok: ext.status !== 'fail', summary: ext.summary })
+    checks.push(database, redis)
+    const report = judgeReady(checks)
+    return reply.code(report.ready ? 200 : 503).send(report)
   })
 
   app.get('/health', async (_req, reply) => {

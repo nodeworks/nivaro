@@ -8,13 +8,13 @@ import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
 import { registerCrossTriggerHooks, setApp as setCrossTriggerApp } from './hooks/cross-triggers.js'
 import { registerEmbeddingHooks, setApp as setEmbeddingApp } from './hooks/embeddings.js'
 import { registerFieldWatchHooks, setApp as setFieldWatchApp } from './hooks/field-watches.js'
+import { registerSnoozeWakeHooks } from './hooks/notification-snooze.js'
 import {
   registerNotificationSubscriptionHooks,
   setApp as setSubscriptionApp
 } from './hooks/notification-subscriptions.js'
 import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
-import { registerSnoozeWakeHooks } from './hooks/notification-snooze.js'
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
@@ -25,6 +25,7 @@ import {
   bootReport,
   markBootPhase,
   markBootReady,
+  markShuttingDown,
   storeBoot
 } from './services/boot-phases.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
@@ -148,6 +149,8 @@ async function main() {
   const shutdown = async (signal: string) => {
     if (shuttingDown) return
     shuttingDown = true
+    // /ready answers 503 from here, so the proxy routes new requests elsewhere.
+    markShuttingDown()
     app.log.info(`${signal} received — draining in-flight requests`)
     // A drain that never finishes (a pool that will not release, a socket
     // that will not close) must not keep the old process alive: tsx watch

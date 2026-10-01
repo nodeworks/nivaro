@@ -1,5 +1,5 @@
-import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -11,7 +11,8 @@ import { NIVARO_VERSION } from '../version.js'
  * No Redis = no roster (reported, not fabricated).
  */
 
-const INSTANCE_ID = randomUUID().slice(0, 8)
+/** This process's id — the roster key, and the scheduler lease holder value (#1080). */
+export const INSTANCE_ID = randomUUID().slice(0, 8)
 let redisRef: Redis | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 

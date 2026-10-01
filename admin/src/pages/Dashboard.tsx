@@ -346,7 +346,7 @@ export function DashboardPage() {
     import('socket.io-client')
       .then(({ io }) => {
         socket = io(window.location.origin, {
-          transports: ['websocket', 'polling'],
+          transports: ['websocket'],
           path: '/socket.io'
         }) as typeof socket
         socket?.on('connect', () => socket?.emit('presence:join', 'admin'))

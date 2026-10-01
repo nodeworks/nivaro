@@ -46,6 +46,14 @@ export async function runSmokeCheck(app: FastifyInstance): Promise<SmokeResult> 
     if (Number(n.n) === 0) throw new Error('zero registered collections')
     return `${n.n} collections`
   })
+  await add('extensions', async () => {
+    // A required extension that failed to mount boots fine and does none of
+    // its work — the deploy gate must catch it (#1083).
+    const { checkExtensions } = await import('../routes/preflight.js')
+    const c = checkExtensions()
+    if (c.status === 'fail') throw new Error(c.summary)
+    return c.summary
+  })
   await add('api-self', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/version' })
     if (res.statusCode !== 200) throw new Error(`GET /api/version → ${res.statusCode}`)

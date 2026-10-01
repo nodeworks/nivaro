@@ -92,7 +92,7 @@ export function PresencePage() {
     import('socket.io-client')
       .then(({ io }) => {
         socket = io(window.location.origin, {
-          transports: ['websocket', 'polling'],
+          transports: ['websocket'],
           path: '/socket.io'
         }) as typeof socket
 

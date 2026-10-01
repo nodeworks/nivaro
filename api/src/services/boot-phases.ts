@@ -74,6 +74,18 @@ export function markBootReady(): void {
   if (readyAt == null) readyAt = Date.now()
 }
 
+let shuttingDownAt: number | null = null
+
+/** A shutdown began: /ready answers 503 from now so the proxy stops routing
+ *  here while in-flight requests drain. */
+export function markShuttingDown(): void {
+  if (shuttingDownAt == null) shuttingDownAt = Date.now()
+}
+
+export function bootState(): { ready: boolean; shutting_down: boolean } {
+  return { ready: readyAt != null, shutting_down: shuttingDownAt != null }
+}
+
 export function bootReport(): BootReport {
   return {
     started_at: new Date(processStart).toISOString(),

@@ -21,7 +21,7 @@ export function usePagePresence() {
 
   useEffect(() => {
     if (!user) return
-    const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+    const socket = io(API_URL, { transports: ['websocket'], withCredentials: true })
     socketRef.current = socket
 
     socket.on('connect', async () => {

@@ -673,15 +673,40 @@ export default function BackgroundJobs() {
       </header>
 
       <div className='flex-1 space-y-4 overflow-y-auto p-6'>
-        {registry.data?.ticks_enabled === false && (
-          <div
-            data-cron-ticks='off'
-            className='rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[12.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
+        {registry.data?.ticks_enabled === false &&
+          (registry.data?.scheduler && registry.data.scheduler.development === false ? (
+            <p
+              data-cron-scheduler='web'
+              className='text-[12px] text-slate-500 dark:text-muted-foreground'
+            >
+              This instance ({registry.data.scheduler.instance}) serves requests only — scheduled
+              jobs fire on{' '}
+              {registry.data.scheduler.holder
+                ? `instance ${registry.data.scheduler.holder}, which holds the scheduler lease`
+                : 'the worker, but no instance holds the scheduler lease right now'}
+              . Run now and dry runs still work here.
+            </p>
+          ) : (
+            <div
+              data-cron-ticks='off'
+              className='rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[12.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200'
+            >
+              <span className='font-semibold'>Scheduled jobs don't fire on this instance.</span>{' '}
+              This is a development process sharing its database with a deployed instance, which
+              runs them. Run now and dry runs still work here. Set CRON_TICKS=on to change that.
+            </div>
+          ))}
+        {registry.data?.ticks_enabled !== false && registry.data?.scheduler?.coordinated && (
+          <p
+            data-cron-scheduler={registry.data.scheduler.is_leader ? 'here' : 'elsewhere'}
+            className='text-[12px] text-slate-500 dark:text-muted-foreground'
           >
-            <span className='font-semibold'>Scheduled jobs don't fire on this instance.</span> This
-            is a development process sharing its database with a deployed instance, which runs them.
-            Run now and dry runs still work here. Set CRON_TICKS=on to change that.
-          </div>
+            {registry.data.scheduler.is_leader
+              ? `Scheduled jobs fire on this instance (${registry.data.scheduler.instance}), which holds the scheduler lease.`
+              : registry.data.scheduler.holder
+                ? `Scheduled jobs fire on instance ${registry.data.scheduler.holder}, which holds the scheduler lease. This one (${registry.data.scheduler.instance}) stands by and takes over if it stops.`
+                : 'No instance holds the scheduler lease right now — scheduled jobs are not firing until one takes it (usually within 10 seconds).'}
+          </p>
         )}
         {/* stat strip */}
         <div className='flex flex-wrap gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>

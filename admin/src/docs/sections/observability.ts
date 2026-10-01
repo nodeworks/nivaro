@@ -152,9 +152,71 @@ export const obsHealthDashboard: DocSection = {
   ]
 }`
     },
+    { type: 'h2', id: 'health-probes', text: 'Probes for proxies and deploys' },
+    {
+      type: 'p',
+      text: 'Four public or admin endpoints answer four different questions. Point each consumer at the one that matches its question.'
+    },
+    {
+      type: 'table',
+      head: ['Endpoint', 'Question', 'Who calls it'],
+      rows: [
+        [
+          'GET /api/version',
+          'Is the process alive, and which build is it?',
+          'Container health check, the redeploy notice'
+        ],
+        [
+          'GET /api/ready',
+          'May the proxy send this process traffic now?',
+          'Proxy health check, the deploy gate'
+        ],
+        [
+          'GET /api/preflight',
+          'Did this deploy land coherently?',
+          'Deploy gate, the Health page (admin)'
+        ],
+        [
+          'POST /api/ops-runtime/smoke?strict=1',
+          'Do reads, writes and extensions work end to end?',
+          'Deploy gate (admin)'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: '/api/ready answers 200 only when the boot has finished, no migration in this build is pending, every extension named in REQUIRED_EXTENSIONS loaded, the database answers SELECT 1 within 2 seconds and Redis answers PING within 500 milliseconds. It is never “degraded”: a slow dependency fails the check rather than keeping the process in rotation. A process that received SIGTERM answers 503 at once, so the proxy stops routing to it while in-flight requests drain.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/ready  → 200 or 503
+{
+  "ready": true,
+  "checks": [
+    { "id": "boot", "ok": true, "summary": "Boot finished." },
+    { "id": "migrations", "ok": true, "summary": "All 384 migrations applied; no files missing." },
+    { "id": "extensions", "ok": true, "summary": "All 1 required extension(s) loaded." },
+    { "id": "database", "ok": true, "ms": 80, "summary": "Database answered in 80ms." },
+    { "id": "redis", "ok": true, "ms": 2, "summary": "Redis answered in 2ms." }
+  ]
+}`
+    },
+    {
+      type: 'p',
+      text: 'The smoke suite (database, Redis, migrations, collections read, required extensions, a request to the API itself) answers 200 with `ok` in the body by default, which is what the Ops Console button reads. Add `?strict=1` and it answers 503 when any check fails, so a deploy script can branch on the status code alone.'
+    },
+    { type: 'h2', id: 'health-scheduler-lease', text: 'Which process runs scheduled jobs' },
+    {
+      type: 'p',
+      text: 'With more than one API process, only one fires scheduled jobs. Every process whose ticks are enabled (CRON_TICKS) competes for a lease in Redis; the holder renews it every 10 seconds and releases it on shutdown, so another process takes over within seconds. A process stops believing it holds the lease shortly before the lease could expire, so a Redis outage stops its ticks before anyone else could start. Each scheduled fire also takes its own lock, so one fire runs once even if two processes briefly overlap during a deploy. Run now works on any process and needs no lease. Boot catch-up runs only on the lease holder.'
+    },
+    {
+      type: 'p',
+      text: 'Background Jobs names the instance that holds the lease. GET /api/job-runs/registry and GET /api/ops-runtime/roster return it as `scheduler` ({ instance, is_leader, holder, ticks_enabled }). A process with ticks off never competes: run web replicas with CRON_TICKS=off and one worker with it on.'
+    },
     {
       type: 'note',
-      text: 'GET /api/health remains the lightweight unauthenticated liveness check for load balancers; the detailed endpoint requires authentication.'
+      text: 'GET /api/health remains the lightweight unauthenticated liveness check; it reports latency as degraded, so do not use it for routing. The detailed endpoint requires authentication.'
     }
   ]
 }
