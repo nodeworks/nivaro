@@ -11,9 +11,15 @@ import {
   type HistoryRow,
   historyNarrowing,
   issueRouteTemplates,
-  summarizeHistory
+  summarizeHistory,
+  traceBelongsTo
 } from '../services/traffic-history.js'
-import { buildSnapshot, seenCallerKeys, seenPartnerIds } from '../services/traffic-map.js'
+import {
+  buildSnapshot,
+  matchExtensionRoute,
+  seenCallerKeys,
+  seenPartnerIds
+} from '../services/traffic-map.js'
 
 /**
  * Traffic Map read routes (spec §6.2–6.3). Admin only. The aggregator is per process, so in
@@ -238,7 +244,14 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
         for (const l of n.like ?? []) b.orWhereRaw("path LIKE ? ESCAPE '\\'", [l])
       })
       const logRows = (await Promise.resolve(q).catch(() => [])) as HistoryRow[]
-      const body = summarizeHistory(logRows, lane, entity, hours as 1 | 6 | 24)
+      const body = summarizeHistory(
+        logRows,
+        lane,
+        entity,
+        hours as 1 | 6 | 24,
+        new Date(),
+        matchExtensionRoute
+      )
       const templates = issueRouteTemplates(lane, entity, extUrls)
       const issues = templates.length
         ? ((await Promise.resolve(
@@ -257,7 +270,7 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
           ).catch(() => [])) as Array<Record<string, unknown>>)
         : []
       const slow = listTraces(200)
-        .filter((t) => t.url.split('?')[0].startsWith(n.routePrefix))
+        .filter((t) => traceBelongsTo(t, lane, entity, n.routePrefix, matchExtensionRoute))
         .slice(0, 5)
         .map((t) => ({ id: t.id, route: t.route, total_ms: t.total_ms, ts: t.ts }))
       return { data: { ...body, issues, slow_traces: slow } }

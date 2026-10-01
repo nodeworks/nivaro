@@ -151,7 +151,8 @@ export function summarizeHistory(
   lane: TrafficLane,
   entity: string,
   hours: 1 | 6 | 24,
-  now = new Date()
+  now = new Date(),
+  matchExt: (method: string, path: string) => string | null = () => null
 ): EntityHistoryBody {
   const bucketS = BUCKET[hours]
   const points = (hours * 3600) / bucketS
@@ -176,11 +177,10 @@ export function summarizeHistory(
       method: r.method,
       path: r.path,
       graphqlOperation: r.graphql_operation,
-      graphqlKind: r.graphql_kind
+      graphqlKind: r.graphql_kind,
+      extensionId: matchExt(r.method, r.path)
     })
-    // Extension rows classify by registry, which history cannot know — the SQL narrowing already
-    // chose them, so trust it for that lane.
-    if (lane !== 'extension' && (!c || entityKey(c.lane, c.entity) !== wantKey)) continue
+    if (!c || entityKey(c.lane, c.entity) !== wantKey) continue
     const sec = Math.floor(new Date(r.created_at).getTime() / 1000)
     const i = Math.floor((sec - start) / bucketS)
     if (i < 0 || i >= points) continue
@@ -188,7 +188,7 @@ export function summarizeHistory(
     const isErr = r.status >= 400
     if (isErr) error++
     // R11: a failed PATCH is still a write request.
-    const isRead = c ? c.kind === 'read' : String(r.method).toUpperCase() === 'GET'
+    const isRead = c.kind === 'read'
     if (isRead) {
       if (!isErr) read++
     } else writes++
@@ -223,4 +223,26 @@ export function summarizeHistory(
     top_callers: top(callers).map(([key, n]) => ({ key, n })),
     truncated: rows.length >= HISTORY_ROW_CAP
   }
+}
+
+/** Does a slow trace belong to this entity? Classified the live way, never by bare prefix. */
+export function traceBelongsTo(
+  t: { method?: string | null; url: string },
+  lane: TrafficLane,
+  entity: string,
+  routePrefix: string,
+  matchExt: (method: string, path: string) => string | null = () => null
+): boolean {
+  const path = t.url.split('?')[0]
+  if (t.method) {
+    const c = classifyRequest({
+      method: t.method,
+      path,
+      extensionId: matchExt(t.method, path)
+    })
+    return !!c && entityKey(c.lane, c.entity) === entityKey(lane, entity)
+  }
+  if (!path.startsWith(routePrefix)) return false
+  const next = path.charAt(routePrefix.length)
+  return next === '' || next === '/'
 }

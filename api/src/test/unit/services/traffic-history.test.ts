@@ -3,7 +3,8 @@ import {
   escapeLike,
   historyNarrowing,
   issueRouteTemplates,
-  summarizeHistory
+  summarizeHistory,
+  traceBelongsTo
 } from '../../../services/traffic-history.js'
 
 const now = new Date('2026-09-30T18:00:00.000Z')
@@ -107,5 +108,72 @@ describe('issueRouteTemplates (R12)', () => {
   it('uses Fastify templates, not concrete urls', () => {
     expect(issueRouteTemplates('widgets', '5')).toEqual(['/api/widgets-internal/:id'])
     expect(issueRouteTemplates('items', 'workflows')).toContain('/api/items/:collection')
+  })
+})
+
+describe('history agrees with live classification', () => {
+  const ext = (m: string, p: string) =>
+    m === 'GET' && /^\/api\/efp\/x\/[^/]+$/.test(p) ? 'efp-ops' : null
+  it('extension lane drops LIKE-selected rows the live matcher would not file there', () => {
+    const rows = [
+      row({ path: '/api/efp/x/5' }),
+      row({ method: 'POST', path: '/api/efp/x/5' }),
+      row({ path: '/api/efp/x/5/extra' })
+    ]
+    const h = summarizeHistory(rows, 'extension', 'efp-ops', 1, now, ext)
+    expect(h.totals.req).toBe(1)
+  })
+  it('other/<seg> no longer counts rows live files under extension/<id>', () => {
+    const rows = [row({ path: '/api/efp/x/5' })]
+    expect(summarizeHistory(rows, 'other', 'efp', 1, now, ext).totals.req).toBe(0)
+    expect(summarizeHistory(rows, 'extension', 'efp-ops', 1, now, ext).totals.req).toBe(1)
+  })
+  it('slow traces are classified, not prefix-matched', () => {
+    const t = (url: string) => ({ method: 'GET', url })
+    expect(
+      traceBelongsTo(
+        t('/api/items/workflows_regions?x=1'),
+        'items',
+        'workflows',
+        '/api/items/workflows'
+      )
+    ).toBe(false)
+    expect(
+      traceBelongsTo(t('/api/items/workflows/5'), 'items', 'workflows', '/api/items/workflows')
+    ).toBe(true)
+    expect(
+      traceBelongsTo(
+        { method: 'POST', url: '/api/widgets-internal/50/render' },
+        'widgets',
+        '5',
+        '/api/widgets-internal/5'
+      )
+    ).toBe(false)
+    expect(
+      traceBelongsTo(
+        { method: 'POST', url: '/api/widgets-internal/5/render' },
+        'widgets',
+        '5',
+        '/api/widgets-internal/5'
+      )
+    ).toBe(true)
+    expect(traceBelongsTo(t('/api/efp/x/5'), 'extension', 'efp-ops', '/api/efp/x/', ext)).toBe(true)
+    // no method: boundary-checked prefix
+    expect(
+      traceBelongsTo(
+        { url: '/api/items/workflows_regions' },
+        'items',
+        'workflows',
+        '/api/items/workflows'
+      )
+    ).toBe(false)
+    expect(
+      traceBelongsTo(
+        { url: '/api/items/workflows/5' },
+        'items',
+        'workflows',
+        '/api/items/workflows'
+      )
+    ).toBe(true)
   })
 })

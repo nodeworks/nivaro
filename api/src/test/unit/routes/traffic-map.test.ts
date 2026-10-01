@@ -238,6 +238,7 @@ describe('GET /traffic-map/entity/:lane/:entity', () => {
     expect(d.issues[0]).toMatchObject({ id: 9, severity: 'high' })
     expect(d.slow_traces).toHaveLength(1)
     expect(d.slow_traces[0].id).toBe('t1')
+    expect(d.slow_traces.map((x: { id: string }) => x.id)).not.toContain('t3')
     expect(JSON.stringify(d)).not.toContain('user_agent')
   })
   it('extension lane with no registered routes answers empty without a query', async () => {
