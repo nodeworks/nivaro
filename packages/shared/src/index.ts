@@ -214,6 +214,12 @@ export {
 export { CallerChangesSection } from './components/monitoring/CallerChanges'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
 export { PartnerDependenciesPanel } from './components/monitoring/PartnerDependencies'
+export {
+  type MiniMapSummary,
+  type MiniSnapshot,
+  miniMapSummary,
+  TrafficMiniMap
+} from './components/monitoring/TrafficMiniMap'
 export type {
   BellLaneTab,
   BellNotification,

@@ -4,6 +4,7 @@ import { useNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { titleCase } from '../../lib/utils'
 import { BaseMap, type BaseMapBubble, type BaseMapPin } from '../BaseMap'
+import { TrafficMiniMap } from '../monitoring/TrafficMiniMap'
 
 /**
  * Command Center — one live board answering "what is happening right now":
@@ -413,6 +414,9 @@ export function CommandCenterView({
               )}
             </div>
           </div>
+
+          {/* Traffic (#1130) — renders nothing for non-admins (the map route refuses them) */}
+          {snap?.health && <TrafficMiniMap tone='dark' />}
 
           {/* System rail — admins only (server withholds it otherwise) */}
           {snap?.health && (
