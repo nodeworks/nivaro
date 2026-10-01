@@ -210,7 +210,7 @@ type CompareData = {
     id: number | 'local'
     name: string
     environment: string | null
-    state: 'ok' | 'no-token' | 'unreachable' | 'no-settings'
+    state: 'ok' | 'no-token' | 'token-rejected' | 'unreachable' | 'no-settings'
     note?: string
     values: Record<string, string | null>
   }>
@@ -307,13 +307,24 @@ function SettingsComparePanel() {
                         <span className='block text-[10px] font-normal'>
                           {c.environment ?? 'here'}
                           {c.state !== 'ok' && (
-                            <span className='ml-1 text-amber-600' data-tip={c.note}>
+                            <span
+                              className={cn(
+                                'ml-1 cursor-help underline decoration-dotted underline-offset-2',
+                                c.state === 'token-rejected'
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : 'text-amber-600'
+                              )}
+                              data-tip={c.note}
+                              data-env-compare-state={c.state}
+                            >
                               ·{' '}
                               {c.state === 'no-token'
                                 ? 'no token'
-                                : c.state === 'no-settings'
-                                  ? 'not there'
-                                  : 'unreachable'}
+                                : c.state === 'token-rejected'
+                                  ? 'token rejected'
+                                  : c.state === 'no-settings'
+                                    ? 'not there'
+                                    : 'unreachable'}
                             </span>
                           )}
                         </span>
@@ -549,6 +560,8 @@ interface CompStatus {
     redis?: { status?: string }
   }
   preflight?: { status?: string; checks?: Array<{ name: string; status: string; detail?: string }> }
+  /** Set when the component refused its stored token on the preflight call. */
+  token_rejected?: string
 }
 
 function ComponentCard({ component, onChanged }: { component: Component; onChanged: () => void }) {
@@ -637,18 +650,28 @@ function ComponentCard({ component, onChanged }: { component: Component; onChang
           />
           <Stat
             label='Preflight'
-            value={status.preflight?.status ?? 'n/a'}
+            value={status.token_rejected ? 'token rejected' : (status.preflight?.status ?? 'n/a')}
             tone={
-              status.preflight?.status === 'ok'
-                ? 'good'
-                : status.preflight?.status === 'fail'
-                  ? 'bad'
-                  : status.preflight?.status === 'warn'
-                    ? 'warn'
-                    : undefined
+              status.token_rejected
+                ? 'bad'
+                : status.preflight?.status === 'ok'
+                  ? 'good'
+                  : status.preflight?.status === 'fail'
+                    ? 'bad'
+                    : status.preflight?.status === 'warn'
+                      ? 'warn'
+                      : undefined
             }
           />
         </div>
+      )}
+      {component.kind === 'api' && status?.token_rejected && (
+        <p
+          className='border-b border-slate-100 px-4 py-2 text-[11.5px] text-red-600 dark:border-border dark:text-red-400'
+          data-env-token-rejected
+        >
+          {status.token_rejected}
+        </p>
       )}
       {status?.preflight?.checks?.some((c) => c.status !== 'ok') && (
         <div className='space-y-1 border-b border-slate-100 px-4 py-2 dark:border-border'>

@@ -89,6 +89,22 @@ async function fetchJson(
   }
 }
 
+/**
+ * A 401/403 from a component means its stored token was refused (rotated,
+ * revoked, or the account behind it lost admin) — not that the host is down.
+ * Returns the sentence the Environments page shows, or null for any other answer.
+ */
+function tokenRefusal(res: { status: number; body: unknown }): string | null {
+  if (res.status !== 401 && res.status !== 403) return null
+  const b = (res.body && typeof res.body === 'object' ? res.body : {}) as {
+    code?: string
+    message?: string
+    error?: string
+  }
+  const why = b.code ?? b.message ?? b.error ?? `HTTP ${res.status}`
+  return `The component's API token was refused (${why}) — paste a current token in its settings`
+}
+
 // ─── Git providers ───────────────────────────────────────────────────────────
 
 interface GitCtx {
@@ -538,7 +554,10 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
           const preflight = await fetchJson(`${base}/api/preflight`, {
             authorization: `Bearer ${row.api_token}`
           })
-          if (preflight.body && typeof preflight.body === 'object') out.preflight = preflight.body
+          const refused = tokenRefusal(preflight)
+          if (refused) out.token_rejected = refused
+          else if (preflight.body && typeof preflight.body === 'object')
+            out.preflight = preflight.body
         } catch {
           /* absent */
         }
@@ -604,6 +623,16 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
             { authorization: `Bearer ${c.api_token}` },
             25_000
           )
+          const refused = tokenRefusal(res)
+          if (refused)
+            return {
+              id: c.id,
+              name: c.name,
+              environment,
+              state: 'token-rejected' as const,
+              note: refused,
+              slo: null
+            }
           if (!res.ok)
             return {
               id: c.id,
@@ -663,7 +692,7 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
       id: number | 'local'
       name: string
       environment: string | null
-      state: 'ok' | 'no-token' | 'unreachable' | 'no-settings'
+      state: 'ok' | 'no-token' | 'token-rejected' | 'unreachable' | 'no-settings'
       note?: string
       values: Record<string, string | null>
     }> = [
@@ -682,7 +711,7 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
           id: c.id,
           name: c.name,
           environment: env?.name ?? null,
-          state: 'ok' as 'ok' | 'no-token' | 'unreachable' | 'no-settings',
+          state: 'ok' as 'ok' | 'no-token' | 'token-rejected' | 'unreachable' | 'no-settings',
           note: undefined as string | undefined,
           values: {} as Record<string, string | null>
         }
@@ -697,6 +726,12 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
           const res = await fetchJson(`${base}/api/extensions/${ext}/settings`, {
             authorization: `Bearer ${c.api_token}`
           })
+          const refused = tokenRefusal(res)
+          if (refused) {
+            col.state = 'token-rejected'
+            col.note = refused
+            return
+          }
           if (res.status === 404) {
             col.state = 'no-settings'
             col.note = 'Extension not loaded there, or declares no settings'
@@ -704,7 +739,9 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
           }
           if (!res.ok) {
             col.state = 'unreachable'
-            col.note = `HTTP ${res.status}`
+            const b = res.body as { error?: string; message?: string } | string | null
+            const detail = typeof b === 'string' ? b : (b?.error ?? b?.message)
+            col.note = `HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 160)}` : ''}`
             return
           }
           const rows = (res.body as { data?: Array<{ key: string; type: string; value: unknown }> })
@@ -717,7 +754,12 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
           }
         } catch (err) {
           col.state = 'unreachable'
-          col.note = err instanceof Error ? err.message : String(err)
+          // fetch() reports every network failure as "fetch failed"; the
+          // useful part (ENOTFOUND, ECONNREFUSED, abort) rides on `cause`.
+          const cause = (err as { cause?: { code?: string; message?: string } })?.cause
+          col.note =
+            (err instanceof Error ? err.message : String(err)) +
+            (cause ? ` (${cause.code ?? cause.message})` : '')
         }
       })
     )

@@ -377,7 +377,7 @@ export const userExtensions: DocSection = {
     { type: 'h2', id: 'extension-settings-compare', text: 'Settings across environments' },
     {
       type: 'p',
-      text: "Environments → **Extension settings across environments** lays one extension's settings side by side: this instance beside every registered API component, probed server-side with the component's own token (secrets compare as set / unset). Rows whose values differ are tinted; a value that departs from `production_expect` reads amber."
+      text: "Environments → **Extension settings across environments** lays one extension's settings side by side: this instance beside every registered API component, probed server-side with the component's own token (secrets compare as set / unset). Rows whose values differ are tinted; a value that departs from `production_expect` reads amber. A column header says why a component has no values: **no token** (none stored), **token rejected** (the component answered 401/403 — the stored token was rotated or revoked; paste a current one, preferably a named API key rather than a personal token), **not there** (the extension is not loaded or declares no settings) or **unreachable** (network failure or another error). Hover the label for the exact reason."
     }
   ]
 }

@@ -42,7 +42,7 @@ interface RemoteSlo {
   id: number
   name: string
   environment: string | null
-  state: 'ok' | 'no-token' | 'unreachable' | 'not-supported'
+  state: 'ok' | 'no-token' | 'token-rejected' | 'unreachable' | 'not-supported'
   note?: string
   slo: SloReport | null
 }
@@ -297,9 +297,11 @@ export function SloPanel() {
                     `${c.environment ?? c.name}: ${
                       c.state === 'no-token'
                         ? 'no API token on the component'
-                        : c.state === 'not-supported'
-                          ? 'runs a version without SLOs'
-                          : `unreachable${c.note ? ` (${c.note})` : ''}`
+                        : c.state === 'token-rejected'
+                          ? 'its API token was refused — paste a current one in its settings'
+                          : c.state === 'not-supported'
+                            ? 'runs a version without SLOs'
+                            : `unreachable${c.note ? ` (${c.note})` : ''}`
                     }`
                 )
                 .join(' · ')}
