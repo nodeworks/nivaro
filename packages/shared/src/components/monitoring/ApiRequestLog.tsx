@@ -9,7 +9,7 @@ import {
   ShieldAlert,
   X
 } from 'lucide-react'
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
@@ -133,6 +133,11 @@ export interface ApiRequestLogFilters {
   api_key?: number | null
   inbound?: boolean
   errors?: boolean
+  /** ISO times bounding the list (a link to one request narrows to the seconds around it). */
+  from?: string
+  to?: string
+  /** Open the newest matching row once it loads (a deep link to one request). */
+  focus?: boolean
 }
 
 const AUTH_LABEL: Record<string, string> = {
@@ -167,6 +172,11 @@ function initials(name: string): string {
       .map((p) => p[0]?.toUpperCase() ?? '')
       .join('') || '?'
   )
+}
+
+function timeOfDay(iso: string | undefined): string {
+  const d = iso ? new Date(iso) : null
+  return d && !Number.isNaN(d.getTime()) ? d.toTimeString().slice(0, 8) : 'a moment'
 }
 
 /** Pretty-print a stored error body: JSON gets indented, anything else is shown as-is. */
@@ -259,6 +269,8 @@ export function ApiRequestLog({
     if (filters.inbound) p.inbound = 1
     else if (filters.auth) p.auth = filters.auth
     if (filters.errors) p.errors = 1
+    if (filters.from) p.from = filters.from
+    if (filters.to) p.to = filters.to
     return p
   }, [filters, hours, page])
 
@@ -279,6 +291,17 @@ export function ApiRequestLog({
     activeChips.push({ key: 'api_key', label: `API key #${filters.api_key}` })
   if (filters.inbound) activeChips.push({ key: 'inbound', label: 'integrations only' })
   if (filters.errors) activeChips.push({ key: 'errors', label: 'errors only' })
+  if (filters.from || filters.to)
+    activeChips.push({ key: 'from', label: `around ${timeOfDay(filters.from ?? filters.to)}` })
+
+  // A deep link to one request: open the newest match once, so its body and Replay show.
+  const focusedRef = useRef(false)
+  const firstId = rows[0]?.id
+  useEffect(() => {
+    if (!filters.focus || focusedRef.current || firstId == null) return
+    focusedRef.current = true
+    setOpen(firstId)
+  }, [filters.focus, firstId])
 
   const body = (
     <>
@@ -333,7 +356,13 @@ export function ApiRequestLog({
           <button
             key={c.key}
             type='button'
-            onClick={() => setFilters({ ...filters, [c.key]: undefined })}
+            onClick={() =>
+              setFilters(
+                c.key === 'from'
+                  ? { ...filters, from: undefined, to: undefined, focus: undefined }
+                  : { ...filters, [c.key]: undefined }
+              )
+            }
             className='inline-flex h-7 items-center gap-1 rounded-full bg-nvr-cyan/10 px-2.5 text-[11px] font-medium text-slate-700 hover:bg-nvr-cyan/20 dark:text-slate-200'
           >
             {c.label} <X className='h-3 w-3' />
@@ -763,6 +792,20 @@ export function InboundCallersView({ hours: initialHours = 24 }: { hours?: numbe
     refetchInterval: 30_000
   })
   const callers = data?.data ?? []
+  // A deep link (`?caller=key:12` / `?caller=user:<UUID>` — the Traffic Map's caller nodes)
+  // picks that caller once its card has loaded.
+  const wantedRef = useRef<string | null>(
+    typeof window === 'undefined'
+      ? null
+      : new URLSearchParams(window.location.search).get('caller')?.toUpperCase() || null
+  )
+  useEffect(() => {
+    const want = wantedRef.current
+    if (!want || callers.length === 0) return
+    wantedRef.current = null
+    const hit = callers.find((c) => c.key.toUpperCase() === want)
+    if (hit) setPicked(hit)
+  }, [callers])
 
   const filters: ApiRequestLogFilters = picked
     ? picked.kind === 'api_key'

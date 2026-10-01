@@ -238,7 +238,13 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
   app.get('/catalog', async () => {
     const store = currentStoreId()
     const cached = catalogCaches.get(store)
-    if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return { data: cached.value }
+    // A partner first called after the cached build has no name in it yet: rebuild now rather
+    // than show its id for up to a minute.
+    const fresh =
+      cached &&
+      Date.now() - cached.at < CATALOG_TTL_MS &&
+      seenPartnerIds().every((id) => cached.value.partners[String(id)] !== undefined)
+    if (cached && fresh) return { data: cached.value }
     // Single-flight: concurrent cold requests share one build.
     let inflight = catalogInflights.get(store)
     if (!inflight) {

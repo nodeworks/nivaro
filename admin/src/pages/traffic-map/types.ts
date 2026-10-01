@@ -54,6 +54,8 @@ export interface TrafficEventWire {
   fields?: string[]
   code?: string | null
   via?: string
+  /** Integration event chain of the request / write (opens the event path sheet). */
+  chain?: string
   /** Short neutral labels a server tap adds (ticker chips). */
   tags?: string[]
   /** Tap-specific fields. */
@@ -69,6 +71,8 @@ export interface TrafficFrame {
   entities: Record<string, number[]> // [req, read, create, update, delete, error, p95]
   callers: Record<string, number[]> // [req, error]
   down: Record<string, number[]> // [req, error, p95]
+  /** Names for down nodes in this frame that are not plain ids (partners, declared nodes). */
+  down_labels?: Record<string, string>
   edges_in: Record<string, number>
   edges_out: Record<string, number>
   events: TrafficEventWire[]

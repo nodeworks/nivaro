@@ -23,7 +23,7 @@ import {
 
 interface Monitor {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'ssl_cert'
+  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'ssl_cert' | 'traffic'
   name: string
   config: Record<string, unknown> | null
   is_active: boolean
@@ -36,7 +36,9 @@ const TYPE_LABEL: Record<Monitor['type'], string> = {
   freshness: 'Data freshness',
   deploy_regression: 'Deploy regression',
   synthetic: 'Synthetic probe',
-  ssl_cert: 'SSL certificate'
+  ssl_cert: 'SSL certificate',
+  // Created from a Traffic Map node (#1124), not from this form.
+  traffic: 'Traffic threshold'
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -267,7 +269,9 @@ function CreateForm({ onDone }: { onDone: () => void }) {
         <div className="sm:col-span-3">
           <Field label="Type">
             <span className="inline-flex rounded-md border border-slate-200 p-0.5 dark:border-border">
-              {(Object.keys(TYPE_LABEL) as Monitor['type'][]).map((t) => (
+              {(Object.keys(TYPE_LABEL) as Monitor['type'][])
+                .filter((t) => t !== 'traffic')
+                .map((t) => (
                 <button
                   key={t}
                   type="button"

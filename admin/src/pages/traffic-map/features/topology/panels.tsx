@@ -403,6 +403,14 @@ register(inspectorPanels, {
 })
 
 // ── downstream nodes ─────────────────────────────────────────────────────────
+/** `100–250 ms`, `500 ms–1.0 s`: one unit when both ends share it, so a bucket fits one line. */
+function rangeLabel(lo: number, hi: number): string {
+  const a = fmtMs(lo)
+  const b = fmtMs(hi)
+  const ua = a.split(' ')[1]
+  return ua && ua === b.split(' ')[1] ? `${a.split(' ')[0]}–${b}` : `${a}–${b}`
+}
+
 function PartnerPanel({ sel }: { sel: Selection }) {
   const top = useTop()
   const p = top?.partners?.downs[sel.id]
@@ -417,7 +425,7 @@ function PartnerPanel({ sel }: { sel: Selection }) {
       ? `< ${fmtMs(buckets[0])}`
       : i >= buckets.length
         ? `≥ ${fmtMs(buckets[buckets.length - 1])}`
-        : `${fmtMs(buckets[i - 1])} – ${fmtMs(buckets[i])}`
+        : rangeLabel(buckets[i - 1], buckets[i])
   return (
     <>
       <Section title='Why calls fail'>

@@ -12,6 +12,7 @@ import {
   KIND_INK,
   KIND_VAR
 } from './EventTicker'
+import { recordUrl } from './links'
 import type { TrafficModel } from './model'
 import { downKindOf, downLabel } from './nodeKinds'
 import { InspectorActions } from './registry/inspectorActions'
@@ -267,30 +268,52 @@ export const Empty = ({ children }: { children: ReactNode }) => (
   <p className='text-[12px] text-[var(--tm-muted)]'>{children}</p>
 )
 
+/** A record id; a link to the record when the selection is one items/system collection (#1091). */
+function RecordId({ sel, record }: { sel?: Selection; record: string }) {
+  const cut = sel?.kind === 'entity' ? sel.id.indexOf('/') : -1
+  const url = sel && cut > 0 ? recordUrl(sel.id.slice(0, cut), sel.id.slice(cut + 1), record) : null
+  if (!url) return <span className='font-mono text-[11px]'>{record}</span>
+  return (
+    <Link to={url} className={cn(LINK, 'font-mono text-[11px]')} data-tm-record-link={record}>
+      {record}
+    </Link>
+  )
+}
+
+/**
+ * Beside the map (≥1100px) the inspector takes the flow canvas's height and scrolls inside, so a
+ * long panel never pushes the ticker and hot table down: its cell stretches to the grid row, and
+ * the panel fills that cell absolutely (contributing no height of its own). Stacked below the map
+ * it is capped at 70% of the viewport instead.
+ */
+const CELL = 'relative min-w-0 min-[1100px]:self-stretch'
 const PANEL =
-  'min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:sticky min-[1100px]:top-6'
+  'flex max-h-[70vh] min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:absolute min-[1100px]:inset-0 min-[1100px]:max-h-none'
+const BODY = 'min-h-0 flex-1 overflow-y-auto'
 
 /** Shown while the snapshot loads (skeleton) or when nothing is selected (teaching line). */
 export function InspectorPlaceholder({ loading }: { loading: boolean }) {
   return (
-    <aside className={PANEL} aria-label='Inspector' id='tm-inspector' aria-busy={loading}>
-      {loading ? (
-        <div className='grid gap-3 px-3.5 py-3' aria-hidden='true'>
-          {[40, 24, 100, 70, 85, 60].map((w, i) => (
-            <div
-              // biome-ignore lint/suspicious/noArrayIndexKey: static placeholder lines
-              key={i}
-              className='h-3.5 animate-pulse rounded bg-[var(--tm-skeleton)] motion-reduce:animate-none'
-              style={{ width: `${w}%` }}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className='px-3.5 py-4 text-[12.5px] text-[var(--tm-muted)]'>
-          Select an entity on the map or in the table.
-        </p>
-      )}
-    </aside>
+    <div className={CELL}>
+      <aside className={PANEL} aria-label='Inspector' id='tm-inspector' aria-busy={loading}>
+        {loading ? (
+          <div className='grid gap-3 px-3.5 py-3' aria-hidden='true'>
+            {[40, 24, 100, 70, 85, 60].map((w, i) => (
+              <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: static placeholder lines
+                key={i}
+                className='h-3.5 animate-pulse rounded bg-[var(--tm-skeleton)] motion-reduce:animate-none'
+                style={{ width: `${w}%` }}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className='px-3.5 py-4 text-[12.5px] text-[var(--tm-muted)]'>
+            Select an entity on the map or in the table.
+          </p>
+        )}
+      </aside>
+    </div>
   )
 }
 
@@ -680,163 +703,167 @@ export function Inspector({
     ['Errors', fmtPct(d.errPct), d.errPct >= 3]
   ]
   return (
-    <aside className={PANEL} aria-label='Inspector' id='tm-inspector'>
-      <div className='flex items-start justify-between gap-3 border-b border-[var(--tm-line-2)] px-3.5 py-2.5'>
-        <div className='min-w-0'>
-          <h2
-            className='truncate font-mono text-[13.5px] font-semibold'
-            data-testid='tm-inspector-name'
-            title={d.name}
-          >
-            {d.name}
-          </h2>
-          <div className='mt-0.5 text-[12px] text-[var(--tm-muted)]'>{d.type}</div>
-        </div>
-        {d.route && (
-          <span
-            className='max-w-[55%] truncate pt-0.5 font-mono text-[11px] text-[var(--tm-muted)]'
-            title={d.route}
-          >
-            {d.route}
-          </span>
-        )}
-      </div>
-      {sel && <InspectorActions sel={sel} d={d} />}
-      {children}
-      {history?.available && <HoursBar hours={history.hours} onHours={history.onHours} />}
-      {showHistory && history ? (
-        <>
-          <HistoryBody h={history} catalog={catalog} selKey={selKey} />
-          {sel && <InspectorPanels sel={sel} d={d} mode='history' />}
-        </>
-      ) : (
-        <>
-          <Facts facts={facts} />
-          <div className='px-3.5 pb-1 pt-3'>
-            <Sparkline data={d.series} range={liveRange} className='block h-11 w-full' />
+    <div className={CELL}>
+      <aside className={PANEL} aria-label='Inspector' id='tm-inspector'>
+        <div className='flex shrink-0 items-start justify-between gap-3 border-b border-[var(--tm-line-2)] px-3.5 py-2.5'>
+          <div className='min-w-0'>
+            <h2
+              className='truncate font-mono text-[13.5px] font-semibold'
+              data-testid='tm-inspector-name'
+              title={d.name}
+            >
+              {d.name}
+            </h2>
+            <div className='mt-0.5 text-[12px] text-[var(--tm-muted)]'>{d.type}</div>
           </div>
-          <Section title='Kinds in window'>
-            <div className='grid gap-1.5'>
-              {KIND_ORDER.map((k: Kind, i) => (
-                <Bar
-                  key={k}
-                  label={k}
-                  n={d.kinds[i] ?? 0}
-                  max={kindsMax}
-                  color={KIND_VAR[k]}
-                  mono={false}
-                />
-              ))}
-            </div>
-          </Section>
-          <Section title='Top routes'>
-            <div className='grid gap-1.5'>
-              {d.routes.length ? (
-                d.routes.map((r) => (
-                  <Bar key={r.route} label={r.route} n={r.n} max={d.routes[0].n} />
-                ))
-              ) : (
-                <Empty>Nothing in this window.</Empty>
-              )}
-            </div>
-          </Section>
-          <Section title='Top callers'>
-            <div className='grid gap-1.5'>
-              {d.callers.length ? (
-                d.callers.map((c) => (
-                  <Bar
-                    key={c.key}
-                    label={callerLabel(catalog, c.key)}
-                    n={c.n}
-                    max={d.callers[0].n}
-                    mono={false}
-                  />
-                ))
-              ) : (
-                <Empty>Nothing in this window.</Empty>
-              )}
-            </div>
-          </Section>
-          <Section title='Recent errors'>
-            <div className='grid gap-1 text-[11.5px]'>
-              {d.errors.length ? (
-                d.errors.slice(0, 6).map((e, i) => (
-                  <div
-                    // biome-ignore lint/suspicious/noArrayIndexKey: errors can share a timestamp
-                    key={`${e.at}-${i}`}
-                    className='grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-2'
-                  >
-                    <span className='font-mono text-[10.5px] tabular-nums text-[var(--tm-muted)]'>
-                      {t(e.at)}
-                    </span>
-                    <span className='font-mono font-medium tabular-nums text-[var(--tm-error-ink)]'>
-                      {e.status}
-                    </span>
-                    <span
-                      className='min-w-0 truncate'
-                      title={`${e.code ?? 'error'} · ${e.route}${e.record ? ` · ${e.record}` : ''}`}
-                    >
-                      <span className='font-mono text-[11px]'>{e.code ?? 'error'}</span>
-                      {' · '}
-                      <span className='font-mono text-[11px]'>{e.route}</span>
-                      {e.record ? (
-                        <>
+          {d.route && (
+            <span
+              className='max-w-[55%] truncate pt-0.5 font-mono text-[11px] text-[var(--tm-muted)]'
+              title={d.route}
+            >
+              {d.route}
+            </span>
+          )}
+        </div>
+        <div className={BODY} data-testid='tm-inspector-body'>
+          {sel && <InspectorActions sel={sel} d={d} />}
+          {children}
+          {history?.available && <HoursBar hours={history.hours} onHours={history.onHours} />}
+          {showHistory && history ? (
+            <>
+              <HistoryBody h={history} catalog={catalog} selKey={selKey} />
+              {sel && <InspectorPanels sel={sel} d={d} mode='history' />}
+            </>
+          ) : (
+            <>
+              <Facts facts={facts} />
+              <div className='px-3.5 pb-1 pt-3'>
+                <Sparkline data={d.series} range={liveRange} className='block h-11 w-full' />
+              </div>
+              <Section title='Kinds in window'>
+                <div className='grid gap-1.5'>
+                  {KIND_ORDER.map((k: Kind, i) => (
+                    <Bar
+                      key={k}
+                      label={k}
+                      n={d.kinds[i] ?? 0}
+                      max={kindsMax}
+                      color={KIND_VAR[k]}
+                      mono={false}
+                    />
+                  ))}
+                </div>
+              </Section>
+              <Section title='Top routes'>
+                <div className='grid gap-1.5'>
+                  {d.routes.length ? (
+                    d.routes.map((r) => (
+                      <Bar key={r.route} label={r.route} n={r.n} max={d.routes[0].n} />
+                    ))
+                  ) : (
+                    <Empty>Nothing in this window.</Empty>
+                  )}
+                </div>
+              </Section>
+              <Section title='Top callers'>
+                <div className='grid gap-1.5'>
+                  {d.callers.length ? (
+                    d.callers.map((c) => (
+                      <Bar
+                        key={c.key}
+                        label={callerLabel(catalog, c.key)}
+                        n={c.n}
+                        max={d.callers[0].n}
+                        mono={false}
+                      />
+                    ))
+                  ) : (
+                    <Empty>Nothing in this window.</Empty>
+                  )}
+                </div>
+              </Section>
+              <Section title='Recent errors'>
+                <div className='grid gap-1 text-[11.5px]'>
+                  {d.errors.length ? (
+                    d.errors.slice(0, 6).map((e, i) => (
+                      <div
+                        // biome-ignore lint/suspicious/noArrayIndexKey: errors can share a timestamp
+                        key={`${e.at}-${i}`}
+                        className='grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-2'
+                      >
+                        <span className='font-mono text-[10.5px] tabular-nums text-[var(--tm-muted)]'>
+                          {t(e.at)}
+                        </span>
+                        <span className='font-mono font-medium tabular-nums text-[var(--tm-error-ink)]'>
+                          {e.status}
+                        </span>
+                        <span
+                          className='min-w-0 truncate'
+                          title={`${e.code ?? 'error'} · ${e.route}${e.record ? ` · ${e.record}` : ''}`}
+                        >
+                          <span className='font-mono text-[11px]'>{e.code ?? 'error'}</span>
                           {' · '}
-                          <span className='font-mono text-[11px]'>{e.record}</span>
-                        </>
-                      ) : null}
-                      <span className='text-[var(--tm-muted)]'>
-                        {' '}
-                        · {callerLabel(catalog, e.caller)}
-                      </span>
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <Empty>No errors recently.</Empty>
-              )}
-            </div>
-          </Section>
-          <Section title='Recent writes'>
-            <div className='grid gap-1 text-[11.5px]'>
-              {d.writes.length ? (
-                d.writes.slice(0, 6).map((w, i) => (
-                  <div
-                    // biome-ignore lint/suspicious/noArrayIndexKey: writes can share a timestamp
-                    key={`${w.at}-${i}`}
-                    className='grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-2'
-                  >
-                    <span className='font-mono text-[10.5px] tabular-nums text-[var(--tm-muted)]'>
-                      {t(w.at)}
-                    </span>
-                    <span className='font-medium' style={{ color: KIND_INK[w.action] }}>
-                      {w.action}
-                    </span>
-                    <span className='min-w-0 truncate'>
-                      <span className='font-mono text-[11px]'>{w.record}</span>
-                      {w.fields.length ? (
-                        <>
-                          {' · '}
-                          <span className='font-mono text-[11px] text-[var(--tm-fg-2)]'>
-                            {w.fields.join(', ')}
+                          <span className='font-mono text-[11px]'>{e.route}</span>
+                          {e.record ? (
+                            <>
+                              {' · '}
+                              <RecordId sel={sel} record={e.record} />
+                            </>
+                          ) : null}
+                          <span className='text-[var(--tm-muted)]'>
+                            {' '}
+                            · {callerLabel(catalog, e.caller)}
                           </span>
-                        </>
-                      ) : null}
-                      <span className='text-[var(--tm-muted)]'>
-                        {' '}
-                        · {callerLabel(catalog, w.caller)}
-                      </span>
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <Empty>No writes recently.</Empty>
-              )}
-            </div>
-          </Section>
-          {sel && <InspectorPanels sel={sel} d={d} mode='live' />}
-        </>
-      )}
-    </aside>
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <Empty>No errors recently.</Empty>
+                  )}
+                </div>
+              </Section>
+              <Section title='Recent writes'>
+                <div className='grid gap-1 text-[11.5px]'>
+                  {d.writes.length ? (
+                    d.writes.slice(0, 6).map((w, i) => (
+                      <div
+                        // biome-ignore lint/suspicious/noArrayIndexKey: writes can share a timestamp
+                        key={`${w.at}-${i}`}
+                        className='grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-2'
+                      >
+                        <span className='font-mono text-[10.5px] tabular-nums text-[var(--tm-muted)]'>
+                          {t(w.at)}
+                        </span>
+                        <span className='font-medium' style={{ color: KIND_INK[w.action] }}>
+                          {w.action}
+                        </span>
+                        <span className='min-w-0 truncate'>
+                          <RecordId sel={sel} record={w.record} />
+                          {w.fields.length ? (
+                            <>
+                              {' · '}
+                              <span className='font-mono text-[11px] text-[var(--tm-fg-2)]'>
+                                {w.fields.join(', ')}
+                              </span>
+                            </>
+                          ) : null}
+                          <span className='text-[var(--tm-muted)]'>
+                            {' '}
+                            · {callerLabel(catalog, w.caller)}
+                          </span>
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <Empty>No writes recently.</Empty>
+                  )}
+                </div>
+              </Section>
+              {sel && <InspectorPanels sel={sel} d={d} mode='live' />}
+            </>
+          )}
+        </div>
+      </aside>
+    </div>
   )
 }

@@ -24,6 +24,18 @@ import '../features/compare'
 import '../features/digest'
 import '../features/replay'
 import '../features/topology'
+import '../features/links'
+import '../features/partner-owes'
+import '../features/explain-spike'
+import '../features/hook-cost'
+import '../features/client-experience'
+import '../features/slow-tail'
+import '../features/node-alert'
+import '../features/caller-controls'
+import '../features/pause-node'
+import '../features/error-groups'
+import '../features/probe'
+import '../features/runbooks'
 
 export {
   type CanvasLayer,

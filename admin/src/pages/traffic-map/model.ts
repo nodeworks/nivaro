@@ -355,6 +355,7 @@ export class TrafficModel {
       r.set(sec, [v[0], 0, 0, 0, 0, v[1]])
       if (v[2]) r.p95 = v[2]
     }
+    for (const [key, label] of Object.entries(f.down_labels ?? {})) this.downLabels.set(key, label)
     const ec = f.ext?.[ENTITY_CALLERS_TAP] as Record<string, Record<string, number[]>> | undefined
     if (ec) {
       this.exactCallers = true
