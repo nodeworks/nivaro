@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useContext } from 'react'
 import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
+import { TrafficMapContext } from './context'
 import {
   callerLabel,
   entityLabel,
@@ -204,6 +205,17 @@ export function Bar({
       </span>
     </div>
   )
+}
+
+/** The time range a history series covers (epoch ms), for change markers (#1093). */
+function seriesRange(
+  series: Array<{ t: string }>,
+  bucketS: number | undefined
+): { from: number; to: number } | undefined {
+  if (!series.length || !bucketS) return undefined
+  const from = Date.parse(series[0].t)
+  const to = Date.parse(series[series.length - 1].t) + bucketS * 1000
+  return Number.isFinite(from) && Number.isFinite(to) && to > from ? { from, to } : undefined
 }
 
 export const t = (iso: string) => {
@@ -448,7 +460,11 @@ function HistoryBody({
     <>
       <Facts facts={facts} />
       <div className='px-3.5 pb-1 pt-3'>
-        <Sparkline data={data.series.map((s) => s.req)} className='block h-11 w-full' />
+        <Sparkline
+          data={data.series.map((s) => s.req)}
+          range={seriesRange(data.series, data.bucket_s)}
+          className='block h-11 w-full'
+        />
         <div className='mt-1 flex flex-wrap justify-between gap-x-3 text-[11.5px] text-[var(--tm-muted)]'>
           <span>
             Requests per {bucketPhrase(data.bucket_s)} · {span}
@@ -609,6 +625,11 @@ export function Inspector({
   children?: ReactNode
 }) {
   const showHistory = !!history?.available && history.hours > 0
+  // The live window the series covers (change markers, #1093).
+  const tm = useContext(TrafficMapContext)
+  const liveRange = tm?.ready
+    ? { from: (tm.model.now - tm.win) * 1000, to: tm.model.now * 1000 }
+    : undefined
   const kindsMax = Math.max(1, ...d.kinds)
   const facts: Array<[string, string, boolean, string?]> = [
     ['Requests/s', fmtRate(d.rps), false],
@@ -649,7 +670,7 @@ export function Inspector({
         <>
           <Facts facts={facts} />
           <div className='px-3.5 pb-1 pt-3'>
-            <Sparkline data={d.series} className='block h-11 w-full' />
+            <Sparkline data={d.series} range={liveRange} className='block h-11 w-full' />
           </div>
           <Section title='Kinds in window'>
             <div className='grid gap-1.5'>

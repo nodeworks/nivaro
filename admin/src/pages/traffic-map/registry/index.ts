@@ -10,6 +10,12 @@
  */
 
 // ── feature registrations (one line each) ──
+import '../features/ops-health'
+import '../features/screens'
+import '../features/caller-cost'
+import '../features/inflight'
+import '../features/breaker'
+import '../features/change-markers'
 
 export {
   type CanvasLayer,
