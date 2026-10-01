@@ -214,6 +214,8 @@ type CompareData = {
     note?: string
     values: Record<string, string | null>
   }>
+  /** Components left out because they point back at this API or at loopback. */
+  skipped?: Array<{ name: string; environment: string | null; reason: string }>
 }
 
 function SettingsComparePanel() {
@@ -305,7 +307,11 @@ function SettingsComparePanel() {
                           {c.name}
                         </span>
                         <span className='block text-[10px] font-normal'>
-                          {c.environment ?? 'here'}
+                          {c.id === 'local'
+                            ? c.environment
+                              ? `${c.environment} · here`
+                              : 'here'
+                            : c.environment}
                           {c.state !== 'ok' && (
                             <span
                               className={cn(
@@ -383,6 +389,15 @@ function SettingsComparePanel() {
                   ))}
                 </tbody>
               </table>
+              {(data.skipped?.length ?? 0) > 0 && (
+                <p
+                  className='mt-2 text-[11px] text-slate-500 dark:text-slate-400'
+                  data-env-compare-skipped
+                >
+                  Not compared:{' '}
+                  {data.skipped!.map((k) => `${k.environment ?? k.name} (${k.reason})`).join(' · ')}
+                </p>
+              )}
             </div>
           )}
         </div>
