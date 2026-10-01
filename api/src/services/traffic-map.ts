@@ -897,6 +897,27 @@ export function currentTrafficSec(): number {
   return nowSec
 }
 
+/**
+ * #1149 — the `n` busiest entities of the current store over the window, each with its request
+ * series folded into `points` buckets (oldest first), for the correlated-spikes route.
+ */
+export function entityRequestSeries(
+  windowS: number,
+  points: number,
+  n: number
+): Array<{ key: string; total: number; series: number[] }> {
+  const sec = nowSec
+  const rows: Array<{ key: string; total: number; e: EntityState }> = []
+  for (const [key, e] of entities) {
+    const total = sumWindow(e, windowS, sec)[K.req]
+    if (total > 0) rows.push({ key, total, e })
+  }
+  rows.sort((a, b) => b.total - a.total)
+  return rows
+    .slice(0, n)
+    .map((r) => ({ key: r.key, total: r.total, series: seriesOf(r.e, windowS, sec, points) }))
+}
+
 // ── clock ────────────────────────────────────────────────────────────────────
 export function advanceTo(sec: number): void {
   if (sec > nowSec) nowSec = sec

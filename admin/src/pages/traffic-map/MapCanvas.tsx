@@ -2,12 +2,34 @@
 // canvas. Every colour comes from the --tm-* tokens (readTokens), re-read on theme change.
 // Data is recomputed once per frame tick; the rAF loop only animates particles, pulses, flashes
 // and the hover/selection highlight. prefers-reduced-motion: no particles, no rAF loop.
-import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  type KeyboardEvent,
+  type MouseEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { cn } from '@/lib/utils'
+import {
+  APP_GROUP_LABEL,
+  appGroupLabel,
+  appGroupOf,
+  type CanvasView,
+  type EdgeScale,
+  edgeWidthFor,
+  isAppGroup,
+  setCanvasView,
+  useCanvasView,
+  ZOOM_LABEL,
+  zoomBy
+} from './canvasView'
 import { callerLabel, entityLabel } from './EventTicker'
+import { LegendButton, LegendGuide } from './Legend'
 import {
   bezierPoint,
   computeLayout,
-  edgeWidth,
   hitTest,
   type MapLayout,
   type MapTokens,
@@ -43,7 +65,8 @@ export interface MapCanvasProps {
   model: TrafficModel
   filters: Filters
   selection: Selection | null
-  onSelect: (s: Selection) => void
+  /** null clears the selection (Escape / Clear path, #1129). */
+  onSelect: (s: Selection | null) => void
   catalog: TrafficCatalog | null
   tick: number
   paused: boolean
@@ -121,6 +144,13 @@ export interface MapData {
   /** Lane → its out edges, for routing a particle's second leg. */
   laneOut: Map<Lane, Array<{ to: string; rps: number }>>
   entityDowns: Map<string, Array<[string, number]>>
+  /** #1161 zoomed in (exact entity × caller data): caller → entity edges. */
+  edgesEnt: Array<{ from: string; to: string; rps: number }>
+  /** Raw caller / source key → the node it is drawn under (itself, a group, or "Other …"). */
+  callerNode: Map<string, string>
+  /** Busiest in / out edge (linear thickness, #1162). */
+  maxIn: number
+  maxOut: number
   /** The model has received its first snapshot (before that: a quiet loading state). */
   loaded: boolean
   empty: boolean
@@ -217,7 +247,16 @@ function downSub(id: string, kind = 'partner'): string {
 }
 
 /** Everything the frame needs, computed once per tick (not per animation frame). */
-function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null): MapData {
+function buildData(
+  m: TrafficModel,
+  filters: Filters,
+  cat: TrafficCatalog | null,
+  view: Pick<CanvasView, 'zoom' | 'groupApps' | 'expanded'> = {
+    zoom: 1,
+    groupApps: false,
+    expanded: null
+  }
+): MapData {
   const win = filters.win
   // lanes + entities: hot() already applies the lane, kind and caller filters
   const rows = m.hot(win, filters, 100000)
@@ -308,59 +347,128 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
       /* a broken provider adds nothing */
     }
   }
-  const ranked = [...perCaller].sort((a, b) => b[1] - a[1])
-  const top = ranked.slice(0, MAX_CALLERS)
-  const rest = ranked.slice(MAX_CALLERS)
-  const callers: NodeView[] = top.map(([k, rps]) => {
-    const kind = cat?.callers[k]?.kind
-    const sub =
-      (kind && CALLER_KIND_TEXT[kind]) || (k === 'cron' ? CALLER_KIND_TEXT.cron : 'caller')
-    const errors = m.callerSum(k, win)[1]
-    return {
-      id: k,
-      label: callerLabel(cat, k),
-      sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
-      rps,
-      partner: false
+  const callerNode = new Map<string, string>()
+  let callers: NodeView[]
+  let sources: NodeView[]
+  if (view.groupApps) {
+    // #1163: every caller and source folds into its app group; one group may be expanded
+    const groupOf = (k: string) => appGroupOf(k, m.callerApps, cat?.callers[k]?.kind, isSourceId(k))
+    const perGroup = new Map<string, { rps: number; n: number }>()
+    const members: Array<[string, number]> = []
+    for (const [k, rps] of [...perCaller, ...perSource]) {
+      const g = groupOf(k)
+      if (g === view.expanded) {
+        members.push([k, rps])
+        continue
+      }
+      const cur = perGroup.get(g) ?? { rps: 0, n: 0 }
+      cur.rps += rps
+      cur.n++
+      perGroup.set(g, cur)
+      callerNode.set(k, g)
     }
-  })
-  if (rest.length)
-    callers.push({
-      id: OTHERS,
-      label: 'Other callers',
-      sub: `${rest.length} more`,
-      rps: rest.reduce((a, [, r]) => a + r, 0),
-      partner: false
+    members.sort((a, b) => b[1] - a[1])
+    const shown = members.slice(0, MAX_CALLERS)
+    const folded = members.slice(MAX_CALLERS)
+    callers = shown.map(([k, rps]) => {
+      callerNode.set(k, k)
+      const errors = m.callerSum(k, win)[1]
+      const kind = cat?.callers[k]?.kind
+      const sub = isSourceId(k)
+        ? (SOURCE_KIND_TEXT[k.slice(0, k.indexOf(':'))] ?? 'source')
+        : (kind && CALLER_KIND_TEXT[kind]) || 'caller'
+      return {
+        id: k,
+        label: callerLabel(cat, k),
+        sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+        rps,
+        partner: false
+      }
     })
-  const rankedSources = [...perSource].sort((a, b) => b[1] - a[1])
-  const topSources = rankedSources.slice(0, MAX_SOURCES)
-  const restSources = rankedSources.slice(MAX_SOURCES)
-  const sources: NodeView[] = topSources.map(([k, rps]) => {
-    const kind = k.slice(0, k.indexOf(':'))
-    const errors = m.callerSum(k, win)[1]
-    const sub = SOURCE_KIND_TEXT[kind] ?? 'source'
-    return {
-      id: k,
-      label: callerLabel(cat, k),
-      sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
-      rps,
-      partner: false,
-      kind
+    if (view.expanded) {
+      // the expanded group keeps a node (its members past MAX_CALLERS fold into it) so it can be
+      // collapsed again
+      for (const [k] of folded) callerNode.set(k, view.expanded)
+      perGroup.set(view.expanded, {
+        rps: folded.reduce((a, [, r]) => a + r, 0),
+        n: folded.length
+      })
     }
-  })
-  if (restSources.length)
-    sources.push({
-      id: OTHER_SOURCES,
-      label: 'Other sources',
-      sub: `${restSources.length} more`,
-      rps: restSources.reduce((a, [, r]) => a + r, 0),
-      partner: false
+    const groups = [...perGroup].sort((a, b) => b[1].rps - a[1].rps)
+    callers.push(
+      ...groups.map(([g, v]) => ({
+        id: g,
+        label: g === view.expanded ? `${appGroupLabel(g)}, expanded` : appGroupLabel(g),
+        sub:
+          g === view.expanded
+            ? v.n
+              ? `${plural(v.n, 'more')} · select to collapse`
+              : 'select to collapse'
+            : `${plural(v.n, g === 'app:cron' ? 'source' : 'caller')} · select to expand`,
+        rps: v.rps,
+        partner: false,
+        kind: 'group'
+      }))
+    )
+    sources = []
+  } else {
+    const ranked = [...perCaller].sort((a, b) => b[1] - a[1])
+    const top = ranked.slice(0, MAX_CALLERS)
+    const rest = ranked.slice(MAX_CALLERS)
+    callers = top.map(([k, rps]) => {
+      const kind = cat?.callers[k]?.kind
+      const sub =
+        (kind && CALLER_KIND_TEXT[kind]) || (k === 'cron' ? CALLER_KIND_TEXT.cron : 'caller')
+      const errors = m.callerSum(k, win)[1]
+      return {
+        id: k,
+        label: callerLabel(cat, k),
+        sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+        rps,
+        partner: false
+      }
     })
-  const topIds = new Set([...top.map(([k]) => k), ...topSources.map(([k]) => k)])
+    if (rest.length)
+      callers.push({
+        id: OTHERS,
+        label: 'Other callers',
+        sub: `${rest.length} more`,
+        rps: rest.reduce((a, [, r]) => a + r, 0),
+        partner: false
+      })
+    const rankedSources = [...perSource].sort((a, b) => b[1] - a[1])
+    const topSources = rankedSources.slice(0, MAX_SOURCES)
+    const restSources = rankedSources.slice(MAX_SOURCES)
+    sources = topSources.map(([k, rps]) => {
+      const kind = k.slice(0, k.indexOf(':'))
+      const errors = m.callerSum(k, win)[1]
+      const sub = SOURCE_KIND_TEXT[kind] ?? 'source'
+      return {
+        id: k,
+        label: callerLabel(cat, k),
+        sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+        rps,
+        partner: false,
+        kind
+      }
+    })
+    if (restSources.length)
+      sources.push({
+        id: OTHER_SOURCES,
+        label: 'Other sources',
+        sub: `${restSources.length} more`,
+        rps: restSources.reduce((a, [, r]) => a + r, 0),
+        partner: false
+      })
+    for (const [k] of top) callerNode.set(k, k)
+    for (const [k] of rest) callerNode.set(k, OTHERS)
+    for (const [k] of topSources) callerNode.set(k, k)
+    for (const [k] of restSources) callerNode.set(k, OTHER_SOURCES)
+  }
   const inAgg = new Map<string, number>()
   for (const [caller, lane, rps] of drawnIn) {
-    const fold = isSourceId(caller) ? OTHER_SOURCES : OTHERS
-    const k = `${topIds.has(caller) ? caller : fold}>${lane}`
+    const node = callerNode.get(caller) ?? (isSourceId(caller) ? OTHER_SOURCES : OTHERS)
+    const k = `${node}>${lane}`
     inAgg.set(k, (inAgg.get(k) ?? 0) + rps)
   }
   const edgesIn = [...inAgg].map(([k, rps]) => {
@@ -390,6 +498,22 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
         )
     }
 
+  // #1161 zoomed in: each drawn caller's own edges into the entity rows (exact data only)
+  const edgesEnt: MapData['edgesEnt'] = []
+  if (view.zoom === 2 && m.exactCallers && !filters.workspace) {
+    const drawnCallers = callers.filter(
+      (c) => c.id !== OTHERS && c.id !== OTHER_SOURCES && !isAppGroup(c.id)
+    )
+    for (const lane of lanes)
+      for (const e of lane.entities)
+        for (const c of drawnCallers) {
+          const n = m.entityCallerSum(e.key, c.id, win)[0]
+          if (n > 0) edgesEnt.push({ from: c.id, to: e.key, rps: n / win })
+        }
+  }
+  const maxIn = Math.max(0, ...edgesIn.map((e) => e.rps), ...edgesEnt.map((e) => e.rps))
+  const maxOut = Math.max(0, ...edgesOut.map((e) => e.rps))
+
   const busiestLanes = lanes
     .slice()
     .sort((a, b) => b.rps - a.rps)
@@ -411,6 +535,10 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
     edgesOut,
     laneOut,
     entityDowns,
+    edgesEnt,
+    callerNode,
+    maxIn,
+    maxOut,
     loaded,
     empty: lanes.length === 0,
     winLabel,
@@ -452,8 +580,17 @@ export function MapCanvas({
     return () => mq.removeEventListener('change', on)
   }, [])
 
+  const view = useCanvasView()
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick forces a re-read of the mutable model
-  const data = useMemo(() => buildData(m, filters, catalog), [m, filters, catalog, tick])
+  const data = useMemo(
+    () =>
+      buildData(m, filters, catalog, {
+        zoom: view.zoom,
+        groupApps: view.groupApps,
+        expanded: view.expanded
+      }),
+    [m, filters, catalog, tick, view.zoom, view.groupApps, view.expanded]
+  )
 
   useEffect(() => {
     const box = boxRef.current
@@ -472,9 +609,10 @@ export function MapCanvas({
         callers: data.callers.map((c) => c.id),
         sources: data.sources.map((c) => c.id),
         lanes: data.lanes.map((l) => ({ id: l.id, entities: l.entities.map((e) => e.entity) })),
-        downs: data.downs.map((d) => d.id)
+        downs: data.downs.map((d) => d.id),
+        zoom: view.zoom
       }),
-    [width, data]
+    [width, data, view.zoom]
   )
   useEffect(() => {
     if (import.meta.env.DEV) (window as unknown as { __tmLayout?: MapLayout }).__tmLayout = layout
@@ -505,6 +643,23 @@ export function MapCanvas({
     }
   }, [])
 
+  // #1129 path trace: a selected caller/source animates its own path end to end
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tick forces a re-read of the mutable model
+  const trace = useMemo(() => {
+    if (selection?.kind !== 'caller') return null
+    const id = selection.id
+    if (id === OTHERS || id === OTHER_SOURCES || isAppGroup(id) || !layout.callers[id]) return null
+    const lanes = new Set(data.edgesIn.filter((e) => e.from === id).map((e) => e.to))
+    if (!lanes.size) return null
+    const drawn = new Set(Object.keys(layout.ents))
+    const ents = new Set(m.callerEntities(id, filters.win).filter((k) => drawn.has(k)))
+    const downs = new Set<string>()
+    for (const k of ents) for (const [d] of data.entityDowns.get(k) ?? []) downs.add(d)
+    // no per-entity downstream: the lanes' own out edges
+    if (!downs.size) for (const e of data.edgesOut) if (lanes.has(e.from)) downs.add(e.to)
+    return { caller: id, lanes, ents, downs }
+  }, [selection, data, layout, m, filters.win, tick])
+
   // highlight easing: when the hovered/selected thing changes, the accent edges fade in
   const active = hover ?? selection
   const hlRef = useRef<{ sel: Selection | null; at: number }>({ sel: null, at: 0 })
@@ -514,8 +669,18 @@ export function MapCanvas({
   })
 
   // live state for the animation loop (read through refs so the loop never restarts)
-  const live = useRef({ data, layout, active, selection, filters, paused, reduced })
-  live.current = { data, layout, active, selection, filters, paused, reduced }
+  const live = useRef({
+    data,
+    layout,
+    active,
+    selection,
+    filters,
+    paused,
+    reduced,
+    view,
+    trace
+  })
+  live.current = { data, layout, active, selection, filters, paused, reduced, view, trace }
 
   // spawn one particle per new event (sampled per edge), only when motion is allowed.
   // Runs once per frame tick; filters/layout/motion are read from that render.
@@ -526,6 +691,7 @@ export function MapCanvas({
     const newest = m.events[0]?.t ?? 0
     const perEdge = new Map<string, number>()
     const callerIds = new Set(Object.keys(layout.callers))
+    const tr = live.current.trace
     for (const ev of m.events) {
       if (spawned.current.has(ev)) break // newest first: everything after this was seen
       spawned.current.add(ev)
@@ -536,7 +702,10 @@ export function MapCanvas({
         (filters.caller && ev.caller !== filters.caller)
       )
         continue
-      const from = callerIds.has(ev.caller) ? ev.caller : callerIds.has(OTHERS) ? OTHERS : null
+      // a path trace (#1129) animates only the traced caller's requests
+      if (tr && ev.caller !== tr.caller) continue
+      const node = data.callerNode.get(ev.caller) ?? ev.caller
+      const from = callerIds.has(node) ? node : callerIds.has(OTHERS) ? OTHERS : null
       const c = from ? layout.callers[from] : undefined
       const lane = layout.lanes[ev.lane]
       if (!c || !lane) continue
@@ -600,7 +769,9 @@ export function MapCanvas({
         paused: pz,
         reduced: rd,
         filters: lf,
-        selection: lsel
+        selection: lsel,
+        view: vw,
+        trace: tr
       } = live.current
       const tok = tokensRef.current ?? {
         T: readTokens(rootRef.current ?? document.documentElement),
@@ -631,6 +802,8 @@ export function MapCanvas({
       }
       const now = Date.now()
       const pnow = performance.now()
+      // #1100 rewound: no live flashes or pulses on a past second
+      const rewound = m.rewound
       const fc = fitCache.current
       let animating = false
 
@@ -705,10 +878,11 @@ export function MapCanvas({
       const hl = rd ? 1 : easeOut(hlT)
       if (sel && !rd && hlT < 1) animating = true
       ctx.lineCap = 'round'
+      const scale: EdgeScale = vw.scale
       const strokeIn = (e: { from: string; to: Lane; rps: number }, accent: boolean) => {
         const c = l.callers[e.from]
         const ln = l.lanes[e.to]
-        const w = edgeWidth(e.rps)
+        const w = edgeWidthFor(e.rps, scale, d.maxIn)
         if (!c || !ln || w <= 0) return
         edgePath(ctx, { x: c.x + c.w, y: c.y + c.h / 2 }, { x: ln.x, y: ln.y + 11 })
         ctx.lineWidth = accent ? Math.max(1.5, w) : w
@@ -717,12 +891,29 @@ export function MapCanvas({
       const strokeOut = (e: { from: Lane; to: string; rps: number }, accent: boolean) => {
         const ln = l.lanes[e.from]
         const dn = l.downs[e.to]
-        const w = edgeWidth(e.rps)
+        const w = edgeWidthFor(e.rps, scale, d.maxOut)
         if (!ln || !dn || w <= 0) return
         edgePath(ctx, { x: ln.x + ln.w, y: ln.y + 11 }, { x: dn.x, y: dn.y + dn.h / 2 })
         ctx.lineWidth = accent ? Math.max(1.5, w) : w
         ctx.stroke()
       }
+      // #1161 zoomed in: a caller's own edge into each entity row it reached
+      const strokeEnt = (e: { from: string; to: string; rps: number }, accent: boolean) => {
+        const c = l.callers[e.from]
+        const er = l.ents[e.to]
+        const w = edgeWidthFor(e.rps, scale, d.maxIn)
+        if (!c || !er || w <= 0) return
+        edgePath(ctx, { x: c.x + c.w, y: c.y + c.h / 2 }, { x: er.x, y: er.y + er.h / 2 })
+        ctx.lineWidth = accent ? Math.max(1.5, w) : Math.max(0.75, w * 0.8)
+        ctx.stroke()
+      }
+      const entFrom = new Set(d.edgesEnt.map((e) => e.from))
+      // #1129: off-path edges and nodes fade while a caller's path is traced
+      const onPathIn = (e: { from: string; to: Lane }) =>
+        !tr || (e.from === tr.caller && tr.lanes.has(e.to))
+      const onPathOut = (e: { from: Lane; to: string }) =>
+        !tr || (tr.lanes.has(e.from) && tr.downs.has(e.to))
+      const FADED = 0.16
       ctx.strokeStyle = T.edge
       // plug-in edge styles (registry/canvasLayers): e.g. a partner edge coloured by error class
       const styled = edgeStyles.length > 0
@@ -732,18 +923,33 @@ export function MapCanvas({
         ctx.setLineDash(st?.dash ?? [])
       }
       for (const e of d.edgesIn) {
+        if (entFrom.has(e.from)) continue
         styleOf('in', e)
+        ctx.globalAlpha = onPathIn(e) ? 1 : FADED
         strokeIn(e, false)
+      }
+      for (const e of d.edgesEnt) {
+        styleOf('in', { from: e.from, to: laneOfKey(e.to), rps: e.rps })
+        ctx.globalAlpha = !tr || (e.from === tr.caller && tr.ents.has(e.to)) ? 1 : FADED
+        strokeEnt(e, false)
       }
       for (const e of d.edgesOut) {
         styleOf('out', e)
+        ctx.globalAlpha = onPathOut(e) ? 1 : FADED
         strokeOut(e, false)
       }
+      ctx.globalAlpha = 1
       ctx.setLineDash([])
-      if (sel) {
+      if (sel && !tr) {
         ctx.strokeStyle = T.accent
         ctx.globalAlpha = 0.55 * hl
-        for (const e of d.edgesIn) if (inHit(e)) strokeIn(e, true)
+        for (const e of d.edgesIn) if (inHit(e) && !entFrom.has(e.from)) strokeIn(e, true)
+        for (const e of d.edgesEnt)
+          if (
+            (sel.kind === 'caller' && sel.id === e.from) ||
+            (sel.kind === 'entity' && sel.id === e.to)
+          )
+            strokeEnt(e, true)
         for (const e of d.edgesOut) if (outHit(e)) strokeOut(e, true)
         ctx.globalAlpha = 1
       }
@@ -751,6 +957,15 @@ export function MapCanvas({
       const isSel = (kind: Selection['kind'], id: string) =>
         !!sel && sel.kind === kind && sel.id === id
       const node = (r: Rect, n: NodeView, selected: boolean, side?: 'caller' | 'down') => {
+        if (n.kind === 'group') {
+          // #1163 an app group reads as a stack of callers
+          rr(ctx, r.x + 4, r.y + 4, r.w, r.h, 8)
+          ctx.fillStyle = T.card2
+          ctx.fill()
+          ctx.lineWidth = 1
+          ctx.strokeStyle = T.nodeLine
+          ctx.stroke()
+        }
         rr(ctx, r.x, r.y, r.w, r.h, 8)
         ctx.fillStyle = T.node
         ctx.fill()
@@ -812,6 +1027,7 @@ export function MapCanvas({
         // the lane header flashes when any of its entities just errored
         let laneFlash = 0
         for (const e of lane.entities) {
+          if (rewound) break
           const at = m.flashes.get(e.key)
           if (at) laneFlash = Math.max(laneFlash, 1 - (now - at) / FLASH_MS)
         }
@@ -851,7 +1067,7 @@ export function MapCanvas({
             ctx.fillStyle = T.accentSoft
             ctx.fill()
           }
-          const flashAt = m.flashes.get(e.key)
+          const flashAt = rewound ? undefined : m.flashes.get(e.key)
           const flash = flashAt ? 1 - (now - flashAt) / FLASH_MS : 0
           if (flash > 0.02) {
             animating = true
@@ -861,7 +1077,7 @@ export function MapCanvas({
             ctx.fill()
             ctx.globalAlpha = 1
           }
-          const pulse = m.pulses.get(e.key)
+          const pulse = rewound ? undefined : m.pulses.get(e.key)
           const p = pulse ? 1 - (now - pulse.t) / PULSE_MS : 0
           const cx = er.x + 7
           const cy = er.y + er.h / 2
@@ -926,12 +1142,110 @@ export function MapCanvas({
           ctx.font = `${entSel ? '600 ' : ''}11px ${mono}`
           ctx.fillStyle = T.fg
           ctx.fillText(ellipsize(ctx, e.label, labelRoom, fc), er.x + 16, er.y + 14)
+          if (vw.zoom === 2) {
+            // #1161 zoomed in: the entity's busiest route under its name
+            const route = m.entityMeta(e.key)?.routes[0]
+            if (route) {
+              ctx.font = `10px ${mono}`
+              ctx.fillStyle = T.muted
+              ctx.fillText(
+                ellipsize(ctx, `${route.route} · ${route.n}`, er.w - 24, fc),
+                er.x + 16,
+                er.y + 28
+              )
+            }
+          }
         }
       }
 
       for (const dn of d.downs) {
         const r = l.downs[dn.id]
         if (r) node(r, dn, isSel('down', dn.id), 'down')
+      }
+
+      // #1129 path trace: everything off the traced caller's path fades; the path marches
+      if (tr) {
+        ctx.fillStyle = T.card
+        ctx.globalAlpha = 0.62
+        const veil = (r: Rect | undefined, rad = 9) => {
+          if (!r) return
+          rr(ctx, r.x - 1, r.y - 1, r.w + 2, r.h + 2, rad)
+          ctx.fill()
+        }
+        for (const c of [...d.callers, ...d.sources]) if (c.id !== tr.caller) veil(l.callers[c.id])
+        for (const lane of d.lanes) {
+          if (!tr.lanes.has(lane.id)) {
+            veil(l.lanes[lane.id])
+            continue
+          }
+          for (const e of lane.entities) {
+            const er = l.ents[e.key]
+            if (er && !tr.ents.has(e.key)) ctx.fillRect(er.x, er.y + 1, er.w, er.h - 2)
+          }
+        }
+        for (const dn of d.downs) if (!tr.downs.has(dn.id)) veil(l.downs[dn.id])
+        ctx.globalAlpha = 1
+        ctx.strokeStyle = T.accent
+        ctx.setLineDash([6, 6])
+        ctx.lineDashOffset = rd ? 0 : -((pnow / 28) % 12)
+        const c = l.callers[tr.caller]
+        if (c) {
+          const ent = d.edgesEnt.filter((e) => e.from === tr.caller && tr.ents.has(e.to))
+          if (ent.length) for (const e of ent) strokeEnt(e, true)
+          else
+            for (const e of d.edgesIn)
+              if (e.from === tr.caller && tr.lanes.has(e.to)) strokeIn(e, true)
+        }
+        for (const e of d.edgesOut) if (onPathOut(e)) strokeOut(e, true)
+        ctx.setLineDash([])
+        ctx.lineDashOffset = 0
+        ctx.fillStyle = T.accent
+        for (const k of tr.ents) {
+          const er = l.ents[k]
+          if (er) ctx.fillRect(er.x, er.y + 3, 2.5, er.h - 6)
+        }
+        if (!rd) animating = true
+      }
+
+      // #1162 numbers on edges
+      if (vw.labels) {
+        ctx.font = `600 9.5px ${mono}`
+        const tag = (a: { x: number; y: number }, b: { x: number; y: number }, rps: number) => {
+          if (!(rps > 0)) return
+          const p = bezierPoint(a, b, 0.5)
+          const t = fmtRate(rps)
+          const w = ctx.measureText(t).width + 8
+          rr(ctx, p.x - w / 2, p.y - 7, w, 14, 7)
+          ctx.fillStyle = T.card
+          ctx.fill()
+          ctx.lineWidth = 1
+          ctx.strokeStyle = T.line
+          ctx.stroke()
+          ctx.fillStyle = T.fg2
+          ctx.textAlign = 'center'
+          ctx.fillText(t, p.x, p.y + 3.5)
+          ctx.textAlign = 'left'
+        }
+        for (const e of d.edgesIn) {
+          if (entFrom.has(e.from) || !onPathIn(e)) continue
+          const c = l.callers[e.from]
+          const ln = l.lanes[e.to]
+          if (c && ln) tag({ x: c.x + c.w, y: c.y + c.h / 2 }, { x: ln.x, y: ln.y + 11 }, e.rps)
+        }
+        for (const e of d.edgesEnt) {
+          if (tr && (e.from !== tr.caller || !tr.ents.has(e.to))) continue
+          const c = l.callers[e.from]
+          const er = l.ents[e.to]
+          if (c && er)
+            tag({ x: c.x + c.w, y: c.y + c.h / 2 }, { x: er.x, y: er.y + er.h / 2 }, e.rps)
+        }
+        for (const e of d.edgesOut) {
+          if (!onPathOut(e)) continue
+          const ln = l.lanes[e.from]
+          const dn = l.downs[e.to]
+          if (ln && dn)
+            tag({ x: ln.x + ln.w, y: ln.y + 11 }, { x: dn.x, y: dn.y + dn.h / 2 }, e.rps)
+        }
       }
 
       // plug-in layers (registry/canvasLayers), each isolated
@@ -1082,7 +1396,7 @@ export function MapCanvas({
       r = layout.callers[hover.id]
       const c = [...data.callers, ...data.sources].find((x) => x.id === hover.id)
       name = c?.label ?? hover.id
-      if (hover.id === OTHERS || hover.id === OTHER_SOURCES)
+      if (hover.id === OTHERS || hover.id === OTHER_SOURCES || isAppGroup(hover.id))
         text = `${fmtRate(c?.rps ?? 0)} · ${c?.sub ?? ''}`
       else {
         const [, e] = m.callerSum(hover.id, win)
@@ -1103,6 +1417,46 @@ export function MapCanvas({
     const rect = e.currentTarget.getBoundingClientRect()
     return hitTest(layout, e.clientX - rect.left, e.clientY - rect.top)
   }
+  const clickable = (h: Selection | null) =>
+    !!h && !(h.kind === 'caller' && (h.id === OTHERS || h.id === OTHER_SOURCES))
+  const pick = (h: Selection | null) => {
+    if (h?.kind === 'caller' && isAppGroup(h.id)) {
+      // #1163: a group node expands (or collapses) instead of selecting
+      setCanvasView({ expanded: view.expanded === h.id ? null : h.id })
+      return
+    }
+    if (clickable(h)) onSelect(h)
+    else if (!h && trace) onSelect(null) // a click on empty canvas ends a path trace
+  }
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault()
+      zoomBy(1)
+    } else if (e.key === '-' || e.key === '_') {
+      e.preventDefault()
+      zoomBy(-1)
+    } else if (e.key === 'Escape') {
+      if (trace) onSelect(null)
+      else if (view.expanded) setCanvasView({ expanded: null })
+    }
+  }
+  // Ctrl + wheel (and trackpad pinch, which arrives as Ctrl + wheel) steps the semantic zoom;
+  // a plain wheel keeps scrolling the page. Native listener: React's wheel handler is passive.
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box) return
+    let acc = 0
+    const onWheel = (e: globalThis.WheelEvent) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      acc += e.deltaY
+      if (Math.abs(acc) < 60) return
+      zoomBy(acc < 0 ? 1 : -1)
+      acc = 0
+    }
+    box.addEventListener('wheel', onWheel, { passive: false })
+    return () => box.removeEventListener('wheel', onWheel)
+  }, [])
 
   return (
     <section
@@ -1117,6 +1471,7 @@ export function MapCanvas({
           <h2 className='text-[13px] font-semibold'>Flow</h2>
           <p className='text-[11.5px] text-[var(--tm-muted)]'>
             Callers → API lanes → data and partners · edge width = requests/s
+            {view.scale === 'log' ? ' (log)' : view.scale === 'linear' ? ' (linear)' : ''}
           </p>
         </div>
         <ul
@@ -1138,8 +1493,22 @@ export function MapCanvas({
             </li>
           ))}
         </ul>
+        <FlowControls
+          view={view}
+          tracing={trace ? callerLabel(catalog, trace.caller) : null}
+          onClearTrace={() => onSelect(null)}
+        />
       </div>
-      <div ref={boxRef} className='relative overflow-auto'>
+      <div
+        ref={boxRef}
+        role='application'
+        className='relative overflow-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the map box takes + / − / Escape (a canvas has no focusable children)
+        tabIndex={0}
+        onKeyDown={onKey}
+        aria-label={`Flow map, ${ZOOM_LABEL[view.zoom].toLowerCase()} view. Plus and minus zoom; Escape clears a traced path.`}
+        data-tm-zoom={view.zoom}
+      >
         <canvas
           ref={canvasRef}
           id='tm-canvas'
@@ -1151,16 +1520,10 @@ export function MapCanvas({
             const h = pointer(e)
             if (!sameSel(h, hover)) setHover(h)
             e.currentTarget.style.cursor =
-              h && !(h.kind === 'caller' && (h.id === OTHERS || h.id === OTHER_SOURCES))
-                ? 'pointer'
-                : 'default'
+              clickable(h) || (h?.kind === 'caller' && isAppGroup(h.id)) ? 'pointer' : 'default'
           }}
           onMouseLeave={() => setHover(null)}
-          onClick={(e) => {
-            const h = pointer(e)
-            if (h && !(h.kind === 'caller' && (h.id === OTHERS || h.id === OTHER_SOURCES)))
-              onSelect(h)
-          }}
+          onClick={(e) => pick(pointer(e))}
         />
         {tip && (
           <div
@@ -1177,6 +1540,7 @@ export function MapCanvas({
           </div>
         )}
         <span ref={monoRef} aria-hidden='true' className='hidden font-mono' />
+        <LegendGuide ready={data.loaded} />
       </div>
       <div className='flex flex-wrap justify-between gap-2.5 border-t border-[var(--tm-line-2)] px-3.5 py-1.5 text-[11px] text-[var(--tm-muted)]'>
         <span>
@@ -1187,10 +1551,159 @@ export function MapCanvas({
         </span>
         {stale ? (
           <span className='text-[var(--tm-update)]'>reconnecting — showing the last frame</span>
+        ) : m.rewound ? (
+          <span className='text-[var(--tm-update)]' data-tm-rewound=''>
+            Rewound to {new Date(m.at * 1000).toLocaleTimeString()} · Live returns to the present.
+          </span>
         ) : paused ? (
           <span>Paused — frames are not applied.</span>
         ) : null}
+        {filters.workspace ? (
+          <span>Downstream edges are the workspace’s share of each lane.</span>
+        ) : null}
       </div>
     </section>
+  )
+}
+
+const SEG =
+  'px-2 py-[2px] text-[11.5px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-50'
+const SEG_ON = 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
+const SEG_OFF = 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
+const CHIP =
+  'inline-flex items-center gap-1.5 rounded-md border px-2 py-[2px] text-[11.5px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tm-card)]'
+const CHIP_ON =
+  'border-[color-mix(in_srgb,var(--tm-accent)_55%,var(--tm-line))] bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
+const CHIP_OFF =
+  'border-[var(--tm-line)] bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
+const SCALES: Array<[EdgeScale, string, string]> = [
+  ['sqrt', '√', 'Square root: a busy edge stands out without hiding quiet ones'],
+  ['log', 'log', 'Log: quiet and busy edges differ only a little'],
+  ['linear', 'linear', 'Linear: thickness proportional to the busiest edge']
+]
+
+/** #1161 zoom, #1162 numbers + thickness, #1163 group by app, #1129 clear path, #1167 legend. */
+function FlowControls({
+  view,
+  tracing,
+  onClearTrace
+}: {
+  view: CanvasView
+  tracing: string | null
+  onClearTrace: () => void
+}) {
+  return (
+    <div
+      className='flex w-full flex-wrap items-center gap-x-3 gap-y-1.5'
+      role='toolbar'
+      aria-label='Map view'
+    >
+      <div className='inline-flex items-center gap-1.5'>
+        <span className='text-[11.5px] font-medium text-[var(--tm-muted)]' id='tm-zoom-label'>
+          Zoom
+        </span>
+        <fieldset
+          className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
+          aria-labelledby='tm-zoom-label'
+        >
+          <button
+            type='button'
+            id='tm-zoom-out'
+            className={cn(SEG, SEG_OFF)}
+            disabled={view.zoom === 0}
+            onClick={() => zoomBy(-1)}
+            aria-label='Zoom out'
+          >
+            −
+          </button>
+          {([0, 1, 2] as const).map((z) => (
+            <button
+              key={z}
+              type='button'
+              data-tm-zoom-level={z}
+              aria-pressed={view.zoom === z}
+              className={cn(
+                SEG,
+                'border-l border-[var(--tm-line)]',
+                view.zoom === z ? SEG_ON : SEG_OFF
+              )}
+              onClick={() => setCanvasView({ zoom: z })}
+            >
+              {ZOOM_LABEL[z]}
+            </button>
+          ))}
+          <button
+            type='button'
+            id='tm-zoom-in'
+            className={cn(SEG, 'border-l border-[var(--tm-line)]', SEG_OFF)}
+            disabled={view.zoom === 2}
+            onClick={() => zoomBy(1)}
+            aria-label='Zoom in'
+          >
+            +
+          </button>
+        </fieldset>
+      </div>
+      <button
+        type='button'
+        id='tm-edge-labels'
+        aria-pressed={view.labels}
+        onClick={() => setCanvasView({ labels: !view.labels })}
+        className={cn(CHIP, view.labels ? CHIP_ON : CHIP_OFF)}
+      >
+        Rates on edges
+      </button>
+      <div className='inline-flex items-center gap-1.5'>
+        <span className='text-[11.5px] font-medium text-[var(--tm-muted)]' id='tm-scale-label'>
+          Thickness
+        </span>
+        <fieldset
+          className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
+          aria-labelledby='tm-scale-label'
+        >
+          {SCALES.map(([sc, label, title], i) => (
+            <button
+              key={sc}
+              type='button'
+              data-tm-scale={sc}
+              aria-pressed={view.scale === sc}
+              title={title}
+              className={cn(
+                SEG,
+                i > 0 && 'border-l border-[var(--tm-line)]',
+                view.scale === sc ? SEG_ON : SEG_OFF
+              )}
+              onClick={() => setCanvasView({ scale: sc })}
+            >
+              {label}
+            </button>
+          ))}
+        </fieldset>
+      </div>
+      <button
+        type='button'
+        id='tm-group-apps'
+        aria-pressed={view.groupApps}
+        title={`Callers folded into ${Object.values(APP_GROUP_LABEL).slice(0, 4).join(', ')}…; select a group to expand it`}
+        onClick={() => setCanvasView({ groupApps: !view.groupApps, expanded: null })}
+        className={cn(CHIP, view.groupApps ? CHIP_ON : CHIP_OFF)}
+      >
+        Group callers by app
+      </button>
+      {tracing ? (
+        <button
+          type='button'
+          id='tm-trace-clear'
+          onClick={onClearTrace}
+          className={cn(CHIP, CHIP_ON)}
+          title='Escape also clears it'
+        >
+          Tracing {tracing} · Clear
+        </button>
+      ) : null}
+      <span className='ml-auto'>
+        <LegendButton />
+      </span>
+    </div>
   )
 }

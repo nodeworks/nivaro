@@ -231,6 +231,12 @@ export function currentTraceCaller(): { auth: string | null; apiKeyId: number | 
   }
 }
 
+/** #1154 — the current request's workspace (the Traffic Map tags write events with it). */
+export function currentTraceWorkspace(): string | null {
+  const ws = (als.getStore()?.request as { workspaceId?: unknown } | undefined)?.workspaceId
+  return typeof ws === 'string' && ws ? ws : null
+}
+
 /** Run `fn` inside its own trace context — a background job that must
  *  still attribute its AI calls to a request id and a person. */
 export function runInTrace<T>(
