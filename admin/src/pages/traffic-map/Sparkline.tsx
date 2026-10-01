@@ -5,7 +5,8 @@ const MARKER_COLOR: Record<SparkMarker['kind'], string> = {
   boot: 'var(--tm-fg-2)',
   config: 'var(--tm-update)',
   snapshot: 'var(--tm-muted)',
-  maintenance: 'var(--tm-update)'
+  maintenance: 'var(--tm-update)',
+  deadlock: 'var(--tm-error)'
 }
 
 /**

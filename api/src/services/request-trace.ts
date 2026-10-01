@@ -130,6 +130,11 @@ interface Measure {
   shape: ReadShapeRef | null
   /** #1173: wall time spent in each extension's hooks (extension id → ms); null until one ran. */
   ext: Map<string, number> | null
+  /** The longest single statement (#1169 near-timeout lens) and its text. */
+  maxStmtMs: number
+  maxStmtSql: string | null
+  /** Statements the driver gave up on (tedious request timeout, ETIMEOUT). */
+  stmtTimeouts: number
 }
 
 /** What the first `readItems` of a request was asked for (references, never copied). */
@@ -168,7 +173,10 @@ function newMeasure(): Measure {
     repeatSql: null,
     derived: null,
     shape: null,
-    ext: null
+    ext: null,
+    maxStmtMs: 0,
+    maxStmtSql: null,
+    stmtTimeouts: 0
   }
 }
 
@@ -434,6 +442,10 @@ export function attachQueryTracing(client: {
     const now = performance.now()
     const ms = now - started.start
     if (ctx.inflight.size === 0) ctx.m.sqlWall += now - ctx.m.sqlWallStart
+    if (ms > ctx.m.maxStmtMs) {
+      ctx.m.maxStmtMs = ms
+      ctx.m.maxStmtSql = started.sql.length > SQL_CAP ? started.sql.slice(0, SQL_CAP) : started.sql
+    }
     if (ctx.statements.length >= STATEMENT_CAP) return
     const sql = started.sql.length > SQL_CAP ? `${started.sql.slice(0, SQL_CAP)}…` : started.sql
     ctx.statements.push({
@@ -445,7 +457,25 @@ export function attachQueryTracing(client: {
     })
   }
   client.on('query-response', (_res: unknown, q: unknown) => settle(q))
-  client.on('query-error', (_err: unknown, q: unknown) => settle(q))
+  client.on('query-error', (err: unknown, q: unknown) => {
+    if (isStatementTimeout(err)) {
+      const ctx = als.getStore()
+      if (ctx) ctx.m.stmtTimeouts++
+    }
+    settle(q)
+  })
+}
+
+/** A driver-side statement timeout (tedious `requestTimeout`): ETIMEOUT / "Timeout: Request
+ *  failed to complete in 15000ms". Knex wraps the driver error; the code or text survives. */
+export function isStatementTimeout(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { code?: unknown; message?: unknown; errors?: unknown }
+  if (e.code === 'ETIMEOUT') return true
+  const text = String(e.message ?? '')
+  if (/Timeout: Request failed to complete/i.test(text)) return true
+  if (Array.isArray(e.errors)) return e.errors.some((x) => isStatementTimeout(x))
+  return false
 }
 
 /** Statement shapes by total time, with call counts. */
@@ -565,6 +595,11 @@ export interface RequestMeasure {
   shape: ReadShapeRef | null
   /** #1173: wall time per extension (its hooks); null when no extension hook ran. */
   extensionMs: ReadonlyMap<string, number> | null
+  /** The longest single statement and its text (#1169). */
+  maxStatementMs: number
+  maxStatementSql: string | null
+  /** Statements the driver gave up on (tedious request timeout). */
+  statementTimeouts: number
 }
 
 /**
@@ -599,8 +634,25 @@ export function requestMeasure(req: unknown): RequestMeasure | null {
     repeatSql: m.repeatSql,
     derived: m.derived,
     shape: m.shape,
-    extensionMs: m.ext
+    extensionMs: m.ext,
+    maxStatementMs: m.maxStmtMs,
+    maxStatementSql: m.maxStmtSql,
+    statementTimeouts: m.stmtTimeouts
   }
+}
+
+/** Distinct statement texts the request `req` ran (≤ `limit`, each ≤ SQL_CAP) — the deadlock
+ *  marker (#1171) indexes them so a deadlock graph's statements can name their entities. */
+export function requestStatements(req: unknown, limit = 40): string[] {
+  if (!req || typeof req !== 'object') return []
+  const ctx = byRequest.get(req)
+  if (!ctx) return []
+  const out = new Set<string>()
+  for (const s of ctx.statements) {
+    out.add(s.sql)
+    if (out.size >= limit) break
+  }
+  return [...out]
 }
 
 // ─── Follow-this-user (#309) ─────────────────────────────────────────────────

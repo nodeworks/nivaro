@@ -45,6 +45,7 @@ import '../features/view-links'
 import '../features/people-lenses'
 import '../features/stale-tabs'
 import '../features/platform'
+import '../features/db-lenses'
 
 export {
   type CanvasLayer,

@@ -31,6 +31,8 @@ interface Entry {
   req: unknown
   method: string
   route: string
+  /** The request path (query string dropped) — the blocking-chain lens (#1170) classifies it. */
+  path: string
   /** Epoch ms. */
   startedAt: number
   running: Map<string, RunningStatement>
@@ -72,6 +74,7 @@ export function inflightStart(req: unknown): void {
       req,
       method: String(r.method ?? 'GET'),
       route: routeOf(r, path),
+      path: path.slice(0, 500),
       startedAt: Date.now(),
       running: new Map(),
       n: 0,
@@ -234,6 +237,38 @@ export function oldestRunning(id: string): { sql: string; age_ms: number; route:
   if (!e || e.running.size === 0) return null
   const s = [...e.running.values()].sort((a, b) => a.at - b.at)[0]
   return { sql: s.sql, age_ms: Math.round(performance.now() - s.perf), route: e.route }
+}
+
+/**
+ * #1170 — every unfinished request that is running at least one statement right now: its method,
+ * path, caller and the statements (full text) with their age. The blocking-chain lens matches
+ * SQL Server sessions to requests with `pickSession` over these.
+ */
+export function inflightRunning(): Array<{
+  id: string
+  method: string
+  path: string
+  route: string
+  caller: string
+  running: Array<{ sql: string; age_ms: number }>
+}> {
+  const nowPerf = performance.now()
+  const out: ReturnType<typeof inflightRunning> = []
+  for (const [id, e] of byTrace) {
+    if (e.running.size === 0) continue
+    out.push({
+      id,
+      method: e.method,
+      path: e.path,
+      route: e.route,
+      caller: callerOf(e.req),
+      running: [...e.running.values()].map((s) => ({
+        sql: s.sql,
+        age_ms: Math.max(0, Math.round(nowPerf - s.perf))
+      }))
+    })
+  }
+  return out
 }
 
 export function inflightCount(): number {

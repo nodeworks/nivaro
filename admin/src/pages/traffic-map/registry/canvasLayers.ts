@@ -2,7 +2,7 @@ import type { MapLayout, MapTokens } from '../layout'
 import type { MapData } from '../MapCanvas'
 import type { TrafficModel } from '../model'
 import type { Filters, Selection } from '../types'
-import type { Registered } from './registry'
+import { byOrder, type Registered } from './registry'
 
 export interface CanvasLayerArgs {
   layout: MapLayout
@@ -107,7 +107,8 @@ export function sideBadgeFor(
   nodeId: string,
   model: TrafficModel
 ): { text: string; tone: 'warn' | 'error' | 'info' } | null {
-  for (const b of sideBadges) {
+  // order ascending (default 100), registration order within — a blocked database outranks pool
+  for (const b of byOrder(sideBadges)) {
     try {
       const v = b.badge(kind, nodeId, model)
       if (v) return v

@@ -31,7 +31,7 @@ export interface ChangeMarker {
 const EPOCH_CAP = 300
 const epochMoves: ChangeMarker[] = []
 let epochTimer: NodeJS.Timeout | null = null
-let lastEpoch: { seen: number | null; moved: string | null } | null = null
+let lastEpoch: { seen: number | null; moved: string | null; writes: number } | null = null
 
 /** Record config-epoch moves from now on (idempotent; never in cloud mode). */
 export function startEpochMarkers(intervalMs = 5000): void {
@@ -39,10 +39,18 @@ export function startEpochMarkers(intervalMs = 5000): void {
   const tick = () => {
     try {
       const s = configEpochState()
-      const cur = { seen: s.seen, moved: s.last_moved_at }
+      const cur = { seen: s.seen, moved: s.last_moved_at, writes: s.writes_seen }
       if (lastEpoch && (cur.seen !== lastEpoch.seen || cur.moved !== lastEpoch.moved)) {
         const at = cur.moved && cur.moved !== lastEpoch.moved ? Date.parse(cur.moved) : Date.now()
-        noteEpochMove(Number.isFinite(at) ? at : Date.now(), cur.seen)
+        // #1176: a write this process made names its table; a move with no local write was
+        // another process (a replica, a script).
+        const local = cur.writes > lastEpoch.writes
+        const table = local ? configWriteTable(s.last_statement) : null
+        noteEpochMove(
+          Number.isFinite(at) ? at : Date.now(),
+          cur.seen,
+          table ?? (local ? null : 'another process')
+        )
       }
       lastEpoch = cur
     } catch {
@@ -60,18 +68,32 @@ export function stopEpochMarkers(): void {
   epochMoves.length = 0
 }
 
-/** Exported for tests. */
-export function noteEpochMove(at: number, epoch: number | null): void {
+/** The table a configuration write statement touched (`update [nivaro_fields] …`). Pure. */
+export function configWriteTable(sql: string | null | undefined): string | null {
+  if (!sql) return null
+  const m = String(sql).match(
+    /\b(?:update|into|from|table)\s+(?:\[?[A-Za-z0-9_]+\]?\.)?\[?([A-Za-z0-9_]+)\]?/i
+  )
+  return m ? m[1] : null
+}
+
+function epochLabel(epoch: number | null, detail?: string | null): string {
+  const parts = [detail, epoch != null ? `epoch ${epoch}` : null].filter(Boolean)
+  return `Configuration changed${parts.length ? ` (${parts.join(', ')})` : ''}`
+}
+
+/** Exported for tests. `detail` = the table the write touched, or who made it. */
+export function noteEpochMove(at: number, epoch: number | null, detail?: string | null): void {
   const prev = epochMoves[epochMoves.length - 1]
   // A burst of writes moves the number several times in seconds — one marker per 30 s.
   if (prev && at - prev.at < 30_000) {
-    prev.label = `Configuration changed${epoch != null ? ` (epoch ${epoch})` : ''}`
+    prev.label = epochLabel(epoch, detail)
     return
   }
   epochMoves.push({
     kind: 'config',
     at,
-    label: `Configuration changed${epoch != null ? ` (epoch ${epoch})` : ''}`
+    label: epochLabel(epoch, detail)
   })
   if (epochMoves.length > EPOCH_CAP) epochMoves.shift()
 }

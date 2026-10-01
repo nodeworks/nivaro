@@ -2,6 +2,7 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import { clusterRoutes } from './cluster.js'
 import { compareRoutes } from './compare.js'
+import { dbLensesRoutes } from './db-lenses.js'
 import { deepMeasurementRoutes } from './deep-measurement.js'
 import { digestRoutes } from './digest.js'
 import { inspectorActionRoutes } from './inspector-actions.js'
@@ -41,7 +42,8 @@ const FEATURES: FastifyPluginAsync[] = [
   trafficViewRoutes,
   peopleLensesRoutes,
   staleTabsRoutes,
-  platformRoutes
+  platformRoutes,
+  dbLensesRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {

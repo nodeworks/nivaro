@@ -81,7 +81,8 @@ const KIND_LABEL: Record<SparkMarker['kind'], string> = {
   boot: 'Restart',
   config: 'Config',
   snapshot: 'Snapshot',
-  maintenance: 'Maintenance'
+  maintenance: 'Maintenance',
+  deadlock: 'Deadlock'
 }
 
 /** Inspector: what changed in the window the sparkline covers. */
@@ -109,7 +110,9 @@ export function ChangesSection() {
             ))}
         </ul>
       ) : (
-        <Empty>No restart, deploy, config write or maintenance window in this window.</Empty>
+        <Empty>
+          No restart, deploy, config write, deadlock or maintenance window in this window.
+        </Empty>
       )}
     </Section>
   )
