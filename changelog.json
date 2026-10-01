@@ -1,10 +1,394 @@
 {
-  "generated_at": "2026-09-30T19:05:49.438Z",
+  "generated_at": "2026-10-01T15:57:55.576Z",
   "releases": [
+    {
+      "version": "0.2.9",
+      "tag": "v0.2.9",
+      "date": "2026-10-01T11:57:45-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "Traffic Map section, www mirror, README entry",
+              "hash": "8ba01fc3"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "summary mode conditions sentence parses again",
+              "hash": "3e854a07"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Let /api/ready answer without a tenant in cloud mode; fix backfill test typing",
+              "hash": "340227a2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Remove Inngest everywhere (#1087)",
+              "hash": "d07c90f0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: final-review fixes (cloud no-op, catalog refresh, history 503, background entity, chunked catalog reads, watch-room ordering, lazy extension matching, templated partner paths, email masking)",
+              "hash": "d7565d9a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "scheduler lease, /api/ready, websocket-only admin sockets, strict smoke (#1080-#1083)",
+              "hash": "3167f255"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): history fix round 1 (issue deep link freshness, not-found note, retry feedback)",
+              "hash": "ef8b5f67"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): inspector history from the request, outbound and issue logs",
+              "hash": "88c14aab"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): flow canvas fix round 1 (fill the box, caller ranking, loading state, idle loop)",
+              "hash": "2c14485b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): animated flow canvas with token colours, particles, pulses and hit testing",
+              "hash": "ea3e0e88"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): fix round 1 (rounding, live region, watch-room refcount, fade)",
+              "hash": "b840b27a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): page with summary strip, live ticker, hot entities and inspector",
+              "hash": "9c9a77c7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): layout fix round 1 (H bound, NaN width, lane-keyed entities)",
+              "hash": "0af4172a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): map geometry, hit testing and token reader",
+              "hash": "90e36c1e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): model fix round 1 (seed spread, frame idempotence, caller filter, pruning)",
+              "hash": "5e2f87ed"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map (admin): client ring model, filters and selectors",
+              "hash": "54899a6d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: history and slow traces classify the way live does",
+              "hash": "dfabf8d1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: entity and partner history from the request, outbound and issue logs",
+              "hash": "34e2f2cb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: snapshot and catalog routes (admin only, 404 in cloud mode)",
+              "hash": "3576d64e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: keep busy entities in frames, catch up skipped seconds, no emitter in cloud mode, cover api-logger wiring",
+              "hash": "366f2f3b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: emit one frame per second to watch:traffic-map while watched; feed from requests, writes and partner calls",
+              "hash": "95e2dd59"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: bound the event buffer, sweep idle rings, cron attribution, token-safe templates",
+              "hash": "c2925be9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: per-node aggregator with per-second rings, caps and frames",
+              "hash": "c73bfad5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: cap entity length, gate bulk create on POST",
+              "hash": "9e3e5326"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: request classifier (lane, entity, kind, caller key)",
+              "hash": "31a4a8a0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the bell's fake socket has onAny/off, like the real one",
+              "hash": "1fe14c5a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Integrations & partners: 20 backlog items (#603-#630, #706, #707, #772, #824, #825)",
+              "hash": "56d4c0c5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "test mode for browser push and Teams (#832)",
+              "hash": "49c833be"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "snooze until the record changes (#647)",
+              "hash": "7a69156a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Runbooks console: run and watch extension operator scripts from admin (#720)",
+              "hash": "deece96d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release card: promote a verified staging version to production (#722)",
+              "hash": "89007262"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "white-label: brand colour from the token, styled selects everywhere (#726)",
+              "hash": "ecbe245c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "service levels on the Health page (#666)",
+              "hash": "207273f5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "legacy retirement list on DB Health (#721)",
+              "hash": "b77fe6ba"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "scope coverage for raw SQL (#770)",
+              "hash": "24db185a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "nivaro_* defaults are UTC (#749)",
+              "hash": "05862955"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "schedules follow the instance time zone (#831)",
+              "hash": "28fe3d10"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "dead code pass (#773)",
+              "hash": "3f719224"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traps — known-trap and migration-dialect check (#727 #757)",
+              "hash": "0336676f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "max age and idle timeout per role (#665)",
+              "hash": "eef8bd21"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "addendum sources, server group-by, typed cache filters, owners sort from the cache, unseen marks (#715 #741 #742 #800 #801 #643)",
+              "hash": "f9d56f92"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a restore continues the record's history (#837)",
+              "hash": "be116da4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "data integrity: path cascades, $parent option filters, grid line field rules (#747 #817)",
+              "hash": "757fa59c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "collection CSV import: opt-in write through the items service (#748)",
+              "hash": "bb14409d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "import templates: chained lookups in one rule (#718)",
+              "hash": "c13fde24"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "staged imports: rehearse a procedure import inside a rolled-back transaction (#717)",
+              "hash": "8daa43e4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record form: relationship explorer in the shared form (#998)",
+              "hash": "376d886a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "collection browser: changed-since-you-looked, formula columns, role default views, tree + hierarchy scope; classic browser retired (#643 #644 #672 #743)",
+              "hash": "38eeaec3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "staged imports: lock groups, bulk fallback, staging purge, rollup recalc, health cards (#802 #803 #846 #719 #650)",
+              "hash": "d29934f8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record form: related records read once per page (#739)",
+              "hash": "86f9994a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "transition requirements: record-level many-to-many and file fields (#814)",
+              "hash": "b7f9ddcc"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "compare and copy access, bulk actions, best time to reach, working-on tools, View as (#637-#641)",
+              "hash": "7e82ab16"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "drawer relations: matched rows stage under pending mode (#735)",
+              "hash": "12faa56e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "catalog picker: quantity edits stage with the record (#734)",
+              "hash": "f6bca9b6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "plan grid: reason notch and shared cell cursors (#729)",
+              "hash": "4b51dbfe"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "summary mode: rules can judge the record's values (#737)",
+              "hash": "cd797d21"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quick create: many-to-many seeds become links (#799)",
+              "hash": "cf042e27"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "plan grid: host slot for the year's history (#842)",
+              "hash": "98ef7f03"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "nested rows that fail to save are named, kept and retryable (#736)",
+              "hash": "646487a7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "row history: machine markers come from the server (#730)",
+              "hash": "bf9fc212"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "people-only user options for non-admins (#732)",
+              "hash": "d52fde40"
+            }
+          ]
+        }
+      ],
+      "count": 61
+    },
     {
       "version": "0.2.8",
       "tag": "v0.2.8",
-      "date": "2026-09-30T15:05:38-04:00",
+      "date": "2026-09-30T15:05:49-04:00",
       "sections": [
         {
           "label": "Documentation",
