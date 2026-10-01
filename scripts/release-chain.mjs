@@ -166,14 +166,37 @@ function detectChanges() {
     headTag: sh('git', ['describe', '--exact-match', '--tags', '--match', 'v*', 'HEAD'], {
       quiet: true,
       allowFail: true
-    }).stdout
+    }).stdout,
+    released: releasedByHead()
   }
 }
 
+/**
+ * The packages the release at HEAD published, when HEAD is a release commit.
+ * A resume past `release` (`--from artifacts`) measures changes from that very
+ * tag, finds none, and would skip npm and the frontend pins: on 2026-10-01 a
+ * resumed chain deployed 0.2.9 with efp-new still on the previous react. A
+ * package tag reachable from HEAD but not from the previous app tag was minted
+ * by this release.
+ */
+function releasedByHead() {
+  const none = { kit: false, sdk: false, react: false }
+  const head = sh('git', ['describe', '--exact-match', '--tags', '--match', 'v*', 'HEAD'], { quiet: true, allowFail: true }).stdout
+  if (!head) return none
+  const prev = sh('git', ['describe', '--tags', '--abbrev=0', '--match', 'v*', `${head}^`], { quiet: true, allowFail: true }).stdout
+  if (!prev) return none
+  const minted = (pattern) =>
+    git(['tag', '--list', pattern, '--merged', 'HEAD', '--no-merged', prev]).split('\n').filter(Boolean).length > 0
+  return { kit: minted('@kit-*'), sdk: minted('@sdk-*'), react: minted('@react-*') }
+}
+
 function plan(cfg, ch) {
-  const wantKit = flag('with-kit') || ch.kit
-  const wantSdk = flag('with-sdk') || ch.sdk
-  const wantReact = !flag('no-react') && (flag('with-react') || ch.react || wantSdk)
+  // Resuming past `release`: HEAD is the release commit, so "changed since the
+  // tag" is empty — what this release published comes from its tags instead.
+  const resumed = FROM !== null && STAGES.indexOf(FROM) > STAGES.indexOf('release')
+  const wantKit = flag('with-kit') || ch.kit || (resumed && ch.released.kit)
+  const wantSdk = flag('with-sdk') || ch.sdk || (resumed && ch.released.sdk)
+  const wantReact = !flag('no-react') && (flag('with-react') || ch.react || wantSdk || (resumed && ch.released.react))
   const lines = []
   const add = (stage, text) => lines.push({ stage, text })
 
@@ -449,9 +472,13 @@ async function main() {
       if (repo && p.wantKit) await waitForWorkflow('artifacts', repo, 'publish-kit.yml', async () => npmHas('@nivaro/extension-kit', KV))
       if (repo && p.wantSdk) await waitForWorkflow('artifacts', repo, 'publish-sdk.yml', async () => npmHas('@nivaro/sdk', SV))
       if (repo && p.wantReact) await waitForWorkflow('artifacts', repo, 'publish-react.yml', async () => npmHas('@nivaro/react', RV))
-      if (p.wantKit) await until(`@nivaro/extension-kit@${KV} on npm`, async () => npmHas('@nivaro/extension-kit', KV))
-      if (p.wantSdk) await until(`@nivaro/sdk@${SV} on npm`, async () => npmHas('@nivaro/sdk', SV))
-      if (p.wantReact) await until(`@nivaro/react@${RV} on npm`, async () => npmHas('@nivaro/react', RV))
+      // npm acknowledges a publish before it serves it ("Your package is being
+      // processed…"). On 2026-10-01 that took over 20 minutes for all three
+      // packages; 10 minutes failed a healthy release. 45 minutes, every 30 s.
+      const NPM_WAIT = { tries: 90, every: 30_000 }
+      if (p.wantKit) await until(`@nivaro/extension-kit@${KV} on npm`, async () => npmHas('@nivaro/extension-kit', KV), NPM_WAIT)
+      if (p.wantSdk) await until(`@nivaro/sdk@${SV} on npm`, async () => npmHas('@nivaro/sdk', SV), NPM_WAIT)
+      if (p.wantReact) await until(`@nivaro/react@${RV} on npm`, async () => npmHas('@nivaro/react', RV), NPM_WAIT)
       await runFrontends()
       currentStage = 'artifacts'
       await imageWait
