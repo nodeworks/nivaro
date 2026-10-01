@@ -73,6 +73,8 @@ const WINDOWS = [
 const STALE_MS = 6000
 /** The server caches the catalog for 60 s, so refetching more often gains nothing. */
 export const CATALOG_REFRESH_MS = 60_000
+/** A frame naming a caller or partner the catalog cannot label asks again this soon. */
+export const CATALOG_MISSING_REFRESH_MS = 5_000
 
 /**
  * True when the catalog has no label for a caller key or partner (`ext:<id>`) the live data
@@ -152,10 +154,10 @@ export default function TrafficMap() {
   const [frozen, setFrozen] = useState<FrozenSnapshot | null>(null)
   const frozenApplied = useRef<string | null>(null)
 
-  /** Throttled to one request per CATALOG_REFRESH_MS unless `force` (the mount). */
-  const refreshCatalog = useCallback((force = false) => {
+  /** Throttled to one request per `minGap` (default CATALOG_REFRESH_MS) unless `force` (the mount). */
+  const refreshCatalog = useCallback((force = false, minGap = CATALOG_REFRESH_MS) => {
     if (catalogBusy.current || frozenRef.current) return
-    if (!force && Date.now() - catalogAt.current < CATALOG_REFRESH_MS) return
+    if (!force && Date.now() - catalogAt.current < minGap) return
     catalogAt.current = Date.now()
     catalogBusy.current = true
     api
@@ -254,7 +256,8 @@ export default function TrafficMap() {
       setTick((t) => t + 1)
       // A caller or partner the catalog has no label for: refetch it (throttled).
       const keys = [...Object.keys(f.callers ?? {}), ...(f.events ?? []).map((e) => e.caller)]
-      if (catalogMissing(catalogRef.current, keys, Object.keys(f.down ?? {}))) refreshCatalog()
+      if (catalogMissing(catalogRef.current, keys, Object.keys(f.down ?? {})))
+        refreshCatalog(false, CATALOG_MISSING_REFRESH_MS)
       // frames resumed after a hole (a reconnect the local socket did not see): re-seed
       if (gap && Date.now() - lastSnapAt.current > STALE_MS)
         void loadSnapshot(filtersRef.current.win)
