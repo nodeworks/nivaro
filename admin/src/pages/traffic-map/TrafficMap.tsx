@@ -5,6 +5,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { adminRealtime, getSocket, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
+import { TrafficMapContext, type TrafficMapContextValue } from './context'
 import { callerLabel, EventTicker, KIND_VAR } from './EventTicker'
 import { HotEntities } from './HotEntities'
 import {
@@ -18,6 +19,10 @@ import {
 } from './Inspector'
 import { MapCanvas } from './MapCanvas'
 import { defaultFilters, laneOf, TrafficModel } from './model'
+// Feature registrations (registry/index.ts) run before the page renders.
+import './registry'
+import { PagePanels } from './registry/pagePanels'
+import { ToolbarItems } from './registry/toolbarItems'
 import { type StripData, SummaryStrip } from './SummaryStrip'
 import type {
   DownHistory,
@@ -341,6 +346,22 @@ export default function TrafficMap() {
     return [{ value: '', label: 'All callers' }, ...opts]
   }, [m, catalog, filters.caller, tick])
 
+  const ctx = useMemo<TrafficMapContextValue>(
+    () => ({
+      model: m,
+      filters,
+      setFilters,
+      selection,
+      setSelection,
+      catalog,
+      tick,
+      win,
+      paused,
+      ready
+    }),
+    [m, filters, selection, catalog, tick, win, paused, ready]
+  )
+
   const live = ready && !stale && !snapError
   const statusLabel = !ready
     ? 'Loading'
@@ -353,239 +374,247 @@ export default function TrafficMap() {
           : 'Live'
 
   return (
-    <div className='traffic-map flex min-h-0 flex-1 flex-col text-[13px]'>
-      <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-        <div className='flex flex-wrap items-start justify-between gap-x-6 gap-y-2'>
-          <div className='flex min-w-0 items-start gap-2.5'>
-            <Waypoints
-              className='mt-0.5 h-5 w-5 shrink-0 text-muted-foreground'
-              aria-hidden='true'
-            />
-            <div className='min-w-0'>
-              <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-                Traffic Map
-              </h1>
-              <p className='mt-0.5 max-w-[78ch] text-[12.5px] text-[var(--tm-muted)]'>
-                Live requests, writes and errors across collections, widgets, pages, queries and
-                partners, as seen by this API node. Select any node for its traffic, routes, callers
-                and recent errors.
-              </p>
+    <TrafficMapContext.Provider value={ctx}>
+      <div className='traffic-map flex min-h-0 flex-1 flex-col text-[13px]'>
+        <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
+          <div className='flex flex-wrap items-start justify-between gap-x-6 gap-y-2'>
+            <div className='flex min-w-0 items-start gap-2.5'>
+              <Waypoints
+                className='mt-0.5 h-5 w-5 shrink-0 text-muted-foreground'
+                aria-hidden='true'
+              />
+              <div className='min-w-0'>
+                <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
+                  Traffic Map
+                </h1>
+                <p className='mt-0.5 max-w-[78ch] text-[12.5px] text-[var(--tm-muted)]'>
+                  Live requests, writes and errors across collections, widgets, pages, queries and
+                  partners, as seen by this API node. Select any node for its traffic, routes,
+                  callers and recent errors.
+                </p>
+              </div>
+            </div>
+            <div
+              className='flex items-center gap-1.5 whitespace-nowrap pt-1 text-[11.5px] text-[var(--tm-muted)]'
+              id='tm-node'
+            >
+              <span
+                className={cn(
+                  'inline-block h-[7px] w-[7px] rounded-full',
+                  live && !paused
+                    ? 'bg-[var(--tm-create)]'
+                    : stale || paused
+                      ? 'bg-[var(--tm-update)]'
+                      : 'bg-[var(--tm-muted)]'
+                )}
+                aria-hidden='true'
+              />
+              <span className='sr-only'>{statusLabel}: </span>
+              <span>
+                api · <span data-testid='tm-instance'>{m.instance || '…'}</span> · journal seq{' '}
+                <span className='font-mono tabular-nums'>
+                  {m.journalSeq != null ? m.journalSeq.toLocaleString() : '—'}
+                </span>
+              </span>
             </div>
           </div>
           <div
-            className='flex items-center gap-1.5 whitespace-nowrap pt-1 text-[11.5px] text-[var(--tm-muted)]'
-            id='tm-node'
+            className='mt-3 flex flex-wrap items-center gap-x-4 gap-y-2'
+            role='toolbar'
+            aria-label='Filters'
           >
-            <span
-              className={cn(
-                'inline-block h-[7px] w-[7px] rounded-full',
-                live && !paused
-                  ? 'bg-[var(--tm-create)]'
-                  : stale || paused
-                    ? 'bg-[var(--tm-update)]'
-                    : 'bg-[var(--tm-muted)]'
-              )}
-              aria-hidden='true'
-            />
-            <span className='sr-only'>{statusLabel}: </span>
-            <span>
-              api · <span data-testid='tm-instance'>{m.instance || '…'}</span> · journal seq{' '}
-              <span className='font-mono tabular-nums'>
-                {m.journalSeq != null ? m.journalSeq.toLocaleString() : '—'}
-              </span>
-            </span>
-          </div>
-        </div>
-        <div
-          className='mt-3 flex flex-wrap items-center gap-x-4 gap-y-2'
-          role='toolbar'
-          aria-label='Filters'
-        >
-          <fieldset className='flex min-w-0 flex-wrap items-center gap-1' aria-label='Entity types'>
-            <span className={FLABEL}>Show</span>
-            {CHIP_LANES.map((l) => {
-              const on = filters.types.has(l)
-              return (
-                <button
-                  key={l}
-                  type='button'
-                  id={`tm-type-${l}`}
-                  aria-pressed={on}
-                  disabled={on && filters.types.size === 1}
-                  onClick={() => toggleType(l)}
-                  className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
-                >
-                  {CHIP_LABEL[l] ?? LANE_LABEL[l]}
-                </button>
-              )
-            })}
-          </fieldset>
-          <fieldset
-            className='flex min-w-0 flex-wrap items-center gap-1'
-            aria-label='Request kinds'
-          >
-            <span className={FLABEL}>Kinds</span>
-            {KIND_ORDER.map((k) => {
-              const on = filters.kinds.has(k)
-              return (
-                <button
-                  key={k}
-                  type='button'
-                  id={`tm-kind-${k}`}
-                  aria-pressed={on}
-                  disabled={on && filters.kinds.size === 1}
-                  onClick={() => toggleKind(k)}
-                  className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
-                >
-                  <span
-                    className='h-2 w-2 rounded-sm'
-                    style={{ background: KIND_VAR[k], opacity: on ? 1 : 0.35 }}
-                    aria-hidden='true'
-                  />
-                  {k}
-                </button>
-              )
-            })}
-          </fieldset>
-          <div className='flex items-center gap-1.5'>
-            <label htmlFor='tm-caller' className={FLABEL}>
-              Caller
-            </label>
-            <SimpleSelect
-              value={filters.caller}
-              onChange={(v) => setFilters((f) => ({ ...f, caller: v }))}
-              options={callerOptions}
-              triggerProps={{ id: 'tm-caller' }}
-              className='h-7 min-w-[170px] max-w-[240px] border-[var(--tm-line)] bg-[var(--tm-card)] px-2.5 text-[12px] text-[var(--tm-fg-2)]'
-            />
-          </div>
-          <div className='flex items-center gap-1.5'>
-            <span className={FLABEL} id='tm-window-label'>
-              Window
-            </span>
             <fieldset
-              className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
-              aria-labelledby='tm-window-label'
+              className='flex min-w-0 flex-wrap items-center gap-1'
+              aria-label='Entity types'
             >
-              {WINDOWS.map(([w, label], i) => {
-                const on = filters.win === w
+              <span className={FLABEL}>Show</span>
+              {CHIP_LANES.map((l) => {
+                const on = filters.types.has(l)
                 return (
                   <button
-                    key={w}
+                    key={l}
                     type='button'
-                    id={`tm-win-${w}`}
+                    id={`tm-type-${l}`}
                     aria-pressed={on}
-                    onClick={() => setFilters((f) => ({ ...f, win: w }))}
-                    className={cn(
-                      'px-2.5 py-[3px] text-[12px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
-                      i > 0 && 'border-l border-[var(--tm-line)]',
-                      on
-                        ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
-                        : 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
-                    )}
+                    disabled={on && filters.types.size === 1}
+                    onClick={() => toggleType(l)}
+                    className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
                   >
-                    {label}
+                    {CHIP_LABEL[l] ?? LANE_LABEL[l]}
                   </button>
                 )
               })}
             </fieldset>
-          </div>
-          <button
-            type='button'
-            id='tm-pause'
-            aria-pressed={paused}
-            onClick={togglePause}
-            className={cn(
-              CHIP,
-              'ml-auto',
-              paused
-                ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
-                : CHIP_OFF
-            )}
-          >
-            {paused ? 'Resume' : 'Pause'}
-          </button>
-        </div>
-      </header>
-
-      <div className='flex-1 overflow-auto bg-[var(--tm-bg)] p-6 text-[var(--tm-fg)]'>
-        {snapError && (
-          <div
-            role='alert'
-            id='tm-snapshot-error'
-            className='mb-3.5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--tm-error)] bg-[var(--tm-error-soft)] px-3.5 py-2 text-[12.5px]'
-          >
-            <span>
-              {ready
-                ? 'The latest snapshot could not be loaded; the map shows the last one.'
-                : 'The traffic snapshot could not be loaded.'}{' '}
-              <span className='font-mono text-[11.5px] text-[var(--tm-fg-2)]'>{snapError}</span>
-            </span>
+            <fieldset
+              className='flex min-w-0 flex-wrap items-center gap-1'
+              aria-label='Request kinds'
+            >
+              <span className={FLABEL}>Kinds</span>
+              {KIND_ORDER.map((k) => {
+                const on = filters.kinds.has(k)
+                return (
+                  <button
+                    key={k}
+                    type='button'
+                    id={`tm-kind-${k}`}
+                    aria-pressed={on}
+                    disabled={on && filters.kinds.size === 1}
+                    onClick={() => toggleKind(k)}
+                    className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
+                  >
+                    <span
+                      className='h-2 w-2 rounded-sm'
+                      style={{ background: KIND_VAR[k], opacity: on ? 1 : 0.35 }}
+                      aria-hidden='true'
+                    />
+                    {k}
+                  </button>
+                )
+              })}
+            </fieldset>
+            <div className='flex items-center gap-1.5'>
+              <label htmlFor='tm-caller' className={FLABEL}>
+                Caller
+              </label>
+              <SimpleSelect
+                value={filters.caller}
+                onChange={(v) => setFilters((f) => ({ ...f, caller: v }))}
+                options={callerOptions}
+                triggerProps={{ id: 'tm-caller' }}
+                className='h-7 min-w-[170px] max-w-[240px] border-[var(--tm-line)] bg-[var(--tm-card)] px-2.5 text-[12px] text-[var(--tm-fg-2)]'
+              />
+            </div>
+            <div className='flex items-center gap-1.5'>
+              <span className={FLABEL} id='tm-window-label'>
+                Window
+              </span>
+              <fieldset
+                className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
+                aria-labelledby='tm-window-label'
+              >
+                {WINDOWS.map(([w, label], i) => {
+                  const on = filters.win === w
+                  return (
+                    <button
+                      key={w}
+                      type='button'
+                      id={`tm-win-${w}`}
+                      aria-pressed={on}
+                      onClick={() => setFilters((f) => ({ ...f, win: w }))}
+                      className={cn(
+                        'px-2.5 py-[3px] text-[12px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
+                        i > 0 && 'border-l border-[var(--tm-line)]',
+                        on
+                          ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
+                          : 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
+                      )}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </fieldset>
+            </div>
+            <ToolbarItems />
             <button
               type='button'
-              id='tm-snapshot-retry'
-              className={cn(CHIP, CHIP_OFF)}
-              onClick={() => void loadSnapshot(filtersRef.current.win)}
+              id='tm-pause'
+              aria-pressed={paused}
+              onClick={togglePause}
+              className={cn(
+                CHIP,
+                'ml-auto',
+                paused
+                  ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
+                  : CHIP_OFF
+              )}
             >
-              Retry
+              {paused ? 'Resume' : 'Pause'}
             </button>
           </div>
-        )}
-        <SummaryStrip d={view?.strip ?? null} />
-        <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-[minmax(0,1fr)_360px]'>
-          <MapCanvas
-            model={m}
-            filters={filters}
-            selection={selection}
-            onSelect={setSelection}
-            catalog={catalog}
-            tick={tick}
-            paused={paused}
-            stale={stale && !paused}
-          />
-          <p className='sr-only' aria-live='polite' id='tm-inspector-announce'>
-            {inspector
-              ? `Inspecting ${inspector.name}${canHistory && hours > 0 ? `, ${hoursPhrase(hours)}` : ''}`
-              : ''}
-          </p>
-          {inspector && selection ? (
-            <Inspector
-              d={inspector}
-              catalog={catalog}
-              selKey={selection.id}
-              history={{
-                hours,
-                onHours: setHours,
-                available: canHistory,
-                data: historyQ.data ?? null,
-                // a Retry after a failure shows the skeleton while it runs (isError holds until it lands)
-                state: historyQ.isFetching ? 'loading' : historyQ.isError ? 'error' : 'idle',
-                error: historyQ.error ? errorText(historyQ.error) : null,
-                onRetry: () => void historyQ.refetch()
-              }}
-            />
-          ) : (
-            <InspectorPlaceholder loading={!ready} />
+        </header>
+
+        <div className='flex-1 overflow-auto bg-[var(--tm-bg)] p-6 text-[var(--tm-fg)]'>
+          {snapError && (
+            <div
+              role='alert'
+              id='tm-snapshot-error'
+              className='mb-3.5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--tm-error)] bg-[var(--tm-error-soft)] px-3.5 py-2 text-[12.5px]'
+            >
+              <span>
+                {ready
+                  ? 'The latest snapshot could not be loaded; the map shows the last one.'
+                  : 'The traffic snapshot could not be loaded.'}{' '}
+                <span className='font-mono text-[11.5px] text-[var(--tm-fg-2)]'>{snapError}</span>
+              </span>
+              <button
+                type='button'
+                id='tm-snapshot-retry'
+                className={cn(CHIP, CHIP_OFF)}
+                onClick={() => void loadSnapshot(filtersRef.current.win)}
+              >
+                Retry
+              </button>
+            </div>
           )}
-        </div>
-        <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-2'>
-          <EventTicker
-            events={view?.events ?? []}
-            newestT={m.events[0]?.t ?? 0}
-            win={win}
-            catalog={catalog}
-            total={eventsSeen.current}
-            loading={!ready}
-          />
-          <HotEntities
-            rows={view?.hot ?? []}
-            catalog={catalog}
-            selectedKey={selection?.kind === 'entity' ? selection.id : null}
-            onSelect={(key) => setSelection({ kind: 'entity', id: key })}
-            loading={!ready}
-          />
+          <SummaryStrip d={view?.strip ?? null} />
+          <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-[minmax(0,1fr)_360px]'>
+            <MapCanvas
+              model={m}
+              filters={filters}
+              selection={selection}
+              onSelect={setSelection}
+              catalog={catalog}
+              tick={tick}
+              paused={paused}
+              stale={stale && !paused}
+            />
+            <p className='sr-only' aria-live='polite' id='tm-inspector-announce'>
+              {inspector
+                ? `Inspecting ${inspector.name}${canHistory && hours > 0 ? `, ${hoursPhrase(hours)}` : ''}`
+                : ''}
+            </p>
+            {inspector && selection ? (
+              <Inspector
+                d={inspector}
+                catalog={catalog}
+                sel={selection}
+                selKey={selection.id}
+                history={{
+                  hours,
+                  onHours: setHours,
+                  available: canHistory,
+                  data: historyQ.data ?? null,
+                  // a Retry after a failure shows the skeleton while it runs (isError holds until it lands)
+                  state: historyQ.isFetching ? 'loading' : historyQ.isError ? 'error' : 'idle',
+                  error: historyQ.error ? errorText(historyQ.error) : null,
+                  onRetry: () => void historyQ.refetch()
+                }}
+              />
+            ) : (
+              <InspectorPlaceholder loading={!ready} />
+            )}
+          </div>
+          <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-2'>
+            <EventTicker
+              events={view?.events ?? []}
+              newestT={m.events[0]?.t ?? 0}
+              win={win}
+              catalog={catalog}
+              total={eventsSeen.current}
+              loading={!ready}
+            />
+            <HotEntities
+              rows={view?.hot ?? []}
+              catalog={catalog}
+              selectedKey={selection?.kind === 'entity' ? selection.id : null}
+              onSelect={(key) => setSelection({ kind: 'entity', id: key })}
+              loading={!ready}
+            />
+          </div>
+          <PagePanels />
         </div>
       </div>
-    </div>
+    </TrafficMapContext.Provider>
   )
 }

@@ -12,6 +12,8 @@ import {
   KIND_VAR
 } from './EventTicker'
 import type { TrafficModel } from './model'
+import { InspectorActions } from './registry/inspectorActions'
+import { InspectorPanels } from './registry/inspectorPanels'
 import { Sparkline } from './Sparkline'
 import type {
   DownHistory,
@@ -209,7 +211,8 @@ export const t = (iso: string) => {
   return Number.isNaN(d.getTime()) ? '—' : d.toTimeString().slice(0, 8)
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** An inspector section (title + body) — plug-in panels use it too. */
+export function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className='border-t border-[var(--tm-line-2)] px-3.5 py-3 first:border-t-0'>
       <h3 className='mb-1.5 text-[12px] font-medium text-[var(--tm-muted)]'>{title}</h3>
@@ -217,7 +220,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
     </div>
   )
 }
-const Empty = ({ children }: { children: ReactNode }) => (
+export const Empty = ({ children }: { children: ReactNode }) => (
   <p className='text-[12px] text-[var(--tm-muted)]'>{children}</p>
 )
 
@@ -593,6 +596,7 @@ export function Inspector({
   catalog,
   history,
   selKey = '',
+  sel,
   children
 }: {
   d: InspectorData
@@ -600,6 +604,8 @@ export function Inspector({
   history?: InspectorHistory
   /** Selection key (`<lane>/<entity>` or a down id), for history notes. */
   selKey?: string
+  /** The current selection — plug-in actions and panels (registry/) need it. */
+  sel?: Selection
   children?: ReactNode
 }) {
   const showHistory = !!history?.available && history.hours > 0
@@ -631,10 +637,14 @@ export function Inspector({
           </span>
         )}
       </div>
+      {sel && <InspectorActions sel={sel} d={d} />}
       {children}
       {history?.available && <HoursBar hours={history.hours} onHours={history.onHours} />}
       {showHistory && history ? (
-        <HistoryBody h={history} catalog={catalog} selKey={selKey} />
+        <>
+          <HistoryBody h={history} catalog={catalog} selKey={selKey} />
+          {sel && <InspectorPanels sel={sel} d={d} mode='history' />}
+        </>
       ) : (
         <>
           <Facts facts={facts} />
@@ -760,6 +770,7 @@ export function Inspector({
               )}
             </div>
           </Section>
+          {sel && <InspectorPanels sel={sel} d={d} mode='live' />}
         </>
       )}
     </aside>

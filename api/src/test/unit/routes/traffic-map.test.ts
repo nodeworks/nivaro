@@ -60,8 +60,14 @@ import {
   advanceTo,
   noteOutbound,
   noteRequest,
+  noteSource,
   resetTrafficMap
 } from '../../../services/traffic-map.js'
+import {
+  registerTrafficTap,
+  trafficTaps,
+  unregisterTrafficTap
+} from '../../../services/traffic-taps.js'
 
 const T0 = 1_800_000_000
 function tableMock(rows: Record<string, Array<Record<string, unknown>>>) {
@@ -458,5 +464,61 @@ describe('final-review fixes', () => {
     expect(Math.max(...chunkSizes)).toBeLessThanOrEqual(1000)
     const callers = res.json().data.callers as Record<string, { label: string }>
     expect(callers['uUSER-02499'].label).toBe('N USER-02499')
+  })
+})
+
+describe('GET /traffic-map/entity-detail (tap seam)', () => {
+  afterEach(() => {
+    for (const t of trafficTaps()) unregisterTrafficTap(t.id)
+  })
+  it('collects every tap entityDetail by id; a failing or empty tap is left out', async () => {
+    registerTrafficTap({
+      id: 'sync',
+      entityDetail: (key, windowS, sec) => ({ key, windowS, sec })
+    })
+    registerTrafficTap({ id: 'async', entityDetail: async () => [1, 2] })
+    registerTrafficTap({ id: 'none', entityDetail: () => undefined })
+    registerTrafficTap({
+      id: 'bad',
+      entityDetail: async () => {
+        throw new Error('db down')
+      }
+    })
+    const res = await buildApp().inject({
+      method: 'GET',
+      url: '/traffic-map/entity-detail?key=items/workflows&window=300'
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data).toEqual({
+      sync: { key: 'items/workflows', windowS: 300, sec: T0 },
+      async: [1, 2]
+    })
+  })
+  it('refuses a malformed key or window; 404 in cloud mode', async () => {
+    for (const url of [
+      '/traffic-map/entity-detail?key=nope/workflows',
+      '/traffic-map/entity-detail?key=items',
+      '/traffic-map/entity-detail?key=items/workflows&window=42'
+    ]) {
+      const res = await buildApp().inject({ method: 'GET', url })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().code).toBe('ENTITY_DETAIL_PARAMS_INVALID')
+    }
+    process.env.CLOUD_META_DB_URL = 'x'
+    const res = await buildApp().inject({
+      method: 'GET',
+      url: '/traffic-map/entity-detail?key=items/workflows'
+    })
+    expect(res.statusCode).toBe(404)
+  })
+  it('catalog labels noteSource ids as sources', async () => {
+    tableMock({})
+    noteSource({ id: 'cron:digest', label: 'Daily digest', kind: 'cron', at: T0 * 1000 })
+    resetTrafficCatalog()
+    const res = await buildApp().inject({ method: 'GET', url: '/traffic-map/catalog' })
+    expect(res.json().data.callers['cron:digest']).toEqual({
+      label: 'Daily digest',
+      kind: 'source'
+    })
   })
 })

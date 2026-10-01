@@ -33,7 +33,10 @@ vi.mock('./MapCanvas', () => ({
   )
 }))
 
+import { useTrafficMap } from './context'
 import { HotEntities } from './HotEntities'
+import { pagePanels } from './registry/pagePanels'
+import { toolbarItems } from './registry/toolbarItems'
 import { SummaryStrip } from './SummaryStrip'
 import TrafficMap from './TrafficMap'
 
@@ -759,5 +762,46 @@ describe('final-review fixes', () => {
     const { entityLabel } = await import('./EventTicker')
     expect(entityLabel(null, 'other', '__background__')).toBe('Background jobs')
     expect(entityLabel(catalog as never, 'other', '__background__')).toBe('Background jobs')
+  })
+})
+
+describe('plug-in seams on the page', () => {
+  beforeEach(() => {
+    handlers.clear()
+    socketHandlers.clear()
+    getMock.mockReset()
+  })
+  it('toolbar items and page panels render inside the page context', async () => {
+    function LensToggle() {
+      const { win, setFilters } = useTrafficMap()
+      return (
+        <button type='button' onClick={() => setFilters((f) => ({ ...f, win: 300 }))}>
+          Lens {win}
+        </button>
+      )
+    }
+    function InFlight() {
+      const { ready, selection } = useTrafficMap()
+      return <section>In flight {ready ? (selection?.id ?? 'none') : 'loading'}</section>
+    }
+    toolbarItems.push({ id: 'lens', Component: LensToggle })
+    pagePanels.push({ id: 'inflight', Component: InFlight })
+    try {
+      mockApi()
+      renderPage()
+      await waitFor(() => expect(screen.getByText('In flight items/workflows')).toBeTruthy())
+      fireEvent.click(screen.getByText('Lens 60'))
+      await waitFor(() => expect(screen.getByText('Lens 300')).toBeTruthy())
+      expect(document.querySelector('[data-tm-page-panels]')).not.toBeNull()
+    } finally {
+      toolbarItems.splice(0)
+      pagePanels.splice(0)
+    }
+  })
+  it('no page-panel row while nothing is registered', async () => {
+    mockApi()
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
+    expect(document.querySelector('[data-tm-page-panels]')).toBeNull()
   })
 })

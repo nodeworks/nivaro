@@ -1,4 +1,5 @@
 import { entityLabel, fmtCount, fmtMs, fmtPct, fmtRate } from './EventTicker'
+import { hotCell, hotColumns } from './registry/hotColumns'
 import { Sparkline } from './Sparkline'
 import type { Lane, TrafficCatalog } from './types'
 import { LANE_LABEL } from './types'
@@ -33,6 +34,8 @@ export function HotEntities({
   onSelect: (key: string) => void
   loading: boolean
 }) {
+  const extra = hotColumns
+  const span = 6 + extra.length
   return (
     <section
       className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
@@ -67,6 +70,16 @@ export function HotEntities({
               <th scope='col' className={TH}>
                 Last 60 s
               </th>
+              {extra.map((c) => (
+                <th
+                  key={c.id}
+                  scope='col'
+                  className={c.align === 'right' ? `${TH} text-right` : TH}
+                  data-tm-hot-col={c.id}
+                >
+                  {c.header}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -74,7 +87,7 @@ export function HotEntities({
               ? Array.from({ length: 6 }, (_, i) => (
                   // biome-ignore lint/suspicious/noArrayIndexKey: static placeholder rows
                   <tr key={i} className='border-b border-[var(--tm-line-2)]'>
-                    <td colSpan={6} className='px-2.5 py-2'>
+                    <td colSpan={span} className='px-2.5 py-2'>
                       <div
                         aria-hidden='true'
                         className='h-3.5 animate-pulse rounded bg-[var(--tm-skeleton)] motion-reduce:animate-none'
@@ -85,7 +98,7 @@ export function HotEntities({
               : null}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={6} className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]'>
+                <td colSpan={span} className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]'>
                   No traffic in this window for the selected types and kinds.
                 </td>
               </tr>
@@ -143,6 +156,14 @@ export function HotEntities({
                       className='block h-5 w-[84px]'
                     />
                   </td>
+                  {extra.map((c) => (
+                    <td
+                      key={c.id}
+                      className={`px-2.5 py-1.5 ${c.align === 'right' ? 'text-right' : ''}`}
+                    >
+                      {hotCell(c, r)}
+                    </td>
+                  ))}
                 </tr>
               )
             })}

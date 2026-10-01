@@ -15,6 +15,7 @@ import {
   readTokens
 } from './layout'
 import type { TrafficModel } from './model'
+import { badgeFor, canvasLayers, nodeBadges } from './registry/canvasLayers'
 import {
   type Filters,
   KIND_ORDER,
@@ -69,7 +70,7 @@ const PULSE_MS = 900
 const HIGHLIGHT_MS = 160
 const EVENT_MAX_AGE_MS = 5000
 
-interface EntityView {
+export interface EntityView {
   key: string
   entity: string
   label: string
@@ -78,19 +79,20 @@ interface EntityView {
   kinds: number[]
   errFrac: number
 }
-interface LaneView {
+export interface LaneView {
   id: Lane
   rps: number
   entities: EntityView[]
 }
-interface NodeView {
+export interface NodeView {
   id: string
   label: string
   sub: string
   rps: number
   partner: boolean
 }
-interface MapData {
+/** What one paint draws (built once per frame tick) — canvas layers (registry/) receive it. */
+export interface MapData {
   callers: NodeView[]
   lanes: LaneView[]
   downs: NodeView[]
@@ -503,7 +505,15 @@ export function MapCanvas({
 
     /** Paints one frame; returns true while something is still animating. */
     const draw = (dt: number): boolean => {
-      const { data: d, layout: l, active: sel, paused: pz, reduced: rd } = live.current
+      const {
+        data: d,
+        layout: l,
+        active: sel,
+        paused: pz,
+        reduced: rd,
+        filters: lf,
+        selection: lsel
+      } = live.current
       const tok = tokensRef.current ?? {
         T: readTokens(rootRef.current ?? document.documentElement),
         sans: 'sans-serif',
@@ -768,15 +778,57 @@ export function MapCanvas({
           ctx.textAlign = 'right'
           ctx.fillText(fmtRate(e.rps), er.x + er.w - 4, er.y + 14)
           ctx.textAlign = 'left'
+          // a plug-in badge (registry/canvasLayers) takes room from the label
+          let labelRoom = bx - er.x - 24
+          const badge = nodeBadges.length ? badgeFor(e.key, m) : null
+          if (badge) {
+            ctx.font = `600 9.5px ${mono}`
+            const text = ellipsize(ctx, badge.text, 64, fc)
+            const pw = ctx.measureText(text).width + 8
+            const px = bx - pw - 6
+            const tone =
+              badge.tone === 'error' ? T.error : badge.tone === 'warn' ? T.update : T.read
+            rr(ctx, px, er.y + 4, pw, 12, 6)
+            ctx.fillStyle = T.card
+            ctx.fill()
+            ctx.lineWidth = 1
+            ctx.strokeStyle = tone
+            ctx.stroke()
+            ctx.fillStyle = tone
+            ctx.fillText(text, px + 4, er.y + 13)
+            labelRoom = px - er.x - 22
+          }
           ctx.font = `${entSel ? '600 ' : ''}11px ${mono}`
           ctx.fillStyle = T.fg
-          ctx.fillText(ellipsize(ctx, e.label, bx - er.x - 24, fc), er.x + 16, er.y + 14)
+          ctx.fillText(ellipsize(ctx, e.label, labelRoom, fc), er.x + 16, er.y + 14)
         }
       }
 
       for (const dn of d.downs) {
         const r = l.downs[dn.id]
         if (r) node(r, dn, isSel('down', dn.id))
+      }
+
+      // plug-in layers (registry/canvasLayers), each isolated
+      for (const layer of canvasLayers) {
+        ctx.save()
+        try {
+          const more = layer.draw(ctx, {
+            layout: l,
+            data: d,
+            tokens: T,
+            fonts: { sans, mono },
+            model: m,
+            filters: lf,
+            selection: lsel,
+            active: sel,
+            now
+          })
+          if (more === true) animating = true
+        } catch {
+          /* a broken layer never stops the paint */
+        }
+        ctx.restore()
       }
 
       // particles: two legs (caller → lane, lane → the store or partner the entity reaches)

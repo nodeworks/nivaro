@@ -51,6 +51,10 @@ export interface TrafficEventWire {
   fields?: string[]
   code?: string | null
   via?: string
+  /** Short neutral labels a server tap adds (ticker chips). */
+  tags?: string[]
+  /** Tap-specific fields. */
+  extra?: Record<string, unknown>
 }
 export interface TrafficFrame {
   v: 1
@@ -68,6 +72,8 @@ export interface TrafficFrame {
   events_dropped?: number
   sockets: number
   journal_seq: number | null
+  /** Server tap figures for this second, by tap id. */
+  ext?: Record<string, unknown>
 }
 export interface RecentError {
   at: string
@@ -105,6 +111,8 @@ export interface SnapshotEntity {
   down: Record<string, number>
   recent_errors: RecentError[]
   recent_writes: RecentWrite[]
+  /** Server tap figures for this entity, by tap id. */
+  ext?: Record<string, unknown>
 }
 export interface TrafficSnapshot {
   instance: string
@@ -119,7 +127,8 @@ export interface TrafficSnapshot {
   down: Array<{
     id: string
     label: string
-    kind: 'db' | 'cache' | 'storage' | 'partner'
+    /** 'db' | 'cache' | 'storage' | 'partner', or a server noteDown kind ('service', …). */
+    kind: string
     req: number
     error: number
     p95: number
@@ -138,7 +147,12 @@ export interface TrafficSnapshot {
   }
   sockets: { count: number; users: number }
   journal_seq: number | null
+  /** Non-request sources (cron jobs, the import worker, sockets) with traffic in the window. */
+  sources?: Array<{ id: string; label: string; kind: string; req: number; error: number }>
+  /** Server tap figures, by tap id. */
+  ext?: Record<string, unknown>
 }
+export type TrafficSource = NonNullable<TrafficSnapshot['sources']>[number]
 export interface TrafficCatalog {
   collections: Record<string, { label: string; system: boolean }>
   widgets: Record<string, string>
@@ -147,7 +161,10 @@ export interface TrafficCatalog {
   inbound: Record<string, string>
   extensions: Record<string, string>
   partners: Record<string, string>
-  callers: Record<string, { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' }>
+  callers: Record<
+    string,
+    { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' | 'source' }
+  >
   down: Record<string, string>
 }
 export interface EntityHistory {

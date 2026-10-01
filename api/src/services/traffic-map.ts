@@ -14,7 +14,6 @@ import {
   type ClassifyInput,
   callerKeyFor,
   classifyRequest,
-  type DownId,
   entityKey,
   LANES,
   normalizePath,
@@ -22,11 +21,22 @@ import {
   type TrafficKind,
   type TrafficLane
 } from './traffic-entities.js'
+import {
+  bumpMinute,
+  type CountRing,
+  type MinuteSeries,
+  RING_SECONDS,
+  ringBump,
+  ringSecond,
+  ringSeries,
+  ringSum,
+  TOP_KEYS_CAP,
+  topMinutes
+} from './traffic-ring.js'
+import { collectTaps, eachTap, resetTapState } from './traffic-taps.js'
 
-export const RING_SECONDS = 900
-export const MINUTE_BUCKETS = 15
+export { MINUTE_BUCKETS, RING_SECONDS, TOP_KEYS_CAP } from './traffic-ring.js'
 export const LANE_ENTITY_CAP = 40
-export const TOP_KEYS_CAP = 20
 export const RECENT_CAP = 12
 export const LAT_SAMPLES = 240
 export const EVENTS_PER_FRAME = 40
@@ -48,6 +58,12 @@ export interface TrafficRequestEvent {
   graphqlKind: string | null
   cacheHit: boolean
   at: number
+  /** The Fastify request (taps read headers, masquerade, workspace, trace data off it). */
+  req?: unknown
+  /** The Fastify reply. */
+  reply?: unknown
+  /** Response body bytes (string/Buffer payloads); null for streams or when unknown. */
+  responseBytes?: number | null
 }
 export interface TrafficWriteEvent {
   collection: string
@@ -55,6 +71,8 @@ export interface TrafficWriteEvent {
   action: 'create' | 'update' | 'delete'
   changedFields: string[]
   at: number
+  /** Anything a writer wants a tap to see (never sent to the client by the map itself). */
+  extra?: Record<string, unknown>
 }
 export interface TrafficOutboundEvent {
   apiId: number
@@ -76,6 +94,10 @@ export interface TrafficEventWire {
   fields?: string[]
   code?: string | null
   via?: string
+  /** Short neutral labels a tap adds (shown as chips in the ticker). */
+  tags?: string[]
+  /** Tap-specific fields; the map itself never reads them. */
+  extra?: Record<string, unknown>
 }
 interface RecentError {
   at: string
@@ -94,20 +116,18 @@ interface RecentWrite {
   via: string
 }
 
-interface Ring {
-  counts: Int32Array // RING_SECONDS * SLOTS
+interface Ring extends CountRing {
+  // counts: RING_SECONDS * SLOTS
   lat: Float32Array
   latN: number
   latI: number
-  lastSec: number // last second written (for gap zeroing)
-  touchedSec: number
 }
 interface EntityState extends Ring {
   lane: TrafficLane
   entity: string
   routes: Map<string, MinuteSeries>
   callers: Map<CallerKey, MinuteSeries>
-  downs: Map<DownId, MinuteSeries>
+  downs: Map<string, MinuteSeries>
   errors: RecentError[]
   writes: RecentWrite[]
   lastSeen: number
@@ -121,6 +141,10 @@ const laneCount = new Map<TrafficLane, number>()
 const callers = new Map<CallerKey, NodeState>()
 const downs = new Map<string, NodeState>()
 const partnerNames = new Map<number, string>()
+/** Label + kind of down nodes recorded through noteDown (and their sweep). */
+const downMeta = new Map<string, { label?: string; kind?: string }>()
+/** Label + kind of non-request sources recorded through noteSource (keys in `callers`). */
+const sourceMeta = new Map<string, { label?: string; kind?: string }>()
 const edgesIn = new Map<string, number>() // this second only
 const edgesOut = new Map<string, number>()
 let pendingEvents: TrafficEventWire[] = []
@@ -144,95 +168,22 @@ function mkNode(label: string): NodeState {
   return { ...mkRing(), label }
 }
 
-/** Zero every slot between the ring's last write and `sec` (a quiet gap must read as zeros). */
-function catchUp(r: Ring, sec: number): void {
-  if (sec <= r.lastSec) return
-  const gap = Math.min(sec - r.lastSec, RING_SECONDS)
-  for (let i = 1; i <= gap; i++) {
-    const idx = ((r.lastSec + i) % RING_SECONDS) * SLOTS
-    r.counts.fill(0, idx, idx + SLOTS)
-  }
-  r.lastSec = sec
-}
 function isStale(sec: number): boolean {
   return sec < nowSec - (RING_SECONDS - 1)
 }
 function bump(r: Ring, sec: number, slot: number, n = 1): void {
-  if (sec < r.lastSec - (RING_SECONDS - 1)) return
-  catchUp(r, sec)
-  r.counts[(sec % RING_SECONDS) * SLOTS + slot] += n
-  r.touchedSec = sec
+  ringBump(r, sec, slot, SLOTS, n)
 }
 function sample(r: Ring, ms: number): void {
   r.lat[r.latI] = ms
   r.latI = (r.latI + 1) % LAT_SAMPLES
   if (r.latN < LAT_SAMPLES) r.latN++
 }
-/** Per-minute counts stamped with the minute they belong to, so a wrapped slot never reads stale. */
-interface MinuteSeries {
-  c: Uint16Array
-  m: Int32Array
-}
-function bumpMinute(map: Map<string, MinuteSeries>, key: string, sec: number): void {
-  let arr = map.get(key)
-  if (!arr) {
-    if (map.size >= TOP_KEYS_CAP) {
-      const cur = Math.floor(sec / 60)
-      for (const [k, v] of map) {
-        let newest = -1
-        for (let i = 0; i < MINUTE_BUCKETS; i++) if (v.m[i] > newest) newest = v.m[i]
-        if (k !== '__other__' && newest < cur - (MINUTE_BUCKETS - 1)) {
-          map.delete(k)
-          break
-        }
-      }
-    }
-    if (map.size >= TOP_KEYS_CAP) {
-      key = '__other__'
-      arr = map.get(key)
-    }
-    if (!arr) {
-      arr = { c: new Uint16Array(MINUTE_BUCKETS), m: new Int32Array(MINUTE_BUCKETS).fill(-1) }
-      map.set(key, arr)
-    }
-  }
-  const mn = Math.floor(sec / 60)
-  const i = mn % MINUTE_BUCKETS
-  if (arr.m[i] !== mn) {
-    arr.m[i] = mn
-    arr.c[i] = 0
-  }
-  if (arr.c[i] < 65535) arr.c[i]++
-}
-function sumMinute(arr: MinuteSeries, windowS: number, sec: number): number {
-  const minutes = Math.min(MINUTE_BUCKETS, Math.ceil(windowS / 60) + 1)
-  const cur = Math.floor(sec / 60)
-  let s = 0
-  for (let k = 0; k < minutes; k++) {
-    const mn = cur - k
-    const i = ((mn % MINUTE_BUCKETS) + MINUTE_BUCKETS) % MINUTE_BUCKETS
-    if (arr.m[i] === mn) s += arr.c[i]
-  }
-  return s
-}
 function sumWindow(r: Ring, windowS: number, sec: number): number[] {
-  catchUp(r, sec)
-  const out = [0, 0, 0, 0, 0, 0]
-  for (let i = 0; i < windowS; i++) {
-    const base = (((sec - i) % RING_SECONDS) + RING_SECONDS) % RING_SECONDS
-    for (let k = 0; k < SLOTS; k++) out[k] += r.counts[base * SLOTS + k]
-  }
-  return out
+  return ringSum(r, windowS, sec, SLOTS)
 }
 function seriesOf(r: Ring, windowS: number, sec: number, points: number): number[] {
-  const per = windowS / points
-  const out = new Array<number>(points).fill(0)
-  for (let i = 0; i < windowS; i++) {
-    const s = sec - windowS + 1 + i
-    const base = ((s % RING_SECONDS) + RING_SECONDS) % RING_SECONDS
-    out[Math.min(points - 1, Math.floor(i / per))] += r.counts[base * SLOTS + K.req]
-  }
-  return out
+  return ringSeries(r, windowS, sec, points, SLOTS, K.req)
 }
 function pct(r: Ring, p: number): number {
   if (!r.latN) return 0
@@ -296,13 +247,22 @@ function getCaller(key: CallerKey): NodeState {
   }
   return c
 }
-function getDown(id: DownId, label?: string): NodeState {
+function getDown(id: string, label?: string): NodeState {
   let d = downs.get(id)
   if (!d) {
     d = mkNode(label ?? id)
     downs.set(id, d)
   } else if (label) d.label = label
   return d
+}
+/** Taps add ticker events here; they share the bounded buffer and its priority rule. */
+export function pushTrafficEvent(ev: TrafficEventWire): void {
+  if (inCloud()) return
+  try {
+    pushEvent(ev)
+  } catch {
+    /* never */
+  }
 }
 function pushEvent(ev: TrafficEventWire): void {
   pendingEvents.push(ev)
@@ -403,8 +363,8 @@ function applyRequest(
   caller: CallerKey,
   route: string,
   code: string | null
-): void {
-  if (isStale(Math.floor(ev.at / 1000))) return
+): EntityState | null {
+  if (isStale(Math.floor(ev.at / 1000))) return null
   const sec = secOf(ev.at)
   const e = getEntity(c.lane, c.entity)
   const isErr = ev.status >= 400
@@ -415,7 +375,7 @@ function applyRequest(
   e.lastSeen = sec
   bumpMinute(e.routes, route, sec)
   bumpMinute(e.callers, caller, sec)
-  const downIds: DownId[] = ev.cacheHit ? c.down.map((d) => (d === 'db' ? 'redis' : d)) : c.down
+  const downIds: string[] = ev.cacheHit ? c.down.map((d) => (d === 'db' ? 'redis' : d)) : c.down
   for (const d of downIds) {
     bumpMinute(e.downs, d, sec)
     const dn = getDown(d)
@@ -463,6 +423,7 @@ function applyRequest(
       ms: ev.latencyMs
     })
   }
+  return e
 }
 
 /**
@@ -501,7 +462,23 @@ export function noteRequest(ev: TrafficRequestEvent & { errorCode?: string | nul
       userId: ev.userId
     })
     const route = routeTemplate(ev.method, ev.path, ev.graphqlOperation)
-    applyRequest(c, ev, caller, route, ev.status >= 400 ? errorCode(ev.errorCode) : null)
+    const code = ev.status >= 400 ? errorCode(ev.errorCode) : null
+    const e = applyRequest(c, ev, caller, route, code)
+    if (e) {
+      const ctx = {
+        ev,
+        lane: e.lane,
+        entity: e.entity,
+        entityKey: entityKey(e.lane, e.entity),
+        kind: c.kind,
+        caller,
+        route,
+        isError: ev.status >= 400,
+        code,
+        sec: secOf(ev.at)
+      }
+      eachTap((t) => t.onRequest?.(ctx))
+    }
   } catch {
     /* the map must never affect a response */
   }
@@ -570,6 +547,17 @@ export function noteWrite(ev: TrafficWriteEvent): void {
       fields,
       via
     })
+    const ctx = {
+      ev,
+      lane,
+      entity: e.entity,
+      entityKey: entityKey(lane, e.entity),
+      caller,
+      via,
+      route,
+      sec
+    }
+    eachTap((t) => t.onWrite?.(ctx))
   } catch {
     /* never */
   }
@@ -580,7 +568,7 @@ export function noteOutbound(ev: TrafficOutboundEvent): void {
   try {
     if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
-    const id: DownId = `ext:${ev.apiId}`
+    const id = `ext:${ev.apiId}`
     partnerNames.set(ev.apiId, ev.apiName)
     const dn = getDown(id, ev.apiName)
     const failed = ev.status == null || ev.status >= 400
@@ -612,9 +600,116 @@ export function noteOutbound(ev: TrafficOutboundEvent): void {
       if (failed) bump(cn, sec, K.error)
       edgesIn.set(`cron>${e.lane}`, (edgesIn.get(`cron>${e.lane}`) ?? 0) + 1)
     }
+    const ctx = { ev, downId: id, entityKey: entityKey(e.lane, e.entity), failed, sec }
+    eachTap((t) => t.onOutbound?.(ctx))
   } catch {
     /* never */
   }
+}
+
+/** `<lane>/<entity>` → the entity state (created; lane cap applies); null when malformed. */
+function entityOfKey(key: string): EntityState | null {
+  const cut = key.indexOf('/')
+  if (cut <= 0) return null
+  const lane = key.slice(0, cut) as TrafficLane
+  if (!LANES.some((l) => l.id === lane)) return null
+  const entity = key.slice(cut + 1).slice(0, 120)
+  return entity ? getEntity(lane, entity) : null
+}
+
+export interface TrafficDownCall {
+  /** Down node id (e.g. `mail`, `ai:gateway`); `db` / `redis` / `store` / `ext:*` are the map's. */
+  id: string
+  label?: string
+  /** Snapshot down-row kind; default 'service'. */
+  kind?: string
+  ok: boolean
+  ms?: number
+  /** Epoch ms; default now. */
+  at?: number
+  /** `<lane>/<entity>` the call belongs to; absent = `other/__background__`. */
+  entityKey?: string | null
+}
+
+/**
+ * A call into any downstream node (mail, SMS, AI provider, webhook receiver…): same ring and
+ * edge semantics as a partner call, without partner specifics. Never counts a caller — a source
+ * that should appear as one records itself with noteSource.
+ */
+export function noteDown(d: TrafficDownCall): void {
+  if (inCloud()) return
+  try {
+    const at = d.at ?? Date.now()
+    if (isStale(Math.floor(at / 1000))) return
+    const id = String(d.id).slice(0, 120)
+    if (!id) return
+    const sec = secOf(at)
+    if (d.label || d.kind) {
+      const meta = downMeta.get(id) ?? {}
+      if (d.label) meta.label = d.label.slice(0, 120)
+      if (d.kind) meta.kind = d.kind.slice(0, 40)
+      downMeta.set(id, meta)
+    }
+    const dn = getDown(id, d.label)
+    bump(dn, sec, K.req)
+    if (!d.ok) bump(dn, sec, K.error)
+    if (d.ms != null && Number.isFinite(d.ms)) sample(dn, d.ms)
+    const e =
+      (d.entityKey ? entityOfKey(d.entityKey) : null) ?? getEntity('other', BACKGROUND_ENTITY)
+    e.lastSeen = sec
+    bumpMinute(e.downs, id, sec)
+    edgesOut.set(`${e.lane}>${id}`, (edgesOut.get(`${e.lane}>${id}`) ?? 0) + 1)
+  } catch {
+    /* never */
+  }
+}
+
+export interface TrafficSourceCall {
+  /** Caller-ring key, e.g. `cron:<jobId>`, `import:<runId>`, `socket`. Never `k…` / `u…`. */
+  id: string
+  label?: string
+  /** e.g. 'cron', 'import', 'socket'; default 'source'. */
+  kind?: string
+  at?: number
+  /** `<lane>/<entity>` it fed; adds the `<id>><lane>` edge and the entity's caller row. */
+  entityKey?: string | null
+  /** false = counts as an error. */
+  ok?: boolean
+}
+
+/**
+ * Traffic from a non-request source (a cron job, the import worker, a socket) into the callers
+ * ring under its own key. The existing `cron` caller is left untouched.
+ */
+export function noteSource(s: TrafficSourceCall): void {
+  if (inCloud()) return
+  try {
+    const at = s.at ?? Date.now()
+    if (isStale(Math.floor(at / 1000))) return
+    const id = String(s.id).slice(0, 120)
+    if (!id) return
+    const sec = secOf(at)
+    const meta = sourceMeta.get(id) ?? {}
+    if (s.label) meta.label = s.label.slice(0, 120)
+    if (s.kind) meta.kind = s.kind.slice(0, 40)
+    sourceMeta.set(id, meta)
+    const cn = getCaller(id)
+    bump(cn, sec, K.req)
+    if (s.ok === false) bump(cn, sec, K.error)
+    const e = s.entityKey ? entityOfKey(s.entityKey) : null
+    if (e) {
+      e.lastSeen = sec
+      bumpMinute(e.callers, id, sec)
+      edgesIn.set(`${id}>${e.lane}`, (edgesIn.get(`${id}>${e.lane}`) ?? 0) + 1)
+    }
+  } catch {
+    /* never */
+  }
+}
+
+/** The ring clock (epoch seconds) — routes asking taps for figures pass it on. */
+export function currentTrafficSec(): number {
+  return nowSec
 }
 
 // ── clock ────────────────────────────────────────────────────────────────────
@@ -660,12 +755,12 @@ export interface FrameWire {
   events_dropped?: number
   sockets: number
   journal_seq: number | null
+  /** Tap figures for this second, by tap id (absent when no tap sent any). */
+  ext?: Record<string, unknown>
 }
 
 function secondOf(r: Ring, sec: number): number[] {
-  catchUp(r, sec)
-  const base = (sec % RING_SECONDS) * SLOTS
-  return Array.from(r.counts.subarray(base, base + SLOTS))
+  return ringSecond(r, sec, SLOTS)
 }
 
 export function buildFrame(
@@ -715,6 +810,8 @@ export function buildFrame(
     journal_seq: opts.journalSeq
   }
   if (dropped) frame.events_dropped = dropped
+  const ext = collectTaps((t) => t.frame?.(sec))
+  if (ext) frame.ext = ext
   edgesIn.clear()
   edgesOut.clear()
   return frame
@@ -741,6 +838,8 @@ export interface SnapshotEntity {
   down: Record<string, number>
   recent_errors: RecentError[]
   recent_writes: RecentWrite[]
+  /** Tap figures for this entity, by tap id (absent when none). */
+  ext?: Record<string, unknown>
 }
 export interface TrafficSnapshot {
   instance: string
@@ -755,7 +854,8 @@ export interface TrafficSnapshot {
   down: Array<{
     id: string
     label: string
-    kind: 'db' | 'cache' | 'storage' | 'partner'
+    /** 'db' | 'cache' | 'storage' | 'partner' for the map's own nodes; noteDown kinds else. */
+    kind: string
     req: number
     error: number
     p95: number
@@ -774,6 +874,10 @@ export interface TrafficSnapshot {
   }
   sockets: { count: number; users: number }
   journal_seq: number | null
+  /** Non-request sources (noteSource) with traffic in the window (absent when none). */
+  sources?: Array<{ id: string; label: string; kind: string; req: number; error: number }>
+  /** Tap figures, by tap id (absent when none). */
+  ext?: Record<string, unknown>
 }
 
 function topOf(
@@ -782,15 +886,14 @@ function topOf(
   sec: number,
   n: number
 ): Array<[string, number]> {
-  const rows: Array<[string, number]> = []
-  for (const [k, arr] of map) {
-    const v = sumMinute(arr, windowS, sec)
-    if (v > 0) rows.push([k, v])
-  }
-  return rows.sort((a, b) => b[1] - a[1]).slice(0, n)
+  return topMinutes(map, windowS, sec, n)
 }
-function downKind(id: string): 'db' | 'cache' | 'storage' | 'partner' {
-  return id === 'db' ? 'db' : id === 'redis' ? 'cache' : id === 'store' ? 'storage' : 'partner'
+function downKind(id: string): string {
+  if (id === 'db') return 'db'
+  if (id === 'redis') return 'cache'
+  if (id === 'store') return 'storage'
+  if (id.startsWith('ext:')) return 'partner'
+  return downMeta.get(id)?.kind ?? 'service'
 }
 const DOWN_LABELS: Record<string, string> = {
   db: 'SQL Server',
@@ -806,13 +909,14 @@ export function buildSnapshot(
   const out: SnapshotEntity[] = []
   const totals = [0, 0, 0, 0, 0, 0]
   const allLat: number[] = []
+  const entityExt = (key: string) => collectTaps((t) => t.entitySnapshot?.(key, windowS, sec))
   for (const [key, e] of entities) {
     const s = sumWindow(e, windowS, sec)
     const downTop = topOf(e.downs, windowS, sec, TOP_KEYS_CAP)
     if (s.every((v) => v === 0) && downTop.length === 0) continue
     for (let k = 0; k < SLOTS; k++) totals[k] += s[k]
     allLat.push(...Array.from(e.lat.subarray(0, e.latN)))
-    out.push({
+    const row: SnapshotEntity = {
       key,
       lane: e.lane,
       entity: e.entity,
@@ -837,12 +941,26 @@ export function buildSnapshot(
       down: Object.fromEntries(downTop),
       recent_errors: e.errors.slice(),
       recent_writes: e.writes.slice()
-    })
+    }
+    const ext = entityExt(key)
+    if (ext) row.ext = ext
+    out.push(row)
   }
   out.sort((a, b) => b.req - a.req)
+  const sourceRows: NonNullable<TrafficSnapshot['sources']> = []
   const callerRows = [...callers]
     .map(([key, c]) => {
       const s = sumWindow(c, windowS, sec)
+      const meta = sourceMeta.get(key)
+      if (meta && s[K.req] > 0) {
+        sourceRows.push({
+          id: key,
+          label: meta.label ?? key,
+          kind: meta.kind ?? 'source',
+          req: s[K.req],
+          error: s[K.error]
+        })
+      }
       return { key, req: s[K.req], error: s[K.error] }
     })
     .filter((c) => c.req > 0)
@@ -871,7 +989,7 @@ export function buildSnapshot(
     allLat.length
       ? Math.round(allLat[Math.min(allLat.length - 1, Math.floor(allLat.length * p))])
       : 0
-  return {
+  const snap: TrafficSnapshot = {
     instance: instanceKey(),
     node_scope: NODE_SCOPE,
     at: new Date(sec * 1000).toISOString(),
@@ -897,10 +1015,19 @@ export function buildSnapshot(
     sockets: { count: opts.sockets, users: opts.users },
     journal_seq: opts.journalSeq
   }
+  if (sourceRows.length) snap.sources = sourceRows.sort((a, b) => b.req - a.req)
+  const ext = collectTaps((t) => t.snapshot?.(windowS, sec))
+  if (ext) snap.ext = ext
+  return snap
 }
 
+/** Caller keys of requests (keys / people / cron / anon) — noteSource ids are left out. */
 export function seenCallerKeys(): CallerKey[] {
-  return [...callers.keys()]
+  return [...callers.keys()].filter((k) => !sourceMeta.has(k))
+}
+/** Label + kind of every noteSource id still held. */
+export function seenSources(): Array<{ id: string; label: string; kind: string }> {
+  return [...sourceMeta].map(([id, m]) => ({ id, label: m.label ?? id, kind: m.kind ?? 'source' }))
 }
 export function seenPartnerIds(): number[] {
   return [...partnerNames.keys()]
@@ -912,6 +1039,7 @@ export function sweepIdle(sec = nowSec): number {
   for (const [key, c] of callers) {
     if (sec - c.touchedSec >= RING_SECONDS) {
       callers.delete(key)
+      sourceMeta.delete(key)
       removed++
     }
   }
@@ -919,6 +1047,7 @@ export function sweepIdle(sec = nowSec): number {
     if (key === 'db' || key === 'redis' || key === 'store') continue
     if (sec - d.touchedSec >= RING_SECONDS) {
       downs.delete(key)
+      downMeta.delete(key)
       removed++
     }
   }
@@ -929,6 +1058,7 @@ export function sweepIdle(sec = nowSec): number {
       removed++
     }
   }
+  eachTap((t) => t.sweep?.(sec))
   return removed
 }
 
@@ -938,6 +1068,8 @@ export function resetTrafficMap(): void {
   callers.clear()
   downs.clear()
   partnerNames.clear()
+  downMeta.clear()
+  sourceMeta.clear()
   edgesIn.clear()
   edgesOut.clear()
   pendingEvents = []
@@ -946,6 +1078,7 @@ export function resetTrafficMap(): void {
   nowSec = 0
   extCompiled = []
   extSig = ''
+  resetTapState()
 }
 
 // ── emitter ──────────────────────────────────────────────────────────────────

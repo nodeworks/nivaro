@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MapCanvas } from './MapCanvas'
 import { defaultFilters, TrafficModel } from './model'
+import { canvasLayers, nodeBadges } from './registry/canvasLayers'
 import type { TrafficSnapshot } from './types'
 
 const T0 = 1_800_000_000
@@ -214,5 +215,50 @@ describe('MapCanvas', () => {
     // width 860 → lane w 292 at x 284, entity rows at x 290; the first row starts at y 52
     fireEvent.click(canvas, { clientX: 300, clientY: 57 })
     expect(onSelect).toHaveBeenCalledWith({ kind: 'entity', id: 'items/workflows' })
+  })
+
+  it('runs plug-in canvas layers after the nodes and draws node badges; a broken layer is isolated', () => {
+    const m = new TrafficModel()
+    m.applySnapshot(snapshot)
+    const seen: Array<{ ents: string[]; sel: string | null }> = []
+    canvasLayers.push(
+      {
+        id: 'bad',
+        draw: () => {
+          throw new Error('broken layer')
+        }
+      },
+      {
+        id: 'probe',
+        draw: (ctx, a) => {
+          seen.push({ ents: Object.keys(a.layout.ents), sel: a.selection?.id ?? null })
+          ctx.fillText('layer drew', 0, 0)
+        }
+      }
+    )
+    nodeBadges.push({
+      id: 'dup',
+      badge: (id) => (id === 'items/workflows' ? { text: '2x dup', tone: 'warn' } : null)
+    })
+    try {
+      render(
+        <MapCanvas
+          model={m}
+          filters={defaultFilters()}
+          selection={{ kind: 'entity', id: 'items/workflows' }}
+          onSelect={() => {}}
+          catalog={null}
+          tick={1}
+          paused={false}
+        />
+      )
+      expect(seen.at(-1)).toEqual({ ents: ['items/workflows'], sel: 'items/workflows' })
+      expect(texts()).toContain('layer drew')
+      expect(texts()).toContain('2x dup')
+      expect(texts()).toContain('workflows')
+    } finally {
+      canvasLayers.splice(0)
+      nodeBadges.splice(0)
+    }
   })
 })

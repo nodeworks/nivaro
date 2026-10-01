@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { EventActions, eventActions } from './registry/eventActions'
 import type { Kind, TrafficCatalog, TrafficEventWire } from './types'
 
 /** Data colour of a kind (swatches, bars, spark lines). */
@@ -95,6 +96,24 @@ function SkeletonRows({ n }: { n: number }) {
   )
 }
 
+/** Tap-added labels (retry storm, duplicate…) as small neutral chips; nothing when none. */
+function Tags({ tags }: { tags?: string[] }) {
+  if (!tags?.length) return null
+  return (
+    <>
+      {tags.slice(0, 4).map((tag) => (
+        <span
+          key={tag}
+          data-tm-event-tag={tag}
+          className='ml-1.5 inline-block rounded border border-[var(--tm-line)] px-1 py-px align-baseline text-[10.5px] font-medium leading-none text-[var(--tm-fg-2)]'
+        >
+          {tag}
+        </span>
+      ))}
+    </>
+  )
+}
+
 const FADE_MS = 600
 const WINDOW_TEXT: Record<number, string> = { 60: '60 s', 300: '5 min', 900: '15 min' }
 
@@ -123,6 +142,7 @@ export function EventTicker({
   const lastNewest = useRef(Number.NEGATIVE_INFINITY)
   const fadeUntil = useRef(new WeakMap<TrafficEventWire, number>())
   const rows = events.slice(0, TICKER_ROWS)
+  const hasActions = eventActions.length > 0
   const now = Date.now()
   const fadeOf = (ev: TrafficEventWire) => {
     let until = fadeUntil.current.get(ev)
@@ -178,11 +198,14 @@ export function EventTicker({
             const isRead = ev.kind === 'read'
             const fresh = fadeOf(ev) && !isErr
             const quiet = isErr ? 'text-[var(--tm-fg-2)]' : 'text-[var(--tm-muted)]'
+            const cols = hasActions
+              ? 'grid-cols-[58px_62px_minmax(0,1fr)_auto]'
+              : 'grid-cols-[58px_62px_minmax(0,1fr)]'
             return (
               <div
                 key={keyOf(ev)}
                 data-tm-event={ev.kind}
-                className={`grid grid-cols-[58px_62px_minmax(0,1fr)] items-baseline gap-2 border-b border-[var(--tm-line-2)] px-3.5 py-1 text-[12px] last:border-0 ${
+                className={`grid ${cols} items-baseline gap-2 border-b border-[var(--tm-line-2)] px-3.5 py-1 text-[12px] last:border-0 ${
                   isErr ? 'bg-[var(--tm-error-soft)]' : ''
                 } ${fresh ? 'tm-ev-fresh' : ''}`}
               >
@@ -200,6 +223,7 @@ export function EventTicker({
                         {ev.status ?? 'error'}
                       </span>{' '}
                       <span className='font-mono text-[11px]'>{ev.route}</span>
+                      <Tags tags={ev.tags} />
                       {ev.code ? (
                         <>
                           {' · '}
@@ -222,6 +246,7 @@ export function EventTicker({
                     <>
                       <span className='font-mono text-[11px] font-medium'>{name}</span>{' '}
                       <span className='font-mono text-[11px]'>{ev.route}</span>
+                      <Tags tags={ev.tags} />
                       <span className={quiet}>
                         {' · '}
                         {who}
@@ -246,6 +271,7 @@ export function EventTicker({
                           </span>
                         </>
                       ) : null}
+                      <Tags tags={ev.tags} />
                       <span className={quiet}>
                         {' · '}
                         {who}
@@ -253,6 +279,7 @@ export function EventTicker({
                     </>
                   )}
                 </span>
+                {hasActions && <EventActions ev={ev} />}
               </div>
             )
           })

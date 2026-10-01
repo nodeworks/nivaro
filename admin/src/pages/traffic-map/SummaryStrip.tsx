@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { fmtCount, fmtRate } from './EventTicker'
+import { StripTiles } from './registry/stripTiles'
 import { Sparkline } from './Sparkline'
 
 export interface StripData {
@@ -141,6 +142,7 @@ export function SummaryStrip({ d }: { d: StripData | null }) {
           {fmtCount(d.peak)}
         </span>
       </Tile>
+      <StripTiles />
     </section>
   )
 }

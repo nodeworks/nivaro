@@ -239,7 +239,16 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   // Keep the first KB of an error body so a rejected integration call can be
   // read back from the request list ("why did my push 400") without replaying
   // it. Only string/Buffer payloads — streams (static files) pass untouched.
+  // Every response also leaves its body size (Traffic Map taps); null = a stream.
   app.addHook('onSend', async (req, reply, payload) => {
+    ;(req as unknown as { __nvrBytes?: number | null }).__nvrBytes =
+      typeof payload === 'string'
+        ? Buffer.byteLength(payload)
+        : Buffer.isBuffer(payload)
+          ? payload.length
+          : payload == null
+            ? 0
+            : null
     if (reply.statusCode < 400) return payload
     if (typeof payload === 'string') {
       ;(req as unknown as { __nvrErr?: string }).__nvrErr = payload.slice(0, ERROR_BODY_CAP)
@@ -273,7 +282,10 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         graphqlKind: gql?.kind ?? null,
         cacheHit: hasCacheHit(req),
         at: Date.now(),
-        errorCode: errorCode((req as unknown as { __nvrErr?: string }).__nvrErr)
+        errorCode: errorCode((req as unknown as { __nvrErr?: string }).__nvrErr),
+        req,
+        reply,
+        responseBytes: (req as unknown as { __nvrBytes?: number | null }).__nvrBytes ?? null
       })
     }
     if (isInternalDispatch(req as unknown as { headers: Record<string, unknown> })) return

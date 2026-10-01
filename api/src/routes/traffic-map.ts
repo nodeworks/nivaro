@@ -17,10 +17,14 @@ import {
 } from '../services/traffic-history.js'
 import {
   buildSnapshot,
+  currentTrafficSec,
   matchExtensionRoute,
   seenCallerKeys,
-  seenPartnerIds
+  seenPartnerIds,
+  seenSources
 } from '../services/traffic-map.js'
+import { trafficTaps } from '../services/traffic-taps.js'
+import { trafficMapExtraRoutes } from './traffic-map-extras/index.js'
 
 /**
  * Traffic Map read routes (spec §6.2–6.3). Admin only. The aggregator is per process, so in
@@ -47,7 +51,10 @@ interface Catalog {
   inbound: Record<string, string>
   extensions: Record<string, string>
   partners: Record<string, string>
-  callers: Record<string, { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' }>
+  callers: Record<
+    string,
+    { label: string; kind: 'key' | 'person' | 'machine' | 'cron' | 'anon' | 'source' }
+  >
   down: Record<string, string>
 }
 let catalogCache: { at: number; value: Catalog } | null = null
@@ -158,6 +165,8 @@ async function buildCatalog(state: { failed: boolean }): Promise<Catalog> {
       kind: u.account_kind ? 'machine' : 'person'
     }
   }
+  // Non-request sources (noteSource) carry their own label.
+  for (const s of seenSources()) catalog.callers[s.id] = { label: s.label, kind: 'source' }
   for (const k of callerKeys) {
     if (!catalog.callers[k]) {
       catalog.callers[k] = k.startsWith('k')
@@ -214,6 +223,41 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
   const LANE_IDS = new Set<string>(LANES.map((l) => l.id))
   const ENTITY_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$/
   const HOURS = new Set([1, 6, 24])
+
+  /** Every tap's `entityDetail` for one entity: `{ data: { [tapId]: detail } }`. */
+  app.get<{ Querystring: { key?: string; window?: string } }>(
+    '/entity-detail',
+    async (req, reply) => {
+      const key = String(req.query.key ?? '')
+      const cut = key.indexOf('/')
+      const windowS = Number(req.query.window ?? 60)
+      if (
+        cut <= 0 ||
+        !LANE_IDS.has(key.slice(0, cut)) ||
+        !ENTITY_RE.test(key.slice(cut + 1)) ||
+        !WINDOWS.has(windowS)
+      ) {
+        return reply
+          .code(400)
+          .send({ error: 'key or window is not valid', code: 'ENTITY_DETAIL_PARAMS_INVALID' })
+      }
+      const sec = currentTrafficSec()
+      const data: Record<string, unknown> = {}
+      await Promise.all(
+        trafficTaps()
+          .filter((t) => t.entityDetail)
+          .map(async (t) => {
+            try {
+              const v = await t.entityDetail?.(key, windowS, sec)
+              if (v !== undefined) data[t.id] = v
+            } catch (err) {
+              req.log.warn({ err, tap: t.id }, 'traffic-map tap entity detail failed')
+            }
+          })
+      )
+      return { data }
+    }
+  )
 
   app.get<{ Params: { lane: string; entity: string }; Querystring: { hours?: string } }>(
     '/entity/:lane/:entity',
@@ -396,4 +440,7 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
       }
     }
   )
+
+  // Feature plugins (traffic-map-extras/): registered last so they inherit both hooks above.
+  await trafficMapExtraRoutes(app)
 }

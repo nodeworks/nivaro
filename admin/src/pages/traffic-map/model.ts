@@ -7,7 +7,8 @@ import {
   type SnapshotEntity,
   type TrafficEventWire,
   type TrafficFrame,
-  type TrafficSnapshot
+  type TrafficSnapshot,
+  type TrafficSource
 } from './types'
 
 export const RING = 900
@@ -134,6 +135,12 @@ export class TrafficModel {
   frameNo = 0
   lastFrameAt = 0
   downLabels = new Map<string, string>()
+  /** Server tap figures of the newest applied frame, by tap id ({} when it carried none). */
+  frameExt: Record<string, unknown> = {}
+  /** Server tap figures of the last snapshot, by tap id. Per-entity ones: entityMeta(k).ext. */
+  snapshotExt: Record<string, unknown> = {}
+  /** Non-request sources of the last snapshot. */
+  sources: TrafficSource[] = []
 
   get now(): number {
     return this.nowSec
@@ -174,6 +181,8 @@ export class TrafficModel {
     this.sockets = snap.sockets.count
     this.journalSeq = snap.journal_seq
     this.frameNo = snap.frame
+    this.snapshotExt = snap.ext ?? {}
+    this.sources = snap.sources ?? []
     const win = snap.window_s
     for (const e of snap.entities) {
       const r = this.ring(this.entities, e.key)
@@ -254,6 +263,7 @@ export class TrafficModel {
     this.sockets = f.sockets
     if (f.journal_seq != null) this.journalSeq = f.journal_seq
     this.instance = f.instance || this.instance
+    this.frameExt = f.ext ?? {}
     this.applyFrameData(f, sec)
     for (const [key, v] of Object.entries(f.entities))
       if (v[SLOT.error] > 0) this.flashes.set(key, Date.now())
