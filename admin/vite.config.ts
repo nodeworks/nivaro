@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+const API_TARGET = process.env.NIVARO_API_TARGET || 'http://localhost:3055'
+
 const sharedSrc = fileURLToPath(new URL('../packages/shared/src', import.meta.url))
 
 export default defineConfig(({ command }) => ({
@@ -39,12 +41,15 @@ export default defineConfig(({ command }) => ({
   worker: {
     format: 'es'
   },
+  // NIVARO_API_TARGET points the dev server at another API (pnpm dev:db);
+  // VITE_CACHE_DIR keeps a second dev server off this one's dependency cache.
+  ...(process.env.VITE_CACHE_DIR ? { cacheDir: process.env.VITE_CACHE_DIR } : {}),
   server: {
     port: 3056,
     proxy: {
-      '/api/': { target: 'http://localhost:3055', changeOrigin: true },
-      '/form/': { target: 'http://localhost:3055', changeOrigin: true },
-      '/socket.io/': { target: 'http://localhost:3055', changeOrigin: true, ws: true }
+      '/api/': { target: API_TARGET, changeOrigin: true },
+      '/form/': { target: API_TARGET, changeOrigin: true },
+      '/socket.io/': { target: API_TARGET, changeOrigin: true, ws: true }
     }
   },
   build: {

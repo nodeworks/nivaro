@@ -23,7 +23,8 @@ export interface ItemEvent {
   at: string
 }
 
-const CHANNEL = 'nvr:item-events'
+// REDIS_CHANNEL_PREFIX: see plugins/socketio.ts (pub/sub ignores the db index).
+const CHANNEL = `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:item-events`
 const NODE = randomUUID()
 let pub: Redis | null = null
 let sub: Redis | null = null

@@ -198,7 +198,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const pubClient = new Redis(app.redis.options)
   const subClient = new Redis(app.redis.options)
 
-  io.adapter(createAdapter(pubClient, subClient))
+  // Redis pub/sub channels ignore the db index, so two APIs on one Redis
+  // (pnpm dev:db beside the dev API) would deliver each other's room events.
+  // REDIS_CHANNEL_PREFIX keeps them apart; unset = the historic channel names.
+  io.adapter(
+    createAdapter(pubClient, subClient, {
+      key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`
+    })
+  )
   // socketId → where in the admin that user is right now (presence map;
   // per-node like recordViewers — same accepted Redis-adapter limitation)
   const pagePresence = new Map<

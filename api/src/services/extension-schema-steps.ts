@@ -247,6 +247,12 @@ export async function runSchemaSteps(
   const result: RunSchemaStepsResult = { applied: [], skipped: [], failed: [] }
   databases.set(extId, knex)
   if (steps.length === 0) return result
+  // SKIP_BOOT_MIGRATIONS=1 (pnpm dev:db) leaves the database exactly as found:
+  // extension schema steps are migrations too.
+  if (process.env.SKIP_BOOT_MIGRATIONS === '1') {
+    result.skipped.push(...steps.map((s) => s.id))
+    return result
+  }
   const list = opts.listSchema ?? listSchema
   const timeoutMs = opts.timeoutMs ?? 60_000
   let rows = await readRows(knex, extId).catch(() => [] as SchemaStepRow[])

@@ -54,7 +54,12 @@ async function main() {
 
   // Run pending migrations on startup (self-hosted only).
   // In cloud mode, tenant migrations are run by the provisioning system.
-  if (!process.env.CLOUD_META_DB_URL) {
+  // SKIP_BOOT_MIGRATIONS=1 boots against a database WITHOUT migrating it (a
+  // throwaway API pointed at a database it must only inspect — pnpm dev:db);
+  // /api/ready still reports any pending files.
+  if (process.env.SKIP_BOOT_MIGRATIONS === '1') {
+    console.log('Migrations: skipped (SKIP_BOOT_MIGRATIONS=1)')
+  } else if (!process.env.CLOUD_META_DB_URL) {
     const [batch, migrations] = await bootPhase('Migrations', () => runMigrationsSafely())
     if (migrations.length > 0) {
       console.log(`Migrations: ran batch ${batch}: ${migrations.join(', ')}`)
