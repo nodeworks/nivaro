@@ -7,10 +7,13 @@ import './globals.css'
 import App from './App'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
 import { captureMasqueradeFromHash, installMasqueradeFetch } from './lib/masquerade'
+import { installPageContextFetch } from './lib/page-context'
 
 // A "View as" tab (#640) reads its token before anything fetches.
 captureMasqueradeFromHash()
 installMasqueradeFetch()
+// Every fetch to the API (SDK clients included) says which screen it came from (#1113 / #1116).
+installPageContextFetch({ app: 'admin' })
 
 window.__NIVARO__ = {
   React,
