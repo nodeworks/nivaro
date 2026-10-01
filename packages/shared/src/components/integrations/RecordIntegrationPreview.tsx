@@ -175,6 +175,11 @@ function useRecheckOnRecordWrites(collection: string, itemId: string) {
  * a header row of buttons keeps its rhythm: the parent must be `relative`.
  * The full chip is for lists with room to read.
  */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
 /** Corner-badge placement over the button it describes (parent is `relative`). */
 const BADGE_POS =
   'absolute -right-1.5 -top-1.5 z-[1] inline-flex items-center justify-center rounded-full ring-2 ring-white dark:ring-card'
@@ -252,17 +257,43 @@ export function PushReadinessChip({
       : issues.length > 0
         ? 'warn'
         : 'ready'
+  // What pressing the button would actually send, in partner names. An item
+  // action's own pre-flight may not report pushes at all (undefined).
+  const pushes = data?.pushes
+  const sending = [
+    ...new Set((pushes ?? []).filter((p) => p.status === 'would_push').map((p) => p.api_name))
+  ]
+  const held = [
+    ...new Set((pushes ?? []).filter((p) => p.status === 'unchanged').map((p) => p.api_name))
+  ]
+  const sendsNothing = !!pushes && sending.length === 0
+  const readyText = !pushes
+    ? 'Nothing missing'
+    : sending.length > 0
+      ? `Will send to ${joinNames(sending)}`
+      : held.length > 0
+        ? `Nothing new for ${joinNames(held)}`
+        : 'Sends nothing for this record'
   const headline =
     state === 'ready'
-      ? 'Ready'
+      ? readyText
       : state === 'error'
         ? 'Could not check'
         : (blocking[0] ?? issues[0]).message
   const more = issues.length > 1 ? ` +${issues.length - 1}` : ''
   const tip =
     state === 'ready'
-      ? `${label}: ready to send`
+      ? !pushes
+        ? `${label}: everything it needs is filled in`
+        : sending.length > 0
+          ? `${label} will send to ${joinNames(sending)}; everything it needs is filled in`
+          : held.length > 0
+            ? `${label} won't resend to ${joinNames(held)}; nothing it watches has changed`
+            : `${label} sends nothing to a partner for this record`
       : `${label}: ${headline}${more ? ` (and ${issues.length - 1} more)` : ''}`
+  // On a button, a green check for "nothing goes out" is noise: only speak
+  // when something will be sent or something stands in the way.
+  if (compact && state === 'ready' && sendsNothing) return null
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -332,7 +363,11 @@ export function PushReadinessChip({
         ) : issues.length === 0 ? (
           <p className='mt-2 flex items-center gap-1.5 text-[12px] text-emerald-800 dark:text-emerald-300'>
             <CheckCircle2 className='h-3.5 w-3.5' />
-            Everything it needs is filled in.
+            {sendsNothing
+              ? held.length > 0
+                ? `Nothing new to send: ${joinNames(held)} already has these values.`
+                : 'Nothing goes to a partner from this record.'
+              : 'Everything it needs is filled in.'}
           </p>
         ) : (
           <div className='mt-2'>
