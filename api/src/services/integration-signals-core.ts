@@ -121,21 +121,28 @@ export function registerCoreIntegrationSignals(): void {
       const starts = new Map<number, { id: number; at: Date }>()
       const unbounded = flagged.filter((f) => f.streak === f.list.length).map((f) => f.apiId)
       if (unbounded.length > 0) {
-        const found = (await selectInChunks(unbounded, 1000, (chunk) =>
-          db.raw(
-            `SELECT l.api_id, MIN(l.id) AS first_id, MIN(l.created_at) AS first_at
-               FROM nivaro_outbound_log l
-              WHERE l.api_id IN (${chunk.map(() => '?').join(',')})
-                AND l.id > ISNULL((SELECT MAX(s.id) FROM nivaro_outbound_log s
-                                    WHERE s.api_id = l.api_id AND s.ok = 1), 0)
-              GROUP BY l.api_id`,
-            chunk
-          )
-        )) as Array<{ api_id: number; first_id: number | null; first_at: Date | null }>
-        for (const f of found) {
-          if (f.first_id != null && f.first_at != null) {
-            starts.set(Number(f.api_id), { id: Number(f.first_id), at: new Date(f.first_at) })
-          }
+        // Two plain reads, never one statement with a correlated "last success"
+        // subquery: with a single id in the IN list SQL Server chose a nested
+        // loop that re-scanned the API's whole log once per row — quadratic, it
+        // blew the 15 s request timeout on an API with ~6k failing calls.
+        const lastOk = new Map<number, number>()
+        const okRows = (await selectInChunks(unbounded, 1000, (chunk) =>
+          db('nivaro_outbound_log')
+            .whereIn('api_id', chunk)
+            .where('ok', true)
+            .groupBy('api_id')
+            .select('api_id')
+            .max('id as last_ok')
+        )) as Array<{ api_id: number; last_ok: number | null }>
+        for (const r of okRows)
+          if (r.last_ok != null) lastOk.set(Number(r.api_id), Number(r.last_ok))
+        for (const apiId of unbounded) {
+          const first = (await db('nivaro_outbound_log')
+            .where('api_id', apiId)
+            .where('id', '>', lastOk.get(apiId) ?? 0)
+            .orderBy('id', 'asc')
+            .first('id', 'created_at')) as { id: number; created_at: Date } | undefined
+          if (first) starts.set(apiId, { id: Number(first.id), at: new Date(first.created_at) })
         }
       }
       const rows: SignalRow[] = []

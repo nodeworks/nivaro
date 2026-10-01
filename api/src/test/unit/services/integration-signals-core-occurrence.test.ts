@@ -11,15 +11,26 @@ type Row = Record<string, unknown>
 const state: {
   outbound: Row[]
   raw: (sql: string, bindings?: unknown[]) => Row[]
-} = { outbound: [], raw: () => [] }
+  /** The streak-start lookup: last success per api, first call after it. */
+  lastOk: Row[]
+  firstAfter: Row | undefined
+} = { outbound: [], raw: () => [], lastOk: [], firstAfter: undefined }
 
 vi.mock('../../../db/index.js', () => {
   const chain = (rows: () => Row[]) => {
     const api: Record<string, unknown> = {}
+    let grouped = false
     for (const m of ['where', 'whereIn', 'orderBy', 'limit', 'whereNull']) {
       api[m] = () => api
     }
-    api.select = async () => rows()
+    api.groupBy = () => {
+      grouped = true
+      return api
+    }
+    // A grouped read continues to .max(); a plain one is awaited at .select().
+    api.select = () => (grouped ? api : Promise.resolve(rows()))
+    api.max = async () => state.lastOk
+    api.first = async () => state.firstAfter
     return api
   }
   const db = ((table: string) =>
@@ -59,6 +70,8 @@ describe('core:partner-failing occurrence', () => {
   beforeEach(() => {
     state.outbound = []
     state.raw = () => []
+    state.lastOk = []
+    state.firstAfter = undefined
   })
 
   it('is the first failing call of the streak, and stays put while the outage continues', async () => {
@@ -70,10 +83,8 @@ describe('core:partner-failing occurrence', () => {
     // Cycles 2 and 3: the window has slid past the last success — every call
     // in it failed. The streak START is found in the database, not assumed to
     // be the oldest call the window still holds.
-    state.raw = (sql) =>
-      /MAX\(s\.id\)/.test(sql)
-        ? [{ api_id: 7, first_id: 10, first_at: new Date(Date.now() - 70 * 60_000) }]
-        : []
+    state.lastOk = [{ api_id: 7, last_ok: 9 }]
+    state.firstAfter = { id: 10, created_at: new Date(Date.now() - 70 * 60_000) }
     state.outbound = [call(14, false), call(13, false), call(12, false), call(11, false)]
     const c2 = await partnerRows()
     state.outbound = [call(16, false), call(15, false), call(14, false), call(13, false)]
