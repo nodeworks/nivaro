@@ -3,7 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
-import { setTraceUser } from '../services/request-trace.js'
+import { setTraceUser, span } from '../services/request-trace.js'
 import type { Role, User } from '../types.js'
 
 export interface ApiKeyScope {
@@ -325,6 +325,11 @@ export function checkApiKeyScope(req: FastifyRequest, action: string, collection
 // ─── Main authenticate middleware ─────────────────────────────────────────────
 
 export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
+  // Timed as its own phase (Traffic Map latency split, #1151); a pass-through outside a request.
+  return span('auth', () => authenticateRequest(req, reply))
+}
+
+async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
   // Bearer auth — Authorization: Bearer <token>
   const authHeader = req.headers.authorization
   if (authHeader?.startsWith('Bearer ')) {

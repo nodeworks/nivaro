@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { chainFields } from './chain-columns.js'
-import { currentTraceCaller } from './request-trace.js'
+import { currentTraceCaller, noteDerivedWrite } from './request-trace.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
 // 'pulse' socket room when the server has registered itself here.
@@ -94,6 +94,7 @@ export async function logActivity(opts: {
       .returning('id')) as unknown[]
     const row = rows[0] as { id: number } | number
     const id = typeof row === 'object' && row !== null ? row.id : (row as number)
+    noteDerivedWrite('activity')
     try {
       _pulseApp?.io?.to('pulse').emit('activity:pulse', {
         id,

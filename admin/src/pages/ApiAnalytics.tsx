@@ -653,6 +653,7 @@ function IndexAdvisorPanel() {
     rows: number
     reasons: string[]
     create_sql: string
+    live?: { filter: number; sort: number; ops: string[] }
   }> = data?.suggestions ?? []
 
   // Bulk runs in the background — poll its job run for live progress.
@@ -735,8 +736,9 @@ function IndexAdvisorPanel() {
           </p>
           <p className='mt-0.5 text-[11.5px] text-slate-400'>
             Columns your config filters on (foreign keys, queue filters, row-level security,
-            workflow state mirrors) that have no index on tables over{' '}
-            {((data?.min_rows ?? 50000) / 1000).toFixed(0)}k rows.
+            workflow state mirrors) or that live reads filtered and sorted by in the last 15
+            minutes, with no index, on tables over {((data?.min_rows ?? 50000) / 1000).toFixed(0)}k
+            rows.
           </p>
         </div>
         {suggestions.length > 0 && (
@@ -803,6 +805,22 @@ function IndexAdvisorPanel() {
                     </span>
                   </p>
                   <p className='text-[11px] text-slate-400'>{s.reasons.join(' · ')}</p>
+                  {s.live && (
+                    <p
+                      data-index-live={key}
+                      className='mt-1 inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-800 dark:bg-sky-900/30 dark:text-sky-200'
+                      title='Reads on this API process in the last 15 minutes (Traffic Map)'
+                    >
+                      Live:{' '}
+                      {[
+                        s.live.filter ? `filtered ${s.live.filter}×` : '',
+                        s.live.sort ? `sorted ${s.live.sort}×` : ''
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      {s.live.ops.length ? ` (${s.live.ops.join(', ')})` : ''}
+                    </p>
+                  )}
                 </div>
                 <button
                   type='button'

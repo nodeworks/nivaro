@@ -25,6 +25,7 @@ import {
   resolveExtraPathValues,
   stateFilterKeep
 } from './queues.js'
+import { noteDerivedWrite } from './request-trace.js'
 import { resolveRecordZones } from './sla-zones.js'
 
 /**
@@ -178,7 +179,10 @@ async function syncOneMaterializedRow(
 
   const matches = await queueItemMatchesSource(collection, itemId, source)
   if (!matches) {
-    if (existing) await db('nivaro_queue_items').where({ id: existing.id }).delete()
+    if (existing) {
+      await db('nivaro_queue_items').where({ id: existing.id }).delete()
+      noteDerivedWrite('queue')
+    }
     return
   }
 
@@ -203,6 +207,7 @@ async function syncOneMaterializedRow(
     queueItemId = inserted.id
   }
 
+  noteDerivedWrite('queue')
   await db('nivaro_queue_item_owners').where({ queue_item_id: queueItemId }).delete()
   if (ownerIds.length > 0) {
     await db('nivaro_queue_item_owners').insert(

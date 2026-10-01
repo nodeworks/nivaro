@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { timeAccess, timeAccessSync } from './request-trace.js'
 
 /**
  * User Scopes — per-user dimensional defaults + restrictions with
@@ -631,6 +632,15 @@ export function applyScopeEnforcement(
   collection: string,
   enforcement: ScopeEnforcement
 ): void {
+  // Access-check cost (Traffic Map, #1146): a pass-through outside a request.
+  timeAccessSync(() => compileScopeEnforcement(q, collection, enforcement))
+}
+
+function compileScopeEnforcement(
+  q: import('knex').Knex.QueryBuilder,
+  collection: string,
+  enforcement: ScopeEnforcement
+): void {
   if (enforcement.deny) {
     void q.whereRaw('1 = 0')
     return
@@ -650,7 +660,9 @@ export async function applyUserScopesToQuery(
   collection: string,
   user: User
 ): Promise<void> {
-  applyScopeEnforcement(q, collection, await getUserScopeEnforcement(user, collection))
+  await timeAccess(async () =>
+    applyScopeEnforcement(q, collection, await getUserScopeEnforcement(user, collection))
+  )
 }
 
 // ── Defaults + display (for /users/me/scopes and editors) ────────────────────

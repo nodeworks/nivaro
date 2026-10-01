@@ -93,6 +93,93 @@ interface TraceContext {
   /** Statements started but not yet answered, by knex query uid. */
   inflight: Map<string, { sql: string; bindings: unknown[]; start: number }>
   queries: number
+  /** Measurement every request keeps (Traffic Map taps read it at onResponse). */
+  m: Measure
+}
+
+/**
+ * Per-request figures kept for EVERY traced request (not only slow ones), read once by the
+ * Traffic Map at onResponse (#1108 / #1151 / #1146 / #1145 / #1135). Plain numbers updated in
+ * place — nothing here allocates per statement or per span.
+ */
+interface Measure {
+  /** Wall time with at least one statement in flight (concurrent statements count once). */
+  sqlWall: number
+  /** When the current in-flight stretch began (valid while a statement is in flight). */
+  sqlWallStart: number
+  /** Wall time per category (auth, metadata, hooks), SQL inside included. */
+  cat: [number, number, number]
+  catOpen: [number, number, number]
+  catStart: [number, number, number]
+  catSql: [number, number, number]
+  /** Database wall time that ran inside a category (the SQL bar shows the rest). */
+  catSqlIn: number
+  /** Row filter + User Scope enforcement, wall time (SQL inside counts). */
+  accessMs: number
+  accessOpen: number
+  accessStart: number
+  /** preSerialization → onSend; 0 when the handler sent a string. */
+  serStart: number
+  serMs: number
+  /** The largest identical-statement run any span saw (the N+1 shape) and its SQL. */
+  repeatN: number
+  repeatSql: string | null
+  /** [direct, rollup, queue, integrity, revision, activity] writes; null until the first. */
+  derived: number[] | null
+  /** The first readItems of the request: its collection + compiled filter / sort inputs. */
+  shape: ReadShapeRef | null
+}
+
+/** What the first `readItems` of a request was asked for (references, never copied). */
+export interface ReadShapeRef {
+  collection: string
+  filter: unknown
+  sort: readonly string[]
+  conditions: unknown
+}
+
+export type DerivedWriteKind = 'direct' | 'rollup' | 'queue' | 'integrity' | 'revision' | 'activity'
+export const DERIVED_KINDS: readonly DerivedWriteKind[] = [
+  'direct',
+  'rollup',
+  'queue',
+  'integrity',
+  'revision',
+  'activity'
+]
+
+function newMeasure(): Measure {
+  return {
+    sqlWall: 0,
+    sqlWallStart: 0,
+    cat: [0, 0, 0],
+    catOpen: [0, 0, 0],
+    catStart: [0, 0, 0],
+    catSql: [0, 0, 0],
+    catSqlIn: 0,
+    accessMs: 0,
+    accessOpen: 0,
+    accessStart: 0,
+    serStart: 0,
+    serMs: 0,
+    repeatN: 0,
+    repeatSql: null,
+    derived: null,
+    shape: null
+  }
+}
+
+/** Database wall time so far, the stretch still in flight included. */
+function sqlWallNow(ctx: TraceContext, now: number): number {
+  return ctx.m.sqlWall + (ctx.inflight.size > 0 ? now - ctx.m.sqlWallStart : 0)
+}
+
+/** auth = 0, metadata = 1, hooks = 2, anything else -1. */
+export function spanCategory(phase: string): number {
+  if (phase === 'auth') return 0
+  if (phase.startsWith('permissions') || phase.startsWith('metadata')) return 1
+  if (phase.startsWith('hook') || phase.startsWith('rules:')) return 2
+  return -1
 }
 
 /** What activity attribution reads off the live request (#609 / #617). */
@@ -110,10 +197,13 @@ const CAPACITY = Number(process.env.TRACE_BUFFER ?? 200)
 
 const buffer: TraceRecord[] = []
 
+/** request object → its trace context, so onResponse readers never depend on the ALS chain. */
+const byRequest = new WeakMap<object, TraceContext>()
+
 export function beginTrace(urlHint?: string, request?: TraceCallerSource): void {
   // enterWith (rather than als.run) is what lets a Fastify onRequest hook scope
   // the context for the whole request without wrapping the handler chain.
-  als.enterWith({
+  const ctx: TraceContext = {
     start: performance.now(),
     spans: [],
     urlHint,
@@ -121,8 +211,11 @@ export function beginTrace(urlHint?: string, request?: TraceCallerSource): void 
     request,
     statements: [],
     inflight: new Map(),
-    queries: 0
-  })
+    queries: 0,
+    m: newMeasure()
+  }
+  if (request && typeof request === 'object') byRequest.set(request, ctx)
+  als.enterWith(ctx)
 }
 
 /** How the current request authenticated, for a write that has no request
@@ -154,7 +247,8 @@ export function runInTrace<T>(
       userId: userId ?? undefined,
       statements: [],
       inflight: new Map(),
-      queries: 0
+      queries: 0,
+      m: newMeasure()
     },
     fn
   )
@@ -193,9 +287,22 @@ export async function span<T>(phase: string, fn: () => Promise<T>, detail?: stri
   const start = performance.now()
   const q0 = ctx.queries
   const s0 = ctx.statements.length
+  const m = ctx.m
+  const cat = spanCategory(phase)
+  if (cat >= 0 && m.catOpen[cat]++ === 0) {
+    m.catStart[cat] = start
+    m.catSql[cat] = sqlWallNow(ctx, start)
+  }
   try {
     return await fn()
   } finally {
+    if (cat >= 0 && --m.catOpen[cat] === 0) {
+      // Union wall time of the category's (possibly overlapping) spans; the database time spent
+      // inside them is remembered so the SQL bar shows only the SQL outside every category.
+      const now = performance.now()
+      m.cat[cat] += now - m.catStart[cat]
+      m.catSqlIn += Math.max(0, sqlWallNow(ctx, now) - m.catSql[cat])
+    }
     // Recorded in `finally` so a phase that throws still shows its cost — the
     // slow thing and the failing thing are often the same thing.
     const rec: TraceSpan = {
@@ -213,7 +320,13 @@ export async function span<T>(phase: string, fn: () => Promise<T>, detail?: stri
       // shape that repeated, which is what an N+1 hunt needs.
       const ran = ctx.statements.slice(s0)
       const repeat = repeatedShape(ran)
-      if (repeat) rec.repeat = repeat
+      if (repeat) {
+        rec.repeat = repeat
+        if (repeat.n > m.repeatN) {
+          m.repeatN = repeat.n
+          m.repeatSql = repeat.sql
+        }
+      }
       const wide = wideByTable(ran)
       if (wide.length) rec.wide = wide
     }
@@ -292,10 +405,12 @@ export function attachQueryTracing(client: {
     const ev = q as KnexQueryEvent
     ctx.queries++
     if (!ev.__knexQueryUid || typeof ev.sql !== 'string') return
+    const start = performance.now()
+    if (ctx.inflight.size === 0) ctx.m.sqlWallStart = start
     ctx.inflight.set(ev.__knexQueryUid, {
       sql: ev.sql,
       bindings: Array.isArray(ev.bindings) ? ev.bindings : [],
-      start: performance.now()
+      start
     })
   })
   const settle = (q: unknown) => {
@@ -307,12 +422,15 @@ export function attachQueryTracing(client: {
     const started = ctx.inflight.get(uid)
     if (!started) return
     ctx.inflight.delete(uid)
+    const now = performance.now()
+    const ms = now - started.start
+    if (ctx.inflight.size === 0) ctx.m.sqlWall += now - ctx.m.sqlWallStart
     if (ctx.statements.length >= STATEMENT_CAP) return
     const sql = started.sql.length > SQL_CAP ? `${started.sql.slice(0, SQL_CAP)}…` : started.sql
     ctx.statements.push({
       sql,
       bindings: started.bindings.slice(0, 40),
-      ms: performance.now() - started.start,
+      ms,
       at: started.start - ctx.start,
       wideTable: wideTableOf(started.sql)
     })
@@ -348,6 +466,117 @@ export function markSpan(phase: string, ms: number, detail?: string): void {
 /** True when the current request is being traced — lets callers skip building detail strings. */
 export function isTracing(): boolean {
   return als.getStore() !== undefined
+}
+
+// ─── Per-request measurement (Traffic Map, #1108 / #1151 / #1146 / #1145 / #1135) ─────────
+// Every function below is a no-op outside a traced request and allocates nothing on the way in.
+
+/** A write the request caused: its own (`direct`) or one derived from it (rollup, queue cache,
+ *  integrity check, revision, activity row). */
+export function noteDerivedWrite(kind: DerivedWriteKind, n = 1): void {
+  const ctx = als.getStore()
+  if (!ctx || n <= 0) return
+  const i = DERIVED_KINDS.indexOf(kind)
+  if (i < 0) return
+  if (!ctx.m.derived) ctx.m.derived = [0, 0, 0, 0, 0, 0]
+  ctx.m.derived[i] += n
+}
+
+/** The first list read of the request (its filter / sort / conditions, kept by reference). */
+export function noteReadShape(
+  collection: string,
+  filter: unknown,
+  sort: readonly string[],
+  conditions: unknown
+): void {
+  const ctx = als.getStore()
+  if (!ctx || ctx.m.shape) return
+  ctx.m.shape = { collection, filter, sort, conditions }
+}
+
+function accessEnter(m: Measure): void {
+  if (m.accessOpen++ === 0) m.accessStart = performance.now()
+}
+function accessLeave(m: Measure): void {
+  if (--m.accessOpen === 0) m.accessMs += performance.now() - m.accessStart
+}
+
+/** Time row-filter / User Scope enforcement (nested calls count once). */
+export async function timeAccess<T>(fn: () => Promise<T>): Promise<T> {
+  const ctx = als.getStore()
+  if (!ctx) return fn()
+  accessEnter(ctx.m)
+  try {
+    return await fn()
+  } finally {
+    accessLeave(ctx.m)
+  }
+}
+export function timeAccessSync<T>(fn: () => T): T {
+  const ctx = als.getStore()
+  if (!ctx) return fn()
+  accessEnter(ctx.m)
+  try {
+    return fn()
+  } finally {
+    accessLeave(ctx.m)
+  }
+}
+
+/** preSerialization (object payloads only). */
+export function markSerializeStart(req: object): void {
+  const ctx = byRequest.get(req)
+  if (ctx) ctx.m.serStart = performance.now()
+}
+/** onSend: closes the serialization window opened above. */
+export function markSerializeEnd(req: object): void {
+  const ctx = byRequest.get(req)
+  if (ctx && ctx.m.serStart > 0) {
+    ctx.m.serMs += performance.now() - ctx.m.serStart
+    ctx.m.serStart = 0
+  }
+}
+
+/** What one finished request measured — read by the Traffic Map at onResponse. */
+export interface RequestMeasure {
+  queries: number
+  /** Wall time waiting on the database (concurrent statements count once). */
+  sqlMs: number
+  /** The part of sqlMs outside auth / metadata / hooks (the latency split's SQL bar). */
+  sqlOutsideMs: number
+  authMs: number
+  metadataMs: number
+  hooksMs: number
+  serializationMs: number
+  accessMs: number
+  repeatN: number
+  repeatSql: string | null
+  /** [direct, rollup, queue, integrity, revision, activity]; null when it wrote nothing. */
+  derived: readonly number[] | null
+  shape: ReadShapeRef | null
+}
+
+/** The measurement of the request `req` (null when it was not traced, e.g. not under /api). */
+export function requestMeasure(req: unknown): RequestMeasure | null {
+  if (!req || typeof req !== 'object') return null
+  const ctx = byRequest.get(req)
+  if (!ctx) return null
+  const m = ctx.m
+  const sql = sqlWallNow(ctx, performance.now())
+  return {
+    queries: ctx.queries,
+    sqlMs: sql,
+    sqlOutsideMs: Math.max(0, sql - m.catSqlIn),
+    authMs: m.cat[0],
+    metadataMs: m.cat[1],
+    hooksMs: m.cat[2],
+    serializationMs: m.serMs,
+    accessMs: m.accessMs,
+    repeatN: m.repeatN,
+    repeatSql: m.repeatSql,
+    derived: m.derived,
+    shape: m.shape
+  }
 }
 
 // ─── Follow-this-user (#309) ─────────────────────────────────────────────────
