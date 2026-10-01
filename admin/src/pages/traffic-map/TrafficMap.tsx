@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { Waypoints } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -6,11 +7,21 @@ import { adminRealtime, getSocket, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { callerLabel, EventTicker, KIND_VAR } from './EventTicker'
 import { HotEntities } from './HotEntities'
-import { describeSelection, Inspector, InspectorPlaceholder } from './Inspector'
+import {
+  describeSelection,
+  type Hours,
+  historyAvailable,
+  historyUrl,
+  hoursPhrase,
+  Inspector,
+  InspectorPlaceholder
+} from './Inspector'
 import { MapCanvas } from './MapCanvas'
 import { defaultFilters, laneOf, TrafficModel } from './model'
 import { type StripData, SummaryStrip } from './SummaryStrip'
 import type {
+  DownHistory,
+  EntityHistory,
   Filters,
   Kind,
   Lane,
@@ -62,6 +73,8 @@ export default function TrafficMap() {
   filtersRef.current = filters
   const [catalog, setCatalog] = useState<TrafficCatalog | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
+  /** Inspector range: 0 = live (the ring); 1/6/24 h read the request log. Kept across selections. */
+  const [hours, setHours] = useState<Hours>(0)
   const [paused, setPaused] = useState(false)
   const pausedRef = useRef(false)
   const [tick, setTick] = useState(0)
@@ -261,6 +274,17 @@ export default function TrafficMap() {
     () => (ready && selection ? describeSelection(m, selection, filters, catalog) : null),
     [m, ready, selection, filters, catalog, tick]
   )
+  const canHistory = historyAvailable(selection)
+  const historyQ = useQuery({
+    queryKey: ['traffic-map', 'history', selection?.kind, selection?.id, hours],
+    queryFn: async () => {
+      const res = await api.get(historyUrl(selection as Selection, hours))
+      return res.data.data as EntityHistory | DownHistory
+    },
+    enabled: canHistory && hours > 0,
+    staleTime: 60_000
+  })
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick forces a re-read of the mutable model
   const callerOptions = useMemo(() => {
     const keys = new Set(m.callerKeys())
@@ -474,10 +498,25 @@ export default function TrafficMap() {
             stale={stale && !paused}
           />
           <p className='sr-only' aria-live='polite' id='tm-inspector-announce'>
-            {inspector ? `Inspecting ${inspector.name}` : ''}
+            {inspector
+              ? `Inspecting ${inspector.name}${canHistory && hours > 0 ? `, ${hoursPhrase(hours)}` : ''}`
+              : ''}
           </p>
           {inspector && selection ? (
-            <Inspector d={inspector} catalog={catalog} />
+            <Inspector
+              d={inspector}
+              catalog={catalog}
+              selKey={selection.id}
+              history={{
+                hours,
+                onHours: setHours,
+                available: canHistory,
+                data: historyQ.data ?? null,
+                state: historyQ.isError ? 'error' : historyQ.isFetching ? 'loading' : 'idle',
+                error: historyQ.error ? errorText(historyQ.error) : null,
+                onRetry: () => void historyQ.refetch()
+              }}
+            />
           ) : (
             <InspectorPlaceholder loading={!ready} />
           )}

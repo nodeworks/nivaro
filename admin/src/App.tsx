@@ -651,6 +651,7 @@ export default function App() {
                   />
                   <Route path='privacy-retention' element={<RetentionPoliciesPage />} />
                   <Route path='issues' element={<IssuesPage />} />
+                  <Route path='issues/:id' element={<IssuesPage />} />
                   {/* The workflow template editor merged into /pipelines —
                       old links land on the unified editor. */}
                   <Route path='workflows' element={<Navigate to='/pipelines' replace />} />

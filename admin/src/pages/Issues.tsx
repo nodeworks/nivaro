@@ -9,8 +9,8 @@ import {
   Plus,
   X
 } from 'lucide-react'
-import { useState } from 'react'
-import { Link } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -452,6 +452,7 @@ function IssueRows({
   return (
     <>
       <tr
+        id={`issue-row-${issue.id}`}
         className='cursor-pointer border-b border-slate-100 text-[12px] hover:bg-slate-50 dark:border-border/50 dark:hover:bg-muted/40'
         onClick={onToggle}
       >
@@ -516,6 +517,9 @@ export function IssuesPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
+  // Deep link /issues/:id (Traffic Map's open issues): expand that row once the list has it.
+  const { id: linkedId } = useParams()
+  const linkedDone = useRef<string | null>(null)
 
   const params = new URLSearchParams()
   if (statusFilter) params.set('status', statusFilter)
@@ -529,6 +533,27 @@ export function IssuesPage() {
     queryFn: () =>
       api.get<{ data: Issue[] }>(`/issues${qs ? `?${qs}` : ''}`).then((r) => r.data.data)
   })
+
+  // A linked issue older than the newest 200 is not in the list: fetch it and pin it on top.
+  const linkedNum = linkedId && /^\d+$/.test(linkedId) ? Number(linkedId) : null
+  const linkedInList = linkedNum != null && issues.some((i) => i.id === linkedNum)
+  const { data: linkedIssue } = useQuery({
+    queryKey: ['issue-full', linkedNum],
+    queryFn: () => api.get<{ data: Issue }>(`/issues/${linkedNum}`).then((r) => r.data.data),
+    enabled: linkedNum != null && !isLoading && !linkedInList,
+    staleTime: 60_000
+  })
+  const rows = !linkedInList && linkedIssue ? [linkedIssue, ...issues] : issues
+
+  useEffect(() => {
+    if (linkedNum == null || linkedDone.current === linkedId) return
+    if (!rows.some((i) => i.id === linkedNum)) return
+    linkedDone.current = linkedId ?? null
+    setExpandedId(linkedNum)
+    requestAnimationFrame(() =>
+      document.getElementById(`issue-row-${linkedNum}`)?.scrollIntoView({ block: 'center' })
+    )
+  }, [linkedId, linkedNum, rows])
 
   const { data: summary } = useQuery<{
     by_status: Record<string, number>
@@ -733,7 +758,7 @@ export function IssuesPage() {
               </tr>
             </thead>
             <tbody>
-              {issues.map((issue) => {
+              {rows.map((issue) => {
                 const isOpen = expandedId === issue.id
                 return (
                   <IssueRows

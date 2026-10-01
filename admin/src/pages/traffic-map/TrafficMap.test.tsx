@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 
@@ -109,6 +111,18 @@ const catalog = {
   down: { db: 'SQL Server', redis: 'Redis', store: 'File storage' }
 }
 
+/** R25: the inspector renders <Link>s and reads history through react-query. */
+function renderPage() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <TrafficMap />
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
+}
+
 // R21: the setup file mocks `api.get`; cast so admin tsc (which includes tests) accepts the shape.
 const getMock = api.get as unknown as ReturnType<typeof vi.fn>
 function mockApi() {
@@ -144,7 +158,7 @@ describe('TrafficMap page', () => {
 
   it('seeds from the snapshot, selects the busiest entity, and applies a frame', async () => {
     mockApi()
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
     expect(screen.getByTestId('tm-instance').textContent).toBe('test-node')
     expect(screen.getByTestId('tm-strip-sockets').textContent).toBe('3')
@@ -187,7 +201,7 @@ describe('TrafficMap page', () => {
 
   it('the kind chips filter the ticker and the pause button stops applying frames', async () => {
     mockApi()
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
     act(() => {
       handlers.get('traffic-map:frame')?.({
@@ -228,7 +242,7 @@ describe('TrafficMap page', () => {
 
   it('refetches the snapshot when the socket re-authenticates (R23)', async () => {
     mockApi()
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
     const snapshotCalls = () =>
       getMock.mock.calls.filter((c) => String(c[0]).includes('/snapshot')).length
@@ -244,7 +258,7 @@ describe('TrafficMap page', () => {
       if (url.includes('/snapshot')) throw new Error('boom')
       return { data: { data: catalog } }
     })
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/boom/))
     mockApi()
     act(() => {
@@ -287,7 +301,7 @@ describe('TrafficMap page', () => {
     getMock.mockImplementation(async (url: string) => ({
       data: { data: url.includes('catalog') ? catalog : odd }
     }))
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getAllByTestId('tm-hot-row')).toHaveLength(2))
     act(() => {
       handlers.get('traffic-map:frame')?.({
@@ -315,7 +329,7 @@ describe('TrafficMap page', () => {
 
   it('announces only the selection, not every frame (no live region on the inspector)', async () => {
     mockApi()
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getByTestId('tm-inspector-name')).toBeInTheDocument())
     expect(document.getElementById('tm-inspector')?.getAttribute('aria-live')).toBeNull()
     expect(document.getElementById('tm-inspector-announce')?.textContent).toBe(
@@ -328,7 +342,7 @@ describe('TrafficMap page', () => {
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
     try {
       mockApi()
-      render(<TrafficMap />)
+      renderPage()
       await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
       const snapshotCalls = () =>
         getMock.mock.calls.filter((c) => String(c[0]).includes('/snapshot')).length
@@ -350,7 +364,7 @@ describe('TrafficMap page', () => {
 
   it('the empty ticker names the selected window', async () => {
     mockApi()
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getByText(/No traffic in the last 60 s/)).toBeInTheDocument())
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: '5m' }))
@@ -362,7 +376,7 @@ describe('TrafficMap page', () => {
 
   it('fades only newly arrived events, not older rows revealed by a filter', async () => {
     mockApi()
-    render(<TrafficMap />)
+    renderPage()
     await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'read' }))
@@ -451,5 +465,130 @@ describe('TrafficMap page', () => {
     expect(cells[2].textContent).toBe('1')
     expect(cells[3].textContent).toBe('558 ms')
     expect(cells[4].textContent).toBe('2.9%')
+  })
+})
+
+const historyBody = {
+  key: 'items/workflows',
+  hours: 6,
+  bucket_s: 300,
+  series: Array.from({ length: 72 }, (_, i) => ({
+    t: new Date(T0 * 1000 + i * 300_000).toISOString(),
+    req: 10,
+    error: i === 71 ? 2 : 0,
+    p95: 400
+  })),
+  totals: { req: 720, read: 600, write_requests: 100, error: 20, p50: 150, p95: 610 },
+  status_codes: { '200': 700, '422': 20 },
+  top_routes: [{ route: 'GET /api/items/workflows', n: 500 }],
+  top_callers: [{ key: 'uA', n: 700 }],
+  issues: [
+    {
+      id: 9120,
+      title: '[server] GET /api/items/workflows: KnexTimeoutError',
+      severity: 'high',
+      status: 'open',
+      occurrence_count: 4,
+      last_seen_at: new Date(T0 * 1000).toISOString()
+    }
+  ],
+  slow_traces: [
+    {
+      id: 't1',
+      route: '/api/items/workflows',
+      total_ms: 4120,
+      ts: new Date(T0 * 1000).toISOString()
+    }
+  ],
+  truncated: true
+}
+
+describe('inspector history', () => {
+  beforeEach(() => {
+    handlers.clear()
+    socketHandlers.clear()
+    getMock.mockReset()
+  })
+
+  it('switching to 6h fetches the entity history and shows issues and slow traces', async () => {
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes('/traffic-map/snapshot')) return { data: { data: snapshot } }
+      if (url.includes('/traffic-map/catalog')) return { data: { data: catalog } }
+      if (url.includes('/traffic-map/entity/items/workflows?hours=6'))
+        return { data: { data: historyBody } }
+      return { data: { data: {} } }
+    })
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByTestId('tm-inspector-name').textContent).toBe('workflows')
+    )
+    expect(screen.getByRole('button', { name: 'Live' })).toHaveAttribute('aria-pressed', 'true')
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: '6h' }))
+    })
+    await waitFor(() => expect(screen.getByText(/KnexTimeoutError/)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '6h' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('tm-inspector-req').textContent).toBe('720')
+    expect(screen.getByRole('link', { name: /KnexTimeoutError/ })).toHaveAttribute(
+      'href',
+      '/issues/9120'
+    )
+    expect(screen.getByText(/4\.1 s/).closest('a')).toHaveAttribute('href', '/api-analytics')
+    expect(screen.getByText('422')).toBeInTheDocument()
+    expect(screen.getByText(/Requests per 5 minutes · last 6 hours/)).toBeInTheDocument()
+    expect(document.getElementById('tm-history-truncated')).not.toBeNull()
+    // live-only sections are replaced while a range is chosen
+    expect(screen.queryByText('Recent writes')).toBeNull()
+    expect(document.getElementById('tm-inspector-announce')?.textContent).toBe(
+      'Inspecting workflows, last 6 hours'
+    )
+    // back to Live restores the ring view
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Live' }))
+    })
+    expect(screen.getByText('Recent writes')).toBeInTheDocument()
+    expect(screen.queryByText(/KnexTimeoutError/)).toBeNull()
+  })
+
+  it('shows an inline error with Retry, and a store node shows its note instead of a chart', async () => {
+    let fail = true
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes('/traffic-map/snapshot')) return { data: { data: snapshot } }
+      if (url.includes('/traffic-map/catalog')) return { data: { data: catalog } }
+      if (url.includes('/traffic-map/entity/items/workflows?hours=1')) {
+        if (fail) throw new Error('boom')
+        return { data: { data: { ...historyBody, hours: 1, bucket_s: 60 } } }
+      }
+      return { data: { data: {} } }
+    })
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByTestId('tm-inspector-name').textContent).toBe('workflows')
+    )
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: '1h' }))
+    })
+    await waitFor(() => expect(document.getElementById('tm-history-error')).not.toBeNull())
+    expect(screen.getByRole('alert').textContent).toMatch(/boom/)
+    fail = false
+    act(() => {
+      fireEvent.click(document.getElementById('tm-history-retry') as HTMLElement)
+    })
+    await waitFor(() => expect(screen.getByTestId('tm-inspector-req').textContent).toBe('720'))
+    expect(screen.getByText(/Requests per minute · last hour/)).toBeInTheDocument()
+  })
+})
+
+describe('history helpers', () => {
+  it('builds entity and down urls and only offers history for entities and down nodes', async () => {
+    const { historyAvailable, historyUrl } = await import('./Inspector')
+    expect(historyUrl({ kind: 'entity', id: 'graphql/getWorkflow.v2' }, 24)).toBe(
+      '/traffic-map/entity/graphql/getWorkflow.v2?hours=24'
+    )
+    expect(historyUrl({ kind: 'down', id: 'ext:12' }, 1)).toBe('/traffic-map/down/ext%3A12?hours=1')
+    expect(historyAvailable({ kind: 'lane', id: 'items' })).toBe(false)
+    expect(historyAvailable({ kind: 'caller', id: 'uA' })).toBe(false)
+    expect(historyAvailable({ kind: 'entity', id: 'items/__other__' })).toBe(false)
+    expect(historyAvailable({ kind: 'down', id: 'db' })).toBe(true)
   })
 })
