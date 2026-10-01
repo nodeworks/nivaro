@@ -174,7 +174,7 @@ describe('frozen snapshot view (#1097)', () => {
     expect(screen.getByText('After the 10:00 import')).toBeTruthy()
     expect(joinWatchRoom).not.toHaveBeenCalled()
     expect(document.getElementById('tm-share')).toBeNull()
-    expect((document.getElementById('tm-pause') as HTMLButtonElement).hidden).toBe(true)
+    expect(document.getElementById('tm-pause')).toBeNull()
     expect(document.getElementById('tm-compare')).toBeNull()
     expect(getMock.mock.calls.some(([u]) => String(u).includes('/traffic-map/catalog'))).toBe(false)
     expect(screen.getByTestId('tm-inspector-name').textContent).toBe('forecasts')

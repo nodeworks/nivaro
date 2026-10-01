@@ -200,6 +200,7 @@ export default function TrafficMap() {
     [refreshCatalog]
   )
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: leaving a frozen snapshot must reload the live one
   useEffect(() => {
     void loadSnapshot(filters.win)
   }, [filters.win, loadSnapshot, frozenId])
@@ -556,22 +557,24 @@ export default function TrafficMap() {
               </fieldset>
             </div>
             <ToolbarItems />
-            <button
-              type='button'
-              id='tm-pause'
-              hidden={!!frozen}
-              aria-pressed={paused}
-              onClick={togglePause}
-              className={cn(
-                CHIP,
-                'ml-auto',
-                paused
-                  ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
-                  : CHIP_OFF
-              )}
-            >
-              {paused ? 'Resume' : 'Pause'}
-            </button>
+            {/* A snapshot is already still: no Pause (a `hidden` attribute loses to the chip's display class). */}
+            {!frozen && (
+              <button
+                type='button'
+                id='tm-pause'
+                aria-pressed={paused}
+                onClick={togglePause}
+                className={cn(
+                  CHIP,
+                  'ml-auto',
+                  paused
+                    ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
+                    : CHIP_OFF
+                )}
+              >
+                {paused ? 'Resume' : 'Pause'}
+              </button>
+            )}
           </div>
         </header>
 
