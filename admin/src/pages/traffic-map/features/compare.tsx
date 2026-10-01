@@ -86,7 +86,11 @@ function Delta({ value, pct }: { value: number; pct?: number | null }) {
     <span className={up ? 'font-medium text-[var(--tm-fg)]' : 'text-[var(--tm-fg-2)]'}>
       {up ? '+' : '−'}
       {fmtRate(Math.abs(value))}
-      {pct != null ? ` (${up ? '+' : '−'}${Math.abs(pct)}%)` : ''}
+      {pct == null
+        ? ''
+        : Math.abs(pct) >= 1000
+          ? ` (${up ? 'over 10×' : 'under a tenth'})` // a near-zero base makes the percentage noise
+          : ` (${up ? '+' : '−'}${Math.abs(pct)}%)`}
     </span>
   )
 }
