@@ -18,6 +18,7 @@ import {
   runPlan,
   runtime,
   startRun,
+  timingHistory,
   validatePromoteBody,
   validateStartBody
 } from '../services/release-runs.js'
@@ -73,20 +74,33 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
     }
   })
 
+  // #1046 — per-stage durations of the last finished runs, for the trend chart.
+  app.get<{ Querystring: { limit?: string } }>('/timings', async (req, reply) => {
+    if (!available()) return reply.code(404).send(UNAVAILABLE)
+    const limit = Number(req.query.limit ?? 30)
+    return { runs: await timingHistory(Number.isFinite(limit) ? limit : 30) }
+  })
+
   // ── Production target (#722) ──────────────────────────────────────────────
   // Promotion moves a version staging already verified; it never builds. It
   // plays the manual production deploy jobs through the GitLab API, with the
   // token the Environments registry holds for the deployment repository —
   // handed to the child in its environment, never on its command line.
   const gitlabEnv = async (): Promise<Record<string, string>> => {
-    const row = await db('nivaro_environment_components as c')
-      .join('nivaro_environments as e', 'e.id', 'c.environment')
-      .where('c.git_provider', 'gitlab')
-      .whereNotNull('c.git_token')
-      .orderByRaw("CASE WHEN LOWER(e.name) = 'production' THEN 0 ELSE 1 END")
-      .orderBy('c.id')
-      .first('c.git_token')
-      .catch(() => null)
+    // A registry that cannot be read means no token (the promotion plan then
+    // lists it as a blocker) — never a 500 from the plan route.
+    let row: { git_token?: unknown } | null | undefined = null
+    try {
+      row = await db('nivaro_environment_components as c')
+        .join('nivaro_environments as e', 'e.id', 'c.environment')
+        .where('c.git_provider', 'gitlab')
+        .whereNotNull('c.git_token')
+        .orderByRaw("CASE WHEN LOWER(e.name) = 'production' THEN 0 ELSE 1 END")
+        .orderBy('c.id')
+        .first('c.git_token')
+    } catch {
+      row = null
+    }
     return row?.git_token ? { GITLAB_TOKEN: String(row.git_token) } : {}
   }
 
@@ -141,7 +155,7 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
 
   app.post('/plan', async (_req, reply) => {
     if (!available()) return reply.code(404).send(UNAVAILABLE)
-    const r = await runPlan()
+    const r = await runPlan(60_000, undefined, [], await gateTokensEnv())
     if (r.timedOut)
       return reply
         .code(502)
@@ -150,6 +164,33 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
       return reply.code(502).send({ error: 'release-chain plan failed', log_tail: tail(r.log) })
     return { plan: r.plan, log_tail: tail(r.log) }
   })
+
+  /**
+   * #1045 — the post-deploy gate's admin checks need a token per API. The
+   * Environments registry already holds one per api component; hand them to
+   * the chain keyed by base URL, in its environment (never on its command
+   * line). A config entry's own `gate.token_env` still wins inside the chain.
+   */
+  const gateTokensEnv = async (): Promise<Record<string, string>> => {
+    // Best-effort: a registry that cannot be read means no tokens (the gate
+    // then checks /api/ready only and says so), never a release that cannot start.
+    let rows: Array<{ base_url: string; api_token: string }> = []
+    try {
+      rows = await db('nivaro_environment_components')
+        .where('kind', 'api')
+        .whereNotNull('base_url')
+        .whereNotNull('api_token')
+        .select('base_url', 'api_token')
+    } catch {
+      rows = []
+    }
+    const map: Record<string, string> = {}
+    for (const r of rows) {
+      const base = String(r.base_url).trim().replace(/\/+$/, '')
+      if (base && r.api_token) map[base] = String(r.api_token)
+    }
+    return Object.keys(map).length ? { RELEASE_GATE_TOKENS: JSON.stringify(map) } : {}
+  }
 
   app.post('/runs', async (req, reply) => {
     if (!available()) return reply.code(404).send(UNAVAILABLE)
@@ -164,7 +205,7 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
     }
     const user = req.user!.id
     try {
-      const run = await startRun({ mode: 'go', args: v.args, user })
+      const run = await startRun({ mode: 'go', args: v.args, user, env: await gateTokensEnv() })
       await logActivity({
         action: 'release-run-start',
         user,

@@ -224,7 +224,9 @@ export function ReleaseCard() {
     lastCurrentId.current = currentId
     setConfirm(null)
     setPlan(null)
-  }, [currentId])
+    // A run that just ended adds a row to the stage-timing history.
+    void qc.invalidateQueries({ queryKey: ['release-timings'] })
+  }, [currentId, qc])
   useEffect(() => {
     if (current && !openId) {
       setOpenId(current.id)
@@ -388,10 +390,151 @@ export function ReleaseCard() {
         </details>
       )}
 
+      <StageTimingHistory />
+
       {status.data.promote_available && (
         <ProductionTarget busy={busy} onStarted={(id) => openRun(id)} />
       )}
     </section>
+  )
+}
+
+interface StageTiming {
+  stage: Stage
+  ms: number
+  status: 'ok' | 'fail' | 'cancelled' | 'unfinished'
+}
+interface TimedRun {
+  id: string
+  mode: RunSummary['mode']
+  version?: string
+  started_at: string
+  state: RunSummary['state']
+  failed_stage?: Stage
+  timings: StageTiming[]
+  total_ms: number
+  slowest: StageTiming | null
+}
+
+/** Pure: a run's time for one stage, or null when the stage did not run. */
+export function stageMs(run: TimedRun, stage: Stage): number | null {
+  const t = run.timings.find((x) => x.stage === stage)
+  return t ? t.ms : null
+}
+
+/** Pure: points of a sparkline over `values` (nulls skipped), 0..w × 0..h. */
+export function sparkPoints(values: Array<number | null>, w: number, h: number): string {
+  const nums = values.filter((v): v is number => v !== null)
+  if (nums.length < 2) return ''
+  const max = Math.max(...nums) || 1
+  const step = values.length > 1 ? w / (values.length - 1) : 0
+  return values
+    .map((v, i) =>
+      v === null ? null : `${(i * step).toFixed(1)},${(h - (v / max) * h).toFixed(1)}`
+    )
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * #1046 — how long each stage of the last releases took, oldest → newest, with
+ * the trend per stage and the slowest stage of every run. Stages can overlap
+ * (artifacts waits on the image while frontends pin), so each column is that
+ * stage's own clock and the columns do not add up to the total.
+ */
+function StageTimingHistory() {
+  const q = useQuery({
+    queryKey: ['release-timings'],
+    queryFn: () => api.get<{ runs: TimedRun[] }>('/release/timings').then((r) => r.data.runs),
+    staleTime: 60_000
+  })
+  const runs = (q.data ?? []).filter((r) => r.mode === 'go')
+  if (runs.length === 0) return null
+  const stages = STAGES.filter((s) => runs.some((r) => stageMs(r, s) !== null))
+  return (
+    <details className='mt-3 text-[12px]' data-release-timings>
+      <summary className='cursor-pointer text-slate-500'>
+        Stage timing ({runs.length} release{runs.length === 1 ? '' : 's'})
+      </summary>
+      <div className='mt-2 overflow-x-auto'>
+        <table className='w-full border-collapse tabular-nums'>
+          <thead>
+            <tr className='text-left text-[11px] text-slate-500 dark:text-muted-foreground'>
+              <th className='py-1 pr-3 font-medium'>Release</th>
+              <th className='py-1 pr-3 font-medium'>Total</th>
+              {stages.map((s) => {
+                const points = sparkPoints(
+                  runs.map((r) => stageMs(r, s)),
+                  56,
+                  14
+                )
+                return (
+                  <th key={s} className='py-1 pr-3 font-medium' data-release-timing-stage={s}>
+                    <div>{s}</div>
+                    {points && (
+                      <svg
+                        width='56'
+                        height='16'
+                        viewBox='0 -1 56 16'
+                        className='text-slate-400 dark:text-muted-foreground'
+                        aria-hidden='true'
+                      >
+                        <polyline
+                          points={points}
+                          fill='none'
+                          stroke='currentColor'
+                          strokeWidth='1.25'
+                          strokeLinejoin='round'
+                        />
+                      </svg>
+                    )}
+                  </th>
+                )
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {[...runs].reverse().map((r) => (
+              <tr
+                key={r.id}
+                className='border-t border-slate-100 dark:border-border'
+                data-release-timing-run={r.id}
+              >
+                <td className='py-1 pr-3 whitespace-nowrap'>
+                  <span className='font-medium text-slate-800 dark:text-foreground'>
+                    {r.version ?? '—'}
+                  </span>{' '}
+                  <span className='text-slate-500 dark:text-muted-foreground'>
+                    {formatRelative(r.started_at)}
+                    {r.state === 'failed' ? ` · failed at ${r.failed_stage ?? '?'}` : ''}
+                  </span>
+                </td>
+                <td className='py-1 pr-3 whitespace-nowrap'>
+                  {r.total_ms ? formatDuration(r.total_ms) : '—'}
+                </td>
+                {stages.map((s) => {
+                  const ms = stageMs(r, s)
+                  const slow = r.slowest?.stage === s
+                  return (
+                    <td
+                      key={s}
+                      className={cn(
+                        'py-1 pr-3 whitespace-nowrap',
+                        slow && 'font-semibold text-amber-700 dark:text-amber-300'
+                      )}
+                      data-release-timing-slowest={slow ? 'true' : undefined}
+                      title={slow ? 'Slowest stage of this release' : undefined}
+                    >
+                      {ms === null ? '·' : formatDuration(ms)}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
   )
 }
 

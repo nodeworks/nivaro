@@ -5,6 +5,8 @@ import {
   interruptionLine,
   outcomeSentence,
   runDuration,
+  sparkPoints,
+  stageMs,
   stageStates
 } from './release-card'
 
@@ -109,5 +111,28 @@ describe('runDuration and bumpOf', () => {
   it('a resume repeats the failed run own bump', () => {
     expect(bumpOf({ ...base, state: 'failed' })).toBe('minor')
     expect(bumpOf({ ...base, args: ['--go'], state: 'failed' })).toBe('patch')
+  })
+})
+
+describe('stage timing history (#1046)', () => {
+  const run = {
+    id: 'r',
+    mode: 'go' as const,
+    started_at: '2026-09-29T18:00:00.000Z',
+    state: 'done' as const,
+    timings: [
+      { stage: 'preflight' as const, ms: 36_000, status: 'ok' as const },
+      { stage: 'artifacts' as const, ms: 631_000, status: 'ok' as const }
+    ],
+    total_ms: 900_000,
+    slowest: { stage: 'artifacts' as const, ms: 631_000, status: 'ok' as const }
+  }
+  it('reads a stage time, null when the stage did not run', () => {
+    expect(stageMs(run, 'artifacts')).toBe(631_000)
+    expect(stageMs(run, 'frontends')).toBeNull()
+  })
+  it('draws a sparkline over the runs that ran the stage, skipping gaps', () => {
+    expect(sparkPoints([10, null, 20], 40, 10)).toBe('0.0,5.0 40.0,0.0')
+    expect(sparkPoints([10], 40, 10)).toBe('')
   })
 })

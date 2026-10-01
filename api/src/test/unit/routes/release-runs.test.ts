@@ -136,7 +136,9 @@ describe('release routes', () => {
     expect(svc.startRun).toHaveBeenCalledWith({
       mode: 'go',
       args: ['--go', '--events', '--bump', 'patch'],
-      user: 'admin-1'
+      user: 'admin-1',
+      // #1045 — no registry rows (the db mock cannot answer) = no gate tokens.
+      env: {}
     })
     const { logActivity } = await import('../../../services/activity.js')
     expect(logActivity).toHaveBeenCalledWith(
@@ -217,7 +219,11 @@ describe('release routes', () => {
 
   it('promotion answers 404 without a production block, and needs the version typed back', async () => {
     const app = await build()
-    const r = await app.inject({ method: 'POST', url: '/release/promote', payload: { version: '1.2.3' } })
+    const r = await app.inject({
+      method: 'POST',
+      url: '/release/promote',
+      payload: { version: '1.2.3' }
+    })
     expect(r.statusCode).toBe(404)
 
     svc.promoteAvailable.mockReturnValue(true)

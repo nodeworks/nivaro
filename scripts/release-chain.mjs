@@ -32,6 +32,14 @@
  * `release-chain.config.json` (gitignored) — see release-chain.config.example.json.
  * Without a config the chain stops after `artifacts`.
  *
+ * An API verify entry (a URL ending /api/version) also runs the post-deploy
+ * gate (scripts/release-gate.mjs, #1045): /api/ready, /api/preflight, the
+ * strict smoke check and the readiness score against a snapshot taken just
+ * before the deployments were pushed. The admin checks need a gate token:
+ * `"gate": { "token_env": "NAME" }` on the entry names an environment
+ * variable; the Release card hands the token its Environments component holds
+ * (RELEASE_GATE_TOKENS). `"gate": false` turns the gate off for an entry.
+ *
  * It always ends with a `### DONE` or `### FAILED at <stage>` line, because it
  * is usually run under nohup and a log that simply stops says nothing.
  */
@@ -40,6 +48,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { apiBase, curlRequest, readinessSnapshot, runGate } from './release-gate.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const argv = process.argv.slice(2)
@@ -226,6 +235,15 @@ function plan(cfg, ch) {
     const what = fe ? `the pushed ${fe} commit` : 'the new version'
     add('verify', `${v.name}: poll ${v.url} until it reports ${what} twice in a row`)
   }
+  for (const { v, base } of gateTargets(cfg)) {
+    const authed = !!gateToken(v, base)
+    add(
+      'verify',
+      authed
+        ? `${v.name}: then the gate — /api/ready, /api/preflight, strict smoke check, readiness score no lower than before the push`
+        : `${v.name}: then /api/ready only — no gate token, so preflight, smoke and readiness are NOT checked`
+    )
+  }
   if (!cfg.path) add('frontends', 'no release-chain.config.json — the chain stops after artifacts')
   return { lines, wantSdk, wantReact, wantKit }
 }
@@ -270,6 +288,55 @@ async function until(what, fn, { tries = 30, every = 20_000, stage = null } = {}
     await sleep(every)
   }
   throw new StageError(`${what} never became true`)
+}
+
+// ── Post-deploy gate (#1045) ────────────────────────────────────────────────
+/** Verify entries the gate runs on: an API URL, and not switched off. */
+const gateTargets = (cfg) =>
+  cfg.verify
+    .filter((v) => v.gate !== false && !v.expect && apiBase(v.url))
+    .map((v) => ({ v, base: apiBase(v.url) }))
+
+/** The entry's gate token: its named env var, else the card's per-base map. */
+function gateToken(v, base) {
+  const envName = v.gate && typeof v.gate === 'object' ? v.gate.token_env : null
+  if (envName && process.env[envName]) return process.env[envName]
+  try {
+    const map = JSON.parse(process.env.RELEASE_GATE_TOKENS || '{}')
+    return typeof map[base] === 'string' && map[base] ? map[base] : null
+  } catch {
+    return null
+  }
+}
+
+/** Where the pre-deploy readiness snapshot lives, so a resume can use it. */
+const GATE_BEFORE = resolve(ROOT, '.release-runs', 'gate-before.json')
+const readGateBefore = () => {
+  try {
+    return JSON.parse(readFileSync(GATE_BEFORE, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+/** Snapshot each gated API's readiness before the pushes land. */
+async function snapshotReadiness(cfg, V) {
+  const all = readGateBefore()
+  for (const { v, base } of gateTargets(cfg)) {
+    const token = gateToken(v, base)
+    if (!token) continue
+    const res = await curlRequest(base, token)('GET', '/api/readiness', { auth: true })
+    const snap = res.status === 200 ? readinessSnapshot(res.body) : null
+    if (snap) {
+      all[base] = { for_version: V, taken_at: new Date().toISOString(), snap }
+      log(`${v.name}: readiness before the deploy = ${snap.score ?? 'n/a'}`)
+    } else log(`${v.name}: could not read readiness before the deploy (HTTP ${res.status || res.error})`)
+  }
+  try {
+    writeFileSync(GATE_BEFORE, JSON.stringify(all, null, 2))
+  } catch {
+    /* .release-runs missing on a fresh checkout — the comparison just reads "no snapshot" */
+  }
 }
 
 async function main() {
@@ -492,6 +559,9 @@ async function main() {
     if (runs('deployments')) {
       currentStage = 'deployments'
       emit('deployments', 'start')
+      // Before anything is pushed: the readiness every gated API has now is
+      // the bar the deployed version must meet (#1045).
+      await snapshotReadiness(cfg, V)
       for (const d of cfg.deployments) {
         // Re-checked HERE, not trusted from above: --from deployments skips
         // the artifacts stage, and this is the push that can take an API down.
@@ -569,6 +639,28 @@ async function main() {
           // image and runs the gate: 13–15 minutes end to end, which outran
           // the earlier 12.5-minute window. Wait up to 30 minutes.
         }, { tries: 120, every: 15_000 })
+
+        // #1045 — answering the version proves the process booted, not that
+        // the deploy is coherent. API entries run the post-deploy gate.
+        const base = !frontendName && v.gate !== false ? apiBase(v.url) : null
+        if (base) {
+          const token = gateToken(v, base)
+          const prior = readGateBefore()[base]
+          const before = prior && prior.for_version === V ? prior.snap : null
+          emit('verify', 'progress', `${v.name}: post-deploy gate`)
+          const gate = await runGate({
+            name: v.name,
+            token,
+            request: curlRequest(base, token),
+            before,
+            readinessTolerance: v.gate && typeof v.gate === 'object' ? (v.gate.readiness_tolerance ?? 0) : 0,
+            sleep
+          })
+          for (const line of gate.lines) log(`  ${line}`)
+          if (!gate.ok) {
+            throw new StageError(`${v.name} answered ${expected} but the post-deploy gate failed — ${gate.failures.join(' · ')}`)
+          }
+        }
       }
       emit('verify', 'ok')
     } else if (flag('skip-verify')) emit('verify', 'skip', '--skip-verify')

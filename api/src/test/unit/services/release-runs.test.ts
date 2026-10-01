@@ -306,6 +306,85 @@ describe('disk-backed runs', () => {
   })
 })
 
+describe('stageTimings (#1046)', () => {
+  const ev = (stage: string, status: string, at: string) => ({ stage, status, at }) as rr.StageEvent
+  it('times each stage start to ok/fail and leaves skips out', () => {
+    const t = rr.stageTimings(
+      [
+        ev('preflight', 'start', '2026-09-29T18:31:36.000Z'),
+        ev('preflight', 'ok', '2026-09-29T18:32:12.000Z'),
+        ev('artifacts', 'start', '2026-09-29T18:33:37.000Z'),
+        ev('frontends', 'skip', '2026-09-29T18:33:37.000Z'),
+        ev('artifacts', 'progress', '2026-09-29T18:40:00.000Z'),
+        ev('artifacts', 'ok', '2026-09-29T18:44:08.000Z'),
+        ev('verify', 'start', '2026-09-29T18:44:12.000Z'),
+        ev('verify', 'fail', '2026-09-29T18:46:12.000Z')
+      ],
+      '2026-09-29T18:46:13.000Z'
+    )
+    expect(t).toEqual([
+      { stage: 'preflight', ms: 36_000, status: 'ok' },
+      { stage: 'artifacts', ms: 631_000, status: 'ok' },
+      { stage: 'verify', ms: 120_000, status: 'fail' }
+    ])
+    expect(rr.slowestStage(t)?.stage).toBe('artifacts')
+  })
+  it('an unclosed stage runs to the end of the log, marked by the outcome', () => {
+    const t = rr.stageTimings(
+      [ev('publish', 'start', '2026-09-29T18:00:00.000Z')],
+      '2026-09-29T18:01:30.000Z',
+      'cancelled'
+    )
+    expect(t).toEqual([{ stage: 'publish', ms: 90_000, status: 'cancelled' }])
+  })
+})
+
+describe('timing history on disk (#1046)', () => {
+  let dir: string
+  let original: typeof rr.runtime
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'release-timings-'))
+    original = { ...rr.runtime }
+    rr.runtime.runsDir = () => dir
+  })
+  afterEach(() => {
+    Object.assign(rr.runtime, original)
+    rmSync(dir, { recursive: true, force: true })
+  })
+  it('a run finished before #1046 gets its timings written back once', async () => {
+    writeFileSync(
+      join(dir, 'r20.json'),
+      JSON.stringify({
+        id: 'r20',
+        mode: 'go',
+        args: [],
+        pid: 999999,
+        started_at: '2026-09-29T18:00:00.000Z',
+        started_by: 'u',
+        outcome: 'done',
+        finished_at: '2026-09-29T18:10:00.000Z'
+      })
+    )
+    writeFileSync(
+      join(dir, 'r20.log'),
+      [
+        '@@event {"stage":"preflight","status":"start","at":"2026-09-29T18:00:00.000Z"}',
+        '@@event {"stage":"preflight","status":"ok","at":"2026-09-29T18:01:00.000Z"}',
+        '@@event {"stage":"verify","status":"start","at":"2026-09-29T18:01:00.000Z"}',
+        '@@event {"stage":"verify","status":"ok","at":"2026-09-29T18:10:00.000Z"}',
+        '### DONE — nivaro 0.2.9'
+      ].join('\n')
+    )
+    const hist = await rr.timingHistory()
+    expect(hist).toHaveLength(1)
+    expect(hist[0].total_ms).toBe(600_000)
+    expect(hist[0].slowest).toEqual({ stage: 'verify', ms: 540_000, status: 'ok' })
+    const stored = JSON.parse(readFileSync(join(dir, 'r20.json'), 'utf8'))
+    expect(stored.timings).toHaveLength(2)
+    expect(stored.finished_at).toBe('2026-09-29T18:10:00.000Z')
+  })
+})
+
 describe('childEnv', () => {
   it('drops NODE_TLS_REJECT_UNAUTHORIZED and pins FORCE_COLOR', () => {
     const before = process.env.NODE_TLS_REJECT_UNAUTHORIZED

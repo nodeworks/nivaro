@@ -37,6 +37,16 @@ export interface RunRecord {
   finished_at?: string
   outcome?: Outcome
   failed_stage?: Stage
+  /** Per-stage wall time, derived once from the log's @@event lines when the
+   *  run finishes (#1046). Absent on a running run. */
+  timings?: StageTiming[]
+}
+
+/** How long one stage took, start → its ok/fail (or the run's end). */
+export interface StageTiming {
+  stage: Stage
+  ms: number
+  status: 'ok' | 'fail' | 'cancelled' | 'unfinished'
 }
 
 export interface StageEvent {
@@ -91,6 +101,48 @@ export function parseEvents(log: string): {
     }
   }
   return { events, plan }
+}
+
+/**
+ * #1046 — per-stage durations from the @@event stream. A stage runs from its
+ * `start` to its `ok`/`fail`; a stage the log never closes (cancelled, lost)
+ * runs to `endAt` (the log's last write). Skipped stages carry no time and are
+ * left out. Stages can overlap (artifacts waits on the image while frontends
+ * pin), so the durations are each stage's own clock, not slices of a total.
+ */
+export function stageTimings(
+  events: StageEvent[],
+  endAt: string | null,
+  outcome?: Outcome
+): StageTiming[] {
+  const open = new Map<Stage, number>()
+  const out: StageTiming[] = []
+  for (const e of events) {
+    const at = Date.parse(e.at)
+    if (!Number.isFinite(at)) continue
+    if (e.status === 'start') open.set(e.stage, at)
+    else if (e.status === 'ok' || e.status === 'fail') {
+      const began = open.get(e.stage)
+      if (began === undefined) continue
+      open.delete(e.stage)
+      out.push({ stage: e.stage, ms: Math.max(0, at - began), status: e.status })
+    }
+  }
+  const end = endAt ? Date.parse(endAt) : Number.NaN
+  for (const [stage, began] of open) {
+    out.push({
+      stage,
+      ms: Number.isFinite(end) ? Math.max(0, end - began) : 0,
+      status: outcome === 'cancelled' ? 'cancelled' : 'unfinished'
+    })
+  }
+  return out
+}
+
+/** The slowest stage of a run — the one to look at first. */
+export function slowestStage(timings: StageTiming[] | undefined): StageTiming | null {
+  if (!timings?.length) return null
+  return timings.reduce((a, b) => (b.ms > a.ms ? b : a))
 }
 
 export function markerOutcome(
@@ -261,14 +313,19 @@ async function summarize(rec: RunRecord): Promise<{ run: RunSummary; log: string
   const run = deriveState(rec, alive, log)
   // Write the derived outcome back once so history reads stay cheap.
   const path = recPath(rec.id)
-  if (path && !alive && !rec.outcome && run.outcome) {
+  // Records finished before #1046 have an outcome but no timings: derive those
+  // once too, from the same log, so the history chart covers old runs.
+  if (path && !alive && run.outcome && (!rec.outcome || !rec.timings)) {
+    const finishedAt = rec.finished_at ?? (await logFinishedAt(rec.id))
     const finished: RunRecord = {
       ...rec,
-      outcome: run.outcome,
-      finished_at: await logFinishedAt(rec.id),
-      ...(run.failed_stage ? { failed_stage: run.failed_stage } : {})
+      outcome: rec.outcome ?? run.outcome,
+      finished_at: finishedAt,
+      ...(run.failed_stage ? { failed_stage: run.failed_stage } : {}),
+      timings: stageTimings(parseEvents(log).events, finishedAt, rec.outcome ?? run.outcome)
     }
     await writeFile(path, JSON.stringify(finished, null, 2)).catch(() => {})
+    return { run: { ...run, timings: finished.timings }, log }
   }
   return { run, log }
 }
@@ -300,6 +357,45 @@ export async function listRuns(limit = 10): Promise<RunSummary[]> {
  * a cancelled run whose process is still exiting reads `state: 'cancelled'`
  * and still blocks a new start.
  */
+/**
+ * #1046 — the stage-timing history the Release card charts: finished runs
+ * (done or failed; cancelled and lost runs only add noise to a trend),
+ * oldest first so a chart reads left → right.
+ */
+export async function timingHistory(limit = 30): Promise<
+  Array<{
+    id: string
+    mode: RunRecord['mode']
+    version?: string
+    started_at: string
+    state: RunSummary['state']
+    failed_stage?: Stage
+    timings: StageTiming[]
+    total_ms: number
+    slowest: StageTiming | null
+  }>
+> {
+  const runs = await listRuns(Math.min(Math.max(limit, 1), 100))
+  return runs
+    .filter((r) => (r.state === 'done' || r.state === 'failed') && r.timings?.length)
+    .map((r) => {
+      const start = Date.parse(r.started_at)
+      const end = r.finished_at ? Date.parse(r.finished_at) : Number.NaN
+      return {
+        id: r.id,
+        mode: r.mode,
+        version: r.version,
+        started_at: r.started_at,
+        state: r.state,
+        ...(r.failed_stage ? { failed_stage: r.failed_stage } : {}),
+        timings: r.timings ?? [],
+        total_ms: Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0,
+        slowest: slowestStage(r.timings)
+      }
+    })
+    .reverse()
+}
+
 export async function currentRun(): Promise<RunSummary | null> {
   try {
     // current.json is written by startRun: read the record directly rather

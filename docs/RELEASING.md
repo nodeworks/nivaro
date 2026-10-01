@@ -106,6 +106,43 @@ run's log is `.release-runs/<id>.log`; resume it from a terminal with
 A chain started from a terminal is invisible to the card's lock — do not click
 Release while one runs.
 
+**The post-deploy gate (#1045).** Answering the new version only proves the
+process booted. For every verify entry whose URL ends in `/api/version`, the
+verify stage then runs `scripts/release-gate.mjs` against that API:
+
+- `GET /api/ready` must be 200 — boot finished, no pending migrations, required
+  extensions loaded, database and Redis answering;
+- `GET /api/preflight` must not fail, `POST /api/ops-runtime/smoke?strict=1`
+  must pass, and the readiness score must be no lower than the snapshot taken
+  just before the deployments were pushed (one re-read after a minute, in case a
+  cache was still warming).
+
+The last three need an admin gate token. The card hands the chain the token
+each API component holds in the Environments registry (by base URL, in the
+child's environment, never its arguments); a terminal run reads
+`"gate": { "token_env": "NAME" }` on the verify entry. Without a token only
+`/api/ready` is checked and the log says so; a token the API refuses fails the
+stage (`### FAILED at verify`) — fix the token, then **Resume from verify**.
+`"gate": { "readiness_tolerance": 5 }` allows a small drop; `"gate": false`
+turns the gate off for one entry. The pre-deploy snapshot is kept in
+`.release-runs/gate-before.json`, so a resume from `verify` still compares
+against it.
+
+The staging deploy job runs the same checks on the host
+(`efp-nivaro/.docker/deploy-gate.sh`): `/api/ready` always (a failure on the
+database or Redis alone is warned, not rolled back — the previous image would
+meet the same database), and preflight + strict smoke + the readiness score
+when the `STAGING_GATE_TOKEN` CI variable is set. A readiness drop is only
+warned there; the release chain's verify stage is what fails on it.
+
+**Stage timing (#1046).** When a run finishes, its per-stage durations are
+read from the log's `@@event` lines and stored on `.release-runs/<id>.json`
+(`timings`); older runs are filled in the first time the card lists them. The
+card's **Stage timing** section lists the last releases with each stage's time,
+a trend line per stage, and the slowest stage of each release highlighted
+(`GET /api/release/timings`). Stages overlap (artifacts waits on the image
+while frontends pin), so the columns do not add up to the total.
+
 ### Promoting to production
 
 The release chain stops at staging. **Promote to production** on the same card
@@ -116,7 +153,8 @@ migrations it will run, and anything that blocks. Typing the version back starts
 the real run (`--go`, same lock and detached-process rules as a release):
 
 1. **check** — production promotion is switched on, the image tag is on Docker
-   Hub (its digest is read for the pin), the deploy commit that took the version
+   Hub with a digest (pinned as line 2 of the pin file; a registry answer
+   without one blocks — production deploys by digest), the deploy commit that took the version
    to staging exists, staging answered with it, the portal commit staging serves
    is on its main branch, and a GitLab token is present.
 2. **push** — in throwaway worktrees: the API deployment repository's

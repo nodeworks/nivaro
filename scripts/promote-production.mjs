@@ -17,7 +17,8 @@
  *
  *   check   production promotion is switched on (`enabled` in the config — off
  *           until cutover, so a --go can never deploy by accident); the image
- *           tag exists on Docker Hub (its digest is pinned with it); the
+ *           tag exists on Docker Hub and reports a digest (pinned as line 2 of
+ *           the pin file; no digest = a blocker); the
  *           deployment commit that took this version to staging exists; staging
  *           answered with it; the portal commit staging serves is on its main
  *           branch; a GitLab token is present.
@@ -361,6 +362,12 @@ async function main() {
   if (!prod.enabled)
     blockers.push('production promotion is switched off — set "enabled": true in the production block of release-chain.config.json at cutover')
   if (cfg.image && !digest) blockers.push(`${cfg.image}:${VERSION} is not on the registry`)
+  // Production deploys BY DIGEST (#1045): line 2 of the pin is what
+  // deploy-production.sh compares the pulled image against. A tag answer
+  // without a digest would pin a version alone, and a moved tag would go
+  // unnoticed — refuse rather than write a one-line pin.
+  if (cfg.image && digest === 'present')
+    blockers.push(`the registry answered ${cfg.image}:${VERSION} without a digest — the pin needs one (line 2 of ${prod.pinFile})`)
   if (!source) blockers.push(`no commit on ${prod.sourceBranch} deployed nivaro ${VERSION} to staging`)
   if (!stagingNow && !verifiedRuns.includes(VERSION))
     blockers.push(`staging never answered with ${VERSION} — neither now nor in a finished release run`)
