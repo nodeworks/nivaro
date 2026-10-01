@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { describeExtensionEnv, extensionEnvDecls } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { partitionSelf, type SkippedComponent } from '../services/environment-self.js'
 import { instanceKey } from '../services/settings-overrides.js'
 
 /**
@@ -58,6 +59,14 @@ export interface PresenceColumn {
   set: Record<string, boolean>
   /** Extensions loaded there (a missing extension is not a missing variable). */
   extensions: string[]
+}
+
+export interface EnvPresenceResponse {
+  rows: PresenceRow[]
+  columns: PresenceColumn[]
+  warnings: string[]
+  /** Registered components not probed — they are this API. */
+  skipped: SkippedComponent[]
 }
 
 export interface PresenceRow {
@@ -146,12 +155,12 @@ export async function envPresenceRoutes(app: FastifyInstance): Promise<void> {
     data: { instance: instanceKey(), vars: localPresence() }
   }))
 
-  app.get('/env-presence', async () => {
+  app.get('/env-presence', async (req) => {
     const envs = (await db('nivaro_environments').orderBy('sort').orderBy('id')) as Array<{
       id: number
       name: string
     }>
-    const comps = (
+    const registered = (
       (await db('nivaro_environment_components')
         .where('kind', 'api')
         .orderBy('sort')
@@ -163,6 +172,10 @@ export async function envPresenceRoutes(app: FastifyInstance): Promise<void> {
         api_token: string | null
       }>
     ).filter((c) => !!c.base_url)
+    // A component that is this API (or localhost, which from a server is the
+    // server) is not another environment: it names the "This instance"
+    // column instead of becoming a second column with the same answers.
+    const { probe: comps, skipped, selfEnvironment } = partitionSelf(registered, envs, req.host)
 
     const mine = localPresence()
     const toSet = (vars: PresenceVar[]) =>
@@ -171,7 +184,7 @@ export async function envPresenceRoutes(app: FastifyInstance): Promise<void> {
       {
         id: 'local',
         name: 'This instance',
-        environment: instanceKey(),
+        environment: selfEnvironment ?? instanceKey(),
         state: 'ok',
         set: toSet(mine),
         extensions: [...extensionEnvDecls.keys()]
@@ -225,6 +238,6 @@ export async function envPresenceRoutes(app: FastifyInstance): Promise<void> {
     for (const [i, c] of comps.entries()) order.set(c.id, i)
     columns.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
     const { rows, warnings } = comparePresence(columns, mine)
-    return { data: { rows, columns, warnings } }
+    return { data: { rows, columns, warnings, skipped } satisfies EnvPresenceResponse }
   })
 }

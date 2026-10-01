@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify'
-import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { partitionSelf } from '../services/environment-self.js'
 import { instanceKey } from '../services/settings-overrides.js'
 
 /**
@@ -104,51 +104,6 @@ function tokenRefusal(res: { status: number; body: unknown }): string | null {
   }
   const why = b.code ?? b.message ?? b.error ?? `HTTP ${res.status}`
   return `The component's API token was refused (${why}) — paste a current token in its settings`
-}
-
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'])
-
-function isLoopbackUrl(baseUrl: string): boolean {
-  try {
-    return LOOPBACK.has(new URL(baseUrl).hostname.toLowerCase())
-  } catch {
-    return false
-  }
-}
-
-/**
- * Why a component should NOT be probed as a separate column in the settings
- * comparison, or null when it should. Two cases, both "this is not another
- * environment":
- *  - `self`: its base URL names the API serving this request (the request's
- *    own host, PUBLIC_URL, ADMIN_URL, or loopback on our own port). The
- *    "This instance" column already reads those values directly.
- *  - `loopback`: a loopback URL on another port. From a server, localhost is
- *    that server, never a developer's laptop — on staging a "Local dev"
- *    component would quietly read staging under a dev label.
- */
-function selfOrLoopback(baseUrl: string, requestHost: string): 'self' | 'loopback' | null {
-  let u: URL
-  try {
-    u = new URL(baseUrl)
-  } catch {
-    return null
-  }
-  const host = u.hostname.toLowerCase()
-  if (LOOPBACK.has(host)) {
-    const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80))
-    return port === config.PORT ? 'self' : 'loopback'
-  }
-  const own = new Set<string>([requestHost.toLowerCase()])
-  for (const v of [config.PUBLIC_URL, config.ADMIN_URL]) {
-    if (!v) continue
-    try {
-      own.add(new URL(v).host.toLowerCase())
-    } catch {
-      /* not a url */
-    }
-  }
-  return own.has(u.host.toLowerCase()) ? 'self' : null
 }
 
 // ─── Git providers ───────────────────────────────────────────────────────────
@@ -647,17 +602,19 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
   // #666 — each registered API component's own SLO (its /api/health/slo,
   // asked server-side with its token), so environments on their own database
   // (production) sit beside this one on the Health page.
-  app.get('/slo', async (_req, reply) => {
+  app.get('/slo', async (req, reply) => {
     const envs = (await db('nivaro_environments').orderBy('sort').orderBy('id')) as Array<{
       id: number
       name: string
     }>
-    const comps = (
+    const registered = (
       (await db('nivaro_environment_components')
         .where('kind', 'api')
         .orderBy('sort')
         .orderBy('id')) as ComponentRow[]
     ).filter((c) => !!c.base_url)
+    // This API's own levels are on the page already; never a second row.
+    const comps = partitionSelf(registered, envs, req.host).probe
     const out = await Promise.all(
       comps.map(async (c) => {
         const environment = envs.find((e) => e.id === c.environment)?.name ?? null
@@ -732,32 +689,8 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
         .orderBy('id')) as ComponentRow[]
     ).filter((c) => !!c.base_url)
     // Components that point back at this API (or at loopback) are not another
-    // environment — see selfOrLoopback. They become a note, not a column; the
-    // first `self` match names which environment "This instance" is.
-    const skipped: Array<{ name: string; environment: string | null; reason: string }> = []
-    // A named-host match beats a loopback one: on staging, localhost:3055 is
-    // also this API, but its component is labelled Local dev.
-    let selfByHost: string | null = null
-    let selfByLoopback: string | null = null
-    const comps = registered.filter((c) => {
-      const why = selfOrLoopback(c.base_url!, req.host)
-      if (!why) return true
-      const envName = envs.find((e) => e.id === c.environment)?.name ?? null
-      if (why === 'self') {
-        if (isLoopbackUrl(c.base_url!)) selfByLoopback ??= envName
-        else selfByHost ??= envName
-      }
-      skipped.push({
-        name: c.name,
-        environment: envName,
-        reason:
-          why === 'self'
-            ? 'points at the API serving this page — shown as This instance'
-            : 'a localhost address, which from this server means the server itself'
-      })
-      return false
-    })
-    const selfEnvironment = selfByHost ?? selfByLoopback
+    // environment — they become a note, not a column.
+    const { probe: comps, skipped, selfEnvironment } = partitionSelf(registered, envs, req.host)
     const local = await readExtensionSettings(ext)
     const mask = (type: string, v: unknown) =>
       v == null || v === '' ? null : type === 'secret' ? MASK : String(v)

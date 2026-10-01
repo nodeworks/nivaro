@@ -25,6 +25,8 @@ interface PresenceData {
   rows: PresenceRow[]
   columns: PresenceColumn[]
   warnings: string[]
+  /** Registered components that are this API — named, not compared. */
+  skipped?: Array<{ name: string; environment: string | null; reason: string }>
 }
 
 const STATE_LABEL: Record<Exclude<PresenceColumn['state'], 'ok'>, string> = {
@@ -172,6 +174,15 @@ export function EnvPresencePanel() {
                   ))}
                 </tbody>
               </table>
+              {(data.skipped?.length ?? 0) > 0 && (
+                <p
+                  className='mt-2 text-[11px] text-slate-500 dark:text-slate-400'
+                  data-env-presence-skipped
+                >
+                  Not compared:{' '}
+                  {data.skipped!.map((k) => `${k.environment ?? k.name} (${k.reason})`).join(' · ')}
+                </p>
+              )}
             </div>
           )}
         </div>
