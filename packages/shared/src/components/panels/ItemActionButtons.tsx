@@ -94,7 +94,7 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
   return (
     <>
       {actions.map((a) => (
-        <span key={a.id} className='inline-flex items-center gap-1'>
+        <span key={a.id} className='relative inline-flex'>
           <Button
             type='button'
             size='sm'

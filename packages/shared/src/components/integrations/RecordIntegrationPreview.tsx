@@ -1,5 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, Zap } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Zap
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -159,10 +167,18 @@ function useRecheckOnRecordWrites(collection: string, itemId: string) {
 }
 
 /**
- * "Ready" / "2 lines missing Sales order" beside a button that sends
- * something to a partner. Give it a transition id (the pipeline pre-flight)
- * or an item action id (the extension's own pre-flight).
+ * "Ready" / "2 lines missing Sales order" for a button that sends something
+ * to a partner. Give it a transition id (the pipeline pre-flight) or an item
+ * action id (the extension's own pre-flight).
+ *
+ * `compact` renders a corner badge pinned to the button's top-right edge, so
+ * a header row of buttons keeps its rhythm: the parent must be `relative`.
+ * The full chip is for lists with room to read.
  */
+/** Corner-badge placement over the button it describes (parent is `relative`). */
+const BADGE_POS =
+  'absolute -right-1.5 -top-1.5 z-[1] inline-flex items-center justify-center rounded-full ring-2 ring-white dark:ring-card'
+
 export function PushReadinessChip({
   collection,
   itemId,
@@ -208,7 +224,14 @@ export function PushReadinessChip({
   })
   if (!id || itemId === 'new') return null
   if (isLoading)
-    return (
+    return compact ? (
+      <span
+        data-push-readiness='loading'
+        role='status'
+        className={cn(BADGE_POS, 'h-2.5 w-2.5 animate-pulse bg-slate-300 dark:bg-slate-600')}
+        aria-label='Checking whether this can be sent'
+      />
+    ) : (
       <span
         data-push-readiness='loading'
         role='status'
@@ -236,38 +259,67 @@ export function PushReadinessChip({
         ? 'Could not check'
         : (blocking[0] ?? issues[0]).message
   const more = issues.length > 1 ? ` +${issues.length - 1}` : ''
+  const tip =
+    state === 'ready'
+      ? `${label}: ready to send`
+      : `${label}: ${headline}${more ? ` (and ${issues.length - 1} more)` : ''}`
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type='button'
-          data-push-readiness={state}
-          data-push-readiness-for={id}
-          className={cn(
-            'inline-flex max-w-[260px] shrink-0 items-center gap-1 self-center rounded-full border px-1.5 py-px text-[10.5px] font-medium transition-colors',
-            state === 'ready'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300'
-              : state === 'block'
-                ? 'border-red-200 bg-red-50 text-red-800 hover:bg-red-100 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
-                : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
-          )}
-          data-tip={
-            state === 'ready'
-              ? `${label}: nothing stands in the way of sending`
-              : `${label}: ${headline}${more ? ` (and ${issues.length - 1} more)` : ''}`
-          }
-        >
-          {state === 'ready' ? (
-            <CheckCircle2 className='h-3 w-3 shrink-0' />
-          ) : (
-            <AlertTriangle className='h-3 w-3 shrink-0' />
-          )}
-          <span className='truncate'>{compact && state !== 'ready' ? 'Check' : headline}</span>
-          {!compact && more && <span className='shrink-0 opacity-70'>{more}</span>}
-          {compact && state !== 'ready' && issues.length > 0 && (
-            <span className='shrink-0 opacity-70'>{issues.length}</span>
-          )}
-        </button>
+        {compact ? (
+          <button
+            type='button'
+            data-push-readiness={state}
+            data-push-readiness-for={id}
+            aria-label={tip}
+            data-tip={tip}
+            className={cn(
+              BADGE_POS,
+              // A larger invisible hit area than the 14–16px disc.
+              "after:absolute after:-inset-1.5 after:content-['']",
+              'text-white transition-[filter,transform] duration-150 ease-out hover:brightness-110 active:scale-90',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+              state === 'ready'
+                ? 'h-3.5 w-3.5 bg-[#047857]'
+                : state === 'block'
+                  ? 'h-4 min-w-4 px-1 bg-[#dc2626]'
+                  : 'h-4 min-w-4 px-1 bg-[#b45309]'
+            )}
+          >
+            {state === 'ready' ? (
+              <Check className='h-2.5 w-2.5' strokeWidth={3.5} />
+            ) : issues.length > 0 ? (
+              <span className='text-[10px] font-semibold leading-none tabular-nums'>
+                {issues.length > 9 ? '9+' : issues.length}
+              </span>
+            ) : (
+              <span className='text-[10px] font-bold leading-none'>!</span>
+            )}
+          </button>
+        ) : (
+          <button
+            type='button'
+            data-push-readiness={state}
+            data-push-readiness-for={id}
+            className={cn(
+              'inline-flex max-w-[260px] shrink-0 items-center gap-1 self-center rounded-full border px-1.5 py-px text-[10.5px] font-medium transition-colors',
+              state === 'ready'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300'
+                : state === 'block'
+                  ? 'border-red-200 bg-red-50 text-red-800 hover:bg-red-100 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+                  : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+            )}
+            data-tip={tip}
+          >
+            {state === 'ready' ? (
+              <CheckCircle2 className='h-3 w-3 shrink-0' />
+            ) : (
+              <AlertTriangle className='h-3 w-3 shrink-0' />
+            )}
+            <span className='truncate'>{headline}</span>
+            {more && <span className='shrink-0 opacity-70'>{more}</span>}
+          </button>
+        )}
       </PopoverTrigger>
       <PopoverContent align='end' className='w-[380px] max-w-[92vw] p-3'>
         <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>

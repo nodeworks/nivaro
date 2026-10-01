@@ -2301,7 +2301,7 @@ function PipelineTransitionButtonsInner({
             // it is pressed, whether what it sends is complete.
             if (!(tx.pushes && tx.pushes > 0)) return button
             return (
-              <span key={label} className='inline-flex items-center gap-1'>
+              <span key={label} className='relative inline-flex'>
                 {button}
                 <PushReadinessChip
                   collection={collection}
