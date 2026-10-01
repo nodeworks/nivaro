@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { extensionRoutes, loadedExtensionLabels } from '../extensions/loader.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getRealtimeStats } from '../plugins/socketio.js'
 import { selectInChunks } from '../services/db-batch.js'
@@ -11,7 +12,8 @@ import {
   HISTORY_ROW_CAP,
   type HistoryRow,
   historyNarrowing,
-  issueRouteTemplates,
+  issueMatch,
+  issueRouteLikes,
   summarizeHistory,
   traceBelongsTo
 } from '../services/traffic-history.js'
@@ -290,6 +292,8 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
           'graphql_kind',
           'created_at'
         )
+      // #1139: the query string tells a dry run apart (a tenant behind migration 357 has none).
+      if (await hasColumn('nivaro_api_logs', 'query').catch(() => false)) q.select('query')
       if (lane === 'extension' && !n.like?.length) {
         return { data: summarizeHistory([], lane, entity, hours as 1 | 6 | 24) }
       }
@@ -318,23 +322,31 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
         new Date(),
         matchExtensionRoute
       )
-      const templates = issueRouteTemplates(lane, entity, extUrls)
-      const issues = templates.length
-        ? ((await Promise.resolve(
-            db('nivaro_issues')
-              .where('source', 'server')
-              .whereNot('status', 'resolved')
-              .where((b) => {
-                for (const t of templates)
-                  b.orWhereRaw("title LIKE ? ESCAPE '\\'", [
-                    `%${t.replace(/[\\%_[]/g, (c) => `\\${c}`)}%`
-                  ])
-              })
-              .orderBy('last_seen_at', 'desc')
-              .limit(10)
-              .select('id', 'title', 'severity', 'status', 'occurrence_count', 'last_seen_at')
-          ).catch(() => [])) as Array<Record<string, unknown>>)
-        : []
+      // #1102: by the issue's stored route (+ request URL for per-entity lanes), not its title.
+      const im = issueMatch(lane, entity, extUrls)
+      let issues: Array<Record<string, unknown>> = []
+      if (im.routePrefixes.length) {
+        const iq = db('nivaro_issues')
+          .where('source', 'server')
+          .whereNot('status', 'resolved')
+          .where((b) => {
+            for (const p of im.routePrefixes)
+              for (const l of issueRouteLikes(p)) b.orWhereRaw("details LIKE ? ESCAPE '\\'", [l])
+          })
+        const urls = im.urlLike
+        if (urls?.length) {
+          iq.where((b) => {
+            for (const l of urls) b.orWhereRaw("details LIKE ? ESCAPE '\\'", [l])
+            b.orWhereRaw("details NOT LIKE '%Request context:%'")
+          })
+        }
+        issues = (await Promise.resolve(
+          iq
+            .orderBy('last_seen_at', 'desc')
+            .limit(10)
+            .select('id', 'title', 'severity', 'status', 'occurrence_count', 'last_seen_at')
+        ).catch(() => [])) as Array<Record<string, unknown>>
+      }
       const slow = listTraces(200)
         .filter((t) => traceBelongsTo(t, lane, entity, n.routePrefix, matchExtensionRoute))
         .slice(0, 5)

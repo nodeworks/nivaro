@@ -14,6 +14,8 @@ import {
 export const RING = 900
 const SLOTS = 6
 export const TICKER_CAP = 80
+/** Server tap with exact per entity × caller counts (#1095). */
+export const ENTITY_CALLERS_TAP = 'entity-callers'
 
 export function defaultFilters(): Filters {
   return {
@@ -93,6 +95,7 @@ class Ring {
 }
 
 const FRAME_BUFFER = 5
+const FRAME_EXT_LOG = 30
 const PRUNE_EVERY = 60
 
 type Totals = {
@@ -123,6 +126,12 @@ export class TrafficModel {
   private frameCount = 0
   /** caller -> entity key -> last frame second a live event from that caller touched it. */
   private callerSeen = new Map<string, Map<string, number>>()
+  /** #1095: entity key -> caller -> exact per-second counts (the entity-callers tap). */
+  private entityCallers = new Map<string, Map<string, Ring>>()
+  /** `${entityKey}\u0000${caller}` -> newest p95. */
+  private callerP95 = new Map<string, number>()
+  /** The server sends exact entity × caller counts (else the caller filter is approximate). */
+  exactCallers = false
   snapshotTotals: TrafficSnapshot['totals'] | null = null
   snapshotWindow = 60
   events: TrafficEventWire[] = []
@@ -137,6 +146,10 @@ export class TrafficModel {
   downLabels = new Map<string, string>()
   /** Server tap figures of the newest applied frame, by tap id ({} when it carried none). */
   frameExt: Record<string, unknown> = {}
+  /** The newest FRAME_EXT_LOG frames' tap figures, oldest first; `seq` counts applied frames,
+   *  so a reader that renders less often than frames arrive can catch up on what it missed. */
+  frameExtLog: Array<{ seq: number; sec: number; ext: Record<string, unknown> }> = []
+  private frameSeq = 0
   /** Server tap figures of the last snapshot, by tap id. Per-entity ones: entityMeta(k).ext. */
   snapshotExt: Record<string, unknown> = {}
   /** Non-request sources of the last snapshot. */
@@ -173,6 +186,9 @@ export class TrafficModel {
     this.edgeIn.clear()
     this.edgeOut.clear()
     this.callerSeen.clear()
+    this.entityCallers.clear()
+    this.callerP95.clear()
+    this.exactCallers = snap.entities.some((e) => e.ext?.[ENTITY_CALLERS_TAP] !== undefined)
     this.framesSince = 0
     this.snapshotTotals = snap.totals
     this.snapshotWindow = snap.window_s
@@ -198,6 +214,9 @@ export class TrafficModel {
       const sTot = e.series.reduce((a, b) => a + b, 0)
       const len = e.series.length || 1
       const totals = [e.req, e.read, e.create, e.update, e.delete, e.error]
+      const byCaller = Object.entries(
+        (e.ext?.[ENTITY_CALLERS_TAP] as Record<string, number[]> | undefined) ?? {}
+      )
       for (let i = 0; i < win; i++) {
         const w =
           sTot > 0
@@ -207,7 +226,15 @@ export class TrafficModel {
           sec - win + 1 + i,
           totals.map((n) => n * w)
         )
+        // each caller's window total takes the entity's shape (frames make it exact from here)
+        for (const [caller, v] of byCaller)
+          this.callerRing(e.key, caller).add(
+            sec - win + 1 + i,
+            v.slice(0, 6).map((n) => n * w)
+          )
       }
+      for (const [caller, v] of byCaller)
+        if (v[6]) this.callerP95.set(`${e.key}\u0000${caller}`, v[6])
       for (const [d, n] of Object.entries(e.down))
         this.spread(this.ring(this.edgeOut, `${e.lane}>${d}`, 1), sec, win, [n])
       for (const c of e.callers)
@@ -243,6 +270,15 @@ export class TrafficModel {
       r.set(sec, [v[0], 0, 0, 0, 0, v[1]])
       if (v[2]) r.p95 = v[2]
     }
+    const ec = f.ext?.[ENTITY_CALLERS_TAP] as Record<string, Record<string, number[]>> | undefined
+    if (ec) {
+      this.exactCallers = true
+      for (const [key, byCaller] of Object.entries(ec))
+        for (const [caller, v] of Object.entries(byCaller)) {
+          this.callerRing(key, caller).set(sec, v.slice(0, 6))
+          if (v[6]) this.callerP95.set(`${key}\u0000${caller}`, v[6])
+        }
+    }
     for (const [key, n] of Object.entries(f.edges_in)) this.ring(this.edgeIn, key, 1).set(sec, [n])
     for (const [key, n] of Object.entries(f.edges_out))
       this.ring(this.edgeOut, key, 1).set(sec, [n])
@@ -264,6 +300,11 @@ export class TrafficModel {
     if (f.journal_seq != null) this.journalSeq = f.journal_seq
     this.instance = f.instance || this.instance
     this.frameExt = f.ext ?? {}
+    this.frameSeq++
+    if (f.ext) {
+      this.frameExtLog.push({ seq: this.frameSeq, sec, ext: f.ext })
+      if (this.frameExtLog.length > FRAME_EXT_LOG) this.frameExtLog.shift()
+    }
     this.applyFrameData(f, sec)
     for (const [key, v] of Object.entries(f.entities))
       if (v[SLOT.error] > 0) this.flashes.set(key, Date.now())
@@ -327,6 +368,48 @@ export class TrafficModel {
       for (const [k, s] of seen) if (s <= cutoff) seen.delete(k)
       if (!seen.size) this.callerSeen.delete(c)
     }
+    for (const [k, byCaller] of this.entityCallers) {
+      for (const [c, r] of byCaller)
+        if (r.touched <= cutoff) {
+          byCaller.delete(c)
+          this.callerP95.delete(`${k}\u0000${c}`)
+        }
+      if (!byCaller.size) this.entityCallers.delete(k)
+    }
+  }
+
+  private callerRing(key: string, caller: string): Ring {
+    let byCaller = this.entityCallers.get(key)
+    if (!byCaller) {
+      byCaller = new Map()
+      this.entityCallers.set(key, byCaller)
+    }
+    return this.ring(byCaller, caller)
+  }
+
+  /** #1095: exact [req, read, create, update, delete, error] of one caller on one entity. */
+  entityCallerSum(key: string, caller: string, win: number): number[] {
+    const r = this.entityCallers.get(key)?.get(caller)
+    return r ? r.sum(this.nowSec, win).map(Math.round) : [0, 0, 0, 0, 0, 0]
+  }
+  entityCallerSeries(key: string, caller: string, win: number, points: number): number[] {
+    const r = this.entityCallers.get(key)?.get(caller)
+    return r ? r.series(this.nowSec, win, points) : new Array<number>(points).fill(0)
+  }
+  entityCallerP95(key: string, caller: string): number {
+    return this.callerP95.get(`${key}\u0000${caller}`) ?? 0
+  }
+  /** Callers with traffic on the entity in the window, busiest first (exact data only). */
+  entityCallerKeys(key: string, win: number): Array<{ key: string; n: number }> {
+    const byCaller = this.entityCallers.get(key)
+    if (!byCaller) return []
+    const out: Array<{ key: string; n: number }> = []
+    for (const [c, r] of byCaller) {
+      const s = r.sum(this.nowSec, win)
+      const n = s[0] + s[2] + s[3] + s[4]
+      if (n > 0.5) out.push({ key: c, n: Math.round(n) })
+    }
+    return out.sort((a, b) => b.n - a.n)
   }
 
   entityKeys(): string[] {
@@ -381,7 +464,11 @@ export class TrafficModel {
   }
 
   private filteredSum(key: string, win: number, f: Filters): number[] {
-    const s = this.entitySum(key, win)
+    // #1095: with a caller filter and exact data, only that caller's share of the entity
+    const s =
+      f.caller && this.exactCallers
+        ? this.entityCallerSum(key, f.caller, win)
+        : this.entitySum(key, win)
     const kinds: Kind[] = ['read', 'create', 'update', 'delete', 'error']
     const out = [0, 0, 0, 0, 0, 0]
     for (let k = 1; k <= 5; k++) if (f.kinds.has(kinds[k - 1])) out[k] = s[k]
@@ -391,18 +478,20 @@ export class TrafficModel {
   }
 
   /**
-   * Entity passes the caller filter? The wire has no entity x caller per-second data, so this is
-   * APPROXIMATE: the entity's snapshot top-callers include the caller, or a live event from that
-   * caller touched it inside the window.
+   * Entity passes the caller filter? Exact when the server sends entity × caller counts (#1095);
+   * otherwise APPROXIMATE: the entity's snapshot top-callers include the caller, or a live event
+   * from that caller touched it inside the window.
    */
   private callerTouches(caller: string, key: string, win: number): boolean {
+    if (this.exactCallers) return this.entityCallerSum(key, caller, win).some((n) => n > 0)
     if (this.meta.get(key)?.callers.some((c) => c.key === caller)) return true
     const s = this.callerSeen.get(caller)?.get(key)
     return s !== undefined && s > this.nowSec - win
   }
 
   /**
-   * Window totals. req/error come from the caller's ring when a caller filter is set. p50/p95:
+   * Window totals. With a caller filter: that caller's exact share of each entity (#1095), or —
+   * on a server without entity × caller counts — req/error from the caller's ring. p50/p95:
    * the snapshot's real totals while no frame has moved past it (same window); afterwards a
    * request-weighted mean of the entities' latest p50/p95 (a live-only approximation).
    */
@@ -420,9 +509,13 @@ export class TrafficModel {
       for (let k = 0; k < 6; k++) t[k] += s[k]
       w += s[0]
       p50 += s[0] * (this.meta.get(key)?.p50 ?? 0)
-      p95 += s[0] * this.entityP95(key)
+      p95 +=
+        s[0] *
+        ((f.caller && this.exactCallers && this.entityCallerP95(key, f.caller)) ||
+          this.entityP95(key))
     }
-    if (f.caller) {
+    // without exact entity × caller data, req/error come from the caller's own ring
+    if (f.caller && !this.exactCallers) {
       const [r, e] = this.callerSum(f.caller, win)
       t[0] = r
       t[5] = e
@@ -482,16 +575,19 @@ export class TrafficModel {
       const s = this.filteredSum(key, win, f)
       const total = s[0]
       if (total <= 0) continue
-      const w60 = this.entitySum(key, 60)
+      const exact = !!f.caller && this.exactCallers
+      const w60 = exact ? this.entityCallerSum(key, f.caller, 60) : this.entitySum(key, 60)
       rows.push({
         key,
         lane,
         entity: key.slice(key.indexOf('/') + 1),
         rps: total / win,
         wpm: w60[2] + w60[3] + w60[4],
-        p95: this.entityP95(key),
+        p95: (exact && this.entityCallerP95(key, f.caller)) || this.entityP95(key),
         errPct: total ? (100 * s[5]) / total : 0,
-        series: this.entitySeries(key, 60, 24)
+        series: exact
+          ? this.entityCallerSeries(key, f.caller, 60, 24)
+          : this.entitySeries(key, 60, 24)
       })
     }
     return rows.sort((a, b) => b.rps - a.rps).slice(0, n)

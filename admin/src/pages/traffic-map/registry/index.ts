@@ -11,6 +11,7 @@
 
 // ── feature registrations (one line each) ──
 import '../features/deep-measurement'
+import '../features/b1-request-lenses'
 
 export {
   type CanvasLayer,
