@@ -39,16 +39,37 @@
   ],
   "production": {
     "name": "production",
+    "enabled": false,
     "path": "~/code/staging-deploy",
     "source_branch": "main",
     "branch": "production",
     "pin_file": ".docker/nivaro-version",
+    "route_conf": ".docker/production.conf",
+    "gitlab": {
+      "api": "https://gitlab.example.com/api/v4",
+      "project": "group/deploy"
+    },
     "verify": [
       {
         "name": "production api",
-        "url": "https://app.example.com/api/version",
+        "url": "https://api.example.com/api/version",
         "field": "version"
       }
-    ]
+    ],
+    "frontend": {
+      "name": "portal",
+      "path": "~/code/portal",
+      "source_branch": "main",
+      "branch": "production",
+      "gitlab_project": "group/portal",
+      "staging_url": "https://staging.example.com/version.json",
+      "verify": [
+        {
+          "name": "production portal",
+          "url": "https://app.example.com/version.json",
+          "field": "version"
+        }
+      ]
+    }
   }
 }

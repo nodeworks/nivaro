@@ -1458,7 +1458,7 @@ this.emitFile({ type: 'asset', fileName: 'version.json',
     },
     {
       type: 'note',
-      text: 'Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. Its Promote to production section moves a version a release run verified on staging to production (scripts/promote-production.mjs: check the image, the staging deploy commit and what production runs; merge into the production branch and pin the version; poll production) — the version is typed back first. Below it, Runbooks runs the long operator scripts extensions declare. See docs/RELEASING.md.'
+      text: 'Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. Its Promote to production section moves a version staging verified to production (scripts/promote-production.mjs: check the image, the staging deploy commit and the portal commit staging serves; pin the version and digest on the production branches; play the manual production deploy jobs through the GitLab API — the API first, then the portal; verify the public URLs once the stacks own them). The version is typed back first, a First production deploy box runs the API job in bootstrap mode, and nothing runs while production promotion is switched off in release-chain.config.json. Below it, Runbooks runs the long operator scripts extensions declare. See docs/RELEASING.md.'
     },
     {
       type: 'h2',

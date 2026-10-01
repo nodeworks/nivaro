@@ -109,21 +109,46 @@ Release while one runs.
 ### Promoting to production
 
 The release chain stops at staging. **Promote to production** on the same card
-lists the last eight versions a finished, verified release run took to staging.
-Picking one runs `node scripts/promote-production.mjs --version <v> --events`
-(plan only) and shows what production runs now, the migrations production will
-run at boot, and anything that blocks: the image tag missing from the
-registry, no deployment commit for that version on the source branch, staging
-never having answered with it, or production already running it or something
-newer. Typing the version back starts the real run (`--go`, same lock and
-detached-process rules as a release): in a throwaway `git worktree` it merges
-the deploy commit into the production branch, writes the version into the pin
-file and pushes, then polls production until it answers the version twice.
+lists the version staging runs now plus the last versions a finished, verified
+release run took there. Picking one runs `node scripts/promote-production.mjs
+--version <v> --events` (plan only) and shows what production runs, the
+migrations it will run, and anything that blocks. Typing the version back starts
+the real run (`--go`, same lock and detached-process rules as a release):
 
-It needs a `production` block in `release-chain.config.json` (see
-`release-chain.config.example.json`), and the production pipeline must read the
-pin file — for EFP, `efp-nivaro`'s `deploy_production` job exports
-`NIVARO_VERSION=$(cat .docker/nivaro-version)`.
+1. **check** — production promotion is switched on, the image tag is on Docker
+   Hub (its digest is read for the pin), the deploy commit that took the version
+   to staging exists, staging answered with it, the portal commit staging serves
+   is on its main branch, and a GitLab token is present.
+2. **push** — in throwaway worktrees: the API deployment repository's
+   `production` branch gets the deploy commit merged and the pin file
+   (`.docker/nivaro-version`: version, then digest) written; the portal
+   repository's `production` branch gets the commit staging serves merged. Both
+   pushed. The portal's pipeline builds its image from that commit.
+3. **deploy** — both production deploy jobs are manual; the promotion plays them
+   through the GitLab API in order: the API first (canary runs the migrations,
+   gates check every task, failure rolls back), then the portal (its script
+   refuses an API older than the build). A failed job ends the promotion.
+4. **verify** — once `ROUTE_PRIORITY` ≥ 3 in the deployment repository's
+   `.docker/production.conf` (the stacks own the public hostnames), the public
+   URLs must answer the release twice. Before that the legacy apps serve them,
+   and the deploy jobs' gates are the verification.
+
+**First production deploy:** tick *First production deploy (bootstrap)* — the
+API job runs with `GATE_MODE=bootstrap`, skipping the checks that need the gate
+account (it cannot exist before that deploy's canary has migrated). Afterwards,
+create the gate account and set `NIVARO_GATE_TOKEN` on the deployment project.
+
+**The switch.** `"enabled": true` in the `production` block of
+`release-chain.config.json` arms promotion; while it is false (until cutover)
+the plan still renders but `--go` stops at *check* and nothing is pushed.
+
+Configuration: the `production` block of `release-chain.config.json` (see
+`release-chain.config.example.json`) — `path`, `branch`, `pin_file`,
+`route_conf`, `gitlab {api, project}`, `verify`, and an optional `frontend`
+block for a separately deployed portal. The GitLab token is the one the
+Environments registry holds for the deployment repository (the card passes it
+in the child's environment; from a terminal, set `GITLAB_TOKEN`). The
+**Production** tier on `/environments` shows both production pipelines.
 
 ### Runbooks
 

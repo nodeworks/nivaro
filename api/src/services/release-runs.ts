@@ -23,7 +23,7 @@ export const STAGES = [
   'verify'
 ] as const
 /** scripts/promote-production.mjs — the production target (#722). */
-export const PROMOTE_STAGES = ['check', 'push', 'verify'] as const
+export const PROMOTE_STAGES = ['check', 'push', 'deploy', 'verify'] as const
 export type Stage = (typeof STAGES)[number] | (typeof PROMOTE_STAGES)[number]
 export type Outcome = 'done' | 'failed' | 'cancelled' | 'lost'
 
@@ -52,8 +52,8 @@ export interface StageEvent {
  * a TLS warning on stderr with every npm/pnpm call, and the chain's registry
  * checks read that as "not published". A terminal run never had the variable.
  */
-export function childEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0' }
+export function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: '0', ...extra }
   delete env.NODE_TLS_REJECT_UNAUTHORIZED
   return env
 }
@@ -318,6 +318,8 @@ export async function startRun(opts: {
   mode: 'go' | 'promote'
   args: string[]
   user: string
+  /** Extra environment for the child (the promote's GITLAB_TOKEN) — never argv. */
+  env?: Record<string, string>
 }): Promise<RunRecord> {
   mkdirSync(runtime.runsDir(), { recursive: true })
   // Claim the lock atomically before anything awaits: two starts in the same
@@ -343,7 +345,7 @@ export async function startRun(opts: {
         cwd: repoRoot(),
         detached: true,
         stdio: ['ignore', fd, fd],
-        env: childEnv()
+        env: childEnv(opts.env)
       })
     } finally {
       closeSync(fd)
@@ -384,17 +386,52 @@ export function promoteAvailable(): boolean {
 export function validatePromoteBody(
   body: unknown
 ): { ok: true; version: string; args: string[] } | { ok: false; error: string } {
-  const v = (body as { version?: unknown } | null)?.version
+  const b = body as { version?: unknown; bootstrap?: unknown } | null
+  const v = b?.version
   if (typeof v !== 'string' || !/^\d+\.\d+\.\d+$/.test(v))
     return { ok: false, error: 'version must look like 1.2.3' }
-  return { ok: true, version: v, args: ['--go', '--events', '--version', v] }
+  if (b?.bootstrap !== undefined && typeof b.bootstrap !== 'boolean')
+    return { ok: false, error: 'bootstrap must be true or false' }
+  // bootstrap = the FIRST production deploy (GATE_MODE=bootstrap on the API job)
+  const extra = b?.bootstrap === true ? ['--bootstrap'] : []
+  return { ok: true, version: v, args: ['--go', '--events', '--version', v, ...extra] }
 }
 
-/** Versions a finished, verified release run took to staging — the candidates. */
+/** The version staging answers with right now (the config's first staging
+ *  verify URL), through curl — node's fetch rejects the corporate certificate. */
+function stagingVersionNow(): string | null {
+  try {
+    const cfg = JSON.parse(
+      readFileSync(join(dirname(runtime.runsDir()), 'release-chain.config.json'), 'utf8')
+    ) as { verify?: Array<{ url?: string; field?: string; expect?: string }> }
+    const v = (cfg.verify ?? []).find((x) => x.url && !x.expect)
+    if (!v?.url) return null
+    const body = JSON.parse(
+      execFileSync('curl', ['-sS', '-m', '8', v.url], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      })
+    ) as Record<string, unknown>
+    const ver = body?.[v.field ?? 'version']
+    return typeof ver === 'string' && /^\d+\.\d+\.\d+$/.test(ver) ? ver : null
+  } catch {
+    return null
+  }
+}
+
+/** Versions a finished, verified release run took to staging — the candidates —
+ *  plus whatever staging runs right now (a release finished outside the card,
+ *  from the command line, is still a staging-verified version; the promotion
+ *  re-checks staging itself before it pushes anything). */
 export async function promoteCandidates(): Promise<Array<{ version: string; at: string }>> {
   const runs = await listRuns(40)
   const seen = new Set<string>()
   const out: Array<{ version: string; at: string }> = []
+  const now = stagingVersionNow()
+  if (now) {
+    seen.add(now)
+    out.push({ version: now, at: new Date().toISOString() })
+  }
   for (const r of runs) {
     if (r.mode !== 'go' || r.state !== 'done' || !r.version || r.args.includes('--skip-verify'))
       continue
@@ -406,7 +443,12 @@ export async function promoteCandidates(): Promise<Array<{ version: string; at: 
   return out
 }
 
-export async function runPlan(timeoutMs = 60_000, script?: string, args: string[] = []): Promise<{
+export async function runPlan(
+  timeoutMs = 60_000,
+  script?: string,
+  args: string[] = [],
+  env: Record<string, string> = {}
+): Promise<{
   plan: Record<string, unknown> | null
   log: string
   ok: boolean
@@ -416,7 +458,7 @@ export async function runPlan(timeoutMs = 60_000, script?: string, args: string[
     const child = spawn(process.execPath, [script ?? runtime.scriptPath(), '--events', ...args], {
       cwd: repoRoot(),
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: childEnv()
+      env: childEnv(env)
     })
     let out = ''
     child.stdout.on('data', (d) => {

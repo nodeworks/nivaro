@@ -15,10 +15,10 @@ const STAGES = [
   'verify'
 ] as const
 /** scripts/promote-production.mjs (#722). */
-const PROMOTE_STAGES = ['check', 'push', 'verify'] as const
+const PROMOTE_STAGES = ['check', 'push', 'deploy', 'verify'] as const
 type Stage = (typeof STAGES)[number] | (typeof PROMOTE_STAGES)[number]
 /** Every stage either script can report, for the stage map. */
-const ALL_STAGES: readonly Stage[] = [...STAGES, 'check', 'push']
+const ALL_STAGES: readonly Stage[] = [...STAGES, 'check', 'push', 'deploy']
 
 interface RunSummary {
   id: string
@@ -422,6 +422,9 @@ function ProductionTarget({ busy, onStarted }: { busy: boolean; onStarted: (id: 
   const [version, setVersion] = useState<string | null>(null)
   const [plan, setPlan] = useState<PromotePlan | null>(null)
   const [typed, setTyped] = useState('')
+  // The FIRST production deploy: the API job runs with GATE_MODE=bootstrap
+  // (no gate account exists before its canary has run the migrations).
+  const [bootstrap, setBootstrap] = useState(false)
   const candidates = useQuery({
     queryKey: ['release-promote-candidates'],
     enabled: open,
@@ -433,7 +436,7 @@ function ProductionTarget({ busy, onStarted }: { busy: boolean; onStarted: (id: 
   const planMut = useMutation({
     mutationFn: (v: string) =>
       api
-        .post<{ plan: PromotePlan }>('/release/promote/plan', { version: v })
+        .post<{ plan: PromotePlan }>('/release/promote/plan', { version: v, bootstrap })
         .then((r) => r.data.plan),
     onMutate: () => {
       setPlan(null)
@@ -445,7 +448,11 @@ function ProductionTarget({ busy, onStarted }: { busy: boolean; onStarted: (id: 
   const go = useMutation({
     mutationFn: () =>
       api
-        .post<{ run: RunSummary }>('/release/promote', { version: plan?.version, confirm: typed })
+        .post<{ run: RunSummary }>('/release/promote', {
+          version: plan?.version,
+          confirm: typed,
+          bootstrap
+        })
         .then((r) => r.data.run),
     onSuccess: (run) => {
       setPlan(null)
@@ -471,8 +478,9 @@ function ProductionTarget({ busy, onStarted }: { busy: boolean; onStarted: (id: 
       {open && (
         <div className='mt-2 space-y-2 text-[12px]'>
           <p className='text-slate-500 dark:text-muted-foreground'>
-            Pick a version a release run verified on staging. Nothing is built: the production
-            branch of the deployment repository is pinned to that image and pushed.
+            Pick a version staging verified. Nothing is built: the production branches are pinned to
+            that image and the portal build staging serves, then the production deploy jobs run in
+            order — the API (canary, migrations, gated roll), then the portal.
           </p>
           {candidates.isLoading ? (
             <div className='h-7 w-64 animate-pulse rounded bg-muted' />
@@ -500,6 +508,19 @@ function ProductionTarget({ busy, onStarted }: { busy: boolean; onStarted: (id: 
               ))}
             </div>
           )}
+          <label className='flex items-center gap-1.5 text-slate-600 dark:text-muted-foreground'>
+            <input
+              type='checkbox'
+              checked={bootstrap}
+              onChange={(e) => {
+                setBootstrap(e.target.checked)
+                setPlan(null)
+                setTyped('')
+              }}
+              data-release-production-bootstrap
+            />
+            First production deploy (bootstrap: the API job skips the gate-account checks)
+          </label>
           {planMut.isPending && (
             <p className='text-slate-500' data-release-production-planning>
               Checking the registry, staging and production…

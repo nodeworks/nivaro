@@ -74,7 +74,21 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
   })
 
   // ── Production target (#722) ──────────────────────────────────────────────
-  // Promotion moves a version staging already verified; it never builds.
+  // Promotion moves a version staging already verified; it never builds. It
+  // plays the manual production deploy jobs through the GitLab API, with the
+  // token the Environments registry holds for the deployment repository —
+  // handed to the child in its environment, never on its command line.
+  const gitlabEnv = async (): Promise<Record<string, string>> => {
+    const row = await db('nivaro_environment_components as c')
+      .join('nivaro_environments as e', 'e.id', 'c.environment')
+      .where('c.git_provider', 'gitlab')
+      .whereNotNull('c.git_token')
+      .orderByRaw("CASE WHEN LOWER(e.name) = 'production' THEN 0 ELSE 1 END")
+      .orderBy('c.id')
+      .first('c.git_token')
+      .catch(() => null)
+    return row?.git_token ? { GITLAB_TOKEN: String(row.git_token) } : {}
+  }
 
   app.get('/promote/candidates', async (_req, reply) => {
     if (!available() || !promoteAvailable()) return reply.code(404).send(UNAVAILABLE)
@@ -85,7 +99,12 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
     if (!available() || !promoteAvailable()) return reply.code(404).send(UNAVAILABLE)
     const v = validatePromoteBody(req.body)
     if (!v.ok) return reply.code(400).send({ error: v.error })
-    const r = await runPlan(90_000, runtime.promotePath(), ['--version', v.version])
+    const planArgs = [
+      '--version',
+      v.version,
+      ...(v.args.includes('--bootstrap') ? ['--bootstrap'] : [])
+    ]
+    const r = await runPlan(90_000, runtime.promotePath(), planArgs, await gitlabEnv())
     if (r.timedOut)
       return reply.code(502).send({ error: 'promotion plan timed out', log_tail: tail(r.log) })
     if (!r.plan)
@@ -103,13 +122,13 @@ export async function releaseRunsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'type the version to confirm the promotion' })
     const user = req.user!.id
     try {
-      const run = await startRun({ mode: 'promote', args: v.args, user })
+      const run = await startRun({ mode: 'promote', args: v.args, user, env: await gitlabEnv() })
       await logActivity({
         action: 'release-promote-start',
         user,
         collection: 'release',
         item: run.id,
-        comment: `promote ${v.version} to production`,
+        comment: `promote ${v.version} to production${v.args.includes('--bootstrap') ? ' (bootstrap — first deploy)' : ''}`,
         req
       })
       return reply.code(201).send({ run })
