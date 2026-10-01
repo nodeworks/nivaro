@@ -28,7 +28,8 @@ const TENANT_FREE_PATHS = [
   '/admin/provision',
   '/admin/migrate',
   '/admin/migration-status',
-  '/admin/configure-storage'
+  '/admin/configure-storage',
+  '/admin/traffic-tenants'
 ]
 
 // ---------------------------------------------------------------------------

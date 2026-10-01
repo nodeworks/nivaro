@@ -128,6 +128,8 @@ interface Measure {
   derived: number[] | null
   /** The first readItems of the request: its collection + compiled filter / sort inputs. */
   shape: ReadShapeRef | null
+  /** #1173: wall time spent in each extension's hooks (extension id → ms); null until one ran. */
+  ext: Map<string, number> | null
 }
 
 /** What the first `readItems` of a request was asked for (references, never copied). */
@@ -165,7 +167,8 @@ function newMeasure(): Measure {
     repeatN: 0,
     repeatSql: null,
     derived: null,
-    shape: null
+    shape: null,
+    ext: null
   }
 }
 
@@ -560,6 +563,20 @@ export interface RequestMeasure {
   /** [direct, rollup, queue, integrity, revision, activity]; null when it wrote nothing. */
   derived: readonly number[] | null
   shape: ReadShapeRef | null
+  /** #1173: wall time per extension (its hooks); null when no extension hook ran. */
+  extensionMs: ReadonlyMap<string, number> | null
+}
+
+/**
+ * #1173 — an extension's hook ran `ms` inside the current traced request (the Traffic Map
+ * splits an entity's load between core and each extension). Outside a request: nothing.
+ */
+export function noteExtensionMs(extensionId: string, ms: number): void {
+  const ctx = als.getStore()
+  if (!ctx || !extensionId || !Number.isFinite(ms) || ms <= 0) return
+  const m = ctx.m
+  if (!m.ext) m.ext = new Map()
+  m.ext.set(extensionId, (m.ext.get(extensionId) ?? 0) + ms)
 }
 
 /** The measurement of the request `req` (null when it was not traced, e.g. not under /api). */
@@ -581,7 +598,8 @@ export function requestMeasure(req: unknown): RequestMeasure | null {
     repeatN: m.repeatN,
     repeatSql: m.repeatSql,
     derived: m.derived,
-    shape: m.shape
+    shape: m.shape,
+    extensionMs: m.ext
   }
 }
 

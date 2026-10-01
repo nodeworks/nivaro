@@ -134,4 +134,29 @@ export async function deadLettersRoutes(app: FastifyInstance) {
 
     return reply.code(404).send({ error: 'Failed run not found' })
   })
+
+  // ─── POST /:runId/discard — stop listing a failed run (#1184) ─────────────
+  // The run is kept (status 'discarded', its error and input untouched) so its history still
+  // reads; it simply leaves the queue. Conditional on status = 'error': a second discard, or one
+  // racing a retry's bookkeeping, changes nothing.
+  app.post('/:runId/discard', async (req, reply) => {
+    const { runId } = req.params as { runId: string }
+    const n = await db('nivaro_flow_runs')
+      .where({ id: runId, status: 'error' })
+      .update({ status: 'discarded' })
+    if (!n) {
+      const run = await db('nivaro_flow_runs').where({ id: runId }).first('status')
+      if (!run) return reply.code(404).send({ error: 'Failed run not found' })
+      return reply.code(409).send({ error: 'Run is not in the dead letter queue' })
+    }
+    await logActivity({
+      action: 'dead-letter-discard',
+      collection: 'nivaro_flow_runs',
+      item: runId,
+      user: req.user?.id,
+      req,
+      comment: 'discarded from the dead letter queue'
+    })
+    return reply.send({ data: { ok: true, discarded: runId } })
+  })
 }

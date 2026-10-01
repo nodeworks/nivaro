@@ -1,7 +1,7 @@
 import type { HookAction, HookTiming } from '@nivaro/extension-kit'
 import type { FastifyRequest } from 'fastify'
 import type { Database } from '../db/index.js'
-import { span } from '../services/request-trace.js'
+import { noteExtensionMs, span } from '../services/request-trace.js'
 import type { User } from '../types.js'
 
 export type { HookAction, HookTiming } from '@nivaro/extension-kit'
@@ -225,9 +225,13 @@ class HookRegistry {
           },
           labelOf(entry) ?? undefined
         )
-        record(entry, performance.now() - started, false)
+        const ms = performance.now() - started
+        record(entry, ms, false)
+        if (entry.extensionId) noteExtensionMs(entry.extensionId, ms)
       } catch (err) {
-        record(entry, performance.now() - started, true)
+        const ms = performance.now() - started
+        record(entry, ms, true)
+        if (entry.extensionId) noteExtensionMs(entry.extensionId, ms)
         // Before-hooks may intentionally block the operation by throwing an
         // error that carries an HTTP statusCode (e.g. AI validation 422).
         // Such errors propagate to the caller; everything else stays non-fatal.

@@ -27,6 +27,7 @@ import {
 } from './queues.js'
 import { noteDerivedWrite } from './request-trace.js'
 import { resolveRecordZones } from './sla-zones.js'
+import { noteQueueLookup, noteQueueSync } from './traffic-taps/queue-cache.js'
 
 /**
  * The in-flight addendum whose state a record SHOWS (#715) — null when the
@@ -98,13 +99,23 @@ export async function syncMaterializedQueueItem(collection: string, itemId: stri
     )
     return
   }
+  const t0 = performance.now()
   const sources = (await db('nivaro_queue_sources as qs')
     .join('nivaro_queues as q', 'qs.queue_id', 'q.id')
     .where({ 'qs.type': 'collection', 'qs.collection': collection, 'q.materialized': true })
     .select('qs.*')) as QueueSourceRow[]
+  // Traffic Map queue cache lane (#1175): what every write pays to ask, and each resync.
+  noteQueueLookup(collection, performance.now() - t0, sources.length > 0)
 
   for (const source of sources) {
-    await syncOneMaterializedRow(source, collection, itemId)
+    const t1 = performance.now()
+    let failed = true
+    try {
+      await syncOneMaterializedRow(source, collection, itemId)
+      failed = false
+    } finally {
+      noteQueueSync(String(source.queue_id), collection, performance.now() - t1, failed)
+    }
   }
 }
 

@@ -48,6 +48,7 @@ import {
   updateOne,
   upsertInfoOf
 } from './items.js'
+import { timedGate, timedResolver } from './traffic-taps/graphql-resolvers.js'
 import { runUnit } from './unit-of-work.js'
 import { RECORD_ORIGINS, translateVirtualKeys } from './virtual-filters.js'
 import {
@@ -820,22 +821,21 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   // integrations send them. A to-one has nothing to page, so
                   // they are accepted and ignored rather than rejected.
                   args: NESTED_LIST_ARGS,
-                  resolve: async (
-                    source: unknown,
-                    _args: Record<string, unknown>,
-                    ctx: GQLContext
-                  ) => {
-                    const parent = source as Record<string, unknown>
-                    const fkVal = parent[col]
-                    if (fkVal == null) return null
-                    const gate = await nestedGate(ctx, target)
-                    const q = db(target).where(`${target}.id`, fkVal as string | number)
-                    if (!applyNestedGate(q, target, gate, ctx.user as User)) return null
-                    const row = (await q.first(`${target}.*`)) as
-                      | Record<string, unknown>
-                      | undefined
-                    return row ? narrowNestedRow(row, gate) : null
-                  }
+                  resolve: timedResolver(
+                    'm2o',
+                    async (source: unknown, _args: Record<string, unknown>, ctx: GQLContext) => {
+                      const parent = source as Record<string, unknown>
+                      const fkVal = parent[col]
+                      if (fkVal == null) return null
+                      const gate = await timedGate(ctx, target, () => nestedGate(ctx, target))
+                      const q = db(target).where(`${target}.id`, fkVal as string | number)
+                      if (!applyNestedGate(q, target, gate, ctx.user as User)) return null
+                      const row = (await q.first(`${target}.*`)) as
+                        | Record<string, unknown>
+                        | undefined
+                      return row ? narrowNestedRow(row, gate) : null
+                    }
+                  )
                 }
                 continue
               }
@@ -859,93 +859,96 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   limit: { type: GraphQLInt },
                   offset: { type: GraphQLInt }
                 },
-                resolve: async (
-                  source: unknown,
-                  args: { collection?: string[]; limit?: number; offset?: number },
-                  ctx: GQLContext
-                ) => {
-                  const parentId = (source as Record<string, unknown>)['id']
-                  if (parentId == null) return []
-                  const q = db(info.junction)
-                    .where(info.fkToParent, parentId as string | number)
-                    .orderBy('id', 'asc')
-                    .select('id', info.itemField, info.discriminator)
-                  if (Array.isArray(args.collection) && args.collection.length > 0)
-                    q.whereIn(info.discriminator, args.collection.map(String))
-                  if (typeof args.limit === 'number' && args.limit > 0) q.limit(args.limit)
-                  if (typeof args.offset === 'number' && args.offset > 0) q.offset(args.offset)
-                  const links = (await q) as Array<Record<string, unknown>>
-                  // One read per collection the links name, each gated as the caller.
-                  const byCollection = new Map<string, Set<string>>()
-                  for (const l of links) {
-                    const c = String(l[info.discriminator] ?? '')
-                    const id = l[info.itemField]
-                    if (!c || id == null) continue
-                    byCollection.set(c, (byCollection.get(c) ?? new Set()).add(String(id)))
-                  }
-                  const found = new Map<string, Map<string, Record<string, unknown>>>()
-                  for (const [c, ids] of byCollection) {
-                    const type = members.get(c)
-                    if (!type) continue
-                    const rows = new Map<string, Record<string, unknown>>()
-                    if (userTypeFor(c)) {
-                      // People hang off a record the caller already read; the
-                      // User type carries only what a directory shows.
-                      const users = (await db('nivaro_users')
-                        .whereIn('id', [...ids])
-                        .where({ is_redacted: false })
-                        .select(
-                          'id',
-                          'email',
-                          'first_name',
-                          'last_name',
-                          'status',
-                          'last_access',
-                          'created_at',
-                          'updated_at'
-                        )
-                        .catch(() => [])) as Array<Record<string, unknown>>
-                      for (const u of users) {
-                        rows.set(String(u.id).toUpperCase(), {
-                          id: u.id,
-                          email: u.email,
-                          firstName: u.first_name,
-                          lastName: u.last_name,
-                          status: u.status,
-                          lastAccess: u.last_access,
-                          createdAt: u.created_at,
-                          updatedAt: u.updated_at,
-                          __typename: type.name
-                        })
-                      }
-                    } else {
-                      const gate = await nestedGate(ctx, c)
-                      const rq = db(c).whereIn(`${c}.id`, [...ids])
-                      if (!applyNestedGate(rq, c, gate, ctx.user as User)) continue
-                      const rs = (await rq.select(`${c}.*`).catch(() => [])) as Array<
-                        Record<string, unknown>
-                      >
-                      for (const r of rs) {
-                        rows.set(String(r.id).toUpperCase(), {
-                          ...narrowNestedRow(r, gate),
-                          __typename: type.name
-                        })
-                      }
+                resolve: timedResolver(
+                  'm2a',
+                  async (
+                    source: unknown,
+                    args: { collection?: string[]; limit?: number; offset?: number },
+                    ctx: GQLContext
+                  ) => {
+                    const parentId = (source as Record<string, unknown>)['id']
+                    if (parentId == null) return []
+                    const q = db(info.junction)
+                      .where(info.fkToParent, parentId as string | number)
+                      .orderBy('id', 'asc')
+                      .select('id', info.itemField, info.discriminator)
+                    if (Array.isArray(args.collection) && args.collection.length > 0)
+                      q.whereIn(info.discriminator, args.collection.map(String))
+                    if (typeof args.limit === 'number' && args.limit > 0) q.limit(args.limit)
+                    if (typeof args.offset === 'number' && args.offset > 0) q.offset(args.offset)
+                    const links = (await q) as Array<Record<string, unknown>>
+                    // One read per collection the links name, each gated as the caller.
+                    const byCollection = new Map<string, Set<string>>()
+                    for (const l of links) {
+                      const c = String(l[info.discriminator] ?? '')
+                      const id = l[info.itemField]
+                      if (!c || id == null) continue
+                      byCollection.set(c, (byCollection.get(c) ?? new Set()).add(String(id)))
                     }
-                    found.set(c, rows)
-                  }
-                  return links.map((l) => {
-                    const c = String(l[info.discriminator] ?? '')
-                    const id = l[info.itemField]
-                    return {
-                      __junction_id: l.id,
-                      [info.discriminator]: c || null,
-                      item_id: id ?? null,
-                      item:
-                        id == null ? null : (found.get(c)?.get(String(id).toUpperCase()) ?? null)
+                    const found = new Map<string, Map<string, Record<string, unknown>>>()
+                    for (const [c, ids] of byCollection) {
+                      const type = members.get(c)
+                      if (!type) continue
+                      const rows = new Map<string, Record<string, unknown>>()
+                      if (userTypeFor(c)) {
+                        // People hang off a record the caller already read; the
+                        // User type carries only what a directory shows.
+                        const users = (await db('nivaro_users')
+                          .whereIn('id', [...ids])
+                          .where({ is_redacted: false })
+                          .select(
+                            'id',
+                            'email',
+                            'first_name',
+                            'last_name',
+                            'status',
+                            'last_access',
+                            'created_at',
+                            'updated_at'
+                          )
+                          .catch(() => [])) as Array<Record<string, unknown>>
+                        for (const u of users) {
+                          rows.set(String(u.id).toUpperCase(), {
+                            id: u.id,
+                            email: u.email,
+                            firstName: u.first_name,
+                            lastName: u.last_name,
+                            status: u.status,
+                            lastAccess: u.last_access,
+                            createdAt: u.created_at,
+                            updatedAt: u.updated_at,
+                            __typename: type.name
+                          })
+                        }
+                      } else {
+                        const gate = await timedGate(ctx, c, () => nestedGate(ctx, c))
+                        const rq = db(c).whereIn(`${c}.id`, [...ids])
+                        if (!applyNestedGate(rq, c, gate, ctx.user as User)) continue
+                        const rs = (await rq.select(`${c}.*`).catch(() => [])) as Array<
+                          Record<string, unknown>
+                        >
+                        for (const r of rs) {
+                          rows.set(String(r.id).toUpperCase(), {
+                            ...narrowNestedRow(r, gate),
+                            __typename: type.name
+                          })
+                        }
+                      }
+                      found.set(c, rows)
                     }
-                  })
-                }
+                    return links.map((l) => {
+                      const c = String(l[info.discriminator] ?? '')
+                      const id = l[info.itemField]
+                      return {
+                        __junction_id: l.id,
+                        [info.discriminator]: c || null,
+                        item_id: id ?? null,
+                        item:
+                          id == null ? null : (found.get(c)?.get(String(id).toUpperCase()) ?? null)
+                      }
+                    })
+                  }
+                )
               }
               continue
             }
@@ -968,28 +971,27 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       type: (filterRegistry.get(otherCol) ?? GraphQLJSON) as GraphQLInputType
                     }
                   },
-                  resolve: async (
-                    source: unknown,
-                    args: Record<string, unknown>,
-                    ctx: GQLContext
-                  ) => {
-                    const parentId = (source as Record<string, unknown>)['id']
-                    if (parentId == null) return []
-                    const gate = await nestedGate(ctx, otherCol)
-                    const q = db(`${info.junction} as _j`)
-                      .join(otherCol, `${otherCol}.id`, `_j.${info.fkToOther}`)
-                      .where(`_j.${info.fkToParent}`, parentId as string | number)
-                      .select(`${otherCol}.*`, '_j.id as __junction_id')
-                    if (!applyNestedGate(q, otherCol, gate, ctx.user as User)) return []
-                    await applyNestedListArgs(q, otherCol, args as never, (fk) =>
-                      m2oMap.get(`${otherCol}.${fk}`)
-                    )
-                    const rows = (await q) as Array<Record<string, unknown>>
-                    return rows.map(({ __junction_id, ...target }) => ({
-                      __junction_id,
-                      __target: narrowNestedRow(target, gate)
-                    }))
-                  }
+                  resolve: timedResolver(
+                    'm2m',
+                    async (source: unknown, args: Record<string, unknown>, ctx: GQLContext) => {
+                      const parentId = (source as Record<string, unknown>)['id']
+                      if (parentId == null) return []
+                      const gate = await timedGate(ctx, otherCol, () => nestedGate(ctx, otherCol))
+                      const q = db(`${info.junction} as _j`)
+                        .join(otherCol, `${otherCol}.id`, `_j.${info.fkToOther}`)
+                        .where(`_j.${info.fkToParent}`, parentId as string | number)
+                        .select(`${otherCol}.*`, '_j.id as __junction_id')
+                      if (!applyNestedGate(q, otherCol, gate, ctx.user as User)) return []
+                      await applyNestedListArgs(q, otherCol, args as never, (fk) =>
+                        m2oMap.get(`${otherCol}.${fk}`)
+                      )
+                      const rows = (await q) as Array<Record<string, unknown>>
+                      return rows.map(({ __junction_id, ...target }) => ({
+                        __junction_id,
+                        __target: narrowNestedRow(target, gate)
+                      }))
+                    }
+                  )
                 }
                 continue
               }
@@ -1011,24 +1013,23 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       type: (filterRegistry.get(manyCol) ?? GraphQLJSON) as GraphQLInputType
                     }
                   },
-                  resolve: async (
-                    source: unknown,
-                    args: Record<string, unknown>,
-                    ctx: GQLContext
-                  ) => {
-                    const parentId = (source as Record<string, unknown>)['id']
-                    if (parentId == null) return []
-                    const gate = await nestedGate(ctx, manyCol)
-                    const q = db(manyCol)
-                      .where(`${manyCol}.${info.manyField}`, parentId as string | number)
-                      .select(`${manyCol}.*`)
-                    if (!applyNestedGate(q, manyCol, gate, ctx.user as User)) return []
-                    await applyNestedListArgs(q, manyCol, args as never, (fk) =>
-                      m2oMap.get(`${manyCol}.${fk}`)
-                    )
-                    const rows = (await q) as Array<Record<string, unknown>>
-                    return gate.fields ? rows.map((r) => narrowNestedRow(r, gate)) : rows
-                  }
+                  resolve: timedResolver(
+                    'o2m',
+                    async (source: unknown, args: Record<string, unknown>, ctx: GQLContext) => {
+                      const parentId = (source as Record<string, unknown>)['id']
+                      if (parentId == null) return []
+                      const gate = await timedGate(ctx, manyCol, () => nestedGate(ctx, manyCol))
+                      const q = db(manyCol)
+                        .where(`${manyCol}.${info.manyField}`, parentId as string | number)
+                        .select(`${manyCol}.*`)
+                      if (!applyNestedGate(q, manyCol, gate, ctx.user as User)) return []
+                      await applyNestedListArgs(q, manyCol, args as never, (fk) =>
+                        m2oMap.get(`${manyCol}.${fk}`)
+                      )
+                      const rows = (await q) as Array<Record<string, unknown>>
+                      return gate.fields ? rows.map((r) => narrowNestedRow(r, gate)) : rows
+                    }
+                  )
                 }
                 continue
               }

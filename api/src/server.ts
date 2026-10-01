@@ -26,6 +26,7 @@ import { redisPlugin } from './plugins/redis.js'
 import { requestTracePlugin } from './plugins/request-trace.js'
 import { socketioPlugin } from './plugins/socketio.js'
 import { adminProvisionRoutes } from './routes/admin/provision.js'
+import { adminTrafficTenantRoutes } from './routes/admin/traffic-tenants.js'
 import { loadScheduledFlows } from './routes/flows.js'
 import { formRendererRoutes } from './routes/form-renderer.js'
 import { registerRoutes } from './routes/index.js'
@@ -107,6 +108,8 @@ export async function buildServer() {
     app.addHook('onRequest', tenantHook)
     // Internal provisioning endpoint — not tenant-scoped, no tenant hook needed
     await app.register(adminProvisionRoutes)
+    // #1185 — the operator's noisy-tenant ranking (same provision secret, tenant-free path)
+    await app.register(adminTrafficTenantRoutes)
   }
 
   // Allow DELETE/PUT/PATCH requests with Content-Type: application/json but no body
