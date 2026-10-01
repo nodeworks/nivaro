@@ -345,8 +345,14 @@ export async function listRuns(limit = 10): Promise<RunSummary[]> {
   } catch {
     return []
   }
+  // The folder also holds non-run JSON (the release gate's gate-before.json),
+  // so a file only counts as a run when it carries an id and a real start time.
   const recs = (await Promise.all(names.map((n) => readRecord(n.slice(0, -5))))).filter(
-    (r): r is RunRecord => r !== null
+    (r): r is RunRecord =>
+      r !== null &&
+      typeof r.id === 'string' &&
+      typeof r.started_at === 'string' &&
+      Number.isFinite(Date.parse(r.started_at))
   )
   recs.sort((a, b) => (a.started_at < b.started_at ? 1 : -1))
   return Promise.all(recs.slice(0, limit).map(async (r) => (await summarize(r)).run))

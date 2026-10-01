@@ -36,6 +36,7 @@ export function formatDateTime(date: string | Date) {
 
 export function formatRelative(date: string | Date) {
   const d = new Date(date)
+  if (Number.isNaN(d.getTime())) return '—'
   const diff = Date.now() - d.getTime()
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return 'just now'
