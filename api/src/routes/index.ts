@@ -65,6 +65,7 @@ import { directoryRoutes } from './directory.js'
 import { dossierRoutes } from './dossier.js'
 import { draftPublishRoutes } from './draft-publish.js'
 import { draftsRoutes } from './drafts.js'
+import { envPresenceRoutes } from './env-presence.js'
 import { environmentRoutes } from './environments.js'
 import { erpSubmissionsRoutes } from './erp-submissions.js'
 import { eventsStreamRoutes } from './events-stream.js'
@@ -288,6 +289,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(traceRoutes)
   await app.register(configDiffRoutes)
   await app.register(environmentRoutes, { prefix: '/environments' })
+  await app.register(envPresenceRoutes, { prefix: '/environments' })
   await app.register(releaseRunsRoutes, { prefix: '/release' })
   await app.register(runbookRoutes, { prefix: '/runbooks' })
   await app.register(integrationEventsRoutes, { prefix: '/integration-events' })

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { EnvPresencePanel } from '@/components/env-presence-panel'
 import { ReleaseCard } from '@/components/release-card'
 import { RunbooksCard } from '@/components/runbooks-card'
 import { Button } from '@/components/ui/button'
@@ -165,6 +166,7 @@ export default function Environments() {
         </aside>
 
         <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+          <EnvPresencePanel />
           <SettingsComparePanel />
           {!selected ? (
             <div className='max-w-[560px]'>
