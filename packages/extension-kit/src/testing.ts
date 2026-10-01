@@ -58,7 +58,7 @@ import type {
   StorageAdapter,
   ValidatorDef
 } from './registrations.js'
-import type { IntegrationSignal, SignalActionHandler } from './signals.js'
+import type { IntegrationSignal, SignalActionHandler, TrafficNodeDef } from './signals.js'
 import type { ExtensionUser } from './user.js'
 
 // ─── In-memory knex ─────────────────────────────────────────────────────────
@@ -422,6 +422,7 @@ export interface TestContext extends ExtensionContext {
     signals: IntegrationSignal[]
     signalActions: SignalActionHandler[]
     eventSources: EventSourceDef[]
+    trafficNodes: TrafficNodeDef[]
     integrityChecks: IntegrityCheck[]
     links: LinkRegistration[]
     mailTypes: MailTypeDef[]
@@ -531,6 +532,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     signals: [],
     signalActions: [],
     eventSources: [],
+    trafficNodes: [],
     integrityChecks: [],
     links: [],
     mailTypes: [],
@@ -724,7 +726,8 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
       },
       registerSignal: (d) => registered.signals.push(d),
       registerSignalAction: (d) => registered.signalActions.push(d),
-      registerEventSource: (d) => registered.eventSources.push(d)
+      registerEventSource: (d) => registered.eventSources.push(d),
+      registerTrafficNode: (d) => registered.trafficNodes.push(d)
     },
     integrity: { registerCheck: (c) => registered.integrityChecks.push(c) },
     links: { register: (r) => registered.links.push(r) },

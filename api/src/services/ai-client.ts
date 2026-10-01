@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { loggedCreate } from './ai-log.js'
 import { overlaySettings } from './settings-overrides.js'
+import { noteAiFallback } from './traffic-taps/ai.js'
 
 /**
  * Shared AI client resolution. Every AI feature (generate, summarize, ask,
@@ -589,6 +590,7 @@ export function withModelFallback(
           `[ai] model "${chain[i]}" refused (${msg.slice(0, 120)}) — falling back to "${chain[i + 1]}"`
         )
         fallbackCount++
+        noteAiFallback(chain[i], chain[i + 1])
       }
     }
     throw lastErr

@@ -13,6 +13,8 @@ import {
   runStagedImport,
   scrubSecrets
 } from './staged-imports.js'
+import { runAsTrafficSource, type TrafficSource, withTrafficSource } from './traffic-source.js'
+import { noteImportRun } from './traffic-taps/sources.js'
 
 /**
  * Post-completion fan-out. A staged import writes through raw SQL (BULK INSERT
@@ -230,6 +232,9 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
   }
 }
 
+/** The Traffic Map source an import run's writes and partner calls are attributed to (#1143). */
+const IMPORT_SOURCE: TrafficSource = { id: 'import:worker', label: 'Import worker', kind: 'import' }
+
 async function runOne(
   app: FastifyInstance,
   next: QueueRow,
@@ -254,25 +259,39 @@ async function runOne(
     const fileBuffer = buffer
     const chainId = newChainId()
     const chainRoot = `import_run:${next.id}`
+    // #1143: the run is the Traffic Map's import-worker source (its writes, partner calls).
+    noteImportRun('start', {
+      run_id: Number(next.id),
+      key: String(next.import_key),
+      label: definition.label ?? null
+    })
     const { rowCount, durationSeconds, summary, affected, matched } = await startChain(
       chainRoot,
       () =>
-        runStagedImport({
-          definition,
-          buffer: fileBuffer,
-          createdBy: next.created_by ? String(next.created_by) : null,
-          runId: Number(next.id),
-          onProgress: async (stage, data) => {
-            if (stage === 'row_count') {
-              await db('nivaro_import_queue')
-                .where('id', next.id)
-                .update({ row_count: Number(data?.row_count ?? 0) })
+        runAsTrafficSource(IMPORT_SOURCE, () =>
+          runStagedImport({
+            definition,
+            buffer: fileBuffer,
+            createdBy: next.created_by ? String(next.created_by) : null,
+            runId: Number(next.id),
+            onProgress: async (stage, data) => {
+              if (stage === 'row_count') {
+                noteImportRun('rows', {
+                  run_id: Number(next.id),
+                  key: String(next.import_key),
+                  rows: Number(data?.row_count ?? 0)
+                })
+                await db('nivaro_import_queue')
+                  .where('id', next.id)
+                  .update({ row_count: Number(data?.row_count ?? 0) })
+              }
+              app.io?.emit('import:progress', { id: next.id, stage, ...data })
             }
-            app.io?.emit('import:progress', { id: next.id, stage, ...data })
-          }
-        }),
+          })
+        ),
       chainId
     )
+    noteImportRun('done', { run_id: Number(next.id), key: String(next.import_key), rows: rowCount })
 
     await db('nivaro_import_queue')
       .where('id', next.id)
@@ -295,24 +314,27 @@ async function runOne(
     startChain(
       chainRoot,
       () =>
-        afterImportCompleted(app, definition, {
-          run_id: String(next.id),
-          import_key: String(next.import_key),
-          definition_label: definition.label ?? null,
-          staging_table: definition.staging_table ?? null,
-          procedure: definition.procedure ?? null,
-          row_count: rowCount,
-          duration_seconds: durationSeconds,
-          created_by: next.created_by ? String(next.created_by) : null,
-          ...(affected ? { affected } : {}),
-          ...(matched ? { matched } : {})
-        }),
+        withTrafficSource(IMPORT_SOURCE, () =>
+          afterImportCompleted(app, definition, {
+            run_id: String(next.id),
+            import_key: String(next.import_key),
+            definition_label: definition.label ?? null,
+            staging_table: definition.staging_table ?? null,
+            procedure: definition.procedure ?? null,
+            row_count: rowCount,
+            duration_seconds: durationSeconds,
+            created_by: next.created_by ? String(next.created_by) : null,
+            ...(affected ? { affected } : {}),
+            ...(matched ? { matched } : {})
+          })
+        ),
       chainId
     )
   } catch (err) {
     // Defence in depth: the share loader sanitises its own failures, but ANY
     // thrower here reaches a persisted log and a user-facing notification.
     const message = scrubSecrets(describeSqlError(err))
+    noteImportRun('error', { run_id: Number(next.id), key: String(next.import_key) })
     await db('nivaro_import_queue')
       .where('id', next.id)
       .update({

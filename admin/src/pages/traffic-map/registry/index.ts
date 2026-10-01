@@ -23,13 +23,21 @@ import '../features/snapshots'
 import '../features/compare'
 import '../features/digest'
 import '../features/replay'
+import '../features/topology'
 
 export {
   type CanvasLayer,
   type CanvasLayerArgs,
   canvasLayers,
+  type EdgeStyle,
+  edgeStyles,
   type NodeBadge,
-  nodeBadges
+  type NodeProvider,
+  nodeBadges,
+  nodeProviders,
+  requestCanvasRepaint,
+  type SideBadge,
+  sideBadges
 } from './canvasLayers'
 export { type EventAction, eventActions } from './eventActions'
 export { type HotColumn, hotColumns } from './hotColumns'

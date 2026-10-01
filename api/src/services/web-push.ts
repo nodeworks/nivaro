@@ -3,6 +3,7 @@ import { routePush } from './channel-test-mode.js'
 import webpush from 'web-push'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 /**
  * Web Push (browser push notifications, PWA).
@@ -93,8 +94,12 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
     // Test mode (#832): a person outside the allowlist is not pushed; the test
     // recipient's browsers get it instead, titled with who it was for.
     const routed = await routePush(userId)
-    if (!routed) return 0
+    if (!routed) {
+      noteChannel('push', 'dropped')
+      return 0
+    }
     if (routed.userId !== userId) {
+      noteChannelRedirect('push')
       userId = routed.userId
       // A redirected push must not carry a chat reply token for someone else.
       payload = { ...payload, title: `${routed.prefix}${payload.title}`, reply_token: undefined }
@@ -119,6 +124,8 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
 
     let sent = 0
     for (const sub of subs) {
+      // #1140: each device push is a call into the Traffic Map's web-push node.
+      const started = Date.now()
       try {
         await webpush.sendNotification(
           {
@@ -136,10 +143,12 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
           }
         )
         sent++
+        noteChannel('push', 'sent', { ms: Date.now() - started })
         await db('nivaro_push_subscriptions')
           .where({ id: sub.id })
           .update({ last_used_at: new Date() })
       } catch (err) {
+        noteChannel('push', 'failed', { ms: Date.now() - started })
         const status = (err as { statusCode?: number }).statusCode
         if (status === 404 || status === 410) {
           await db('nivaro_push_subscriptions').where({ id: sub.id }).del()

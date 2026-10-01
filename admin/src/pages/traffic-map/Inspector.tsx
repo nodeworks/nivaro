@@ -13,6 +13,7 @@ import {
   KIND_VAR
 } from './EventTicker'
 import type { TrafficModel } from './model'
+import { downKindOf, downLabel } from './nodeKinds'
 import { InspectorActions } from './registry/inspectorActions'
 import { InspectorPanels } from './registry/inspectorPanels'
 import { Sparkline } from './Sparkline'
@@ -49,6 +50,19 @@ export interface InspectorData {
 }
 
 const SERIES_POINTS = 40
+/** Inspector type line for group-C node kinds. */
+const SOURCE_TYPE: Record<string, string> = {
+  cron: 'scheduled job',
+  flow: 'flow',
+  import: 'staged-import worker',
+  socket: 'browser sockets'
+}
+const DOWN_TYPE: Record<string, string> = {
+  partner: 'Partner · declared by an extension',
+  channel: 'Notification channel',
+  ai: 'AI provider',
+  webhook: 'Outgoing webhook'
+}
 const zeros = (n: number) => new Array<number>(n).fill(0)
 
 function kindsOf(sums: number[], f: Filters): number[] {
@@ -133,12 +147,15 @@ export function describeSelection(
   if (sel.kind === 'caller') {
     const [req, err] = m.callerSum(sel.id, win)
     const c = catalog?.callers[sel.id]
+    const srcKind = sel.id.includes(':') ? sel.id.slice(0, sel.id.indexOf(':')) : null
     const keys = m
       .entityKeys()
       .filter((k) => (m.entityMeta(k)?.callers ?? []).some((x) => x.key === sel.id))
     return {
       name: callerLabel(catalog, sel.id),
-      type: `Caller · ${c?.kind ?? 'person'}`,
+      type: srcKind
+        ? `Source · ${SOURCE_TYPE[srcKind] ?? srcKind}`
+        : `Caller · ${c?.kind ?? 'person'}`,
       route: '',
       rps: req / win,
       p95: Math.max(0, ...keys.map((k) => m.entityP95(k))),
@@ -166,13 +183,15 @@ export function describeSelection(
   const [req, err, p95] = m.downSum(sel.id, win)
   const keys = m.entityKeys().filter((k) => m.entityMeta(k)?.down?.[sel.id])
   const ext = sel.id.startsWith('ext:')
+  const kind = downKindOf(m, sel.id)
   return {
     name:
       catalog?.down[sel.id] ??
       (ext ? catalog?.partners[sel.id.slice(4)] : undefined) ??
-      m.downLabels.get(sel.id) ??
-      sel.id,
-    type: ext ? 'External API' : 'Data store',
+      downLabel(m, catalog, sel.id),
+    type: ext
+      ? 'External API'
+      : (DOWN_TYPE[kind] ?? (['db', 'cache', 'storage'].includes(kind) ? 'Data store' : 'Service')),
     route: '',
     rps: req / win,
     p95,
@@ -284,8 +303,12 @@ export function historyAvailable(sel: Selection | null): boolean {
   if (!sel) return false
   if (sel.kind === 'down') return true
   // `__other__` folds many entities; `__background__` has no request rows behind it.
+  // socket events never reach the request log
   return (
-    sel.kind === 'entity' && !sel.id.endsWith('/__other__') && !sel.id.endsWith('/__background__')
+    sel.kind === 'entity' &&
+    !sel.id.endsWith('/__other__') &&
+    !sel.id.endsWith('/__background__') &&
+    !sel.id.startsWith('socket/')
   )
 }
 export function historyUrl(sel: Selection, hours: Hours): string {
@@ -450,9 +473,11 @@ function HistoryBody({
     return (
       <div className='grid gap-2 px-3.5 py-3 text-[12.5px]' id='tm-history-note'>
         <p className='text-[var(--tm-fg-2)]'>{dh.note}</p>
-        <Link to='/db-health' id='tm-history-db-health' className={cn(LINK, 'w-fit text-[12px]')}>
-          Open DB Health
-        </Link>
+        {(selKey === 'db' || selKey === 'redis' || selKey === 'store') && (
+          <Link to='/db-health' id='tm-history-db-health' className={cn(LINK, 'w-fit text-[12px]')}>
+            Open DB Health
+          </Link>
+        )}
       </div>
     )
   }

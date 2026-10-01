@@ -33,6 +33,7 @@ import {
   TOP_KEYS_CAP,
   topMinutes
 } from './traffic-ring.js'
+import { currentTrafficSource } from './traffic-source.js'
 import {
   collectTaps,
   currentStoreId,
@@ -90,6 +91,11 @@ export interface TrafficOutboundEvent {
   status: number | null
   durationMs: number
   at: number
+  /** HTTP verb and path of the call (extension node matching, #1114). */
+  method?: string
+  path?: string
+  /** Transport error text when there was no response (error class, #1112). */
+  error?: string | null
 }
 export interface TrafficEventWire {
   t: number
@@ -596,8 +602,15 @@ export function noteWrite(ev: TrafficWriteEvent): void {
     const slot = ev.action === 'create' ? K.create : ev.action === 'delete' ? K.delete : K.update
     bump(e, sec, slot)
     e.lastSeen = sec
-    const { caller, via } = callerFromTrace()
-    if (caller === 'cron') {
+    let { caller, via } = callerFromTrace()
+    const src = currentTrafficSource()
+    if (src) {
+      // #1105/#1106/#1143: a cron job, flow run or import run owns this write, even inside a
+      // request (a flow an item write fired).
+      caller = src.id
+      via = src.kind
+      bumpSource(src.id, src.label, src.kind, sec, e, true)
+    } else if (caller === 'cron') {
       // R4: a write inside a request is already counted by noteRequest.
       bumpMinute(e.callers, caller, sec)
       bump(getCaller(caller), sec, K.req)
@@ -650,9 +663,12 @@ export function noteOutbound(ev: TrafficOutboundEvent): void {
   try {
     if (isStale(Math.floor(ev.at / 1000))) return
     const sec = secOf(ev.at)
-    const id = `ext:${ev.apiId}`
     partnerNames.set(ev.apiId, ev.apiName)
-    const dn = getDown(id, ev.apiName)
+    // #1114: an extension-declared node (MDSi, MWF…) takes the call instead of `ext:<apiId>`.
+    const node = resolveOutboundNode(ev)
+    const id = node?.id ?? `ext:${ev.apiId}`
+    if (node) downMeta.set(id, { label: node.label, kind: 'partner' })
+    const dn = getDown(id, node?.label ?? ev.apiName)
     const failed = ev.status == null || ev.status >= 400
     bump(dn, sec, K.req)
     if (failed) bump(dn, sec, K.error)
@@ -675,7 +691,10 @@ export function noteOutbound(ev: TrafficOutboundEvent): void {
     e.lastSeen = sec
     bumpMinute(e.downs, id, sec)
     edgesOut.set(`${e.lane}>${id}`, (edgesOut.get(`${e.lane}>${id}`) ?? 0) + 1)
-    if (!meta) {
+    const src = currentTrafficSource()
+    if (src) {
+      bumpSource(src.id, src.label, src.kind, sec, e, !failed)
+    } else if (!meta) {
       // No request behind it: a cron / background call (spec §4).
       const cn = getCaller('cron')
       bump(cn, sec, K.req)
@@ -759,6 +778,34 @@ export interface TrafficSourceCall {
   ok?: boolean
 }
 
+/** One unit of source traffic: the callers ring under `id`, and the entity's caller row + edge. */
+function bumpSource(
+  id: string,
+  label: string | undefined,
+  kind: string | undefined,
+  sec: number,
+  e: EntityState | null,
+  ok: boolean,
+  edgeKey?: string
+): void {
+  let meta = sourceMeta.get(id)
+  if (!meta) {
+    meta = {}
+    sourceMeta.set(id, meta)
+  }
+  if (label && meta.label !== label) meta.label = label.slice(0, 120)
+  if (kind && meta.kind !== kind) meta.kind = kind.slice(0, 40)
+  const cn = getCaller(id)
+  bump(cn, sec, K.req)
+  if (!ok) bump(cn, sec, K.error)
+  if (e) {
+    e.lastSeen = sec
+    bumpMinute(e.callers, id, sec)
+    const edge = edgeKey ?? `${id}>${e.lane}`
+    edgesIn.set(edge, (edgesIn.get(edge) ?? 0) + 1)
+  }
+}
+
 /**
  * Traffic from a non-request source (a cron job, the import worker, a socket) into the callers
  * ring under its own key. The existing `cron` caller is left untouched.
@@ -771,21 +818,67 @@ export function noteSource(s: TrafficSourceCall): void {
     const id = String(s.id).slice(0, 120)
     if (!id) return
     const sec = secOf(at)
-    const meta = sourceMeta.get(id) ?? {}
-    if (s.label) meta.label = s.label.slice(0, 120)
-    if (s.kind) meta.kind = s.kind.slice(0, 40)
-    sourceMeta.set(id, meta)
-    const cn = getCaller(id)
-    bump(cn, sec, K.req)
-    if (s.ok === false) bump(cn, sec, K.error)
     const e = s.entityKey ? entityOfKey(s.entityKey) : null
-    if (e) {
-      e.lastSeen = sec
-      bumpMinute(e.callers, id, sec)
-      edgesIn.set(`${id}>${e.lane}`, (edgesIn.get(`${id}>${e.lane}`) ?? 0) + 1)
-    }
+    bumpSource(id, s.label, s.kind, sec, e, s.ok !== false)
   } catch {
     /* never */
+  }
+}
+
+// ── socket lane (#1104) ───────────────────────────────────────────────────────
+/** The source every socket event is attributed to (the browsers' socket connections). */
+export const SOCKET_SOURCE = 'socket:browsers'
+const SOCKET_EDGE = `${SOCKET_SOURCE}>socket`
+const SOCKET_EVENT_RE = /^[a-z0-9][a-z0-9:_.-]{0,59}$/i
+/** `record:join` → `record.join` (entity names carry no colon); anything odd folds to `other`. */
+export function socketEntity(event: string): string {
+  const ev = String(event ?? '')
+  return SOCKET_EVENT_RE.test(ev) ? ev.toLowerCase().replace(/:/g, '.') : 'other'
+}
+/** Event name → entity, memoised (bounded) so a busy socket never allocates per event. */
+const socketEntityCache = new Map<string, string>()
+function socketEntityCached(event: string): string {
+  const hit = socketEntityCache.get(event)
+  if (hit !== undefined) return hit
+  const v = socketEntity(event)
+  if (socketEntityCache.size < 200) socketEntityCache.set(event, v)
+  return v
+}
+/**
+ * One inbound socket.io event. Counter bumps only — no event object, no ticker row — so the
+ * socket middleware stays free while nobody watches the map.
+ */
+export function noteSocket(event: string, at = Date.now()): void {
+  if (noStore()) return
+  try {
+    if (isStale(Math.floor(at / 1000))) return
+    const sec = secOf(at)
+    const e = getEntity('socket', socketEntityCached(event))
+    bump(e, sec, K.req)
+    bump(e, sec, K.read)
+    e.lastSeen = sec
+    bumpSource(SOCKET_SOURCE, 'Browser sockets', 'socket', sec, e, true, SOCKET_EDGE)
+  } catch {
+    /* never */
+  }
+}
+
+// ── extension-declared downstream nodes (#1114) ─────────────────────────────
+export type OutboundNodeResolver = (
+  ev: TrafficOutboundEvent
+) => { id: string; label: string } | null
+let outboundResolver: OutboundNodeResolver | null = null
+/** Set (or clear) the function that maps a partner call onto an extension-declared node. */
+export function setOutboundNodeResolver(fn: OutboundNodeResolver | null): void {
+  outboundResolver = fn
+}
+function resolveOutboundNode(ev: TrafficOutboundEvent): { id: string; label: string } | null {
+  if (!outboundResolver) return null
+  try {
+    const n = outboundResolver(ev)
+    return n?.id ? { id: String(n.id).slice(0, 120), label: String(n.label || n.id) } : null
+  } catch {
+    return null
   }
 }
 

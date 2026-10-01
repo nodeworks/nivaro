@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { sourceLabel } from './nodeKinds'
 import { EventActions, eventActions } from './registry/eventActions'
 import type { Kind, TrafficCatalog, TrafficEventWire } from './types'
 
@@ -47,11 +48,14 @@ export function callerLabel(cat: TrafficCatalog | null, key: string): string {
   if (key === 'cron') return 'Crons & flows'
   if (key === 'anon') return 'Unauthenticated'
   if (key.startsWith('k')) return `API key ${key.slice(1)}`
+  // a source (`cron:<job>`, `flow:<id>`, `import:worker`) the catalog has no label for yet
+  if (key.includes(':')) return sourceLabel(key) ?? key.slice(key.indexOf(':') + 1)
   return key.slice(1, 9) || key
 }
 export function entityLabel(cat: TrafficCatalog | null, lane: string, entity: string): string {
   if (entity === '__other__') return 'other'
   if (entity === '__background__') return 'Background jobs'
+  if (lane === 'socket') return entity.replace(/\./g, ':')
   if (!cat) return entity
   if (lane === 'widgets') return cat.widgets[entity] ?? `widget ${entity}`
   if (lane === 'pages') return cat.pages[entity] ?? entity

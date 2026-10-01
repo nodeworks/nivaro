@@ -69,3 +69,28 @@ export interface SignalActionHandler {
     authHeaders: Record<string, string>
   }): Promise<Array<{ key: string; ok: boolean; message: string }>>
 }
+
+/** What a declared Traffic Map node matches: external API names (case-insensitive), a path
+ *  prefix or RegExp, a verb. Every given part must match. */
+export interface TrafficNodeMatchSpec {
+  api?: string | string[]
+  path?: string | RegExp
+  method?: string
+}
+/** The partner call a function matcher sees. */
+export interface TrafficNodeCall {
+  apiId: number
+  apiName: string
+  method: string | null
+  path: string | null
+}
+/** A downstream node an extension declares on the Traffic Map (#1114): partner calls it
+ *  matches are drawn to `x:<extension>.<id>` (first declared match wins) instead of the plain
+ *  external-API node, so fan-out reads in business terms (MDSi, MWF, a warehouse). */
+export interface TrafficNodeDef {
+  /** Unique within the extension: [a-z0-9_-], up to 60 characters. */
+  id: string
+  label: string
+  match: TrafficNodeMatchSpec | ((call: TrafficNodeCall) => boolean)
+  description?: string
+}

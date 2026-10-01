@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
+import { noteWebhookDelivery } from './traffic-taps/webhooks.js'
 import {
   type ConditionRule,
   evalConditionRule,
@@ -128,6 +129,8 @@ export interface DispatchResult {
 
 async function writeDelivery(entry: {
   webhook: number | string
+  /** For the Traffic Map's webhook node label (#1144); never stored. */
+  target?: { url?: string | null; name?: unknown }
   event: string
   status_code: number | null
   request_body: string | null
@@ -136,6 +139,12 @@ async function writeDelivery(entry: {
   success: boolean
   attempt: number
 }): Promise<number | null> {
+  noteWebhookDelivery({
+    webhook: { id: entry.webhook, url: entry.target?.url, name: entry.target?.name },
+    status: entry.status_code,
+    ms: entry.latency_ms,
+    success: entry.success
+  })
   try {
     const rows = (await db('nivaro_webhook_deliveries')
       .insert({
@@ -202,6 +211,7 @@ export async function dispatchWebhook(
     const message = err instanceof Error ? err.message : 'Unsafe URL blocked'
     const deliveryId = await writeDelivery({
       webhook: webhook.id,
+      target: webhook as { url?: string | null; name?: unknown },
       event,
       status_code: null,
       request_body: rawBody,
@@ -245,6 +255,7 @@ export async function dispatchWebhook(
   if (fetchError || !res) {
     const deliveryId = await writeDelivery({
       webhook: webhook.id,
+      target: webhook as { url?: string | null; name?: unknown },
       event,
       status_code: null,
       request_body: rawBody,
@@ -270,6 +281,7 @@ export async function dispatchWebhook(
     } catch {
       const deliveryId = await writeDelivery({
         webhook: webhook.id,
+        target: webhook as { url?: string | null; name?: unknown },
         event,
         status_code: res.status,
         request_body: rawBody,
@@ -298,6 +310,7 @@ export async function dispatchWebhook(
   const success = res.ok
   const deliveryId = await writeDelivery({
     webhook: webhook.id,
+    target: webhook as { url?: string | null; name?: unknown },
     event,
     status_code: res.status,
     request_body: rawBody,

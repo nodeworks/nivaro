@@ -19,7 +19,10 @@ export const ENTITY_CALLERS_TAP = 'entity-callers'
 
 export function defaultFilters(): Filters {
   return {
-    types: new Set<Lane>(LANE_ORDER.filter((l) => l !== 'system' && l !== 'other')),
+    // system and socket traffic are opt-in chips: busy, and rarely what a first look is about
+    types: new Set<Lane>(
+      LANE_ORDER.filter((l) => l !== 'system' && l !== 'other' && l !== 'socket')
+    ),
     kinds: new Set<Kind>(['read', 'create', 'update', 'delete', 'error']),
     caller: '',
     win: 60
@@ -144,6 +147,8 @@ export class TrafficModel {
   frameNo = 0
   lastFrameAt = 0
   downLabels = new Map<string, string>()
+  /** Snapshot down-row kind per id ('db', 'partner', 'channel', 'ai', 'webhook'…). */
+  downKinds = new Map<string, string>()
   /** Server tap figures of the newest applied frame, by tap id ({} when it carried none). */
   frameExt: Record<string, unknown> = {}
   /** The newest FRAME_EXT_LOG frames' tap figures, oldest first; `seq` counts applied frames,
@@ -247,6 +252,7 @@ export class TrafficModel {
       this.spread(r, sec, win, [d.req, 0, 0, 0, 0, d.error])
       r.p95 = d.p95
       this.downLabels.set(d.id, d.label)
+      this.downKinds.set(d.id, d.kind)
     }
     // frames that arrived before the snapshot but are newer than it survive the replacement
     for (const { sec: fs, f } of this.recent) if (fs > sec) this.applyFrameData(f, fs)

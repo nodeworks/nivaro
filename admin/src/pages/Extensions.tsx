@@ -1258,6 +1258,7 @@ const GATE_LABELS: Record<string, string> = {
 
 const REGISTRATION_LABELS: Record<string, string> = {
   ops_tasks: 'Operational tasks',
+  traffic_nodes: 'Traffic Map nodes',
   config_seeds: 'Config seeds',
   schema_steps: 'Schema steps (declared)',
   flow_operations: 'Flow operations',

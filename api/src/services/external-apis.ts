@@ -554,7 +554,11 @@ function logOutbound(
     apiName: entry.api_name,
     status: entry.status,
     durationMs: entry.duration_ms,
-    at: Date.now()
+    at: Date.now(),
+    // #1112 / #1114: the path picks an extension-declared node, the error its class
+    method: entry.method,
+    path: entry.path,
+    error: entry.error ?? null
   })
   void (async () => {
     const extra = detail ? await outboundDetailFields(entry.api_id, detail) : {}

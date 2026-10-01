@@ -5,6 +5,7 @@ import type { Redis } from 'ioredis'
 import { newChainId, startChain } from '../services/chain.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { startJobRun } from '../services/job-runs.js'
+import { runAsTrafficSource, type TrafficSource } from '../services/traffic-source.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -647,7 +648,11 @@ export class CronManager {
         if (opts?.quiet) {
           const chainId = newChainId()
           try {
-            await startChain(`cron:${id}`, () => fn(), chainId)
+            await startChain(
+              `cron:${id}`,
+              () => runAsTrafficSource(cronTrafficSource(id), fn),
+              chainId
+            )
           } catch (err) {
             console.error({ err, cronId: id }, 'Cron job error')
             const run = await startJobRun('cron', id, { extensionId: opts?.extensionId, chainId })
@@ -671,7 +676,11 @@ export class CronManager {
           }, budget)
           try {
             // Every tick is its own integration event chain.
-            await startChain(`cron:${id}`, () => fn(), chainId)
+            await startChain(
+              `cron:${id}`,
+              () => runAsTrafficSource(cronTrafficSource(id), fn),
+              chainId
+            )
             await run.complete()
             this.triggerChained(id)
           } catch (err) {
@@ -736,7 +745,11 @@ export class CronManager {
       // A NEW chain even when run-now comes from an HTTP request: the job's
       // writes are the cron's, not the admin click's (the click is recorded
       // on nivaro_job_runs.triggered_by).
-      await startChain(`cron:${id}`, () => entry.fn(), chainId)
+      await startChain(
+        `cron:${id}`,
+        () => runAsTrafficSource(cronTrafficSource(id), entry.fn),
+        chainId
+      )
       await run.complete()
       this.triggerChained(id)
     } catch (err) {
@@ -881,3 +894,8 @@ export const cronPlugin = fp(async (app: FastifyInstance) => {
       : 'Cron manager ready — scheduled ticks OFF on this instance (development default; CRON_TICKS=on to enable). Run-now still works.'
   )
 })
+
+/** The Traffic Map source a job's run is attributed to (#1105): its writes and partner calls. */
+function cronTrafficSource(id: string): TrafficSource {
+  return { id: `cron:${id}`, label: id, kind: 'cron' }
+}

@@ -72,6 +72,8 @@ export type {
   FlowOpRegistration,
   FlowTriggerRegistration
 } from '@nivaro/extension-kit'
+
+import { registerTrafficNode, type TrafficNodeDef } from '../services/traffic-taps/nodes.js'
 export type Extension = ExtensionDefinition
 
 /** Every extension call lands in the external API's Call Logs. A caller that
@@ -528,6 +530,29 @@ export function ungatedExtensionRoutes(): Array<{
  * — shared by the self-hosted and cloud context builds so the two cannot
  * drift (#812: the cloud build used to skip the ledger entirely).
  */
+/**
+ * `ctx.integrations.registerTrafficNode` (#1114): an extension names the business system behind
+ * its partner calls (MDSi, MWF, a warehouse) as its own Traffic Map node. Ledger kind
+ * `traffic_nodes`. A malformed id is logged and skipped — never a throw out of register().
+ */
+function trafficNodeMembers(
+  extId: string,
+  note: (capability: string) => void,
+  own: (kind: string, label: string) => void
+): { registerTrafficNode: (def: TrafficNodeDef) => void } {
+  return {
+    registerTrafficNode: (def) => {
+      note('integrations')
+      try {
+        const id = registerTrafficNode(extId, def)
+        own('traffic_nodes', `${def.id} · ${def.label} (${id})`)
+      } catch (err) {
+        console.warn(`[extensions] ${extId}: traffic node skipped —`, (err as Error).message)
+      }
+    }
+  }
+}
+
 export function registrationMembers(
   extId: string,
   ctx: Pick<ExtensionContext, 'app' | 'logger' | 'database'>,
@@ -831,6 +856,8 @@ export function registrationMembers(
     },
     chain: buildChainContext(),
     integrations: {
+      // #1114 (spread: the member is typed in the kit source; a build of the kit is not needed)
+      ...trafficNodeMembers(extId, note, own),
       registerObligationKind: (def) => {
         void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
           registerObligationKind(def)

@@ -15,6 +15,7 @@
  */
 import { db } from '../db/index.js'
 import { overlaySettings } from './settings-overrides.js'
+import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 export interface ChannelTestConfig {
   push: { on: boolean; recipient: string | null; allowlist: string[] }
@@ -116,7 +117,11 @@ export async function routePush(
 /** Resolve a Teams card under test mode: the webhook and the title prefix. `null` = dropped. */
 export async function routeTeams(url: string): Promise<{ url: string; prefix: string } | null> {
   const cfg = (await getChannelTestConfig()).teams
-  return routeTeamsDecision(cfg, url)
+  const routed = routeTeamsDecision(cfg, url)
+  // #1140: the Traffic Map's Teams node counts dropped and redirected cards.
+  if (!routed) noteChannel('teams', 'dropped')
+  else if (routed.url !== url) noteChannelRedirect('teams')
+  return routed
 }
 
 export function routeTeamsDecision(
