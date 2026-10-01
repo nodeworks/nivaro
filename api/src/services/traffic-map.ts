@@ -363,7 +363,7 @@ function applyRequest(
   caller: CallerKey,
   route: string,
   code: string | null
-): EntityState | null {
+): { e: EntityState; event?: TrafficEventWire } | null {
   if (isStale(Math.floor(ev.at / 1000))) return null
   const sec = secOf(ev.at)
   const e = getEntity(c.lane, c.entity)
@@ -387,6 +387,7 @@ function applyRequest(
   bump(cn, sec, K.req)
   if (isErr) bump(cn, sec, K.error)
   edgesIn.set(`${caller}>${c.lane}`, (edgesIn.get(`${caller}>${c.lane}`) ?? 0) + 1)
+  let event: TrafficEventWire | undefined
   if (isErr) {
     const record = recordOfPath(ev.path)
     const err: RecentError = {
@@ -399,7 +400,7 @@ function applyRequest(
     }
     e.errors.unshift(err)
     if (e.errors.length > RECENT_CAP) e.errors.pop()
-    pushEvent({
+    event = {
       t: ev.at,
       lane: c.lane,
       entity: e.entity,
@@ -410,9 +411,10 @@ function applyRequest(
       ms: ev.latencyMs,
       code,
       record: record ?? undefined
-    })
+    }
+    pushEvent(event)
   } else if (c.kind === 'read') {
-    pushEvent({
+    event = {
       t: ev.at,
       lane: c.lane,
       entity: e.entity,
@@ -421,9 +423,10 @@ function applyRequest(
       route,
       status: ev.status,
       ms: ev.latencyMs
-    })
+    }
+    pushEvent(event)
   }
-  return e
+  return { e, event }
 }
 
 /**
@@ -463,8 +466,9 @@ export function noteRequest(ev: TrafficRequestEvent & { errorCode?: string | nul
     })
     const route = routeTemplate(ev.method, ev.path, ev.graphqlOperation)
     const code = ev.status >= 400 ? errorCode(ev.errorCode) : null
-    const e = applyRequest(c, ev, caller, route, code)
-    if (e) {
+    const applied = applyRequest(c, ev, caller, route, code)
+    if (applied) {
+      const { e, event } = applied
       const ctx = {
         ev,
         lane: e.lane,
@@ -475,7 +479,8 @@ export function noteRequest(ev: TrafficRequestEvent & { errorCode?: string | nul
         route,
         isError: ev.status >= 400,
         code,
-        sec: secOf(ev.at)
+        sec: secOf(ev.at),
+        event
       }
       eachTap((t) => t.onRequest?.(ctx))
     }
@@ -536,7 +541,7 @@ export function noteWrite(ev: TrafficWriteEvent): void {
     }
     e.writes.unshift(w)
     if (e.writes.length > RECENT_CAP) e.writes.pop()
-    pushEvent({
+    const event: TrafficEventWire = {
       t: ev.at,
       lane,
       entity: e.entity,
@@ -546,7 +551,8 @@ export function noteWrite(ev: TrafficWriteEvent): void {
       record: w.record,
       fields,
       via
-    })
+    }
+    pushEvent(event)
     const ctx = {
       ev,
       lane,
@@ -555,7 +561,8 @@ export function noteWrite(ev: TrafficWriteEvent): void {
       caller,
       via,
       route,
-      sec
+      sec,
+      event
     }
     eachTap((t) => t.onWrite?.(ctx))
   } catch {

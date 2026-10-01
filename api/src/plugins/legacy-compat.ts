@@ -3,7 +3,11 @@ import type { FastifyInstance } from 'fastify'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFile } from '../services/files.js'
-import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from './api-logger.js'
+import {
+  INTERNAL_DISPATCH_HEADER,
+  internalDispatchStamps,
+  internalDispatchTokens
+} from './api-logger.js'
 
 /**
  * Root-level aliases for integrations written against the Directus-era API.
@@ -127,6 +131,10 @@ export async function legacyCompatRoutes(app: FastifyInstance) {
       })
     } finally {
       internalDispatchTokens.delete(dispatchToken)
+      // The inner request's operation stamp names the OUTER logged row (#1102).
+      const stamp = internalDispatchStamps.get(dispatchToken)
+      internalDispatchStamps.delete(dispatchToken)
+      if (stamp) (req as unknown as { __nvrGql?: unknown }).__nvrGql = stamp
     }
     return reply
       .code(res.statusCode)

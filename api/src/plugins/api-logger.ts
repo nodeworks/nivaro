@@ -6,6 +6,7 @@ import { hasChainColumns } from '../services/chain-columns.js'
 import { maskQueryString } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { errorCode, hasCacheHit, noteRequest } from '../services/traffic-map.js'
+import { notePublicHit } from '../services/traffic-taps/public-clients.js'
 
 interface ApiLogRow {
   method: string
@@ -40,7 +41,7 @@ interface ApiLogRow {
 // caller, not a person's browser session) so a rejected push can be replayed
 // from the request log. Capped; multipart and non-JSON bodies are skipped.
 const REQUEST_BODY_CAP = 64 * 1024
-interface GraphQLStampLike {
+export interface GraphQLStampLike {
   operation: string | null
   kind: string | null
   depth: number | null
@@ -102,11 +103,21 @@ const LEGACY_ALIASES = new Set(['/files', '/graphql'])
  */
 export const INTERNAL_DISPATCH_HEADER = 'x-nivaro-internal-dispatch'
 export const internalDispatchTokens = new Set<string>()
+/**
+ * The inner dispatched GraphQL request's operation stamp, by dispatch token: the alias copies it
+ * onto the OUTER request, so the one logged row names the operation (#1102 — partners calling the
+ * root /graphql otherwise read as `anonymous` in history). Set in onSend (before the inject
+ * resolves), removed by the alias as soon as it has read it.
+ */
+export const internalDispatchStamps = new Map<string, GraphQLStampLike>()
 
 function isInternalDispatch(req: { headers: Record<string, unknown> }): boolean {
   const t = req.headers[INTERNAL_DISPATCH_HEADER]
   return typeof t === 'string' && internalDispatchTokens.has(t)
 }
+/** Root-level public pages (share links, public forms) — outside /api, seen by the map's
+ *  public-client tap only (#1152). */
+const PUBLIC_PAGE_RE = /^\/(share|form)\/[^/]+$/
 const ERROR_BODY_CAP = 1000
 
 const FLUSH_INTERVAL_MS = 5000
@@ -241,6 +252,11 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   // it. Only string/Buffer payloads — streams (static files) pass untouched.
   // Every response also leaves its body size (Traffic Map taps); null = a stream.
   app.addHook('onSend', async (req, reply, payload) => {
+    const headers = req.headers as Record<string, unknown>
+    if (isInternalDispatch({ headers })) {
+      const g = (req as unknown as { __nvrGql?: GraphQLStampLike }).__nvrGql
+      if (g) internalDispatchStamps.set(headers[INTERNAL_DISPATCH_HEADER] as string, g)
+    }
     ;(req as unknown as { __nvrBytes?: number | null }).__nvrBytes =
       typeof payload === 'string'
         ? Buffer.byteLength(payload)
@@ -264,6 +280,19 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     const rawUrl = req.raw.url ?? req.url
     const mark = rawUrl.indexOf('?')
     const path = mark < 0 ? rawUrl : rawUrl.slice(0, mark)
+    if (PUBLIC_PAGE_RE.test(path)) {
+      const ua = req.headers['user-agent']
+      notePublicHit({
+        method: req.method,
+        path,
+        status: reply.statusCode,
+        latencyMs: Math.round(reply.elapsedTime),
+        at: Date.now(),
+        ip: clientIp(req as unknown as { headers: Record<string, unknown>; ip: string }),
+        userAgent: typeof ua === 'string' ? ua : null,
+        signedIn: !!req.user
+      })
+    }
     if (shouldSkip(path, req.method)) return
     // Traffic Map (per-node aggregator): memory only, never awaits. The inner internally
     // dispatched GraphQL request carries the operation stamp, so it is counted; the outer

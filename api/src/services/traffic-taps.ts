@@ -12,7 +12,12 @@
  * Ordering: taps run after the map has counted the event, in registration order.
  */
 import type { TrafficKind, TrafficLane } from './traffic-entities.js'
-import type { TrafficOutboundEvent, TrafficRequestEvent, TrafficWriteEvent } from './traffic-map.js'
+import type {
+  TrafficEventWire,
+  TrafficOutboundEvent,
+  TrafficRequestEvent,
+  TrafficWriteEvent
+} from './traffic-map.js'
 
 export { MinuteCounter, SecondRing } from './traffic-ring.js'
 
@@ -32,6 +37,9 @@ export interface TapRequestCtx {
   code: string | null
   /** Epoch second the event belongs to. */
   sec: number
+  /** The ticker event the map queued for this request (reads and errors only); a tap may add
+   *  `tags` / `extra` to it before it is sent. */
+  event?: TrafficEventWire
 }
 export interface TapWriteCtx {
   ev: TrafficWriteEvent
@@ -42,6 +50,8 @@ export interface TapWriteCtx {
   via: string
   route: string
   sec: number
+  /** The ticker event the map queued for this write; a tap may add `tags` / `extra` to it. */
+  event?: TrafficEventWire
 }
 export interface TapOutboundCtx {
   ev: TrafficOutboundEvent
