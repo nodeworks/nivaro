@@ -15699,7 +15699,7 @@ function App() {
         </div>
 
         <!-- HEALTH DASHBOARD -->
-        <div class="doc-section" id="s-health-dashboard" data-toc='[{"id":"health-dashboard","label":"Health Dashboard"},{"id":"health-startup","label":"Startup"},{"id":"health-probes","label":"Probes for proxies and deploys"},{"id":"health-scheduler-lease","label":"Which process runs scheduled jobs"}]'>
+        <div class="doc-section" id="s-health-dashboard" data-toc='[{"id":"health-dashboard","label":"Health Dashboard"},{"id":"health-startup","label":"Startup"},{"id":"health-probes","label":"Probes for proxies and deploys"},{"id":"health-scheduler-lease","label":"Which process runs scheduled jobs"},{"id":"health-metrics","label":"Metrics for Prometheus"},{"id":"health-secret-files","label":"Secrets from files"}]'>
           <!-- SYNC:health-dashboard -->
           <h1 class="doc-h1" id="health-dashboard">Health Dashboard</h1>
           <p class="doc-p">The /health admin page gives a live view of every subsystem, backed by a detailed health endpoint that goes beyond the public liveness probe.</p>
@@ -15749,6 +15749,19 @@ function App() {
           <h2 class="doc-h2" id="health-scheduler-lease">Which process runs scheduled jobs</h2>
           <p class="doc-p">With more than one API process, only one fires scheduled jobs. Every process whose ticks are enabled (CRON_TICKS) competes for a lease in Redis; the holder renews it every 10 seconds and releases it on shutdown, so another process takes over within seconds. A process stops believing it holds the lease shortly before the lease could expire, so a Redis outage stops its ticks before anyone else could start. Each scheduled fire also takes its own lock, so one fire runs once even if two processes briefly overlap during a deploy. Run now works on any process and needs no lease. Boot catch-up runs only on the lease holder.</p>
           <p class="doc-p">Background Jobs names the instance that holds the lease. GET /api/job-runs/registry and GET /api/ops-runtime/roster return it as <code class="doc-code">scheduler</code> ({ instance, is_leader, holder, ticks_enabled }). A process with ticks off never competes: run web replicas with CRON_TICKS=off and one worker with it on.</p>
+          <p class="doc-p">Jobs labelled unsafe to run twice (the digests, broadcasts, chat sends and report deliveries) take a cluster-wide “running” marker in Redis while they run. A second start anywhere, whether run now, a chained run, a boot catch-up or the clock, is refused while the marker is held; run now answers 409 with code JOB_RUNNING and names the holder. If Redis cannot be asked, the run is refused too. The marker is renewed while the job runs and expires five minutes after a process dies.</p>
+          <p class="doc-p">Heavy jobs take turns across every process through one Redis slot, so a run now on a web replica never runs beside the worker’s nightly heavy job. A heavy job waits for the slot (up to two hours, then runs with a warning); if Redis is down it runs at once. <code class="doc-code">scheduler.heavy_slot</code> names the job holding the slot.</p>
+          <h2 class="doc-h2" id="health-metrics">Metrics for Prometheus</h2>
+          <p class="doc-p">GET /api/metrics returns the Prometheus text format for this process: version and instance, memory and CPU, event-loop delay since the previous scrape, request counts and a latency histogram by route pattern (/api/items/:collection, never a raw URL), the database pool (in use, waiting, ceiling, five-minute p95 wait) and whether the process holds the scheduler lease. A scraper reads it with <code class="doc-code">Authorization: Bearer &lt;METRICS_TOKEN&gt;</code>; without METRICS_TOKEN only signed-in administrators can. Scrapes are not written to the API request log.</p>
+          <pre class="doc-pre"><code># prometheus.yml
+scrape_configs:
+  - job_name: nivaro
+    metrics_path: /api/metrics
+    authorization: { credentials_file: /etc/prometheus/nivaro-metrics-token }
+    static_configs: [{ targets: ['nivaro-web:3055', 'nivaro-worker:3055'] }]</code></pre>
+          <h2 class="doc-h2" id="health-secret-files">Secrets from files</h2>
+          <p class="doc-p">Any setting can come from a file instead of the environment. <code class="doc-code">X_FILE=/path</code> sets X from that file (set X or X_FILE, not both). Every file in /run/secrets whose name is an environment-variable name becomes that variable, which is where Docker Swarm mounts a secret under its target name; NIVARO_SECRETS_DIR moves the folder and <code class="doc-code">off</code> turns it off. A secret file replaces a value already in the environment and the log names the variable, never the value. One trailing newline is dropped. An unreadable file stops the process at boot.</p>
+          <p class="doc-p">GET /api/extensions also carries each extension’s <code class="doc-code">build</code>: the export’s own <code class="doc-code">build</code> value, or else the <code class="doc-code">.release-sha</code> file a deploy writes beside the extension. A deploy gate compares it with the release it mounted.</p>
           <div class="doc-note">GET /api/health remains the lightweight unauthenticated liveness check; it reports latency as degraded, so do not use it for routing. The detailed endpoint requires authentication.</div>
           <!-- /SYNC:health-dashboard -->
         </div>
