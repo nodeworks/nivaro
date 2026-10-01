@@ -199,6 +199,7 @@ import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
+import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
 import { treeRoutes } from './tree.js'
 import { treePermissionsRoutes } from './tree-permissions.js'
@@ -354,6 +355,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(exportPresetRoutes, { prefix: '/export-presets' })
   await app.register(recordMergeRoutes, { prefix: '/record-merge' })
   await app.register(realtimeRoutes, { prefix: '/realtime' })
+  await app.register(trafficMapRoutes, { prefix: '/traffic-map' })
   await app.register(recordViewersRoutes, { prefix: '/presence' })
   await app.register(geocodeRoutes)
   await app.register(recordMetaRoutes)

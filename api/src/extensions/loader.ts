@@ -370,6 +370,13 @@ export interface ExtensionRouteRecord {
 
 export const extensionRoutes = new Map<string, ExtensionRouteRecord[]>()
 
+/** Extension id → display label (the id is the honest label; manifests carry no separate name). */
+export function loadedExtensionLabels(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const id of extensionRoutes.keys()) out[id] = id
+  return out
+}
+
 type GateFn = (...a: unknown[]) => unknown
 const GATE_HOOKS = new Set(['onRequest', 'preValidation', 'preHandler'])
 
