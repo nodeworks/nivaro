@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-interface TraceSpan {
+export interface TraceSpan {
   seq: number
   phase: string
   ms: number
@@ -18,14 +18,14 @@ interface TraceSpan {
   wide?: Array<{ table: string; n: number }>
 }
 
-interface TraceStatement {
+export interface TraceStatement {
   sql: string
   bindings: unknown[]
   ms: number
   n: number
 }
 
-interface Trace {
+export interface Trace {
   id: string
   method: string
   route: string
@@ -121,7 +121,7 @@ function SpanBar({ span, total, slowest }: { span: TraceSpan; total: number; slo
 }
 
 /** The statements a slow request ran, heaviest first, each with its real plan on request. */
-function StatementList({ trace }: { trace: Trace }) {
+export function StatementList({ trace }: { trace: Trace }) {
   const [open, setOpen] = useState<number | null>(null)
   const [result, setResult] = useState<PlanResult | null>(null)
   const explain = useMutation({

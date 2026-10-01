@@ -17,7 +17,7 @@ import type { FastifyInstance } from 'fastify'
 
 export interface MonitorRow {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'journey' | 'ssl_cert'
+  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'journey' | 'ssl_cert' | 'traffic'
   name: string
   config: string | null
   state: string | null
@@ -450,6 +450,11 @@ export async function evaluateMonitor(
     else if (monitor.type === 'synthetic') result = await evalSynthetic(cfg)
     else if (monitor.type === 'ssl_cert') result = await evalSslCert(cfg)
     else if (monitor.type === 'journey') result = await evalJourney(cfg, app)
+    else if (monitor.type === 'traffic') {
+      // #1124 — a Traffic Map entity's live figure against a threshold (this process's rings).
+      const { evalTraffic } = await import('./traffic-monitor.js')
+      result = await evalTraffic(cfg)
+    }
     else {
       const r = await evalDeployRegression(cfg, state)
       result = r.result

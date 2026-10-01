@@ -1,8 +1,9 @@
 import { createNivaro } from '@nivaro/sdk'
-import { ApiRequestLog, NivaroProvider } from '@nivaro/shared'
+import { ApiRequestLog, type ApiRequestLogFilters, NivaroProvider } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { SlowTracesPanel } from '@/components/slow-traces'
 import { Button } from '@/components/ui/button'
@@ -67,8 +68,43 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   )
 }
 
+/** Request-list filters + deep-link extras (`from`/`to`/`focus`, read by the shared list). */
+type RequestLinkFilters = ApiRequestLogFilters & { from?: string; to?: string; focus?: boolean }
+
+/**
+ * #1090 — `/api-analytics?req_path=…&req_method=…&req_status=…&req_user=…&req_key=…&from=…&to=…`
+ * (the Traffic Map's "Open request" link) seeds the request list and opens the match.
+ */
+export function requestLinkFilters(params: URLSearchParams): RequestLinkFilters | null {
+  const path = params.get('req_path')
+  const from = params.get('from')
+  if (!path && !from) return null
+  // A link to one request (it names its seconds) opens it; a path alone only filters.
+  const f: RequestLinkFilters = from ? { focus: true } : {}
+  if (path) f.path = path
+  const method = params.get('req_method')
+  if (method) f.method = method.toUpperCase()
+  const status = params.get('req_status')
+  if (status && /^\d{3}$/.test(status)) f.status = status
+  const user = params.get('req_user')
+  if (user) f.user = user
+  const key = Number(params.get('req_key'))
+  if (Number.isFinite(key) && key > 0) f.api_key = key
+  if (from) f.from = from
+  const to = params.get('to')
+  if (to) f.to = to
+  return f
+}
+
 export function ApiAnalyticsPage() {
   const [hours, setHours] = useState(24)
+  const [params] = useSearchParams()
+  const [linkFilters] = useState(() => requestLinkFilters(params))
+  const [reqFilters, setReqFilters] = useState<RequestLinkFilters>(linkFilters ?? {})
+  const requestsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (linkFilters) requestsRef.current?.scrollIntoView({ block: 'start' })
+  }, [linkFilters])
 
   const { data: summary } = useQuery<Summary>({
     queryKey: ['api-analytics-summary', hours],
@@ -302,10 +338,12 @@ export function ApiAnalyticsPage() {
         <div className='mt-6'>
           <RumPanel />
         </div>
-        <div className='mt-6'>
+        <div className='mt-6 scroll-mt-4' ref={requestsRef} id='api-request-log'>
           <NivaroProvider client={sharedClient}>
             <ApiRequestLog
               hours={hours}
+              filters={reqFilters}
+              onFiltersChange={setReqFilters}
               title='Requests'
               description='Every /api call plus the root /files and /graphql aliases integrations use — filter by path, method, status or how the caller authenticated; expand a row for the response body on failures.'
             />

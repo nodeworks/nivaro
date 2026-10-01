@@ -1,5 +1,6 @@
 // api/src/routes/traffic-map-extras/index.ts
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
+import { inspectorActionRoutes } from './inspector-actions.js'
 
 /**
  * Extra Traffic Map routes, one plugin per feature. Registered by trafficMapRoutes AFTER its
@@ -13,6 +14,7 @@ import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
  */
 const FEATURES: FastifyPluginAsync[] = [
   // import { myFeatureRoutes } from './my-feature.js'  →  myFeatureRoutes,
+  inspectorActionRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {

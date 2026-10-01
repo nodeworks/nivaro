@@ -11,6 +11,7 @@ import {
   KIND_INK,
   KIND_VAR
 } from './EventTicker'
+import { recordUrl } from './links'
 import type { TrafficModel } from './model'
 import { InspectorActions } from './registry/inspectorActions'
 import { InspectorPanels } from './registry/inspectorPanels'
@@ -223,6 +224,18 @@ export function Section({ title, children }: { title: string; children: ReactNod
 export const Empty = ({ children }: { children: ReactNode }) => (
   <p className='text-[12px] text-[var(--tm-muted)]'>{children}</p>
 )
+
+/** A record id; a link to the record when the selection is one items/system collection (#1091). */
+function RecordId({ sel, record }: { sel?: Selection; record: string }) {
+  const cut = sel?.kind === 'entity' ? sel.id.indexOf('/') : -1
+  const url = sel && cut > 0 ? recordUrl(sel.id.slice(0, cut), sel.id.slice(cut + 1), record) : null
+  if (!url) return <span className='font-mono text-[11px]'>{record}</span>
+  return (
+    <Link to={url} className={cn(LINK, 'font-mono text-[11px]')} data-tm-record-link={record}>
+      {record}
+    </Link>
+  )
+}
 
 const PANEL =
   'min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] min-[1100px]:sticky min-[1100px]:top-6'
@@ -718,7 +731,7 @@ export function Inspector({
                       {e.record ? (
                         <>
                           {' · '}
-                          <span className='font-mono text-[11px]'>{e.record}</span>
+                          <RecordId sel={sel} record={e.record} />
                         </>
                       ) : null}
                       <span className='text-[var(--tm-muted)]'>
@@ -749,7 +762,7 @@ export function Inspector({
                       {w.action}
                     </span>
                     <span className='min-w-0 truncate'>
-                      <span className='font-mono text-[11px]'>{w.record}</span>
+                      <RecordId sel={sel} record={w.record} />
                       {w.fields.length ? (
                         <>
                           {' · '}

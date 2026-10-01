@@ -468,6 +468,10 @@ describe('final-review fixes', () => {
 })
 
 describe('GET /traffic-map/entity-detail (tap seam)', () => {
+  // Feature taps register when their route module loads; this test owns the registry.
+  beforeEach(() => {
+    for (const t of trafficTaps()) unregisterTrafficTap(t.id)
+  })
   afterEach(() => {
     for (const t of trafficTaps()) unregisterTrafficTap(t.id)
   })

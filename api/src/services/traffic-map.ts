@@ -4,6 +4,7 @@
  * entity / caller / downstream node, fed by the api-logger (requests), broadcastCollectionUpdate
  * (writes) and logOutbound (partner calls). Memory only — nothing here touches the database.
  */
+import { currentChain } from './chain.js'
 import { currentSeq } from './event-journal.js'
 import { getIo } from './io-holder.js'
 import { currentTraceCaller, currentTraceMeta } from './request-trace.js'
@@ -94,6 +95,8 @@ export interface TrafficEventWire {
   fields?: string[]
   code?: string | null
   via?: string
+  /** Integration event chain the request / write belongs to (#1092 Show path). */
+  chain?: string
   /** Short neutral labels a tap adds (shown as chips in the ticker). */
   tags?: string[]
   /** Tap-specific fields; the map itself never reads them. */
@@ -275,6 +278,11 @@ function pushEvent(ev: TrafficEventWire): void {
   pendingEvents.splice(worst, 1)
   bufferDropped++
 }
+/** The request's integration chain id (plugins/chain.ts stamps `req.chainId`). */
+function chainOfReq(req: unknown): string | undefined {
+  const id = (req as { chainId?: unknown } | undefined)?.chainId
+  return typeof id === 'string' && id ? id.slice(0, 64) : undefined
+}
 function secOf(atMs: number): number {
   const s = Math.floor(atMs / 1000)
   return s > nowSec ? nowSec : s
@@ -409,7 +417,8 @@ function applyRequest(
       status: ev.status,
       ms: ev.latencyMs,
       code,
-      record: record ?? undefined
+      record: record ?? undefined,
+      chain: chainOfReq(ev.req)
     })
   } else if (c.kind === 'read') {
     pushEvent({
@@ -545,7 +554,8 @@ export function noteWrite(ev: TrafficWriteEvent): void {
       route,
       record: w.record,
       fields,
-      via
+      via,
+      chain: currentChain()?.chain_id
     })
     const ctx = {
       ev,

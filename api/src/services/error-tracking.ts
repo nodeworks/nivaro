@@ -11,6 +11,22 @@ import { db } from '../db/index.js'
  *
  * Fire-and-forget: never throws, never blocks the response path.
  */
+/** The message an issue keeps (and fingerprints): trimmed to 400 chars, a blank one named. */
+export function issueMessage(message: string | null | undefined): string {
+  return (message || 'Unknown error').slice(0, 400)
+}
+
+/**
+ * The issue fingerprint rule: sha256 of `source|route|message` (message through
+ * issueMessage). `route` is `METHOD /route/:template` for server errors. Exported so other
+ * views (the Traffic Map's error groups) group exactly the way issues dedupe.
+ */
+export function issueFingerprint(source: string, route: string, message: string): string {
+  return createHash('sha256')
+    .update(`${source}|${route}|${issueMessage(message)}`)
+    .digest('hex')
+}
+
 export async function trackError(opts: {
   source: 'server' | 'client'
   route: string
@@ -25,10 +41,8 @@ export async function trackError(opts: {
   requestContext?: string | null
 }): Promise<void> {
   try {
-    const message = (opts.message || 'Unknown error').slice(0, 400)
-    const fingerprint = createHash('sha256')
-      .update(`${opts.source}|${opts.route}|${message}`)
-      .digest('hex')
+    const message = issueMessage(opts.message)
+    const fingerprint = issueFingerprint(opts.source, opts.route, message)
 
     const existing = await db('nivaro_issues')
       .where({ fingerprint })
