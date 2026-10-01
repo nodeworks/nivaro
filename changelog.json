@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-01T23:31:23.002Z",
+  "generated_at": "2026-10-01T23:53:16.940Z",
   "releases": [
+    {
+      "version": "0.2.14",
+      "tag": "v0.2.14",
+      "date": "2026-10-01T19:53:05-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "push readiness: answer for addendum steps instead of 'could not check'",
+              "hash": "7024ecbd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "one rule for 'this component is this API' across every comparison",
+              "hash": "a13b1910"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.13",
       "tag": "v0.2.13",
-      "date": "2026-10-01T19:31:10-04:00",
+      "date": "2026-10-01T19:31:23-04:00",
       "sections": [
         {
           "label": "Other",
