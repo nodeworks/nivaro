@@ -24,6 +24,8 @@ export interface MapLayout {
 }
 const COL_W = 164
 const ROW_H = 20
+/** #1161 zoomed in: each entity row carries its busiest route under the name. */
+const ROW_H_DETAIL = 34
 const LANE_HEAD = 24
 /** Below this the map box scrolls horizontally; above it the canvas fills its box (R34). */
 const MIN_W = 720
@@ -44,7 +46,11 @@ export function computeLayout(input: {
   /** `entities` are BARE entity ids (no lane prefix); rects are keyed `${lane}/${entity}`. */
   lanes: Array<{ id: Lane; entities: string[] }>
   downs: string[]
+  /** #1161: 0 = lanes only (no entity rows), 1 = entities, 2 = entities with routes. */
+  zoom?: 0 | 1 | 2
 }): MapLayout {
+  const zoom = input.zoom ?? 1
+  const rowH = zoom === 2 ? ROW_H_DETAIL : ROW_H
   const W = Number.isFinite(input.width) ? Math.max(MIN_W, Math.floor(input.width)) : MIN_W
   // narrower boxes shrink the side columns (164 → 141 px at 720) before the lane floor (280)
   const colW = W >= FULL_W ? COL_W : Math.max(140, COL_W - Math.round((FULL_W - W) / 6))
@@ -54,15 +60,16 @@ export function computeLayout(input: {
   const ents: Record<string, Rect> = {}
   let y = TOP + 4
   for (const lane of input.lanes) {
-    const h = LANE_HEAD + lane.entities.length * ROW_H + 8
+    const rows = zoom === 0 ? [] : lane.entities
+    const h = LANE_HEAD + rows.length * rowH + (zoom === 0 ? 2 : 8)
     lanes[lane.id] = { x: laneX, y, w: laneW, h }
     let ey = y + LANE_HEAD + 2
-    for (const entity of lane.entities) {
+    for (const entity of rows) {
       // keyed `${lane}/${entity}` like the server/model keys, so equal ids in two lanes never collide
-      ents[`${lane.id}/${entity}`] = { x: laneX + 6, y: ey, w: laneW - 12, h: ROW_H }
-      ey += ROW_H
+      ents[`${lane.id}/${entity}`] = { x: laneX + 6, y: ey, w: laneW - 12, h: rowH }
+      ey += rowH
     }
-    y += h + 10
+    y += h + (zoom === 0 ? 8 : 10)
   }
   const sources = input.sources ?? []
   // Left column with sources: callers stacked from the top, then a caption, then the sources.
@@ -113,7 +120,7 @@ export function computeLayout(input: {
     lanes,
     ents,
     downs: place(input.downs, W - colW - 14, 40),
-    rowH: ROW_H,
+    rowH,
     laneHead: LANE_HEAD
   }
 }
@@ -171,6 +178,8 @@ export interface MapTokens {
   ecAuth: string
   ecNotFound: string
   ecValidation: string
+  /** Inferred (correlated) edges, #1149. */
+  inferred: string
 }
 export const TOKEN_FALLBACK: MapTokens = {
   card: '#ffffff',
@@ -195,7 +204,8 @@ export const TOKEN_FALLBACK: MapTokens = {
   ecRateLimited: '#7c3aed',
   ecAuth: '#dc2626',
   ecNotFound: '#475569',
-  ecValidation: '#be185d'
+  ecValidation: '#be185d',
+  inferred: '#6d28d9'
 }
 const TOKEN_VARS: Record<keyof MapTokens, string> = {
   card: '--tm-card',
@@ -220,7 +230,8 @@ const TOKEN_VARS: Record<keyof MapTokens, string> = {
   ecRateLimited: '--tm-ec-rate-limited',
   ecAuth: '--tm-ec-auth',
   ecNotFound: '--tm-ec-not-found',
-  ecValidation: '--tm-ec-validation'
+  ecValidation: '--tm-ec-validation',
+  inferred: '--tm-inferred'
 }
 export function readTokens(el: Element): MapTokens {
   const cs = getComputedStyle(el)

@@ -563,6 +563,21 @@ tr.nvr-row-flash > td {
   --tm-ec-not-found: #a3adb8;
   --tm-ec-validation: #f08fc0;
 }
+/* Traffic Map group D: inferred (correlated) edges, #1149 — >= 4.5:1 on --tm-card. */
+.traffic-map {
+  --tm-inferred: #6d28d9;
+}
+.dark .traffic-map {
+  --tm-inferred: #c4b5fd;
+}
+/* Summary strip, secondary row: the registry tiles render the primary tile shape; here their
+   figures step down a size so the built-in six stay the primary read. */
+.traffic-map [data-tm-strip-more] > * {
+  flex: 1 1 210px;
+}
+.traffic-map [data-tm-strip-more] .text-\[22px\] {
+  font-size: 17px;
+}
 /* New ticker rows fade from the accent tint (state change, not decoration). */
 @keyframes tm-evin {
   from { background-color: var(--tm-accent-soft); }

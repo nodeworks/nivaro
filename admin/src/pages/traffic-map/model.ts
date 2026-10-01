@@ -380,7 +380,8 @@ export class TrafficModel {
         for (const [c, v] of Object.entries(byCaller))
           this.nested(this.wsCallers, w, c).set(sec, [v[0], 0, 0, 0, 0, v[1] ?? 0])
       for (const [w, byEdge] of Object.entries(ws.i ?? {}))
-        for (const [k, n] of Object.entries(byEdge)) this.nested(this.wsEdgeIn, w, k, 1).set(sec, [n])
+        for (const [k, n] of Object.entries(byEdge))
+          this.nested(this.wsEdgeIn, w, k, 1).set(sec, [n])
     }
     const apps = f.ext?.[CALLER_APPS_TAP] as Record<string, string> | undefined
     if (apps) for (const [c, a] of Object.entries(apps)) this.callerApps.set(c, a)
