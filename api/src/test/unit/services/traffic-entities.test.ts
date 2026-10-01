@@ -169,6 +169,33 @@ describe('classifyRequest — malformed paths and id segments', () => {
   })
 })
 
+describe('classifier fix round 1', () => {
+  it('caps every entity at 120 chars', () => {
+    expect((c('GET', `/api/items/${'a'.repeat(128)}`)?.entity ?? '').length).toBeLessThanOrEqual(
+      120
+    )
+    expect(
+      (c('GET', `/api/pipelines/instance/${'a'.repeat(128)}/1`)?.entity ?? '').length
+    ).toBeLessThanOrEqual(120)
+    const w = c('POST', `/api/widgets-internal/${'1'.repeat(200)}/render`)
+    expect(w?.lane).toBe('other')
+    expect((w?.entity ?? '').length).toBeLessThanOrEqual(120)
+  })
+  it('async bulk poll is a read; POST bulk is create', () => {
+    expect(c('GET', '/api/items/forecasts/bulk/abc123')?.kind).toBe('read')
+    expect(c('POST', '/api/items/forecasts/bulk')?.kind).toBe('create')
+  })
+  it('sys prefix is system; non-NAME collection with sub-path is other/items', () => {
+    expect(c('GET', '/api/items/sysdiagrams')?.lane).toBe('system')
+    expect(c('GET', '/api/items/Bad-Name/12/resolve-paths')).toEqual({
+      lane: 'other',
+      entity: 'items',
+      kind: 'read',
+      down: ['db']
+    })
+  })
+})
+
 describe('helpers', () => {
   it('normalizePath, entityKey, routeTemplate, callerKeyFor', () => {
     expect(normalizePath('/api/items/workflows/?x=1')).toBe('/api/items/workflows')

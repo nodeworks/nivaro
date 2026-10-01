@@ -95,7 +95,7 @@ function kindByMethod(method: string): TrafficKind {
 function itemsKind(method: string, rest: string[]): TrafficKind {
   const [a, b] = rest
   if (a === undefined) return kindByMethod(method)
-  if (a === 'bulk' || a === 'batch') return 'create'
+  if ((a === 'bulk' || a === 'batch') && method === 'POST') return 'create'
   if (a === 'bulk-delete') return 'delete'
   if (READ_POSTS.has(a)) return 'read'
   if (b !== undefined && READ_POSTS.has(b)) return 'read'
@@ -134,17 +134,17 @@ export function classifyRequest(input: ClassifyInput): Classified | null {
     if (!NAME_RE.test(c))
       return { lane: 'other', entity: 'items', kind: kindByMethod(method), down: ['db'] }
     const lane: TrafficLane = SYSTEM_RE.test(c) ? 'system' : 'items'
-    return { lane, entity: c, kind: itemsKind(method, seg.slice(2)), down: ['db'] }
+    return { lane, entity: clip(c), kind: itemsKind(method, seg.slice(2)), down: ['db'] }
   }
   if (head === 'pipelines' && seg[1] === 'instance' && NAME_RE.test(seg[2] ?? '')) {
     return {
       lane: 'items',
-      entity: seg[2],
+      entity: clip(seg[2]),
       kind: method === 'GET' ? 'read' : 'update',
       down: ['db']
     }
   }
-  if (head === 'widgets-internal' && /^\d+$/.test(seg[1] ?? '') && method === 'POST') {
+  if (head === 'widgets-internal' && /^\d{1,20}$/.test(seg[1] ?? '') && method === 'POST') {
     if (seg[2] === 'render') return { lane: 'widgets', entity: seg[1], kind: 'read', down: ['db'] }
     if (seg[2] === 'action')
       return { lane: 'widgets', entity: seg[1], kind: 'update', down: ['db'] }
