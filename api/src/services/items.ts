@@ -3306,6 +3306,12 @@ export async function readItems(
     hooks.trigger('after', { collection, action: 'read', user, result, database: db, req })
   )
 
+  // Traffic Map data egress (#1179): rows this request handed back.
+  if (req) {
+    const r = req as unknown as { __nvrRows?: number }
+    r.__nvrRows = (r.__nvrRows ?? 0) + data.length
+  }
+
   return result
 }
 

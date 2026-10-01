@@ -83,23 +83,31 @@ export async function issuesRoutes(app: FastifyInstance) {
         .first('id')
       if (rec) recordingId = body.recording_id
     }
-    await trackError({
+    // Explicit null must STAY null (a clip has no offset — the whole clip
+    // is the context); Number(null) is 0, which would claim precision the
+    // link does not have.
+    const recordingOffsetMs =
+      recordingId &&
+      body.recording_offset_ms != null &&
+      Number.isFinite(Number(body.recording_offset_ms))
+        ? Math.max(0, Math.floor(Number(body.recording_offset_ms)))
+        : null
+    const issueId = await trackError({
       source: 'client',
       route: String(body.url ?? 'unknown').slice(0, 300),
       message: body.message,
       stack: body.stack ?? null,
       userId: req.user?.id ?? null,
       recordingId,
-      recordingOffsetMs:
-        // Explicit null must STAY null (a clip has no offset — the whole clip
-        // is the context); Number(null) is 0, which would claim precision the
-        // link does not have.
-        recordingId &&
-        body.recording_offset_ms != null &&
-        Number.isFinite(Number(body.recording_offset_ms))
-          ? Math.max(0, Math.floor(Number(body.recording_offset_ms)))
-          : null
+      recordingOffsetMs
     })
+    // Traffic Map (#1181): the crash rides the ticker with its replay link.
+    ;(req as unknown as { __nvrClientCrash?: unknown }).__nvrClientCrash = {
+      issue_id: issueId,
+      recording_id: recordingId,
+      offset_ms: recordingOffsetMs,
+      message: body.message.trim().slice(0, 160)
+    }
     return reply.code(204).send()
   })
 

@@ -42,6 +42,7 @@ import '../features/presence'
 import '../features/nl-filter'
 import '../features/capture'
 import '../features/view-links'
+import '../features/people-lenses'
 
 export {
   type CanvasLayer,

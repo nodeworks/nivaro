@@ -39,7 +39,8 @@ export async function trackError(opts: {
   recordingOffsetMs?: number | null
   /** #300 — redacted request context (method/route/query keys/body SHAPE, never values). */
   requestContext?: string | null
-}): Promise<void> {
+}): Promise<number | null> {
+  // Returns the issue id (new or bumped); null when tracking failed.
   try {
     const message = issueMessage(opts.message)
     const fingerprint = issueFingerprint(opts.source, opts.route, message)
@@ -65,7 +66,7 @@ export async function trackError(opts: {
               }
             : {})
         })
-      return
+      return Number(existing.id)
     }
 
     const details = [
@@ -76,22 +77,29 @@ export async function trackError(opts: {
       .filter(Boolean)
       .join('\n')
 
-    await db('nivaro_issues').insert({
-      title: `[${opts.source}] ${opts.route}: ${message}`.slice(0, 500),
-      severity: opts.severity ?? 'high',
-      status: 'open',
-      source: opts.source,
-      details,
-      fingerprint,
-      occurrence_count: 1,
-      last_seen_at: new Date(),
-      recording_id: opts.recordingId ?? null,
-      recording_offset_ms: opts.recordingOffsetMs ?? null,
-      raised_by: opts.userId ?? null,
-      created_at: new Date(),
-      updated_at: new Date()
-    })
+    const inserted = await db('nivaro_issues')
+      .insert({
+        title: `[${opts.source}] ${opts.route}: ${message}`.slice(0, 500),
+        severity: opts.severity ?? 'high',
+        status: 'open',
+        source: opts.source,
+        details,
+        fingerprint,
+        occurrence_count: 1,
+        last_seen_at: new Date(),
+        recording_id: opts.recordingId ?? null,
+        recording_offset_ms: opts.recordingOffsetMs ?? null,
+        raised_by: opts.userId ?? null,
+        created_at: new Date(),
+        updated_at: new Date()
+      })
+      .returning('id')
+    // `.returning('id')` yields an OBJECT on this stack
+    const first = (inserted as unknown[])[0] as { id?: unknown } | number | undefined
+    const id = typeof first === 'object' && first ? Number(first.id) : Number(first)
+    return Number.isFinite(id) ? id : null
   } catch {
     /* tracking must never break the request path */
+    return null
   }
 }

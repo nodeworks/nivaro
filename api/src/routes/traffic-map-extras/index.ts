@@ -6,6 +6,7 @@ import { deepMeasurementRoutes } from './deep-measurement.js'
 import { digestRoutes } from './digest.js'
 import { inspectorActionRoutes } from './inspector-actions.js'
 import { trafficOpsRoutes } from './ops.js'
+import { peopleLensesRoutes } from './people-lenses.js'
 import { replayRoutes } from './replay.js'
 import { requestLensesRoutes } from './request-lenses.js'
 import { snapshotRoutes } from './snapshots.js'
@@ -35,7 +36,8 @@ const FEATURES: FastifyPluginAsync[] = [
   replayRoutes,
   topologyRoutes,
   inspectorActionRoutes,
-  trafficViewRoutes
+  trafficViewRoutes,
+  peopleLensesRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {
