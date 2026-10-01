@@ -16,6 +16,7 @@ export const obsApiAnalytics: DocSection = {
         'p50/p95 are computed over the selected window; the error-rate card breaks down 4xx vs 5xx.',
         'The ring buffer self-prunes — no maintenance required and bounded storage.',
         'The Requests panel is the per-request list behind the aggregates: newest first, filter by path, method, status class or how the caller authenticated (session, token, API key, masquerade, anonymous); expand a row for the client IP, user agent and — on a 4xx/5xx — the first kilobyte of the response body the caller received.',
+        'Rows from development instances (laptops, probes sharing the database) are hidden by default and pruned after 3 hours; "Deployed instances" switches to every instance. See Deploys & Versions.',
         'GraphQL by operation splits the one /graphql path by what each call ran: calls, p50/p95, error rate (HTTP errors and 200 answers carrying errors), average depth and selections, top callers, the slowest calls, and every @deprecated field still selected with who selects it.'
       ]
     },
@@ -719,6 +720,57 @@ POST /api/traffic-map/snapshots                    → freeze a shareable snapsh
 GET  /api/traffic-map/compare/windows?…            → two windows from the request log
 GET|POST|DELETE /api/traffic-map/breakers          → circuit breakers
 socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched`
+    }
+  ]
+}
+
+export const obsTrafficMapLenses: DocSection = {
+  id: 'traffic-map-lenses',
+  label: 'Traffic Map: Database, People & Platform',
+  content: [
+    {
+      type: 'h1',
+      id: 'traffic-map-lenses',
+      text: 'Traffic Map: Database, People and Platform'
+    },
+    {
+      type: 'p',
+      text: 'Lenses for three questions the main map leaves open: what the database is waiting on, who is doing what, and which part of the platform carries the load.'
+    },
+    { type: 'h2', id: 'traffic-map-db', text: 'The database node' },
+    {
+      type: 'ul',
+      items: [
+        'Near timeout (on by default): requests whose longest database statement used 80% or more of the driver’s 15 s request timeout, or whose whole request used 80% or more of the proxy’s read timeout (`TRAFFIC_PROXY_TIMEOUT_MS`, default 60 s). Requests past a budget count as timed out. Those entities get an outline and a badge; the inspector lists the requests with how much of the budget they used, plus 24 hours from the request log.',
+        'Blocking chains: while the map is open, the database is checked every 3 s for sessions waiting 0.5 s or more on another session’s locks. A red edge runs from the waiting request’s entity to the one holding it up, or to the database node when the holder is background work or another program. The database node names the head blocker and its statement, including an idle session holding an open transaction. Needs VIEW SERVER STATE; not in cloud mode.',
+        'Deadlocks: every deadlock SQL Server recorded is a red marker on the sparklines at the moment it happened, named by the entities whose statements met. The database node lists them with the victim and the tables involved.',
+        'Database time: a strip tile splitting the window’s database time between people (signed-in sessions), integrations (tokens and API keys), scheduled jobs, imports, flows and other background work. For the heaviest scheduled job it suggests the quietest hour of the day when the job runs in a busier one.',
+        'Configuration cache: on the database node, how many configuration reads were answered from memory, how often a configuration write emptied the cache, and a hit-rate line carrying the change markers. Configuration-change markers name the table the write touched.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-people', text: 'People and callers' },
+    {
+      type: 'ul',
+      items: [
+        'Credentials about to fail: API key callers show a badge when the key expires within 7 days or is using 85% or more of its per-minute limit (counted the way the rate limiter counts). Partners show "token failing ×N" when their last two or more token exchanges failed. Select the node for details and a link to where you fix it.',
+        'Follow a person: pick someone and the map rings their node and lights up what they touch as they move from page to page. A panel lists the screens they visited with request and error counts. "Keep full traces" records their next 50 requests in full. Only requests served by the process you are watching are seen.',
+        'Data egress (More → Data egress): callers ranked by the rows list reads returned to them over the window, plus exports from the activity log: CSV and xlsx, export presets, PDFs, dossiers, backups and bundles. A read of 500 rows or more counts as large. GraphQL reads are not counted.',
+        'Client crashes appear in the live events with links to the replay, seeked to the error, and to the issue.',
+        'By role splits an entity’s requests by role, with API keys and machine accounts shown as Integrations.',
+        'Recent payloads shows an API key’s or machine account’s last five logged request bodies and errors, with secrets masked. Only API-key and token writes keep their bodies.',
+        'Old tabs: how many open tabs still run an old front-end build, or loaded against an older API, per app over the window. Follow "reload them" to /realtime (see Deploys & Versions).'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-platform-lenses', text: 'Platform' },
+    {
+      type: 'ul',
+      items: [
+        'Owners: shades each node by how much of its load is Nivaro core versus each extension. Extension routes count wholly to their extension; other requests count by the time extension hooks ran inside them; partner calls count by the route, job or declared node that made them. Select a node for "Load by owner".',
+        'Queue cache: a node that appears when a queue is materialized, showing rows resynced per write and their cost, failures, rebuild runs and time since the last rebuild, plus the lookup every business write pays.',
+        'Nested resolver time: on a GraphQL operation, the time spent per nested field path (to-one, to-many, many-to-many, linked records) and per access check, summed over every row a list resolved. Measured only while the map is open.',
+        'Dead letters: failed flow runs, and webhook deliveries that failed in the last day with nothing successful since, gather in one node with Retry and Discard on each item or on everything listed. Discarding keeps the run in the flow history; webhook deliveries can be retried but not discarded.',
+        'Cloud operators: `GET /admin/traffic-tenants?window=300` (the provisioning path, cloud mode only) with the `x-provision-secret` header ranks the tenants this process served by database time, then requests, then errors.'
+      ]
     }
   ]
 }

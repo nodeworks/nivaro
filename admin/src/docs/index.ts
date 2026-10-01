@@ -255,13 +255,15 @@ import {
   obsTrafficMap,
   obsTrafficMapAct,
   obsTrafficMapInvestigate,
+  obsTrafficMapLenses,
   obsTrafficMapPlatform
 } from './sections/observability.js'
 import {
   dbHealthDocs,
   instanceOverridesDocs,
   mailHarnessDocs,
-  opsConsoleDocs
+  opsConsoleDocs,
+  deploysVersionsDocs
 } from './sections/ops-observability.js'
 import {
   opsBackups,
@@ -798,6 +800,7 @@ export const navSections: NavGroup[] = [
       obsTrafficMap,
       obsTrafficMapInvestigate,
       obsTrafficMapAct,
+      obsTrafficMapLenses,
       obsTrafficMapPlatform,
       commandCenterDocs,
       wallboardPulseDocs,
@@ -808,6 +811,7 @@ export const navSections: NavGroup[] = [
       obsHealthDashboard,
       dbHealthDocs,
       opsConsoleDocs,
+      deploysVersionsDocs,
       instanceOverridesDocs,
       mailHarnessDocs,
       obsDataQuality,

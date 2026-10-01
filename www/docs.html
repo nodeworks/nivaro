@@ -545,6 +545,7 @@
           <a class="docs-nav-item" data-section="traffic-map" href="#traffic-map">Traffic Map</a>
           <a class="docs-nav-item" data-section="traffic-map-investigate" href="#traffic-map-investigate">Traffic Map: Investigate</a>
           <a class="docs-nav-item" data-section="traffic-map-act" href="#traffic-map-act">Traffic Map: Act</a>
+          <a class="docs-nav-item" data-section="traffic-map-lenses" href="#traffic-map-lenses">Traffic Map: Database, People &amp; Platform</a>
           <a class="docs-nav-item" data-section="traffic-map-platform" href="#traffic-map-platform">Traffic Map: Share &amp; Scale</a>
           <a class="docs-nav-item" data-section="command-center" href="#command-center">Command Center</a>
           <a class="docs-nav-item" data-section="wallboard-pulse" href="#wallboard-pulse">Wallboard &amp; Pulse</a>
@@ -555,6 +556,7 @@
           <a class="docs-nav-item" data-section="health-dashboard" href="#health-dashboard">Health Dashboard</a>
           <a class="docs-nav-item" data-section="db-health" href="#db-health">DB &amp; Runtime Health</a>
           <a class="docs-nav-item" data-section="ops-console" href="#ops-console">Ops Console</a>
+          <a class="docs-nav-item" data-section="deploys-versions" href="#deploys-versions">Deploys &amp; Versions</a>
           <a class="docs-nav-item" data-section="instance-overrides" href="#instance-overrides">Per-Instance Settings</a>
           <a class="docs-nav-item" data-section="mail-harness" href="#mail-harness">Mail Templates &amp; Test Harness</a>
           <a class="docs-nav-item" data-section="data-quality" href="#data-quality">Data Quality Inspector</a>
@@ -15483,6 +15485,39 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <!-- /SYNC:traffic-map-act -->
         </div>
 
+        <div class="doc-section" id="s-traffic-map-lenses" data-toc='[{"id":"traffic-map-lenses","label":"Traffic Map: Database, People and Platform"},{"id":"traffic-map-db","label":"The database node"},{"id":"traffic-map-people","label":"People and callers"},{"id":"traffic-map-platform-lenses","label":"Platform"}]'>
+          <!-- SYNC:traffic-map-lenses -->
+          <h1 class="doc-h1" id="traffic-map-lenses">Traffic Map: Database, People and Platform</h1>
+          <p class="doc-p">Lenses for three questions the main map leaves open: what the database is waiting on, who is doing what, and which part of the platform carries the load.</p>
+          <h2 class="doc-h2" id="traffic-map-db">The database node</h2>
+          <ul class="doc-ul">
+            <li>Near timeout (on by default): requests whose longest database statement used 80% or more of the driver’s 15 s request timeout, or whose whole request used 80% or more of the proxy’s read timeout (<code class="doc-code">TRAFFIC_PROXY_TIMEOUT_MS</code>, default 60 s). Requests past a budget count as timed out. Those entities get an outline and a badge; the inspector lists the requests with how much of the budget they used, plus 24 hours from the request log.</li>
+            <li>Blocking chains: while the map is open, the database is checked every 3 s for sessions waiting 0.5 s or more on another session’s locks. A red edge runs from the waiting request’s entity to the one holding it up, or to the database node when the holder is background work or another program. The database node names the head blocker and its statement, including an idle session holding an open transaction. Needs VIEW SERVER STATE; not in cloud mode.</li>
+            <li>Deadlocks: every deadlock SQL Server recorded is a red marker on the sparklines at the moment it happened, named by the entities whose statements met. The database node lists them with the victim and the tables involved.</li>
+            <li>Database time: a strip tile splitting the window’s database time between people (signed-in sessions), integrations (tokens and API keys), scheduled jobs, imports, flows and other background work. For the heaviest scheduled job it suggests the quietest hour of the day when the job runs in a busier one.</li>
+            <li>Configuration cache: on the database node, how many configuration reads were answered from memory, how often a configuration write emptied the cache, and a hit-rate line carrying the change markers. Configuration-change markers name the table the write touched.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-people">People and callers</h2>
+          <ul class="doc-ul">
+            <li>Credentials about to fail: API key callers show a badge when the key expires within 7 days or is using 85% or more of its per-minute limit (counted the way the rate limiter counts). Partners show "token failing ×N" when their last two or more token exchanges failed. Select the node for details and a link to where you fix it.</li>
+            <li>Follow a person: pick someone and the map rings their node and lights up what they touch as they move from page to page. A panel lists the screens they visited with request and error counts. "Keep full traces" records their next 50 requests in full. Only requests served by the process you are watching are seen.</li>
+            <li>Data egress (More → Data egress): callers ranked by the rows list reads returned to them over the window, plus exports from the activity log: CSV and xlsx, export presets, PDFs, dossiers, backups and bundles. A read of 500 rows or more counts as large. GraphQL reads are not counted.</li>
+            <li>Client crashes appear in the live events with links to the replay, seeked to the error, and to the issue.</li>
+            <li>By role splits an entity’s requests by role, with API keys and machine accounts shown as Integrations.</li>
+            <li>Recent payloads shows an API key’s or machine account’s last five logged request bodies and errors, with secrets masked. Only API-key and token writes keep their bodies.</li>
+            <li>Old tabs: how many open tabs still run an old front-end build, or loaded against an older API, per app over the window. Follow "reload them" to /realtime (see Deploys &amp; Versions).</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-platform-lenses">Platform</h2>
+          <ul class="doc-ul">
+            <li>Owners: shades each node by how much of its load is Nivaro core versus each extension. Extension routes count wholly to their extension; other requests count by the time extension hooks ran inside them; partner calls count by the route, job or declared node that made them. Select a node for "Load by owner".</li>
+            <li>Queue cache: a node that appears when a queue is materialized, showing rows resynced per write and their cost, failures, rebuild runs and time since the last rebuild, plus the lookup every business write pays.</li>
+            <li>Nested resolver time: on a GraphQL operation, the time spent per nested field path (to-one, to-many, many-to-many, linked records) and per access check, summed over every row a list resolved. Measured only while the map is open.</li>
+            <li>Dead letters: failed flow runs, and webhook deliveries that failed in the last day with nothing successful since, gather in one node with Retry and Discard on each item or on everything listed. Discarding keeps the run in the flow history; webhook deliveries can be retried but not discarded.</li>
+            <li>Cloud operators: <code class="doc-code">GET /admin/traffic-tenants?window=300</code> (the provisioning path, cloud mode only) with the <code class="doc-code">x-provision-secret</code> header ranks the tenants this process served by database time, then requests, then errors.</li>
+          </ul>
+          <!-- /SYNC:traffic-map-lenses -->
+        </div>
+
         <div class="doc-section" id="s-traffic-map-platform" data-toc='[{"id":"traffic-map-platform","label":"Traffic Map: Sharing, Capacity and Scale"},{"id":"traffic-map-sharing","label":"Sharing and comparing"},{"id":"traffic-map-capacity","label":"Capacity and health"},{"id":"traffic-map-nodes","label":"Several API processes"},{"id":"traffic-map-cloud","label":"Cloud mode"},{"id":"traffic-map-replay","label":"Load replay (development only)"},{"id":"traffic-map-extending","label":"Extending the map"},{"id":"traffic-map-config","label":"Settings"}]'>
           <!-- SYNC:traffic-map-platform -->
           <h1 class="doc-h1" id="traffic-map-platform">Traffic Map: Sharing, Capacity and Scale</h1>
@@ -15821,6 +15856,53 @@ function App() {
             <li>Heap snapshot — captures a V8 heap snapshot of this replica and downloads it for analysis in Chrome DevTools. The file lives in the process’s temp directory, so download it right away — a restart discards it.</li>
           </ul>
           <!-- /SYNC:ops-console -->
+        </div>
+
+        <div class="doc-section" id="s-deploys-versions" data-toc='[{"id":"deploys-versions","label":"Deploys and Versions"},{"id":"deploys-gate","label":"The post-deploy gate"},{"id":"deploys-stage-timing","label":"Release stage timing"},{"id":"deploys-env-presence","label":"Environment variables across environments"},{"id":"deploys-tab-versions","label":"Open tabs by version"},{"id":"deploys-readiness","label":"Readiness checks for the deploy shape"},{"id":"deploys-config-changes","label":"Configuration changes on the incident timeline"},{"id":"deploys-dev-rows","label":"Development traffic in the shared request log"}]'>
+          <!-- SYNC:deploys-versions -->
+          <h1 class="doc-h1" id="deploys-versions">Deploys and Versions</h1>
+          <p class="doc-p">The checks that tell you a deploy really landed, which versions are running where, and what changed shortly before something went wrong.</p>
+          <h2 class="doc-h2" id="deploys-gate">The post-deploy gate</h2>
+          <p class="doc-p">An API answering its new version is not enough: an extension mount can fail or readiness can drop while <code class="doc-code">/api/version</code> still answers. After a release, the verify stage (and the staging deploy gate) requires:</p>
+          <ul class="doc-ul">
+            <li><code class="doc-code">GET /api/ready</code> answers 200.</li>
+            <li><code class="doc-code">GET /api/preflight</code> does not fail.</li>
+            <li><code class="doc-code">POST /api/ops-runtime/smoke?strict=1</code> passes.</li>
+            <li>The readiness score is no lower than a snapshot taken just before the deployments were pushed. It is read again once after a minute before the stage fails.</li>
+          </ul>
+          <p class="doc-p">The Release card passes each API’s token from the Environments registry to the chain through its environment. Without a token only <code class="doc-code">/api/ready</code> is checked, and the plan says so; a token the API refuses fails the stage, so update it under Environments and resume from verify. On staging the extra checks run when the masked CI variable <code class="doc-code">STAGING_GATE_TOKEN</code> is set. A failing database or cache alone only warns, since the previous image would meet the same database.</p>
+          <h2 class="doc-h2" id="deploys-stage-timing">Release stage timing</h2>
+          <p class="doc-p">Each release run stores how long each stage took, worked out from the run’s log. The Release card’s Stage timing table shows a trend per stage and highlights the slowest stage of each release. <code class="doc-code">GET /api/release/timings</code> returns the same.</p>
+          <h2 class="doc-h2" id="deploys-env-presence">Environment variables across environments</h2>
+          <p class="doc-p">Environments lists every environment variable the loaded extensions declare, per registered API, as set or unset. Values are never read. A variable set on one environment and missing on another is listed at the top ("EFP_OPS_TAKEOVER is set on staging, missing on production"). A component running an older build reads "older version" rather than missing.</p>
+          <pre class="doc-pre"><code>GET /api/environments/env-presence/local   → this instance
+GET /api/environments/env-presence         → every registered API, compared</code></pre>
+          <h2 class="doc-h2" id="deploys-tab-versions">Open tabs by version</h2>
+          <p class="doc-p">Every front end reports the build it runs on each call (<code class="doc-code">x-nivaro-client: build=…; api=…; tab=…; loaded=…</code>) and in the socket’s <code class="doc-code">client:hello</code>. /realtime → Sockets &amp; rooms lists open tabs per app and build, against the API version they first talked to. An app’s current build is the one its newest page load reported. Force client refresh → Old versions reloads only tabs on another build, or loaded before the API update; like the app filter, it reaches sockets on this API process only. The Traffic Map’s Old tabs tile shows the same count over its window.</p>
+          <p class="doc-p">A custom front end reports its build with <code class="doc-code">setClientBuild</code> / <code class="doc-code">installPageContextFetch({ build })</code>. A tab that reports nothing groups as "Not reported"; builds named <code class="doc-code">dev</code> are never judged old.</p>
+          <h2 class="doc-h2" id="deploys-readiness">Readiness checks for the deploy shape</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Check</th><th>Warns when</th></tr></thead>
+            <tbody>
+              <tr><td>Every API process runs one version</td><td>The instance roster has held two API versions for longer than <code class="doc-code">MIXED_VERSION_MINUTES</code> (default 15): a rolling deploy that stalled or a replica left behind. Roster entries carry <code class="doc-code">NIVARO_ROLE</code> (web or worker), so it reads "2 web, 1 worker".</td></tr>
+              <tr><td>Only this deployment runs scheduled jobs on its database</td><td>Scheduled (not run-now) job runs from another instance landed in the last 24 hours, for example a laptop booted with <code class="doc-code">CRON_TICKS=on</code> against a shared database.</td></tr>
+            </tbody>
+          </table></div>
+          <p class="doc-p">Every job run records the instance, process, how it was started (schedule, run now, chained, catch-up), whether its process had scheduled ticks on, and who held the scheduler lease. A scheduled run started by a process with ticks off raises one high-severity issue naming the job and the code path that started it. Shutting down or booting a process now only marks its own deployment’s running jobs as interrupted, never another instance’s.</p>
+          <h2 class="doc-h2" id="deploys-config-changes">Configuration changes on the incident timeline</h2>
+          <p class="doc-p">Each burst of configuration writes appears once on the Ops Console incident timeline as <code class="doc-code">config:change</code>: the area (layout, pipeline, flow, schema, access, rules…), the tables, who saved it, the instance, and a link to the activity row of the save behind it. A latency shift or readiness drop can then be read against "layout 2 saved 20 minutes ago".</p>
+          <h2 class="doc-h2" id="deploys-dev-rows">Development traffic in the shared request log</h2>
+          <p class="doc-p">When development machines share a database with a deployed instance, their requests would show as callers and failures there for 14 days. Request-log rows from <code class="doc-code">development</code> and <code class="doc-code">test</code> instances (and any named in <code class="doc-code">API_LOGS_DEV_INSTANCES</code>) are deleted after <code class="doc-code">API_LOGS_DEV_TTL_HOURS</code> (default 3, 0 = never). API Analytics shows deployed instances only by default; "Deployed instances" switches to all.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Setting</th><th>Default</th><th>What it changes</th></tr></thead>
+            <tbody>
+              <tr><td><code class="doc-code">NIVARO_ROLE</code></td><td>unset</td><td>web or worker; shown in the roster and the version check.</td></tr>
+              <tr><td><code class="doc-code">MIXED_VERSION_MINUTES</code></td><td>15</td><td>How long two versions may run together before readiness warns.</td></tr>
+              <tr><td><code class="doc-code">API_LOGS_DEV_INSTANCES</code></td><td>unset</td><td>Extra instance names treated as development (comma list).</td></tr>
+              <tr><td><code class="doc-code">API_LOGS_DEV_TTL_HOURS</code></td><td>3</td><td>Hours development rows stay in the request log; 0 keeps them.</td></tr>
+            </tbody>
+          </table></div>
+          <!-- /SYNC:deploys-versions -->
         </div>
 
         <div class="doc-section" id="s-instance-overrides" data-toc='[{"id":"instance-overrides","label":"Per-Instance Settings Overrides"}]'>

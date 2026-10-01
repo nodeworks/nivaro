@@ -227,6 +227,115 @@ export const opsConsoleDocs: DocSection = {
   ]
 }
 
+export const deploysVersionsDocs: DocSection = {
+  id: 'deploys-versions',
+  label: 'Deploys & Versions',
+  content: [
+    { type: 'h1', id: 'deploys-versions', text: 'Deploys and Versions' },
+    {
+      type: 'p',
+      text: 'The checks that tell you a deploy really landed, which versions are running where, and what changed shortly before something went wrong.'
+    },
+    { type: 'h2', id: 'deploys-gate', text: 'The post-deploy gate' },
+    {
+      type: 'p',
+      text: 'An API answering its new version is not enough: an extension mount can fail or readiness can drop while `/api/version` still answers. After a release, the verify stage (and the staging deploy gate) requires:'
+    },
+    {
+      type: 'ul',
+      items: [
+        '`GET /api/ready` answers 200.',
+        '`GET /api/preflight` does not fail.',
+        '`POST /api/ops-runtime/smoke?strict=1` passes.',
+        'The readiness score is no lower than a snapshot taken just before the deployments were pushed. It is read again once after a minute before the stage fails.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The Release card passes each API’s token from the Environments registry to the chain through its environment. Without a token only `/api/ready` is checked, and the plan says so; a token the API refuses fails the stage, so update it under Environments and resume from verify. On staging the extra checks run when the masked CI variable `STAGING_GATE_TOKEN` is set. A failing database or cache alone only warns, since the previous image would meet the same database.'
+    },
+    { type: 'h2', id: 'deploys-stage-timing', text: 'Release stage timing' },
+    {
+      type: 'p',
+      text: 'Each release run stores how long each stage took, worked out from the run’s log. The Release card’s Stage timing table shows a trend per stage and highlights the slowest stage of each release. `GET /api/release/timings` returns the same.'
+    },
+    { type: 'h2', id: 'deploys-env-presence', text: 'Environment variables across environments' },
+    {
+      type: 'p',
+      text: 'Environments lists every environment variable the loaded extensions declare, per registered API, as set or unset. Values are never read. A variable set on one environment and missing on another is listed at the top ("EFP_OPS_TAKEOVER is set on staging, missing on production"). A component running an older build reads "older version" rather than missing.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/environments/env-presence/local   → this instance
+GET /api/environments/env-presence         → every registered API, compared`
+    },
+    { type: 'h2', id: 'deploys-tab-versions', text: 'Open tabs by version' },
+    {
+      type: 'p',
+      text: 'Every front end reports the build it runs on each call (`x-nivaro-client: build=…; api=…; tab=…; loaded=…`) and in the socket’s `client:hello`. /realtime → Sockets & rooms lists open tabs per app and build, against the API version they first talked to. An app’s current build is the one its newest page load reported. Force client refresh → Old versions reloads only tabs on another build, or loaded before the API update; like the app filter, it reaches sockets on this API process only. The Traffic Map’s Old tabs tile shows the same count over its window.'
+    },
+    {
+      type: 'p',
+      text: 'A custom front end reports its build with `setClientBuild` / `installPageContextFetch({ build })`. A tab that reports nothing groups as "Not reported"; builds named `dev` are never judged old.'
+    },
+    { type: 'h2', id: 'deploys-readiness', text: 'Readiness checks for the deploy shape' },
+    {
+      type: 'table',
+      head: ['Check', 'Warns when'],
+      rows: [
+        [
+          'Every API process runs one version',
+          'The instance roster has held two API versions for longer than `MIXED_VERSION_MINUTES` (default 15): a rolling deploy that stalled or a replica left behind. Roster entries carry `NIVARO_ROLE` (web or worker), so it reads "2 web, 1 worker".'
+        ],
+        [
+          'Only this deployment runs scheduled jobs on its database',
+          'Scheduled (not run-now) job runs from another instance landed in the last 24 hours, for example a laptop booted with `CRON_TICKS=on` against a shared database.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Every job run records the instance, process, how it was started (schedule, run now, chained, catch-up), whether its process had scheduled ticks on, and who held the scheduler lease. A scheduled run started by a process with ticks off raises one high-severity issue naming the job and the code path that started it. Shutting down or booting a process now only marks its own deployment’s running jobs as interrupted, never another instance’s.'
+    },
+    {
+      type: 'h2',
+      id: 'deploys-config-changes',
+      text: 'Configuration changes on the incident timeline'
+    },
+    {
+      type: 'p',
+      text: 'Each burst of configuration writes appears once on the Ops Console incident timeline as `config:change`: the area (layout, pipeline, flow, schema, access, rules…), the tables, who saved it, the instance, and a link to the activity row of the save behind it. A latency shift or readiness drop can then be read against "layout 2 saved 20 minutes ago".'
+    },
+    { type: 'h2', id: 'deploys-dev-rows', text: 'Development traffic in the shared request log' },
+    {
+      type: 'p',
+      text: 'When development machines share a database with a deployed instance, their requests would show as callers and failures there for 14 days. Request-log rows from `development` and `test` instances (and any named in `API_LOGS_DEV_INSTANCES`) are deleted after `API_LOGS_DEV_TTL_HOURS` (default 3, 0 = never). API Analytics shows deployed instances only by default; "Deployed instances" switches to all.'
+    },
+    {
+      type: 'table',
+      head: ['Setting', 'Default', 'What it changes'],
+      rows: [
+        ['`NIVARO_ROLE`', 'unset', 'web or worker; shown in the roster and the version check.'],
+        [
+          '`MIXED_VERSION_MINUTES`',
+          '15',
+          'How long two versions may run together before readiness warns.'
+        ],
+        [
+          '`API_LOGS_DEV_INSTANCES`',
+          'unset',
+          'Extra instance names treated as development (comma list).'
+        ],
+        [
+          '`API_LOGS_DEV_TTL_HOURS`',
+          '3',
+          'Hours development rows stay in the request log; 0 keeps them.'
+        ]
+      ]
+    }
+  ]
+}
+
 export const instanceOverridesDocs: DocSection = {
   id: 'instance-overrides',
   label: 'Per-Instance Settings',
