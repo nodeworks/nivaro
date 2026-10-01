@@ -15,7 +15,18 @@ import {
   readTokens
 } from './layout'
 import type { TrafficModel } from './model'
-import { badgeFor, canvasLayers, nodeBadges } from './registry/canvasLayers'
+import { downKindOf, downLabel, isSourceId, OTHER_SOURCES } from './nodeKinds'
+import {
+  badgeFor,
+  canvasLayers,
+  edgeStyleFor,
+  edgeStyles,
+  nodeBadges,
+  nodeProviders,
+  setCanvasRepaint,
+  sideBadgeFor,
+  sideBadges
+} from './registry/canvasLayers'
 import {
   type Filters,
   KIND_ORDER,
@@ -50,6 +61,7 @@ const ROUTE_HINT: Record<Lane, string> = {
   files: '/api/files',
   extension: 'extension routes',
   system: '/api/items/nivaro_*',
+  socket: 'socket.io events',
   other: 'other'
 }
 const CALLER_KIND_TEXT: Record<string, string> = {
@@ -61,6 +73,9 @@ const CALLER_KIND_TEXT: Record<string, string> = {
 }
 const OTHERS = '__others__'
 const MAX_CALLERS = 6
+const MAX_SOURCES = 6
+/** Downstream column cap (busiest first; the data stores always stay). */
+const MAX_DOWNS = 14
 const MAX_ENTITIES_PER_LANE = 12
 const MAX_PARTICLES = 300
 /** Per edge, per frame (frames are one second apart): above this the particles are sampled. */
@@ -90,10 +105,15 @@ export interface NodeView {
   sub: string
   rps: number
   partner: boolean
+  /** Down-node kind ('db', 'partner', 'channel', 'ai', 'webhook'…) or source kind
+   *  ('cron', 'flow', 'import', 'socket'); absent for request callers. */
+  kind?: string
 }
 /** What one paint draws (built once per frame tick) — canvas layers (registry/) receive it. */
 export interface MapData {
   callers: NodeView[]
+  /** Non-request sources (cron jobs, flows, the import worker, sockets), drawn under callers. */
+  sources: NodeView[]
   lanes: LaneView[]
   downs: NodeView[]
   edgesIn: Array<{ from: string; to: Lane; rps: number }>
@@ -179,16 +199,21 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
 /** "1 min" / "5 min" / "15 min" for the window selector's values. */
 export const windowLabel = (win: number) => `${Math.max(1, Math.round(win / 60))} min`
 
-function downLabel(m: TrafficModel, cat: TrafficCatalog | null, id: string): string {
-  if (cat?.down[id]) return cat.down[id]
-  if (id.startsWith('ext:') && cat?.partners[id.slice(4)]) return cat.partners[id.slice(4)]
-  return m.downLabels.get(id) ?? id
+const SOURCE_KIND_TEXT: Record<string, string> = {
+  cron: 'scheduled job',
+  flow: 'flow',
+  import: 'staged imports',
+  socket: 'socket.io events'
 }
-function downSub(id: string): string {
+function downSub(id: string, kind = 'partner'): string {
   if (id === 'db') return 'reads and writes'
   if (id === 'redis') return 'cache hits'
   if (id === 'store') return 'uploads and downloads'
-  return 'partner calls'
+  if (kind === 'channel') return 'notifications sent'
+  if (kind === 'ai') return 'AI calls'
+  if (kind === 'webhook') return 'webhook deliveries'
+  if (kind === 'partner') return 'partner calls'
+  return 'calls'
 }
 
 /** Everything the frame needs, computed once per tick (not per animation frame). */
@@ -226,21 +251,36 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
     })
   }
 
-  // downstream: data stores first (db always), partners after, busiest first
-  const ids = m.downIds()
-  const core = ['db', 'redis', 'store'].filter((d) => d === 'db' || ids.includes(d))
-  const partners = ids
-    .filter((d) => d.startsWith('ext:'))
-    .map((d) => ({ d, r: m.downSum(d, win)[0] }))
-    .sort((a, b) => b.r - a.r)
-    .map((p) => p.d)
-  const downs: NodeView[] = [...core, ...partners].map((id) => ({
-    id,
-    label: downLabel(m, cat, id),
-    sub: downSub(id),
-    rps: m.downSum(id, win)[0] / win,
-    partner: id.startsWith('ext:')
-  }))
+  // downstream: data stores first (db always), partners next, then channels / AI / webhooks,
+  // busiest first within each; plug-in providers (registry/canvasLayers) can force a node in
+  const ids = new Set(m.downIds())
+  for (const p of nodeProviders) {
+    try {
+      for (const id of p.downs?.(m, win) ?? []) ids.add(id)
+    } catch {
+      /* a broken provider adds nothing */
+    }
+  }
+  const core = ['db', 'redis', 'store'].filter((d) => d === 'db' || ids.has(d))
+  const busiest = (list: string[]) =>
+    list
+      .map((d) => ({ d, r: m.downSum(d, win)[0] }))
+      .sort((a, b) => b.r - a.r)
+      .map((p) => p.d)
+  const nonCore = [...ids].filter((d) => !core.includes(d))
+  const partners = busiest(nonCore.filter((d) => downKindOf(m, d) === 'partner'))
+  const others = busiest(nonCore.filter((d) => downKindOf(m, d) !== 'partner'))
+  const downs: NodeView[] = [...core, ...partners, ...others].slice(0, MAX_DOWNS).map((id) => {
+    const kind = downKindOf(m, id)
+    return {
+      id,
+      label: downLabel(m, cat, id),
+      sub: downSub(id, kind),
+      rps: m.downSum(id, win)[0] / win,
+      partner: kind === 'partner',
+      kind
+    }
+  })
   const downSet = new Set(downs.map((d) => d.id))
   const laneSet = new Set(lanes.map((l) => l.id))
 
@@ -249,11 +289,24 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
   const edges = m.edges(win, filters)
   const drawnIn: Array<[string, Lane, number]> = []
   const perCaller = new Map<string, number>()
+  const perSource = new Map<string, number>()
   for (const [key, rps] of edges.in) {
-    const [caller, lane] = key.split('>') as [string, Lane]
+    const cut = key.lastIndexOf('>')
+    const caller = key.slice(0, cut)
+    const lane = key.slice(cut + 1) as Lane
     if (!laneSet.has(lane) || rps <= 0) continue
     drawnIn.push([caller, lane, rps])
-    perCaller.set(caller, (perCaller.get(caller) ?? 0) + rps)
+    const into = isSourceId(caller) ? perSource : perCaller
+    into.set(caller, (into.get(caller) ?? 0) + rps)
+  }
+  // sources with no drawn lane edge (a job that only calls partners) come from providers
+  for (const p of nodeProviders) {
+    try {
+      for (const s of p.sources?.(m, win, filters) ?? [])
+        if (!perSource.has(s.id)) perSource.set(s.id, s.rps)
+    } catch {
+      /* a broken provider adds nothing */
+    }
   }
   const ranked = [...perCaller].sort((a, b) => b[1] - a[1])
   const top = ranked.slice(0, MAX_CALLERS)
@@ -279,15 +332,40 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
       rps: rest.reduce((a, [, r]) => a + r, 0),
       partner: false
     })
-  const topIds = new Set(top.map(([k]) => k))
+  const rankedSources = [...perSource].sort((a, b) => b[1] - a[1])
+  const topSources = rankedSources.slice(0, MAX_SOURCES)
+  const restSources = rankedSources.slice(MAX_SOURCES)
+  const sources: NodeView[] = topSources.map(([k, rps]) => {
+    const kind = k.slice(0, k.indexOf(':'))
+    const errors = m.callerSum(k, win)[1]
+    const sub = SOURCE_KIND_TEXT[kind] ?? 'source'
+    return {
+      id: k,
+      label: callerLabel(cat, k),
+      sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+      rps,
+      partner: false,
+      kind
+    }
+  })
+  if (restSources.length)
+    sources.push({
+      id: OTHER_SOURCES,
+      label: 'Other sources',
+      sub: `${restSources.length} more`,
+      rps: restSources.reduce((a, [, r]) => a + r, 0),
+      partner: false
+    })
+  const topIds = new Set([...top.map(([k]) => k), ...topSources.map(([k]) => k)])
   const inAgg = new Map<string, number>()
   for (const [caller, lane, rps] of drawnIn) {
-    const k = `${topIds.has(caller) ? caller : OTHERS}>${lane}`
+    const fold = isSourceId(caller) ? OTHER_SOURCES : OTHERS
+    const k = `${topIds.has(caller) ? caller : fold}>${lane}`
     inAgg.set(k, (inAgg.get(k) ?? 0) + rps)
   }
   const edgesIn = [...inAgg].map(([k, rps]) => {
-    const [from, to] = k.split('>') as [string, Lane]
-    return { from, to, rps }
+    const cut = k.lastIndexOf('>')
+    return { from: k.slice(0, cut), to: k.slice(cut + 1) as Lane, rps }
   })
   const edgesOut: MapData['edgesOut'] = []
   const laneOut = new Map<Lane, Array<{ to: string; rps: number }>>()
@@ -312,7 +390,7 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
         )
     }
 
-  const busiest = lanes
+  const busiestLanes = lanes
     .slice()
     .sort((a, b) => b.rps - a.rps)
     .slice(0, 3)
@@ -322,10 +400,11 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
   const summary = !loaded
     ? 'Flow of API traffic: loading.'
     : lanes.length
-      ? `Flow of API traffic over the last ${winLabel}. Busiest lanes: ${busiest.join(', ')}. ${plural(callers.length, 'caller')}, ${plural(downs.length, 'downstream system')}.`
+      ? `Flow of API traffic over the last ${winLabel}. Busiest lanes: ${busiestLanes.join(', ')}. ${plural(callers.length, 'caller')}${sources.length ? `, ${plural(sources.length, 'source')}` : ''}, ${plural(downs.length, 'downstream system')}.`
       : `Flow of API traffic: no requests in the last ${winLabel}.`
   return {
     callers,
+    sources,
     lanes,
     downs,
     edgesIn,
@@ -391,6 +470,7 @@ export function MapCanvas({
       computeLayout({
         width,
         callers: data.callers.map((c) => c.id),
+        sources: data.sources.map((c) => c.id),
         lanes: data.lanes.map((l) => ({ id: l.id, entities: l.entities.map((e) => e.entity) })),
         downs: data.downs.map((d) => d.id)
       }),
@@ -496,6 +576,14 @@ export function MapCanvas({
 
   // draw: one loop per motion mode; reduced motion repaints through drawRef instead of a loop
   const drawRef = useRef<((dt: number) => boolean) | null>(null)
+  // features repaint the canvas after changing what a layer draws (registry/canvasLayers)
+  useEffect(() => {
+    setCanvasRepaint(() => {
+      dirtyRef.current = true
+      if (live.current.reduced) drawRef.current?.(0)
+    })
+    return () => setCanvasRepaint(() => {})
+  }, [])
   useEffect(() => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext?.('2d') ?? null
@@ -595,6 +683,8 @@ export function MapCanvas({
       ctx.textAlign = 'right'
       ctx.fillText('Data and partners', l.W - 14, 14)
       ctx.textAlign = 'left'
+      if (l.sourcesCaptionY != null && d.sources.length)
+        ctx.fillText('Sources', 14, l.sourcesCaptionY)
 
       // edges: base weight first, then the accent highlight for the hovered/selected node
       const selLane: Lane | null =
@@ -634,8 +724,22 @@ export function MapCanvas({
         ctx.stroke()
       }
       ctx.strokeStyle = T.edge
-      for (const e of d.edgesIn) strokeIn(e, false)
-      for (const e of d.edgesOut) strokeOut(e, false)
+      // plug-in edge styles (registry/canvasLayers): e.g. a partner edge coloured by error class
+      const styled = edgeStyles.length > 0
+      const styleOf = (dir: 'in' | 'out', e: { from: string; to: string; rps: number }) => {
+        const st = styled ? edgeStyleFor({ dir, from: e.from, to: e.to, rps: e.rps }, m) : null
+        ctx.strokeStyle = st ? (T[st.tone] ?? T.edge) : T.edge
+        ctx.setLineDash(st?.dash ?? [])
+      }
+      for (const e of d.edgesIn) {
+        styleOf('in', e)
+        strokeIn(e, false)
+      }
+      for (const e of d.edgesOut) {
+        styleOf('out', e)
+        strokeOut(e, false)
+      }
+      ctx.setLineDash([])
       if (sel) {
         ctx.strokeStyle = T.accent
         ctx.globalAlpha = 0.55 * hl
@@ -646,7 +750,7 @@ export function MapCanvas({
 
       const isSel = (kind: Selection['kind'], id: string) =>
         !!sel && sel.kind === kind && sel.id === id
-      const node = (r: Rect, n: NodeView, selected: boolean) => {
+      const node = (r: Rect, n: NodeView, selected: boolean, side?: 'caller' | 'down') => {
         rr(ctx, r.x, r.y, r.w, r.h, 8)
         ctx.fillStyle = T.node
         ctx.fill()
@@ -665,13 +769,34 @@ export function MapCanvas({
         ctx.font = `600 11px ${sans}`
         ctx.fillStyle = T.fg
         ctx.fillText(ellipsize(ctx, n.label, r.w - 26 - rateW, fc), r.x + 10, r.y + 16)
+        // a plug-in pill (registry/canvasLayers sideBadges) takes room from the sub line
+        let subRoom = r.w - 18
+        const sb = side && sideBadges.length ? sideBadgeFor(side, n.id, m) : null
+        if (sb) {
+          ctx.font = `600 9.5px ${mono}`
+          // the pill wins the line: it is the alert; the sub line keeps what is left
+          const text = ellipsize(ctx, sb.text, r.w - 28, fc)
+          const pw = ctx.measureText(text).width + 8
+          const px = r.x + r.w - pw - 6
+          const py = r.y + r.h - 18
+          const tone = sb.tone === 'error' ? T.error : sb.tone === 'warn' ? T.update : T.read
+          rr(ctx, px, py, pw, 12, 6)
+          ctx.fillStyle = T.card
+          ctx.fill()
+          ctx.lineWidth = 1
+          ctx.strokeStyle = tone
+          ctx.stroke()
+          ctx.fillStyle = tone
+          ctx.fillText(text, px + 4, py + 9)
+          subRoom = px - r.x - 14
+        }
         ctx.font = `10px ${sans}`
         ctx.fillStyle = T.muted
-        ctx.fillText(ellipsize(ctx, n.sub, r.w - 18, fc), r.x + 10, r.y + r.h - 8)
+        if (subRoom >= 28) ctx.fillText(ellipsize(ctx, n.sub, subRoom, fc), r.x + 10, r.y + r.h - 8)
       }
-      for (const c of d.callers) {
+      for (const c of [...d.callers, ...d.sources]) {
         const r = l.callers[c.id]
-        if (r) node(r, c, isSel('caller', c.id))
+        if (r) node(r, c, isSel('caller', c.id), 'caller')
       }
 
       for (const lane of d.lanes) {
@@ -806,7 +931,7 @@ export function MapCanvas({
 
       for (const dn of d.downs) {
         const r = l.downs[dn.id]
-        if (r) node(r, dn, isSel('down', dn.id))
+        if (r) node(r, dn, isSel('down', dn.id), 'down')
       }
 
       // plug-in layers (registry/canvasLayers), each isolated
@@ -955,9 +1080,10 @@ export function MapCanvas({
       text = `${fmtRate(lv?.rps ?? 0)} · ${ROUTE_HINT[hover.id]}`
     } else if (hover.kind === 'caller') {
       r = layout.callers[hover.id]
-      const c = data.callers.find((x) => x.id === hover.id)
+      const c = [...data.callers, ...data.sources].find((x) => x.id === hover.id)
       name = c?.label ?? hover.id
-      if (hover.id === OTHERS) text = `${fmtRate(c?.rps ?? 0)} · ${c?.sub ?? ''}`
+      if (hover.id === OTHERS || hover.id === OTHER_SOURCES)
+        text = `${fmtRate(c?.rps ?? 0)} · ${c?.sub ?? ''}`
       else {
         const [, e] = m.callerSum(hover.id, win)
         text = `${fmtRate(c?.rps ?? 0)} · ${e} ${e === 1 ? 'error' : 'errors'}`
@@ -1025,12 +1151,15 @@ export function MapCanvas({
             const h = pointer(e)
             if (!sameSel(h, hover)) setHover(h)
             e.currentTarget.style.cursor =
-              h && !(h.kind === 'caller' && h.id === OTHERS) ? 'pointer' : 'default'
+              h && !(h.kind === 'caller' && (h.id === OTHERS || h.id === OTHER_SOURCES))
+                ? 'pointer'
+                : 'default'
           }}
           onMouseLeave={() => setHover(null)}
           onClick={(e) => {
             const h = pointer(e)
-            if (h && !(h.kind === 'caller' && h.id === OTHERS)) onSelect(h)
+            if (h && !(h.kind === 'caller' && (h.id === OTHERS || h.id === OTHER_SOURCES)))
+              onSelect(h)
           }}
         />
         {tip && (

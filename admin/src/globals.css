@@ -547,6 +547,22 @@ tr.nvr-row-flash > td {
   --tm-node-line: #4a5058;
   --tm-skeleton: #30343c;
 }
+/* Traffic Map partner error classes (#1112): edge colours + their text forms. Every value is
+   >= 4.5:1 on --tm-card in its theme, so the same token serves the legend text. */
+.traffic-map {
+  --tm-ec-transient: #b45309;
+  --tm-ec-rate-limited: #7c3aed;
+  --tm-ec-auth: #dc2626;
+  --tm-ec-not-found: #475569;
+  --tm-ec-validation: #be185d;
+}
+.dark .traffic-map {
+  --tm-ec-transient: #e0b45a;
+  --tm-ec-rate-limited: #b9a2f5;
+  --tm-ec-auth: #f07070;
+  --tm-ec-not-found: #a3adb8;
+  --tm-ec-validation: #f08fc0;
+}
 /* New ticker rows fade from the accent tint (state change, not decoration). */
 @keyframes tm-evin {
   from { background-color: var(--tm-accent-soft); }

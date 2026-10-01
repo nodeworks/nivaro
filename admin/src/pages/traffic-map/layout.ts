@@ -9,7 +9,13 @@ export interface Rect {
 export interface MapLayout {
   W: number
   H: number
+  /** Callers AND sources (cron jobs, flows, the import worker, sockets) — both are `caller`
+   *  selections; `sourceIds` says which are sources. */
   callers: Record<string, Rect>
+  /** Ids in `callers` that are sources, drawn under their own caption. */
+  sourceIds: string[]
+  /** Baseline of the "Sources" caption; null when there are none. */
+  sourcesCaptionY: number | null
   lanes: Record<string, Rect>
   ents: Record<string, Rect>
   downs: Record<string, Rect>
@@ -25,10 +31,16 @@ const MIN_W = 720
 const FULL_W = 860
 /** Band above the columns for the canvas captions (Callers / API lanes / Data and partners). */
 const TOP = 22
+/** Gap between stacked left-column nodes when sources share the column. */
+const STACK_GAP = 8
+/** Room for the "Sources" caption above the source nodes. */
+const SOURCES_HEAD = 20
 
 export function computeLayout(input: {
   width: number
   callers: string[]
+  /** Source nodes (group C, #1105/#1106/#1143/#1104), placed under the callers. */
+  sources?: string[]
   /** `entities` are BARE entity ids (no lane prefix); rects are keyed `${lane}/${entity}`. */
   lanes: Array<{ id: Lane; entities: string[] }>
   downs: string[]
@@ -52,11 +64,20 @@ export function computeLayout(input: {
     }
     y += h + 10
   }
+  const sources = input.sources ?? []
+  // Left column with sources: callers stacked from the top, then a caption, then the sources.
+  const leftStacked = sources.length
+    ? TOP +
+      input.callers.length * (44 + STACK_GAP) +
+      SOURCES_HEAD +
+      sources.length * (40 + STACK_GAP)
+    : 0
   const H = Math.max(
     y + 6,
     320,
     TOP + 10 + input.downs.length * 40,
-    TOP + 10 + input.callers.length * 44
+    TOP + 10 + input.callers.length * 44,
+    leftStacked + 10
   )
   const place = (list: string[], x: number, h: number): Record<string, Rect> => {
     const out: Record<string, Rect> = {}
@@ -66,10 +87,29 @@ export function computeLayout(input: {
     })
     return out
   }
+  let callers: Record<string, Rect>
+  let sourcesCaptionY: number | null = null
+  if (!sources.length) callers = place(input.callers, 14, 44)
+  else {
+    callers = {}
+    let cy = TOP
+    for (const id of input.callers) {
+      callers[id] = { x: 14, y: cy, w: colW, h: 44 }
+      cy += 44 + STACK_GAP
+    }
+    sourcesCaptionY = cy + 12
+    cy += SOURCES_HEAD
+    for (const id of sources) {
+      callers[id] = { x: 14, y: cy, w: colW, h: 40 }
+      cy += 40 + STACK_GAP
+    }
+  }
   return {
     W,
     H,
-    callers: place(input.callers, 14, 44),
+    callers,
+    sourceIds: sources.filter((id) => callers[id]),
+    sourcesCaptionY,
     lanes,
     ents,
     downs: place(input.downs, W - colW - 14, 40),
@@ -125,6 +165,12 @@ export interface MapTokens {
   edge: string
   node: string
   nodeLine: string
+  /** Partner error classes (#1112). */
+  ecTransient: string
+  ecRateLimited: string
+  ecAuth: string
+  ecNotFound: string
+  ecValidation: string
 }
 export const TOKEN_FALLBACK: MapTokens = {
   card: '#ffffff',
@@ -144,7 +190,12 @@ export const TOKEN_FALLBACK: MapTokens = {
   errorSoft: 'rgba(220, 38, 38, 0.10)',
   edge: 'rgba(23, 41, 64, 0.16)',
   node: '#ffffff',
-  nodeLine: '#cbd5e1'
+  nodeLine: '#cbd5e1',
+  ecTransient: '#b45309',
+  ecRateLimited: '#7c3aed',
+  ecAuth: '#dc2626',
+  ecNotFound: '#475569',
+  ecValidation: '#be185d'
 }
 const TOKEN_VARS: Record<keyof MapTokens, string> = {
   card: '--tm-card',
@@ -164,7 +215,12 @@ const TOKEN_VARS: Record<keyof MapTokens, string> = {
   errorSoft: '--tm-error-soft',
   edge: '--tm-edge',
   node: '--tm-node',
-  nodeLine: '--tm-node-line'
+  nodeLine: '--tm-node-line',
+  ecTransient: '--tm-ec-transient',
+  ecRateLimited: '--tm-ec-rate-limited',
+  ecAuth: '--tm-ec-auth',
+  ecNotFound: '--tm-ec-not-found',
+  ecValidation: '--tm-ec-validation'
 }
 export function readTokens(el: Element): MapTokens {
   const cs = getComputedStyle(el)

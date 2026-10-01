@@ -8,6 +8,7 @@ export type Lane =
   | 'files'
   | 'extension'
   | 'system'
+  | 'socket'
   | 'other'
 export type Kind = 'read' | 'create' | 'update' | 'delete' | 'error'
 export const KIND_ORDER: Kind[] = ['read', 'create', 'update', 'delete', 'error']
@@ -23,6 +24,7 @@ export const LANE_ORDER: Lane[] = [
   'files',
   'extension',
   'system',
+  'socket',
   'other'
 ]
 export const LANE_LABEL: Record<Lane, string> = {
@@ -35,6 +37,7 @@ export const LANE_LABEL: Record<Lane, string> = {
   files: 'Files',
   extension: 'Extensions',
   system: 'System',
+  socket: 'Sockets',
   other: 'Other'
 }
 
