@@ -249,7 +249,7 @@ function Presence() {
   )
 }
 
-register(toolbarItems, { id: 'presence', order: 5, Component: Presence })
+register(toolbarItems, { id: 'presence', order: 5, slot: 'status', Component: Presence })
 register(canvasLayers, {
   id: 'presence',
   order: 95,

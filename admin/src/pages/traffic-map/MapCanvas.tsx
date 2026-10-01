@@ -1413,6 +1413,18 @@ export function MapCanvas({
     return { name, text, x: r.x + r.w / 2, y: below ? r.y + r.h : r.y, below }
   }, [hover, layout, data, m, catalog, filters.win, tick])
 
+  // Keep the tip inside the canvas: centred on the node when it fits, else pinned to the
+  // nearer edge (a tip centred on a node at the right edge overflowed and scrolled the map).
+  const tipRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = tipRef.current
+    const cv = canvasRef.current
+    if (!el || !cv || !tip) return
+    const w = el.offsetWidth
+    const max = cv.offsetWidth - w - TIP_EDGE
+    el.style.left = `${Math.max(TIP_EDGE, Math.min(tip.x - w / 2, max))}px`
+  }, [tip])
+
   const pointer = (e: MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
     return hitTest(layout, e.clientX - rect.left, e.clientY - rect.top)
@@ -1527,13 +1539,14 @@ export function MapCanvas({
         />
         {tip && (
           <div
+            ref={tipRef}
             data-tm-tip=''
             role='tooltip'
             className='pointer-events-none absolute z-10 max-w-[320px] truncate whitespace-nowrap rounded-md bg-[var(--tm-fg)] px-2 py-1 text-[11px] tabular-nums text-[var(--tm-card)]'
             style={{
               left: tip.x,
               top: tip.y,
-              transform: `translate(-50%, ${tip.below ? '8px' : 'calc(-100% - 8px)'})`
+              transform: `translateY(${tip.below ? '8px' : 'calc(-100% - 8px)'})`
             }}
           >
             <span className='font-semibold'>{tip.name}</span> · {tip.text}
@@ -1569,6 +1582,8 @@ export function MapCanvas({
 const SEG =
   'px-2 py-[2px] text-[11.5px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-50'
 const SEG_ON = 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
+/** Gap kept between a hover tip and the canvas edge, px. */
+const TIP_EDGE = 6
 const SEG_OFF = 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
 const CHIP =
   'inline-flex items-center gap-1.5 rounded-md border px-2 py-[2px] text-[11.5px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tm-card)]'

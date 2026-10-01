@@ -1,6 +1,7 @@
 import { Check, Link2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import { getCanvasView, setCanvasView, subscribeCanvasView } from '../canvasView'
 import { register } from '../registry/registry'
 import { toolbarItems } from '../registry/toolbarItems'
@@ -103,8 +104,9 @@ function CopyViewLink() {
     <button
       type='button'
       id='tm-copy-view'
-      className={BTN}
-      title='A link that opens exactly this view: filters, selection, lenses, zoom and the rewind position'
+      className={cn(BTN, 'px-1.5')}
+      aria-label={copied ? 'View link copied' : 'Copy view link'}
+      title='Copy a link that opens exactly this view: filters, selection, lenses, zoom and the rewind position'
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(window.location.href)
@@ -120,9 +122,8 @@ function CopyViewLink() {
       ) : (
         <Link2 className='h-3.5 w-3.5' aria-hidden='true' />
       )}
-      {copied ? 'Copied' : 'Copy view link'}
     </button>
   )
 }
 
-register(toolbarItems, { id: 'copy-view', order: 85, Component: CopyViewLink })
+register(toolbarItems, { id: 'copy-view', order: 85, slot: 'actions', Component: CopyViewLink })

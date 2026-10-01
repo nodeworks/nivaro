@@ -215,6 +215,9 @@ describe('live page extras', () => {
   it('the daily summary toggle saves the preference', async () => {
     patchMock.mockResolvedValue({ data: {} })
     renderAt('/traffic-map')
+    // the toggle lives in the header's More menu
+    await waitFor(() => expect(document.getElementById('tm-more')).toBeTruthy())
+    fireEvent.click(document.getElementById('tm-more') as HTMLElement)
     await waitFor(() => expect(document.getElementById('tm-digest')).toBeTruthy())
     fireEvent.click(document.getElementById('tm-digest') as HTMLElement)
     await waitFor(() =>

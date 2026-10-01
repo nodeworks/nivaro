@@ -234,4 +234,4 @@ function Capture() {
   )
 }
 
-register(toolbarItems, { id: 'capture', order: 70, Component: Capture })
+register(toolbarItems, { id: 'capture', order: 70, slot: 'actions', Component: Capture })

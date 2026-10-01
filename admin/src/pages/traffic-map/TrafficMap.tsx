@@ -1,6 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
-import { Waypoints } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  MoreHorizontal,
+  Pause as PauseIcon,
+  Play,
+  Waypoints
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { adminRealtime, getSocket, joinWatchRoom } from '@/lib/socket'
@@ -34,7 +42,7 @@ import { defaultFilters, laneOf, TrafficModel } from './model'
 import './registry'
 import { RewindBar } from './RewindBar'
 import { PagePanels } from './registry/pagePanels'
-import { ToolbarItems } from './registry/toolbarItems'
+import { ToolbarItems, toolbarItemsIn } from './registry/toolbarItems'
 import { viewParams } from './registry/viewParams'
 import { type StripData, SummaryStrip } from './SummaryStrip'
 import type {
@@ -99,7 +107,128 @@ const CHIP_ON =
   'border-[color-mix(in_srgb,var(--tm-accent)_55%,var(--tm-line))] bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
 const CHIP_OFF =
   'border-[var(--tm-line)] bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
-const FLABEL = 'mr-0.5 text-[12px] font-medium text-[var(--tm-muted)]'
+const SEG =
+  'inline-flex items-center gap-1.5 px-2.5 py-[3px] text-[12px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan disabled:cursor-not-allowed'
+const SEG_ON = 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
+/** Kind toggles carry their own colour swatch, so "on" stays neutral (no accent wash on all five). */
+const SEG_ON_NEUTRAL = 'bg-[var(--tm-card)] text-[var(--tm-fg)]'
+const SEG_IDLE = 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
+/** A hidden kind: struck through, so the filter reads as "left out", not "not chosen". */
+const SEG_OFF =
+  'bg-[var(--tm-card-2)] text-[var(--tm-muted)] line-through decoration-[var(--tm-muted)]/60 hover:text-[var(--tm-fg-2)]'
+
+/** The ten lane toggles, folded into one menu: "All lanes" or "4 of 10 lanes". */
+function LanesMenu({
+  types,
+  onToggle,
+  onSet
+}: {
+  types: Set<Lane>
+  onToggle: (l: Lane) => void
+  onSet: (lanes: Lane[]) => void
+}) {
+  const shown = CHIP_LANES.filter((l) => types.has(l))
+  const all = shown.length === CHIP_LANES.length
+  const label = all
+    ? 'All lanes'
+    : shown.length === 1
+      ? (CHIP_LABEL[shown[0]] ?? LANE_LABEL[shown[0]])
+      : `${shown.length} of ${CHIP_LANES.length} lanes`
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          id='tm-lanes'
+          aria-label={`Lanes: ${label}`}
+          className={cn(CHIP, all ? CHIP_OFF : CHIP_ON)}
+        >
+          {label}
+          <ChevronDown className='h-3.5 w-3.5 opacity-70' aria-hidden='true' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='traffic-map w-[240px] p-1'>
+        <fieldset className='grid text-[12.5px]' aria-label='Lanes'>
+          {CHIP_LANES.map((l) => {
+            const on = types.has(l)
+            return (
+              <div
+                key={l}
+                className='group flex items-center rounded-md hover:bg-[var(--tm-card-2)]'
+              >
+                <button
+                  type='button'
+                  id={`tm-type-${l}`}
+                  aria-pressed={on}
+                  disabled={on && types.size === 1}
+                  onClick={() => onToggle(l)}
+                  className='flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[var(--tm-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan disabled:cursor-not-allowed'
+                >
+                  <span
+                    className={cn(
+                      'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border',
+                      on
+                        ? 'border-[var(--tm-accent)] bg-[var(--tm-accent)] text-[var(--tm-card)]'
+                        : 'border-[var(--tm-line)] bg-[var(--tm-card)]'
+                    )}
+                    aria-hidden='true'
+                  >
+                    {on ? <Check className='h-2.5 w-2.5' strokeWidth={3} /> : null}
+                  </span>
+                  <span className='truncate'>{CHIP_LABEL[l] ?? LANE_LABEL[l]}</span>
+                </button>
+                <button
+                  type='button'
+                  onClick={() => onSet([l])}
+                  aria-label={`Show only ${CHIP_LABEL[l] ?? LANE_LABEL[l]}`}
+                  className='mr-1 rounded px-1.5 py-0.5 text-[11.5px] text-[var(--tm-muted)] opacity-0 hover:text-[var(--tm-fg)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan group-hover:opacity-100'
+                >
+                  Only
+                </button>
+              </div>
+            )
+          })}
+        </fieldset>
+        <div className='mt-1 border-t border-[var(--tm-line-2)] px-1 pt-1'>
+          <button
+            type='button'
+            disabled={all}
+            onClick={() => onSet(CHIP_LANES)}
+            className='w-full rounded-md px-2 py-1.5 text-left text-[12.5px] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan disabled:cursor-default disabled:opacity-50'
+          >
+            Show all lanes
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** Set-once preferences (the daily summary) live here instead of on the toolbar. */
+function MoreMenu() {
+  if (toolbarItemsIn('menu').length === 0) return null
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          id='tm-more'
+          aria-label='More'
+          title='More'
+          className={cn(CHIP, CHIP_OFF, 'px-1.5')}
+        >
+          <MoreHorizontal className='h-3.5 w-3.5' aria-hidden='true' />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align='end'
+        className='traffic-map grid w-[230px] gap-1 p-1.5 [&_button]:w-full [&_button]:justify-start'
+      >
+        <ToolbarItems slot='menu' />
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 function errorText(e: unknown): string {
   const r = e as { response?: { data?: { error?: string } }; message?: string }
@@ -342,6 +471,13 @@ export default function TrafficMap() {
       } else types.add(l)
       return { ...f, types }
     })
+  const setTypes = (lanes: Lane[]) =>
+    setFilters((f) => {
+      const types = new Set(f.types)
+      for (const l of CHIP_LANES) types.delete(l)
+      for (const l of lanes) types.add(l)
+      return { ...f, types }
+    })
   const toggleKind = (k: Kind) =>
     setFilters((f) => {
       const kinds = new Set(f.kinds)
@@ -544,81 +680,86 @@ export default function TrafficMap() {
   return (
     <TrafficMapContext.Provider value={ctx}>
       <div className='traffic-map flex min-h-0 flex-1 flex-col text-[13px]'>
-        <header className='shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
-          <div className='flex flex-wrap items-start justify-between gap-x-6 gap-y-2'>
-            <div className='flex min-w-0 items-start gap-2.5'>
-              <Waypoints
-                className='mt-0.5 h-5 w-5 shrink-0 text-muted-foreground'
-                aria-hidden='true'
-              />
-              <div className='min-w-0'>
-                <h1 className='text-[17px] font-semibold text-slate-900 dark:text-foreground'>
-                  Traffic Map
-                </h1>
-                <p className='mt-0.5 max-w-[78ch] text-[12.5px] text-[var(--tm-muted)]'>
-                  Live requests, writes and errors across collections, widgets, pages, queries and
-                  partners, as seen by this API node. Select any node for its traffic, routes,
-                  callers and recent errors.
-                </p>
-              </div>
+        <header className='shrink-0 border-b border-slate-200 bg-white px-6 pb-3 pt-4 dark:border-border dark:bg-card'>
+          <div className='flex flex-wrap items-center justify-between gap-x-6 gap-y-2'>
+            <div className='flex min-w-0 flex-1 items-center gap-2.5'>
+              <Waypoints className='h-5 w-5 shrink-0 text-muted-foreground' aria-hidden='true' />
+              <h1 className='shrink-0 text-[17px] font-semibold text-slate-900 dark:text-foreground'>
+                Traffic Map
+              </h1>
+              <p className='hidden min-w-0 truncate text-[12.5px] text-[var(--tm-muted)] 2xl:block'>
+                Live requests, writes and errors as this API node sees them. Select any node for its
+                routes, callers and recent errors.
+              </p>
             </div>
-            <div
-              className='flex items-center gap-1.5 whitespace-nowrap pt-1 text-[11.5px] text-[var(--tm-muted)]'
-              id='tm-node'
-            >
-              <span
-                className={cn(
-                  'inline-block h-[7px] w-[7px] rounded-full',
-                  live && !paused
-                    ? 'bg-[var(--tm-create)]'
-                    : stale || paused
-                      ? 'bg-[var(--tm-update)]'
-                      : 'bg-[var(--tm-muted)]'
-                )}
-                aria-hidden='true'
-              />
-              <span className='sr-only'>{statusLabel}: </span>
-              <span>
-                api · <span data-testid='tm-instance'>{m.instance || '…'}</span> · journal seq{' '}
-                <span className='font-mono tabular-nums'>
-                  {m.journalSeq != null ? m.journalSeq.toLocaleString() : '—'}
+            <div className='flex shrink-0 items-center gap-2'>
+              <ToolbarItems slot='status' />
+              <ToolbarItems slot='actions' />
+              <MoreMenu />
+              <span className='mx-1 h-4 w-px bg-[var(--tm-line)]' aria-hidden='true' />
+              <div
+                className='flex items-center gap-1.5 whitespace-nowrap px-1 text-[12px] text-[var(--tm-muted)]'
+                id='tm-node'
+                title={
+                  m.journalSeq != null
+                    ? `Journal sequence ${m.journalSeq.toLocaleString()}`
+                    : undefined
+                }
+              >
+                <span
+                  className={cn(
+                    'inline-block h-[7px] w-[7px] rounded-full',
+                    live && !paused
+                      ? 'bg-[var(--tm-create)]'
+                      : stale || paused
+                        ? 'bg-[var(--tm-update)]'
+                        : 'bg-[var(--tm-muted)]'
+                  )}
+                  aria-hidden='true'
+                />
+                <span className='font-medium text-[var(--tm-fg-2)]'>{statusLabel}</span>
+                <span aria-hidden='true'>·</span>
+                <span>
+                  api <span data-testid='tm-instance'>{m.instance || '…'}</span>
                 </span>
-              </span>
+              </div>
+              {/* A snapshot is already still: no Pause (a `hidden` attribute loses to the chip's display class). */}
+              {!frozen && (
+                <button
+                  type='button'
+                  id='tm-pause'
+                  aria-pressed={paused}
+                  onClick={togglePause}
+                  title={paused ? 'Back to live' : 'Pause and rewind through the last 15 minutes'}
+                  className={cn(
+                    CHIP,
+                    paused
+                      ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
+                      : CHIP_OFF
+                  )}
+                >
+                  {paused ? (
+                    <Play className='h-3 w-3' aria-hidden='true' />
+                  ) : (
+                    <PauseIcon className='h-3 w-3' aria-hidden='true' />
+                  )}
+                  {paused ? 'Resume' : 'Pause'}
+                </button>
+              )}
             </div>
           </div>
           <div
-            className='mt-3 flex flex-wrap items-center gap-x-4 gap-y-2'
+            className='mt-3 flex flex-wrap items-center gap-x-2 gap-y-2'
             role='toolbar'
             aria-label='Filters'
           >
+            <ToolbarItems slot='lead' />
+            <LanesMenu types={filters.types} onToggle={toggleType} onSet={setTypes} />
             <fieldset
-              className='flex min-w-0 flex-wrap items-center gap-1'
-              aria-label='Entity types'
-            >
-              <span className={FLABEL}>Show</span>
-              {CHIP_LANES.map((l) => {
-                const on = filters.types.has(l)
-                return (
-                  <button
-                    key={l}
-                    type='button'
-                    id={`tm-type-${l}`}
-                    aria-pressed={on}
-                    disabled={on && filters.types.size === 1}
-                    onClick={() => toggleType(l)}
-                    className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
-                  >
-                    {CHIP_LABEL[l] ?? LANE_LABEL[l]}
-                  </button>
-                )
-              })}
-            </fieldset>
-            <fieldset
-              className='flex min-w-0 flex-wrap items-center gap-1'
+              className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
               aria-label='Request kinds'
             >
-              <span className={FLABEL}>Kinds</span>
-              {KIND_ORDER.map((k) => {
+              {KIND_ORDER.map((k, i) => {
                 const on = filters.kinds.has(k)
                 return (
                   <button
@@ -628,11 +769,15 @@ export default function TrafficMap() {
                     aria-pressed={on}
                     disabled={on && filters.kinds.size === 1}
                     onClick={() => toggleKind(k)}
-                    className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
+                    className={cn(
+                      SEG,
+                      i > 0 && 'border-l border-[var(--tm-line)]',
+                      on ? SEG_ON_NEUTRAL : SEG_OFF
+                    )}
                   >
                     <span
                       className='h-2 w-2 rounded-sm'
-                      style={{ background: KIND_VAR[k], opacity: on ? 1 : 0.35 }}
+                      style={{ background: KIND_VAR[k], opacity: on ? 1 : 0.3 }}
                       aria-hidden='true'
                     />
                     {k}
@@ -640,69 +785,42 @@ export default function TrafficMap() {
                 )
               })}
             </fieldset>
-            <div className='flex items-center gap-1.5'>
-              <label htmlFor='tm-caller' className={FLABEL}>
-                Caller
-              </label>
-              <SimpleSelect
-                value={filters.caller}
-                onChange={(v) => setFilters((f) => ({ ...f, caller: v }))}
-                options={callerOptions}
-                triggerProps={{ id: 'tm-caller' }}
-                className='h-7 min-w-[170px] max-w-[240px] border-[var(--tm-line)] bg-[var(--tm-card)] px-2.5 text-[12px] text-[var(--tm-fg-2)]'
-              />
-            </div>
-            <div className='flex items-center gap-1.5'>
-              <span className={FLABEL} id='tm-window-label'>
-                Window
-              </span>
-              <fieldset
-                className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
-                aria-labelledby='tm-window-label'
-              >
-                {WINDOWS.map(([w, label], i) => {
-                  const on = filters.win === w
-                  return (
-                    <button
-                      key={w}
-                      type='button'
-                      id={`tm-win-${w}`}
-                      aria-pressed={on}
-                      onClick={() => setFilters((f) => ({ ...f, win: w }))}
-                      className={cn(
-                        'px-2.5 py-[3px] text-[12px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
-                        i > 0 && 'border-l border-[var(--tm-line)]',
-                        on
-                          ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
-                          : 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
-                      )}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </fieldset>
-            </div>
-            <ToolbarItems />
-            {/* A snapshot is already still: no Pause (a `hidden` attribute loses to the chip's display class). */}
-            {!frozen && (
-              <button
-                type='button'
-                id='tm-pause'
-                aria-pressed={paused}
-                onClick={togglePause}
-                title={paused ? 'Back to live' : 'Pause and rewind through the last 15 minutes'}
-                className={cn(
-                  CHIP,
-                  'ml-auto',
-                  paused
-                    ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
-                    : CHIP_OFF
-                )}
-              >
-                {paused ? 'Resume' : 'Pause'}
-              </button>
-            )}
+            <label htmlFor='tm-caller' className='sr-only'>
+              Caller
+            </label>
+            <SimpleSelect
+              value={filters.caller}
+              onChange={(v) => setFilters((f) => ({ ...f, caller: v }))}
+              options={callerOptions}
+              triggerProps={{ id: 'tm-caller' }}
+              className='h-7 w-[170px] border-[var(--tm-line)] bg-[var(--tm-card)] px-2.5 text-[12px] text-[var(--tm-fg-2)]'
+            />
+            <fieldset
+              className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
+              aria-label='Window'
+              title='How far back the rates and counts look'
+            >
+              {WINDOWS.map(([w, label], i) => {
+                const on = filters.win === w
+                return (
+                  <button
+                    key={w}
+                    type='button'
+                    id={`tm-win-${w}`}
+                    aria-pressed={on}
+                    onClick={() => setFilters((f) => ({ ...f, win: w }))}
+                    className={cn(
+                      SEG,
+                      i > 0 && 'border-l border-[var(--tm-line)]',
+                      on ? SEG_ON : SEG_IDLE
+                    )}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </fieldset>
+            <ToolbarItems slot='filters' />
           </div>
         </header>
 

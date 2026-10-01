@@ -330,4 +330,9 @@ export function FrozenBanner({ snap }: { snap: FrozenSnapshot | null }) {
   )
 }
 
-register(toolbarItems, { id: 'share-snapshot', order: 90, Component: ShareSnapshot })
+register(toolbarItems, {
+  id: 'share-snapshot',
+  order: 90,
+  slot: 'actions',
+  Component: ShareSnapshot
+})

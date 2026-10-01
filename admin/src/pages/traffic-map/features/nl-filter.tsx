@@ -160,9 +160,15 @@ function NlFilter() {
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button type='button' id='tm-nl' className={BTN}>
+          <button
+            type='button'
+            id='tm-nl'
+            className={BTN}
+            aria-label='Describe a view'
+            title='Describe a view in your own words'
+          >
             <Sparkles className='h-3.5 w-3.5' aria-hidden='true' />
-            Describe a view
+            <span className='hidden 2xl:inline'>Describe a view</span>
           </button>
         </PopoverTrigger>
         <PopoverContent align='start' className='w-[380px] p-3'>
@@ -236,4 +242,4 @@ function NlFilter() {
   )
 }
 
-register(toolbarItems, { id: 'nl-filter', order: 2, Component: NlFilter })
+register(toolbarItems, { id: 'nl-filter', order: 2, slot: 'lead', Component: NlFilter })

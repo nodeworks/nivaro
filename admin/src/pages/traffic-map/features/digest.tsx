@@ -55,4 +55,4 @@ export function DigestToggle() {
   )
 }
 
-register(toolbarItems, { id: 'digest', order: 80, Component: DigestToggle })
+register(toolbarItems, { id: 'digest', order: 80, slot: 'menu', Component: DigestToggle })

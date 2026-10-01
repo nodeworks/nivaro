@@ -315,4 +315,9 @@ register(inspectorPanels, {
   applies: (sel) => breakerTargetOf(sel) !== null,
   Component: ({ sel }) => <BreakerSection sel={sel} />
 })
-register(toolbarItems, { id: 'breakers', order: 50, Component: inMapOnly(BreakersToolbarItem) })
+register(toolbarItems, {
+  id: 'breakers',
+  order: 50,
+  slot: 'status',
+  Component: inMapOnly(BreakersToolbarItem)
+})
