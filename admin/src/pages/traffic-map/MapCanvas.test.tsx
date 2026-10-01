@@ -80,6 +80,7 @@ function fakeContext() {
 
 describe('MapCanvas', () => {
   let fake: ReturnType<typeof fakeContext>
+  const realMatchMedia = window.matchMedia
   beforeEach(() => {
     fake = fakeContext()
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
@@ -93,7 +94,11 @@ describe('MapCanvas', () => {
       removeEventListener: () => {}
     })) as unknown as typeof window.matchMedia
   })
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    window.matchMedia = realMatchMedia
+  })
+  const texts = () => (fake.calls.fillText ?? []).map((a) => String(a[0]))
 
   it('paints with fallback tokens (empty computed styles) without throwing', () => {
     const m = new TrafficModel()
@@ -119,7 +124,7 @@ describe('MapCanvas', () => {
     expect(texts.some((t) => t.startsWith('SQL Server'))).toBe(true)
   })
 
-  it('draws the empty state when nothing moved', () => {
+  it('shows a quiet loading state (no empty-state copy) before the first snapshot', () => {
     render(
       <MapCanvas
         model={new TrafficModel()}
@@ -131,8 +136,52 @@ describe('MapCanvas', () => {
         paused={false}
       />
     )
-    const texts = (fake.calls.fillText ?? []).map((a) => String(a[0]))
-    expect(texts.some((t) => t.startsWith('No traffic in the last 60 s'))).toBe(true)
+    expect(texts().some((t) => t.startsWith('No traffic'))).toBe(false)
+    expect((fake.calls.roundRect ?? []).length).toBeGreaterThan(5)
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('loading')
+  })
+
+  it('draws the empty state after a snapshot with no traffic, in window words', () => {
+    const m = new TrafficModel()
+    m.applySnapshot({ ...snapshot, window_s: 300, entities: [], callers: [], down: [] })
+    render(
+      <MapCanvas
+        model={m}
+        filters={{ ...defaultFilters(), win: 300 }}
+        selection={null}
+        onSelect={() => {}}
+        catalog={null}
+        tick={1}
+        paused={false}
+      />
+    )
+    expect(texts()).toContain('No traffic in the last 5 min. Requests appear here as they happen.')
+    expect(screen.getByRole('img').getAttribute('aria-label')).toBe(
+      'Flow of API traffic: no requests in the last 5 min.'
+    )
+  })
+
+  it('omits callers with no traffic into a drawn lane (no orphan nodes)', () => {
+    const m = new TrafficModel()
+    // `anon` has requests (all in lane other) but no edge into a drawn lane
+    m.applySnapshot({
+      ...snapshot,
+      callers: [...snapshot.callers, { key: 'anon', req: 40, error: 40 }]
+    })
+    render(
+      <MapCanvas
+        model={m}
+        filters={defaultFilters()}
+        selection={null}
+        onSelect={() => {}}
+        catalog={null}
+        tick={1}
+        paused={false}
+      />
+    )
+    expect(texts().some((t) => t.startsWith('Unauthenticated'))).toBe(false)
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('last 1 min')
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('1 caller,')
   })
 
   it('selects an entity row on click', () => {

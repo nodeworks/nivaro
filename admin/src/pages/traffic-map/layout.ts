@@ -19,7 +19,10 @@ export interface MapLayout {
 const COL_W = 164
 const ROW_H = 20
 const LANE_HEAD = 24
-const MIN_W = 860
+/** Below this the map box scrolls horizontally; above it the canvas fills its box (R34). */
+const MIN_W = 720
+/** At or above this width the side columns keep their full COL_W. */
+const FULL_W = 860
 /** Band above the columns for the canvas captions (Callers / API lanes / Data and partners). */
 const TOP = 22
 
@@ -31,7 +34,9 @@ export function computeLayout(input: {
   downs: string[]
 }): MapLayout {
   const W = Number.isFinite(input.width) ? Math.max(MIN_W, Math.floor(input.width)) : MIN_W
-  const laneW = Math.min(360, Math.max(280, W - 2 * (COL_W + 40) - 160))
+  // narrower boxes shrink the side columns (164 → 141 px at 720) before the lane floor (280)
+  const colW = W >= FULL_W ? COL_W : Math.max(140, COL_W - Math.round((FULL_W - W) / 6))
+  const laneW = Math.min(360, Math.max(280, W - 2 * (colW + 40) - 160))
   const laneX = Math.round((W - laneW) / 2)
   const lanes: Record<string, Rect> = {}
   const ents: Record<string, Rect> = {}
@@ -57,7 +62,7 @@ export function computeLayout(input: {
     const out: Record<string, Rect> = {}
     const gap = list.length > 1 ? (H - TOP - 10 - list.length * h) / (list.length - 1) : 0
     list.forEach((id, i) => {
-      out[id] = { x, y: TOP + i * (h + Math.max(0, gap)), w: COL_W, h }
+      out[id] = { x, y: TOP + i * (h + Math.max(0, gap)), w: colW, h }
     })
     return out
   }
@@ -67,7 +72,7 @@ export function computeLayout(input: {
     callers: place(input.callers, 14, 44),
     lanes,
     ents,
-    downs: place(input.downs, W - COL_W - 14, 40),
+    downs: place(input.downs, W - colW - 14, 40),
     rowH: ROW_H,
     laneHead: LANE_HEAD
   }

@@ -2,7 +2,7 @@
 // canvas. Every colour comes from the --tm-* tokens (readTokens), re-read on theme change.
 // Data is recomputed once per frame tick; the rAF loop only animates particles, pulses, flashes
 // and the hover/selection highlight. prefers-reduced-motion: no particles, no rAF loop.
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { callerLabel, entityLabel } from './EventTicker'
 import {
   bezierPoint,
@@ -99,7 +99,10 @@ interface MapData {
   /** Lane → its out edges, for routing a particle's second leg. */
   laneOut: Map<Lane, Array<{ to: string; rps: number }>>
   entityDowns: Map<string, Array<[string, number]>>
+  /** The model has received its first snapshot (before that: a quiet loading state). */
+  loaded: boolean
   empty: boolean
+  winLabel: string
   summary: string
 }
 interface Particle {
@@ -131,8 +134,21 @@ function edgePath(
   ctx.bezierCurveTo(mx, a.y, mx, b.y, b.x, b.y)
 }
 /** Truncate to `max` px with an ellipsis (measured in the current font). */
-function ellipsize(ctx: CanvasRenderingContext2D, text: string, max: number): string {
+function ellipsize(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  max: number,
+  cache?: Map<string, string>
+): string {
   if (max <= 0) return ''
+  const key = cache ? `${ctx.font}|${Math.round(max)}|${text}` : ''
+  const hit = cache?.get(key)
+  if (hit !== undefined) return hit
+  const out = ellipsizeUncached(ctx, text, max)
+  cache?.set(key, out)
+  return out
+}
+function ellipsizeUncached(ctx: CanvasRenderingContext2D, text: string, max: number): string {
   if (ctx.measureText(text).width <= max) return text
   let lo = 0
   let hi = text.length
@@ -157,6 +173,9 @@ const easeOut = (x: number) => 1 - (1 - Math.min(1, Math.max(0, x))) ** 3
 const sameSel = (a: Selection | null, b: Selection | null) =>
   a === b || (!!a && !!b && a.kind === b.kind && a.id === b.id)
 const laneOfKey = (key: string) => key.slice(0, key.indexOf('/')) as Lane
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
+/** "1 min" / "5 min" / "15 min" for the window selector's values. */
+export const windowLabel = (win: number) => `${Math.max(1, Math.round(win / 60))} min`
 
 function downLabel(m: TrafficModel, cat: TrafficCatalog | null, id: string): string {
   if (cat?.down[id]) return cat.down[id]
@@ -173,37 +192,6 @@ function downSub(id: string): string {
 /** Everything the frame needs, computed once per tick (not per animation frame). */
 function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null): MapData {
   const win = filters.win
-  const callersAll = m
-    .callerKeys()
-    .map((k) => ({ k, s: m.callerSum(k, win) }))
-    .filter((c) => c.s[0] > 0 && (!filters.caller || c.k === filters.caller))
-    .sort((a, b) => b.s[0] - a.s[0])
-  const top = callersAll.slice(0, MAX_CALLERS)
-  const rest = callersAll.slice(MAX_CALLERS)
-  const callers: NodeView[] = top.map(({ k, s }) => {
-    const kind = cat?.callers[k]?.kind
-    const sub =
-      (kind && CALLER_KIND_TEXT[kind]) || (k === 'cron' ? CALLER_KIND_TEXT.cron : 'caller')
-    return {
-      id: k,
-      label: callerLabel(cat, k),
-      sub: s[1] > 0 ? `${sub} · ${s[1]} errors` : sub,
-      rps: s[0] / win,
-      partner: false
-    }
-  })
-  if (rest.length) {
-    const req = rest.reduce((a, c) => a + c.s[0], 0)
-    callers.push({
-      id: OTHERS,
-      label: 'Other callers',
-      sub: `${rest.length} more`,
-      rps: req / win,
-      partner: false
-    })
-  }
-  const topIds = new Set(top.map((c) => c.k))
-
   // lanes + entities: hot() already applies the lane, kind and caller filters
   const rows = m.hot(win, filters, 100000)
   const byLane = new Map<Lane, typeof rows>()
@@ -254,14 +242,45 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
   const downSet = new Set(downs.map((d) => d.id))
   const laneSet = new Set(lanes.map((l) => l.id))
 
+  // callers are ranked on the traffic they send into DRAWN lanes, so a caller whose requests
+  // all land in lane `other` or a hidden lane never floats in the column without an edge
   const edges = m.edges(win, filters)
-  const inAgg = new Map<string, number>()
+  const drawnIn: Array<[string, Lane, number]> = []
+  const perCaller = new Map<string, number>()
   for (const [key, rps] of edges.in) {
     const [caller, lane] = key.split('>') as [string, Lane]
-    if (!laneSet.has(lane)) continue
-    const from = topIds.has(caller) ? caller : rest.length ? OTHERS : null
-    if (!from) continue
-    const k = `${from}>${lane}`
+    if (!laneSet.has(lane) || rps <= 0) continue
+    drawnIn.push([caller, lane, rps])
+    perCaller.set(caller, (perCaller.get(caller) ?? 0) + rps)
+  }
+  const ranked = [...perCaller].sort((a, b) => b[1] - a[1])
+  const top = ranked.slice(0, MAX_CALLERS)
+  const rest = ranked.slice(MAX_CALLERS)
+  const callers: NodeView[] = top.map(([k, rps]) => {
+    const kind = cat?.callers[k]?.kind
+    const sub =
+      (kind && CALLER_KIND_TEXT[kind]) || (k === 'cron' ? CALLER_KIND_TEXT.cron : 'caller')
+    const errors = m.callerSum(k, win)[1]
+    return {
+      id: k,
+      label: callerLabel(cat, k),
+      sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+      rps,
+      partner: false
+    }
+  })
+  if (rest.length)
+    callers.push({
+      id: OTHERS,
+      label: 'Other callers',
+      sub: `${rest.length} more`,
+      rps: rest.reduce((a, [, r]) => a + r, 0),
+      partner: false
+    })
+  const topIds = new Set(top.map(([k]) => k))
+  const inAgg = new Map<string, number>()
+  for (const [caller, lane, rps] of drawnIn) {
+    const k = `${topIds.has(caller) ? caller : OTHERS}>${lane}`
     inAgg.set(k, (inAgg.get(k) ?? 0) + rps)
   }
   const edgesIn = [...inAgg].map(([k, rps]) => {
@@ -296,9 +315,13 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
     .sort((a, b) => b.rps - a.rps)
     .slice(0, 3)
     .map((l) => `${LANE_LABEL[l.id]} ${fmtRate(l.rps)}`)
-  const summary = lanes.length
-    ? `Flow of API traffic over the last ${win} seconds. Busiest lanes: ${busiest.join(', ')}. ${callers.length} callers, ${downs.length} data stores and partners.`
-    : `Flow of API traffic: no requests in the last ${win} seconds.`
+  const loaded = m.snapshotTotals !== null
+  const winLabel = windowLabel(win)
+  const summary = !loaded
+    ? 'Flow of API traffic: loading.'
+    : lanes.length
+      ? `Flow of API traffic over the last ${winLabel}. Busiest lanes: ${busiest.join(', ')}. ${plural(callers.length, 'caller')}, ${plural(downs.length, 'downstream system')}.`
+      : `Flow of API traffic: no requests in the last ${winLabel}.`
   return {
     callers,
     lanes,
@@ -307,7 +330,9 @@ function buildData(m: TrafficModel, filters: Filters, cat: TrafficCatalog | null
     edgesOut,
     laneOut,
     entityDowns,
+    loaded,
     empty: lanes.length === 0,
+    winLabel,
     summary
   }
 }
@@ -401,7 +426,10 @@ export function MapCanvas({
   // highlight easing: when the hovered/selected thing changes, the accent edges fade in
   const active = hover ?? selection
   const hlRef = useRef<{ sel: Selection | null; at: number }>({ sel: null, at: 0 })
-  if (!sameSel(hlRef.current.sel, active)) hlRef.current = { sel: active, at: performance.now() }
+  // layout effect: runs before the next paint, so no frame shows the new highlight at full alpha
+  useLayoutEffect(() => {
+    if (!sameSel(hlRef.current.sel, active)) hlRef.current = { sel: active, at: performance.now() }
+  })
 
   // live state for the animation loop (read through refs so the loop never restarts)
   const live = useRef({ data, layout, active, selection, filters, paused, reduced })
@@ -412,13 +440,14 @@ export function MapCanvas({
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick forces a re-read of the mutable model
   useEffect(() => {
     if (reduced || paused || (typeof document !== 'undefined' && document.hidden)) return
-    const now = Date.now()
+    // age is measured against the newest event (server clock), never the client clock
+    const newest = m.events[0]?.t ?? 0
     const perEdge = new Map<string, number>()
     const callerIds = new Set(Object.keys(layout.callers))
     for (const ev of m.events) {
       if (spawned.current.has(ev)) break // newest first: everything after this was seen
       spawned.current.add(ev)
-      if (now - ev.t > EVENT_MAX_AGE_MS) continue
+      if (newest - ev.t > EVENT_MAX_AGE_MS) continue
       if (
         !filters.types.has(ev.lane) ||
         !filters.kinds.has(ev.kind) ||
@@ -446,13 +475,25 @@ export function MapCanvas({
     }
   }, [m, tick])
 
-  // motion turned off or paused-and-reset: drop in-flight particles so nothing hangs mid-edge
+  // motion turned off or paused: drop in-flight particles so nothing hangs mid-edge
   useEffect(() => {
-    if (reduced) particles.current = []
-  }, [reduced])
+    if (reduced || paused) particles.current = []
+  }, [reduced, paused])
+
+  // the loop draws only when something changed or something is still animating
+  const dirtyRef = useRef(true)
+  const fitCache = useRef(new Map<string, string>())
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these are the repaint triggers
+  useEffect(() => {
+    fitCache.current.clear()
+  }, [data, layout, themeV])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these are the repaint triggers
+  useLayoutEffect(() => {
+    dirtyRef.current = true
+  }, [data, layout, active, themeV, paused, reduced])
 
   // draw: one loop per motion mode; reduced motion repaints through drawRef instead of a loop
-  const drawRef = useRef<((dt: number) => void) | null>(null)
+  const drawRef = useRef<((dt: number) => boolean) | null>(null)
   useEffect(() => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext?.('2d') ?? null
@@ -460,8 +501,9 @@ export function MapCanvas({
     let raf = 0
     let last = performance.now()
 
-    const draw = (dt: number) => {
-      const { data: d, layout: l, active: sel, filters: f, paused: pz, reduced: rd } = live.current
+    /** Paints one frame; returns true while something is still animating. */
+    const draw = (dt: number): boolean => {
+      const { data: d, layout: l, active: sel, paused: pz, reduced: rd } = live.current
       const tok = tokensRef.current ?? {
         T: readTokens(rootRef.current ?? document.documentElement),
         sans: 'sans-serif',
@@ -491,18 +533,47 @@ export function MapCanvas({
       }
       const now = Date.now()
       const pnow = performance.now()
+      const fc = fitCache.current
+      let animating = false
 
+      if (!d.loaded) {
+        // quiet loading state (D9): skeleton columns until the first snapshot answers
+        ctx.fillStyle = T.line2
+        const colW = Math.min(164, Math.round(l.W * 0.19))
+        const laneW = Math.min(360, Math.round(l.W * 0.36))
+        const laneX = Math.round((l.W - laneW) / 2)
+        for (const [i, h] of [44, 44, 44].entries()) {
+          rr(ctx, 14, 26 + i * 70, colW, h, 8)
+          ctx.fill()
+          rr(ctx, l.W - colW - 14, 26 + i * 70, colW, 40, 8)
+          ctx.fill()
+        }
+        ctx.lineWidth = 1
+        ctx.strokeStyle = T.line2
+        for (const [i, rows] of [5, 3].entries()) {
+          const y = 26 + i * 150
+          rr(ctx, laneX, y, laneW, 24 + rows * 20 + 8, 8)
+          ctx.stroke()
+          rr(ctx, laneX + 10, y + 8, 90, 8, 4)
+          ctx.fill()
+          for (let r = 0; r < rows; r++) {
+            rr(ctx, laneX + 16, y + 34 + r * 20, laneW * (0.35 + ((r * 37) % 30) / 100), 6, 3)
+            ctx.fill()
+          }
+        }
+        return false
+      }
       if (d.empty) {
         ctx.font = `500 12px ${sans}`
         ctx.fillStyle = T.muted
         ctx.textAlign = 'center'
         ctx.fillText(
-          `No traffic in the last ${f.win} s. Requests appear here as they happen.`,
+          `No traffic in the last ${d.winLabel}. Requests appear here as they happen.`,
           l.W / 2,
           l.H / 2
         )
         ctx.textAlign = 'left'
-        return
+        return false
       }
 
       // column captions (sentence case, D1)
@@ -530,7 +601,9 @@ export function MapCanvas({
           (sel.kind === 'entity' &&
             e.from === selLane &&
             (!selEntityDowns?.length || selEntityDowns.includes(e.to))))
-      const hl = rd ? 1 : easeOut((pnow - hlRef.current.at) / HIGHLIGHT_MS)
+      const hlT = (pnow - hlRef.current.at) / HIGHLIGHT_MS
+      const hl = rd ? 1 : easeOut(hlT)
+      if (sel && !rd && hlT < 1) animating = true
       ctx.lineCap = 'round'
       const strokeIn = (e: { from: string; to: Lane; rps: number }, accent: boolean) => {
         const c = l.callers[e.from]
@@ -581,10 +654,10 @@ export function MapCanvas({
         ctx.textAlign = 'left'
         ctx.font = `600 11px ${sans}`
         ctx.fillStyle = T.fg
-        ctx.fillText(ellipsize(ctx, n.label, r.w - 26 - rateW), r.x + 10, r.y + 16)
+        ctx.fillText(ellipsize(ctx, n.label, r.w - 26 - rateW, fc), r.x + 10, r.y + 16)
         ctx.font = `10px ${sans}`
         ctx.fillStyle = T.muted
-        ctx.fillText(ellipsize(ctx, n.sub, r.w - 18), r.x + 10, r.y + r.h - 8)
+        ctx.fillText(ellipsize(ctx, n.sub, r.w - 18, fc), r.x + 10, r.y + r.h - 8)
       }
       for (const c of d.callers) {
         const r = l.callers[c.id]
@@ -608,6 +681,7 @@ export function MapCanvas({
           if (at) laneFlash = Math.max(laneFlash, 1 - (now - at) / FLASH_MS)
         }
         if (laneFlash > 0.02) {
+          animating = true
           rr(ctx, r.x, r.y, r.w, l.laneHead, 8)
           ctx.fillStyle = T.errorSoft
           ctx.globalAlpha = laneFlash
@@ -629,7 +703,7 @@ export function MapCanvas({
         ctx.font = `10px ${mono}`
         ctx.fillStyle = T.muted
         const hintRoom = r.w - titleW - 30 - laneRateW - 16
-        const hint = ellipsize(ctx, ROUTE_HINT[lane.id], hintRoom)
+        const hint = ellipsize(ctx, ROUTE_HINT[lane.id], hintRoom, fc)
         if (hint && hintRoom > 60) ctx.fillText(hint, r.x + titleW + 20, r.y + 15)
 
         const maxR = Math.max(0.1, ...lane.entities.map((e) => e.rps))
@@ -645,6 +719,7 @@ export function MapCanvas({
           const flashAt = m.flashes.get(e.key)
           const flash = flashAt ? 1 - (now - flashAt) / FLASH_MS : 0
           if (flash > 0.02) {
+            animating = true
             rr(ctx, er.x, er.y + 1, er.w, er.h - 2, 4)
             ctx.fillStyle = T.errorSoft
             ctx.globalAlpha = Math.min(1, flash * 1.6)
@@ -656,6 +731,7 @@ export function MapCanvas({
           const cx = er.x + 7
           const cy = er.y + er.h / 2
           if (p > 0.02 && !rd) {
+            animating = true
             ctx.beginPath()
             ctx.arc(cx, cy, 3 + 5 * (1 - p), 0, Math.PI * 2)
             ctx.strokeStyle = KC[pulse?.kind ?? 'update']
@@ -694,7 +770,7 @@ export function MapCanvas({
           ctx.textAlign = 'left'
           ctx.font = `${entSel ? '600 ' : ''}11px ${mono}`
           ctx.fillStyle = T.fg
-          ctx.fillText(ellipsize(ctx, e.label, bx - er.x - 24), er.x + 16, er.y + 14)
+          ctx.fillText(ellipsize(ctx, e.label, bx - er.x - 24, fc), er.x + 16, er.y + 14)
         }
       }
 
@@ -704,8 +780,9 @@ export function MapCanvas({
       }
 
       // particles: two legs (caller → lane, lane → the store or partner the entity reaches)
-      if (rd) return
+      if (rd) return false
       const list = particles.current
+      if (list.length && !pz) animating = true
       for (let i = list.length - 1; i >= 0; i--) {
         const p = list[i]
         if (!pz) p.t += dt * p.speed
@@ -748,12 +825,13 @@ export function MapCanvas({
         }
         ctx.globalAlpha = 1
       }
+      return animating
     }
 
     let warned = false
-    const safeDraw = (dt: number) => {
+    const safeDraw = (dt: number): boolean => {
       try {
-        draw(dt)
+        return draw(dt)
       } catch (err) {
         // a canvas error must never take the page down; the next frame tries again
         if (!warned) {
@@ -761,6 +839,7 @@ export function MapCanvas({
           // biome-ignore lint/suspicious/noConsole: one warning per mount, the loop keeps going
           console.warn('[traffic-map] draw failed', err)
         }
+        return false
       }
     }
     drawRef.current = safeDraw
@@ -770,10 +849,20 @@ export function MapCanvas({
         drawRef.current = null
       }
     }
+    let animating = true
+    let lastDpr = window.devicePixelRatio
     const frame = (t: number) => {
       const dt = Math.min(0.1, (t - last) / 1000)
       last = t
-      if (!document.hidden) safeDraw(dt)
+      if (window.devicePixelRatio !== lastDpr) {
+        lastDpr = window.devicePixelRatio
+        dirtyRef.current = true
+      }
+      // idle frames (nothing changed, nothing moving) are skipped entirely
+      if (!document.hidden && (dirtyRef.current || animating)) {
+        dirtyRef.current = false
+        animating = safeDraw(dt)
+      }
       raf = requestAnimationFrame(frame)
     }
     raf = requestAnimationFrame(frame)
@@ -806,7 +895,9 @@ export function MapCanvas({
       const p95 = m.entityP95(hover.id)
       text = `${fmtRate(s[0] / win)} · p95 ${p95 ? `${Math.round(p95)} ms` : '—'} · err ${err}`
     } else if (hover.kind === 'lane') {
-      r = layout.lanes[hover.id]
+      // anchored on the lane header, not the whole card (the card can be tall)
+      const lr = layout.lanes[hover.id]
+      r = lr ? { ...lr, h: layout.laneHead } : undefined
       const lv = data.lanes.find((l) => l.id === hover.id)
       name = LANE_LABEL[hover.id]
       text = `${fmtRate(lv?.rps ?? 0)} · ${ROUTE_HINT[hover.id]}`
@@ -877,7 +968,7 @@ export function MapCanvas({
           data-tm-canvas=''
           role='img'
           aria-label={data.summary}
-          className='block min-w-[860px]'
+          className='block min-w-[720px]'
           onMouseMove={(e) => {
             const h = pointer(e)
             if (!sameSel(h, hover)) setHover(h)

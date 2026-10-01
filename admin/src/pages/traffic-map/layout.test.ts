@@ -19,10 +19,10 @@ const input = {
 }
 
 describe('computeLayout', () => {
-  it('lays callers left, lanes centred with one row per entity, downs right; never narrower than 860', () => {
+  it('lays callers left, lanes centred with one row per entity, downs right; never narrower than 720', () => {
     const l = computeLayout(input)
     expect(l.W).toBe(1000)
-    expect(computeLayout({ ...input, width: 400 }).W).toBe(860)
+    expect(computeLayout({ ...input, width: 400 }).W).toBe(720)
     expect(l.callers.uA.x).toBe(14)
     expect(l.downs.db.x).toBe(1000 - 178)
     expect(l.lanes.items.h).toBe(24 + 2 * 20 + 8)
@@ -30,6 +30,21 @@ describe('computeLayout', () => {
     expect(l.ents['items/forecasts'].y).toBe(l.ents['items/workflows'].y + 20)
     expect(l.H).toBeGreaterThan(l.lanes.widgets.y + l.lanes.widgets.h)
     expect(l.callers.k7.y + 44).toBeLessThanOrEqual(l.H)
+  })
+  it('fills narrow boxes (720–860) without overlap or overflow (R34)', () => {
+    for (const width of [720, 756, 796, 859, 860]) {
+      const l = computeLayout({ ...input, width })
+      expect(l.W).toBe(width)
+      const lane = l.lanes.items
+      for (const r of [...Object.values(l.callers), ...Object.values(l.downs), lane]) {
+        expect(r.x).toBeGreaterThanOrEqual(0)
+        expect(r.x + r.w).toBeLessThanOrEqual(width)
+      }
+      expect(l.callers.uA.x + l.callers.uA.w).toBeLessThan(lane.x - 24)
+      expect(lane.x + lane.w).toBeLessThan(l.downs.db.x - 24)
+    }
+    expect(computeLayout({ ...input, width: 720 }).callers.uA.w).toBeLessThan(164)
+    expect(computeLayout({ ...input, width: 860 }).callers.uA.w).toBe(164)
   })
   it('hitTest resolves entity, lane, caller, down and nothing', () => {
     const l = computeLayout(input)
@@ -75,9 +90,9 @@ describe('computeLayout', () => {
     for (let i = 1; i < rects.length; i++)
       expect(rects[i].y).toBeGreaterThanOrEqual(rects[i - 1].y + 40)
   })
-  it('non-finite width falls back to 860', () => {
-    expect(computeLayout({ ...input, width: Number.NaN }).W).toBe(860)
-    expect(computeLayout({ ...input, width: undefined as unknown as number }).W).toBe(860)
+  it('non-finite width falls back to 720', () => {
+    expect(computeLayout({ ...input, width: Number.NaN }).W).toBe(720)
+    expect(computeLayout({ ...input, width: undefined as unknown as number }).W).toBe(720)
   })
   it('same entity id in two lanes stays distinct', () => {
     const l = computeLayout({
