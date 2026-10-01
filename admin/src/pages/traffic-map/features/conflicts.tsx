@@ -24,7 +24,8 @@ import {
  * toggle beside the filters outlines the entities that had any and badges them with the count.
  */
 export const CONFLICTS_TAP = 'conflicts'
-export const conflictLens = createStore(false)
+/** On by default: a conflict is rare and worth seeing the moment it happens. */
+export const conflictLens = createStore(true)
 const CODE_LABEL: Record<string, string> = {
   MIDAIR_COLLISION: 'stale edit',
   TRANSITION_DUPLICATE: 'repeated transition',
