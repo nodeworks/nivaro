@@ -1,10 +1,112 @@
 {
-  "generated_at": "2026-10-01T20:44:16.104Z",
+  "generated_at": "2026-10-01T22:08:40.575Z",
   "releases": [
+    {
+      "version": "0.2.12",
+      "tag": "v0.2.12",
+      "date": "2026-10-01T18:08:29-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "production follow-ups on the public docs page",
+              "hash": "008f7827"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "Deploys & Versions, Traffic Map database/people/platform lenses",
+              "hash": "75bc0df5"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "one UnseenDot for lists and queues (#643)",
+              "hash": "06642c5b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic-map: database lenses (#1169 #1170 #1171 #1174 #1176)",
+              "hash": "8eed0431"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "api logs: prune development-instance rows after 3 hours (#1052)",
+              "hash": "a4bf1be9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "declared env var presence across environments (#1047)",
+              "hash": "338deaa1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "post-deploy gate in verify, stage timing history (#1045, #1046)",
+              "hash": "d643335c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic-map: ownership overlay, queue cache, resolver time, dead letters, tenant ranking (#1173 #1175 #1177 #1184 #1185)",
+              "hash": "bf913af2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Deploy-shape checks, job-run origin, config changes on the timeline (#1049-#1051, #1053)",
+              "hash": "f0b5f9f8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Count open tabs by build; reload only the old ones (#1048, #1180)",
+              "hash": "fe243a11"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic-map: callers and people lenses (#1172 #1178 #1179 #1181 #1182 #1183)",
+              "hash": "90579618"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "settings comparison skips components that point back at itself",
+              "hash": "ec36506a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "say when a component refused its token",
+              "hash": "e7d02e4c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic-map: calmer header, tooltip stays inside the flow map",
+              "hash": "8c929e99"
+            }
+          ]
+        }
+      ],
+      "count": 14
+    },
     {
       "version": "0.2.11",
       "tag": "v0.2.11",
-      "date": "2026-10-01T16:44:04-04:00",
+      "date": "2026-10-01T16:44:16-04:00",
       "sections": [
         {
           "label": "Documentation",
