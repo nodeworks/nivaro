@@ -215,6 +215,10 @@ export interface Filters {
   kinds: Set<Kind>
   caller: string
   win: 60 | 300 | 900
+  /** #1133: a group of callers (a caller kind the natural-language filter picked); `caller` wins. */
+  callers?: string[]
+  /** #1154: the whole map scoped to one workspace (upper-case id). */
+  workspace?: string
 }
 export type Selection =
   /** `caller` (#1095): the inspector narrows the entity to that caller's traffic. */

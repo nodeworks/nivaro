@@ -16,6 +16,12 @@ const SLOTS = 6
 export const TICKER_CAP = 80
 /** Server tap with exact per entity × caller counts (#1095). */
 export const ENTITY_CALLERS_TAP = 'entity-callers'
+/** #1154: per-workspace entity / caller / edge counts (the whole map scoped to a workspace). */
+export const WORKSPACE_SCOPE_TAP = 'workspace-scope'
+/** #1163: the app (x-nivaro-app) each caller uses most. */
+export const CALLER_APPS_TAP = 'caller-apps'
+/** #1100: events kept for rewinding the ticker (newest first). */
+const EVENT_LOG_CAP = 1500
 
 export function defaultFilters(): Filters {
   return {
@@ -28,10 +34,20 @@ export function defaultFilters(): Filters {
     win: 60
   }
 }
-export function applyFilters(f: Filters, e: { lane: Lane; kind?: Kind; caller?: string }): boolean {
+/** The callers the filter narrows to: one caller, a group (#1133 caller kind), or null = all. */
+export function callerSet(f: Filters): Set<string> | null {
+  return f.caller ? new Set([f.caller]) : f.callers?.length ? new Set(f.callers) : null
+}
+export function applyFilters(
+  f: Filters,
+  e: { lane: Lane; kind?: Kind; caller?: string; extra?: Record<string, unknown> }
+): boolean {
   if (!f.types.has(e.lane)) return false
   if (e.kind && !f.kinds.has(e.kind)) return false
-  if (f.caller && e.caller && e.caller !== f.caller) return false
+  const cs = callerSet(f)
+  if (cs && e.caller && !cs.has(e.caller)) return false
+  // #1154: an event the server could not place in a workspace never shows under one
+  if (f.workspace && e.extra?.ws !== f.workspace) return false
   return true
 }
 export function laneOf(key: string): Lane {
@@ -79,6 +95,8 @@ class Ring {
     this.catchUp(sec)
     const out = new Array<number>(this.slots).fill(0)
     for (let i = 0; i < win; i++) {
+      // a second the ring no longer holds (its slot now carries a newer one) reads as zero
+      if (sec - i <= this.last - RING) break
       const base = ((((sec - i) % RING) + RING) % RING) * this.slots
       for (let k = 0; k < this.slots; k++) out[k] += this.counts[base + k]
     }
@@ -90,6 +108,7 @@ class Ring {
     const out = new Array<number>(points).fill(0)
     for (let i = 0; i < win; i++) {
       const s = sec - win + 1 + i
+      if (s <= this.last - RING) continue
       const base = (((s % RING) + RING) % RING) * this.slots
       out[Math.min(points - 1, Math.floor(i / per))] += this.counts[base + SLOT.req]
     }
@@ -159,9 +178,46 @@ export class TrafficModel {
   snapshotExt: Record<string, unknown> = {}
   /** Non-request sources of the last snapshot. */
   sources: TrafficSource[] = []
+  /** #1154: workspace -> entity key / caller / `caller>lane` -> per-second counts. */
+  private wsEntities = new Map<string, Map<string, Ring>>()
+  private wsCallers = new Map<string, Map<string, Ring>>()
+  private wsEdgeIn = new Map<string, Map<string, Ring>>()
+  /** #1163: caller -> the app it uses most (x-nivaro-app). */
+  callerApps = new Map<string, string>()
+  /** #1100: the newest EVENT_LOG_CAP events (newest first), for rewinding the ticker. */
+  eventLog: TrafficEventWire[] = []
+  /** #1100: the second being viewed while rewound; null = live (the newest second). */
+  private viewSec: number | null = null
 
+  /** The newest second the model holds (live). */
   get now(): number {
     return this.nowSec
+  }
+  /** The second every read is anchored on: the live second, or the rewound one (#1100). */
+  get at(): number {
+    if (this.viewSec === null) return this.nowSec
+    return Math.min(this.nowSec, Math.max(this.nowSec - RING + 60, this.viewSec))
+  }
+  /** True while a past second is being viewed. */
+  get rewound(): boolean {
+    return this.viewSec !== null && this.at < this.nowSec
+  }
+  /** #1100: view the map as of `sec` (null = live). Clamped to what the ring holds. */
+  setView(sec: number | null): void {
+    this.viewSec = sec === null || !Number.isFinite(sec) ? null : Math.floor(sec)
+  }
+  /** The seconds a window of `win` can be rewound over: [oldest, newest]. */
+  rewindRange(win: number): { min: number; max: number } {
+    return { min: this.nowSec - RING + Math.max(60, win), max: this.nowSec }
+  }
+
+  private nested(outer: Map<string, Map<string, Ring>>, a: string, b: string, slots = SLOTS) {
+    let inner = outer.get(a)
+    if (!inner) {
+      inner = new Map()
+      outer.set(a, inner)
+    }
+    return this.ring(inner, b, slots)
   }
 
   private ring(map: Map<string, Ring>, key: string, slots = SLOTS): Ring {
@@ -193,6 +249,12 @@ export class TrafficModel {
     this.callerSeen.clear()
     this.entityCallers.clear()
     this.callerP95.clear()
+    this.wsEntities.clear()
+    this.wsCallers.clear()
+    this.wsEdgeIn.clear()
+    this.callerApps = new Map(
+      Object.entries((snap.ext?.[CALLER_APPS_TAP] as Record<string, string> | undefined) ?? {})
+    )
     this.exactCallers = snap.entities.some((e) => e.ext?.[ENTITY_CALLERS_TAP] !== undefined)
     this.framesSince = 0
     this.snapshotTotals = snap.totals
@@ -222,6 +284,9 @@ export class TrafficModel {
       const byCaller = Object.entries(
         (e.ext?.[ENTITY_CALLERS_TAP] as Record<string, number[]> | undefined) ?? {}
       )
+      const byWs = Object.entries(
+        (e.ext?.[WORKSPACE_SCOPE_TAP] as Record<string, number[]> | undefined) ?? {}
+      )
       for (let i = 0; i < win; i++) {
         const w =
           sTot > 0
@@ -237,6 +302,11 @@ export class TrafficModel {
             sec - win + 1 + i,
             v.slice(0, 6).map((n) => n * w)
           )
+        for (const [ws, v] of byWs)
+          this.nested(this.wsEntities, ws, e.key).add(
+            sec - win + 1 + i,
+            v.slice(0, 6).map((n) => n * w)
+          )
       }
       for (const [caller, v] of byCaller)
         if (v[6]) this.callerP95.set(`${e.key}\u0000${caller}`, v[6])
@@ -247,6 +317,15 @@ export class TrafficModel {
     }
     for (const c of snap.callers)
       this.spread(this.ring(this.callers, c.key), sec, win, [c.req, 0, 0, 0, 0, c.error])
+    const ws = snap.ext?.[WORKSPACE_SCOPE_TAP] as
+      | { c?: Record<string, Record<string, number[]>>; i?: Record<string, Record<string, number>> }
+      | undefined
+    for (const [w, byCaller] of Object.entries(ws?.c ?? {}))
+      for (const [c, v] of Object.entries(byCaller))
+        this.spread(this.nested(this.wsCallers, w, c), sec, win, [v[0], 0, 0, 0, 0, v[1] ?? 0])
+    for (const [w, byEdge] of Object.entries(ws?.i ?? {}))
+      for (const [k, n] of Object.entries(byEdge))
+        this.spread(this.nested(this.wsEdgeIn, w, k, 1), sec, win, [n])
     for (const d of snap.down) {
       const r = this.ring(this.downs, d.id)
       this.spread(r, sec, win, [d.req, 0, 0, 0, 0, d.error])
@@ -285,6 +364,25 @@ export class TrafficModel {
           if (v[6]) this.callerP95.set(`${key}\u0000${caller}`, v[6])
         }
     }
+    const ws = f.ext?.[WORKSPACE_SCOPE_TAP] as
+      | {
+          e?: Record<string, Record<string, number[]>>
+          c?: Record<string, Record<string, number[]>>
+          i?: Record<string, Record<string, number>>
+        }
+      | undefined
+    if (ws) {
+      for (const [w, byKey] of Object.entries(ws.e ?? {}))
+        for (const [k, v] of Object.entries(byKey))
+          this.nested(this.wsEntities, w, k).set(sec, v.slice(0, 6))
+      for (const [w, byCaller] of Object.entries(ws.c ?? {}))
+        for (const [c, v] of Object.entries(byCaller))
+          this.nested(this.wsCallers, w, c).set(sec, [v[0], 0, 0, 0, 0, v[1] ?? 0])
+      for (const [w, byEdge] of Object.entries(ws.i ?? {}))
+        for (const [k, n] of Object.entries(byEdge)) this.nested(this.wsEdgeIn, w, k, 1).set(sec, [n])
+    }
+    const apps = f.ext?.[CALLER_APPS_TAP] as Record<string, string> | undefined
+    if (apps) for (const [c, a] of Object.entries(apps)) this.callerApps.set(c, a)
     for (const [key, n] of Object.entries(f.edges_in)) this.ring(this.edgeIn, key, 1).set(sec, [n])
     for (const [key, n] of Object.entries(f.edges_out))
       this.ring(this.edgeOut, key, 1).set(sec, [n])
@@ -357,6 +455,7 @@ export class TrafficModel {
     if (f.events.length) {
       const sorted = f.events.slice().sort((a, b) => b.t - a.t)
       this.events = [...sorted, ...this.events].slice(0, TICKER_CAP)
+      this.eventLog = [...sorted, ...this.eventLog].slice(0, EVENT_LOG_CAP)
     }
     if (++this.frameCount % PRUNE_EVERY === 0) this.prune()
   }
@@ -374,6 +473,14 @@ export class TrafficModel {
       for (const [k, s] of seen) if (s <= cutoff) seen.delete(k)
       if (!seen.size) this.callerSeen.delete(c)
     }
+    for (const outer of [this.wsEntities, this.wsCallers, this.wsEdgeIn])
+      for (const [w, inner] of outer) {
+        for (const [k, r] of inner) if (r.touched <= cutoff) inner.delete(k)
+        if (!inner.size) outer.delete(w)
+      }
+    const oldest = cutoff * 1000
+    if (this.eventLog.length && this.eventLog[this.eventLog.length - 1].t < oldest)
+      this.eventLog = this.eventLog.filter((e) => e.t >= oldest)
     for (const [k, byCaller] of this.entityCallers) {
       for (const [c, r] of byCaller)
         if (r.touched <= cutoff) {
@@ -396,11 +503,11 @@ export class TrafficModel {
   /** #1095: exact [req, read, create, update, delete, error] of one caller on one entity. */
   entityCallerSum(key: string, caller: string, win: number): number[] {
     const r = this.entityCallers.get(key)?.get(caller)
-    return r ? r.sum(this.nowSec, win).map(Math.round) : [0, 0, 0, 0, 0, 0]
+    return r ? r.sum(this.at, win).map(Math.round) : [0, 0, 0, 0, 0, 0]
   }
   entityCallerSeries(key: string, caller: string, win: number, points: number): number[] {
     const r = this.entityCallers.get(key)?.get(caller)
-    return r ? r.series(this.nowSec, win, points) : new Array<number>(points).fill(0)
+    return r ? r.series(this.at, win, points) : new Array<number>(points).fill(0)
   }
   entityCallerP95(key: string, caller: string): number {
     return this.callerP95.get(`${key}\u0000${caller}`) ?? 0
@@ -411,7 +518,7 @@ export class TrafficModel {
     if (!byCaller) return []
     const out: Array<{ key: string; n: number }> = []
     for (const [c, r] of byCaller) {
-      const s = r.sum(this.nowSec, win)
+      const s = r.sum(this.at, win)
       const n = s[0] + s[2] + s[3] + s[4]
       if (n > 0.5) out.push({ key: c, n: Math.round(n) })
     }
@@ -423,11 +530,11 @@ export class TrafficModel {
   }
   entitySum(key: string, win: number): number[] {
     const r = this.entities.get(key)
-    return r ? r.sum(this.nowSec, win).map(Math.round) : [0, 0, 0, 0, 0, 0]
+    return r ? r.sum(this.at, win).map(Math.round) : [0, 0, 0, 0, 0, 0]
   }
   entitySeries(key: string, win: number, points: number): number[] {
     const r = this.entities.get(key)
-    return r ? r.series(this.nowSec, win, points) : new Array<number>(points).fill(0)
+    return r ? r.series(this.at, win, points) : new Array<number>(points).fill(0)
   }
   entityMeta(key: string): SnapshotEntity | null {
     return this.meta.get(key) ?? null
@@ -436,7 +543,7 @@ export class TrafficModel {
     return this.entities.get(key)?.p95 ?? 0
   }
   callerSum(key: string, win: number): [number, number] {
-    const s = this.callers.get(key)?.sum(this.nowSec, win) ?? [0, 0, 0, 0, 0, 0]
+    const s = this.callers.get(key)?.sum(this.at, win) ?? [0, 0, 0, 0, 0, 0]
     return [Math.round(s[0]), Math.round(s[5])]
   }
   callerKeys(): string[] {
@@ -444,37 +551,97 @@ export class TrafficModel {
   }
   downSum(id: string, win: number): [number, number, number] {
     const r = this.downs.get(id)
-    const s = r?.sum(this.nowSec, win) ?? [0, 0, 0, 0, 0, 0]
+    const s = r?.sum(this.at, win) ?? [0, 0, 0, 0, 0, 0]
     return [Math.round(s[0]), Math.round(s[5]), r?.p95 ?? 0]
   }
   downIds(): string[] {
     return [...this.downs.keys()]
   }
 
+  /** #1154: one workspace's [req, read, create, update, delete, error] on an entity. */
+  workspaceEntitySum(ws: string, key: string, win: number): number[] {
+    const r = this.wsEntities.get(ws)?.get(key)
+    return r ? r.sum(this.at, win).map(Math.round) : [0, 0, 0, 0, 0, 0]
+  }
+  /** #1154: workspaces the model holds per-workspace counts for. */
+  workspaceIds(): string[] {
+    return [...this.wsEntities.keys()]
+  }
+
   edges(win: number, f: Filters): { in: Map<string, number>; out: Map<string, number> } {
     const inn = new Map<string, number>()
     const out = new Map<string, number>()
-    for (const [key, r] of this.edgeIn) {
-      const [caller, lane] = key.split('>') as [string, Lane]
-      if (!f.types.has(lane) || (f.caller && caller !== f.caller)) continue
-      const n = r.sum(this.nowSec, win)[0]
+    const cs = callerSet(f)
+    const wsEdges = f.workspace ? this.wsEdgeIn.get(f.workspace) : null
+    for (const [key, r] of f.workspace ? (wsEdges ?? new Map<string, Ring>()) : this.edgeIn) {
+      const cut = key.lastIndexOf('>')
+      const caller = key.slice(0, cut)
+      const lane = key.slice(cut + 1) as Lane
+      if (!f.types.has(lane) || (cs && !cs.has(caller))) continue
+      const n = r.sum(this.at, win)[0]
       if (n > 0) inn.set(key, n / win)
     }
+    // #1154: a lane's downstream edges keep the workspace's share of that lane (approximate:
+    // the downstream calls themselves carry no workspace)
+    const laneShare = f.workspace ? this.workspaceLaneShare(f.workspace, win) : null
     for (const [key, r] of this.edgeOut) {
       const lane = key.slice(0, key.indexOf('>')) as Lane
       if (!f.types.has(lane)) continue
-      const n = r.sum(this.nowSec, win)[0]
+      const share = laneShare ? (laneShare.get(lane) ?? 0) : 1
+      const n = r.sum(this.at, win)[0] * share
       if (n > 0) out.set(key, n / win)
     }
     return { in: inn, out }
   }
 
+  private workspaceLaneShare(ws: string, win: number): Map<Lane, number> {
+    const all = new Map<Lane, number>()
+    const mine = new Map<Lane, number>()
+    for (const key of this.entities.keys()) {
+      const lane = laneOf(key)
+      all.set(lane, (all.get(lane) ?? 0) + this.entitySum(key, win)[0])
+      mine.set(lane, (mine.get(lane) ?? 0) + this.workspaceEntitySum(ws, key, win)[0])
+    }
+    const out = new Map<Lane, number>()
+    for (const [lane, n] of all) out.set(lane, n > 0 ? Math.min(1, (mine.get(lane) ?? 0) / n) : 0)
+    return out
+  }
+
+  /** Counts behind every filtered figure: a workspace's, the filtered callers', or the entity's. */
+  private baseSum(key: string, win: number, f: Filters): number[] {
+    if (f.workspace) return this.workspaceEntitySum(f.workspace, key, win)
+    const cs = callerSet(f)
+    if (cs && this.exactCallers) {
+      const out = [0, 0, 0, 0, 0, 0]
+      for (const c of cs) {
+        const s = this.entityCallerSum(key, c, win)
+        for (let k = 0; k < 6; k++) out[k] += s[k]
+      }
+      return out
+    }
+    return this.entitySum(key, win)
+  }
+  private baseSeries(key: string, win: number, points: number, f: Filters): number[] {
+    if (f.workspace) {
+      const r = this.wsEntities.get(f.workspace)?.get(key)
+      return r ? r.series(this.at, win, points) : new Array<number>(points).fill(0)
+    }
+    const cs = callerSet(f)
+    if (cs && this.exactCallers) {
+      const out = new Array<number>(points).fill(0)
+      for (const c of cs) {
+        const s = this.entityCallerSeries(key, c, win, points)
+        for (let i = 0; i < points; i++) out[i] += s[i] ?? 0
+      }
+      return out
+    }
+    return this.entitySeries(key, win, points)
+  }
+
   private filteredSum(key: string, win: number, f: Filters): number[] {
-    // #1095: with a caller filter and exact data, only that caller's share of the entity
-    const s =
-      f.caller && this.exactCallers
-        ? this.entityCallerSum(key, f.caller, win)
-        : this.entitySum(key, win)
+    // #1095: with a caller filter and exact data, only those callers' share of the entity
+    // #1154: with a workspace, only that workspace's share
+    const s = this.baseSum(key, win, f)
     const kinds: Kind[] = ['read', 'create', 'update', 'delete', 'error']
     const out = [0, 0, 0, 0, 0, 0]
     for (let k = 1; k <= 5; k++) if (f.kinds.has(kinds[k - 1])) out[k] = s[k]
@@ -492,42 +659,73 @@ export class TrafficModel {
     if (this.exactCallers) return this.entityCallerSum(key, caller, win).some((n) => n > 0)
     if (this.meta.get(key)?.callers.some((c) => c.key === caller)) return true
     const s = this.callerSeen.get(caller)?.get(key)
-    return s !== undefined && s > this.nowSec - win
+    return s !== undefined && s > this.at - win
+  }
+  private callersTouch(cs: Set<string> | null, key: string, win: number): boolean {
+    if (!cs) return true
+    for (const c of cs) if (this.callerTouches(c, key, win)) return true
+    return false
+  }
+  private singleCaller(f: Filters): string | null {
+    const cs = callerSet(f)
+    return cs && cs.size === 1 ? [...cs][0] : null
+  }
+
+  /** #1129: entity keys a caller (or source) reached in the window, busiest first. */
+  callerEntities(caller: string, win: number): string[] {
+    const out: Array<[string, number]> = []
+    for (const key of this.entities.keys()) {
+      if (!this.callerTouches(caller, key, win)) continue
+      const n = this.exactCallers ? this.entityCallerSum(key, caller, win)[0] : 1
+      out.push([key, n])
+    }
+    return out.sort((a, b) => b[1] - a[1]).map(([k]) => k)
   }
 
   /**
-   * Window totals. With a caller filter: that caller's exact share of each entity (#1095), or —
-   * on a server without entity × caller counts — req/error from the caller's ring. p50/p95:
-   * the snapshot's real totals while no frame has moved past it (same window); afterwards a
-   * request-weighted mean of the entities' latest p50/p95 (a live-only approximation).
+   * Window totals. With a caller filter: those callers' exact share of each entity (#1095), or —
+   * on a server without entity × caller counts — req/error from the callers' rings. With a
+   * workspace (#1154): that workspace's share. p50/p95: the snapshot's real totals while no frame
+   * has moved past it (same window, unfiltered, live); afterwards a request-weighted mean of the
+   * entities' latest p50/p95 (a live-only approximation).
    */
   totals(win: number, f: Filters): Totals {
     const t = [0, 0, 0, 0, 0, 0]
     let w = 0
     let p50 = 0
     let p95 = 0
+    const cs = callerSet(f)
+    const one = this.singleCaller(f)
     for (const key of this.entities.keys()) {
       const lane = laneOf(key)
       // lane `other` is never drawn but always counted in totals (R24)
       if (lane !== 'other' && !f.types.has(lane)) continue
-      if (f.caller && !this.callerTouches(f.caller, key, win)) continue
+      if (cs && !this.callersTouch(cs, key, win)) continue
       const s = this.filteredSum(key, win, f)
       for (let k = 0; k < 6; k++) t[k] += s[k]
       w += s[0]
       p50 += s[0] * (this.meta.get(key)?.p50 ?? 0)
       p95 +=
-        s[0] *
-        ((f.caller && this.exactCallers && this.entityCallerP95(key, f.caller)) ||
-          this.entityP95(key))
+        s[0] * ((one && this.exactCallers && this.entityCallerP95(key, one)) || this.entityP95(key))
     }
-    // without exact entity × caller data, req/error come from the caller's own ring
-    if (f.caller && !this.exactCallers) {
-      const [r, e] = this.callerSum(f.caller, win)
-      t[0] = r
-      t[5] = e
+    // without exact entity × caller data, req/error come from the callers' own rings
+    if (cs && !this.exactCallers && !f.workspace) {
+      t[0] = 0
+      t[5] = 0
+      for (const c of cs) {
+        const [r, e] = this.callerSum(c, win)
+        t[0] += r
+        t[5] += e
+      }
     }
     const snap = this.snapshotTotals
-    const useSnap = snap && this.framesSince === 0 && win === this.snapshotWindow && !f.caller
+    const useSnap =
+      snap &&
+      this.framesSince === 0 &&
+      win === this.snapshotWindow &&
+      !cs &&
+      !f.workspace &&
+      !this.rewound
     let outbound = 0
     let outboundErr = 0
     for (const id of this.downs.keys()) {
@@ -574,34 +772,42 @@ export class TrafficModel {
       errPct: number
       series: number[]
     }> = []
+    const cs = callerSet(f)
+    const one = this.singleCaller(f)
     for (const key of this.entities.keys()) {
       const lane = laneOf(key)
       if (!f.types.has(lane)) continue
-      if (f.caller && !this.callerTouches(f.caller, key, win)) continue
+      if (cs && !this.callersTouch(cs, key, win)) continue
       const s = this.filteredSum(key, win, f)
       const total = s[0]
       if (total <= 0) continue
-      const exact = !!f.caller && this.exactCallers
-      const w60 = exact ? this.entityCallerSum(key, f.caller, 60) : this.entitySum(key, 60)
+      const w60 = this.baseSum(key, 60, f)
       rows.push({
         key,
         lane,
         entity: key.slice(key.indexOf('/') + 1),
         rps: total / win,
         wpm: w60[2] + w60[3] + w60[4],
-        p95: (exact && this.entityCallerP95(key, f.caller)) || this.entityP95(key),
+        p95: (one && this.exactCallers && this.entityCallerP95(key, one)) || this.entityP95(key),
         errPct: total ? (100 * s[5]) / total : 0,
-        series: exact
-          ? this.entityCallerSeries(key, f.caller, 60, 24)
-          : this.entitySeries(key, 60, 24)
+        series: this.baseSeries(key, 60, 24, f)
       })
     }
     return rows.sort((a, b) => b.rps - a.rps).slice(0, n)
   }
 
+  /** Ticker events: live = the newest TICKER_CAP; rewound (#1100) = the ones up to that second. */
   visibleEvents(f: Filters): TrafficEventWire[] {
-    return this.events.filter((e) =>
-      applyFilters(f, { lane: e.lane, kind: e.kind, caller: e.caller })
-    )
+    const pass = (e: TrafficEventWire) =>
+      applyFilters(f, { lane: e.lane, kind: e.kind, caller: e.caller, extra: e.extra })
+    if (!this.rewound) return this.events.filter(pass)
+    const until = (this.at + 1) * 1000
+    const out: TrafficEventWire[] = []
+    for (const e of this.eventLog) {
+      if (e.t >= until || !pass(e)) continue
+      out.push(e)
+      if (out.length >= TICKER_CAP) break
+    }
+    return out
   }
 }
