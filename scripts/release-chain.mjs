@@ -172,21 +172,22 @@ function detectChanges() {
 }
 
 /**
- * The packages the release at HEAD published, when HEAD is a release commit.
- * A resume past `release` (`--from artifacts`) measures changes from that very
- * tag, finds none, and would skip npm and the frontend pins: on 2026-10-01 a
- * resumed chain deployed 0.2.9 with efp-new still on the previous react. A
- * package tag reachable from HEAD but not from the previous app tag was minted
- * by this release.
+ * The packages the newest release published. A resume past `release`
+ * (`--from artifacts`) measures changes from that release's own tag, finds
+ * none, and would skip npm and the frontend pins: on 2026-10-01 a resumed chain
+ * deployed 0.2.9 with efp-new still on the previous react. A package tag
+ * reachable from the newest app tag but not from the one before it was minted
+ * by that release. The newest tag, not HEAD: a commit made after the release
+ * (a fix to this very script, that day) must not hide it.
  */
 function releasedByHead() {
   const none = { kit: false, sdk: false, react: false }
-  const head = sh('git', ['describe', '--exact-match', '--tags', '--match', 'v*', 'HEAD'], { quiet: true, allowFail: true }).stdout
+  const head = sh('git', ['describe', '--tags', '--abbrev=0', '--match', 'v*', 'HEAD'], { quiet: true, allowFail: true }).stdout
   if (!head) return none
   const prev = sh('git', ['describe', '--tags', '--abbrev=0', '--match', 'v*', `${head}^`], { quiet: true, allowFail: true }).stdout
   if (!prev) return none
   const minted = (pattern) =>
-    git(['tag', '--list', pattern, '--merged', 'HEAD', '--no-merged', prev]).split('\n').filter(Boolean).length > 0
+    git(['tag', '--list', pattern, '--merged', head, '--no-merged', prev]).split('\n').filter(Boolean).length > 0
   return { kit: minted('@kit-*'), sdk: minted('@sdk-*'), react: minted('@react-*') }
 }
 
