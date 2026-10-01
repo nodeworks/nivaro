@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const runs: string[] = []
 let release: (() => void) | null = null
+// Read through a function so TypeScript does not narrow the module variable.
+const releaseRun = () => (release as (() => void) | null)?.()
 
 vi.mock('../../../db/index.js', () => ({
   // The queue lookup answers "no such queue", so a run is just the
@@ -51,7 +53,7 @@ describe('queue backfill runner (Inngest replacement)', () => {
     first?.()
     await until(() => runs.length === 2 && release !== null)
     expect(runs).toEqual(['q1', 'q1'])
-    release?.()
+    releaseRun()
     for (let i = 0; i < 20; i++) await tick()
     expect(runs).toEqual(['q1', 'q1'])
   })

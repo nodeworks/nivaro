@@ -20,9 +20,11 @@ export function getMetaDb(): Knex {
 // Subdomains that are not tenant slugs — route through without tenant resolution.
 const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
 
-// Paths that work without a tenant DB (health check, admin provision).
+// Paths that work without a tenant DB (health and readiness probes, admin provision).
+// /api/ready answers about the PROCESS, so a proxy probing it by IP needs no tenant.
 const TENANT_FREE_PATHS = [
   '/health',
+  '/api/ready',
   '/admin/provision',
   '/admin/migrate',
   '/admin/migration-status',
