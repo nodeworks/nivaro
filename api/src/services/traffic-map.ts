@@ -4,6 +4,8 @@
  * entity / caller / downstream node, fed by the api-logger (requests), broadcastCollectionUpdate
  * (writes) and logOutbound (partner calls). Memory only — nothing here touches the database.
  */
+import { currentSeq } from './event-journal.js'
+import { getIo } from './io-holder.js'
 import { currentTraceCaller, currentTraceMeta } from './request-trace.js'
 import { instanceKey } from './settings-overrides.js'
 import {
@@ -593,6 +595,13 @@ function takeEvents(): { events: TrafficEventWire[]; dropped: number } {
 export function drainEvents(): TrafficEventWire[] {
   return takeEvents().events
 }
+/** Unwatched tick: drop the per-second accumulators so the first frame after a watcher joins
+ *  never carries an idle backlog (R3). */
+export function discardTick(): void {
+  takeEvents()
+  edgesIn.clear()
+  edgesOut.clear()
+}
 const PRIORITY: Record<string, number> = { error: 0, create: 1, delete: 2, update: 3, read: 4 }
 function pickEvents(all: TrafficEventWire[]): { events: TrafficEventWire[]; dropped: number } {
   if (all.length <= EVENTS_PER_FRAME) return { events: all, dropped: 0 }
@@ -896,4 +905,62 @@ export function resetTrafficMap(): void {
   nowSec = 0
   extCompiled = []
   extSig = ''
+}
+
+// ── emitter ──────────────────────────────────────────────────────────────────
+interface IoLike {
+  sockets: { adapter: { rooms: Map<string, Set<string>> } }
+  to(room: string): { emit(ev: string, payload: unknown): void }
+  local?: { to(room: string): { emit(ev: string, payload: unknown): void } }
+  engine?: { clientsCount?: number }
+}
+export const TRAFFIC_MAP_ROOM = 'watch:traffic-map'
+export const TRAFFIC_MAP_EVENT = 'traffic-map:frame'
+
+/**
+ * One tick per second. The ring clock always advances; a frame is built and emitted ONLY while
+ * the room has a member. Frames are per node, so they go through io.local (never the adapter).
+ */
+export function startTrafficMapEmitter(
+  opts: { intervalMs?: number; io?: () => IoLike | null; now?: () => number } = {}
+): () => void {
+  const ioOf = opts.io ?? (() => getIo() as unknown as IoLike | null)
+  const nowMs = opts.now ?? (() => Date.now())
+  let journalSeq: number | null = null
+  let lastSeqPoll = 0
+  let lastTickSec = -1
+  const timer = setInterval(() => {
+    try {
+      const sec = Math.floor(nowMs() / 1000)
+      if (sec === lastTickSec) return
+      lastTickSec = sec
+      advanceTo(sec)
+      const io = ioOf()
+      const watchers = io?.sockets?.adapter?.rooms?.get(TRAFFIC_MAP_ROOM)?.size ?? 0
+      if (!io || watchers === 0) {
+        discardTick()
+        return
+      }
+      if (sec - lastSeqPoll >= 5) {
+        lastSeqPoll = sec
+        void currentSeq()
+          .then((v) => {
+            journalSeq = v
+          })
+          .catch(() => {})
+      }
+      // Emit the PREVIOUS second: it is complete.
+      const frame = buildFrame(sec - 1, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
+      ;(io.local ?? io).to(TRAFFIC_MAP_ROOM).emit(TRAFFIC_MAP_EVENT, frame)
+    } catch {
+      /* the map must never throw into the event loop */
+    }
+  }, opts.intervalMs ?? 1000)
+  timer.unref?.()
+  const sweep = setInterval(() => sweepIdle(), 3_600_000)
+  sweep.unref?.()
+  return () => {
+    clearInterval(timer)
+    clearInterval(sweep)
+  }
 }

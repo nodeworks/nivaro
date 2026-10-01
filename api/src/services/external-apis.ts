@@ -13,6 +13,7 @@ import {
 import { maskJsonPaths, redactHeaders } from './outbound-redaction.js'
 import { maskBodySecrets, maskQueryString, SENSITIVE_KEY_PATTERN } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
+import { noteOutbound } from './traffic-map.js'
 
 export type { CallOptions, CallResult } from '@nivaro/extension-kit'
 
@@ -548,6 +549,13 @@ function logOutbound(
   /** #626 — the flight recorder's detail for this call (redacted on write). */
   detail?: CallDetail
 ): void {
+  noteOutbound({
+    apiId: entry.api_id,
+    apiName: entry.api_name,
+    status: entry.status,
+    durationMs: entry.duration_ms,
+    at: Date.now()
+  })
   void (async () => {
     const extra = detail ? await outboundDetailFields(entry.api_id, detail) : {}
     await db('nivaro_outbound_log').insert({

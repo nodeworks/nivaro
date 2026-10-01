@@ -2,6 +2,7 @@ import type { Server as SocketIOServer } from 'socket.io'
 import { journaledEmit } from './event-journal.js'
 import { publishItemEvent } from './item-events.js'
 import { publishSseEvent } from './sse-hub.js'
+import { noteWrite } from './traffic-map.js'
 
 /**
  * Best-effort broadcast that a record in `collection` changed. Consumers join
@@ -21,6 +22,15 @@ export function broadcastCollectionUpdate(
   extra?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
 ): void {
   void io // kept for signature compat — journaledEmit resolves io globally
+  if (extra?.action) {
+    noteWrite({
+      collection,
+      item,
+      action: extra.action,
+      changedFields: extra.changed_fields?.slice(0, 50) ?? [],
+      at: Date.now()
+    })
+  }
   // SSE mirror (#602): /events/stream consumers get the same minimal payload.
   publishSseEvent({
     collection,

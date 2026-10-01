@@ -20,6 +20,7 @@ import {
   validateReviewListConfig
 } from '../services/review-list.js'
 import { type RollupConfig, resolveRollupRows, validateRollupConfig } from '../services/rollup.js'
+import { markCacheHit } from '../services/traffic-map.js'
 import type { User } from '../types.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -879,6 +880,7 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
         app.redis,
         (req.body as { refresh?: boolean })?.refresh === true
       )
+      if ((data as { cache?: { cached?: boolean } } | null)?.cache?.cached) markCacheHit(req)
       return reply.send({ data })
     } catch (err) {
       const code = (err as { statusCode?: number }).statusCode ?? 500

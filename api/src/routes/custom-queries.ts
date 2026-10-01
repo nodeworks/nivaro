@@ -23,6 +23,7 @@ import {
 } from '../services/query-freshness.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { markSpan } from '../services/request-trace.js'
+import { markCacheHit } from '../services/traffic-map.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -809,6 +810,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
             const cachedAt = Array.isArray(parsed) ? null : (entry?.cached_at ?? null)
             const expiresIn = await app.redis.ttl(cacheKey).catch(() => -1)
             recordCacheOutcome(slug, 'hit', { cacheTtl: query.cache_ttl })
+            markCacheHit(req)
             const fresh = await queryFreshness(query).catch(() => null)
             return {
               data: rows,

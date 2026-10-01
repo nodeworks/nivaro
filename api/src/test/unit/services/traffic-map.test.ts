@@ -429,3 +429,46 @@ describe('fix round 1', () => {
     expect(snap().entities.some((e) => e.key === 'pages/home')).toBe(true)
   })
 })
+
+import { startTrafficMapEmitter } from '../../../services/traffic-map.js'
+
+describe('emitter', () => {
+  it('emits only while watched, one frame per tick, drains events and edges either way', async () => {
+    const emitted: Array<{
+      frame: number
+      entities: Record<string, number[]>
+      edges_in: Record<string, number>
+    }> = []
+    const rooms = new Map<string, Set<string>>()
+    const io = {
+      sockets: { adapter: { rooms } },
+      to: () => ({ emit: () => {} }),
+      local: {
+        to: (room: string) => ({
+          emit: (ev: string, payload: unknown) => {
+            if (room === 'watch:traffic-map' && ev === 'traffic-map:frame')
+              emitted.push(payload as never)
+          }
+        })
+      }
+    }
+    let clock = T0
+    const stop = startTrafficMapEmitter({ intervalMs: 5, io: () => io, now: () => clock * 1000 })
+    req()
+    clock += 1
+    await new Promise((r) => setTimeout(r, 20))
+    expect(emitted).toHaveLength(0)
+    expect(drainEvents()).toEqual([]) // drained by the unwatched tick
+    rooms.set('watch:traffic-map', new Set(['s1']))
+    req({ at: clock * 1000 })
+    clock += 1
+    await new Promise((r) => setTimeout(r, 20))
+    stop()
+    expect(emitted.length).toBeGreaterThanOrEqual(1)
+    expect(emitted.some((f) => f.entities['items/workflows']?.[0] === 1)).toBe(true)
+    // R3: the idle-second request's edge never rides the first watched frame
+    expect(emitted[0].edges_in['session>items'] ?? 0).toBeLessThanOrEqual(1)
+    const nos = emitted.map((f) => f.frame)
+    expect(new Set(nos).size).toBe(nos.length)
+  })
+})

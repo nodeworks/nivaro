@@ -5,6 +5,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { maskQueryString } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
+import { errorCode, hasCacheHit, noteRequest } from '../services/traffic-map.js'
 
 interface ApiLogRow {
   method: string
@@ -255,6 +256,26 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     const mark = rawUrl.indexOf('?')
     const path = mark < 0 ? rawUrl : rawUrl.slice(0, mark)
     if (shouldSkip(path, req.method)) return
+    // Traffic Map (per-node aggregator): memory only, never awaits. The inner internally
+    // dispatched GraphQL request carries the operation stamp, so it is counted; the outer
+    // root-alias `/graphql` request is not (GraphQL counts once, with its real operation).
+    if (path !== '/graphql') {
+      const gql = (req as unknown as { __nvrGql?: GraphQLStampLike }).__nvrGql
+      noteRequest({
+        method: req.method,
+        path,
+        status: reply.statusCode,
+        latencyMs: Math.round(reply.elapsedTime),
+        authMethod: req.authMethod ?? null,
+        apiKeyId: req.apiKeyId ?? null,
+        userId: req.user?.id ?? null,
+        graphqlOperation: gql?.operation ?? null,
+        graphqlKind: gql?.kind ?? null,
+        cacheHit: hasCacheHit(req),
+        at: Date.now(),
+        errorCode: errorCode((req as unknown as { __nvrErr?: string }).__nvrErr)
+      })
+    }
     if (isInternalDispatch(req as unknown as { headers: Record<string, unknown> })) return
 
     const ua = req.headers['user-agent']

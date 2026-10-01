@@ -189,6 +189,11 @@ export async function buildServer() {
     setAppRef(app)
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
+    const { setExtensionRoutes, startTrafficMapEmitter } = await import('./services/traffic-map.js')
+    const { extensionRoutes } = await import('./extensions/loader.js')
+    setExtensionRoutes(extensionRoutes) // live Map: routes registered later are seen
+    const stopTrafficMap = startTrafficMapEmitter()
+    app.addHook('onClose', async () => stopTrafficMap())
     const { initItemEvents, closeItemEvents } = await import('./services/item-events.js')
     await initItemEvents(app.redis)
     app.addHook('onClose', async () => {
