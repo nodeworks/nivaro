@@ -641,23 +641,24 @@ export function buildFrame(
   frameNo++
   const ents: Record<string, number[]> = {}
   for (const [key, e] of entities) {
-    if (e.touchedSec !== sec) continue
+    if (e.touchedSec < sec) continue
     const s = secondOf(e, sec)
     if (s[K.req] + s[K.create] + s[K.update] + s[K.delete] + s[K.error] === 0) continue
     ents[key] = [...s, pct(e, 0.95)]
   }
   const cs: Record<string, number[]> = {}
   for (const [key, c] of callers) {
-    if (c.touchedSec !== sec) continue
+    if (c.touchedSec < sec) continue
     const s = secondOf(c, sec)
     if (s[K.req]) cs[key] = [s[K.req], s[K.error]]
   }
   const ds: Record<string, number[]> = {}
   for (const [key, d] of downs) {
-    if (d.touchedSec !== sec) continue
+    if (d.touchedSec < sec) continue
     const s = secondOf(d, sec)
     if (s[K.req]) ds[key] = [s[K.req], s[K.error], pct(d, 0.95)]
   }
+  // Accepted: edges/events for a frame can lead the entity counts by up to 1 s.
   const taken = takeEvents()
   const picked = pickEvents(taken.events)
   const events = picked.events
@@ -928,17 +929,18 @@ export function startTrafficMapEmitter(
   const nowMs = opts.now ?? (() => Date.now())
   let journalSeq: number | null = null
   let lastSeqPoll = 0
-  let lastTickSec = -1
+  let nextFrameSec = -1
   const timer = setInterval(() => {
     try {
       const sec = Math.floor(nowMs() / 1000)
-      if (sec === lastTickSec) return
-      lastTickSec = sec
+      if (nextFrameSec < 0) nextFrameSec = sec - 1
+      if (sec - 1 < nextFrameSec) return // same second already handled
       advanceTo(sec)
       const io = ioOf()
       const watchers = io?.sockets?.adapter?.rooms?.get(TRAFFIC_MAP_ROOM)?.size ?? 0
       if (!io || watchers === 0) {
         discardTick()
+        nextFrameSec = sec
         return
       }
       if (sec - lastSeqPoll >= 5) {
@@ -949,9 +951,13 @@ export function startTrafficMapEmitter(
           })
           .catch(() => {})
       }
-      // Emit the PREVIOUS second: it is complete.
-      const frame = buildFrame(sec - 1, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
-      ;(io.local ?? io).to(TRAFFIC_MAP_ROOM).emit(TRAFFIC_MAP_EVENT, frame)
+      // Emit every completed second we have not sent (timer drift can skip one); cap the
+      // catch-up at 5 s, then skip ahead.
+      for (let s = Math.max(nextFrameSec, sec - 5); s <= sec - 1; s++) {
+        const frame = buildFrame(s, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
+        ;(io.local ?? io).to(TRAFFIC_MAP_ROOM).emit(TRAFFIC_MAP_EVENT, frame)
+      }
+      nextFrameSec = sec
     } catch {
       /* the map must never throw into the event loop */
     }

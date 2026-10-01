@@ -467,8 +467,54 @@ describe('emitter', () => {
     expect(emitted.length).toBeGreaterThanOrEqual(1)
     expect(emitted.some((f) => f.entities['items/workflows']?.[0] === 1)).toBe(true)
     // R3: the idle-second request's edge never rides the first watched frame
-    expect(emitted[0].edges_in['session>items'] ?? 0).toBeLessThanOrEqual(1)
+    expect(emitted[0].edges_in['uU1>items']).toBe(1)
     const nos = emitted.map((f) => f.frame)
     expect(new Set(nos).size).toBe(nos.length)
+  })
+})
+
+describe('emitter frames', () => {
+  const mk = () => {
+    const emitted: Array<{ at: string; entities: Record<string, number[]> }> = []
+    const rooms = new Map<string, Set<string>>([['watch:traffic-map', new Set(['s'])]])
+    const io = {
+      sockets: { adapter: { rooms } },
+      to: (_r: string) => ({ emit: (_e: string, p: unknown) => void emitted.push(p as never) })
+    }
+    return { emitted, io }
+  }
+  it("sends a busy entity's previous second even when it was hit again this second", async () => {
+    const { emitted, io } = mk()
+    let clock = T0
+    const stop = startTrafficMapEmitter({ intervalMs: 5, io: () => io, now: () => clock * 1000 })
+    await new Promise((r) => setTimeout(r, 15))
+    advanceTo(T0 + 1)
+    req({ at: (T0 + 1) * 1000 })
+    advanceTo(T0 + 2)
+    req({ at: (T0 + 2) * 1000 })
+    clock = T0 + 2
+    await new Promise((r) => setTimeout(r, 15))
+    stop()
+    const f = emitted.find((x) => x.at === new Date((T0 + 1) * 1000).toISOString())
+    expect(f?.entities['items/workflows']?.[0]).toBe(1)
+  })
+  it('catches up a skipped second', async () => {
+    const { emitted, io } = mk()
+    let clock = T0
+    const stop = startTrafficMapEmitter({ intervalMs: 5, io: () => io, now: () => clock * 1000 })
+    await new Promise((r) => setTimeout(r, 15))
+    advanceTo(T0 + 1)
+    req({ at: (T0 + 1) * 1000 })
+    clock = T0 + 3 // jumped two seconds
+    await new Promise((r) => setTimeout(r, 15))
+    stop()
+    const ats = emitted.map((x) => x.at)
+    expect(ats).toContain(new Date((T0 + 1) * 1000).toISOString())
+    expect(emitted.find((x) => x.at === ats[0])).toBeTruthy()
+    expect(
+      emitted.some(
+        (x) => x.at === new Date((T0 + 1) * 1000).toISOString() && x.entities['items/workflows']
+      )
+    ).toBe(true)
   })
 })

@@ -192,8 +192,12 @@ export async function buildServer() {
     const { setExtensionRoutes, startTrafficMapEmitter } = await import('./services/traffic-map.js')
     const { extensionRoutes } = await import('./extensions/loader.js')
     setExtensionRoutes(extensionRoutes) // live Map: routes registered later are seen
-    const stopTrafficMap = startTrafficMapEmitter()
-    app.addHook('onClose', async () => stopTrafficMap())
+    // Cloud: one process serves many tenants, so a shared per-process traffic room would show
+    // every tenant's collections, records and callers to any tenant admin. No emitter there.
+    if (!process.env.CLOUD_META_DB_URL) {
+      const stopTrafficMap = startTrafficMapEmitter()
+      app.addHook('onClose', async () => stopTrafficMap())
+    }
     const { initItemEvents, closeItemEvents } = await import('./services/item-events.js')
     await initItemEvents(app.redis)
     app.addHook('onClose', async () => {
