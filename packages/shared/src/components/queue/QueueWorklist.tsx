@@ -80,6 +80,7 @@ import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { TickerNumber } from '../TickerNumber'
+import { UnseenDot } from '../UnseenDot'
 import { Badge } from '../ui/badge'
 import { Checkbox } from '../ui/checkbox'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
@@ -357,15 +358,6 @@ function QueueAddendumPill({ summary }: { summary: QueueItemRow['addendums'] }) 
       {costText && <span className='tabular-nums opacity-80'>· {costText}</span>}
     </span>
   )
-}
-
-function unseenTip(u: NonNullable<QueueItemRow['unseen']>): string {
-  const what = u.kinds
-    .map((k) => (k === 'edit' ? 'edited' : k === 'transition' ? 'moved' : 'commented on'))
-    .join(', ')
-  const when = new Date(u.changed_at)
-  const at = Number.isNaN(when.getTime()) ? '' : ` · ${when.toLocaleString()}`
-  return `${u.by ?? 'Someone'} ${what} this since you last opened it${at}`
 }
 
 function formatAging(hours: number | null): string {
@@ -2150,6 +2142,7 @@ export function QueueWorklist({
   // Single-collection queues waste a column repeating the same badge on every
   // row — only offer/show Collection when the queue actually mixes collections.
   const multiCollection = (data?.available_values.collection?.length ?? 0) > 1
+  const anyUnseen = items.some((r) => !!r.unseen)
 
   const baseColumns: Column<QueueItemRow>[] = [
     ...(multiCollection
@@ -2166,21 +2159,18 @@ export function QueueWorklist({
       key: 'label',
       header: aliasFor('label', 'Item'),
       sortable: true,
+      // Room in the left padding for the hanging unseen mark (#643).
+      className: anyUnseen ? 'pl-[30px]' : undefined,
+      headerClassName: anyUnseen ? 'pl-[30px]' : undefined,
       render: (row) => (
         // Underlined because clicking opens the item. The row is clickable as
         // a whole, but nothing on it said so — an underline is the one
         // convention people already read as "this goes somewhere".
         <span className='flex items-center gap-1.5'>
-          {row.unseen && (
-            // #643 — someone else changed this since you last opened it.
-            <span
-              className='h-2 w-2 shrink-0 rounded-full bg-nvr-cyan'
-              data-queue-unseen
-              data-tip={unseenTip(row.unseen)}
-              role='img'
-              aria-label='Changed since you last opened it'
-            />
-          )}
+          {/* #643 — someone else changed this since you last opened it. The
+            mark hangs in the column's widened left padding, so item names
+            stay aligned with each other and with the header. */}
+          <UnseenDot change={row.unseen} dataAttr='data-queue-unseen' hang />
           <span
             className='block max-w-[160px] truncate font-medium underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover/row:decoration-nvr-cyan dark:decoration-slate-600'
             title={row.label}

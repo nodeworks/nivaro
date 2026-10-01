@@ -94,6 +94,7 @@ import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { TipLayer } from './TipLayer'
+import { UnseenDot } from './UnseenDot'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
 
 /**
@@ -5802,7 +5803,7 @@ export function CollectionBrowserView({
       }
     }
   })
-  const CHECKBOX_W = 36
+  const CHECKBOX_W = 52
   /**
    * Offsets FLOOR on both sides so adjacent pinned cells overlap by a sub-pixel
    * instead of meeting exactly — meeting on a fractional boundary is what let a
@@ -7431,14 +7432,19 @@ export function CollectionBrowserView({
                         // Measured like any other pinned column — a hardcoded 36
                         // would drift from the real width and reopen the gap.
                         ref={pinRef('__checkbox__')}
-                        className='sticky left-0 top-0 z-[4] h-8 w-9 bg-slate-50 px-3 py-0 dark:bg-slate-800'
+                        className='sticky left-0 top-0 z-[4] h-8 w-11 bg-slate-50 py-0 pl-1.5 pr-3 dark:bg-slate-800'
                       >
-                        <input
-                          type='checkbox'
-                          checked={allSelected}
-                          onChange={toggleAll}
-                          aria-label='Select all'
-                        />
+                        {/* Same 16px leading slot the rows reserve for the
+                          unseen mark, so the checkboxes stack in one column. */}
+                        <span className='flex items-center gap-1'>
+                          <UnseenDot change={null} />
+                          <input
+                            type='checkbox'
+                            checked={allSelected}
+                            onChange={toggleAll}
+                            aria-label='Select all'
+                          />
+                        </span>
                       </th>
                     )}
                     {orderedCols.map((col) => {
@@ -7540,7 +7546,7 @@ export function CollectionBrowserView({
                   {(anyColFilterable || hasPipeline) && (
                     <tr className='border-b border-slate-200 dark:border-slate-700'>
                       {enableCheckboxes && (
-                        <th className='sticky left-0 top-8 z-[4] w-9 bg-slate-50 px-3 py-1 dark:bg-slate-800' />
+                        <th className='sticky left-0 top-8 z-[4] w-11 bg-slate-50 py-1 pl-1.5 pr-3 dark:bg-slate-800' />
                       )}
                       {orderedCols.map((col) => {
                         const key = col.key
@@ -7871,22 +7877,18 @@ export function CollectionBrowserView({
                             toggles; toggling here too would double-toggle. */}
                           {enableCheckboxes && (
                             <td
-                              className={`sticky left-0 z-[1] w-9 px-3 py-1.5 ${stickyBg}`}
+                              className={`sticky left-0 z-[1] w-11 py-1.5 pl-1.5 pr-3 ${stickyBg}`}
                               onClick={(e) => e.stopPropagation()}
                             >
-                              {unseen && (
-                                <span
-                                  data-cbv-unseen
-                                  data-tip={unseenTip(unseen)}
-                                  className='absolute left-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-nvr-cyan'
+                              <span className='flex items-center gap-1'>
+                                <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />
+                                <input
+                                  type='checkbox'
+                                  checked={isSelected}
+                                  onChange={() => toggleRow(id)}
+                                  aria-label={`Select ${id}`}
                                 />
-                              )}
-                              <input
-                                type='checkbox'
-                                checked={isSelected}
-                                onChange={() => toggleRow(id)}
-                                aria-label={`Select ${id}`}
-                              />
+                              </span>
                             </td>
                           )}
                           {orderedCols.map((col) => {
@@ -8264,7 +8266,7 @@ export function CollectionBrowserView({
                   <tfoot className='text-[12px] tabular-nums'>
                     <tr className='sticky bottom-0 z-[2] border-t-2 border-slate-200 bg-slate-50 font-medium dark:border-slate-700 dark:bg-slate-800'>
                       {enableCheckboxes && (
-                        <td className='sticky left-0 z-[3] w-9 bg-slate-50 px-3 py-1.5 dark:bg-slate-800' />
+                        <td className='sticky left-0 z-[3] w-11 bg-slate-50 py-1.5 pl-1.5 pr-3 dark:bg-slate-800' />
                       )}
                       {orderedCols.map((col, ci) => {
                         const key = col.key
@@ -8637,24 +8639,4 @@ export interface CollectionBrowserColumn {
   label?: string
   format?: 'currency' | 'date' | 'datetime' | 'text'
   filterable?: boolean
-}
-
-/** #643 — "Changed by Beth 2h ago · edited, moved" for the unseen dot. */
-function unseenTip(u: { changed_at: string; by: string | null; kinds: string[] }): string {
-  const words: Record<string, string> = {
-    edit: 'edited',
-    transition: 'moved',
-    comment: 'commented on'
-  }
-  const what = u.kinds.map((k) => words[k] ?? k).join(', ')
-  const mins = Math.max(0, Math.round((Date.now() - new Date(u.changed_at).getTime()) / 60_000))
-  const ago =
-    mins < 1
-      ? 'just now'
-      : mins < 60
-        ? `${mins}m ago`
-        : mins < 1440
-          ? `${Math.round(mins / 60)}h ago`
-          : `${Math.round(mins / 1440)}d ago`
-  return `Changed since you last opened it — ${what}${u.by ? ` by ${u.by}` : ''}, ${ago}`
 }
