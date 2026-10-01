@@ -450,6 +450,15 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       if (kinds.length) void base.whereIn('l.auth', kinds)
     }
     if (q.errors === '1') void base.where('l.status', '>=', 400)
+    // #1090 — a time window around one request (the Traffic Map links a ticker error here).
+    const at = (v: string | undefined) => {
+      const d = v ? new Date(v) : null
+      return d && !Number.isNaN(d.getTime()) ? d : null
+    }
+    const from = at(q.from)
+    const to = at(q.to)
+    if (from) void base.where('l.created_at', '>=', from)
+    if (to) void base.where('l.created_at', '<=', to)
 
     const totalRow = (await base.clone().count('* as c').first()) as { c: number } | undefined
     const withQuery = await hasColumn('nivaro_api_logs', 'query')

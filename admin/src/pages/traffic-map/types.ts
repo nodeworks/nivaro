@@ -54,6 +54,8 @@ export interface TrafficEventWire {
   fields?: string[]
   code?: string | null
   via?: string
+  /** Integration event chain of the request / write (opens the event path sheet). */
+  chain?: string
   /** Short neutral labels a server tap adds (ticker chips). */
   tags?: string[]
   /** Tap-specific fields. */

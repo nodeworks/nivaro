@@ -9,7 +9,14 @@ import { evaluateMonitor, type MonitorRow } from '../services/ops-monitors.js'
  * internal collections/URLs, and failures carry operational detail.
  */
 
-const TYPES = ['freshness', 'deploy_regression', 'synthetic', 'journey', 'ssl_cert'] as const
+const TYPES = [
+  'freshness',
+  'deploy_regression',
+  'synthetic',
+  'journey',
+  'ssl_cert',
+  'traffic'
+] as const
 
 function parseJsonSafe<T>(raw: unknown): T | null {
   if (raw == null || raw === '') return null
