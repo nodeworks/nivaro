@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-10-01T20:12:13.809Z",
+  "generated_at": "2026-10-01T20:44:16.104Z",
   "releases": [
+    {
+      "version": "0.2.11",
+      "tag": "v0.2.11",
+      "date": "2026-10-01T16:44:04-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "traffic map follow-ups (#1090–#1168)",
+              "hash": "45bb22cd"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "secrets from files, unsafe-job lock, heavy slot, /api/metrics, extension build (#1084–#1086, #1088, #1089)",
+              "hash": "0eef9e9c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "partner-failing no longer times out on a fully failing API",
+              "hash": "05e2cd72"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.2.10",
       "tag": "v0.2.10",
-      "date": "2026-10-01T16:12:01-04:00",
+      "date": "2026-10-01T16:12:13-04:00",
       "sections": [
         {
           "label": "Documentation",
