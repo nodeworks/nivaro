@@ -24,6 +24,13 @@ export function setJournalRedis(redis: Redis): void {
   _redis = redis
 }
 
+/** Traffic Map realtime health (#1101): how long each emit spent journaling, and whether it did. */
+type JournalObserver = (ms: number, journaled: boolean) => void
+let observer: JournalObserver | null = null
+export function setJournalObserver(fn: JournalObserver | null): void {
+  observer = fn
+}
+
 export interface JournalEntry {
   seq: number
   room: string
@@ -43,6 +50,7 @@ export async function journaledEmit(
   const io = getIo()
   if (!io) return
   let seq: number | null = null
+  const t0 = observer ? performance.now() : 0
   try {
     if (_redis) {
       seq = await _redis.incr(SEQ_KEY)
@@ -58,6 +66,13 @@ export async function journaledEmit(
     seq = null // Redis down — emit unjournaled (fail open)
   }
   io.to(room).emit(event, seq == null ? payload : { ...payload, _seq: seq })
+  if (observer) {
+    try {
+      observer(performance.now() - t0, seq != null)
+    } catch {
+      /* a diagnostic never affects delivery */
+    }
+  }
 }
 
 /** Replay events after `cursor` for the given rooms. */

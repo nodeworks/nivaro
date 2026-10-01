@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
+import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker.js'
 
 /**
  * Redis-backed fixed-window rate limiter for /api routes.
@@ -18,6 +19,14 @@ import fp from 'fastify-plugin'
  */
 
 const WINDOW_SECONDS = 60
+
+function registerEntityBreakers(app: FastifyInstance): void {
+  if (process.env.CLOUD_META_DB_URL) return
+  startBreakerSync((app as unknown as { redis?: Parameters<typeof startBreakerSync>[0] }).redis)
+  app.addHook('onRequest', async (req, reply) => {
+    if (await entityBreakerHook(req, reply)) return reply
+  })
+}
 
 /** 0 = disabled (the default). */
 function resolveLimit(): number {
@@ -39,6 +48,8 @@ function clientKey(req: {
 }
 
 export const rateLimitPlugin = fp(async (app: FastifyInstance) => {
+  // Traffic Map circuit breakers (#1157) on entities — independent of the rate limit below.
+  registerEntityBreakers(app)
   const limit = resolveLimit()
   if (limit <= 0) {
     app.log.info('Rate limiter off (set RATE_LIMIT_PER_MINUTE to enable)')

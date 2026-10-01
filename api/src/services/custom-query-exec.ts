@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { trackStatement } from './traffic-inflight.js'
 
 /**
  * Custom-query execution core, shared by the /custom-queries/:slug/execute
@@ -93,6 +94,9 @@ export async function execCustomQuerySql(
     Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown
   }
   const conn = (await knexClient.acquireConnection()) as { execSqlBatch(r: unknown): void }
+  // Traffic Map in-flight list (#1147): the batch this request is running.
+  const tracked = trackStatement(resolvedSql)
+  let rowCount = 0
   try {
     return await new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
       let settled = false
@@ -121,7 +125,12 @@ export async function execCustomQuerySql(
         for (const col of cols) row[col.metadata.colName] = col.value
         collected.push(row)
       })
-      req.once('requestCompleted', () => done(() => resolve(collected)))
+      req.once('requestCompleted', () =>
+        done(() => {
+          rowCount = collected.length
+          resolve(collected)
+        })
+      )
       req.on('error', (e) => done(() => reject(e)))
       conn.execSqlBatch(req)
     })
@@ -132,6 +141,7 @@ export async function execCustomQuerySql(
     await rollbackOpenTransaction(Driver, conn)
     throw err
   } finally {
+    tracked(rowCount)
     await knexClient.releaseConnection(conn)
   }
 }
