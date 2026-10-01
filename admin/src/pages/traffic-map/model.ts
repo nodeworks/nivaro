@@ -186,6 +186,10 @@ export class TrafficModel {
   eventLog: TrafficEventWire[] = []
   /** #1100: the second being viewed while rewound; null = live (the newest second). */
   private viewSec: number | null = null
+  /** #1100: the oldest second the rings hold real data for (the snapshot window, then frames). */
+  private coveredFrom = Number.POSITIVE_INFINITY
+  /** After a backfill (#1100): the first second with per-second figures (older = coarse). */
+  fineFrom: number | null = null
 
   /** The newest second the model holds (live). */
   get now(): number {
@@ -206,7 +210,10 @@ export class TrafficModel {
   }
   /** The seconds a window of `win` can be rewound over: [oldest, newest]. */
   rewindRange(win: number): { min: number; max: number } {
-    return { min: this.nowSec - RING + Math.max(60, win), max: this.nowSec }
+    const ring = this.nowSec - RING + Math.max(60, win)
+    // never earlier than the rings hold data for (a frozen snapshot holds its window only)
+    const held = Number.isFinite(this.coveredFrom) ? this.coveredFrom + win - 1 : ring
+    return { min: Math.min(this.nowSec, Math.max(ring, held)), max: this.nowSec }
   }
 
   private nested(outer: Map<string, Map<string, Ring>>, a: string, b: string, slots = SLOTS) {
@@ -257,6 +264,8 @@ export class TrafficModel {
     this.framesSince = 0
     this.snapshotTotals = snap.totals
     this.snapshotWindow = snap.window_s
+    this.coveredFrom = sec - snap.window_s + 1
+    this.fineFrom = null
     this.instance = snap.instance
     this.nodeScope = snap.node_scope
     this.sockets = snap.sockets.count
@@ -333,6 +342,75 @@ export class TrafficModel {
     }
     // frames that arrived before the snapshot but are newer than it survive the replacement
     for (const { sec: fs, f } of this.recent) if (fs > sec) this.applyFrameData(f, fs)
+  }
+
+  /**
+   * #1100: fill the seconds BEFORE what the rings already hold from a longer snapshot (the page
+   * pauses with a 15-minute one), so someone who arrived after a blip can still rewind to it.
+   * Only older seconds are written — live per-second detail is never replaced; the filled part
+   * follows the snapshot series' shape (coarser than live).
+   */
+  backfill(snap: TrafficSnapshot): void {
+    const sec = Math.floor(new Date(snap.at).getTime() / 1000)
+    const win = snap.window_s
+    const from = Math.max(sec - win + 1, this.nowSec - RING + 1)
+    const until = Math.min(this.coveredFrom, sec + 1) // exclusive
+    if (until <= from) return
+    const inRange = (s: number) => s >= from && s < until
+    for (const e of snap.entities) {
+      const r = this.ring(this.entities, e.key)
+      if (!r.p95) r.p95 = e.p95
+      if (!this.meta.has(e.key))
+        this.meta.set(e.key, {
+          ...e,
+          recent_writes: [...e.recent_writes],
+          recent_errors: [...e.recent_errors]
+        })
+      const sTot = e.series.reduce((a, b) => a + b, 0)
+      const len = e.series.length || 1
+      const totals = [e.req, e.read, e.create, e.update, e.delete, e.error]
+      for (let i = 0; i < win; i++) {
+        const s = sec - win + 1 + i
+        if (!inRange(s)) continue
+        const w =
+          sTot > 0
+            ? e.series[Math.min(len - 1, Math.floor((i * len) / win))] / ((win / len) * sTot)
+            : 1 / win
+        r.add(
+          s,
+          totals.map((n) => n * w)
+        )
+      }
+      for (const [d, n] of Object.entries(e.down))
+        this.spreadRange(this.ring(this.edgeOut, `${e.lane}>${d}`, 1), sec, win, [n], inRange)
+      for (const c of e.callers)
+        this.spreadRange(this.ring(this.edgeIn, `${c.key}>${e.lane}`, 1), sec, win, [c.n], inRange)
+    }
+    for (const c of snap.callers)
+      this.spreadRange(
+        this.ring(this.callers, c.key),
+        sec,
+        win,
+        [c.req, 0, 0, 0, 0, c.error],
+        inRange
+      )
+    for (const d of snap.down)
+      this.spreadRange(this.ring(this.downs, d.id), sec, win, [d.req, 0, 0, 0, 0, d.error], inRange)
+    this.fineFrom = this.fineFrom ?? until
+    this.coveredFrom = Math.min(this.coveredFrom, from)
+  }
+  private spreadRange(
+    r: Ring,
+    sec: number,
+    win: number,
+    total: number[],
+    keep: (s: number) => boolean
+  ): void {
+    const per = total.map((n) => n / win)
+    for (let i = 0; i < win; i++) {
+      const s = sec - win + 1 + i
+      if (keep(s)) r.add(s, per)
+    }
   }
 
   private applyFrameData(f: TrafficFrame, sec: number): void {

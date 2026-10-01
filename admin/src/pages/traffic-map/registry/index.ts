@@ -36,6 +36,12 @@ import '../features/pause-node'
 import '../features/error-groups'
 import '../features/probe'
 import '../features/runbooks'
+import '../features/pins'
+import '../features/correlations'
+import '../features/presence'
+import '../features/nl-filter'
+import '../features/capture'
+import '../features/view-links'
 
 export {
   type CanvasLayer,
@@ -59,3 +65,4 @@ export { type PagePanel, pagePanels } from './pagePanels'
 export { byOrder, register } from './registry'
 export { type StripTile, stripTiles } from './stripTiles'
 export { type ToolbarItem, toolbarItems } from './toolbarItems'
+export { type ViewParam, viewParams } from './viewParams'

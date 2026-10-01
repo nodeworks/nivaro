@@ -7,7 +7,9 @@ import { adminRealtime, getSocket, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { TrafficMapContext, type TrafficMapContextValue } from './context'
 import { callerLabel, EventTicker, KIND_VAR } from './EventTicker'
+import { useStore } from './features/b1-shared'
 import { nodeFeed } from './features/node-merge'
+import { usePinFilter } from './features/pins'
 import {
   FrozenBanner,
   type FrozenSnapshot,
@@ -15,6 +17,7 @@ import {
   loadFrozenSnapshot,
   useFrozenSnapshotId
 } from './features/snapshots'
+import { workspaceFocus } from './features/workspaces'
 import { HotEntities } from './HotEntities'
 import {
   describeSelection,
@@ -29,8 +32,10 @@ import { MapCanvas } from './MapCanvas'
 import { defaultFilters, laneOf, TrafficModel } from './model'
 // Feature registrations (registry/index.ts) run before the page renders.
 import './registry'
+import { RewindBar } from './RewindBar'
 import { PagePanels } from './registry/pagePanels'
 import { ToolbarItems } from './registry/toolbarItems'
+import { viewParams } from './registry/viewParams'
 import { type StripData, SummaryStrip } from './SummaryStrip'
 import type {
   DownHistory,
@@ -44,6 +49,7 @@ import type {
   TrafficSnapshot
 } from './types'
 import { KIND_ORDER, LANE_LABEL, LANE_ORDER } from './types'
+import { CORE_PARAMS, decodeView, encodeView } from './viewUrl'
 
 /**
  * Traffic Map (spec: docs/superpowers/specs/2026-09-30-traffic-map-design.md §10).
@@ -98,13 +104,30 @@ function errorText(e: unknown): string {
   return r?.response?.data?.error ?? r?.message ?? 'Unknown error'
 }
 
+/** #1166: the view a link opened with (read once per page mount). */
+function initialView() {
+  const empty = { filters: defaultFilters(), selection: null, at: null }
+  if (typeof window === 'undefined') return empty
+  try {
+    return decodeView(new URLSearchParams(window.location.search), empty)
+  } catch {
+    return empty
+  }
+}
+
 export default function TrafficMap() {
   const modelRef = useRef(new TrafficModel())
-  const [filters, setFilters] = useState<Filters>(() => defaultFilters())
+  const linked = useRef(initialView())
+  const [filters, setFilters] = useState<Filters>(() => linked.current.filters)
   const filtersRef = useRef(filters)
   filtersRef.current = filters
   const [catalog, setCatalog] = useState<TrafficCatalog | null>(null)
-  const [selection, setSelection] = useState<Selection | null>(null)
+  const [selection, setSelection] = useState<Selection | null>(() => linked.current.selection)
+  /** #1100: the rewound second while paused (null = the newest). */
+  const [viewSec, setViewSec] = useState<number | null>(null)
+  // #1154: the workspace chip scopes the whole map
+  const wsFocus = useStore(workspaceFocus)
+  const pinFilter = usePinFilter()
   /** Inspector range: 0 = live (the ring); 1/6/24 h read the request log. Kept across selections. */
   const [hours, setHours] = useState<Hours>(0)
   const [paused, setPaused] = useState(false)
@@ -200,11 +223,6 @@ export default function TrafficMap() {
     [refreshCatalog]
   )
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: leaving a frozen snapshot must reload the live one
-  useEffect(() => {
-    void loadSnapshot(filters.win)
-  }, [filters.win, loadSnapshot, frozenId])
-
   useEffect(() => {
     alive.current = true
     refreshCatalog(true)
@@ -271,12 +289,46 @@ export default function TrafficMap() {
     }
   }, [loadSnapshot, refreshCatalog, frozenId])
 
+  /** #1100: pausing fills the ring's older seconds from a 15-minute snapshot, so the timeline
+   *  reaches back before this page was opened. */
+  const backfill = useCallback(async () => {
+    if (frozenRef.current) return
+    try {
+      const res = await api.get(nodeFeed.snapshotUrl(900))
+      if (!pausedRef.current) return
+      modelRef.current.backfill(res.data.data as TrafficSnapshot)
+      setTick((t) => t + 1)
+    } catch {
+      /* the timeline keeps what the page already holds */
+    }
+  }, [])
   const togglePause = () => {
     const next = !pausedRef.current
     pausedRef.current = next // set here so a frame arriving before the re-render is dropped
     setPaused(next)
-    // frames were dropped while paused: resuming re-seeds so the hole is filled
-    if (!next) void loadSnapshot(filtersRef.current.win)
+    if (next) void backfill()
+    else {
+      // back to live: drop the rewind, and re-seed (frames were dropped while paused)
+      modelRef.current.setView(null)
+      setViewSec(null)
+      void loadSnapshot(filtersRef.current.win)
+    }
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: leaving a frozen snapshot must reload the live one
+  useEffect(() => {
+    // paused: the new window's snapshot replaced the ring, so fill the older seconds again
+    void loadSnapshot(filters.win).then(() => {
+      if (pausedRef.current) void backfill()
+    })
+  }, [filters.win, loadSnapshot, frozenId, backfill])
+  const rewindTo = useCallback((sec: number | null) => {
+    modelRef.current.setView(sec)
+    setViewSec(sec)
+    setTick((t) => t + 1)
+  }, [])
+  const goLive = () => {
+    if (pausedRef.current) togglePause()
+    else rewindTo(null)
   }
   const toggleType = (l: Lane) =>
     setFilters((f) => {
@@ -297,36 +349,102 @@ export default function TrafficMap() {
       return { ...f, kinds }
     })
 
+  // #1166: a link's lens / workspace / zoom params apply once on open. A link that carries any
+  // view param is a whole view: params it leaves out go back to their defaults.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search)
+    const own = [...CORE_PARAMS, ...viewParams.map((v) => v.param)]
+    if (!own.some((k) => p.has(k))) return
+    for (const v of viewParams) {
+      try {
+        v.set(p.get(v.param))
+      } catch {
+        /* a broken param leaves its state alone */
+      }
+    }
+  }, [])
+  // #1100 + #1166: a link that names a second opens paused at it (once the first snapshot is in)
+  const atApplied = useRef(false)
+  useEffect(() => {
+    if (!ready || atApplied.current) return
+    atApplied.current = true
+    const at = linked.current.at
+    if (at == null || frozenRef.current) return
+    pausedRef.current = true
+    setPaused(true)
+    rewindTo(at)
+    void backfill().then(() => rewindTo(at))
+  }, [ready, rewindTo, backfill])
+  // #1166: keep the address bar on the current view (replaceState: no history entry, no reload)
+  const [paramsV, setParamsV] = useState(0)
+  useEffect(() => {
+    const offs = viewParams.map((v) => v.subscribe?.(() => setParamsV((n) => n + 1)))
+    return () => {
+      for (const off of offs) off?.()
+    }
+  }, [])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: paramsV re-runs it when a view param changes
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const url = new URL(window.location.href)
+      for (const k of CORE_PARAMS) url.searchParams.delete(k)
+      for (const v of viewParams) url.searchParams.delete(v.param)
+      for (const [k, v] of encodeView({
+        filters,
+        selection,
+        at: paused && viewSec != null ? viewSec : null
+      }))
+        url.searchParams.set(k, v)
+      for (const v of viewParams) {
+        let val: string | null = null
+        try {
+          val = v.get()
+        } catch {
+          val = null
+        }
+        if (val != null) url.searchParams.set(v.param, val)
+      }
+      if (url.href !== window.location.href)
+        window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+    }, 250)
+    return () => clearTimeout(t)
+  }, [filters, selection, paused, viewSec, paramsV])
+
   const m = modelRef.current
   const win = filters.win
+  const ef = useMemo<Filters>(
+    () => (wsFocus ? { ...filters, workspace: wsFocus } : filters),
+    [filters, wsFocus]
+  )
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick forces a re-read of the mutable model
   const view = useMemo(() => {
     if (!ready) return null
-    const totals = m.totals(win, filters)
-    const last60 = m.totals(60, filters)
-    const counted = (lane: Lane) => lane === 'other' || filters.types.has(lane)
+    const totals = m.totals(win, ef)
+    const last60 = m.totals(60, ef)
+    const counted = (lane: Lane) => lane === 'other' || ef.types.has(lane)
     const series = new Array<number>(60).fill(0)
     for (const k of m.entityKeys()) {
       if (!counted(laneOf(k))) continue
       const s = m.entitySeries(k, win, 60)
       for (let i = 0; i < 60; i++) series[i] += s[i] ?? 0
     }
-    const visibleEvents = m.visibleEvents(filters)
+    const allEvents = m.visibleEvents(ef)
+    // #1125 pinned only: the ticker and the hot table keep the pinned entities
+    const visibleEvents = pinFilter
+      ? allEvents.filter((e) => pinFilter.has(`${e.lane}/${e.entity}`))
+      : allEvents
     // Newest error code, counted the way the error total is: visible lanes plus `other` (R24).
     let lastError: string | null = null
-    if (filters.kinds.has('error')) {
+    if (ef.kinds.has('error')) {
       const evErr = m.events.find(
-        (e) =>
-          e.kind === 'error' && counted(e.lane) && (!filters.caller || e.caller === filters.caller)
+        (e) => e.kind === 'error' && counted(e.lane) && (!ef.caller || e.caller === ef.caller)
       )
       if (evErr) lastError = evErr.code ?? (evErr.status ? String(evErr.status) : null)
       else {
         let newest = ''
         for (const k of m.entityKeys()) {
           if (!counted(laneOf(k))) continue
-          const e = m
-            .entityMeta(k)
-            ?.recent_errors.find((x) => !filters.caller || x.caller === filters.caller)
+          const e = m.entityMeta(k)?.recent_errors.find((x) => !ef.caller || x.caller === ef.caller)
           if (e && e.at > newest) {
             newest = e.at
             lastError = e.code ?? String(e.status)
@@ -356,13 +474,19 @@ export default function TrafficMap() {
       users,
       peak: Math.max(peak.current, m.sockets)
     }
-    return { strip, hot: m.hot(win, filters, 12), events: visibleEvents }
-  }, [m, ready, win, filters, catalog, users, tick])
+    const hot = pinFilter
+      ? m
+          .hot(win, ef, 100000)
+          .filter((r) => pinFilter.has(r.key))
+          .slice(0, 12)
+      : m.hot(win, ef, 12)
+    return { strip, hot, events: visibleEvents }
+  }, [m, ready, win, ef, catalog, users, tick, pinFilter])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick forces a re-read of the mutable model
   const inspector = useMemo(
-    () => (ready && selection ? describeSelection(m, selection, filters, catalog) : null),
-    [m, ready, selection, filters, catalog, tick]
+    () => (ready && selection ? describeSelection(m, selection, ef, catalog) : null),
+    [m, ready, selection, ef, catalog, tick]
   )
   const canHistory = historyAvailable(selection)
   const historyQ = useQuery({
@@ -388,7 +512,7 @@ export default function TrafficMap() {
   const ctx = useMemo<TrafficMapContextValue>(
     () => ({
       model: m,
-      filters,
+      filters: ef,
       setFilters,
       selection,
       setSelection,
@@ -398,7 +522,7 @@ export default function TrafficMap() {
       paused,
       ready
     }),
-    [m, filters, selection, catalog, tick, win, paused, ready]
+    [m, ef, selection, catalog, tick, win, paused, ready]
   )
 
   const live = ready && !stale && !snapError && !frozen
@@ -564,6 +688,7 @@ export default function TrafficMap() {
                 id='tm-pause'
                 aria-pressed={paused}
                 onClick={togglePause}
+                title={paused ? 'Back to live' : 'Pause and rewind through the last 15 minutes'}
                 className={cn(
                   CHIP,
                   'ml-auto',
@@ -602,11 +727,21 @@ export default function TrafficMap() {
             </div>
           )}
           <FrozenBanner snap={frozen} />
+          {ready && (paused || frozen) ? (
+            <RewindBar
+              model={m}
+              win={win}
+              viewSec={viewSec}
+              frozen={!!frozen}
+              onRewind={rewindTo}
+              onLive={goLive}
+            />
+          ) : null}
           <SummaryStrip d={view?.strip ?? null} />
           <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-[minmax(0,1fr)_360px]'>
             <MapCanvas
               model={m}
-              filters={filters}
+              filters={ef}
               selection={selection}
               onSelect={setSelection}
               catalog={catalog}

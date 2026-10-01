@@ -71,15 +71,23 @@ function SkeletonTile() {
   )
 }
 
+/** The six built-in figures: 2 / 3 / 6 columns, so the grid never leaves an empty cell. */
 const STRIP_CLS =
   'grid grid-cols-2 gap-px md:grid-cols-3 min-[1280px]:grid-cols-6 overflow-hidden rounded-lg border border-[var(--tm-line)] bg-[var(--tm-line)]'
+/**
+ * Feature tiles (registry/stripTiles), a second, quieter row: a wrapping flex row whose cells
+ * grow to fill each line (globals.css `[data-tm-strip-more]`), so any number of tiles lays out
+ * without holes, and their figures step down a size under the six primary ones.
+ */
+const MORE_CLS =
+  'mt-px flex flex-wrap gap-px overflow-hidden rounded-b-lg border border-t-0 border-[var(--tm-line)] bg-[var(--tm-line)] empty:hidden'
 
 export function SummaryStrip({ d }: { d: StripData | null }) {
   // The window the series covers — the sparkline marks restarts / deploys / config writes in it.
   const ctx = useContext(TrafficMapContext)
-  const range = ctx?.ready
-    ? { from: (ctx.model.now - ctx.win) * 1000, to: ctx.model.now * 1000 }
-    : undefined
+  // the viewed second (#1100: the rewound one while paused)
+  const at = ctx?.ready ? (ctx.model.at ?? ctx.model.now) : 0
+  const range = ctx?.ready ? { from: (at - ctx.win) * 1000, to: at * 1000 } : undefined
   if (!d)
     return (
       <section aria-label='Summary' aria-busy='true' className={STRIP_CLS} id='tm-strip'>
@@ -95,60 +103,64 @@ export function SummaryStrip({ d }: { d: StripData | null }) {
     d.p95 > 0 ? (d.p95 >= 1000 ? (d.p95 / 1000).toFixed(1) : String(Math.round(d.p95))) : '—'
   const partners = d.partners.length ? d.partners.join(', ') : 'none in window'
   return (
-    <section aria-label='Summary' className={STRIP_CLS} id='tm-strip'>
-      <Tile label='Requests' value={fmtRate(d.rps)} unit='/s' testId='tm-strip-rps'>
-        <Sparkline data={d.series} range={range} className='h-[18px] min-w-0 flex-1' />
-      </Tile>
-      <Tile label='p95 latency' value={p95} unit={p95Unit} testId='tm-strip-p95'>
-        <span className='truncate tabular-nums'>
-          p50 {d.p50 > 0 ? `${Math.round(d.p50).toLocaleString()} ms` : '—'}
-        </span>
-      </Tile>
-      <Tile
-        label='Error rate'
-        value={Number.isFinite(errPct) ? errPct.toFixed(1) : '—'}
-        unit='%'
-        bad={errPct >= 3}
-        testId='tm-strip-err'
-      >
-        <span className='truncate tabular-nums'>
-          {fmtCount(d.errN)} in window
-          {d.lastError ? (
-            <>
-              {' · '}
-              <span className='font-mono text-[11px]'>{d.lastError}</span>
-            </>
-          ) : null}
-        </span>
-      </Tile>
-      <Tile label='Writes' value={fmtRate(d.writesPerMin)} unit='/min' testId='tm-strip-writes'>
-        <span className='truncate tabular-nums'>
-          {fmtCount(d.writesMix.create)} created · {fmtCount(d.writesMix.update)} updated ·{' '}
-          {fmtCount(d.writesMix.delete)} deleted
-        </span>
-      </Tile>
-      <Tile
-        label='Partner calls'
-        value={fmtRate(d.outboundPerMin)}
-        unit='/min'
-        testId='tm-strip-out'
-      >
-        <span className='truncate tabular-nums'>
-          {d.outboundErr ? (
-            <span className='text-[var(--tm-error-ink)]'>{fmtCount(d.outboundErr)} failed</span>
-          ) : (
-            'all landed'
-          )}{' '}
-          · {partners}
-        </span>
-      </Tile>
-      <Tile label='Sockets' value={fmtCount(d.sockets)} testId='tm-strip-sockets'>
-        <span className='truncate tabular-nums'>
-          {fmtCount(d.users)} {Math.round(d.users) === 1 ? 'person' : 'people'} · peak{' '}
-          {fmtCount(d.peak)}
-        </span>
-      </Tile>
-      <StripTiles />
+    <section aria-label='Summary' id='tm-strip-wrap'>
+      <div className={`${STRIP_CLS} has-[+div:not(:empty)]:rounded-b-none`} id='tm-strip'>
+        <Tile label='Requests' value={fmtRate(d.rps)} unit='/s' testId='tm-strip-rps'>
+          <Sparkline data={d.series} range={range} className='h-[18px] min-w-0 flex-1' />
+        </Tile>
+        <Tile label='p95 latency' value={p95} unit={p95Unit} testId='tm-strip-p95'>
+          <span className='truncate tabular-nums'>
+            p50 {d.p50 > 0 ? `${Math.round(d.p50).toLocaleString()} ms` : '—'}
+          </span>
+        </Tile>
+        <Tile
+          label='Error rate'
+          value={Number.isFinite(errPct) ? errPct.toFixed(1) : '—'}
+          unit='%'
+          bad={errPct >= 3}
+          testId='tm-strip-err'
+        >
+          <span className='truncate tabular-nums'>
+            {fmtCount(d.errN)} in window
+            {d.lastError ? (
+              <>
+                {' · '}
+                <span className='font-mono text-[11px]'>{d.lastError}</span>
+              </>
+            ) : null}
+          </span>
+        </Tile>
+        <Tile label='Writes' value={fmtRate(d.writesPerMin)} unit='/min' testId='tm-strip-writes'>
+          <span className='truncate tabular-nums'>
+            {fmtCount(d.writesMix.create)} created · {fmtCount(d.writesMix.update)} updated ·{' '}
+            {fmtCount(d.writesMix.delete)} deleted
+          </span>
+        </Tile>
+        <Tile
+          label='Partner calls'
+          value={fmtRate(d.outboundPerMin)}
+          unit='/min'
+          testId='tm-strip-out'
+        >
+          <span className='truncate tabular-nums'>
+            {d.outboundErr ? (
+              <span className='text-[var(--tm-error-ink)]'>{fmtCount(d.outboundErr)} failed</span>
+            ) : (
+              'all landed'
+            )}{' '}
+            · {partners}
+          </span>
+        </Tile>
+        <Tile label='Sockets' value={fmtCount(d.sockets)} testId='tm-strip-sockets'>
+          <span className='truncate tabular-nums'>
+            {fmtCount(d.users)} {Math.round(d.users) === 1 ? 'person' : 'people'} · peak{' '}
+            {fmtCount(d.peak)}
+          </span>
+        </Tile>
+      </div>
+      <div className={MORE_CLS} data-tm-strip-more='' id='tm-strip-more'>
+        <StripTiles />
+      </div>
     </section>
   )
 }
