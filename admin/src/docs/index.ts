@@ -252,7 +252,10 @@ import {
   obsDataQuality,
   obsHealthDashboard,
   obsIssueLog,
-  obsTrafficMap
+  obsTrafficMap,
+  obsTrafficMapAct,
+  obsTrafficMapInvestigate,
+  obsTrafficMapPlatform
 } from './sections/observability.js'
 import {
   dbHealthDocs,
@@ -793,6 +796,9 @@ export const navSections: NavGroup[] = [
     items: [
       obsApiAnalytics,
       obsTrafficMap,
+      obsTrafficMapInvestigate,
+      obsTrafficMapAct,
+      obsTrafficMapPlatform,
       commandCenterDocs,
       wallboardPulseDocs,
       recordGraphDocs,

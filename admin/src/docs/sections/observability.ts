@@ -286,41 +286,408 @@ export const obsTrafficMap: DocSection = {
     { type: 'h1', id: 'traffic-map', text: 'Traffic Map' },
     {
       type: 'p',
-      text: 'The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API as this node sees it: callers on the left, API lanes in the middle (Items, Widgets, Pages, Custom queries, GraphQL, Inbound, Files, Extensions), data stores and partner APIs on the right. Edge width is requests per second; particles are individual requests coloured by kind; a node pulses on a write and flashes on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the particles off.'
+      text: 'The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API: who is calling, what they reach, and where the work goes next. Callers sit on the left, API lanes in the middle, data stores and outside services on the right. Edge width is requests per second, moving dots are individual requests coloured by kind, a row pulses when it is written to and flashes red on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the dots off.'
+    },
+    {
+      type: 'p',
+      text: 'This page covers reading the map. The next three pages cover finding the cause of a spike, acting from a node, and sharing, capacity and running it across several API processes.'
+    },
+    { type: 'h2', id: 'traffic-map-reading', text: 'Reading the map' },
+    { type: 'h3', id: 'traffic-map-columns', text: 'The three columns' },
+    {
+      type: 'ul',
+      items: [
+        'Callers (left): people, API keys and integration accounts. Under them are sources, the work that has no request behind it: scheduled jobs, flows, the staged import worker and socket events. Each source pulses into the collections it writes and the services it calls.',
+        'API lanes (middle): Collections, Widgets, Pages, Custom queries, GraphQL, Inbound, Files, Extensions, System and Sockets. Each row is one entity (a collection, widget, page, query, GraphQL operation, inbound key, file route, extension, system table or socket event) with its requests per second. System and Sockets are shown by default; the Show chips hide lanes.',
+        'Data and partners (right): the database, the cache, file storage, partner APIs (dashed outline), notification channels (mail, SMS, push, Teams) and the AI provider. The database node shows connection-pool pressure, the cache node its commands per second and the key families it touched.'
+      ]
+    },
+    { type: 'h3', id: 'traffic-map-marks', text: 'Edges, dots and badges' },
+    {
+      type: 'table',
+      head: ['You see', 'It means'],
+      rows: [
+        [
+          'A thicker edge',
+          'More requests per second. In the Flow header, Thickness switches between square root, log and linear, and Rates on edges prints the requests per second on each edge.'
+        ],
+        [
+          'A highlighted path',
+          'The selected node’s traffic. Selecting a caller traces its whole path (caller → lane → entity → downstream) and fades everything else until you clear it.'
+        ],
+        [
+          'A dashed amber edge',
+          'Someone acting as someone else: a masquerade or a simulated API key. The inspector names both people.'
+        ],
+        ['A dashed red edge', 'A retry storm: one caller repeating the same failing request.'],
+        [
+          'A dashed violet edge with an r value',
+          'An inferred link: two entities that keep rising together. Turn these on with Inferred links in the toolbar.'
+        ],
+        [
+          'Coloured partner edges',
+          'Why partner calls fail: transient, rate limited, auth, not found or validation.'
+        ],
+        ['Moving dots', 'Requests, coloured by kind: read, create, update, delete, error.'],
+        ['A ring pulse / a red flash', 'The row was written to / the row or lane had an error.'],
+        ['A green arc on a row', 'Its cache hit ratio (custom queries and widgets).'],
+        [
+          'A dashed outline on a row',
+          'Rehearsed writes (dry runs, sandbox keys, flow tests) that were thrown away. They are counted apart and never added to real write counts.'
+        ],
+        [
+          'A pill on a row or node',
+          'Something to look at: duplicate requests, an N+1 query pattern, write conflicts, pool pressure, a failing job.'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'How to read the map (in the Flow header) opens a guide with all of the above. It opens by itself on your first visit.'
+    },
+    { type: 'h3', id: 'traffic-map-controls', text: 'Narrowing the view' },
+    {
+      type: 'ul',
+      items: [
+        'Show, Kinds, Caller and the 1m / 5m / 15m window filter the canvas, the summary strip, the live events and the Hot entities table together.',
+        'Ask in words: type a sentence such as "only writes by integrations to forecasts in the last 5 minutes" and press Turn into filters. One small AI call picks from what the map already shows; every value is checked again before it is applied. A kind of caller ("integrations") becomes a removable caller-group chip. Needs an AI provider (Settings → AI Features).',
+        'Zoom with + and − in the Flow header, or Ctrl and the scroll wheel. Zoomed out shows lanes only; zoomed in shows each entity’s busiest route and every caller’s own edges. Escape clears a traced path.',
+        'Group callers by app collapses callers into the admin app, your other front ends, integrations, and cron & sources; select a group to expand it and select it again to fold it. Callers that send no app header are grouped by account kind.',
+        'Pin an entity (the pin in the inspector or the star in Hot entities) to keep it on your watch list across reloads. Pinned only narrows the live events and Hot entities to your pins. Up to 40 pins.',
+        'Workspace chips appear when more than one workspace has traffic. Picking one redraws every figure on the page for that workspace.',
+        'The Conflicts lens (on by default) outlines entities whose writes collided: stale edits, repeated transitions, record locks.',
+        'Avatars in the toolbar show which other admins are watching the map and what each has selected, which helps on an incident call.'
+      ]
+    },
+    { type: 'h3', id: 'traffic-map-rewind', text: 'Rewinding' },
+    {
+      type: 'p',
+      text: 'Pause turns the window into a timeline you can drag back through the last 15 minutes, so someone who arrives after a blip can still see it. Live returns to the present. With the 15-minute window selected there is nothing earlier to show; pick 1 or 5 minutes to rewind.'
     },
     { type: 'h2', id: 'traffic-map-sources', text: 'Where the numbers come from' },
     {
       type: 'ul',
       items: [
-        'Requests: the api-logger hook classifies every response into a lane and an entity (collection, widget id, page slug, query slug, GraphQL operation, inbound key, file route or extension) and counts it into a 15-minute per-second ring in memory. Route templates replace id-shaped and token-like segments with :id, so no access token ever appears.',
-        'Internally dispatched requests are counted once: the root /graphql alias re-dispatches to /api/graphql, and the call is counted under its real GraphQL operation, not twice.',
-        'Writes: broadcastCollectionUpdate reports create/update/delete with the record id and the names of the fields written — never values. One PATCH that writes a parent and twenty lines counts as twenty-one writes.',
-        'Partner calls: every callExternalApi lands on its partner node and is attributed to the request that caused it.',
-        'History (1h / 6h / 24h in the inspector) is rolled up from nivaro_api_logs, nivaro_outbound_log and open nivaro_issues. It reads the newest 20,000 log rows and says so when it truncates. Open issues are matched by route family (the template), not per entity. History for GraphQL calls made through the root /graphql alias may show as anonymous.'
+        'Requests: every response is classified into a lane and an entity and counted into a 15-minute, per-second ring in memory. Route templates replace id-shaped and token-like segments with :id, so no record id or access token reaches the map.',
+        'Requests that are re-dispatched internally are counted once: the root /graphql alias counts under the real GraphQL operation.',
+        'Writes: each create, update and delete is counted with its record id and the names of the fields written, never the values. One PATCH that writes a parent and twenty lines counts as twenty-one writes.',
+        'Partner calls, notification sends, AI calls, webhook deliveries and cache commands are counted where they are made and attributed to the request, job or flow that caused them.',
+        'Screens: the admin app and other front ends send the screen a call came from (its route pattern, never ids), which front end it is, and one id per page load. The headers are untrusted and normalised again on the server.',
+        'History (1h / 6h / 24h in the inspector) is read from the request log, the outbound call log and open issues. It reads the newest 20,000 log rows and says so when it stops there.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-limits', text: 'Limits' },
+    {
+      type: 'ul',
+      items: [
+        'A lane holds at most 40 entities (the rest fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame. Idle rings are swept after 15 minutes.',
+        'Frames are built only while someone has the page open (or a node is asked for them); nothing is written to the database on the request path.',
+        'When more than one API process serves traffic, see "Several API processes" on the Share & Scale page.'
+      ]
+    }
+  ]
+}
+
+export const obsTrafficMapInvestigate: DocSection = {
+  id: 'traffic-map-investigate',
+  label: 'Traffic Map: Investigate',
+  content: [
+    { type: 'h1', id: 'traffic-map-investigate', text: 'Traffic Map: Finding a Cause' },
+    {
+      type: 'p',
+      text: 'Select any node and the inspector opens beside the map, at the canvas height, scrolling inside. What it shows depends on the kind of node. Start with the figures and the sparkline, then work down the panels below.'
+    },
+    {
+      type: 'p',
+      text: 'Sparklines carry markers for what changed: API restarts and deploys, configuration writes and maintenance windows. A jump that starts at a marker usually has its cause right there.'
+    },
+    { type: 'h2', id: 'traffic-map-who', text: 'Who is driving it' },
+    {
+      type: 'ul',
+      items: [
+        'Callers: pick one caller in the inspector header and the entity’s figures, sparkline and events narrow to that caller (exact counts, not an estimate).',
+        'Screens: the screens the calls came from ("record page → 41 calls"). The fan-out tile on the summary strip flags screens whose single page load fires more calls than the limit (60 by default).',
+        'Signed in by: the split between browser sessions, static tokens, API keys, masquerade and simulated keys. A lane suddenly driven by tokens stands out.',
+        'Acting as someone: requests made while an admin masqueraded, named as "admin as person", so they never read as that person’s own traffic.',
+        'By workspace: the entity’s requests per workspace, on instances with more than one.',
+        'Moves with: entities that keep rising and falling with this one over the last 15 minutes, and which usually moves first.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-why-slow', text: 'Why it is slow' },
+    {
+      type: 'table',
+      head: ['Panel', 'What it tells you'],
+      rows: [
+        [
+          'Request cost',
+          'Average database round trips and SQL time per request, where the time goes (sign-in, metadata, SQL, hooks, building the answer), and how much row filters and user scopes add. A request that averages more round trips than the N+1 limit (40 by default) gets an N+1 badge on the map and its repeated statement is shown.'
+        ],
+        [
+          'Slow requests',
+          'The slow requests this process kept for the entity, slowest first, each with its heaviest statements and the Plan / explain button.'
+        ],
+        [
+          'Hook cost on this collection',
+          'Every before and after hook that runs for the collection, slowest first, with what registered it (an extension or a core file).'
+        ],
+        [
+          'Filter and sort shapes',
+          'Which filter paths, operators and sorts callers use on the collection (shapes only, never values). The index advisor on API Analytics uses the same evidence.'
+        ],
+        [
+          'Write amplification',
+          'For each direct write, the derived writes it caused: rollups, queue cache rows, integrity rows, revisions, activity.'
+        ],
+        [
+          'Response size',
+          'Median and p95 response size. Hot entities has the same column for finding fat responses.'
+        ],
+        ['Cache', 'Hit ratio and roughly how many milliseconds the cache saved.'],
+        [
+          'What users felt',
+          'On a page: the browser’s p75 load and route-settle times beside what the API took.'
+        ],
+        [
+          'Duplicate requests',
+          'Identical reads from the same caller within half a second, listed as pairs.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-why-failing', text: 'Why it is failing' },
+    {
+      type: 'table',
+      head: ['Panel', 'What it tells you'],
+      rows: [
+        [
+          'Error groups',
+          'Errors grouped by their normalised message; each server-error group links to its issue.'
+        ],
+        [
+          'Rejected requests',
+          'Refused sign-ins and permissions (401, 403, 429) per caller, with the reason code and the key’s configured scopes and rate limit.'
+        ],
+        ['Retry storm', 'The caller that keeps repeating the same failing request, and how often.'],
+        [
+          'Conflicts',
+          'Stale-edit collisions, repeated transitions, idempotency waits and record locks.'
+        ],
+        [
+          'Hot records right now',
+          'The ten records being written or locked most, with write counts, lock queue and conflicts; each opens the record.'
+        ],
+        [
+          'Fields that change most',
+          'Which fields are written most on the collection, and by whom.'
+        ],
+        [
+          'Fields this operation selects',
+          'On a GraphQL node: the fields partners actually select. Unused fields are candidates for deprecation.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-sources-panels', text: 'Jobs, flows, partners and services' },
+    {
+      type: 'ul',
+      items: [
+        'A scheduled job or flow shows its schedule or triggers, its recent runs with duration and outcome, and what it calls into. The import worker shows the run in progress and its rows per second.',
+        'A partner shows its calls in this window, why calls fail, a latency spread, and what it is owed: missing, overdue and failed messages and its newest failed pushes.',
+        'Notification channels show sends, failures and test-mode redirects; the AI provider shows calls, tokens, cost, the models that answered and any fallbacks; a webhook shows deliveries and slow receivers.',
+        'Rejected, unknown and first-seen clients on public routes (share pages, public forms, widget feeds) are listed in their own panel, with IP addresses masked.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-ai', text: 'Explain with AI' },
+    {
+      type: 'p',
+      text: 'Explain (in the inspector) sends the node’s own window (rate, latency, errors, kinds, top routes and callers, recent errors and events) and returns two sentences plus where to look next. One call per click. Ask AI can answer the same kind of question in chat ("who hit forecasts hardest today?") through its traffic tool, for administrators only.'
+    }
+  ]
+}
+
+export const obsTrafficMapAct: DocSection = {
+  id: 'traffic-map-act',
+  label: 'Traffic Map: Act',
+  content: [
+    { type: 'h1', id: 'traffic-map-act', text: 'Traffic Map: Acting from a Node' },
+    {
+      type: 'p',
+      text: 'Everything that changes something asks for two clicks and writes an activity row, through the same routes the rest of the admin uses.'
+    },
+    { type: 'h2', id: 'traffic-map-links', text: 'Going to the source' },
+    {
+      type: 'ul',
+      items: [
+        'An error in the live events opens the logged request in API Analytics, where you can read the body and replay it.',
+        'A record id opens the record. A write or error offers Show path: the request, the writes it made, the transitions, partner pushes and flows that followed.',
+        'A caller opens Inbound calls filtered to it; a person opens their profile. An entity opens where it is configured; a partner opens its external API.',
+        'Runbook links appear on a node when an Environments component’s notes name one, or when an extension declares one.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-actions', text: 'Actions' },
+    {
+      type: 'table',
+      head: ['Action', 'Where', 'What it does'],
+      rows: [
+        [
+          'Retry / Send now',
+          'Partner node',
+          'Retry re-sends a failed push with its stored payload; Send now sends a missing message (only when remediation is switched on under Settings → Integrations).'
+        ],
+        [
+          'Tell me when…',
+          'Any entity',
+          'Creates a `traffic` monitor prefilled with the entity, metric (errors or requests per minute, p95, error rate), threshold and window. You are notified when it starts failing, like any ops monitor. Each API process judges its own traffic.'
+        ],
+        [
+          'Caller controls',
+          'Caller node',
+          'For an API key: set its calls-per-minute limit or revoke it. For a person or integration account: suspend it.'
+        ],
+        [
+          'Pause',
+          'Job, flow or partner node',
+          'Pauses a scheduled job, switches a flow off, or switches a partner’s external API to mock answers on this instance. Each switches back the same way.'
+        ],
+        [
+          'Fire a probe',
+          'Entity',
+          'Sends one safe read at the entity as you, so it lights up end to end as a live smoke check.'
+        ],
+        [
+          'Replay load (dev)',
+          'Caller node',
+          'Shows how many reads the caller made in the last hour and the command that replays a sample of them against a throwaway API (see Share & Scale).'
+        ],
+        [
+          'Circuit breaker',
+          'Entity or caller',
+          'Refuses (503) or limits (429) one entity or caller for a set number of minutes, with a reason. Every API process honours it and it lifts on its own.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-breakers', text: 'Circuit breakers' },
+    {
+      type: 'ul',
+      items: [
+        'Use one during an incident to take pressure off a struggling collection or stop a runaway caller. Refused callers get the code `TRAFFIC_BREAKER_OPEN`.',
+        'A breaker lasts 1 minute to 24 hours and needs a reason. You cannot break your own account.',
+        'Sign-in, health, version, readiness and the Traffic Map itself are never broken, so you can always lift a breaker.',
+        'Breakers live in the cache so every process sees them; if the cache is down, breakers are off rather than refusing traffic.',
+        'While any breaker is open, an "N breakers open" button in the toolbar lists them and lifts them.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-inflight', text: 'In-flight requests' },
+    {
+      type: 'p',
+      text: 'The In flight panel lists requests this process has not finished, oldest first, with their age, route, caller and the SQL they are running. Cancel kills the database session running that statement: give a reason, then confirm. Use it for a runaway read, not for a write you want to finish.'
+    }
+  ]
+}
+
+export const obsTrafficMapPlatform: DocSection = {
+  id: 'traffic-map-platform',
+  label: 'Traffic Map: Share & Scale',
+  content: [
+    { type: 'h1', id: 'traffic-map-platform', text: 'Traffic Map: Sharing, Capacity and Scale' },
+    { type: 'h2', id: 'traffic-map-sharing', text: 'Sharing and comparing' },
+    {
+      type: 'ul',
+      items: [
+        'Copy view link copies a link that opens exactly this view: filters, selection, lenses, workspace, zoom and the rewind position.',
+        'Share freezes the current window into a stored snapshot that opens read-only from a link (/traffic-map?snapshot=…). Add a note and it also appears on the Ops Console incident timeline. Snapshots keep the labels the map showed, and you can scrub through the frozen window.',
+        'Record keeps a rolling recording of the canvas in your browser. Download the last 30 seconds as a video, or attach it to a new issue. Nothing leaves the browser until you do.',
+        'Compare shows two windows of this deployment side by side from the request log (morning against afternoon, this hour against the same hour last week), or this deployment against another API registered under Environments, fetched live with that component’s token.',
+        'Daily summary adds a traffic section to your daily summary email: busiest callers, new callers, error hot spots and integrations that went quiet. It is off until you turn it on.',
+        'A compact traffic card sits on the Command Center admin rail.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-capacity', text: 'Capacity and health' },
+    {
+      type: 'ul',
+      items: [
+        'Headroom: the current request rate against a ceiling, either the best sustained minute this instance has carried over the last week or a fixed value you set (`TRAFFIC_CAPACITY_RPS`), with connection-pool use beside it. It reads "at 30% of what it can carry".',
+        'Projection: the next 15 minutes from the recent trend and how the same time of day usually moves, for example "past the pool limit in 8 minutes at this rate".',
+        'Event loop: event-loop delay and garbage-collection pauses beside the request rate. A slow node with fast SQL is CPU-bound.',
+        'Realtime: event-journal lag and how many tabs watch each live view, linking to /realtime.',
+        'Fan-out: the screens whose page loads fire the most calls.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
+    {
+      type: 'p',
+      text: 'Each API process counts its own traffic. While anyone watches the map, every process publishes its frames through the cache and the page merges them, so the map shows the whole deployment. When more than one process is sending, a Nodes control appears: all nodes combined (the default) or one process. Snapshots can be taken of every node or one. When nobody watches, nothing is published. In-flight requests, slow requests and the event loop stay per process.'
+    },
+    { type: 'h2', id: 'traffic-map-cloud', text: 'Cloud mode' },
+    {
+      type: 'p',
+      text: 'In cloud mode (one process serving many tenants) every tenant has its own counts, and an admin sees only their own tenant’s traffic. The map, the inspector history, snapshots, Compare windows and the node merge are tenant-scoped. The panels that read process-wide state (in-flight requests, slow traces, capacity, breakers, probes and similar) are not available there.'
+    },
+    { type: 'h2', id: 'traffic-map-replay', text: 'Load replay (development only)' },
+    {
+      type: 'p',
+      text: 'Replays an evenly spaced sample of one caller’s logged reads against a throwaway API at a chosen speed, then prints status counts and latency. GET requests only, run as the token you pass (not as the caller). It refuses unless NODE_ENV is development and refuses any registered or shared host.'
+    },
+    {
+      type: 'pre',
+      code: `pnpm --filter @nivaro/api run traffic:replay -- \\
+  --caller k12 | u<user uuid> --target http://localhost:3099 --token <bearer> \\
+  [--hours 1] [--sample 200] [--multiplier 2] [--dry-run]`
+    },
+    { type: 'h2', id: 'traffic-map-extending', text: 'Extending the map' },
+    {
+      type: 'p',
+      text: 'An extension can name the business systems behind its partner calls, so the map reads "→ deployment requests" instead of "→ external API 7". A partner call goes to the first declared node that matches it, else to the plain partner node.'
+    },
+    {
+      type: 'pre',
+      code: `ctx.integrations.registerTrafficNode({
+  id: 'deployment-requests',          // unique within the extension
+  label: 'Deployment requests',
+  match: { api: 'Warehouse API', path: '/api/deploymentRequests', method: 'POST' }
+  // or match: (call) => call.apiName === 'Warehouse API' && call.path?.startsWith('/orders')
+})`
+    },
+    {
+      type: 'p',
+      text: 'A front end of your own can send the same headers the admin app sends, so its calls appear under their screens and page loads: `x-nivaro-app` (which front end), `x-nivaro-page` (the screen’s route pattern, never ids) and `x-nivaro-load` (one id per page load).'
+    },
+    { type: 'h2', id: 'traffic-map-config', text: 'Settings' },
+    {
+      type: 'table',
+      head: ['Setting', 'Default', 'What it changes'],
+      rows: [
+        [
+          '`TRAFFIC_N_PLUS_ONE_TRIPS`',
+          '40',
+          'Average round trips per request before an entity gets the N+1 badge.'
+        ],
+        [
+          '`TRAFFIC_FANOUT_LIMIT`',
+          '60',
+          'Calls in one page load before a screen is flagged for fan-out.'
+        ],
+        [
+          '`TRAFFIC_CAPACITY_RPS`',
+          'unset',
+          'A fixed request-per-second ceiling for the headroom gauge. Unset = the best sustained minute from the request log.'
+        ],
+        [
+          '`TRACE_SLOW_MS`',
+          '1000',
+          'Requests slower than this are kept for the Slow requests panel.'
+        ]
       ]
     },
     {
       type: 'pre',
-      code: `GET  /api/traffic-map/snapshot?window=60|300|900   → the rings for this node
+      code: `GET  /api/traffic-map/snapshot?window=60|300|900   → this node's counts
+GET  /api/traffic-map/cluster-snapshot?window=     → every node merged (or ?node=)
 GET  /api/traffic-map/catalog                      → labels for entities, callers, partners
-GET  /api/traffic-map/entity/:lane/:entity?hours=  → rolled-up history + issues + slow traces
-GET  /api/traffic-map/down/:id?hours=              → partner call history (ext:<api id>)
-socket  admin:join {room: 'traffic-map'}  → one 'traffic-map:frame' per second while watched`
-    },
-    { type: 'h2', id: 'traffic-map-limits', text: 'Limits and scope' },
-    {
-      type: 'ul',
-      items: [
-        'Per node: the numbers are this API process only, and frames go only to watchers connected to this node.',
-        'Cloud mode (CLOUD_META_DB_URL set): the emitter does not start and every /api/traffic-map route answers 404, because one process serves many tenants and the aggregator is per process. Cloud tenants do not get the page.',
-        'A lane holds at most 40 entities (extras fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame (events_dropped counts the rest). Idle rings are swept after 15 minutes.',
-        "The caller filter uses the caller's own counts for totals; the hot table is approximate (entities whose top callers include that caller, or with a live event from it).",
-        '/issues/:id opens the Issues page on that issue, pinned on top when it is older than the newest 200.'
-      ]
-    },
-    {
-      type: 'note',
-      text: 'Frames are built only while someone has the page open; nothing is written to the database on the request path.'
+GET  /api/traffic-map/entity/:lane/:entity?hours=  → history, issues and slow traces
+GET  /api/traffic-map/entity-detail?key=           → every inspector panel's figures
+POST /api/traffic-map/snapshots                    → freeze a shareable snapshot
+GET  /api/traffic-map/compare/windows?…            → two windows from the request log
+GET|POST|DELETE /api/traffic-map/breakers          → circuit breakers
+socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched`
     }
   ]
 }
