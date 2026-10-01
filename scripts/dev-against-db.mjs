@@ -129,7 +129,7 @@ process.on('unhandledRejection', (err) => {
 process.on('SIGINT', () => stop(0))
 process.on('SIGTERM', () => stop(0))
 
-function run(label, cmd, argv, cwd, env) {
+function run(label, cmd, argv, cwd, env, { respawn } = {}) {
   const child = spawn(cmd, argv, {
     cwd,
     env: { ...process.env, ...env },
@@ -149,6 +149,15 @@ function run(label, cmd, argv, cwd, env) {
   }
   child.on('exit', (code) => {
     if (stopping) return
+    const at = children.indexOf(child)
+    if (at >= 0) children.splice(at, 1)
+    // A clean exit the launcher did not ask for = a restart request (the
+    // admin's "Restart the API" button, or an extension file changing).
+    if (code === 0 && respawn) {
+      console.log(`${tag}restarting`)
+      respawn()
+      return
+    }
     console.error(`${tag}exited (${code}) — stopping the rest`)
     stop(1)
   })
@@ -180,17 +189,30 @@ if (!(await listening(Number(redisBase.port || 6379), redisBase.hostname)))
 
 console.log(`dev:db → ${database}  (API ${apiPort}, admin ${adminPort}${frontend ? `, frontend ${frontend.port}` : ''})`)
 
-run('api', 'npx', ['tsx', 'src/index.ts'], resolve(ROOT, 'api'), {
-  PORT: String(apiPort),
-  DB_DATABASE: database,
-  REDIS_URL: redisUrl,
-  REDIS_CHANNEL_PREFIX: 'devdb:',
-  CRON_TICKS: 'off',
-  SKIP_BOOT_MIGRATIONS: '1',
-  PUBLIC_URL: apiUrl,
-  ADMIN_URL: adminUrl,
-  APP_URLS: [adminUrl, frontendUrl].filter(Boolean).join(',')
-})
+function startApi() {
+  run(
+    'api',
+    'npx',
+    ['tsx', 'src/index.ts'],
+    resolve(ROOT, 'api'),
+    {
+      PORT: String(apiPort),
+      DB_DATABASE: database,
+      REDIS_URL: redisUrl,
+      REDIS_CHANNEL_PREFIX: 'devdb:',
+      CRON_TICKS: 'off',
+      SKIP_BOOT_MIGRATIONS: '1',
+      // No watcher runs this API, and api/src/index.ts is shared with the dev
+      // API: a restart request makes it exit, and startApi() runs it again.
+      DEV_RESTART: 'exit',
+      PUBLIC_URL: apiUrl,
+      ADMIN_URL: adminUrl,
+      APP_URLS: [adminUrl, frontendUrl].filter(Boolean).join(',')
+    },
+    { respawn: startApi }
+  )
+}
+startApi()
 
 const version = await waitFor(`${apiUrl}/api/version`, 120)
 if (!version) {

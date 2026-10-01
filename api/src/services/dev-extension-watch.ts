@@ -65,6 +65,14 @@ export function requestDevRestart(
   if (nodeEnv !== 'development')
     return Promise.resolve({ ok: false, reason: 'not a development API' })
   if (!existsSync(entry)) return Promise.resolve({ ok: false, reason: 'no source tree' })
+  // DEV_RESTART=exit (pnpm dev:db): no tsx watch runs this process, and the
+  // entry file is shared with the dev API — touching it would restart THAT
+  // one. Shut down cleanly instead; the launcher starts this API again.
+  if (process.env.DEV_RESTART === 'exit') {
+    log('DEV_RESTART=exit — shutting down; the launcher starts the API again')
+    setTimeout(() => process.kill(process.pid, 'SIGTERM'), 300)
+    return Promise.resolve({ ok: true })
+  }
   return new Promise((done) => {
     const now = new Date()
     utimes(entry, now, now, (err) => {
