@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { instanceScope } from '../services/api-log-instances.js'
 import { recordReplayRoot } from '../services/chain-roots.js'
 import { queryIsReplayable } from '../services/secret-mask.js'
 
@@ -30,16 +31,20 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const { hours: hoursRaw } = req.query as { hours?: string }
     const hours = parseHours(hoursRaw)
     const from = since(hours)
+    const sc = await instanceScope(req.query)
 
     const [totalRow, errorRow, latRows] = await Promise.all([
-      db('nivaro_api_logs').where('created_at', '>=', from).count('* as c').first(),
-      db('nivaro_api_logs')
-        .where('created_at', '>=', from)
+      sc
+        .apply(db('nivaro_api_logs').where('created_at', '>=', from))
+        .count('* as c')
+        .first(),
+      sc
+        .apply(db('nivaro_api_logs').where('created_at', '>=', from))
         .andWhere('status', '>=', 400)
         .count('* as c')
         .first(),
-      db('nivaro_api_logs')
-        .where('created_at', '>=', from)
+      sc
+        .apply(db('nivaro_api_logs').where('created_at', '>=', from))
         .select('latency_ms')
         .limit(LATENCY_SAMPLE_CAP) as Promise<{ latency_ms: number }[]>
     ])
@@ -65,6 +70,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const { hours: hoursRaw } = req.query as { hours?: string }
     const hours = parseHours(hoursRaw)
     const from = since(hours)
+    const sc = await instanceScope(req.query)
 
     const rows = (await db.raw(
       `SELECT DATEADD(hour, DATEDIFF(hour, 0, created_at), 0) AS bucket,
@@ -72,10 +78,10 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
               AVG(CAST(latency_ms AS FLOAT)) AS avg_latency,
               SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors
        FROM nivaro_api_logs
-       WHERE created_at >= ?
+       WHERE created_at >= ?${sc.sql()}
        GROUP BY DATEADD(hour, DATEDIFF(hour, 0, created_at), 0)
        ORDER BY bucket`,
-      [from]
+      [from, ...sc.bindings]
     )) as { bucket: Date; count: number; avg_latency: number | null; errors: number }[]
 
     return reply.send({
@@ -92,9 +98,10 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
   app.get('/top-paths', { preHandler: requireAdmin }, async (req, reply) => {
     const { hours: hoursRaw } = req.query as { hours?: string }
     const from = since(parseHours(hoursRaw))
+    const sc = await instanceScope(req.query)
 
-    const rows = (await db('nivaro_api_logs')
-      .where('created_at', '>=', from)
+    const rows = (await sc
+      .apply(db('nivaro_api_logs').where('created_at', '>=', from))
       .select(
         'method',
         'path',
@@ -148,8 +155,9 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       graphql_errors: number | null
       graphql_deprecated: string | null
     }
-    const rows = (await db('nivaro_api_logs')
-      .where('created_at', '>=', from)
+    const sc = await instanceScope(req.query)
+    const rows = (await sc
+      .apply(db('nivaro_api_logs').where('created_at', '>=', from))
       .whereNotNull('graphql_operation')
       .orderBy('id', 'desc')
       .limit(20000)
@@ -341,9 +349,14 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const { hours: hoursRaw } = req.query as { hours?: string }
     const from = since(parseHours(hoursRaw))
 
-    const rows = (await db('nivaro_api_logs as l')
-      .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
-      .where('l.created_at', '>=', from)
+    const sc = await instanceScope(req.query)
+    const rows = (await sc
+      .apply(
+        db('nivaro_api_logs as l')
+          .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
+          .where('l.created_at', '>=', from),
+        'l.instance'
+      )
       .whereNotNull('l.api_key_id')
       .select(
         'l.api_key_id',
@@ -381,8 +394,9 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const { hours: hoursRaw } = req.query as { hours?: string }
     const from = since(parseHours(hoursRaw))
 
-    const rows = (await db('nivaro_api_logs')
-      .where('created_at', '>=', from)
+    const sc = await instanceScope(req.query)
+    const rows = (await sc
+      .apply(db('nivaro_api_logs').where('created_at', '>=', from))
       .whereNotNull('collection')
       .select(
         'collection',
@@ -407,9 +421,10 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
   })
 
   // GET /api-analytics/errors — latest 50 error responses
-  app.get('/errors', { preHandler: requireAdmin }, async (_req, reply) => {
-    const rows = await db('nivaro_api_logs')
-      .where('status', '>=', 400)
+  app.get('/errors', { preHandler: requireAdmin }, async (req, reply) => {
+    const sc = await instanceScope(req.query)
+    const rows = await sc
+      .apply(db('nivaro_api_logs').where('status', '>=', 400))
       .orderBy('created_at', 'desc')
       .limit(50)
     return reply.send({ data: rows })
@@ -425,7 +440,11 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const hours = parseHours(q.hours)
     const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
     const page = Math.max(1, Number(q.page) || 1)
-    const base = db('nivaro_api_logs as l').where('l.created_at', '>=', since(hours))
+    const sc = await instanceScope(q)
+    const base = sc.apply(
+      db('nivaro_api_logs as l').where('l.created_at', '>=', since(hours)),
+      'l.instance'
+    )
     if (q.path) {
       const esc = q.path.replace(/[%_[]/g, (m) => `[${m}]`)
       void base.where('l.path', 'like', `%${esc}%`)
@@ -625,9 +644,10 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const from = since(hours)
     // A refused credential that matched nobody is logged as token / api_key
     // with no caller — those belong to /auth-failures, not to a caller card.
+    const sc = await instanceScope(q)
     const inbound = () =>
-      db('nivaro_api_logs as l')
-        .where('l.created_at', '>=', from)
+      sc
+        .apply(db('nivaro_api_logs as l').where('l.created_at', '>=', from), 'l.instance')
         .whereIn('l.auth', ['token', 'api_key'])
         .where((w) => w.whereNotNull('l.user').orWhereNotNull('l.api_key_id'))
 
@@ -801,8 +821,9 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const hours = parseHours(q.hours)
     const from = since(hours)
     const SCAN = 5000
-    const rows = (await db('nivaro_api_logs as l')
-      .where('l.created_at', '>=', from)
+    const sc = await instanceScope(q)
+    const rows = (await sc
+      .apply(db('nivaro_api_logs as l').where('l.created_at', '>=', from), 'l.instance')
       .whereIn('l.status', [401, 403, 429])
       .whereIn('l.auth', ['token', 'api_key', 'masquerade'])
       .select(

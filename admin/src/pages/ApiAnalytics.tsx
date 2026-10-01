@@ -98,6 +98,10 @@ export function requestLinkFilters(params: URLSearchParams): RequestLinkFilters 
 
 export function ApiAnalyticsPage() {
   const [hours, setHours] = useState(24)
+  // #1052 — development instances (laptops, probes) share the database; their
+  // rows are hidden unless asked for, and pruned after 3 hours anyway.
+  const [allInstances, setAllInstances] = useState(false)
+  const inst = allInstances ? '&instances=all' : ''
   const [params] = useSearchParams()
   const [linkFilters] = useState(() => requestLinkFilters(params))
   const [reqFilters, setReqFilters] = useState<RequestLinkFilters>(linkFilters ?? {})
@@ -107,33 +111,38 @@ export function ApiAnalyticsPage() {
   }, [linkFilters])
 
   const { data: summary } = useQuery<Summary>({
-    queryKey: ['api-analytics-summary', hours],
+    queryKey: ['api-analytics-summary', hours, allInstances],
     queryFn: () =>
-      api.get<{ data: Summary }>(`/api-analytics/summary?hours=${hours}`).then((r) => r.data.data),
+      api
+        .get<{ data: Summary }>(`/api-analytics/summary?hours=${hours}${inst}`)
+        .then((r) => r.data.data),
     refetchInterval: 30_000
   })
 
   const { data: timeseries = [] } = useQuery<TimeseriesPoint[]>({
-    queryKey: ['api-analytics-timeseries', hours],
+    queryKey: ['api-analytics-timeseries', hours, allInstances],
     queryFn: () =>
       api
-        .get<{ data: TimeseriesPoint[] }>(`/api-analytics/timeseries?hours=${hours}`)
+        .get<{ data: TimeseriesPoint[] }>(`/api-analytics/timeseries?hours=${hours}${inst}`)
         .then((r) => r.data.data),
     refetchInterval: 30_000
   })
 
   const { data: topPaths = [] } = useQuery<TopPath[]>({
-    queryKey: ['api-analytics-top-paths', hours],
+    queryKey: ['api-analytics-top-paths', hours, allInstances],
     queryFn: () =>
       api
-        .get<{ data: TopPath[] }>(`/api-analytics/top-paths?hours=${hours}`)
+        .get<{ data: TopPath[] }>(`/api-analytics/top-paths?hours=${hours}${inst}`)
         .then((r) => r.data.data),
     refetchInterval: 30_000
   })
 
   const { data: errors = [] } = useQuery<ErrorLog[]>({
-    queryKey: ['api-analytics-errors'],
-    queryFn: () => api.get<{ data: ErrorLog[] }>('/api-analytics/errors').then((r) => r.data.data),
+    queryKey: ['api-analytics-errors', allInstances],
+    queryFn: () =>
+      api
+        .get<{ data: ErrorLog[] }>(`/api-analytics/errors${allInstances ? '?instances=all' : ''}`)
+        .then((r) => r.data.data),
     refetchInterval: 30_000
   })
 
@@ -154,6 +163,17 @@ export function ApiAnalyticsPage() {
           <h1 className='text-lg font-semibold'>API Analytics</h1>
         </div>
         <div className='flex items-center gap-1'>
+          <Button
+            size='sm'
+            variant={allInstances ? 'default' : 'outline'}
+            className='mr-2 h-7 px-2.5 text-[12px]'
+            aria-pressed={allInstances}
+            onClick={() => setAllInstances((v) => !v)}
+            data-api-analytics-all-instances
+            data-tip='Development instances (laptops, probes) write to the same database. Their rows are hidden unless this is on, and pruned after 3 hours.'
+          >
+            {allInstances ? 'Incl. dev instances' : 'Deployed instances'}
+          </Button>
           {RANGES.map((r) => (
             <Button
               key={r.hours}
@@ -327,10 +347,10 @@ export function ApiAnalyticsPage() {
         </div>
 
         <div className='mt-6'>
-          <ByKeyPanel hours={hours} />
+          <ByKeyPanel hours={hours} allInstances={allInstances} />
         </div>
         <div className='mt-6'>
-          <GraphqlPanel hours={hours} />
+          <GraphqlPanel hours={hours} allInstances={allInstances} />
         </div>
         <div className='mt-6'>
           <SlowTracesPanel />
@@ -342,6 +362,7 @@ export function ApiAnalyticsPage() {
           <NivaroProvider client={sharedClient}>
             <ApiRequestLog
               hours={hours}
+              allInstances={allInstances}
               filters={reqFilters}
               onFiltersChange={setReqFilters}
               title='Requests'
@@ -367,7 +388,7 @@ export function ApiAnalyticsPage() {
 /** Per-API-key traffic (#67) — which integration is hammering the API, and
  *  whether its calls are erroring. Session/cookie traffic is excluded; only
  *  requests authenticated by a named nivaro_api_keys key appear. */
-function ByKeyPanel({ hours }: { hours: number }) {
+function ByKeyPanel({ hours, allInstances }: { hours: number; allInstances: boolean }) {
   const { data: rows = [] } = useQuery<
     Array<{
       api_key_id: number
@@ -378,8 +399,11 @@ function ByKeyPanel({ hours }: { hours: number }) {
       last_seen: string | null
     }>
   >({
-    queryKey: ['api-analytics-by-key', hours],
-    queryFn: () => api.get(`/api-analytics/by-key?hours=${hours}`).then((r) => r.data.data)
+    queryKey: ['api-analytics-by-key', hours, allInstances],
+    queryFn: () =>
+      api
+        .get(`/api-analytics/by-key?hours=${hours}${allInstances ? '&instances=all' : ''}`)
+        .then((r) => r.data.data)
   })
   if (rows.length === 0) return null
   return (
@@ -425,7 +449,7 @@ function ByKeyPanel({ hours }: { hours: number }) {
 /** Per-operation GraphQL view (#607): the one path integrations hit, split
  *  by what each call asked for. Deprecated fields still being selected are
  *  listed with who selects them — the deprecation policy's other half. */
-function GraphqlPanel({ hours }: { hours: number }) {
+function GraphqlPanel({ hours, allInstances }: { hours: number; allInstances: boolean }) {
   const { data } = useQuery<{
     operations: Array<{
       operation: string
@@ -459,8 +483,11 @@ function GraphqlPanel({ hours }: { hours: number }) {
     total: number
     unavailable: boolean
   }>({
-    queryKey: ['api-analytics-graphql', hours],
-    queryFn: () => api.get(`/api-analytics/graphql?hours=${hours}`).then((r) => r.data.data)
+    queryKey: ['api-analytics-graphql', hours, allInstances],
+    queryFn: () =>
+      api
+        .get(`/api-analytics/graphql?hours=${hours}${allInstances ? '&instances=all' : ''}`)
+        .then((r) => r.data.data)
   })
   const [open, setOpen] = useState<string | null>(null)
   if (!data || data.unavailable || data.operations.length === 0) return null

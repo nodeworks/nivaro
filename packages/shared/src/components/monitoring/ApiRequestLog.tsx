@@ -221,9 +221,12 @@ export function ApiRequestLog({
   title = 'Requests',
   description,
   embedded = false,
-  refetchMs = 30_000
+  refetchMs = 30_000,
+  allInstances = false
 }: {
   hours?: number
+  /** #1052 — include rows from development instances (hidden by default). */
+  allInstances?: boolean
   /** Controlled filters (the Integrations page drives these from the caller cards). */
   filters?: ApiRequestLogFilters
   onFiltersChange?: (f: ApiRequestLogFilters) => void
@@ -271,8 +274,9 @@ export function ApiRequestLog({
     if (filters.errors) p.errors = 1
     if (filters.from) p.from = filters.from
     if (filters.to) p.to = filters.to
+    if (allInstances) p.instances = 'all'
     return p
-  }, [filters, hours, page])
+  }, [filters, hours, page, allInstances])
 
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['api-request-log', params],

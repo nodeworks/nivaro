@@ -124,6 +124,7 @@ const FLUSH_INTERVAL_MS = 5000
 const FLUSH_THRESHOLD = 50
 const RETENTION_DAYS = 14
 const CLEANUP_PROBABILITY = 0.01
+const DEV_PRUNE_INTERVAL_MS = 10 * 60 * 1000
 
 /** Extract the collection slug from /api/items/:collection[/...] paths. */
 function extractCollection(path: string): string | null {
@@ -249,6 +250,20 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   }, FLUSH_INTERVAL_MS)
   timer.unref()
 
+  // #1052 — request-log rows from development instances (laptops and probes
+  // sharing the database) go after 3 hours instead of 14 days, so a deployed
+  // instance's caller cards and failure lists stay its own. Every process
+  // runs it; the delete is idempotent and batched.
+  const devPrune = setInterval(() => {
+    void import('../services/api-log-instances.js')
+      .then((m) => m.pruneDevInstanceLogs())
+      .then((n) => {
+        if (n > 0) app.log.info({ rows: n }, 'pruned development-instance API log rows')
+      })
+      .catch((err) => app.log.warn({ err }, 'Failed to prune development-instance API log rows'))
+  }, DEV_PRUNE_INTERVAL_MS)
+  devPrune.unref()
+
   // Keep the first KB of an error body so a rejected integration call can be
   // read back from the request list ("why did my push 400") without replaying
   // it. Only string/Buffer payloads — streams (static files) pass untouched.
@@ -370,6 +385,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
 
   app.addHook('onClose', async () => {
     clearInterval(timer)
+    clearInterval(devPrune)
     await flush()
   })
 
