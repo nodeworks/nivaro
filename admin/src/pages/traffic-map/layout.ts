@@ -24,10 +24,11 @@ const MIN_W = 860
 export function computeLayout(input: {
   width: number
   callers: string[]
+  /** `entities` are BARE entity ids (no lane prefix); rects are keyed `${lane}/${entity}`. */
   lanes: Array<{ id: Lane; entities: string[] }>
   downs: string[]
 }): MapLayout {
-  const W = Math.max(MIN_W, Math.floor(input.width))
+  const W = Number.isFinite(input.width) ? Math.max(MIN_W, Math.floor(input.width)) : MIN_W
   const laneW = Math.min(360, Math.max(280, W - 2 * (COL_W + 40) - 160))
   const laneX = Math.round((W - laneW) / 2)
   const lanes: Record<string, Rect> = {}
@@ -37,13 +38,14 @@ export function computeLayout(input: {
     const h = LANE_HEAD + lane.entities.length * ROW_H + 8
     lanes[lane.id] = { x: laneX, y, w: laneW, h }
     let ey = y + LANE_HEAD + 2
-    for (const key of lane.entities) {
-      ents[key] = { x: laneX + 6, y: ey, w: laneW - 12, h: ROW_H }
+    for (const entity of lane.entities) {
+      // keyed `${lane}/${entity}` like the server/model keys, so equal ids in two lanes never collide
+      ents[`${lane.id}/${entity}`] = { x: laneX + 6, y: ey, w: laneW - 12, h: ROW_H }
       ey += ROW_H
     }
     y += h + 10
   }
-  const H = Math.max(y + 6, 320)
+  const H = Math.max(y + 6, 320, 20 + input.downs.length * 40, 20 + input.callers.length * 44)
   const place = (list: string[], x: number, h: number): Record<string, Rect> => {
     const out: Record<string, Rect> = {}
     const gap = list.length > 1 ? (H - 20 - list.length * h) / (list.length - 1) : 0
@@ -87,6 +89,7 @@ export function bezierPoint(
   return { x, y }
 }
 
+/** Returns 0 for rps <= 0: the canvas must skip zero-width edges rather than stroke them. */
 export function edgeWidth(rps: number): number {
   return rps <= 0 ? 0 : Math.min(11, 1 + Math.sqrt(rps) * 2.2)
 }

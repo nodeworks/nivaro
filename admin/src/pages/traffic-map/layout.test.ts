@@ -12,8 +12,8 @@ const input = {
   width: 1000,
   callers: ['uA', 'k7'],
   lanes: [
-    { id: 'items' as const, entities: ['items/workflows', 'items/forecasts'] },
-    { id: 'widgets' as const, entities: ['widgets/1'] }
+    { id: 'items' as const, entities: ['workflows', 'forecasts'] },
+    { id: 'widgets' as const, entities: ['1'] }
   ],
   downs: ['db', 'ext:3']
 }
@@ -61,5 +61,46 @@ describe('computeLayout', () => {
     expect(Object.values(t).every((v) => typeof v === 'string' && v.length > 0)).toBe(true)
     el.style.setProperty('--tm-accent', '#ff00aa')
     expect(readTokens(el).accent).toBe('#ff00aa')
+  })
+  it('grows H to fit many downs/callers without overlap', () => {
+    const downs = Array.from({ length: 8 }, (_, i) => `d${i}`)
+    const l = computeLayout({
+      width: 1000,
+      callers: ['a'],
+      lanes: [{ id: 'items', entities: ['x'] }],
+      downs
+    })
+    const rects = downs.map((d) => l.downs[d]).sort((a, b) => a.y - b.y)
+    for (const r of rects) expect(r.y + r.h).toBeLessThanOrEqual(l.H)
+    for (let i = 1; i < rects.length; i++)
+      expect(rects[i].y).toBeGreaterThanOrEqual(rects[i - 1].y + 40)
+  })
+  it('non-finite width falls back to 860', () => {
+    expect(computeLayout({ ...input, width: Number.NaN }).W).toBe(860)
+    expect(computeLayout({ ...input, width: undefined as unknown as number }).W).toBe(860)
+  })
+  it('same entity id in two lanes stays distinct', () => {
+    const l = computeLayout({
+      width: 1000,
+      callers: [],
+      lanes: [
+        { id: 'pages', entities: ['budget'] },
+        { id: 'queries', entities: ['budget'] }
+      ],
+      downs: []
+    })
+    const a = l.ents['pages/budget']
+    const b = l.ents['queries/budget']
+    expect(a).not.toEqual(b)
+    expect(hitTest(l, a.x + 2, a.y + 2)).toEqual({ kind: 'entity', id: 'pages/budget' })
+    expect(hitTest(l, b.x + 2, b.y + 2)).toEqual({ kind: 'entity', id: 'queries/budget' })
+  })
+  it('empty input has no NaN or negative heights', () => {
+    const l = computeLayout({ width: 1000, callers: [], lanes: [], downs: [] })
+    expect(Number.isFinite(l.W) && Number.isFinite(l.H)).toBe(true)
+    expect(l.H).toBeGreaterThan(0)
+    expect(
+      Object.keys(l.callers).length + Object.keys(l.lanes).length + Object.keys(l.downs).length
+    ).toBe(0)
   })
 })
