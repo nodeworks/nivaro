@@ -925,6 +925,8 @@ export interface FrameWire {
   entities: Record<string, number[]>
   callers: Record<string, number[]>
   down: Record<string, number[]>
+  /** Labels of the down nodes in this frame that are not plain ids (partners, declared nodes). */
+  down_labels?: Record<string, string>
   edges_in: Record<string, number>
   edges_out: Record<string, number>
   events: TrafficEventWire[]
@@ -961,10 +963,15 @@ export function buildFrame(
     if (s[K.req]) cs[key] = [s[K.req], s[K.error]]
   }
   const ds: Record<string, number[]> = {}
+  // Names travel with the frame: a partner first seen mid-session must not read as `ext:9`
+  // until the page's next (throttled, cached) catalog read.
+  const dl: Record<string, string> = {}
   for (const [key, d] of downs) {
     if (d.touchedSec < sec) continue
     const s = secondOf(d, sec)
-    if (s[K.req]) ds[key] = [s[K.req], s[K.error], pct(d, 0.95)]
+    if (!s[K.req]) continue
+    ds[key] = [s[K.req], s[K.error], pct(d, 0.95)]
+    if (d.label && d.label !== key && !DOWN_LABELS[key]) dl[key] = d.label.slice(0, 120)
   }
   // Accepted: edges/events for a frame can lead the entity counts by up to 1 s.
   const taken = takeEvents()
@@ -988,6 +995,7 @@ export function buildFrame(
     journal_seq: opts.journalSeq
   }
   if (dropped) frame.events_dropped = dropped
+  if (Object.keys(dl).length) frame.down_labels = dl
   const ext = collectTaps((t) => t.frame?.(sec))
   if (ext) frame.ext = ext
   edgesIn.clear()

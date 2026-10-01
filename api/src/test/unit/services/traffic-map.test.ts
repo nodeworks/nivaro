@@ -191,6 +191,13 @@ describe('rings, windows and caps', () => {
 })
 
 describe('frames', () => {
+  it('buildFrame names the partner nodes it carries (down_labels), never the data stores', () => {
+    noteOutbound({ apiId: 9, apiName: 'LinX', status: 200, durationMs: 40, at: T0 * 1000 })
+    const f = buildFrame(T0, { sockets: 0, journalSeq: null })
+    expect(f.down['ext:9']).toBeDefined()
+    expect(f.down_labels).toEqual({ 'ext:9': 'LinX' })
+  })
+
   it('buildFrame carries this second only, drains events, and prioritises errors and writes', () => {
     for (let i = 0; i < 60; i++) req()
     req({ method: 'PATCH', path: '/api/items/workflows/3', status: 422 })
