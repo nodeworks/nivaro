@@ -40,7 +40,7 @@ import type {
   StorageAdapter,
   ValidatorDef
 } from './registrations.js'
-import type { IntegrationSignal, SignalActionHandler } from './signals.js'
+import type { IntegrationSignal, SignalActionHandler, TrafficNodeDef } from './signals.js'
 
 export type ExtensionSettingValue = string | number | boolean | null
 
@@ -259,6 +259,8 @@ export interface ExtensionContext {
     registerSignalAction(def: SignalActionHandler): void
     /** An event source on the Integrations console's Events feed. */
     registerEventSource(def: EventSourceDef): void
+    /** A downstream node on the Traffic Map for the partner calls it matches (#1114). */
+    registerTrafficNode(def: TrafficNodeDef): void
   }
   integrity: {
     /** A Data Integrity check the sweep, the record banner and Fix run. */

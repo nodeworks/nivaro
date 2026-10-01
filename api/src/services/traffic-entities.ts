@@ -14,6 +14,7 @@ export type TrafficLane =
   | 'files'
   | 'extension'
   | 'system'
+  | 'socket'
   | 'other'
 export type TrafficKind = 'read' | 'create' | 'update' | 'delete'
 export type DownId = 'db' | 'redis' | 'store' | `ext:${number}`
@@ -44,6 +45,8 @@ export const LANES: ReadonlyArray<{ id: TrafficLane; label: string; route_hint: 
   { id: 'files', label: 'Files', route_hint: '/api/files' },
   { id: 'extension', label: 'Extensions', route_hint: 'extension routes' },
   { id: 'system', label: 'System', route_hint: '/api/items/nivaro_*' },
+  // #1104: socket.io events after the handshake (counted in the socket middleware, never a request)
+  { id: 'socket', label: 'Sockets', route_hint: 'socket.io events' },
   { id: 'other', label: 'Other', route_hint: 'every other /api route' }
 ]
 

@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 import { currentTraceMeta } from './request-trace.js'
+import { noteAiCall } from './traffic-taps/ai.js'
 
 /**
  * Per-call AI log (nivaro_ai_calls) — every `messages.create` that leaves
@@ -113,6 +114,18 @@ export function loggedCreate(
       const output = usage?.output_tokens ?? null
       const cached = usage?.cache_read_input_tokens ?? null
       const content = Array.isArray(res.content) ? res.content : []
+      const latency = Math.round(performance.now() - started)
+      // #1141: the call is a request into the Traffic Map's AI provider node.
+      noteAiCall({
+        provider,
+        model: res.model || base.model,
+        ok: true,
+        ms: latency,
+        input,
+        output,
+        cached,
+        cost: costOf(res.model || base.model, { input, cached, output })
+      })
       void db('nivaro_ai_calls')
         .insert({
           ...base,
@@ -131,6 +144,12 @@ export function loggedCreate(
         .catch(() => undefined)
       return res
     } catch (err) {
+      noteAiCall({
+        provider,
+        model: base.model,
+        ok: false,
+        ms: Math.round(performance.now() - started)
+      })
       void db('nivaro_ai_calls')
         .insert({
           ...base,

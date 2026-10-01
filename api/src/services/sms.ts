@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { overlaySettings } from './settings-overrides.js'
+import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 export type SmsProvider = 'twilio' | 'aws-sns' | 'vonage' | 'sinch' | 'messagebird'
 
@@ -123,10 +124,24 @@ export async function sendSms(to: string, body: string): Promise<void> {
   const routed = applySmsTestMode(cfg, to, body)
   if (!routed) {
     console.warn('[sms] test mode: dropped SMS to', to, '(no test recipient configured)')
+    noteChannel('sms', 'dropped')
     return
   }
+  if (routed.to !== to) noteChannelRedirect('sms')
   ;({ to, body } = routed)
 
+  // #1140: the send is a call into the Traffic Map's SMS node.
+  const started = Date.now()
+  try {
+    await sendViaProvider(to, body, cfg)
+    noteChannel('sms', 'sent', { ms: Date.now() - started })
+  } catch (err) {
+    noteChannel('sms', 'failed', { ms: Date.now() - started })
+    throw err
+  }
+}
+
+async function sendViaProvider(to: string, body: string, cfg: SmsConfig): Promise<void> {
   switch (cfg.provider) {
     case 'twilio':
       await sendViaTwilio(to, body, cfg)

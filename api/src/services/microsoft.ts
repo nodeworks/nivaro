@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { routeTeams } from './channel-test-mode.js'
+import { noteChannel } from './traffic-taps/channels.js'
 
 /** Post a card to Teams via the configured incoming webhook. Fire-and-forget (no throw). */
 export async function sendTeamsNotification(opts: {
@@ -25,11 +26,18 @@ export async function sendTeamsNotification(opts: {
       sections: [{ activityTitle: opts.title, activityText: opts.text }]
     }
 
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
+    const started = Date.now()
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      noteChannel('teams', res.ok ? 'sent' : 'failed', { ms: Date.now() - started })
+    } catch (err) {
+      noteChannel('teams', 'failed', { ms: Date.now() - started })
+      throw err
+    }
   } catch {
     // Teams notifications are non-critical — never throw
   }

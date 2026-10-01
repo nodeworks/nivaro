@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
+import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -503,8 +504,12 @@ function logMail(
     /** Record context (#261) — powers the per-record communications view. */
     collection?: string | null
     item?: string | number | null
+    /** How long the SMTP hand-off took (sent / failed). */
+    ms?: number
   }
 ): Promise<number | null> {
+  // #1140: every attempt is a call into the Traffic Map's email node.
+  noteChannel('mail', status, { ms: opts?.ms })
   const addr = (Array.isArray(to) ? to.join(', ') : String(to)).slice(0, 1000)
   // #706 — a mail sent inside a chain is a step of it (probed per tenant, so a
   // database behind migration 385 keeps logging).
@@ -628,11 +633,13 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   }
   if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
+  if (routed?.redirected.length) noteChannelRedirect('mail', routed.redirected.length)
   if (!routed || routed.to.length === 0) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
     const id = await logMail(afterDigest, opts.subject, 'dropped', { template: opts.template })
     return { status: 'dropped', log_id: id }
   }
+  const sendStarted = Date.now()
   try {
     await buildTransporter(smtp).sendMail({
       from: smtp.from,
@@ -645,7 +652,8 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       template: opts.template,
       body: html,
       collection: opts.collection,
-      item: opts.item
+      item: opts.item,
+      ms: Date.now() - sendStarted
     })
     return { status: 'sent', log_id: id }
   } catch (err) {
@@ -654,7 +662,8 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       error: err,
       body: html,
       collection: opts.collection,
-      item: opts.item
+      item: opts.item,
+      ms: Date.now() - sendStarted
     })
     throw err
   }
@@ -737,6 +746,7 @@ export async function sendRawMail(opts: {
   }
   if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
+  if (routed?.redirected.length) noteChannelRedirect('mail', routed.redirected.length)
   if (!routed || routed.to.length === 0) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
     const id = await logMail(afterDigest, opts.subject, 'dropped', { template: logTemplate })
@@ -754,6 +764,7 @@ export async function sendRawMail(opts: {
     item: _item,
     ...mailOpts
   } = opts
+  const sendStarted = Date.now()
   try {
     await buildTransporter(smtp).sendMail({
       from: smtp.from,
@@ -766,7 +777,8 @@ export async function sendRawMail(opts: {
       template: logTemplate,
       body: html,
       collection: opts.collection,
-      item: opts.item
+      item: opts.item,
+      ms: Date.now() - sendStarted
     })
     return { status: 'sent', log_id: id }
   } catch (err) {
@@ -775,7 +787,8 @@ export async function sendRawMail(opts: {
       error: err,
       body: html,
       collection: opts.collection,
-      item: opts.item
+      item: opts.item,
+      ms: Date.now() - sendStarted
     })
     throw err
   }

@@ -16,6 +16,7 @@ export function usersOnPath(path: string): Array<{ id: string; name: string; sin
   return pagePresenceReader ? pagePresenceReader(path) : []
 }
 
+import { noteSocket } from '../services/traffic-map.js'
 import type { User } from '../types.js'
 
 declare module 'fastify' {
@@ -264,6 +265,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
   io.on('connection', (socket) => {
     app.log.debug({ socketId: socket.id }, 'Socket connected')
+    // #1104: every inbound event is a counter bump on the Traffic Map's socket lane (no event
+    // object, no emit) — the map stays free while nobody watches it.
+    noteSocket('connect')
+    socket.use((packet, next) => {
+      noteSocket(typeof packet?.[0] === 'string' ? packet[0] : 'other')
+      next()
+    })
     socketMeta.set(socket.id, {
       user: null,
       connectedAt: Date.now(),
@@ -754,6 +762,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
 
     socket.on('disconnect', () => {
+      noteSocket('disconnect')
       clearInterval(rttTimer)
       socketMeta.delete(socket.id)
       if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)

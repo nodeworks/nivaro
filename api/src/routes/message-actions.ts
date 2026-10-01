@@ -141,6 +141,8 @@ export async function sendActionCard(opts: ActionCardOptions): Promise<boolean> 
     ]
   }
 
+  const { noteChannel } = await import('../services/traffic-taps/channels.js')
+  const started = Date.now()
   try {
     const res = await fetch(webhookUrl, {
       method: 'POST',
@@ -148,8 +150,10 @@ export async function sendActionCard(opts: ActionCardOptions): Promise<boolean> 
       body: JSON.stringify(card),
       signal: AbortSignal.timeout(15_000)
     })
+    noteChannel('teams', res.ok ? 'sent' : 'failed', { ms: Date.now() - started })
     return res.ok
   } catch (err) {
+    noteChannel('teams', 'failed', { ms: Date.now() - started })
     console.warn('[message-actions] Teams card post failed:', err)
     return false
   }

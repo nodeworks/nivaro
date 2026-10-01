@@ -6,6 +6,7 @@ import { getRealtimeStats } from '../plugins/socketio.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { currentSeq } from '../services/event-journal.js'
 import { listTraces } from '../services/request-trace.js'
+import { downHistoryFor } from '../services/traffic-down-history.js'
 import { LANES, pathTemplate, type TrafficLane } from '../services/traffic-entities.js'
 import {
   HISTORY_ROW_CAP,
@@ -362,6 +363,14 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
             note: 'Per-request attribution only — see DB Health for server-side figures.'
           }
         }
+      }
+      // Down nodes a feature added (email, AI, webhooks, extension nodes) bring their own log.
+      try {
+        const provided = await downHistoryFor(id, hours as 1 | 6 | 24)
+        if (provided) return { data: provided }
+      } catch (err) {
+        req.log.warn({ err }, 'traffic-map down-node history provider failed')
+        return reply.code(503).send(HISTORY_UNAVAILABLE)
       }
       const m = id.match(/^ext:(\d{1,9})$/)
       if (!m) {

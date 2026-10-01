@@ -9,6 +9,8 @@ import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
 import { NOTIFY_CATEGORIES, NOTIFY_CATEGORY_LABELS, notifyUser } from './notification-channels.js'
+import { noteTrafficSourceRun, type TrafficSource, withTrafficSource } from './traffic-source.js'
+import { flowTriggerKey, noteFlowTrigger } from './traffic-taps/sources.js'
 import { detectDefaultBodyRejection } from './workflow-actions.js'
 
 interface FlowOperation {
@@ -1327,13 +1329,23 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
     lockTracked = true
   }
   try {
-    return await executeFlowInner(ctx)
+    // #1106: the run is a Traffic Map source — its writes and partner calls read
+    // "trigger → flow → …". A dry run (tester, shadow mode) sends and writes nothing.
+    if (ctx.dryRun) return await executeFlowInner(ctx)
+    const source: TrafficSource = {
+      id: `flow:${ctx.flowId}`,
+      label: ctx.flowName || 'Flow',
+      kind: 'flow',
+      trigger: flowTriggerKey(ctx.trigger, ctx.payload)
+    }
+    noteFlowTrigger(source)
+    return await withTrafficSource(source, () => executeFlowInner(ctx, source))
   } finally {
     if (lockTracked) runningFlows.delete(ctx.flowId)
   }
 }
 
-async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
+async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): Promise<FlowData> {
   const operations = await db<FlowOperation>('nivaro_flow_operations')
     .where({ flow: ctx.flowId })
     .orderBy('position_y')
@@ -1594,6 +1606,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
       })
     }
 
+    if (source) noteTrafficSourceRun(source, !progress.failed, Date.now() - startMs)
     if (progress.failed) {
       ctx.log.warn(
         { flowId: ctx.flowId, key: progress.failed.key, error: progress.failed.error },
@@ -1627,6 +1640,7 @@ async function executeFlowInner(ctx: ExecutionContext): Promise<FlowData> {
         reason: `flow errored: ${errorText(err, 400)}`
       })
     }
+    if (source) noteTrafficSourceRun(source, false, Date.now() - startMs)
     // #622: tell the flow's creator the run errored — fire-and-forget,
     // throttled to one notification per flow per hour.
     notifyFlowError(ctx, err)
