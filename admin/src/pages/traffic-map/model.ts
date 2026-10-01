@@ -19,10 +19,8 @@ export const ENTITY_CALLERS_TAP = 'entity-callers'
 
 export function defaultFilters(): Filters {
   return {
-    // system and socket traffic are opt-in chips: busy, and rarely what a first look is about
-    types: new Set<Lane>(
-      LANE_ORDER.filter((l) => l !== 'system' && l !== 'other' && l !== 'socket')
-    ),
+    // Every lane shows by default, System and Sockets included (`other` has no chip).
+    types: new Set<Lane>(LANE_ORDER.filter((l) => l !== 'other')),
     kinds: new Set<Kind>(['read', 'create', 'update', 'delete', 'error']),
     caller: '',
     win: 60

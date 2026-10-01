@@ -167,7 +167,8 @@ describe('TrafficModel', () => {
     g.types.delete('items')
     expect(m.hot(60, g, 5)).toEqual([])
     expect(applyFilters(g, { lane: 'items' })).toBe(false)
-    expect(applyFilters(defaultFilters(), { lane: 'system' })).toBe(false) // system off by default
+    expect(applyFilters(defaultFilters(), { lane: 'system' })).toBe(true)
+    expect(applyFilters(defaultFilters(), { lane: 'socket' })).toBe(true) // system off by default
   })
   it('the ticker is capped at 80 newest-first', () => {
     const m = new TrafficModel()
