@@ -176,6 +176,8 @@ export interface EntityHistory {
     req: number
     read: number
     write_requests: number
+    /** Rehearsed writes (dry runs, flow tests), kept out of write_requests (#1139). */
+    rehearsal?: number
     error: number
     p50: number
     p95: number
@@ -212,7 +214,8 @@ export interface Filters {
   win: 60 | 300 | 900
 }
 export type Selection =
-  | { kind: 'entity'; id: string }
+  /** `caller` (#1095): the inspector narrows the entity to that caller's traffic. */
+  | { kind: 'entity'; id: string; caller?: string }
   | { kind: 'lane'; id: Lane }
   | { kind: 'caller'; id: string }
   | { kind: 'down'; id: string }

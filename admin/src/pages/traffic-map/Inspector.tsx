@@ -43,6 +43,8 @@ export interface InspectorData {
   callers: Array<{ key: string; n: number }>
   errors: SnapshotEntity['recent_errors']
   writes: SnapshotEntity['recent_writes']
+  /** #1095: the caller an entity's figures are narrowed to (absent = every caller). */
+  focusCaller?: string
 }
 
 const SERIES_POINTS = 40
@@ -61,23 +63,33 @@ export function describeSelection(
   const win = f.win
   if (sel.kind === 'entity') {
     const meta = m.entityMeta(sel.id)
-    const s = m.entitySum(sel.id, win)
+    // #1095: narrowed to one caller (picked in the inspector, else the page's caller filter)
+    // when the server sends exact entity × caller counts
+    const focus = m.exactCallers ? sel.caller || f.caller || undefined : undefined
+    const s = focus ? m.entityCallerSum(sel.id, focus, win) : m.entitySum(sel.id, win)
     const cut = sel.id.indexOf('/')
     const lane = sel.id.slice(0, cut) as Lane
     const entity = sel.id.slice(cut + 1)
+    const mine = <T extends { caller: string }>(list: T[]) =>
+      focus ? list.filter((x) => x.caller === focus) : list
     return {
       name: entityLabel(catalog, lane, entity),
-      type: `${LANE_LABEL[lane] ?? lane}${meta?.system ? ' · system collection' : ''}`,
+      type: `${LANE_LABEL[lane] ?? lane}${meta?.system ? ' · system collection' : ''}${
+        focus ? ` · ${callerLabel(catalog, focus)} only` : ''
+      }`,
       route: meta?.routes[0]?.route ?? '',
       rps: s[0] / win,
-      p95: m.entityP95(sel.id),
+      p95: (focus && m.entityCallerP95(sel.id, focus)) || m.entityP95(sel.id),
       errPct: s[0] ? (100 * s[5]) / s[0] : Number.NaN,
-      series: m.entitySeries(sel.id, win, SERIES_POINTS),
+      series: focus
+        ? m.entityCallerSeries(sel.id, focus, win, SERIES_POINTS)
+        : m.entitySeries(sel.id, win, SERIES_POINTS),
       kinds: kindsOf(s, f),
       routes: meta?.routes ?? [],
       callers: meta?.callers ?? [],
-      errors: meta?.recent_errors ?? [],
-      writes: meta?.recent_writes ?? []
+      errors: mine(meta?.recent_errors ?? []),
+      writes: mine(meta?.recent_writes ?? []),
+      ...(focus ? { focusCaller: focus } : {})
     }
   }
   if (sel.kind === 'lane') {
@@ -464,10 +476,16 @@ function HistoryBody({
             Showing the newest 20,000 requests; older ones in this range are not counted.
           </p>
         )}
+        {eh?.totals.rehearsal ? (
+          <p className='mt-1 text-[11.5px] text-[var(--tm-muted)]' id='tm-history-rehearsal'>
+            {fmtCount(eh.totals.rehearsal)} rehearsed writes (dry runs, flow tests) are not counted
+            as writes.
+          </p>
+        ) : null}
         {selKey.startsWith('graphql/') && (
           <p className='mt-1 text-[11.5px] text-[var(--tm-muted)]'>
-            Calls through the root /graphql alias can log without an operation name and count under
-            anonymous.
+            Calls through the root /graphql alias logged before 2026-10-01 carry no operation name
+            and count under anonymous.
           </p>
         )}
       </div>
