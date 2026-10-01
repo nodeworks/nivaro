@@ -1,0 +1,12 @@
+/* Deep measurement (Traffic Map group B2): latency-split segment colours for both themes.
+   Data colours only (bars + legend swatches); every label beside them uses --tm-fg-2. */
+.traffic-map {
+  --tm-dm-auth: #334155;
+  --tm-dm-ser: #7c3aed;
+  --tm-dm-other: #8a94a6;
+}
+.dark .traffic-map {
+  --tm-dm-auth: #c3cad3;
+  --tm-dm-ser: #b79cf5;
+  --tm-dm-other: #7b8494;
+}

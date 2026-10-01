@@ -10,6 +10,7 @@
  */
 
 // ── feature registrations (one line each) ──
+import '../features/deep-measurement'
 
 export {
   type CanvasLayer,
