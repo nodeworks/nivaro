@@ -1,10 +1,232 @@
 {
-  "generated_at": "2026-10-01T15:57:55.576Z",
+  "generated_at": "2026-10-01T20:12:13.809Z",
   "releases": [
+    {
+      "version": "0.2.10",
+      "tag": "v0.2.10",
+      "date": "2026-10-01T16:12:01-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www/docs.html with the admin docs",
+              "hash": "a817d98b"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: callers show their name right after the page opens",
+              "hash": "209719f0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: an expanded app group keeps a node to collapse it; inferred arcs clear the lane border; strip tiles fit one row at 1440",
+              "hash": "548ed9bc"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: rewind, whole-view links, pins, NL filter, presence, capture, correlations, workspace scope",
+              "hash": "f468e44a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: canvas zoom, edge numbers and thickness, app groups, path trace, legend",
+              "hash": "b4dbf8e7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: System, Sockets and the Conflicts lens are on by default",
+              "hash": "f4fc120e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: model can rewind, scope to a workspace and narrow to a caller group",
+              "hash": "86a2b5cb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: inspector takes the canvas height and scrolls inside",
+              "hash": "3522ca49"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: server side of group D — correlations, NL filter, workspace scope, caller apps, presence, pins pref",
+              "hash": "1d1883be"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: partner nodes show their name from the first frame",
+              "hash": "35c08ae4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: inspector links and actions (group A)",
+              "hash": "bd942066"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: sources, socket lane and new down kinds on the canvas",
+              "hash": "f93b1e3e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: topology taps (server) — sources, sockets, partners, pool, Redis, channels, AI, webhooks",
+              "hash": "c8958fb0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: compare shows 'over 10x' instead of a four-digit percentage",
+              "hash": "50c911c4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: no Pause in a frozen snapshot view",
+              "hash": "a412058c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: ops, health and capacity in the admin map",
+              "hash": "42692078"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "page context headers: x-nivaro-app/page/load from admin and shared fetch",
+              "hash": "6badab7b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: ops, health and capacity (server)",
+              "hash": "4dc089a9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db: Restart the API restarts this API, not the dev one",
+              "hash": "db189fbf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ops console: incident timeline LIKE needs an ESCAPE clause",
+              "hash": "39514846"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: request lenses in the admin map",
+              "hash": "50bdcc92"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: request taps and lenses (server)",
+              "hash": "eeaee902"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a compact traffic card for dashboards, on the Command Center admin rail",
+              "hash": "f09f5462"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map page: nodes toggle, share snapshots, compare views, daily summary toggle, replay preview",
+              "hash": "f4ef5092"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: deep measurement panels, N+1 badge and Trips column",
+              "hash": "1fddf96e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: deep measurement taps (request cost, read shapes, GraphQL + field heat, hot records)",
+              "hash": "c01891c8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: snapshots, compare views, daily digest, load replay, Ask AI tool (server)",
+              "hash": "efcb6e8c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: per-tenant stores in cloud mode, every API process in one view",
+              "hash": "b736c590"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: plug-in seams for the follow-up program (taps, route extras, client registries)",
+              "hash": "87df8098"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db — throwaway API + admin against another database",
+              "hash": "2e5a70e2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "promote to production: pin + digest, both repos, deploy jobs in order, behind a switch",
+              "hash": "9edc1207"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "config inventory: classify task categories, chat auto-joins, scheduled chat, integration obligations",
+              "hash": "0eb3eb90"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release chain: resumes find the newest release by tag, not by HEAD",
+              "hash": "d93857fd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release chain: wait out npm's async processing; resumes keep the packages they released",
+              "hash": "afe64dc6"
+            }
+          ]
+        }
+      ],
+      "count": 34
+    },
     {
       "version": "0.2.9",
       "tag": "v0.2.9",
-      "date": "2026-10-01T11:57:45-04:00",
+      "date": "2026-10-01T11:57:55-04:00",
       "sections": [
         {
           "label": "Documentation",
