@@ -932,7 +932,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <h2 class="doc-h2" id="extension-registry-versions">Registry versions</h2>
           <p class="doc-p">After every load the API fingerprints what each extension registered — hooks, crons, flow operations and triggers, mail types, readiness and integrity checks, bulk and item actions, digest sections, settings keys — and stores it as a **registry version**. A boot that registers the same set touches the version (last seen, boot count); a different set becomes a new version. The registry sheet lists them newest first with what each one added or removed against the one before, so "when did this check appear?" is a lookup. Volatile facts (next run, paused, staged builds) never mint a version. API: <code class="doc-code">GET /extensions/:id/registry/history</code>.</p>
           <h2 class="doc-h2" id="extension-settings-compare">Settings across environments</h2>
-          <p class="doc-p">Environments → **Extension settings across environments** lays one extension's settings side by side: this instance beside every registered API component, probed server-side with the component's own token (secrets compare as set / unset). Rows whose values differ are tinted; a value that departs from <code class="doc-code">production_expect</code> reads amber.</p>
+          <p class="doc-p">Environments → **Extension settings across environments** lays one extension's settings side by side: this instance beside every registered API component, probed server-side with the component's own token (secrets compare as set / unset). Rows whose values differ are tinted; a value that departs from <code class="doc-code">production_expect</code> reads amber. A column header says why a component has no values: **no token** (none stored), **token rejected** (the component answered 401/403 — the stored token was rotated or revoked; paste a current one, preferably a named API key rather than a personal token), **not there** (the extension is not loaded or declares no settings) or **unreachable** (network failure or another error). Hover the label for the exact reason. A component whose base URL points back at the API serving the page (its own host, <code class="doc-code">PUBLIC_URL</code>, <code class="doc-code">ADMIN_URL</code>, or localhost on its own port) is not probed again: **This instance** already shows those values and is labelled with that component's environment. A localhost component on any other port is skipped too, since from a server localhost is that server, not a developer's machine. Both are listed under the table as *Not compared*.</p>
           <!-- /SYNC:extensions -->
         </div>
 
@@ -15292,6 +15292,7 @@ POST /api/search/semantic/reindex
             <li>p50/p95 are computed over the selected window; the error-rate card breaks down 4xx vs 5xx.</li>
             <li>The ring buffer self-prunes — no maintenance required and bounded storage.</li>
             <li>The Requests panel is the per-request list behind the aggregates: newest first, filter by path, method, status class or how the caller authenticated (session, token, API key, masquerade, anonymous); expand a row for the client IP, user agent and — on a 4xx/5xx — the first kilobyte of the response body the caller received.</li>
+            <li>Rows from development instances (laptops, probes sharing the database) are hidden by default and pruned after 3 hours; "Deployed instances" switches to every instance. See Deploys &amp; Versions.</li>
             <li>GraphQL by operation splits the one /graphql path by what each call ran: calls, p50/p95, error rate (HTTP errors and 200 answers carrying errors), average depth and selections, top callers, the slowest calls, and every @deprecated field still selected with who selects it.</li>
           </ul>
           <h2 class="doc-h2" id="api-analytics-traces">Slow requests: round trips, N+1s, the real plan</h2>
@@ -15896,10 +15897,8 @@ GET /api/environments/env-presence         → every registered API, compared</c
           <h2 class="doc-h2" id="deploys-readiness">Readiness checks for the deploy shape</h2>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Check</th><th>Warns when</th></tr></thead>
-            <tbody>
-              <tr><td>Every API process runs one version</td><td>The instance roster has held two API versions for longer than <code class="doc-code">MIXED_VERSION_MINUTES</code> (default 15): a rolling deploy that stalled or a replica left behind. Roster entries carry <code class="doc-code">NIVARO_ROLE</code> (web or worker), so it reads "2 web, 1 worker".</td></tr>
-              <tr><td>Only this deployment runs scheduled jobs on its database</td><td>Scheduled (not run-now) job runs from another instance landed in the last 24 hours, for example a laptop booted with <code class="doc-code">CRON_TICKS=on</code> against a shared database.</td></tr>
-            </tbody>
+            <tbody><tr><tr><td>Every API process runs one version</td><td>The instance roster has held two API versions for longer than <code class="doc-code">MIXED_VERSION_MINUTES</code> (default 15): a rolling deploy that stalled or a replica left behind. Roster entries carry <code class="doc-code">NIVARO_ROLE</code> (web or worker), so it reads "2 web, 1 worker".</td></tr>
+              <tr><td>Only this deployment runs scheduled jobs on its database</td><td>Scheduled (not run-now) job runs from another instance landed in the last 24 hours, for example a laptop booted with <code class="doc-code">CRON_TICKS=on</code> against a shared database.</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">Every job run records the instance, process, how it was started (schedule, run now, chained, catch-up), whether its process had scheduled ticks on, and who held the scheduler lease. A scheduled run started by a process with ticks off raises one high-severity issue naming the job and the code path that started it. Shutting down or booting a process now only marks its own deployment’s running jobs as interrupted, never another instance’s.</p>
           <h2 class="doc-h2" id="deploys-config-changes">Configuration changes on the incident timeline</h2>
@@ -15908,12 +15907,10 @@ GET /api/environments/env-presence         → every registered API, compared</c
           <p class="doc-p">When development machines share a database with a deployed instance, their requests would show as callers and failures there for 14 days. Request-log rows from <code class="doc-code">development</code> and <code class="doc-code">test</code> instances (and any named in <code class="doc-code">API_LOGS_DEV_INSTANCES</code>) are deleted after <code class="doc-code">API_LOGS_DEV_TTL_HOURS</code> (default 3, 0 = never). API Analytics shows deployed instances only by default; "Deployed instances" switches to all.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Setting</th><th>Default</th><th>What it changes</th></tr></thead>
-            <tbody>
-              <tr><td><code class="doc-code">NIVARO_ROLE</code></td><td>unset</td><td>web or worker; shown in the roster and the version check.</td></tr>
+            <tbody><tr><tr><td><code class="doc-code">NIVARO_ROLE</code></td><td>unset</td><td>web or worker; shown in the roster and the version check.</td></tr>
               <tr><td><code class="doc-code">MIXED_VERSION_MINUTES</code></td><td>15</td><td>How long two versions may run together before readiness warns.</td></tr>
               <tr><td><code class="doc-code">API_LOGS_DEV_INSTANCES</code></td><td>unset</td><td>Extra instance names treated as development (comma list).</td></tr>
-              <tr><td><code class="doc-code">API_LOGS_DEV_TTL_HOURS</code></td><td>3</td><td>Hours development rows stay in the request log; 0 keeps them.</td></tr>
-            </tbody>
+              <tr><td><code class="doc-code">API_LOGS_DEV_TTL_HOURS</code></td><td>3</td><td>Hours development rows stay in the request log; 0 keeps them.</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:deploys-versions -->
         </div>
