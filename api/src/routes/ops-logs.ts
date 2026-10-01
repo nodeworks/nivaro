@@ -252,7 +252,9 @@ export async function opsLogsRoutes(app: FastifyInstance) {
           .catch(() => [] as Array<Record<string, unknown>>),
         db('nivaro_activity')
           .whereBetween('timestamp', [from, to])
-          .where('collection', 'like', 'nivaro\\_%')
+          // ESCAPE is required: without it SQL Server reads the backslash literally and the
+          // pattern matched no row, so config writes never reached the timeline.
+          .whereRaw("collection LIKE ? ESCAPE '\\'", ['nivaro\\_%'])
           .whereNotIn('action', ['read', 'login'])
           .orderBy('timestamp', 'desc')
           .limit(80)

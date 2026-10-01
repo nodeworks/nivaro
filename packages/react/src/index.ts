@@ -410,6 +410,7 @@ export {
   TicketDetailSheet,
   TimezoneCard,
   TipLayer,
+  TrafficMiniMap,
   titleCase,
   toneForOutcome,
   trackActivity,

@@ -7,6 +7,14 @@ import { adminRealtime, getSocket, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { TrafficMapContext, type TrafficMapContextValue } from './context'
 import { callerLabel, EventTicker, KIND_VAR } from './EventTicker'
+import { nodeFeed } from './features/node-merge'
+import {
+  FrozenBanner,
+  type FrozenSnapshot,
+  filtersFromJson,
+  loadFrozenSnapshot,
+  useFrozenSnapshotId
+} from './features/snapshots'
 import { HotEntities } from './HotEntities'
 import {
   describeSelection,
@@ -114,10 +122,16 @@ export default function TrafficMap() {
   const catalogAt = useRef(0)
   const catalogBusy = useRef(false)
   const alive = useRef(true)
+  // #1097: `?snapshot=<id>` opens a stored view read-only (no socket, labels from the snapshot).
+  const frozenId = useFrozenSnapshotId()
+  const frozenRef = useRef(frozenId)
+  frozenRef.current = frozenId
+  const [frozen, setFrozen] = useState<FrozenSnapshot | null>(null)
+  const frozenApplied = useRef<string | null>(null)
 
   /** Throttled to one request per CATALOG_REFRESH_MS unless `force` (the mount). */
   const refreshCatalog = useCallback((force = false) => {
-    if (catalogBusy.current) return
+    if (catalogBusy.current || frozenRef.current) return
     if (!force && Date.now() - catalogAt.current < CATALOG_REFRESH_MS) return
     catalogAt.current = Date.now()
     catalogBusy.current = true
@@ -140,11 +154,29 @@ export default function TrafficMap() {
       const id = ++snapSeq.current
       lastSnapAt.current = Date.now()
       try {
-        const res = await api.get(`/traffic-map/snapshot?window=${win}`)
+        const fid = frozenRef.current
+        const fz = fid ? await loadFrozenSnapshot(fid) : null
+        const res = fz ? null : await api.get(nodeFeed.snapshotUrl(win))
         if (id !== snapSeq.current) return // a newer request (window change) superseded this one
-        const snap = res.data.data as TrafficSnapshot
+        const snap = (fz ? fz.snapshot : res?.data.data) as TrafficSnapshot
         const m = modelRef.current
         m.applySnapshot(snap)
+        if (fz) {
+          setFrozen(fz)
+          if (fz.catalog) {
+            catalogRef.current = fz.catalog
+            setCatalog(fz.catalog)
+          }
+          // the stored selection + filters apply once per snapshot (a window change after is the reader's)
+          if (frozenApplied.current !== fz.id) {
+            frozenApplied.current = fz.id
+            if (fz.selection) setSelection(fz.selection)
+            if (fz.filters) setFilters((f) => filtersFromJson(f, fz.filters))
+          }
+        } else {
+          setFrozen(null)
+          nodeFeed.noteSnapshot(snap, (res?.data.nodes as unknown[] | undefined)?.length ?? 1)
+        }
         lastSnapAt.current = Date.now()
         peak.current = Math.max(peak.current, snap.sockets.count)
         setUsers(snap.sockets.users)
@@ -168,9 +200,10 @@ export default function TrafficMap() {
     [refreshCatalog]
   )
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: leaving a frozen snapshot must reload the live one
   useEffect(() => {
     void loadSnapshot(filters.win)
-  }, [filters.win, loadSnapshot])
+  }, [filters.win, loadSnapshot, frozenId])
 
   useEffect(() => {
     alive.current = true
@@ -181,11 +214,16 @@ export default function TrafficMap() {
   }, [refreshCatalog])
 
   useEffect(() => {
+    if (frozenId) return // a frozen view never goes live
     const leave = joinWatchRoom('traffic-map')
+    // #1098: frames from every API process; nodeFeed merges them (or keeps one node's).
+    const offReseed = nodeFeed.onReseed(() => void loadSnapshot(filtersRef.current.win))
     const off = adminRealtime.on('traffic-map:frame', (p: unknown) => {
       if (pausedRef.current || document.hidden) return
+      nodeFeed.accept(p as TrafficFrame, apply)
+    })
+    function apply(f: TrafficFrame) {
       const m = modelRef.current
-      const f = p as TrafficFrame
       const gap = m.lastFrameAt > 0 && Date.now() - m.lastFrameAt > STALE_MS
       const before = m.lastFrameAt
       const beforeNo = m.frameNo
@@ -202,7 +240,7 @@ export default function TrafficMap() {
       // frames resumed after a hole (a reconnect the local socket did not see): re-seed
       if (gap && Date.now() - lastSnapAt.current > STALE_MS)
         void loadSnapshot(filtersRef.current.win)
-    })
+    }
     // R23: a socket reconnect re-seeds from the snapshot (frames were lost while away)
     const socket = getSocket()
     let firstAuth = socket.connected
@@ -225,12 +263,13 @@ export default function TrafficMap() {
     }, 2000)
     return () => {
       off()
+      offReseed()
       leave()
       socket.off('auth:ok', onAuth)
       document.removeEventListener('visibilitychange', onVis)
       clearInterval(watchdog)
     }
-  }, [loadSnapshot, refreshCatalog])
+  }, [loadSnapshot, refreshCatalog, frozenId])
 
   const togglePause = () => {
     const next = !pausedRef.current
@@ -362,16 +401,18 @@ export default function TrafficMap() {
     [m, filters, selection, catalog, tick, win, paused, ready]
   )
 
-  const live = ready && !stale && !snapError
+  const live = ready && !stale && !snapError && !frozen
   const statusLabel = !ready
     ? 'Loading'
-    : paused
-      ? 'Paused'
-      : stale
-        ? 'Reconnecting'
-        : snapError
-          ? 'Snapshot failed'
-          : 'Live'
+    : frozen
+      ? 'Snapshot'
+      : paused
+        ? 'Paused'
+        : stale
+          ? 'Reconnecting'
+          : snapError
+            ? 'Snapshot failed'
+            : 'Live'
 
   return (
     <TrafficMapContext.Provider value={ctx}>
@@ -516,21 +557,24 @@ export default function TrafficMap() {
               </fieldset>
             </div>
             <ToolbarItems />
-            <button
-              type='button'
-              id='tm-pause'
-              aria-pressed={paused}
-              onClick={togglePause}
-              className={cn(
-                CHIP,
-                'ml-auto',
-                paused
-                  ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
-                  : CHIP_OFF
-              )}
-            >
-              {paused ? 'Resume' : 'Pause'}
-            </button>
+            {/* A snapshot is already still: no Pause (a `hidden` attribute loses to the chip's display class). */}
+            {!frozen && (
+              <button
+                type='button'
+                id='tm-pause'
+                aria-pressed={paused}
+                onClick={togglePause}
+                className={cn(
+                  CHIP,
+                  'ml-auto',
+                  paused
+                    ? 'border-[var(--tm-update)] bg-[var(--tm-update)] text-[var(--tm-on-update)]'
+                    : CHIP_OFF
+                )}
+              >
+                {paused ? 'Resume' : 'Pause'}
+              </button>
+            )}
           </div>
         </header>
 
@@ -557,6 +601,7 @@ export default function TrafficMap() {
               </button>
             </div>
           )}
+          <FrozenBanner snap={frozen} />
           <SummaryStrip d={view?.strip ?? null} />
           <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-[minmax(0,1fr)_360px]'>
             <MapCanvas

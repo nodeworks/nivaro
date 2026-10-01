@@ -261,6 +261,19 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
       },
       required: ['slug']
     }
+  },
+  {
+    name: 'traffic_snapshot',
+    description:
+      'Administrators only. Who is calling the API and what they hit: per entity (collection, widget, page, query, GraphQL operation) request and error counts with the top callers, plus the busiest callers overall. hours 0 = the live Traffic Map (last 15 minutes); 1-24 = the request log over that many hours ("today" ≈ 24). Use entity to narrow to one collection or operation, e.g. "forecasts".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        entity: { type: 'string', description: 'Collection or operation name; omit for all.' },
+        hours: { type: 'number', description: '0 (live, default) or 1-24.' },
+        top: { type: 'number', description: 'How many rows (default 10, max 25).' }
+      }
+    }
   }
 ]
 
@@ -1275,6 +1288,13 @@ export async function executeChatTool(
         },
         summary: `${collection}: ${run.violation_count} violation(s) over ${run.checked_records} record(s) in sweep ${run.id}`
       }
+    }
+
+    case 'traffic_snapshot': {
+      if (!(await askerIsAdmin(user)))
+        throw new Error('Traffic figures are for administrators only')
+      const { trafficSnapshotTool } = await import('./traffic-ai.js')
+      return trafficSnapshotTool(input)
     }
 
     case 'run_custom_query': {

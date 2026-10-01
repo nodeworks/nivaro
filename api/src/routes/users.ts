@@ -943,6 +943,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.chat_email_fallback = v === true ? true : null
     }
+    if ('traffic_digest' in body) {
+      // #1128 — the Traffic Map section of the daily summary (administrators; opt-in).
+      const v = body.traffic_digest
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'traffic_digest must be true, false or null' })
+      }
+      patch.traffic_digest = v === true ? true : null
+    }
     if ('team_alerts' in body) {
       // #1037 — the lines a manager wants to hear about when their team crosses them.
       const { normalizeTeamAlerts } = await import('../services/team.js')
