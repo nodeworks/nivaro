@@ -652,7 +652,7 @@
               <tr><td>Roles / Permissions</td><td>RBAC via nivaro_roles + nivaro_policies</td></tr>
               <tr><td>Auth (OIDC)</td><td>openid-client with Microsoft OIDC (PKCE flow)</td></tr>
               <tr><td>Extensions</td><td>Plugin loader at api/extensions/</td></tr>
-              <tr><td>Flows / Automation</td><td>Inngest + in-process flow executor</td></tr>
+              <tr><td>Flows / Automation</td><td>In-process flow executor</td></tr>
               <tr><td>WebSockets / Real-time</td><td>Socket.io + Redis pub/sub adapter</td></tr>
               <tr><td>File Management</td><td>multer + local storage + nivaro_files</td></tr>
               <tr><td>Activity Log</td><td>nivaro_activity + nivaro_revisions</td></tr>
@@ -672,7 +672,7 @@
               <tr><td>Database</td><td>Knex + MSSQL (tedious driver) — nivaro_ prefix tables alongside existing data</td></tr>
               <tr><td>Sessions / Cache</td><td>Redis (ioredis) — sessions stored as sess:&lt;id&gt; keys</td></tr>
               <tr><td>Auth</td><td>openid-client PKCE flow — Microsoft OIDC</td></tr>
-              <tr><td>Job Queue</td><td>Inngest — event-driven background jobs and flows</td></tr>
+              <tr><td>Background jobs</td><td>In-process scheduler with a Redis leader lease; every run recorded</td></tr>
               <tr><td>WebSockets</td><td>Socket.io + @socket.io/redis-adapter</td></tr>
               <tr><td>Admin UI</td><td>React 19 + Vite 6 + shadcn/ui + Tanstack Query v5</td></tr>
               <tr><td>Linter / Formatter</td><td>Biome v2 — replaces ESLint + Prettier</td></tr></tr></tbody>
@@ -686,7 +686,7 @@
 │   ├── db/               # Knex instance + migrations
 │   ├── extensions/       # Extension loader
 │   ├── middleware/        # authenticate.ts (req.user, req.isAdmin)
-│   ├── plugins/          # inngest, redis, cron, socketio
+│   ├── plugins/          # redis, cron, socketio
 │   ├── routes/           # REST endpoints
 │   └── services/         # Business logic (permissions, items, etc.)
 └── admin/src/
@@ -852,7 +852,6 @@ Server listening on http://0.0.0.0:3055</code></pre>
             <thead><tr><th>Trigger</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>manual</td><td>Started by clicking "Run Flow" in the UI or calling POST /api/flows/:id/trigger</td></tr>
               <tr><td>schedule</td><td>Runs on a cron schedule. Specify a cron expression in Trigger Options.</td></tr>
-              <tr><td>event</td><td>Triggered by an Inngest event name (planned).</td></tr>
               <tr><td>webhook</td><td>Triggered by an incoming HTTP request (planned).</td></tr>
               <tr><td>workflow-transition</td><td>Fires after any workflow/pipeline transition lands (manual or automatic). Payload carries collection, item, friendly_id, from/to state, owners and owner_emails.</td></tr>
               <tr><td>staged-import-completed</td><td>Fires after a staged (file → staging table → procedure) import run completes. Payload: run_id, import_key, definition_label, staging_table, procedure, row_count, duration_seconds, created_by. Filter with a Condition on import_key. A flow listed in the import definition's "After each run" runs there instead and is not fired twice.</td></tr></tr></tbody>
@@ -906,7 +905,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
         <div class="doc-section" id="s-extensions" data-toc='[{"id":"extensions","label":"Extensions"},{"id":"extension-settings","label":"Extension settings"},{"id":"extension-registry","label":"Registry: what an extension registered"},{"id":"extension-staged-builds","label":"Staged builds"},{"id":"extension-registry-versions","label":"Registry versions"},{"id":"extension-settings-compare","label":"Settings across environments"}]'>
           <!-- SYNC:extensions -->
           <h1 class="doc-h1" id="extensions">Extensions</h1>
-          <p class="doc-p">Extensions are Node.js plugins that extend Nivaro's behavior — custom routes, hooks, scheduled jobs, and Inngest functions. The Extensions page shows all discovered plugins and their status.</p>
+          <p class="doc-p">Extensions are Node.js plugins that extend Nivaro's behavior — custom routes, hooks, scheduled jobs, flow operations and more. The Extensions page shows all discovered plugins and their status.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
             <tbody><tr><tr><td>loaded</td><td>Extension is registered and active.</td></tr>
@@ -1842,7 +1841,7 @@ x-workspace: ws-uuid-here</code></pre>
             <li>condition_rules (optional): field conditions that must match to offer the transition.</li>
             <li>group_label: optional; transitions with same label render in a dropdown menu instead of individual buttons.</li>
             <li>Renaming a button label (the pencil on a route group in the pipeline editor, or POST /api/pipelines/:id/transitions/rename { from, to, dry_run? }) renames every route carrying it and rewrites what names the old label — registry bulk actions of kind transition, saved bulk recipes and flow conditions on transition_label — after listing them for confirmation. A name another button already uses is refused.</li>
-            <li>requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs, m2o pickers for FK columns, m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers) — e.g. confirm an order number at submit time.</li>
+            <li>requirements (optional): data-entry gates enforced at execute time (422 + a fill-in dialog). Type child_fields requires listed fields on every related child row (scalar inputs, m2o pickers for FK columns, m2m multi-selects writing junction rows); type record_fields collects fields on the transitioning record itself (text inputs, m2o pickers, m2m multi-selects, and upload controls for a file field or a many-to-many to files) — e.g. confirm an order number, or attach the signed quote, at submit time.</li>
             <li>optional_when (child_fields): waive a required field per row when a controlling field (a column or an m2m alias) holds one of a list of values — {"&lt;field&gt;": {"field": "&lt;controlling&gt;", "in": [..], "placeholder": "Auto-assigned"}}. Instead of typing ids, "in_query": {"collection", "filter": {col: value | [values] | null}, "value_field"} reads the list from a business collection at evaluation time (500 rows max) and can be combined with a static "in". A query that is malformed, fails, or matches nothing drops the rule — the field stays required, never accidentally waived.</li>
             <li>review_when (child_fields): {"field": "&lt;record field or one M2O hop, e.g. warehouse.ordering_system&gt;", "in": [..]} (or a list — any match) on the transitioning record brings the dialog back with EVERY row, filled or not, when e.g. the last partner push failed ("push_status": ["error"]) — so a line can be corrected before trying again; "review_message" sets the banner text. The dialog's own re-submit sends reviewed: true, which skips review_when (incomplete rows still block), so it asks once per attempt.</li>
             <li>Repeat guard: the same manual transition on the same record is refused with 409 <code class="doc-code">TRANSITION_DUPLICATE</code> when it is made again within 10 seconds, so a double click or a retried request never runs the side effects twice. The answer cites the first history row. Settings → Content changes the window; 0 turns the guard off. <code class="doc-code">TRANSITION_GUARD_SECONDS</code> sets the default per instance.</li>
@@ -2232,7 +2231,10 @@ const { data: tx } = await nivaro.request(
           <ul class="doc-ul">
             <li>Save the current scope + filters + sort + grouping + view mode as a named view (+ Save view); views appear as pills and can be shared with everyone. Views are per-queue.</li>
             <li>Selecting rows (checkboxes) opens a floating bar: bulk Claim, Release, or Transition to a target state. Transitions apply per item under the same permission and condition rules as dragging a card — a summary toast reports successes and skips.</li>
+            <li>Where the source collections offer them, the bar also carries the integration pushes — one "Push to &lt;partner&gt;" button per registered push, and "Retry failed pushes" — each with a dry run before it sends and a per-row result list after (see Bulk Actions → Integration pushes). The row Actions menu offers the same for one record.</li>
           </ul>
+          <h3 class="doc-h3">Integrations filter</h3>
+          <p class="doc-p">When a source collection has integration partners, the queue carries an Integrations column (one dot per partner) and an Integrations pill beside Unseen changes: Overdue, failed or missing · Pending or skipped · Sent · No integration. The same buckets as the collection browser's Integrations filter, read from the integration ledger. On large, cached queues the filter is answered straight from the cache. API: filters.integrations = danger | warning | positive | none (aliases failed, pending, sent, never; several values OR).</p>
           <h3 class="doc-h3">Kanban swimlanes and live updates</h3>
           <ul class="doc-ul">
             <li>The Lanes control on the Kanban view adds horizontal lanes by collection or owner, crossed with the state columns. Lanes collapse individually.</li>
@@ -2240,6 +2242,15 @@ const { data: tx } = await nivaro.request(
           </ul>
           <h3 class="doc-h3">Sidebar badges</h3>
           <p class="doc-p">Each queue in the Queues sidebar carries a count pill: the total item count, with a red past-SLA count appended (e.g. "142 · 3⚠") when anything has breached. Large materialized queues show exact live counts straight from their cache; regular queues show the numbers from the latest nightly snapshot — the pill’s tooltip tells you which. Badges refresh every minute and only appear for queues with items.</p>
+          <h3 class="doc-h3">Addendums as a source</h3>
+          <p class="doc-p">An "Addendums in flight" source lists the addendums still in approval on one collection (a collection must have addendums turned on). Each row is the addendum itself: labelled with its title and the record it changes, owned by whoever owns its current approval step, with its money change in a Cost impact column and its own SLA. Its state filter reads the addendum approval states. Opening a row opens the record with that addendum in view. The addendum inherits the record's access: people who cannot read the record do not see its addendums.</p>
+          <p class="doc-p">A collection row whose record has an addendum in flight shows the ADDENDUM's state and owners (the approval actually moving) on large, cached queues too — the cache follows addendums as they are created, move, are approved or rejected.</p>
+          <h3 class="doc-h3">Grouping a table</h3>
+          <p class="doc-p">Group by (state, collection, owners, at-risk, SLA, aging or any extra column) in the Table view loads the group headers first — each with its count, breached and at-risk counts, and a sum for every number column — and a group's rows load when you open it, 50 at a time (Show more adds the next 50). On large, cached queues the headers come from one grouped query. Kanban still groups the full set on the board.</p>
+          <h3 class="doc-h3">Changed since you looked</h3>
+          <p class="doc-p">A small dot before an item means someone else edited it, moved it through its pipeline, or commented on it after you last opened it (hover for who and when). Records you have never opened carry no dot. The Unseen changes button narrows the table to those records.</p>
+          <h3 class="doc-h3">Filters and sorts on large queues</h3>
+          <p class="doc-p">Large queues read from a cache. Date, number and yes/no column filters (before / after / between, greater than, equals…) and the Owners sort are answered straight from it; a cache built before this release answers them the slower way until its next rebuild (saving the queue's sources, or Rematerialize, rebuilds it).</p>
           <h3 class="doc-h3">Trends</h3>
           <p class="doc-p">A nightly snapshot records each queue's totals (total, unowned, SLA warning/breached, at risk, per-state counts). Stat tiles show a 14-day sparkline and a delta versus the last snapshot — rising breached/at-risk counts render red, falling ones green. Trends appear after the first nightly snapshot.</p>
           <!-- /SYNC:queues -->
@@ -3058,7 +3069,6 @@ Authorization: Bearer &lt;token&gt;
 {
   "db": { "ok": true, "latency_ms": 4 },
   "redis": { "ok": true },
-  "inngest": { "ok": true },
   "migrations": { "ok": true, "pending": 0 },
   "sockets": { "connected": 42 }
 }</code></pre>
@@ -3316,7 +3326,7 @@ Content-Type: application/json
         <div class="doc-section" id="s-flows-api" data-toc='[{"id":"flows-api","label":"Flows API"}]'>
           <!-- SYNC:flows-api -->
           <h1 class="doc-h1" id="flows-api">Flows API</h1>
-          <p class="doc-p">Manage Inngest-backed flows — automated workflows with triggers and operations.</p>
+          <p class="doc-p">Manage flows — automated workflows with triggers and operations.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>GET</td><td>/api/flows</td><td>List flows with operation counts and next_run for scheduled flows.</td></tr>
@@ -5705,7 +5715,7 @@ await nivaro.request(deleteRule(rule.id))</code></pre>
         <div class="doc-section" id="s-sdk-flow-runs" data-toc='[{"id":"sdk-flow-runs","label":"SDK — Flow Runs"}]'>
           <!-- SYNC:sdk-flow-runs -->
           <h1 class="doc-h1" id="sdk-flow-runs">SDK — Flow Runs</h1>
-          <p class="doc-p">Flows are Inngest-backed automations (schedules, webhooks, manual triggers). View execution history, logs, and errors via the SDK.</p>
+          <p class="doc-p">Flows are automations (schedules, events, webhooks, manual triggers). View execution history, logs, and errors via the SDK.</p>
           <pre class="doc-pre"><code>import { readFlowRuns, readFlowRun, triggerFlowRun } from '@nivaro/sdk'
 
 // List all runs for a flow (newest first)
@@ -6136,7 +6146,7 @@ await nivaro.request(evaluateAlerts())</code></pre>
               <tr><td>readAlertLog(alertId?)</td><td>GET /alerts/log</td><td>Admin</td></tr>
               <tr><td>evaluateAlerts()</td><td>POST /alerts/evaluate</td><td>Admin</td></tr></tr></tbody>
           </table></div>
-          <div class="doc-note">Alerts are evaluated every 5 minutes by an Inngest cron job. Anomaly detection uses statistical analysis (standard deviation multipliers) to identify unusual values. Cooldown prevents the same alert from firing multiple times within a time window.</div>
+          <div class="doc-note">Alerts are evaluated every 5 minutes by a scheduled job. Anomaly detection uses statistical analysis (standard deviation multipliers) to identify unusual values. Cooldown prevents the same alert from firing multiple times within a time window.</div>
           <!-- /SYNC:sdk-alerts -->
         </div>
 
@@ -6491,7 +6501,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-schema","label":"Schema steps"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-schema","label":"Schema steps"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"},{"id":"ext-overview-runbooks","label":"Runbooks"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6609,6 +6619,30 @@ Authorization: Bearer &lt;admin-token&gt;
   ],
   async register(ctx) { … }
 }</code></pre>
+          <h3 class="doc-h3" id="ext-overview-runbooks">Runbooks</h3>
+          <p class="doc-p">A long, multi-step operator script (a data conversion, a cutover chain) can be declared as a runbook. The admin Environments page lists it under Runbooks and runs it from the machine the API runs on — local development only — as a detached process, so a run that takes hours outlives the API restarting. The console shows each step, how long it took and what it said, the log tail, and offers Cancel and Resume from the step that failed.</p>
+          <ul class="doc-ul">
+            <li>A real run needs a finished dry run of the same target from the last 24 hours, and the target typed back.</li>
+            <li>One runbook runs at a time on the machine. A target listed in <code class="doc-code">refuse_targets</code> is refused.</li>
+            <li>The script is started as <code class="doc-code">npx tsx &lt;script&gt; &lt;args&gt; --events</code> from the api directory, with <code class="doc-code">target_env</code> set to the target. It prints <code class="doc-code">@@steps ["a","b"]</code>, then <code class="doc-code">@@event {"step","status":"start|ok|fail|skip|refused","secs","lines"}</code> per step, and ends with <code class="doc-code">### DONE — &lt;summary&gt;</code> or <code class="doc-code">### FAILED at &lt;step&gt;: &lt;reason&gt;</code>.</li>
+            <li>Resume passes <code class="doc-code">resume_flag</code> and the failed step name; the script skips the steps before it.</li>
+          </ul>
+          <pre class="doc-pre"><code>export default {
+  id: 'my-extension',
+  runbooks: [
+    {
+      key: 'convert',
+      label: 'Data conversion',
+      script: 'extensions/my-extension/scripts/convert.ts',
+      dry_args: ['--dry-run'],
+      go_args: ['--execute'],
+      resume_flag: '--from',
+      target_env: 'DB_DATABASE',
+      refuse_targets: ['shared_dev']
+    }
+  ],
+  async register(ctx) { … }
+}</code></pre>
           <!-- /SYNC:ext-overview -->
         </div>
 
@@ -6621,7 +6655,6 @@ Authorization: Bearer &lt;admin-token&gt;
             <thead><tr><th>Property</th><th>Type</th><th>Purpose</th></tr></thead>
             <tbody><tr><tr><td>app</td><td>FastifyInstance</td><td>Register routes, decorators, hooks. Scoped to /api prefix.</td></tr>
               <tr><td>database</td><td>Knex</td><td>MSSQL connection via Knex query builder.</td></tr>
-              <tr><td>inngest</td><td>Inngest</td><td>Async job orchestration. Register functions, send events.</td></tr>
               <tr><td>logger</td><td>FastifyBaseLogger</td><td>Structured pino logger prefixed with extension id.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3" id="ext-context-hooks-cron">Hooks &amp; Cron</h3>
@@ -6733,7 +6766,7 @@ ctx.hooks.after('*', 'delete', async (payload) =&gt; {
 // To cancel a job (e.g. on cleanup):
 ctx.cron.unschedule('daily-report');</code></pre>
           <p class="doc-p">When an extension is disabled via the Extensions page, all of its cron jobs are automatically paused. They resume when the extension is re-enabled.</p>
-          <div class="doc-note">Cron jobs run in-process. For heavy or long-running work, fire an Inngest event from the cron callback and handle the work in an Inngest function.</div>
+          <div class="doc-note">Cron jobs run in-process and are recorded on the Background Jobs page. With several API processes, only the one holding the scheduler lease fires them. Mark long full-table work as heavy so it waits its turn instead of piling onto the connection pool.</div>
           <!-- /SYNC:ext-cron -->
         </div>
 
@@ -6896,7 +6929,7 @@ ctx.app.register(async (fastify) =&gt; {
         <div class="doc-section" id="s-ext-example" data-toc='[{"id":"ext-example","label":"Full Example Extension"}]'>
           <!-- SYNC:ext-example -->
           <h1 class="doc-h1" id="ext-example">Full Example Extension</h1>
-          <div class="doc-note">Working examples for all extension types (inngest, socket.io, UI plugins, flows) live in <code class="doc-code">examples/my-project/extensions/</code>. Copy any folder into <code class="doc-code">api/extensions/</code> to activate it.</div>
+          <div class="doc-note">Working examples for all extension types (socket.io, UI plugins, flows, bulk and item actions) live in <code class="doc-code">examples/my-project/extensions/</code>. Copy any folder into <code class="doc-code">api/extensions/</code> to activate it.</div>
           <pre class="doc-pre"><code>// api/extensions/project-sync/index.ts
 import type { Extension } from '../../src/extensions/loader.js';
 
@@ -8118,7 +8151,9 @@ Authorization: Bearer &lt;token&gt;
             <thead><tr><th>Check</th><th>What counts as a finding</th></tr></thead>
             <tbody><tr><tr><td>Required empty</td><td>A required field (or required M2M link) is empty on the record.</td></tr>
               <tr><td>Validation</td><td>A field value fails one of its validation rules — the same evaluator the save path uses. Date-offset rules ("at least 7 days from today") are judged against the record's creation date.</td></tr>
-              <tr><td>Not an available option</td><td>A cascade-filtered picker holds a value its parent would no longer offer (a sub type outside the chosen project type).</td></tr>
+              <tr><td>Not an available option</td><td>A cascade-filtered picker holds a value its parent would no longer offer (a sub type outside the chosen project type). Cascades whose filter column is a dotted path or walks a to-many alias (<code class="doc-code">regions.region</code>, <code class="doc-code">filter_via_many</code>) are compiled per record with the form's own cascade builder, so a project outside the record's zone is found too.</td></tr>
+              <tr><td>Not an option the picker offers</td><td>A picker narrowed by its own <code class="doc-code">option_filter</code> holds a value that filter excludes. A filter with <code class="doc-code">$parent.&lt;field&gt;</code> tokens is resolved per record the way the form resolves it — from the record itself when it carries those fields, else from the record a grid shows it under — so "shipping location outside the request's region" is found. When a cascade already reported the same field, the cascade finding stands alone.</td></tr>
+              <tr><td>Lines breaking a field rule</td><td>A line in an inline grid breaks its own required flag or validation rule ("Line 3: Qty is required") — only on columns the grid shows (its child table layout, with that layout's required overrides) and only on the lines its <code class="doc-code">row_filter</code> shows. Calendar-relative rules are left to the moment a line is typed. Reported on the parent record under the grid.</td></tr>
               <tr><td>Broken display label</td><td>Every part of the display template resolved empty, so the record shows as its internal id.</td></tr>
               <tr><td>Lines missing rule inputs</td><td>A line's rule INPUT is empty — a line item with no category has no basis for its task, GL category or PO line type, whatever those hold today. Reported per line naming the empty field and the targets it drives; fixed by filling the input on the record, never automatically.</td></tr>
               <tr><td>Lines off their rules</td><td>An inline-grid row rule (task from the SKU, labor price locked to $1, line type from the parent) derives a different value than the child row stores. Every SAVED line of every checked record is re-derived from scratch with the same evaluator the grid runs as you type; a rule that derives nothing never counts as drift. The finding lists each line and the stored vs derived value: "Line 3: Price is $40.00 — rules derive $1.00 (locked); Task is \"X\" — rules derive \"Y\"".</td></tr></tr></tbody>
@@ -8187,20 +8222,33 @@ Authorization: Bearer &lt;token&gt;
         <div class="doc-section" id="s-managers-team" data-toc='[{"id":"managers-team","label":"Your team (managers)"},{"id":"managers-team-routes","label":"Routes"},{"id":"managers-team-alerts","label":"Team alerts"}]'>
           <!-- SYNC:managers-team -->
           <h1 class="doc-h1" id="managers-team">Your team (managers)</h1>
-          <p class="doc-p">A manager is anyone with active direct reports. <code class="doc-code">/auth/me</code> answers <code class="doc-code">has_reports</code>, and a headless dashboard offers its team widgets only to those people. Every count and every record listed is narrowed to what the viewer may open.</p>
+          <p class="doc-p">A manager is anyone with active direct reports (people whose manager is set to them). <code class="doc-code">/auth/me</code> answers <code class="doc-code">has_reports</code>, and a headless dashboard offers its team widgets only to those people. Every count and every record listed is narrowed to what the viewer may open, so two people asking about the same report can see different numbers.</p>
           <h2 class="doc-h2" id="managers-team-routes">Routes</h2>
-          <p class="doc-p">Team load, time off ahead, the week, tasks, the SLA trend, wins and kudos, new starters, access check and 1:1 preparation — see the admin docs for the full table.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>What it answers</th></tr></thead>
+            <tbody><tr><tr><td>GET /users/me/team-load</td><td>One row per report: open records, past SLA, oldest, stuck count, the three oldest records, out-of-office and who covers. Admins may pass ?team=&lt;team id&gt; to read a Team instead.</td></tr>
+              <tr><td>GET /delegation/team?days=14</td><td>Reports who are out now or whose time off starts within the window, gaps (no working delegate) first.</td></tr>
+              <tr><td>POST /delegation/:userId/remind</td><td>Asks a report to set a delegate. Their manager or an admin; once a day per person (429 REMIND_TOO_SOON).</td></tr>
+              <tr><td>GET /users/me/team-week</td><td>The last seven days: completions, send-backs, records newly past SLA, who was out, and gaps in the next two weeks.</td></tr>
+              <tr><td>GET /users/me/team-tasks</td><td>Open and overdue tasks per report with who asked. The assignee's manager may nudge (POST /tasks/:id/nudge).</td></tr>
+              <tr><td>GET /users/me/team-trend?days=30</td><td>Past-SLA and at-risk counts per day from the per-owner queue snapshots, with the change against the previous window.</td></tr>
+              <tr><td>GET /users/me/team-wins?days=7</td><td>Completions and accepted partner pushes per report; POST /users/me/team-wins/kudos posts a message as the manager through the chat send path.</td></tr>
+              <tr><td>GET /users/me/team-onboarding?days=60</td><td>New reports: sign-ins, first request and approval, setup steps, pending access requests. POST /access-requests/:id/vouch tells admins the manager backs a request; it grants nothing.</td></tr>
+              <tr><td>GET /users/me/team-access</td><td>Role, scope limits, directory status, sign-in staleness, token presence, pending requests and expired delegations. POST /users/me/team-access/flag tells admins about a needed scope change or a departure.</td></tr>
+              <tr><td>GET /users/:id/one-on-one?since=</td><td>1:1 preparation for one report (their manager or an admin); POST …/summary writes a short brief from that payload only.</td></tr></tr></tbody>
+          </table></div>
           <h2 class="doc-h2" id="managers-team-alerts">Team alerts</h2>
-          <p class="doc-p">A manager sets <code class="doc-code">preferences.team_alerts</code>; an hourly job sends one notification per report and rule per day. On Mondays the daily summary carries "Your team this week".</p>
+          <p class="doc-p">A manager sets <code class="doc-code">preferences.team_alerts</code> — <code class="doc-code">breached_max</code>, <code class="doc-code">uncovered</code>, <code class="doc-code">stuck_hours</code>, <code class="doc-code">silent_days</code> — through PATCH /users/me/preferences. The hourly <code class="doc-code">team-alerts</code> job checks each manager's team against those lines and sends one notification per report and rule per day. On Mondays the daily summary carries a "Your team this week" section for anyone with reports.</p>
+          <div class="doc-note">What counts as stuck is set once for the instance: Settings → <code class="doc-code">team_stuck_hours</code> (blank = 240 hours).</div>
           <!-- /SYNC:managers-team -->
         </div>
 
-        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-processors","label":"Import processors"},{"id":"imports-table-config","label":"Configuring a table import"},{"id":"imports-run-detail","label":"Reading a run"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-definitions","label":"Definitions"}]'>
+        <div class="doc-section" id="s-imports" data-toc='[{"id":"data-import-guide","label":"Imports"},{"id":"imports-staged","label":"Staged imports"},{"id":"imports-processors","label":"Import processors"},{"id":"imports-table-config","label":"Configuring a table import"},{"id":"imports-run-detail","label":"Reading a run"},{"id":"imports-collection","label":"Collection imports"},{"id":"imports-health","label":"Import health"},{"id":"imports-definitions","label":"Definitions"}]'>
           <!-- SYNC:imports -->
           <h1 class="doc-h1" id="data-import-guide">Imports</h1>
           <p class="doc-p">The Import Console (Monitoring → Imports) covers two different importers behind one surface. Staged imports load a file into a staging table and optionally run a stored procedure over it. Collection imports map a CSV's columns onto a collection's fields and write each row through the item API. The console is the shared <code class="doc-code">ImportConsole</code> component, so the admin and any headless frontend built on @nivaro/react run exactly the same screen.</p>
           <h2 class="doc-h2" id="imports-staged">Staged imports</h2>
-          <p class="doc-p">Each staged import is a row in <code class="doc-code">nivaro_import_definitions</code>: a key, the staging table rows land in, and an optional procedure that runs afterwards. A definition with no procedure is still a valid import — the load alone is the job. Uploading queues a run in <code class="doc-code">nivaro_import_queue</code>; a worker drains it one run at a time, because procedures truncate and refill shared staging tables.</p>
+          <p class="doc-p">Each staged import is a row in <code class="doc-code">nivaro_import_definitions</code>: a key, the staging table rows land in, and an optional procedure that runs afterwards. A definition with no procedure is still a valid import — the load alone is the job. Uploading queues a run in <code class="doc-code">nivaro_import_queue</code>. Runs in the same lock group — by default the staging table — go one at a time, in queue order, because procedures truncate and refill that table; runs in different groups start side by side (up to IMPORT_MAX_PARALLEL per process, default 3). The claim is atomic, so two worker processes never start the same run.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
             <tbody><tr><tr><td>Status</td><td>queued, running (live pulse), completed, error or canceled.</td></tr>
@@ -8211,6 +8259,7 @@ Authorization: Bearer &lt;token&gt;
           <p class="doc-p">The New import dialog previews the file BEFORE queueing, using the worker's own parser — so the cleaned values shown are the ones the procedure will consume — and diffs the file's columns against the staging table, warning about columns the table does not have and columns it expects but the file omits.</p>
           <p class="doc-p">Service-mode definitions (rows written through the items service instead of a staging table + procedure) go one step further: the preview is a DRY RUN of the real importer — the same lookups, header mapping, natural-key dedupe and field diff, with nothing written — and reports what a run would do: how many rows would be created, how many existing rows would change (field by field, old → new), how many are unchanged, and every skipped row with the rule that dropped it ("row 12 · no cifa_items match for cifa", "row 40 · duplicate key in file (a later row wins)"). Lookup values a real run would stub-create are listed too. Click a count to see the rows behind it.</p>
           <div class="doc-note">The insight strip is scoped by the window control (7d / 30d / 90d / All): status counts, success rate, rows imported and median duration all describe the runs inside that window, and so does the table.</div>
+          <p class="doc-p">Procedure-mode definitions get a Rehearse button in the preview: the file is loaded into the staging table and the procedure runs inside ONE transaction on one connection, every table it (and the procedures it calls, three deep) writes is counted before and after, and then everything is rolled back — "purchase_orders +12 · line_items +340" before the real run is queued. The connection runs with IMPLICIT_TRANSACTIONS on, so a write the procedure makes after its own ROLLBACK opens a new transaction instead of committing, and the final rollback takes it too. It is refused up front when a rollback could not undo the run: a procedure that COMMITs more transactions than it opens, or one that reaches outside the database (mail, shell, linked servers); and its counts are withheld when the procedure ended the rehearsal transaction itself. It holds locks on those tables while the procedure runs, so it is a click, never automatic. <code class="doc-code">POST /api/staged-imports/rehearse</code> (multipart import_key + file, admin).</p>
           <h3 class="doc-h3" id="imports-processors">Import processors</h3>
           <p class="doc-p">Service mode writes one collection per file. A file that spans several — a header and its lines, the links between them, totals that follow from the lines — is handled by an import processor: code an extension registers and a definition names in its Processor field. The file is compared with live data first and only real differences are written, through the items service, as the person who queued the file, so every change has a revision and an author. The upload preview shows the same dry run as service mode.</p>
           <pre class="doc-pre"><code>// api/extensions/&lt;name&gt;/index.ts
@@ -8300,7 +8349,7 @@ POST /api/staged-imports/:id/revert/preview   // admin · { item_ids? }
 POST /api/staged-imports/:id/revert           // admin · { item_ids? }</code></pre>
           <div class="doc-note">A revert reaches what the run wrote through the items service. It does not reach set-based fills, the procedures a run calls at its end, or rows the run removed; the preview says which records it will leave alone and why. Link to a run with <code class="doc-code">/imports?run=&lt;id&gt;</code>.</div>
           <h2 class="doc-h2" id="imports-collection">Collection imports</h2>
-          <p class="doc-p">The row-by-row CSV importer. Rows go through the normal item API, so validation rules, hooks, row-level security and activity logging all apply. Jobs process in the background with live progress counters.</p>
+          <p class="doc-p">The row-by-row CSV importer. Jobs process in the background with live progress counters. By default rows are written directly (fast, no per-record history). Switch on "Apply rules and keep history" in the options step and each row is saved through the items service instead, as the queuing admin: field rules, validation, hooks and automations run, every record gets an activity row stamped <code class="doc-code">import:CSV &lt;file&gt;:job-&lt;id&gt;</code> and a revision, a row that breaks a rule is reported instead of written, and an existing record whose mapped fields already hold the file's values is left untouched (counted as skipped). Rolling such a job back restores through the items service too, so the history shows both. The diff preview is the same either way. <code class="doc-code">POST /api/imports</code> and <code class="doc-code">/from-url</code> take <code class="doc-code">through_items: true</code>.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Step</th><th>What it does</th></tr></thead>
             <tbody><tr><tr><td>1. Source</td><td>Upload a CSV, paste rows, or have the server fetch a URL (25MB max). Shows a parsed preview.</td></tr>
@@ -8314,8 +8363,10 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }</code></
               <tr><td>overwrite</td><td>The existing record's mapped fields are all replaced.</td></tr>
               <tr><td>merge</td><td>Only the mapped fields are updated.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3" id="imports-health">Import health</h3>
+          <p class="doc-p">Above the runs table (admins), one card per active definition: when it last ran, whether that is late for the cadence the staleness setting expects (or, unmonitored, how often runs have actually landed), its error rate over the last 30 days, a bar per recent run sized by rows imported (failed runs in red), and how much its staging table holds. Click a card to filter the runs to that import. <code class="doc-code">GET /api/staged-imports/definition-health?days=30</code> and <code class="doc-code">GET /api/staged-imports/staging-tables</code> back it.</p>
           <h2 class="doc-h2" id="imports-definitions">Definitions</h2>
-          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (batched inserts by default; bulk = a file on an SMB share plus BULK INSERT, which needs smbclient and SAMBA_* on the host), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).</p>
+          <p class="doc-p">Admin-only registry for staged imports: key, label, staging table, procedure, loader (batched inserts by default; bulk = a file on an SMB share plus BULK INSERT, which needs smbclient and SAMBA_* on the host — when the share, smbclient or the BULK INSERT permission is unavailable the run continues on batched inserts and its log says so; "Bulk only" fails instead), lock group (runs sharing a group never overlap; blank = the staging table), "Recalculate rollups for" (procedure mode — collections the procedure writes; after each run the stored rollups those rows feed are recomputed over their whole parent table, a chunk at a time, writing only values that differ, because a procedure bypasses the hooks that normally keep them current), "Empty staging after" (opt-in: days after the newest completed run at which the daily <code class="doc-code">staged-import-staging-purge</code> job empties the staging table, never while a run of it is queued or running; blank keeps the last file — <code class="doc-code">POST /api/staged-imports/definitions/:id/purge-staging</code> empties it by hand), processor (stored procedure, items service, or a registered import processor), sort, and "After each run" — an ordered list of flows executed right after a successful run with the run summary as payload (import_key, run_id, row_count, duration_seconds, created_by). That is the hook for work the raw-SQL import cannot trigger itself, e.g. an Auto Sweep flow op that re-evaluates automatic workflow transitions once purchase orders have landed. Every active flow on the generic "Staged Import Completed" trigger fires too, minus the ones already listed. Definitions are deactivated rather than deleted, so their run history stays readable while new uploads are blocked. "Receipt to owners after each run" is off by default: when on, each record the run touched sends its current owners one in-app message with what the import did for it (the definition's post-run handler defines the summary — a purchase-order import might report the linked PO number plus matched and unmatched line counts).</p>
           <div class="doc-note doc-warn">Both importers are admin-only for writes, and <code class="doc-code">nivaro_*</code> system tables are blocked as collection-import targets. Staging table and procedure names are validated as plain identifiers because they are interpolated into SQL — BULK INSERT and EXEC cannot bind an object name.</div>
           <!-- /SYNC:imports -->
         </div>
@@ -8341,6 +8392,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }</code></
           <h3 class="doc-h3">Lookup step and on_miss policies</h3>
           <p class="doc-p">A lookup step names a target collection, a match field, optional scope filters (AND-ed, each <code class="doc-code">{{token}}</code>-substitutable), and <code class="doc-code">take</code> — what to pull off the matched record once it's found. What happens when nothing matches is the <code class="doc-code">on_miss</code> policy:</p>
           <p class="doc-p">Line rules run in order and each result lands in a per-row <code class="doc-code">{{$line.*}}</code> context, so a later rule can chain off earlier ones — in expressions and in scope-filter values. Composite lookups fall out of this: resolve <code class="doc-code">category_type</code> and <code class="doc-code">core_category</code> first, then a <code class="doc-code">category</code> rule with an expression <code class="doc-code">{{$line.core_category}}</code> and a scope filter <code class="doc-code">sub_category = {{$line.category_type}}</code> picks the exact record matching both, per row. Row-varying scope filters are applied in memory after the single batched query, so lookups stay one query per rule.</p>
+          <p class="doc-p">A rule may also CHAIN up to three lookup steps: each later lookup matches on what the one before it returned. Set the first to take a field, e.g. <code class="doc-code">cifa_number</code> → cifa_items (take field <code class="doc-code">override_cifa</code>) → cifa_items by id (take field <code class="doc-code">cifa_number</code>) — the file names an item and the rule lands on its override. Each lookup is still one query across all rows, asking only for the values the previous lookup answered. A miss anywhere in the chain reports that lookup's <code class="doc-code">on_miss</code>; a chained rule cannot use <code class="doc-code">on_miss: 'create'</code> (which of the chain's collections to create in would be ambiguous).</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>take</th><th>Behavior</th></tr></thead>
             <tbody><tr><tr><td>id (default)</td><td>Resolves to the matched record's id — the typical FK-fill case.</td></tr>
@@ -9074,6 +9126,8 @@ await sendRawMail({ to: 'user@example.com', subject: 'Notice', html: '&lt;p&gt;H
           <h3 class="doc-h3">Test mode (dev / staging)</h3>
           <p class="doc-p">When Test mode is enabled (Settings → SMS → Test mode), every outgoing SMS is redirected to a single test number — the message body is prefixed with <code class="doc-code">[TEST — was: &lt;original number&gt;]</code>. An optional allowlist (comma-separated phone numbers; formatting and country-code differences are ignored when matching) lets specific numbers receive texts normally. If test mode is on but no test number is configured, non-allowlisted SMS is dropped with a server log rather than sent.</p>
           <div class="doc-note">The <code class="doc-code">SMS_TEST_MODE</code> and <code class="doc-code">SMS_TEST_RECIPIENT</code> env vars override the settings values and force test mode on — set them in dev/staging <code class="doc-code">.env</code> files so the protection survives database restores from production. Email has the same feature: see Email / SMTP → Test mode.</div>
+          <h3 class="doc-h3">Browser push and Teams test mode</h3>
+          <p class="doc-p">Settings → Microsoft carries the same protection for the other two channels. Browser push: a push to anyone whose email is not on the allowlist (emails or @domains) goes to the test person's browsers instead, titled <code class="doc-code">[TEST — was: &lt;email&gt;]</code>; with no test person it is dropped, and a redirected chat push loses its reply token. Teams: every card goes to the test channel's incoming webhook instead, titled <code class="doc-code">[TEST — was: &lt;channel host&gt;]</code>; with no test webhook it is dropped. <code class="doc-code">PUSH_TEST_MODE</code> / <code class="doc-code">PUSH_TEST_RECIPIENT</code> and <code class="doc-code">TEAMS_TEST_MODE</code> / <code class="doc-code">TEAMS_TEST_WEBHOOK_URL</code> force the mode on from the environment, like the mail and SMS variables.</p>
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>GET   /api/settings           # sms_auth_token → ••••••
 PATCH /api/settings           # sms_provider, sms_account_sid, sms_auth_token, sms_from, sms_region,
@@ -9563,7 +9617,7 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
           <h3 class="doc-h3">The Summary layout</h3>
           <p class="doc-p">What Summary mode shows is a layout of type "summary" (Data Model → collection → Layouts → layout type). It renders the same way a read-only detail sheet does — section cards, definition grids, child tables, the header band and hide-empty settings — and it carries its own groups and field assignments, so the summary can differ from the edit form: fewer fields, a different order, a header band with the identity fields. Start one with "Clone as Summary" on the grouped layout, which copies every group, assignment and override, then trim. A collection without a summary layout renders its grouped layout read-only, which is the pre-layout behaviour. Each section has a read-view width (Data Model → Layout → group settings → "Summary / read-view width": auto, full, half or one third) — the board is six tracks wide, so two half sections sit side by side and a lines grid takes the row; auto is half for a short fact list and full when the section holds a grid or widget. Child grids with no rows and links with nothing linked count as empty, so an empty Files section disappears. Widget slots with nothing to show (an empty rollup, a review list with no rows) are hidden in Summary mode, and a section left with nothing collapses with them. Data-integrity findings do not render as a banner in Summary mode; the affected fields (or child grids) carry an amber mark whose tooltip lists the issues.</p>
           <h3 class="doc-h3">Which mode a record opens in</h3>
-          <p class="doc-p">Data Model → collection → Settings → Form UX. Turn on "Summary mode" to show the switch, then set the default (Edit or Summary) and any number of rules. A rule combines a role list and a state test: "when role is X and state is / is not [states] → open in Summary|Edit". Leave roles empty to match any role, states empty to match any state. "No state yet" matches a record that has no pipeline instance. Rules run top to bottom and the first match wins; when none match the default applies.</p>
+          <p class="doc-p">Data Model → collection → Settings → Form UX. Turn on "Summary mode" to show the switch, then set the default (Edit or Summary) and any number of rules. A rule combines a role list, a state test and conditions on the record’s own values: "when role is X, state is / is not [states] and On Hold is true → open in Summary|Edit". Leave roles empty to match any role, states empty to match any state. "No state yet" matches a record that has no pipeline instance. Rules run top to bottom and the first match wins; when none match the default applies.</p>
           <pre class="doc-pre"><code>PATCH /api/collections/workflows
 {
   "read_mode_toggle": true,
@@ -9581,6 +9635,7 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
               <tr><td>rules[].roles</td><td>Role ids (uuid). Empty or omitted = any role.</td></tr>
               <tr><td>rules[].states</td><td>Pipeline state keys, plus the sentinel '__none__' for records with no instance. Empty or omitted = any state.</td></tr>
               <tr><td>rules[].states_op</td><td>'in' (default) or 'not_in' — inverts the state test.</td></tr>
+              <tr><td>rules[].conditions</td><td>Record values that must ALL hold: [{field, op, value}] with the row-highlight ops (eq, neq, gt, gte, lt, lte, contains, null, nnull). A value may name another field ('{{budget}} * 0.9'). Omitted = any record. At most 10 per rule.</td></tr>
               <tr><td>rules[].mode</td><td>'edit' or 'summary' — the mode to open in when the rule matches.</td></tr></tr></tbody>
           </table></div>
           <p class="doc-p">GET /api/collections/:collection returns the normalized object (never null). The server validates on PATCH: at most 20 rules, 50 roles or states per rule, uuid-shaped roles, key-shaped states. Storing the empty default clears the column.</p>
@@ -9593,7 +9648,7 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
           <h1 class="doc-h1" id="bulk-actions">Bulk Actions</h1>
           <p class="doc-p">Bulk actions are admin-defined buttons offered over a selection — in the collection browser's selection bar and in a queue's selection pill — that apply one change to every selected record: On Hold, Remove Hold, Cancel, Uncancel and whatever else a collection needs. Each action is defined once per collection (Data Model → collection → Settings → Bulk actions) and each surface chooses which of the enabled actions it shows.</p>
           <h3 class="doc-h3">Built-in operations</h3>
-          <p class="doc-p">The bars' own operations are registry entries too, listed under "Built-in" in the same card: Update Field, Transition, Message…, Compare, Merge… (admins, fixed), Saved recipes and Delete for the collection browser; Claim, Release and Transition for queues. Each can be switched off for the collection or given an access rule (everyone / admins / roles). The endpoints behind them (bulk update / delete / transition, message stakeholders, queue claim / release) enforce the same rule, so a stale client cannot drive a disabled operation. Surface allow-lists include built-ins by key (update-field, transition, message, compare, merge, recipes, delete, claim, release).</p>
+          <p class="doc-p">The bars' own operations are registry entries too, listed under "Built-in" in the same card: Update Field, Transition, Message…, Compare, Merge… (admins, fixed), Saved recipes and Delete for the collection browser; Claim, Release and Transition for queues; Push… and Retry failed pushes on both. Each can be switched off for the collection or given an access rule (everyone / admins / roles). The endpoints behind them (bulk update / delete / transition, message stakeholders, queue claim / release) enforce the same rule, so a stale client cannot drive a disabled operation. Surface allow-lists include built-ins by key (update-field, transition, message, compare, merge, recipes, delete, claim, release, push, retry-push).</p>
           <h3 class="doc-h3">Custom actions</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Kind</th><th>Behaviour</th></tr></thead>
@@ -9614,6 +9669,14 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
               <tr><td>Queue</td><td>Queue builder → Bulk actions → checklist across the queue's source collections (display_config.bulk_action_keys, entries are collection:key — null = all).</td></tr>
               <tr><td>Extensions</td><td>ctx.bulkActions.register({id, label, collections, access, require_reason, confirm, execute}) — appears alongside DB-defined actions on the same surfaces.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Integration pushes</h3>
+          <p class="doc-p">Two built-ins send selected records to integration partners, in the collection browser bar, the queue pill and a record row's Actions menu (under "Integrations"):</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Built-in</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>Push… (push)</td><td>One button per item action an extension registered for the collection (ctx.itemActions — e.g. "Push to &lt;partner&gt;"), run on each selected record one at a time. The record form's gates apply per record: the action must apply to the record (its applicable() check), an addendum-creating action needs the addendum gate, and the record must be readable by the person running it. When the action asks for a note, one note is sent with every record.</td></tr>
+              <tr><td>Retry failed pushes (retry-push)</td><td>For each selected record, every partner whose LATEST submission failed (or was rejected) is re-sent the same stored request the record's own Retry button sends. A partner whose latest push landed is left alone; a record never pushed is skipped.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">The popover opens with a dry run ("3 of 5 would run · 2 not applicable to this record") and, after the run, keeps a per-row result list — sent, skipped with the reason, or failed with the partner's answer. Records run sequentially (at most 200 per run): every one is a real partner request. The row menu offers the same two operations for one record ("Retry last failed push" appears only when a partner's latest push failed).</p>
           <h3 class="doc-h3">Results</h3>
           <p class="doc-p">Every run reports done / skipped / failed with the first failures named per record (a transition whose conditions are not met, a blocked integration action, a validation error). Failed records stay selected so the run can be retried after fixing them; an activity row "bulk-action-execute" records the run and its reason.</p>
           <h3 class="doc-h3">API</h3>
@@ -9623,6 +9686,15 @@ GET  /api/bulk-actions/transition-labels?collection=    # labels for the transit
 POST /api/bulk-actions/run
 { "collection": "workflows", "key": "on-hold", "ids": [1, 2, 3], "reason": "Vendor dispute" }
 → { "data": { "succeeded": 2, "skipped": 1, "failed": 0, "errors": [], "skipped_items": ["3"] } }
+
+# integration pushes (built-ins push / retry-push; dry_run classifies, sends nothing)
+POST /api/bulk-actions/push
+{ "collection": "orders", "action_id": "push-to-partner", "ids": [1, 2], "payload": { "message": "…" }, "dry_run": false }
+POST /api/bulk-actions/retry-push
+{ "collection": "orders", "ids": [1, 2], "dry_run": true }
+→ { "data": { "succeeded": 1, "skipped": 1, "failed": 0, "errors": [],
+              "outcomes": [{ "item": "1", "outcome": "change", "reason": "Partner A: accepted" },
+                           { "item": "2", "outcome": "skip", "reason": "no failed push" }] } }
 
 # admin
 GET/POST   /api/bulk-actions/defs?collection=
@@ -10776,6 +10848,8 @@ DELETE /api/trash/:id          # purge immediately</code></pre>
             <li>Restore keeps the original primary key (identity insert), so surviving references still point at the record.</li>
             <li>Dependent rows removed by the original delete (cascades, SET NULL) are not resurrected — only the record itself returns.</li>
             <li>Restore needs create permission on the collection; an occupied id refuses with 409.</li>
+            <li>The record's history continues: a restore writes a <code class="doc-code">restore</code> activity row (credited to whoever restored it, on the request's event chain) and a full revision, per the collection's audit level — the History panel reads "restored this record from trash". Stored rollups, the record's tasks, its integrity check, materialized queue rows and open views all catch up.</li>
+            <li>A restore is not a create: creation notifications and subscriptions, pipeline auto-start, automatic transitions, webhooks and flows do not run again, so nobody is told about the record twice.</li>
             <li>UI: the Trash page in the System nav, with per-collection filter pills.</li>
           </ul>
           <!-- /SYNC:trash -->
@@ -10894,7 +10968,7 @@ Authorization: Bearer &lt;admin-token&gt;
         <div class="doc-section" id="s-content-ops-scheduled-changes" data-toc='[{"id":"content-ops-scheduled-changes","label":"Content Scheduling"}]'>
           <!-- SYNC:content-ops-scheduled-changes -->
           <h1 class="doc-h1" id="content-ops-scheduled-changes">Content Scheduling</h1>
-          <p class="doc-p">Scheduled changes let you queue a field update, workflow transition, or publish/unpublish action to execute at a future date and time. Changes are stored in <code class="doc-code">nivaro_scheduled_changes</code> with a <code class="doc-code">pending</code> status and can be executed manually or via Inngest automation.</p>
+          <p class="doc-p">Scheduled changes let you queue a field update, workflow transition, or publish/unpublish action to execute at a future date and time. Changes are stored in <code class="doc-code">nivaro_scheduled_changes</code> with a <code class="doc-code">pending</code> status and are executed manually (POST /:id/execute or the Execute button) — nothing runs them automatically at scheduled_at yet.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
           <p class="doc-p">On any item edit page, the Schedule button in the header opens a dialog to queue a change for that record — pick the change type, the values, and the date/time. All pending and past changes across collections are managed on the /scheduled-changes page, where each change can be edited, cancelled, or executed immediately.</p>
           <h3 class="doc-h3">Creating a scheduled change via API</h3>
@@ -10932,7 +11006,7 @@ Authorization: Bearer &lt;admin-token&gt;
               <tr><td>DELETE</td><td>/api/scheduled-changes/:id</td><td>Cancel and delete a pending change.</td></tr>
               <tr><td>POST</td><td>/api/scheduled-changes/:id/execute</td><td>Manually execute a pending change immediately.</td></tr></tr></tbody>
           </table></div>
-          <div class="doc-note">Automatic Inngest-based execution runs at the scheduled_at time. Manual execution via POST /:id/execute is available regardless of schedule.</div>
+          <div class="doc-note">Pending changes do not run on their own yet: execute them via POST /:id/execute, which works regardless of the scheduled time.</div>
           <!-- /SYNC:content-ops-scheduled-changes -->
         </div>
 
@@ -12337,6 +12411,8 @@ Authorization: Bearer &lt;nvm_-token&gt;
 
 → 200 { "ok": true }
 → 400 { "error": "Not a masquerade session" }</code></pre>
+          <h3 class="doc-h3">View as, from a person’s page</h3>
+          <p class="doc-p">The admin app’s "View as" button (People page → header) mints a token and opens a new tab on it. The token lives only in that tab’s sessionStorage and rides every request as a bearer, so the admin’s other tabs stay the admin; an amber bar names the person and "Stop viewing as" revokes the token and closes the tab. See People page tools.</p>
           <div class="doc-note doc-warn">A masquerade token carries the target user’s full permissions — including admin, if the target is an admin. Tokens live in Redis under <code class="doc-code">masq:&lt;token&gt;</code>; restarting Redis revokes all active masquerades.</div>
           <!-- /SYNC:masquerade -->
         </div>
@@ -12645,9 +12721,9 @@ cms.request(getTypes())</code></pre>
           <pre class="doc-pre"><code>// vite.config.ts — stamp the pin into version.json
 this.emitFile({ type: 'asset', fileName: 'version.json',
   source: JSON.stringify({ version: APP_VERSION, nivaro_react: installedReactVersion() }) })</code></pre>
-          <div class="doc-note">Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. See docs/RELEASING.md.</div>
+          <div class="doc-note">Local development only: a Release card at the top of this page runs scripts/release-chain.mjs (plan or --go) and shows each stage live. Its Promote to production section moves a version staging verified to production (scripts/promote-production.mjs: check the image, the staging deploy commit and the portal commit staging serves; pin the version and digest on the production branches; play the manual production deploy jobs through the GitLab API — the API first, then the portal; verify the public URLs once the stacks own them). The version is typed back first, a First production deploy box runs the API job in bootstrap mode, and nothing runs while production promotion is switched off in release-chain.config.json. Below it, Runbooks runs the long operator scripts extensions declare. See docs/RELEASING.md.</div>
           <h2 class="doc-h2" id="dev-tooling-dev-launcher">pnpm dev attaches to what is already running</h2>
-          <p class="doc-p"><code class="doc-code">pnpm dev</code> runs <code class="doc-code">scripts/dev-preflight.mjs</code>: it asks each port first (Redis 6379, Inngest 8288, API 3055, admin 3056) and starts only the pieces nothing is listening on, naming what it attached to. It never stops a process it did not start — a hand-started API keeps serving, and edits still reload through its own watch. Orphaned watchers (<code class="doc-code">vite build --watch</code>, <code class="doc-code">tsc --watch</code>, <code class="doc-code">tsx watch</code> whose parent shell is gone) are reported with their pid because they rewrite <code class="doc-code">dist</code> from an old checkout; stopping one is your call. <code class="doc-code">pnpm dev:check</code> reports without launching; <code class="doc-code">pnpm dev:all</code> is the old unconditional launcher; <code class="doc-code">DEV_PREFLIGHT=off pnpm dev</code> skips the port check.</p>
+          <p class="doc-p"><code class="doc-code">pnpm dev</code> runs <code class="doc-code">scripts/dev-preflight.mjs</code>: it asks each port first (Redis 6379, API 3055, admin 3056) and starts only the pieces nothing is listening on, naming what it attached to. It never stops a process it did not start — a hand-started API keeps serving, and edits still reload through its own watch. Orphaned watchers (<code class="doc-code">vite build --watch</code>, <code class="doc-code">tsc --watch</code>, <code class="doc-code">tsx watch</code> whose parent shell is gone) are reported with their pid because they rewrite <code class="doc-code">dist</code> from an old checkout; stopping one is your call. <code class="doc-code">pnpm dev:check</code> reports without launching; <code class="doc-code">pnpm dev:all</code> is the old unconditional launcher; <code class="doc-code">DEV_PREFLIGHT=off pnpm dev</code> skips the port check.</p>
           <!-- /SYNC:dev-tooling -->
         </div>
 
@@ -13669,6 +13745,8 @@ DELETE /api/integration-signals/snoozes/:id   // Undo / Unsnooze</code></pre>
           <p class="doc-p">Open any row on the Events tab to see everything it set off: the records it created or updated, the transitions and flows those writes ran, the pushes to partners and what each partner answered. The sheet opens on the first failure. Large runs of writes to one collection fold into a single line, and the tree stops at 2,000 steps (pushes, transitions and flows are kept before plain writes). The Events tab lists outbound pushes, inbound calls made with integration accounts or API keys (tick "Include people's tokens" to add calls made with a person's own token; GraphQL calls count only when they are mutations) and each extension's own feed.</p>
           <p class="doc-p">Exact paths are recorded as they happen: every API request, scheduled job, import run and extension feed event starts a chain, and every write, push, partner call, transition and flow run it causes is stamped with that chain. Events from before this feature, or on an instance that has not run migration 351, are matched by account and time instead and marked Inferred; each inferred step says why it was matched. A replay links to the event it replays, and the original links to its replays.</p>
           <p class="doc-p">On a record, the history sheet's Integration activity section lists every integration chain that touched it (integration accounts and API keys only), and each push under External requests has Show path. A record reader sees the path without request or response bodies, full error text or URL query strings; steps on records they cannot read are left out and counted.</p>
+          <p class="doc-p">A path ends with who was told: every in-app notification and every logged email sent inside the chain is a step (migration 385 stamps <code class="doc-code">nivaro_notifications</code> and <code class="doc-code">nivaro_mail_log</code>). A notification names the person and the channels that reached them (in-app, push, email, text); the email it sent hangs underneath it. Admins see subjects and addresses; everyone else sees the name, the channels and how many recipients an email had.</p>
+          <p class="doc-p">A scheduled job run records the chain it started (<code class="doc-code">nivaro_job_runs.chain_id</code>), so on Background Jobs each finished run has "Show what it wrote" — the same path sheet, opened on that run: every write, workflow move, push and message the run made. Runs from before migration 385 have no chain and show no link.</p>
           <div class="doc-note">Routes: <code class="doc-code">GET /integration-events</code> (admin; filters <code class="doc-code">source</code>, <code class="doc-code">partner</code>, <code class="doc-code">caller</code>, <code class="doc-code">include_people</code>, <code class="doc-code">record</code>), <code class="doc-code">GET /integration-events/:source/:id/path</code> and <code class="doc-code">GET /integration-events/chain/:chainId/path</code> (admin), <code class="doc-code">GET /integration-events/record/:collection/:item</code> and <code class="doc-code">.../path?source=&amp;id=</code> (read permission on the record; the path 404s unless the event names the record or shares one of its chains). A path that cannot be built answers 503, never 500. Extensions start a chain for their own feed events with <code class="doc-code">ctx.chain.begin</code> and list them with <code class="doc-code">ctx.integrations.registerEventSource</code>.</div>
           <h2 class="doc-h2" id="ic-partners">Partners tab</h2>
           <p class="doc-p">A health card per registered external API — a health word (idle / healthy / degraded / failing, with an auth-failure override), a 48-hour call sparkline, and TEST / MOCK / "sign-in failing" / "turned off" flags. Opening a card shows the detail sheet: Recent calls, Submissions, Obligations, Contracts.</p>
@@ -13778,7 +13856,7 @@ GET  /api/erp-submissions/:id       # one push in full (admin): partner, obligat
           <!-- /SYNC:erp-submissions -->
         </div>
 
-        <div class="doc-section" id="s-integration-obligations" data-toc='[{"id":"integration-obligations","label":"Integration Obligations"},{"id":"integration-obligations-outcomes","label":"The seven outcomes"},{"id":"integration-obligations-reconcile","label":"Reconciliation vs. the triggers"},{"id":"integration-obligations-register","label":"Registering a kind"},{"id":"integration-obligations-surfaces","label":"Where it shows up"}]'>
+        <div class="doc-section" id="s-integration-obligations" data-toc='[{"id":"integration-obligations","label":"Integration Obligations"},{"id":"integration-obligations-outcomes","label":"The seven outcomes"},{"id":"integration-obligations-reconcile","label":"Reconciliation vs. the triggers"},{"id":"integration-obligations-register","label":"Registering a kind"},{"id":"integration-obligations-surfaces","label":"Where it shows up"},{"id":"integration-obligations-arming-preview","label":"Before switching on: the arming preview"}]'>
           <!-- SYNC:integration-obligations -->
           <h1 class="doc-h1" id="integration-obligations">Integration Obligations</h1>
           <p class="doc-p">An obligation is a ledger row that says a partner SHOULD hear about a record, opened the moment the condition that creates that expectation becomes true — not when a send is attempted. It is then resolved with an outcome. <code class="doc-code">sent</code> is one good outcome; <code class="doc-code">skipped</code> with a written reason is another, just as good. The point is that every "no" is now on the record: an unmet guard, a <code class="doc-code">skip_when_empty</code>/<code class="doc-code">skip_unless_any</code> gate, an unconfigured action and a flow condition that rejected are all equally invisible today, and equally visible once they write a row here.</p>
@@ -13841,10 +13919,21 @@ GET  /api/erp-submissions/:id       # one push in full (admin): partner, obligat
             <li>Notes thread — a resolved obligation with a reason appears as a machine-authored entry on the record's Notes timeline, so "why wasn't this sent" has an answer sitting right next to the human conversation.</li>
             <li>Ask AI — the <code class="doc-code">integration_status</code> tool answers "why did X not get told about this record" directly: it runs as the asking user, gated on read permission for the record's collection (nivaro_*/directus_* refused outright, same as every other tool), and returns each obligation's api, kind, outcome, reason and trigger with no ids or internal columns the model could misread as a record key.</li>
           </ul>
+          <h2 class="doc-h2" id="integration-obligations-arming-preview">Before switching on: the arming preview</h2>
+          <p class="doc-p">Settings → Integrations → "What the first cycle would do" runs the three Phase-2 passes as a dry run against today's ledger and shows the result, whichever way the two switches are set: the people the unmet-obligation notice would reach (with how many messages each would get, and the obligations nobody can be told about), the failed sends the retry ladder would try now, is waiting on, or would hand to a person — grouped by why they failed — and the missing messages that would be re-sent by repeating an earlier request, plus the kinds that are never re-sent automatically and how many rows each has waiting. Nothing is claimed, stamped or sent by looking.</p>
+          <pre class="doc-pre"><code>GET /api/integration-obligations/arming-preview   // admin
+// -&gt; { data: {
+//   notifications: { enabled, plan: { obligations, messages, recipientless,
+//                                     recipients: [{ id, name, messages }], rows: [...] } },
+//   remediation:   { enabled,
+//                    retry:  { retry: [...], waiting: [...], give_up: [...], by_error_class: {...} },
+//                    refire: { refire: [...], queued: [...], left_for_a_person: [...] } },
+//   generated_at } }</code></pre>
+          <div class="doc-note">The same functions run the real cycle: <code class="doc-code">alertUnmetObligations</code>, <code class="doc-code">runRetryPass</code> and <code class="doc-code">runMissingRefirePass</code> take <code class="doc-code">{ dryRun: true }</code> and return a <code class="doc-code">plan</code> instead of acting. Each pass works one batch at a time (200 notices, 50 retries, 25 re-sends), so the preview shows the first cycle, not the whole backlog.</div>
           <!-- /SYNC:integration-obligations -->
         </div>
 
-        <div class="doc-section" id="s-integration-events" data-toc='[{"id":"integration-events","label":"Integration Events &amp; Replay"},{"id":"integration-events-header","label":"Per-integration status in the record header"},{"id":"integration-events-search","label":"Searching submission payloads"},{"id":"integration-events-retry","label":"Inline retries on external APIs"},{"id":"integration-events-webhooks","label":"Webhook test and replay with a payload"},{"id":"integration-events-webhook-conditions","label":"Webhook conditions"},{"id":"integration-events-webhook-payload","label":"What a webhook receives"},{"id":"integration-events-mock","label":"Mock mode per instance"},{"id":"integration-events-instances","label":"Per-instance credentials and hosts"},{"id":"integration-events-contracts","label":"Endpoint contract tests"},{"id":"integration-events-inbound","label":"Inbound mappings"},{"id":"integration-events-replay-inbound","label":"Replaying an inbound request"},{"id":"integration-events-flows","label":"Flow version diff and the field-watch trigger"}]'>
+        <div class="doc-section" id="s-integration-events" data-toc='[{"id":"integration-events","label":"Integration Events &amp; Replay"},{"id":"integration-events-header","label":"Per-integration status in the record header"},{"id":"integration-events-search","label":"Searching submission payloads"},{"id":"integration-events-retry","label":"Inline retries on external APIs"},{"id":"integration-events-webhooks","label":"Webhook test and replay with a payload"},{"id":"integration-events-webhook-conditions","label":"Webhook conditions"},{"id":"integration-events-webhook-payload","label":"What a webhook receives"},{"id":"integration-events-mock","label":"Mock mode per instance"},{"id":"integration-events-instances","label":"Per-instance credentials and hosts"},{"id":"integration-events-contracts","label":"Endpoint contract tests"},{"id":"integration-events-inbound","label":"Inbound mappings"},{"id":"integration-events-inbound-children","label":"Child rows"},{"id":"integration-events-inbound-fixtures","label":"Fixtures"},{"id":"integration-events-inbound-response","label":"Response shaping"},{"id":"integration-events-replay-inbound","label":"Replaying an inbound request"},{"id":"integration-events-flows","label":"Flow version diff and the field-watch trigger"}]'>
           <!-- SYNC:integration-events -->
           <h1 class="doc-h1" id="integration-events">Integration Events &amp; Replay</h1>
           <p class="doc-p">Every integration that registers a notes source (<code class="doc-code">ctx.notes.registerSource</code>) can also answer two more questions: what happened lately across every record, and can this event be re-applied. The Events tab of the Integrations console (Operations → Integrations → Events; the old /integration-events address lands there) lists the newest events from every source grouped by day, with a status dot (ok / error / info), the record they belong to by its friendly id, and a Replay action where the source offers one. Filter by source and by status (All · Problems · OK · Info); Show older pages back through what the sources keep. The same Replay sits on the record's Notes thread beside each replayable external entry.</p>
@@ -13936,6 +14025,34 @@ GET  /api/external-apis/contracts                     // targets
           <p class="doc-p">The verdict is stamped on the endpoint (<code class="doc-code">contract_last_run</code>, <code class="doc-code">contract_last_ok</code>, <code class="doc-code">contract_last_detail</code>) and rendered as a pass / fail chip with a Run button on the endpoint row. Mock mode and instance overrides apply, so a contract can be exercised against mocked answers.</p>
           <h2 class="doc-h2" id="integration-events-inbound">Inbound mappings</h2>
           <p class="doc-p">Monitoring → Inbound Mappings defines a key an integration POSTs its OWN payload shape to. The mapping's rules are the import-template header-rule format (trim / remap / expression / lookup / const; source = a key on the posted object) and its target is a collection; mode <code class="doc-code">create</code> always inserts, <code class="doc-code">upsert</code> matches on the listed mapped fields first. <code class="doc-code">POST /api/inbound/&lt;key&gt;</code> takes one object or an array (≤500) from any authenticated caller and writes through the items service AS THAT CALLER — permissions, validation, hooks, activity all apply. The reply lists per-entry <code class="doc-code">created | updated | rejected</code> with the mapped values and issues (207 when some entries were rejected, 422 when all were). The editor's “Try a payload” panel dry-runs the rules as currently edited.</p>
+          <h3 class="doc-h3" id="integration-events-inbound-children">Child rows</h3>
+          <p class="doc-p">A mapping may also fill one-to-many fields. Each child set names the field, the payload path that holds the rows (<code class="doc-code">order.lines</code>; a single object reads as one row) and its own row rules — the import-template line format, with an optional row filter; <code class="doc-code">{{$resolved.&lt;field&gt;}}</code> reads a value the record rules produced. The record and all its rows go to the items service as ONE nested payload, so the write is all or nothing: a refused row removes everything, and the entry's result carries <code class="doc-code">child_error {field, index, message}</code> naming the payload row. On an upsert that finds the record, a set either adds its rows (<code class="doc-code">append</code>) or replaces the record's rows with exactly these (<code class="doc-code">replace</code>). Record rules may read nested payload keys with dots (<code class="doc-code">customer.name</code>).</p>
+          <pre class="doc-pre"><code>"children": [
+  {
+    "target_field": "lines",            // a one-to-many field of the mapping's collection
+    "source": "order.lines",            // where the rows are in the payload
+    "row_filter": { "column": "qty", "op": "nnull" },
+    "columns": [                        // same rule steps as the record rules
+      { "target": "quantity", "source": "qty", "steps": [] },
+      { "target": "sku", "source": "code", "steps": [{ "type": "trim" }] }
+    ],
+    "on_update": "append"               // or "replace"
+  }
+]
+// result entry: { ..., "children": [{ "field": "lines", "found": 3, "rows": 2 }],
+//                 "child_error": { "field": "lines", "index": 1, "message": "…" } }</code></pre>
+          <h3 class="doc-h3" id="integration-events-inbound-fixtures">Fixtures</h3>
+          <p class="doc-p">Fixtures are named partner payloads saved with the mapping (a column on the mapping row, so they travel with it through config copies, snapshots and diffs; at most 20, 64 KB each). Add one from a recent call to the endpoint — any token or API-key call kept its body in the request log — or paste it. Each fixture says what a correct mapping does with it: be written, or be refused (a known-bad payload kept as a guard). The editor re-runs every fixture whenever the rules, child rows or response change, saved or not, and shows green or red with the reason (<code class="doc-code">Entry 2: lines row 3 — price is required</code>). A run never writes: would-be creates go through the create pipeline (rules, validation, required fields) without the database insert, so a type or foreign-key refusal only shows on a real call.</p>
+          <pre class="doc-pre"><code>GET    /api/inbound-mappings/:id/fixtures/candidates      // recent calls with a stored body
+POST   /api/inbound-mappings/:id/fixtures                 // { name, payload, expect: write|reject } or { log_id }
+PATCH  /api/inbound-mappings/:id/fixtures/:fid            // { name?, payload?, expect? }
+DELETE /api/inbound-mappings/:id/fixtures/:fid
+POST   /api/inbound-mappings/:id/fixtures/run             // { rules?, children?, response_template?, response_status? }
+// → { fixtures: [{ id, name, expect, pass, reason, run, response }], passed, failed }</code></pre>
+          <h3 class="doc-h3" id="integration-events-inbound-response">Response shaping</h3>
+          <p class="doc-p">A partner that already parses an envelope keeps it: <code class="doc-code">response_template</code> is Liquid (the transition-payload filters, <code class="doc-code">jsonify</code> among them) rendered over <code class="doc-code">record</code> (the first record written), <code class="doc-code">records</code>, <code class="doc-code">created</code>, <code class="doc-code">updated</code>, <code class="doc-code">rejected</code>, <code class="doc-code">created_ids</code>, <code class="doc-code">updated_ids</code>, <code class="doc-code">errors</code> (index, message, issues, child), <code class="doc-code">results</code> and <code class="doc-code">outcome</code>. Output that parses as JSON is sent as JSON; anything else as text (XML when it starts with <code class="doc-code">&lt;</code>). <code class="doc-code">response_status</code> maps the outcome — <code class="doc-code">success</code> (all written), <code class="doc-code">partial</code>, <code class="doc-code">rejected</code> — to a status; unset keeps 200 / 207 / 422, and it applies with or without a template. With no template the body is the standard <code class="doc-code">{data: {results, created, updated, rejected}}</code>. A template that fails to render never turns a landed write into an error: the standard body goes out. The dry-run tester and every fixture show the response the partner would get.</p>
+          <pre class="doc-pre"><code>"response_template": "{\"accepted\": {{ created }}, \"orderId\": {{ record.id | jsonify }}, \"errors\": {{ errors | map: 'message' | jsonify }}}",
+"response_status": { "success": 201, "rejected": 400 }</code></pre>
           <h2 class="doc-h2" id="integration-events-replay-inbound">Replaying an inbound request</h2>
           <p class="doc-p">The request log keeps the JSON body of every inbound integration write (token or API-key caller, capped at 64 KB). Expanding such a row on API Analytics or the Integrations page shows the body with Replay and Edit &amp; replay: <code class="doc-code">POST /api/api-analytics/requests/:id/replay { body? }</code> re-dispatches the same method and path in-process AS THE ADMIN who clicked (the original credential is never stored), tags the new request with <code class="doc-code">x-nivaro-replay-of</code>, and logs <code class="doc-code">api-request-replay</code>.</p>
           <h2 class="doc-h2" id="integration-events-flows">Flow version diff and the field-watch trigger</h2>
@@ -14463,6 +14580,7 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&amp;category=workfl
           <h3 class="doc-h3">Replying from the notification</h3>
           <p class="doc-p">A chat mention offers Reply — an inline box that posts straight back into the room. A mention in a record note offers Reply onto the record's thread. A workflow-transition notification offers "Comment on this", which adds a note to the record (the row stays unread; commenting is not acknowledging). Reply actions are server-declared like every inline action (<code class="doc-code">actions[].input</code> names the field the box fills) so hosts stay domain-blind; the normal permissions apply — posting on a record needs create rights on its collection.</p>
           <h3 class="doc-h3">Channel fallback chain (if it stays unread)</h3>
+          <p class="doc-p">Snooze: a notification can sleep for an hour, until tomorrow 8am, until next week — or, when it is about a record, until the record changes. "Until the record changes" wakes it the moment someone else writes a field on that record or moves it to another pipeline state (your own edits do not wake it); it returns unread in the inbox and the bell. <code class="doc-code">POST /api/notifications/:id/snooze</code> with <code class="doc-code">{ "until": "&lt;iso&gt;" }</code>, <code class="doc-code">{ "until_change": true }</code>, or <code class="doc-code">{ "until": null }</code> to wake it now.</p>
           <p class="doc-p">Profile → Notification rules → "If it stays unread": per category, how long an in-app notification may sit unread before it climbs to a browser push, then to an email — one notification escalating channels, stopping the moment it is read or snoozed. Each step fires once, and a channel that already delivered the row at send time is not repeated (an email sent immediately is never re-sent as an escalation). Only rows from the last 7 days are considered, so switching the rule on does not replay an old inbox. Runs every 5 minutes (<code class="doc-code">notification-escalation</code> cron); the escalation shows as an extra chip on the row.</p>
           <pre class="doc-pre"><code>PATCH /api/users/me/preferences
 { "notification_prefs": { "escalation": { "workflow": { "push_after_min": 60, "email_after_min": 240 } } } }</code></pre>
@@ -14798,7 +14916,7 @@ DELETE /api/saved-views/:id        Delete view (creator/admin only)</code></pre>
           <!-- /SYNC:form-collaboration -->
         </div>
 
-        <div class="doc-section" id="s-list-signals" data-toc='[{"id":"list-signals","label":"Fulfilment, Send-backs &amp; Back to Queue"},{"id":"list-signals-fulfilment","label":"Shipped n / m on lists"},{"id":"list-signals-send-backs","label":"Sent back"},{"id":"list-signals-back","label":"Back to the queue"},{"id":"list-signals-open-tabs","label":"Open in tabs"},{"id":"list-signals-recent","label":"Recently viewed"},{"id":"list-signals-owner-load","label":"Owner load"},{"id":"list-signals-saved-view-widget","label":"Dashboard widgets from a saved view"},{"id":"list-signals-sla-presets","label":"SLA duration presets"},{"id":"list-signals-row-flags","label":"Row flags on a catalog picker"}]'>
+        <div class="doc-section" id="s-list-signals" data-toc='[{"id":"list-signals","label":"Fulfilment, Send-backs &amp; Back to Queue"},{"id":"list-signals-fulfilment","label":"Shipped n / m on lists"},{"id":"list-signals-send-backs","label":"Sent back"},{"id":"list-signals-back","label":"Back to the queue"},{"id":"list-signals-open-tabs","label":"Open in tabs"},{"id":"list-signals-recent","label":"Recently viewed"},{"id":"list-signals-owner-load","label":"Owner load"},{"id":"list-signals-saved-view-widget","label":"Dashboard widgets from a saved view"},{"id":"list-signals-sla-presets","label":"SLA duration presets"},{"id":"list-signals-row-flags","label":"Row flags on a catalog picker"},{"id":"list-signals-unseen","label":"Changed since you looked"},{"id":"list-signals-formula-columns","label":"Formula columns"},{"id":"list-signals-role-default","label":"Default view per role"},{"id":"list-signals-tree","label":"Tree view and hierarchy scope"}]'>
           <!-- SYNC:list-signals -->
           <h1 class="doc-h1" id="list-signals">Fulfilment, Send-backs &amp; Back to Queue</h1>
           <h2 class="doc-h2" id="list-signals-fulfilment">Shipped n / m on lists</h2>
@@ -14821,6 +14939,14 @@ DELETE /api/saved-views/:id        Delete view (creator/admin only)</code></pre>
           <p class="doc-p">A catalog-picker grid may declare <code class="doc-code">catalog_mode.row_flags: [{label, when}]</code> — <code class="doc-code">when</code> is a boolean expression over the child row (<code class="doc-code">{{shipped_qty}} &gt; {{quantity}}</code>). A row the expression matches carries the label as an amber flag in the Summary table. Pair it with an extension-registered Data Integrity check when the sweep should report the same fact across records.</p>
           <p class="doc-p">With a to-many <code class="doc-code">section_by</code>, <code class="doc-code">catalog_mode.link_filter</code> filters the JUNCTION row between item and section — for memberships that carry their own columns (an item that belongs to a category only in one region). An item lists under a section only through a link that passes, the catalog read requires one such link to an in-scope section (<code class="doc-code">_link</code> inside the <code class="doc-code">_some</code>), and an item with no passing link is left out rather than shown as Uncategorized. <code class="doc-code">$parent.&lt;field&gt;</code> tokens resolve and gate the list like <code class="doc-code">filter</code>.</p>
           <p class="doc-p">An O2M whose rows are MEMBERSHIPS — one row per (member, scope), where a blank scope means "every scope" — can set <code class="doc-code">options.membership_set: {key_field, value_field, empty_label?, key_label?, value_label?}</code> on the inline-table field. The grid is replaced by one line per member with its scopes as a multi-select (toggle chips up to ten options, a searchable checklist beyond). Storage is unchanged: nothing picked = a single row with a blank scope; picks = one row per picked value. The first pick re-points the blank row and clearing the last pick blanks it again, so a member never drops out mid-edit. Writes are immediate and go through the items API.</p>
+          <h2 class="doc-h2" id="list-signals-unseen">Changed since you looked</h2>
+          <p class="doc-p">The collection browser marks a row with a small dot when someone else edited it, moved it through its pipeline or commented on it after you last opened it. Hover the dot for who and when. A record you never opened carries no dot. The filter menu offers "Changed since I last looked" (condition path <code class="doc-code">$unseen</code>), which narrows the list server-side to those records (<code class="doc-code">POST /record-views/unseen</code> answers the dots for a page of ids).</p>
+          <h2 class="doc-h2" id="list-signals-formula-columns">Formula columns</h2>
+          <p class="doc-p">Columns → "＋ Formula column" adds a calculated column over the row: <code class="doc-code">{{amount}} - {{allocated_total}}</code>, with dotted tokens reading related values. It uses the same expression engine as grid formula columns, is computed on the page (not sortable or filterable) and is kept in the view — save the view to keep it. CSV export includes it.</p>
+          <h2 class="doc-h2" id="list-signals-role-default">Default view per role</h2>
+          <p class="doc-p">Besides the one collection default everyone gets, an admin can make a saved view the default for one role from the ★ menu on its pill. Members of that role open the browser on it; everyone else keeps the collection default. A role has one default per collection, so picking another view for the same role moves it (<code class="doc-code">nivaro_saved_views.default_for_role</code>).</p>
+          <h2 class="doc-h2" id="list-signals-tree">Tree view and hierarchy scope</h2>
+          <p class="doc-p">A collection with a tree setup (Table Editor → Tree) offers a Tree button beside Map: an indented list with add-child and move-under-another-parent actions, drag-to-reorder among siblings when an order field is set, and an org chart of the same tree. A collection that sits under a parent in a Hierarchy (Hierarchies page) offers "Scope by &lt;parent&gt;": pick a parent record and the list narrows to its children, through the parent key or the hierarchy's junction. Admin also adds its spreadsheet, calendar and Gantt views here; the older classic browser (<code class="doc-code">/collections/:c/classic</code>) now redirects to this one.</p>
           <!-- /SYNC:list-signals -->
         </div>
 
@@ -15152,7 +15278,7 @@ POST /api/search/semantic/reindex
         <!-- ════ OBSERVABILITY ════ -->
 
         <!-- API ANALYTICS -->
-        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"}]'>
+        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"}]'>
           <!-- SYNC:api-analytics -->
           <h1 class="doc-h1" id="api-analytics">API Analytics</h1>
           <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /api-analytics page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
@@ -15194,6 +15320,19 @@ POST /api/search/semantic/reindex
           <p class="doc-p">The advisor crosses the columns configuration already declares hot — M2O foreign keys, queue source filters, row-level security filters, workflow state mirrors — against the leading column of every index on tables past 50,000 rows, and ships each gap as a one-click CREATE INDEX. It also sweeps every table carrying both a <code class="doc-code">collection</code> and an <code class="doc-code">item</code> / <code class="doc-code">item_id</code> column for an index that LEADS on that pair (either order): that correlated "which instance / revision / state does this record have" lookup scanned 115k rows per check on nivaro_workflow_instances until migration 331 added the pair, and the same shape on nivaro_revisions and nivaro_activity was migration 321.</p>
           <h2 class="doc-h2" id="api-analytics-inbound">Inbound integrations</h2>
           <p class="doc-p">Every request records how it authenticated, and a call that is not a browser session — a static-token user or a named API key — is by definition an integration. The Integrations page (Monitoring → Integrations → Inbound calls) rolls those callers up one card each: calls, errors, latency, last call, last error and top paths; picking a card scopes the request list to that caller. The Directus-era root aliases (<code class="doc-code">POST /files</code>, <code class="doc-code">POST /graphql</code>) that third-party integrations still use are logged like any <code class="doc-code">/api</code> route.</p>
+          <h2 class="doc-h2" id="api-analytics-dependencies">Partner dependencies</h2>
+          <p class="doc-p">Picking a caller card also opens its Dependencies panel: every collection and field the caller read or wrote, the GraphQL operations and REST endpoints it called, with call counts and when each was last used. The map is built from the request log itself — a read’s fields come from its logged query string (<code class="doc-code">fields</code>, <code class="doc-code">sort</code>, <code class="doc-code">filter</code>, aggregate parameters), a write’s from its stored body, a GraphQL call’s from its document walked against the live schema (selections, <code class="doc-code">filter</code> / <code class="doc-code">sort</code> keys, the keys of a mutation’s <code class="doc-code">data</code>, documents sent by persisted-query id or hash included). It reaches back as far as the log does (14 days) and as deep as what was logged: bodies are stored only for token and API-key callers. A read with no field list is shown as “every field”. Two downloads narrow the published surfaces to exactly what the caller uses: an OpenAPI subset (the generated items spec, only its paths and fields) and a GraphQL SDL subset (the used types, fields, arguments and input fields).</p>
+          <p class="doc-p">The break check compares every partner’s used set — API keys, and static-token accounts marked as machine accounts — with the schema as it is now. A used collection or field that no longer exists, or a GraphQL root field the schema dropped, is a break; a used field carrying a deprecation stamp is a warning. The same findings feed the readiness scorecard (“Partner integrations still find the fields they use”, a warning, never a failure), the release preflight prints a one-line summary without blocking, and the field-removal confirm in the Table Editor lists the callers that used the field.</p>
+          <pre class="doc-pre"><code>pnpm --filter @nivaro/api run partners:check            # exit 1 on a break
+pnpm --filter @nivaro/api run partners:check -- --people # also people on tokens
+pnpm --filter @nivaro/api run partners:check -- --json   # findings as JSON
+
+GET /api/partner-dependencies?days=14                    // every caller, summarised
+GET /api/partner-dependencies/check?days=14&amp;people=1     // break + deprecation findings
+GET /api/partner-dependencies/field/:collection/:field   // callers of one field
+GET /api/partner-dependencies/:key                       // key = key:&lt;id&gt; | user:&lt;uuid&gt;
+GET /api/partner-dependencies/:key/openapi.json?download=1
+GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <!-- /SYNC:api-analytics -->
         </div>
 
@@ -15203,18 +15342,26 @@ POST /api/search/semantic/reindex
           <p class="doc-p">The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API as this node sees it: callers on the left, API lanes in the middle (Items, Widgets, Pages, Custom queries, GraphQL, Inbound, Files, Extensions), data stores and partner APIs on the right. Edge width is requests per second; particles are individual requests coloured by kind; a node pulses on a write and flashes on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the particles off.</p>
           <h2 class="doc-h2" id="traffic-map-sources">Where the numbers come from</h2>
           <ul class="doc-ul">
-            <li>Requests: the api-logger hook classifies every response into a lane and an entity and counts it into a 15-minute per-second ring in memory. Route templates replace id-shaped and token-like segments with :id, so no access token ever appears.</li>
+            <li>Requests: the api-logger hook classifies every response into a lane and an entity (collection, widget id, page slug, query slug, GraphQL operation, inbound key, file route or extension) and counts it into a 15-minute per-second ring in memory. Route templates replace id-shaped and token-like segments with :id, so no access token ever appears.</li>
             <li>Internally dispatched requests are counted once: the root /graphql alias re-dispatches to /api/graphql, and the call is counted under its real GraphQL operation, not twice.</li>
-            <li>Writes: broadcastCollectionUpdate reports create/update/delete with the record id and the names of the fields written — never values.</li>
+            <li>Writes: broadcastCollectionUpdate reports create/update/delete with the record id and the names of the fields written — never values. One PATCH that writes a parent and twenty lines counts as twenty-one writes.</li>
             <li>Partner calls: every callExternalApi lands on its partner node and is attributed to the request that caused it.</li>
-            <li>History (1h / 6h / 24h in the inspector) is rolled up from nivaro_api_logs, nivaro_outbound_log and open nivaro_issues, reading the newest 20,000 log rows. Open issues are matched by route family, not per entity.</li>
+            <li>History (1h / 6h / 24h in the inspector) is rolled up from nivaro_api_logs, nivaro_outbound_log and open nivaro_issues. It reads the newest 20,000 log rows and says so when it truncates. Open issues are matched by route family (the template), not per entity. History for GraphQL calls made through the root /graphql alias may show as anonymous.</li>
           </ul>
+          <pre class="doc-pre"><code>GET  /api/traffic-map/snapshot?window=60|300|900   → the rings for this node
+GET  /api/traffic-map/catalog                      → labels for entities, callers, partners
+GET  /api/traffic-map/entity/:lane/:entity?hours=  → rolled-up history + issues + slow traces
+GET  /api/traffic-map/down/:id?hours=              → partner call history (ext:&lt;api id&gt;)
+socket  admin:join {room: 'traffic-map'}  → one 'traffic-map:frame' per second while watched</code></pre>
           <h2 class="doc-h2" id="traffic-map-limits">Limits and scope</h2>
           <ul class="doc-ul">
             <li>Per node: the numbers are this API process only, and frames go only to watchers connected to this node.</li>
-            <li>Cloud mode (CLOUD_META_DB_URL set): every /api/traffic-map route answers 404 and the page is unavailable.</li>
-            <li>A lane holds at most 40 entities (extras fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame. Idle rings are swept after 15 minutes.</li>
+            <li>Cloud mode (CLOUD_META_DB_URL set): the emitter does not start and every /api/traffic-map route answers 404, because one process serves many tenants and the aggregator is per process. Cloud tenants do not get the page.</li>
+            <li>A lane holds at most 40 entities (extras fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame (events_dropped counts the rest). Idle rings are swept after 15 minutes.</li>
+            <li>The caller filter uses the caller's own counts for totals; the hot table is approximate (entities whose top callers include that caller, or with a live event from it).</li>
+            <li>/issues/:id opens the Issues page on that issue, pinned on top when it is older than the newest 200.</li>
           </ul>
+          <div class="doc-note">Frames are built only while someone has the page open; nothing is written to the database on the request path.</div>
           <!-- /SYNC:traffic-map -->
         </div>
 
@@ -15264,16 +15411,20 @@ POST /api/search/semantic/reindex
           <!-- /SYNC:wallboard-pulse -->
         </div>
 
-        <div class="doc-section" id="s-record-graph" data-toc='[{"id":"record-graph","label":"Record Graph Explorer"}]'>
+        <div class="doc-section" id="s-record-graph" data-toc='[{"id":"record-graph","label":"Relationship Explorer"}]'>
           <!-- SYNC:record-graph -->
-          <h1 class="doc-h1" id="record-graph">Record Graph Explorer</h1>
-          <p class="doc-p">A radial map of one record’s relation neighborhood: M2O parents, O2M children (capped at 12 per relation) and M2M partners, each with resolved labels. Click a node to recenter on it, double-click to open the record.</p>
+          <h1 class="doc-h1" id="record-graph">Relationship Explorer</h1>
+          <p class="doc-p">Every record form has a Relationships button in its header. It opens a map of the records linked to this one, grouped by the link: what the record points at (vendor, project, creator), what points at it (lines, forecasts, notes), and records joined through a many-to-many link. Expand any record to see what it connects to in turn; click a record to open it.</p>
           <pre class="doc-pre"><code>GET /api/record-graph/:collection/:id
-→ { "data": { "node": {…}, "edges": [{ "kind": "m2o|o2m|m2m", "via": "field", "node": {…} }], "truncated": false } }</code></pre>
+→ { "data": { "node": {collection, id, label, collection_label},
+              "groups": [{ "direction": "out|in|m2m", "field", "label", "collection",
+                           "collection_label", "total", "items": [{collection, id, label}] }],
+              "edges": 29, "truncated": false } }</code></pre>
           <ul class="doc-ul">
-            <li>Neighbor collections require read permission; system tables are excluded (nivaro_files attachments are the one allowed system target).</li>
-            <li>One API hop per recenter — the explorer never loads more than a single neighborhood.</li>
-            <li>Open it from the graph button in the item editor header.</li>
+            <li>Every record in the answer is read as the viewer (roles, row filters, User Scopes): a group the viewer cannot read is left out and counts are what the viewer can see. A record outside their access answers 404.</li>
+            <li>Up to 12 records per group; <code class="doc-code">total</code> says how many there are. Polymorphic links are split per target collection.</li>
+            <li>A relation row naming a table that no longer exists drops that group rather than failing the map.</li>
+            <li>Shared components <code class="doc-code">RecordGraphSheet</code> / <code class="doc-code">RecordGraphExplorer</code> (exported from @nivaro/react), so headless hosts get the same explorer.</li>
           </ul>
           <!-- /SYNC:record-graph -->
         </div>
@@ -15337,7 +15488,7 @@ function App() {
         </div>
 
         <!-- HEALTH DASHBOARD -->
-        <div class="doc-section" id="s-health-dashboard" data-toc='[{"id":"health-dashboard","label":"Health Dashboard"},{"id":"health-startup","label":"Startup"}]'>
+        <div class="doc-section" id="s-health-dashboard" data-toc='[{"id":"health-dashboard","label":"Health Dashboard"},{"id":"health-startup","label":"Startup"},{"id":"health-probes","label":"Probes for proxies and deploys"},{"id":"health-scheduler-lease","label":"Which process runs scheduled jobs"}]'>
           <!-- SYNC:health-dashboard -->
           <h1 class="doc-h1" id="health-dashboard">Health Dashboard</h1>
           <p class="doc-p">The /health admin page gives a live view of every subsystem, backed by a detailed health endpoint that goes beyond the public liveness probe.</p>
@@ -15345,7 +15496,6 @@ function App() {
 {
   "db":        { "ok": true, "latency_ms": 4 },
   "redis":     { "ok": true },
-  "inngest":   { "ok": true },
   "migrations":{ "ok": true, "pending": 0 },
   "sockets":   { "connected": 12 }
 }</code></pre>
@@ -15363,7 +15513,32 @@ function App() {
       "usual_ms": 1350, "slow": false }
   ]
 }</code></pre>
-          <div class="doc-note">GET /api/health remains the lightweight unauthenticated liveness check for load balancers; the detailed endpoint requires authentication.</div>
+          <h2 class="doc-h2" id="health-probes">Probes for proxies and deploys</h2>
+          <p class="doc-p">Four public or admin endpoints answer four different questions. Point each consumer at the one that matches its question.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Endpoint</th><th>Question</th><th>Who calls it</th></tr></thead>
+            <tbody><tr><tr><td>GET /api/version</td><td>Is the process alive, and which build is it?</td><td>Container health check, the redeploy notice</td></tr>
+              <tr><td>GET /api/ready</td><td>May the proxy send this process traffic now?</td><td>Proxy health check, the deploy gate</td></tr>
+              <tr><td>GET /api/preflight</td><td>Did this deploy land coherently?</td><td>Deploy gate, the Health page (admin)</td></tr>
+              <tr><td>POST /api/ops-runtime/smoke?strict=1</td><td>Do reads, writes and extensions work end to end?</td><td>Deploy gate (admin)</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">/api/ready answers 200 only when the boot has finished, no migration in this build is pending, every extension named in REQUIRED_EXTENSIONS loaded, the database answers SELECT 1 within 2 seconds and Redis answers PING within 500 milliseconds. It is never “degraded”: a slow dependency fails the check rather than keeping the process in rotation. A process that received SIGTERM answers 503 at once, so the proxy stops routing to it while in-flight requests drain.</p>
+          <pre class="doc-pre"><code>GET /api/ready  → 200 or 503
+{
+  "ready": true,
+  "checks": [
+    { "id": "boot", "ok": true, "summary": "Boot finished." },
+    { "id": "migrations", "ok": true, "summary": "All 384 migrations applied; no files missing." },
+    { "id": "extensions", "ok": true, "summary": "All 1 required extension(s) loaded." },
+    { "id": "database", "ok": true, "ms": 80, "summary": "Database answered in 80ms." },
+    { "id": "redis", "ok": true, "ms": 2, "summary": "Redis answered in 2ms." }
+  ]
+}</code></pre>
+          <p class="doc-p">The smoke suite (database, Redis, migrations, collections read, required extensions, a request to the API itself) answers 200 with <code class="doc-code">ok</code> in the body by default, which is what the Ops Console button reads. Add <code class="doc-code">?strict=1</code> and it answers 503 when any check fails, so a deploy script can branch on the status code alone.</p>
+          <h2 class="doc-h2" id="health-scheduler-lease">Which process runs scheduled jobs</h2>
+          <p class="doc-p">With more than one API process, only one fires scheduled jobs. Every process whose ticks are enabled (CRON_TICKS) competes for a lease in Redis; the holder renews it every 10 seconds and releases it on shutdown, so another process takes over within seconds. A process stops believing it holds the lease shortly before the lease could expire, so a Redis outage stops its ticks before anyone else could start. Each scheduled fire also takes its own lock, so one fire runs once even if two processes briefly overlap during a deploy. Run now works on any process and needs no lease. Boot catch-up runs only on the lease holder.</p>
+          <p class="doc-p">Background Jobs names the instance that holds the lease. GET /api/job-runs/registry and GET /api/ops-runtime/roster return it as <code class="doc-code">scheduler</code> ({ instance, is_leader, holder, ticks_enabled }). A process with ticks off never competes: run web replicas with CRON_TICKS=off and one worker with it on.</p>
+          <div class="doc-note">GET /api/health remains the lightweight unauthenticated liveness check; it reports latency as degraded, so do not use it for routing. The detailed endpoint requires authentication.</div>
           <!-- /SYNC:health-dashboard -->
         </div>
 
@@ -15377,7 +15552,7 @@ function App() {
             <tbody><tr><tr><td>This process</td><td>Uptime, memory, event-loop lag, and connection-pool usage for the replica that answered — per process, not fleet-wide.</td></tr>
               <tr><td>Instance roster</td><td>Every live API replica registered in Redis (empty when Redis is down).</td></tr>
               <tr><td>Cache console</td><td>In-process caches on this replica, each with a Bust button (and a bust-all). Every bust is audit-logged.</td></tr>
-              <tr><td>Degradation map</td><td>What stops working when each dependency (database, Redis, Inngest, SMTP) goes down. Database and Redis are probed live.</td></tr>
+              <tr><td>Degradation map</td><td>What stops working when each dependency (database, Redis, SMTP) goes down. Database and Redis are probed live.</td></tr>
               <tr><td>Top expensive SQL</td><td>The 15 statements costing the server the most CPU since its last restart. SELECT statements get an Explain button that opens the query plan.</td></tr>
               <tr><td>Deadlocks</td><td>Recent deadlock events mined from the server health session, with the statements involved.</td></tr>
               <tr><td>Long transactions</td><td>Sleeping sessions that have held an open transaction idle for 5+ minutes.</td></tr>
@@ -15389,7 +15564,6 @@ function App() {
               <tr><td>Data velocity</td><td>Which collections are being created/updated the most, from the activity log.</td></tr>
               <tr><td>Latency by hour</td><td>Slowest routes by hour of day (UTC) over the last 7 days.</td></tr>
               <tr><td>Dangling foreign keys</td><td>Registered relations whose FK values point at rows that no longer exist, with guarded repair actions.</td></tr>
-              <tr><td>Inngest</td><td>Whether the job runner answers, and how many recent events it reports.</td></tr>
               <tr><td>Redundant indexes</td><td>An index whose key list is a strict prefix of another index on the same table — it answers nothing the wider one cannot and taxes every write. Filtered and unique coverers are never counted as covering. Drop goes through the same guarded path as unused indexes.</td></tr>
               <tr><td>Backup tables</td><td>Scratch copies a one-off fix left behind (zz_…, …_backup, …_bak): row count, size, age and the last time anything read them. Only tables that are not registered collections and that no foreign key references are listed; rows older than BACKUP_TABLE_STALE_DAYS (default 30) read amber.</td></tr></tr></tbody>
           </table></div>
