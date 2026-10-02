@@ -9,22 +9,24 @@ import type { TrafficModel } from './model'
  * #1206: a programmatic "rewind to this second" for features (the investigation panel's
  * "Rewind map to here"). While the bar is on screen (paused or a frozen snapshot) the request goes
  * straight to it; otherwise the page is paused through its own Pause control and the bar applies
- * the second as soon as it mounts.
+ * the second as soon as it mounts. Either way the second goes through the bar's own rule: clamped
+ * to what the rings hold for the current window, and the newest second means Live (null), never
+ * a "rewound" view of the present.
  */
-let liveRewind: ((sec: number) => void) | null = null
+let liveRewind: ((sec: number) => boolean) | null = null
 let pending: { sec: number; until: number } | null = null
 const PENDING_MS = 4000
 
 export type MapRewindResult = 'rewound' | 'pausing' | 'unavailable'
 
-/** Rewind the map to epoch ms `ms` (whole seconds). 'unavailable' when the page cannot pause. */
+/**
+ * Rewind the map to epoch ms `ms` (whole seconds). 'unavailable' when the page cannot pause, or
+ * when the bar is up and the moment is not one it can show (it would only land on Live).
+ */
 export function requestMapRewind(ms: number): MapRewindResult {
   if (!Number.isFinite(ms)) return 'unavailable'
   const sec = Math.floor(ms / 1000)
-  if (liveRewind) {
-    liveRewind(sec)
-    return 'rewound'
-  }
+  if (liveRewind) return liveRewind(sec) ? 'rewound' : 'unavailable'
   const pause = typeof document !== 'undefined' ? document.getElementById('tm-pause') : null
   if (!(pause instanceof HTMLButtonElement) || pause.disabled) return 'unavailable'
   pending = { sec, until: Date.now() + PENDING_MS }
@@ -63,10 +65,20 @@ export function RewindBar({
 }) {
   const { min, max } = m.rewindRange(win)
   const at = viewSec == null ? max : Math.min(max, Math.max(min, viewSec))
-  const onRewindRef = useRef(onRewind)
-  onRewindRef.current = onRewind
+  // The programmatic path reads the live model, window and handler, not the ones of first mount.
+  const liveRef = useRef({ m, win, onRewind })
+  liveRef.current = { m, win, onRewind }
   useEffect(() => {
-    const fn = (sec: number) => onRewindRef.current(sec)
+    // The slider's rule: clamp to the rewindable range; the newest second is Live (null), which
+    // is not a rewind — the caller is told so and the view is left alone.
+    const fn = (sec: number): boolean => {
+      const { m: model, win: w, onRewind: apply } = liveRef.current
+      const range = model.rewindRange(w)
+      const v = Math.min(range.max, Math.max(range.min, sec))
+      if (v >= range.max) return false
+      apply(v)
+      return true
+    }
     liveRewind = fn
     if (pending && pending.until >= Date.now()) fn(pending.sec)
     pending = null

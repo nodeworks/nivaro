@@ -4,7 +4,8 @@
  *  - `load` (#1205): one page load's calls as a waterfall, from the screens tap's in-memory
  *    per-load buffer, with the page's real-user timings (nivaro_rum_events p75) beside it;
  *  - `search` (#1208): a search box entry resolved to the levels it names;
- *  - the Related rail (#1204): what else shares a level's chain, record, caller, error or page load.
+ *  - the Related rail (#1204): what else shares a level's chain, record, caller, error, page load
+ *    or statement shape.
  *
  * Every id is validated before it reaches a query; queries bind values and never interpolate.
  * Search never reads or compares token columns (API keys, static tokens): a credential-shaped entry
@@ -35,6 +36,8 @@ import {
   type SearchResult,
   screenMatches,
   splitScreenKey,
+  statementLabel,
+  statementSha,
   type Waterfall
 } from './nav-logic.js'
 
@@ -206,7 +209,8 @@ async function loadDetail(e: LoadEntry): Promise<LoadDetail> {
     ended_at: e.last,
     calls: e.calls.length + e.dropped,
     dropped: e.dropped,
-    waterfall: buildWaterfall(e.calls),
+    // The load's own span as the origin: dropped calls may start before the first kept one.
+    waterfall: buildWaterfall(e.calls, { first: e.first, last: e.last }),
     rum,
     node: INSTANCE_ID,
     instance: instanceKey()
@@ -224,7 +228,7 @@ registerInspectSource({
     return {
       title: `Page load · ${path}`,
       lines: [`${n} ${n === 1 ? 'call' : 'calls'} in ${Math.max(0, e.last - e.first)} ms`],
-      at: new Date(e.first).toISOString()
+      at: e.first
     }
   },
   async detail(id) {
@@ -368,7 +372,17 @@ function recordOf(collection: unknown, item: unknown): Facts['record'] {
   return { collection, item: it }
 }
 
-async function factsFor(kind: string, id: string, notes: string[]): Promise<Facts | null> {
+/**
+ * What a level shares with other things. `needAt`: the caller has no anchor, so a level without a
+ * time of its own (a record, a caller opened from Search) looks up its newest activity to centre
+ * the window on it instead of on now.
+ */
+async function factsFor(
+  kind: string,
+  id: string,
+  notes: string[],
+  needAt = false
+): Promise<Facts | null> {
   switch (kind) {
     case 'request':
     case 'trace':
@@ -424,12 +438,37 @@ async function factsFor(kind: string, id: string, notes: string[]): Promise<Fact
       const collection = id.slice(0, cut)
       const item = id.slice(cut + 1)
       if (cut <= 0 || !IDENT_RE.test(collection) || !ITEM_RE.test(item)) return null
-      return { record: { collection, item } }
+      const facts: Facts = { record: { collection, item } }
+      if (needAt) {
+        const row = (await safe(
+          db('nivaro_activity')
+            .where({ collection, item })
+            .orderBy('id', 'desc')
+            .first('timestamp'),
+          undefined
+        )) as { timestamp?: Date | string | null } | undefined
+        facts.at = ms(row?.timestamp)
+      }
+      return facts
     }
-    case 'caller':
-      return CALLER_RE.test(id)
-        ? { caller: id[0].toLowerCase() === 'u' ? `u${id.slice(1).toUpperCase()}` : id }
-        : {}
+    case 'caller': {
+      if (!CALLER_RE.test(id)) return {}
+      const caller = id[0].toLowerCase() === 'u' ? `u${id.slice(1).toUpperCase()}` : id
+      const facts: Facts = { caller }
+      if (needAt) {
+        const qb = db('nivaro_api_logs')
+        if (/^k\d+$/.test(caller)) qb.where('api_key_id', Number(caller.slice(1)))
+        else {
+          const uid = caller.slice(1)
+          qb.whereIn('user', [uid.toUpperCase(), uid.toLowerCase()]).whereNull('api_key_id')
+        }
+        const row = (await safe(qb.orderBy('id', 'desc').first('created_at'), undefined)) as
+          | { created_at?: Date | string | null }
+          | undefined
+        facts.at = ms(row?.created_at)
+      }
+      return facts
+    }
     case 'load': {
       if (!LOAD_RE.test(id)) return null
       const e = loadCalls(id)
@@ -731,31 +770,55 @@ async function callerGroup(
   return { key: 'caller', label: 'Same caller (around this time)', refs, total: 1 + n }
 }
 
+interface IssueRow {
+  id: number
+  title: string
+  status: string
+  last_seen_at: Date
+}
+
+const ISSUE_COLS = ['id', 'title', 'status', 'last_seen_at']
+
+const issueRef = (r: IssueRow): RefWire => ({
+  kind: 'issue',
+  id: String(r.id),
+  label: `${r.status} · ${r.title}`.slice(0, 140),
+  at: ms(r.last_seen_at)
+})
+
+/** Issues sharing a fingerprint (indexed; the way issues dedupe). */
+async function issuesByFingerprint(fingerprint: string): Promise<IssueRow[]> {
+  return (await db('nivaro_issues')
+    .where({ fingerprint })
+    .orderBy('id', 'desc')
+    .limit(11)
+    .select(ISSUE_COLS)) as IssueRow[]
+}
+
+/**
+ * Does an issue title name this failure? Titles are `[server] METHOD /route/:template: message`
+ * (error-tracking.ts). Tested here, not in SQL: `[server]` inside a LIKE pattern is a character
+ * class on SQL Server, so a title LIKE would match nothing on the main dialect.
+ */
+export function issueTitleMatches(title: unknown, method: string, needle: string): boolean {
+  if (typeof title !== 'string') return false
+  const m = method.toUpperCase().replace(/[^A-Z]/g, '')
+  return title.startsWith(`[server] ${m} `) && title.includes(needle)
+}
+
 async function errorGroup(f: Facts, at: number): Promise<RelatedDraft | null> {
   if (f.fingerprint) {
-    const rows = (await db('nivaro_issues')
-      .where({ fingerprint: f.fingerprint })
-      .orderBy('id', 'desc')
-      .limit(11)
-      .select('id', 'title', 'status', 'last_seen_at')) as Array<{
-      id: number
-      title: string
-      status: string
-      last_seen_at: Date
-    }>
     return {
       key: 'error',
       label: 'Same error (earlier and later issues)',
-      refs: rows.map((r) => ({
-        kind: 'issue',
-        id: String(r.id),
-        label: `${r.status} · ${r.title}`.slice(0, 140),
-        at: ms(r.last_seen_at)
-      }))
+      refs: (await issuesByFingerprint(f.fingerprint)).map(issueRef)
     }
   }
   if (!f.failure) return null
-  const message = groupOf({
+  // The fingerprint the error handler would have given this failure, from the same rule the
+  // error-groups tap uses. The log row holds the raw path, not the route template, so this
+  // matches exactly only for routes without parameters — hence the title scan below.
+  const g = groupOf({
     method: f.failure.method,
     routeUrl: null,
     path: f.failure.path,
@@ -763,35 +826,43 @@ async function errorGroup(f: Facts, at: number): Promise<RelatedDraft | null> {
     status: f.failure.status,
     code: null,
     body: f.failure.error
-  }).meta.message
-  const needle = message.slice(0, 120)
+  })
+  if (g.meta.fingerprint) {
+    const exact = await issuesByFingerprint(g.meta.fingerprint)
+    if (exact.length)
+      return { key: 'error', label: 'Same error (issue)', refs: exact.map(issueRef) }
+  }
+  const needle = g.meta.message.slice(0, 120)
   const rows = (await db('nivaro_issues')
     .where({ source: 'server' })
-    .andWhere(
-      'title',
-      'like',
-      `[server] ${f.failure.method.toUpperCase().replace(/[^A-Z]/g, '')} %`
-    )
     .andWhere('last_seen_at', '>=', new Date(at - 86_400_000))
     .orderBy('last_seen_at', 'desc')
     .limit(100)
-    .select('id', 'title', 'status', 'last_seen_at')) as Array<{
-    id: number
-    title: string
-    status: string
-    last_seen_at: Date
-  }>
-  const hits = rows.filter((r) => typeof r.title === 'string' && r.title.includes(needle))
-  return {
-    key: 'error',
-    label: 'Same error (issue)',
-    refs: hits.map((r) => ({
-      kind: 'issue',
-      id: String(r.id),
-      label: `${r.status} · ${r.title}`.slice(0, 140),
-      at: ms(r.last_seen_at)
-    }))
+    .select(ISSUE_COLS)) as IssueRow[]
+  const hits = rows.filter((r) => issueTitleMatches(r.title, f.failure?.method ?? '', needle))
+  return { key: 'error', label: 'Same error (issue)', refs: hits.map(issueRef) }
+}
+
+/**
+ * Same statement shape (#1204): the request's heaviest statements from its kept trace, each a
+ * `statement:<sha1>` level (the request group's statement panel: routes that run it, plan, cache).
+ * Only while this process keeps the trace; the ring keeps slow requests only.
+ */
+function statementGroup(rid: string): RelatedDraft | null {
+  const t = getTrace(rid)
+  if (!t || !Array.isArray(t.top_sql) || t.top_sql.length === 0) return null
+  const refs: RefWire[] = []
+  const seen = new Set<string>()
+  for (const s of t.top_sql) {
+    if (!s?.sql) continue
+    const sha = statementSha(s.sql)
+    if (seen.has(sha)) continue
+    seen.add(sha)
+    refs.push({ kind: 'statement', id: sha, label: statementLabel(s) })
   }
+  return refs.length
+    ? { key: 'statement', label: 'Same statement shape (this request’s top SQL)', refs }
+    : null
 }
 
 function loadGroup(load: string): RelatedDraft | null {
@@ -829,7 +900,7 @@ export async function relatedFor(
   ctx: InspectCtx
 ): Promise<RelatedResult | null> {
   const notes: string[] = []
-  const facts = await factsFor(kind, id, notes)
+  const facts = await factsFor(kind, id, notes, ctx.at == null)
   if (facts === null) return null
   const at = ctx.at ?? facts.at ?? Date.now()
   const w = ctx.windowSec
@@ -854,6 +925,10 @@ export async function relatedFor(
     const g = loadGroup(facts.load)
     if (g) drafts.push(g)
   }
+  if (facts.requestId && kind !== 'statement') {
+    const g = statementGroup(facts.requestId)
+    if (g) drafts.push(g)
+  }
   await Promise.all(tasks)
   if ((kind === 'request' || kind === 'trace' || kind === 'ai') && !facts.load) {
     const elsewhere = facts.instance && facts.instance !== instanceKey()
@@ -863,11 +938,11 @@ export async function relatedFor(
         : 'Page load: not known — page loads are kept in memory (the last 200, on the API process that served them), and calls from scripts or integrations send no page load id.'
     )
   }
-  // Same statement shape: Task 3 keeps the statement shape map (shape → routes, last seen). When
-  // it exports a getter, a 'statement' draft built from the request's trace plugs in here.
   const e = facts.load ? loadCalls(facts.load) : null
-  const self =
-    kind === 'compare' && facts.requestId ? { kind: 'request', id: facts.requestId } : { kind, id }
+  // The level itself never appears in its own rail: a trace, compare or AI call level is also
+  // the request the groups name (`request:<rid>`).
+  const self = [{ kind, id }]
+  if (facts.requestId && kind !== 'request') self.push({ kind: 'request', id: facts.requestId })
   const groups = finishRelated(drafts, self)
   if (groups.length === 0 && notes.length === 0)
     notes.push(`Nothing else is linked to this ${kind} in the ±${Math.round(w / 60)} min window.`)

@@ -40,7 +40,10 @@ export function AnchorAction({ inspectRef }: InspectPanelProps) {
   const rewind = () => {
     if (target == null) return
     const r = requestMapRewind(target)
-    if (r === 'unavailable') toast.error('The map cannot pause here, so it cannot rewind.')
+    if (r === 'unavailable')
+      toast.error(
+        'The map cannot rewind to that moment: it cannot pause here, or the rewind bar does not reach it with this window.'
+      )
     else setOpen(false)
   }
   return (

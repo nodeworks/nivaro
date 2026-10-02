@@ -39,11 +39,16 @@ export function LoadPanel({ inspectRef, anchor, windowSec }: InspectPanelProps) 
         </p>
         <p className='text-[11.5px] text-[var(--tm-muted)]'>
           {d.app ? `${d.app} · ` : ''}page load started {fmtClock(d.started_at)} by{' '}
-          <InspectLink
-            inspectRef={{ kind: 'caller', id: d.caller, label: d.user_name ?? d.caller_label }}
-          >
-            {d.user_name ?? d.caller_label}
-          </InspectLink>
+          {d.caller === 'anon' ? (
+            // No caller level can show "anonymous": plain text, not a link that would 400.
+            <span data-tm-inspect-load-caller='anon'>{d.caller_label}</span>
+          ) : (
+            <InspectLink
+              inspectRef={{ kind: 'caller', id: d.caller, label: d.user_name ?? d.caller_label }}
+            >
+              {d.user_name ?? d.caller_label}
+            </InspectLink>
+          )}
         </p>
       </div>
 

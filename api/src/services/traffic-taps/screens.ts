@@ -143,18 +143,22 @@ export function onScreenRequest(c: TapRequestCtx): void {
   finishIdleLoads(c.sec)
   const loadId = normalizeLoadId(header(c.ev.req, 'x-nivaro-load'))
   if (!loadId) return
-  const rid = (c.ev.req as { requestId?: unknown } | undefined)?.requestId
-  s.callLog.note(
-    loadId,
-    { screen, caller: c.caller, user: c.ev.userId ?? null },
-    {
-      rid: typeof rid === 'string' && rid ? rid.slice(0, 64) : (c.event?.rid ?? null),
-      route: c.route,
-      start: c.ev.at - Math.max(0, c.ev.latencyMs),
-      ms: c.ev.latencyMs,
-      status: c.ev.status
-    }
-  )
+  // #1205: keep the call for the load waterfall — not in cloud mode, where the inspect routes
+  // answer 404 and nothing would read it (per-tenant stores would hold up to 60k calls each).
+  if (!process.env.CLOUD_META_DB_URL) {
+    const rid = (c.ev.req as { requestId?: unknown } | undefined)?.requestId
+    s.callLog.note(
+      loadId,
+      { screen, caller: c.caller, user: c.ev.userId ?? null },
+      {
+        rid: typeof rid === 'string' && rid ? rid.slice(0, 64) : (c.event?.rid ?? null),
+        route: c.route,
+        start: c.ev.at - Math.max(0, c.ev.latencyMs),
+        ms: c.ev.latencyMs,
+        status: c.ev.status
+      }
+    )
+  }
   const key = `${loadId}|${c.caller}`
   let l = s.open.get(key)
   if (l && l.screen !== screen) {

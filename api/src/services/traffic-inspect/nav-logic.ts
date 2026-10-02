@@ -3,6 +3,7 @@
  * Traffic Map drill-down, group "nav" — the pure parts: what a search box entry is, how the
  * Related rail's groups are assembled, a page load's waterfall shape and a p75. No I/O.
  */
+import { createHash } from 'node:crypto'
 
 export interface RefWire {
   kind: string
@@ -108,15 +109,18 @@ export interface RelatedGroup {
 }
 
 /**
- * Finish the rail: drop the level itself from every group, dedupe, cap each group at
- * RELATED_PER_GROUP (the rest counted in `more`), drop empty groups, order by RELATED_ORDER.
+ * Finish the rail: drop the level itself from every group (every ref in `self` — a trace or AI
+ * call level is also its request), dedupe, cap each group at RELATED_PER_GROUP (the rest counted
+ * in `more`), drop empty groups, order by RELATED_ORDER.
  */
 export function finishRelated(
   drafts: RelatedDraft[],
-  self: { kind: string; id: string },
+  self: { kind: string; id: string } | Array<{ kind: string; id: string }>,
   per = RELATED_PER_GROUP
 ): RelatedGroup[] {
-  const selfKey = `${self.kind}:${self.id.toLowerCase()}`
+  const selfKeys = new Set(
+    (Array.isArray(self) ? self : [self]).map((s) => `${s.kind}:${s.id.toLowerCase()}`)
+  )
   const out: RelatedGroup[] = []
   for (const d of drafts) {
     const seen = new Set<string>()
@@ -125,7 +129,7 @@ export function finishRelated(
     for (const r of d.refs) {
       if (!r?.kind || !r.id) continue
       const k = `${r.kind}:${String(r.id).toLowerCase()}`
-      if (k === selfKey || seen.has(k)) {
+      if (selfKeys.has(k) || seen.has(k)) {
         removed++
         continue
       }
@@ -151,6 +155,32 @@ export function finishRelated(
     return i < 0 ? RELATED_ORDER.length : i
   }
   return out.sort((a, b) => rank(a.key) - rank(b.key))
+}
+
+/**
+ * The statement shape a trace recorded, whitespace collapsed (its identity), and its sha1 — the
+ * `statement` inspect id. The same rule as the request group's `statementSha`
+ * (traffic-inspect/request-logic.ts, Task 3): that module is not on this branch, so the hash is
+ * repeated here rather than imported; the two must stay identical for `statement:<sha>` refs to
+ * open the right shape.
+ */
+export function normaliseStatement(sql: string): string {
+  return String(sql ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function statementSha(sql: string): string {
+  return createHash('sha1').update(normaliseStatement(sql)).digest('hex')
+}
+
+/** A statement shape as the rail labels it: `n× · ms · the first 90 chars`. */
+export function statementLabel(s: { sql: string; n?: number; ms?: number }): string {
+  const text = normaliseStatement(s.sql)
+  const head = text.length > 90 ? `${text.slice(0, 89)}…` : text
+  const n = Number(s.n) || 1
+  const ms = Math.round(Number(s.ms) || 0)
+  return `${n}× · ${ms} ms · ${head}`
 }
 
 /** `METHOD /path · status` for an API log row. */
@@ -188,10 +218,19 @@ export interface Waterfall {
   errors: number
 }
 
-export function buildWaterfall(calls: WaterfallCall[]): Waterfall {
+/**
+ * The waterfall of a load's kept calls. `span` is the load's own first start / last end — it
+ * includes calls that were counted but not kept, so bars and the total share one origin with the
+ * load's started_at / ended_at. Without it both come from the kept calls.
+ */
+export function buildWaterfall(
+  calls: WaterfallCall[],
+  span?: { first: number; last: number }
+): Waterfall {
   const sorted = [...calls].sort((a, b) => a.start - b.start)
-  const first = sorted.length ? sorted[0].start : 0
-  let lastEnd = first
+  const firstKept = sorted.length ? sorted[0].start : (span?.first ?? 0)
+  const first = span ? Math.min(span.first, firstKept) : firstKept
+  let lastEnd = span ? Math.max(first, span.last) : first
   const rows: WaterfallRow[] = sorted.map((c) => {
     lastEnd = Math.max(lastEnd, c.start + Math.max(0, c.ms))
     return { ...c, ms: Math.max(0, c.ms), offset_ms: Math.max(0, c.start - first) }

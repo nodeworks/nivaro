@@ -43,6 +43,10 @@ export function SearchBox() {
   const search = useInspectSearch(q)
   const settled = q.trim() === text.trim()
   const results = settled && !refusedLocally ? (search.data?.results ?? []) : []
+  // Enter pressed with nothing settled yet (the debounce or the fetch is still running): the
+  // entry it was pressed on; the first result opens as soon as it lands. The core flow is paste
+  // an id, press Enter — it must not need a second press.
+  const [pendingEnter, setPendingEnter] = useState<string | null>(null)
 
   // `/` and ⌘K focus the box while the Traffic Map page has focus (capture: before the admin-wide
   // shortcut handlers, which then never see the key). Elsewhere the global keys are untouched.
@@ -73,12 +77,31 @@ export function SearchBox() {
   }, [])
 
   const choose = (ref: InspectRef) => {
+    setPendingEnter(null)
     openInspect(ref, { root: true })
     setOpen(false)
     inputRef.current?.blur()
   }
   const first = results[0]
   const current = results.find((r) => keyOf(r) === active) ?? first
+  const term = text.trim()
+
+  useEffect(() => {
+    if (pendingEnter == null) return
+    if (pendingEnter !== term || refusedLocally || search.isError) {
+      setPendingEnter(null)
+      return
+    }
+    if (!settled || search.isFetching || !search.data) return
+    const hit = search.data.results[0]
+    setPendingEnter(null)
+    // A result → open it; none → the search level says what was looked for and why nothing matched.
+    openInspect(hit ? hit.ref : { kind: 'search', id: term, label: `Search “${term}”` }, {
+      root: true
+    })
+    setOpen(false)
+    inputRef.current?.blur()
+  }, [pendingEnter, term, settled, refusedLocally, search.isFetching, search.isError, search.data])
 
   return (
     <PopoverPrimitive.Root open={open && text.trim().length > 0} onOpenChange={setOpen}>
@@ -103,14 +126,17 @@ export function SearchBox() {
               setText(e.target.value)
               setActive('')
               setOpen(true)
+              setPendingEnter(null)
             }}
             onFocus={() => text.trim() && setOpen(true)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
                 if (current) choose(current.ref)
+                else if (term && !refusedLocally) setPendingEnter(term)
               } else if (e.key === 'Escape') {
                 setOpen(false)
+                setPendingEnter(null)
               } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 if (results.length === 0) return
                 e.preventDefault()

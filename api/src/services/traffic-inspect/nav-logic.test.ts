@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   buildWaterfall,
@@ -7,7 +8,9 @@ import {
   p75,
   RELATED_PER_GROUP,
   SEARCH_REFUSED_CREDENTIAL,
-  screenMatches
+  screenMatches,
+  statementLabel,
+  statementSha
 } from './nav-logic.js'
 
 describe('classifySearch', () => {
@@ -108,6 +111,47 @@ describe('finishRelated', () => {
     expect(g.refs).toHaveLength(10)
     expect(g.more).toBe(2)
   })
+
+  it('drops every self ref: a trace level is also its request', () => {
+    const groups = finishRelated(
+      [
+        {
+          key: 'chain',
+          label: 'Same chain',
+          refs: [
+            { kind: 'chain', id: 'c' },
+            { kind: 'request', id: 'RID-1' },
+            { kind: 'request', id: 'rid-2' }
+          ],
+          total: 3
+        }
+      ],
+      [
+        { kind: 'trace', id: 'rid-1' },
+        { kind: 'request', id: 'rid-1' }
+      ]
+    )
+    expect(groups[0].refs.map((r) => `${r.kind}:${r.id}`)).toEqual(['chain:c', 'request:rid-2'])
+    expect(groups[0].more).toBeUndefined()
+  })
+})
+
+describe('statement shape', () => {
+  it('hashes the whitespace-collapsed statement (sha1 hex, lower case)', () => {
+    const a = statementSha('select  *\n from   workflows where id = @p0')
+    expect(a).toBe(statementSha(' select * from workflows where id = @p0 '))
+    expect(a).toMatch(/^[0-9a-f]{40}$/)
+    expect(a).toBe(
+      createHash('sha1').update('select * from workflows where id = @p0').digest('hex')
+    )
+    expect(statementSha('select 1')).not.toBe(statementSha('select 2'))
+  })
+  it('labels a statement with its count, time and a short head', () => {
+    expect(statementLabel({ sql: 'select   1', n: 3, ms: 12.4 })).toBe('3× · 12 ms · select 1')
+    const long = statementLabel({ sql: `select ${'x,'.repeat(80)} from t` })
+    expect(long.startsWith('1× · 0 ms · select x,')).toBe(true)
+    expect(long.endsWith('…')).toBe(true)
+  })
 })
 
 describe('buildWaterfall', () => {
@@ -125,6 +169,20 @@ describe('buildWaterfall', () => {
     expect(w.errors).toBe(1)
     expect(w.rows[3].ms).toBe(0)
     expect(buildWaterfall([])).toMatchObject({ rows: [], total_ms: 0, slowest: null })
+  })
+
+  it('measures from the load’s own span when calls were dropped', () => {
+    // A long call that arrived after the cap started before the first kept one and ended last.
+    const w = buildWaterfall(
+      [
+        { rid: 'a', route: 'GET /api/auth/me', start: 1_000, ms: 30, status: 200 },
+        { rid: 'b', route: 'GET /api/items/x', start: 1_100, ms: 50, status: 200 }
+      ],
+      { first: 900, last: 1_600 }
+    )
+    expect(w.rows.map((r) => r.offset_ms)).toEqual([100, 200])
+    expect(w.total_ms).toBe(700)
+    expect(buildWaterfall([], { first: 5, last: 9 }).total_ms).toBe(4)
   })
 })
 

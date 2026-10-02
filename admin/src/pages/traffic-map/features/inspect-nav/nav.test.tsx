@@ -5,7 +5,8 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventTicker } from '../../EventTicker'
 import { getInspectSnapshot, resetInspectForTests } from '../../inspect/stack'
-import { requestMapRewind } from '../../RewindBar'
+import type { TrafficModel } from '../../model'
+import { RewindBar, requestMapRewind } from '../../RewindBar'
 import type { TrafficEventWire } from '../../types'
 import { AnchorAction } from './HeaderActions'
 import { LoadPanel } from './LoadPanel'
@@ -15,6 +16,20 @@ import { SearchBox } from './Search'
 const RID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const get = vi.fn()
 vi.mock('@/lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a) } }))
+
+// jsdom has no ResizeObserver and no scrollIntoView; the search results list (cmdk) uses both
+// once it renders.
+if (typeof ResizeObserver === 'undefined') {
+  class StubResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = StubResizeObserver
+}
+if (typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = () => {}
+}
 
 function wrap(ui: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -136,6 +151,40 @@ describe('search box (#1208)', () => {
     expect(get).not.toHaveBeenCalled()
     expect(document.querySelector('[data-tm-inspect-search-refused]')).not.toBeNull()
   })
+
+  it('Enter pressed before the results settle opens the first result once they land', async () => {
+    get.mockResolvedValue({
+      data: {
+        data: {
+          q: RID,
+          type: 'uuid',
+          results: [{ ref: { kind: 'request', id: RID, at: 5 }, label: 'GET /x · 200', hint: '' }]
+        }
+      }
+    })
+    render(wrap(<SearchBox />))
+    const input = document.querySelector('[data-tm-inspect-search]') as HTMLInputElement
+    fireEvent.change(input, { target: { value: RID } })
+    // paste, Enter — within the 250 ms debounce, nothing has been fetched yet
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(get).not.toHaveBeenCalled()
+    expect(getInspectSnapshot().levels).toHaveLength(0)
+    await waitFor(() =>
+      expect(getInspectSnapshot().levels[0]).toMatchObject({ kind: 'request', id: RID })
+    )
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  it('Enter on an entry that matches nothing opens the search level, which says so', async () => {
+    get.mockResolvedValue({ data: { data: { q: 'CR26-1', type: 'friendly', results: [] } } })
+    render(wrap(<SearchBox />))
+    const input = document.querySelector('[data-tm-inspect-search]') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'CR26-1' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(getInspectSnapshot().levels[0]).toMatchObject({ kind: 'search', id: 'CR26-1' })
+    )
+  })
 })
 
 describe('load panel (#1205)', () => {
@@ -203,6 +252,46 @@ describe('load panel (#1205)', () => {
     expect(document.querySelector('[data-tm-inspect-load-rum="none"]')).not.toBeNull()
     fireEvent.click(document.querySelector(`[data-tm-inspect-link="request:${RID}"]`) as Element)
     expect(getInspectSnapshot().levels.at(-1)).toMatchObject({ kind: 'request', id: RID })
+  })
+
+  it('an unauthenticated load names no caller level', async () => {
+    get.mockResolvedValue({
+      data: {
+        data: {
+          load: 'load-anon01',
+          screen: '/login',
+          app: null,
+          page: '/login',
+          caller: 'anon',
+          caller_label: 'Unauthenticated',
+          user: null,
+          user_name: null,
+          started_at: 1000,
+          ended_at: 1000,
+          calls: 0,
+          dropped: 0,
+          waterfall: { rows: [], total_ms: 0, slowest: null, duplicates: [], errors: 0 },
+          rum: null,
+          node: 'abcd1234',
+          instance: 'development'
+        }
+      }
+    })
+    render(
+      wrap(
+        <LoadPanel
+          inspectRef={{ kind: 'load', id: 'load-anon01' }}
+          open={() => {}}
+          anchor={null}
+          windowSec={300}
+        />
+      )
+    )
+    await waitFor(() =>
+      expect(document.querySelector('[data-tm-inspect-load-caller="anon"]')).not.toBeNull()
+    )
+    expect(screen.getByText('Unauthenticated')).toBeTruthy()
+    expect(document.querySelector('[data-tm-inspect-link="caller:anon"]')).toBeNull()
   })
 
   it('says why a load is gone', async () => {
@@ -307,5 +396,33 @@ describe('time anchor (#1206)', () => {
 
   it('says when the map cannot pause', () => {
     expect(requestMapRewind(Date.now())).toBe('unavailable')
+  })
+
+  it('goes through the rewind bar’s own rule while it is up: clamped, and never a rewind to Live', () => {
+    const onRewind = vi.fn()
+    const model = {
+      rewindRange: () => ({ min: 100, max: 200 }),
+      fineFrom: null
+    } as unknown as TrafficModel
+    const { unmount } = render(
+      <RewindBar
+        model={model}
+        win={300}
+        viewSec={null}
+        frozen={false}
+        onRewind={onRewind}
+        onLive={() => {}}
+      />
+    )
+    expect(requestMapRewind(150_000)).toBe('rewound')
+    expect(onRewind).toHaveBeenLastCalledWith(150)
+    // older than the rings hold → the oldest second
+    expect(requestMapRewind(50_000)).toBe('rewound')
+    expect(onRewind).toHaveBeenLastCalledWith(100)
+    // newer than the bar's newest second → that would be Live, not a rewind
+    expect(requestMapRewind(250_000)).toBe('unavailable')
+    expect(onRewind).toHaveBeenCalledTimes(2)
+    unmount()
+    expect(requestMapRewind(150_000)).toBe('unavailable')
   })
 })
