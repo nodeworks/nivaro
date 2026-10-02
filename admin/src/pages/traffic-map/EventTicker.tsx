@@ -1,4 +1,4 @@
-import { type MouseEvent, useEffect, useRef } from 'react'
+import { type MouseEvent, useEffect, useRef, useState } from 'react'
 import { refForEvent } from './inspect/format'
 import { openInspect } from './inspect/stack'
 import { sourceLabel } from './nodeKinds'
@@ -135,6 +135,26 @@ function openFromRow(e: MouseEvent<HTMLElement>, ev: TrafficEventWire): void {
   openInspect(refForEvent(ev), { root: true })
 }
 
+function typingIn(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false
+  if (el.isContentEditable) return true
+  const t = el.tagName
+  return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT'
+}
+
+/**
+ * #1209: may j / k move the ticker selection now? Not while typing, not while focus is in the
+ * investigation panel or a dialog, and only with focus on the page (or nowhere).
+ */
+function tickerKeysAllowed(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return false
+  if (typingIn(e.target)) return false
+  const a = typeof document !== 'undefined' ? document.activeElement : null
+  if (!a || a === document.body || a === document.documentElement) return true
+  if (a.closest('[data-tm-inspect-host]') || a.closest('[role="dialog"]')) return false
+  return !!a.closest('#tm-ticker, .traffic-map')
+}
+
 const FADE_MS = 600
 const WINDOW_TEXT: Record<number, string> = { 60: '60 s', 300: '5 min', 900: '15 min' }
 
@@ -185,6 +205,31 @@ export function EventTicker({
     if (newestT > lastNewest.current) lastNewest.current = newestT
   }, [newestT])
 
+  // #1209: j / k move a visible selection through the rows (and focus that row, so Enter opens
+  // it like a click); the selection follows its event as newer rows push it down.
+  const [selKey, setSelKey] = useState<number | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const live = useRef({ rows, keyOf, selKey })
+  live.current = { rows, keyOf, selKey }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'j' && e.key !== 'k') return
+      if (!tickerKeysAllowed(e)) return
+      const { rows: list, keyOf: key, selKey: cur } = live.current
+      if (list.length === 0) return
+      e.preventDefault()
+      const i = cur == null ? -1 : list.findIndex((ev) => key(ev) === cur)
+      const next = i < 0 ? 0 : e.key === 'j' ? Math.min(list.length - 1, i + 1) : Math.max(0, i - 1)
+      const k = key(list[next])
+      setSelKey(k)
+      const el = listRef.current?.querySelector<HTMLElement>(`[data-tm-event-key="${k}"]`)
+      el?.focus({ preventScroll: true })
+      el?.scrollIntoView?.({ block: 'nearest' })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   return (
     <section
       className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
@@ -202,7 +247,7 @@ export function EventTicker({
           {total.toLocaleString()} since open
         </span>
       </div>
-      <div className='max-h-[440px] overflow-auto' data-tm-ticker=''>
+      <div className='max-h-[440px] overflow-auto' data-tm-ticker='' ref={listRef}>
         {loading && rows.length === 0 ? (
           <SkeletonRows n={8} />
         ) : rows.length === 0 ? (
@@ -222,15 +267,23 @@ export function EventTicker({
             const cols = hasActions
               ? 'grid-cols-[58px_62px_minmax(0,1fr)_auto]'
               : 'grid-cols-[58px_62px_minmax(0,1fr)]'
+            const rowKey = keyOf(ev)
+            const selected = rowKey === selKey
             return (
               // biome-ignore lint/a11y/useSemanticElements: a row that holds its own action buttons cannot be a <button>
               <div
-                key={keyOf(ev)}
+                key={rowKey}
                 data-tm-event={ev.kind}
+                data-tm-event-key={rowKey}
+                data-tm-event-selected={selected ? '' : undefined}
+                aria-current={selected ? 'true' : undefined}
                 role='button'
                 tabIndex={0}
                 aria-label={`Inspect ${ev.kind} on ${name}`}
-                onClick={(e) => openFromRow(e, ev)}
+                onClick={(e) => {
+                  if (e.currentTarget.contains(e.target as Node)) setSelKey(rowKey)
+                  openFromRow(e, ev)
+                }}
                 onKeyDown={(e) => {
                   if (e.target !== e.currentTarget) return
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -240,6 +293,8 @@ export function EventTicker({
                 }}
                 className={`grid ${cols} cursor-pointer items-baseline gap-2 border-b border-[var(--tm-line-2)] px-3.5 py-1 text-[12px] last:border-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan ${
                   isErr ? 'bg-[var(--tm-error-soft)]' : 'hover:bg-[var(--tm-card-2)]'
+                } ${selected ? 'outline outline-1 -outline-offset-1 outline-[var(--tm-accent-ink)]' : ''} ${
+                  selected && !isErr ? 'bg-[var(--tm-card-2)]' : ''
                 } ${fresh ? 'tm-ev-fresh' : ''}`}
               >
                 <span className={`font-mono text-[10.5px] tabular-nums ${quiet}`}>
