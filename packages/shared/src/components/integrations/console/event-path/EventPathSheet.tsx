@@ -28,7 +28,7 @@ import { Skeleton } from '../../../ui/skeleton'
 import { type EventPathTarget, eventPathTargetKey, useEventPath } from '../api'
 import { CodeBlock, HttpStatusChip, isTruncatedBody, pretty, StatusPill } from '../drill'
 import { agoText, exactTime, TONE_BORDER, TONE_SOFT, TONE_TEXT } from '../tone'
-import type { PathDetail, PathNode } from '../types'
+import type { EventPath, PathDetail, PathNode } from '../types'
 import { ancestorsOf, flattenVisible, formatOffset, summarySentence } from './pathModel'
 
 export interface EventPathSheetProps {
@@ -287,7 +287,8 @@ function StepRow({
   open,
   onToggle,
   onOpen,
-  onOpenRecord
+  onOpenRecord,
+  action
 }: {
   node: PathNode
   depth: number
@@ -297,6 +298,8 @@ function StepRow({
   onToggle: () => void
   onOpen: () => void
   onOpenRecord?: (collection: string, id: string) => void
+  /** Host control at the end of the row (e.g. a drill-down link). */
+  action?: ReactNode
 }) {
   const Icon = node.failed ? AlertTriangle : (KIND_ICON[node.kind] ?? Layers)
   const rec = node.record
@@ -396,6 +399,11 @@ function StepRow({
               </span>
             )}
           </div>
+          {action ? (
+            <span className='shrink-0 self-center' data-path-step-action={node.key}>
+              {action}
+            </span>
+          ) : null}
         </div>
         {open && <StepDetailView node={node} />}
       </div>
@@ -403,21 +411,35 @@ function StepRow({
   )
 }
 
+export interface EventPathBodyProps {
+  /** The path to draw; null while loading or after an error. */
+  path: EventPath | null
+  loading?: boolean
+  /** Set when the path failed to load; the message may be empty. */
+  error?: string | null
+  /** Identity of what the path is about — the failure-first pass runs once per value. */
+  targetKey?: string | null
+  onOpenRecord?: (collection: string, id: string) => void
+  /** A control at the end of every step row (a host drill-down link). Null = none for that step. */
+  stepAction?: (node: PathNode) => ReactNode
+  /** The body's own box (the sheet makes it the scrolling area). */
+  className?: string
+}
+
 /**
- * One integration event opened into its full chain: the call, cron, import
- * or feed that started it, every write and transition it caused, the flows
- * that ran and the partner pushes that went out — as a tree. Opens on the
+ * The path tree itself — steps, their details, the failure-first opening — without any sheet
+ * chrome, so another host (the Traffic Map's investigation panel) can embed it. Opens on the
  * first failure, expanded and scrolled to.
  */
-export function EventPathSheet({
-  target,
-  event,
-  onClose,
+export function EventPathBody({
+  path,
+  loading,
+  error,
+  targetKey,
   onOpenRecord,
-  onOpenEvent
-}: EventPathSheetProps) {
-  const q = useEventPath(target)
-  const path = q.data ?? null
+  stepAction,
+  className
+}: EventPathBodyProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [open, setOpen] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -425,14 +447,13 @@ export function EventPathSheet({
   const pendingScrollRef = useRef<string | null>(null)
   /** Which target + root the failure-first pass last ran for. */
   const initFor = useRef<string | null>(null)
-  const targetKey = target ? eventPathTargetKey(target) : null
 
   // Failure-first: expand to and open the first failure; else expand the
   // root. Once per target + root — a background refetch that returns the
   // same path keeps whatever the person expanded and opened since.
   useEffect(() => {
     if (!path) return
-    const id = `${targetKey}|${path.root.key}`
+    const id = `${targetKey ?? ''}|${path.root.key}`
     if (initFor.current === id) return
     initFor.current = id
     const keys = new Set<string>([path.root.key])
@@ -467,7 +488,6 @@ export function EventPathSheet({
     // row's scroll margin keeps a little of its parent in view above it.
     el.scrollIntoView({ block: 'start' })
   }, [rows])
-  if (!target) return null
 
   const toggle = (key: string) =>
     setExpanded((s) => {
@@ -476,6 +496,81 @@ export function EventPathSheet({
       else next.add(key)
       return next
     })
+
+  return (
+    <div ref={scrollRef} className={className} data-path-body>
+      {loading && <PathSkeleton />}
+      {error != null && (
+        <p className={cn('px-2 text-[13px]', TONE_TEXT.negative)}>
+          Couldn't load this path{error ? ` · ${error}` : ''}.
+        </p>
+      )}
+      {path && !pathHasSteps && (
+        <>
+          <ol className='mb-3 space-y-0.5'>
+            <StepRow
+              node={path.root}
+              depth={0}
+              hasChildren={false}
+              expanded={false}
+              open={open === path.root.key}
+              onToggle={() => {}}
+              onOpen={() => setOpen(open === path.root.key ? null : path.root.key)}
+              onOpenRecord={onOpenRecord}
+              action={stepAction?.(path.root)}
+            />
+          </ol>
+          <p className='px-2 text-[13px] text-muted-foreground' data-path-empty>
+            {path.mode === 'inferred'
+              ? 'Nothing matched this event within the window.'
+              : 'No recorded writes for this event.'}
+          </p>
+        </>
+      )}
+      {path && pathHasSteps && (
+        <ol className='space-y-0.5'>
+          {rows.map(({ node, depth }) => (
+            <StepRow
+              key={node.key}
+              node={node}
+              depth={depth}
+              hasChildren={node.children.length > 0 || (node.members?.length ?? 0) > 0}
+              expanded={expanded.has(node.key)}
+              open={open === node.key}
+              onToggle={() => toggle(node.key)}
+              onOpen={() => setOpen(open === node.key ? null : node.key)}
+              onOpenRecord={onOpenRecord}
+              action={stepAction?.(node)}
+            />
+          ))}
+        </ol>
+      )}
+      {path && path.warnings.length > 0 && (
+        <p className='mt-4 px-2 text-[11px] text-muted-foreground' data-path-warnings>
+          Some steps could not be read: {path.warnings.join('; ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One integration event opened into its full chain: the call, cron, import
+ * or feed that started it, every write and transition it caused, the flows
+ * that ran and the partner pushes that went out — as a tree. Opens on the
+ * first failure, expanded and scrolled to.
+ */
+export function EventPathSheet({
+  target,
+  event,
+  onClose,
+  onOpenRecord,
+  onOpenEvent
+}: EventPathSheetProps) {
+  const q = useEventPath(target)
+  const path = q.data ?? null
+  const targetKey = target ? eventPathTargetKey(target) : null
+  if (!target) return null
 
   const errMsg =
     (q.error as { response?: { error?: string } } | null)?.response?.error ??
@@ -499,125 +594,91 @@ export function EventPathSheet({
           </SheetTitle>
           <SheetDescription asChild>
             <div className='mt-2 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground'>
-              {path && (
-                <span
-                  data-path-badge={path.mode}
-                  data-tip={
-                    path.mode === 'inferred'
-                      ? 'Recorded before chains existed. Steps were matched by account and time; each says why.'
-                      : 'Every step was recorded on this chain as it happened.'
-                  }
-                  className={
-                    path.mode === 'exact'
-                      ? 'rounded-full bg-[#dcfce7] px-2 py-0.5 font-medium text-[#166534] dark:bg-[#14532d] dark:text-[#bbf7d0]'
-                      : 'rounded-full bg-[#fef3c7] px-2 py-0.5 font-medium text-[#92400e] dark:bg-[#451a03] dark:text-[#fde68a]'
-                  }
-                >
-                  {path.mode === 'exact' ? 'Exact' : 'Inferred'}
-                </span>
-              )}
-              {path && (
-                <span className='tabular-nums' data-tip={exactTime(path.root.at)}>
-                  {agoText(path.root.at)}
-                </span>
-              )}
-              {path?.replay_of &&
-                (onOpenEvent ? (
-                  <button
-                    type='button'
-                    data-path-replay-of={path.replay_of}
-                    className='underline decoration-border underline-offset-2 hover:text-foreground'
-                    onClick={() => onOpenEvent({ chainId: path.replay_of as string })}
-                  >
-                    Replay of an earlier event
-                  </button>
-                ) : (
-                  <span data-path-replay-of>Replay of an earlier event</span>
-                ))}
-              {path && path.replayed_as.length > 0 && (
-                <span data-path-replayed>
-                  Replayed {path.replayed_as.length}×
-                  {onOpenEvent &&
-                    path.replayed_as.map((r, i) => (
-                      <button
-                        key={r}
-                        type='button'
-                        data-path-replay={r}
-                        className='ml-1.5 underline decoration-border underline-offset-2 hover:text-foreground'
-                        onClick={() => onOpenEvent({ chainId: r })}
-                      >
-                        #{i + 1}
-                      </button>
-                    ))}
-                </span>
-              )}
-              {path?.truncated && <span>Showing the first {path.step_count} steps</span>}
-              {path?.hidden_steps ? (
-                <span data-path-hidden>
-                  {path.hidden_steps} step{path.hidden_steps === 1 ? '' : 's'} on records you can't
-                  open
-                </span>
-              ) : null}
+              {path && <EventPathFacts path={path} onOpenEvent={onOpenEvent} />}
             </div>
           </SheetDescription>
         </div>
-        <div
-          ref={scrollRef}
+        <EventPathBody
+          path={path}
+          loading={q.isLoading}
+          error={q.isError ? (errMsg ?? '') : null}
+          targetKey={targetKey}
+          onOpenRecord={onOpenRecord}
           className='min-h-0 flex-1 overflow-y-auto bg-muted/30 px-4 py-4'
-          data-path-body
-        >
-          {q.isLoading && <PathSkeleton />}
-          {q.isError && (
-            <p className={cn('px-2 text-[13px]', TONE_TEXT.negative)}>
-              Couldn't load this path{errMsg ? ` · ${errMsg}` : ''}.
-            </p>
-          )}
-          {path && !pathHasSteps && (
-            <>
-              <ol className='mb-3 space-y-0.5'>
-                <StepRow
-                  node={path.root}
-                  depth={0}
-                  hasChildren={false}
-                  expanded={false}
-                  open={open === path.root.key}
-                  onToggle={() => {}}
-                  onOpen={() => setOpen(open === path.root.key ? null : path.root.key)}
-                  onOpenRecord={onOpenRecord}
-                />
-              </ol>
-              <p className='px-2 text-[13px] text-muted-foreground' data-path-empty>
-                {path.mode === 'inferred'
-                  ? 'Nothing matched this event within the window.'
-                  : 'No recorded writes for this event.'}
-              </p>
-            </>
-          )}
-          {path && pathHasSteps && (
-            <ol className='space-y-0.5'>
-              {rows.map(({ node, depth }) => (
-                <StepRow
-                  key={node.key}
-                  node={node}
-                  depth={depth}
-                  hasChildren={node.children.length > 0 || (node.members?.length ?? 0) > 0}
-                  expanded={expanded.has(node.key)}
-                  open={open === node.key}
-                  onToggle={() => toggle(node.key)}
-                  onOpen={() => setOpen(open === node.key ? null : node.key)}
-                  onOpenRecord={onOpenRecord}
-                />
-              ))}
-            </ol>
-          )}
-          {path && path.warnings.length > 0 && (
-            <p className='mt-4 px-2 text-[11px] text-muted-foreground' data-path-warnings>
-              Some steps could not be read: {path.warnings.join('; ')}
-            </p>
-          )}
-        </div>
+        />
       </SheetContent>
     </Sheet>
+  )
+}
+
+/**
+ * The facts line under a path's title: exact / inferred, when, replay links, truncation and
+ * hidden steps. The sheet's header renders it; exported for hosts that draw their own header.
+ */
+export function EventPathFacts({
+  path,
+  onOpenEvent
+}: {
+  path: EventPath
+  onOpenEvent?: (target: { chainId: string }) => void
+}) {
+  return (
+    <>
+      <span
+        data-path-badge={path.mode}
+        data-tip={
+          path.mode === 'inferred'
+            ? 'Recorded before chains existed. Steps were matched by account and time; each says why.'
+            : 'Every step was recorded on this chain as it happened.'
+        }
+        className={
+          path.mode === 'exact'
+            ? 'rounded-full bg-[#dcfce7] px-2 py-0.5 font-medium text-[#166534] dark:bg-[#14532d] dark:text-[#bbf7d0]'
+            : 'rounded-full bg-[#fef3c7] px-2 py-0.5 font-medium text-[#92400e] dark:bg-[#451a03] dark:text-[#fde68a]'
+        }
+      >
+        {path.mode === 'exact' ? 'Exact' : 'Inferred'}
+      </span>
+      <span className='tabular-nums' data-tip={exactTime(path.root.at)}>
+        {agoText(path.root.at)}
+      </span>
+      {path.replay_of &&
+        (onOpenEvent ? (
+          <button
+            type='button'
+            data-path-replay-of={path.replay_of}
+            className='underline decoration-border underline-offset-2 hover:text-foreground'
+            onClick={() => onOpenEvent({ chainId: path.replay_of as string })}
+          >
+            Replay of an earlier event
+          </button>
+        ) : (
+          <span data-path-replay-of>Replay of an earlier event</span>
+        ))}
+      {path.replayed_as.length > 0 && (
+        <span data-path-replayed>
+          Replayed {path.replayed_as.length}×
+          {onOpenEvent &&
+            path.replayed_as.map((r, i) => (
+              <button
+                key={r}
+                type='button'
+                data-path-replay={r}
+                className='ml-1.5 underline decoration-border underline-offset-2 hover:text-foreground'
+                onClick={() => onOpenEvent({ chainId: r })}
+              >
+                #{i + 1}
+              </button>
+            ))}
+        </span>
+      )}
+      {path.truncated && <span>Showing the first {path.step_count} steps</span>}
+      {path.hidden_steps ? (
+        <span data-path-hidden>
+          {path.hidden_steps} step{path.hidden_steps === 1 ? '' : 's'} on records you can't open
+        </span>
+      ) : null}
+    </>
   )
 }
 
