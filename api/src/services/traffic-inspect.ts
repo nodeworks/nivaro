@@ -14,7 +14,8 @@ import type { FastifyRequest } from 'fastify'
 export interface InspectPeek {
   title: string
   lines: string[]
-  at?: string | null
+  /** When the thing happened, as epoch ms — the hover card formats it with fmtClock. */
+  at?: number | null
 }
 
 export interface InspectCtx {

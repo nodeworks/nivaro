@@ -150,7 +150,8 @@ export function replaceInspect(levels: InspectRef[]): void {
 
 // ── URL form: `kind:id(@at)/kind:id/…` ──
 
-const KIND_RE = /^[a-z][a-z0-9_-]{0,31}$/
+/** Same shape as the server's INSPECT_KIND_RE: a kind a source could actually register. */
+const KIND_RE = /^[a-z][a-z0-9-]{1,30}$/
 
 /** The stack as a URL value (the newest MAX_URL_LEVELS levels); null when closed. */
 export function encodeStack(levels: InspectRef[] = state.levels): string | null {

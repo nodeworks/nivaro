@@ -158,10 +158,10 @@ describe('stack URL form', () => {
   })
 
   it(`caps at ${MAX_URL_LEVELS} levels both ways`, () => {
-    const many = Array.from({ length: 12 }, (_, i) => ({ kind: 'k', id: String(i) }))
+    const many = Array.from({ length: 12 }, (_, i) => ({ kind: 'kk', id: String(i) }))
     const enc = encodeStack(many) as string
     expect(enc.split('/')).toHaveLength(MAX_URL_LEVELS)
-    expect(enc.startsWith('k:4/')).toBe(true) // the newest levels are kept
+    expect(enc.startsWith('kk:4/')).toBe(true) // the newest levels are kept
     const long = many.map((r) => `${r.kind}:${r.id}`).join('/')
     expect(decodeStack(long, any)).toHaveLength(MAX_URL_LEVELS)
     expect(encodeStack([])).toBeNull()
