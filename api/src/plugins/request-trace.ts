@@ -4,6 +4,8 @@ import { _staticDb, db, dbRead } from '../db/index.js'
 import {
   attachQueryTracing,
   beginTrace,
+  clearTrace,
+  currentTraceMeta,
   finishTrace,
   markSerializeEnd,
   markSerializeStart,
@@ -20,6 +22,9 @@ import { attachInflightQueries, inflightEnd, inflightStart } from '../services/t
  * downstream — including inside the items service and hook registry — finds a
  * context. Non-/api paths (the admin SPA, static assets) are left alone.
  */
+/** Response header carrying the request id on every traced /api response. */
+export const REQUEST_ID_HEADER = 'x-nivaro-request-id'
+
 export const requestTracePlugin = fp(async (app: FastifyInstance) => {
   // Round-trip accounting (#506/#507/#483): every statement a traced request
   // runs is counted and timed off knex's query events. Both pools — the
@@ -62,11 +67,18 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
 
   app.addHook('onRequest', async (req) => {
     const path = (req.raw.url ?? req.url).split('?')[0]
-    if (!path.startsWith('/api/')) return
     // Tracing the trace reader would be circular and would evict real traces
     // from the ring buffer every time the page polled.
-    if (path.startsWith('/api/traces')) return
+    if (!path.startsWith('/api/') || path.startsWith('/api/traces')) {
+      // beginTrace uses enterWith, so a previous request's trace can still be the store on a
+      // keep-alive socket — an untraced request must not inherit its id (public-page events).
+      clearTrace()
+      return
+    }
     beginTrace(path, req)
+    // The trace id IS the request id: the API log row, the Traffic Map events, the trace ring
+    // and the response header all carry it, so one id joins them.
+    req.requestId = currentTraceMeta()?.id
     inflightStart(req)
   })
 
@@ -82,8 +94,10 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     markSerializeStart(req)
     done(null, payload)
   })
-  app.addHook('onSend', (req, _reply, payload, done) => {
+  app.addHook('onSend', (req, reply, payload, done) => {
     markSerializeEnd(req)
+    // Lets the browser's own network tab correlate a call with its trace / log row.
+    if (req.requestId) reply.header(REQUEST_ID_HEADER, req.requestId)
     done(null, payload)
   })
 

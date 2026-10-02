@@ -6,9 +6,11 @@
  */
 import { currentChain } from './chain.js'
 import { currentSeq } from './event-journal.js'
+import { INSTANCE_ID } from './instance-roster.js'
 import { getIo } from './io-holder.js'
 import { currentTraceCaller, currentTraceMeta } from './request-trace.js'
 import { instanceKey } from './settings-overrides.js'
+import { clientFactsOf } from './traffic-client-facts.js'
 import {
   type CallerKey,
   type Classified,
@@ -117,6 +119,22 @@ export interface TrafficEventWire {
   tags?: string[]
   /** Tap-specific fields; the map itself never reads them. */
   extra?: Record<string, unknown>
+  /** The request id behind the event (= its trace id and API log `request_id`). */
+  rid?: string
+  /** The API process that saw it (the roster id — the cluster's node id). */
+  node?: string
+  /** The browser tab the request came from (`x-nivaro-client` tab=). */
+  tab?: string
+  /** The frontend build that tab runs (`x-nivaro-client` build=). */
+  build?: string
+  /** Which front end (`x-nivaro-app`). */
+  app?: string
+  /** The screen pattern the request came from (`x-nivaro-page`, normalised). */
+  page?: string
+  /** The page load id (`x-nivaro-load`). */
+  load?: string
+  /** The cron job / flow run / import run that owns a write or partner call. */
+  run?: string
 }
 interface RecentError {
   at: string
@@ -330,10 +348,40 @@ function getDown(id: string, label?: string): NodeState {
   } else if (label) d.label = label
   return d
 }
+/** The request id of the current trace, when a request (not a background job) is behind it. */
+function currentRequestId(): string | undefined {
+  const meta = currentTraceMeta()
+  return meta && meta.request !== false && meta.id ? meta.id : undefined
+}
+/** Ids for an event recorded off a Fastify request: request id, node, and the client facts. */
+function requestIds(
+  req: unknown
+): Pick<TrafficEventWire, 'rid' | 'node' | 'tab' | 'build' | 'app' | 'page' | 'load'> {
+  const rid = (req as { requestId?: unknown } | undefined)?.requestId
+  return {
+    rid: typeof rid === 'string' && rid ? rid.slice(0, 64) : currentRequestId(),
+    node: INSTANCE_ID,
+    ...clientFactsOf(req)
+  }
+}
+/** Ids for an event with no request object in hand: node, plus the trace / source in context. */
+function contextIds(): Pick<TrafficEventWire, 'rid' | 'node' | 'run'> {
+  const out: Pick<TrafficEventWire, 'rid' | 'node' | 'run'> = { node: INSTANCE_ID }
+  const rid = currentRequestId()
+  if (rid) out.rid = rid
+  const run = currentTrafficSource()?.id
+  if (run) out.run = String(run).slice(0, 120)
+  return out
+}
 /** Taps add ticker events here; they share the bounded buffer and its priority rule. */
 export function pushTrafficEvent(ev: TrafficEventWire): void {
   if (noStore()) return
   try {
+    // A tap event inherits the ids of whatever is in context (the request / source it rode on).
+    const ids = contextIds()
+    if (ev.node == null) ev.node = ids.node
+    if (ev.rid == null && ids.rid) ev.rid = ids.rid
+    if (ev.run == null && ids.run) ev.run = ids.run
     pushEvent(ev)
   } catch {
     /* never */
@@ -351,6 +399,14 @@ function pushEvent(ev: TrafficEventWire): void {
   }
   pendingEvents.splice(worst, 1)
   st.bufferDropped++
+}
+/** Drop undefined keys, so an event never carries `rid: undefined` on the wire. */
+function definedOnly<T extends object>(o: T): Partial<T> {
+  const out: Partial<T> = {}
+  for (const k of Object.keys(o) as Array<keyof T>) {
+    if (o[k] !== undefined) out[k] = o[k]
+  }
+  return out
 }
 /** The request's integration chain id (plugins/chain.ts stamps `req.chainId`). */
 function chainOfReq(req: unknown): string | undefined {
@@ -493,7 +549,8 @@ function applyRequest(
       ms: ev.latencyMs,
       code,
       record: record ?? undefined,
-      chain: chainOfReq(ev.req)
+      chain: chainOfReq(ev.req),
+      ...definedOnly(requestIds(ev.req))
     }
     pushEvent(event)
   } else if (c.kind === 'read') {
@@ -505,7 +562,8 @@ function applyRequest(
       caller,
       route,
       status: ev.status,
-      ms: ev.latencyMs
+      ms: ev.latencyMs,
+      ...definedOnly(requestIds(ev.req))
     }
     pushEvent(event)
   }
@@ -648,7 +706,9 @@ export function noteWrite(ev: TrafficWriteEvent): void {
       record: w.record,
       fields,
       via,
-      chain: currentChain()?.chain_id
+      chain: currentChain()?.chain_id,
+      // Client facts are not in hand here (no request object) — only the ids.
+      ...contextIds()
     }
     pushEvent(event)
     const ctx = {

@@ -1,5 +1,5 @@
 // api/src/test/unit/services/traffic-map.test.ts
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../services/request-trace.js', () => ({
   currentTraceCaller: vi.fn(() => null),
@@ -7,6 +7,7 @@ vi.mock('../../../services/request-trace.js', () => ({
 }))
 vi.mock('../../../services/settings-overrides.js', () => ({ instanceKey: () => 'test-node' }))
 
+import { INSTANCE_ID } from '../../../services/instance-roster.js'
 import { currentTraceCaller, currentTraceMeta } from '../../../services/request-trace.js'
 import {
   advanceTo,
@@ -25,6 +26,7 @@ import {
   setExtensionRoutes,
   sweepIdle
 } from '../../../services/traffic-map.js'
+import { withTrafficSource } from '../../../services/traffic-source.js'
 
 const T0 = 1_800_000_000 // epoch seconds
 const req = (over: Partial<Parameters<typeof noteRequest>[0]> = {}) =>
@@ -583,5 +585,86 @@ describe('final-review fixes', () => {
     live.set('a', [{ method: 'GET', url: '/api/new/:id' }])
     expect(matchExtensionRoute('GET', '/api/old/1')).toBeNull()
     expect(matchExtensionRoute('GET', '/api/new/1')).toBe('a')
+  })
+})
+
+describe('event ids (drill-down Wave 0)', () => {
+  afterEach(() => {
+    vi.mocked(currentTraceMeta).mockReturnValue(null)
+  })
+  const RID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  const fastifyReq = {
+    requestId: RID,
+    headers: {
+      'x-nivaro-client': 'build=b42; api=0.2.15; tab=tab_9; loaded=1800000000000',
+      'x-nivaro-app': 'Admin',
+      'x-nivaro-page': '/collections/workflows/371367?tab=lines',
+      'x-nivaro-load': 'load_abc123'
+    }
+  }
+  it('a request event carries the request id, this node and the parsed client facts', () => {
+    req({ method: 'PATCH', path: '/api/items/workflows/1', status: 422, req: fastifyReq })
+    req({ req: fastifyReq })
+    const [err, read] = drainEvents()
+    for (const ev of [err, read]) {
+      expect(ev).toMatchObject({
+        rid: RID,
+        node: INSTANCE_ID,
+        tab: 'tab_9',
+        build: 'b42',
+        app: 'admin',
+        page: '/collections/workflows/:id',
+        load: 'load_abc123'
+      })
+    }
+    expect(err.kind).toBe('error')
+    expect(read.kind).toBe('read')
+  })
+  it('missing or junk headers leave the facts out rather than sending them empty', () => {
+    req({
+      req: { requestId: RID, headers: { 'x-nivaro-app': 'Not a slug!', 'x-nivaro-load': 'x' } }
+    })
+    const [ev] = drainEvents()
+    expect(ev.rid).toBe(RID)
+    for (const k of ['app', 'load', 'tab', 'build', 'page'])
+      expect(Object.keys(ev)).not.toContain(k)
+  })
+  it('a write takes the request id from the trace and the owning source as run', () => {
+    vi.mocked(currentTraceMeta).mockReturnValue({
+      id: RID,
+      urlHint: '/api/items/workflows/1',
+      userId: 'u1',
+      request: true
+    })
+    noteWrite({
+      collection: 'workflows',
+      item: 1,
+      action: 'update',
+      changedFields: [],
+      at: T0 * 1000
+    })
+    const [w] = drainEvents()
+    expect(w).toMatchObject({ rid: RID, node: INSTANCE_ID })
+    expect(w.tab).toBeUndefined()
+
+    // A background job's own trace id is not a request id — no rid, but the run that owns it.
+    vi.mocked(currentTraceMeta).mockReturnValue({
+      id: 'bg-trace',
+      urlHint: 'job',
+      userId: null,
+      request: false
+    })
+    withTrafficSource({ id: 'cron:nightly', label: 'Nightly', kind: 'cron' }, () =>
+      noteWrite({
+        collection: 'forecasts',
+        item: 2,
+        action: 'create',
+        changedFields: [],
+        at: T0 * 1000
+      })
+    )
+    const [bg] = drainEvents()
+    expect(bg.rid).toBeUndefined()
+    expect(bg.run).toBe('cron:nightly')
   })
 })
