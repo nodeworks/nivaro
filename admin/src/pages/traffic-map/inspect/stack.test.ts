@@ -152,6 +152,20 @@ describe('stack URL form', () => {
     expect(decodeStack(null, any)).toEqual([])
   })
 
+  it('keeps a slash inside an id that a hand-written link left single-encoded', () => {
+    // URLSearchParams decodes `items%2Fworkflows` to `items/workflows` before we see it.
+    expect(decodeStack(`entity:items/workflows/request:${RID}`, any)).toEqual([
+      { kind: 'entity', id: 'items/workflows' },
+      { kind: 'request', id: RID }
+    ])
+    expect(decodeStack('entity:items/workflows@1700000000123', any)).toEqual([
+      { kind: 'entity', id: 'items/workflows', at: 1_700_000_000_123 }
+    ])
+    // Round trip of what the page itself writes still works.
+    const enc = encodeStack([{ kind: 'entity', id: 'items/workflows' }]) as string
+    expect(decodeStack(enc, any)).toEqual([{ kind: 'entity', id: 'items/workflows' }])
+  })
+
   it('unknown kinds default to "no registered inspectable"', () => {
     register(inspectables, { id: 'request', label: 'Request', Panel: () => null })
     expect(decodeStack(`request:${RID}/trace:${RID}`)).toEqual([{ kind: 'request', id: RID }])

@@ -348,7 +348,6 @@ export function InspectHost() {
             <ArrowRight className='h-4 w-4' aria-hidden='true' />
           </button>
           <Crumbs levels={s.levels} index={s.index} />
-          <InspectHeaderActions {...headerProps} />
           <button
             type='button'
             className={cn(
@@ -380,6 +379,11 @@ export function InspectHost() {
           >
             <X className='h-4 w-4' aria-hidden='true' />
           </button>
+        </div>
+        {/* The level's actions get their own row so a wide set never squeezes the breadcrumbs
+            out of the 600px column; the row disappears when no action applies. */}
+        <div className='mt-1 flex flex-wrap items-center justify-end gap-1 empty:hidden'>
+          <InspectHeaderActions {...headerProps} />
         </div>
       </header>
       <div

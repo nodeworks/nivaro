@@ -152,6 +152,8 @@ export function replaceInspect(levels: InspectRef[]): void {
 
 /** Same shape as the server's INSPECT_KIND_RE: a kind a source could actually register. */
 const KIND_RE = /^[a-z][a-z0-9-]{1,30}$/
+/** A URL piece that opens a new `kind:` segment (see decodeStack). */
+const SEG_START_RE = /^[a-z][a-z0-9-]{1,30}:/
 
 /** The stack as a URL value (the newest MAX_URL_LEVELS levels); null when closed. */
 export function encodeStack(levels: InspectRef[] = state.levels): string | null {
@@ -174,8 +176,16 @@ export function decodeStack(
   known: (kind: string) => boolean = (k) => !!inspectableFor(k)
 ): InspectRef[] {
   if (!s || typeof s !== 'string' || s.length > 4000) return []
+  // Split on '/', but a piece that does not start a `kind:` segment belongs to the id before
+  // it: a hand-written link spells an entity id as `items%2Fworkflows`, and URLSearchParams
+  // hands that to us already decoded as `items/workflows`.
+  const segs: string[] = []
+  for (const piece of s.split('/')) {
+    if (segs.length > 0 && !SEG_START_RE.test(piece)) segs[segs.length - 1] += `/${piece}`
+    else segs.push(piece)
+  }
   const out: InspectRef[] = []
-  for (const seg of s.split('/')) {
+  for (const seg of segs) {
     if (out.length >= MAX_URL_LEVELS) break
     const cut = seg.indexOf(':')
     if (cut <= 0) continue
