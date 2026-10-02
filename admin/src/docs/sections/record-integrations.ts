@@ -25,7 +25,7 @@ export const recordIntegrations: DocSection = {
     { type: 'h2', id: 'record-integrations-readiness', text: 'Push readiness' },
     {
       type: 'p',
-      text: 'A transition that carries a partner push shows a small chip beside its button in the record header: a green "Ready", or what stands in the way. Click it for the list — "2 lines missing Sales order" names the lines, and each line or field jumps into view (the form switches to the step that holds it and opens the line). The same chip appears on the Integrations dialog next to each step, and beside item actions that can pre-flight.'
+      text: 'A transition that carries a partner push shows a small chip beside its button in the record header: a green "Ready", or what stands in the way. Click it for the list — "2 lines missing Sales order" names the lines, and each line or field jumps into view (the form switches to the step that holds it and opens the line). The same chip appears on the Integrations dialog next to each step, and beside item actions that can pre-flight. Values the step itself asks for when you press the button (REQ IDs on Fusion Submitted) are listed under "Asked for when you press it" and never turn the chip red — they are meant to be empty until then; a partner push waiting on one of those fields reads the same way. Issue severities: `block`, `warn`, `ask`.'
     },
     {
       type: 'ul',

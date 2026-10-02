@@ -280,8 +280,11 @@ export async function outboundPreview(
 
 export interface PreflightIssue {
   /** 'block' stops the transition; 'warn' lets it through but a push will
-   *  skip, fail or leave the partner without something. */
-  severity: 'block' | 'warn'
+   *  skip, fail or leave the partner without something; 'ask' is a value the
+   *  step's own requirements dialog asks for when the button is pressed (REQ
+   *  IDs on Fusion Submitted) — expected to be empty beforehand, never a
+   *  problem. */
+  severity: 'block' | 'warn' | 'ask'
   message: string
   /** Record field to bring into view. */
   field?: string
@@ -301,7 +304,9 @@ function isEmpty(v: unknown): boolean {
   return v == null || (Array.isArray(v) ? v.length === 0 : String(v).trim() === '')
 }
 
-/** Group a child_fields block's incomplete rows by the field they lack. */
+/** Group a child_fields block's incomplete rows by the field they lack. These
+ *  are what the transition's requirements dialog collects when the button is
+ *  pressed, so they read as 'ask', never as something standing in the way. */
 export function requirementIssues(blocks: TransitionRequirementBlock[]): PreflightIssue[] {
   const issues: PreflightIssue[] = []
   for (const b of blocks) {
@@ -309,7 +314,7 @@ export function requirementIssues(blocks: TransitionRequirementBlock[]): Preflig
       if (b.optional) continue
       for (const f of b.fields) {
         if (!isEmpty(b.values?.[f.field])) continue
-        issues.push({ severity: 'block', message: `Missing ${f.label}`, field: f.field })
+        issues.push({ severity: 'ask', message: `Asks for ${f.label}`, field: f.field })
       }
       continue
     }
@@ -334,8 +339,8 @@ export function requirementIssues(blocks: TransitionRequirementBlock[]): Preflig
       const rows = byField.get(f.field)
       if (!rows?.length) continue
       issues.push({
-        severity: 'block',
-        message: `${rows.length} line${rows.length === 1 ? '' : 's'} missing ${f.label}`,
+        severity: 'ask',
+        message: `Asks for ${f.label} on ${rows.length} line${rows.length === 1 ? '' : 's'}`,
         collection: block.collection,
         fk_field: block.fk_field,
         rows
@@ -405,6 +410,9 @@ export async function transitionPreflight(
     )) as TransitionRow | undefined
   if (!t) return null
   const issues: PreflightIssue[] = []
+  // Record fields the requirements dialog collects on press: a push guard
+  // waiting on one of them is satisfied by the dialog, not a blocker.
+  const asked = new Set<string>()
 
   if (t.requirements) {
     const blocks = await evaluateTransitionRequirements(
@@ -414,7 +422,12 @@ export async function transitionPreflight(
       undefined,
       collection
     ).catch(() => null)
-    if (blocks) issues.push(...requirementIssues(blocks))
+    if (blocks) {
+      issues.push(...requirementIssues(blocks))
+      for (const b of blocks) {
+        if (b.type === 'record_fields') for (const f of b.fields) asked.add(f.field)
+      }
+    }
   }
 
   if (t.condition_rules) {
@@ -454,7 +467,13 @@ export async function transitionPreflight(
     const name = p.api_id != null ? (names.get(p.api_id) ?? `API #${p.api_id}`) : 'A partner'
     pushes.push({ api_name: name, status: p.status, reason: p.reason })
     const later = p.after_earlier_writeback ? ' (an earlier push on this step may fill it)' : ''
-    if (p.status === 'guard' && p.guard_failed) {
+    if (p.status === 'guard' && p.guard_failed && asked.has(p.guard_failed.field)) {
+      issues.push({
+        severity: 'ask',
+        message: `${name} goes once ${humanizePayloadKey(p.guard_failed.field)} is entered in the dialog`,
+        field: p.guard_failed.field
+      })
+    } else if (p.status === 'guard' && p.guard_failed) {
       issues.push({
         severity: p.blocking ? 'block' : 'warn',
         message: `${name} will not be sent: ${describeGuard(p.guard_failed)}${later}`,

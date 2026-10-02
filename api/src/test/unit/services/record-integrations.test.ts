@@ -106,8 +106,8 @@ describe('requirementIssues (#616)', () => {
     ])
     expect(issues).toEqual([
       {
-        severity: 'block',
-        message: '2 lines missing Sales order',
+        severity: 'ask',
+        message: 'Asks for Sales order on 2 lines',
         collection: 'lines',
         fk_field: 'order',
         rows: [
@@ -116,8 +116,8 @@ describe('requirementIssues (#616)', () => {
         ]
       },
       {
-        severity: 'block',
-        message: '2 lines missing Site',
+        severity: 'ask',
+        message: 'Asks for Site on 2 lines',
         collection: 'lines',
         fk_field: 'order',
         rows: [
@@ -125,7 +125,7 @@ describe('requirementIssues (#616)', () => {
           { id: '3', label: 'Line 3' }
         ]
       },
-      { severity: 'block', message: 'Missing Order number', field: 'order_number' }
+      { severity: 'ask', message: 'Asks for Order number', field: 'order_number' }
     ])
   })
 

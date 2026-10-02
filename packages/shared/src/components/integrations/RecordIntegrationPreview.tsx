@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  PencilLine,
   Zap
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -28,7 +29,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 // ─── Shared types (mirror api services/integration-preview.ts) ─────────────
 
 export interface PreflightIssue {
-  severity: 'block' | 'warn'
+  /** 'ask' = the step's own dialog collects this when the button is pressed
+   *  (REQ IDs on Fusion Submitted) — information, never a problem. */
+  severity: 'block' | 'warn' | 'ask'
   message: string
   field?: string
   collection?: string
@@ -79,14 +82,18 @@ function PreflightIssueList({
           data-preflight-issue={issue.severity}
           className='flex items-start gap-2 text-[12px]'
         >
-          <AlertTriangle
-            className={cn(
-              'mt-0.5 h-3.5 w-3.5 shrink-0',
-              issue.severity === 'block'
-                ? 'text-red-600 dark:text-red-400'
-                : 'text-amber-600 dark:text-amber-400'
-            )}
-          />
+          {issue.severity === 'ask' ? (
+            <PencilLine className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500' />
+          ) : (
+            <AlertTriangle
+              className={cn(
+                'mt-0.5 h-3.5 w-3.5 shrink-0',
+                issue.severity === 'block'
+                  ? 'text-red-600 dark:text-red-400'
+                  : 'text-amber-600 dark:text-amber-400'
+              )}
+            />
+          )}
           <div className='min-w-0 flex-1'>
             <p className='text-slate-700 dark:text-slate-200'>{issue.message}</p>
             {issue.rows && issue.rows.length > 0 && issue.collection && (
@@ -248,7 +255,11 @@ export function PushReadinessChip({
     )
   if (data?.supported === false) return null
   const failed = isError || !!data?.error
-  const issues = data?.issues ?? []
+  const all = data?.issues ?? []
+  // What the step's own dialog asks for on press is expected to be empty
+  // beforehand: it never colours or counts the chip.
+  const asks = all.filter((i) => i.severity === 'ask')
+  const issues = all.filter((i) => i.severity !== 'ask')
   const blocking = issues.filter((i) => i.severity === 'block')
   const state: 'ready' | 'block' | 'warn' | 'error' = failed
     ? 'error'
@@ -281,15 +292,19 @@ export function PushReadinessChip({
         ? 'Could not check'
         : (blocking[0] ?? issues[0]).message
   const more = issues.length > 1 ? ` +${issues.length - 1}` : ''
+  const askText =
+    asks.length > 0
+      ? ` It asks for ${asks.map((a) => a.message.replace(/^Asks for /, '')).join('; ')} when you press it.`
+      : ''
   const tip =
     state === 'ready'
-      ? !pushes
-        ? `${label}: everything it needs is filled in`
-        : sending.length > 0
-          ? `${label} will send to ${joinNames(sending)}; everything it needs is filled in`
-          : held.length > 0
-            ? `${label} won't resend to ${joinNames(held)}; nothing it watches has changed`
-            : `${label} sends nothing to a partner for this record`
+      ? (!pushes
+          ? `${label}: everything it needs is filled in`
+          : sending.length > 0
+            ? `${label} will send to ${joinNames(sending)}; everything it needs is filled in`
+            : held.length > 0
+              ? `${label} won't resend to ${joinNames(held)}; nothing it watches has changed`
+              : `${label} sends nothing to a partner for this record`) + askText
       : `${label}: ${headline}${more ? ` (and ${issues.length - 1} more)` : ''}`
   // On a button, a green check for "nothing goes out" is noise: only speak
   // when something will be sent or something stands in the way.
@@ -367,7 +382,9 @@ export function PushReadinessChip({
               ? held.length > 0
                 ? `Nothing new to send: ${joinNames(held)} already has these values.`
                 : 'Nothing goes to a partner from this record.'
-              : 'Everything it needs is filled in.'}
+              : asks.length > 0
+                ? 'Nothing stands in the way.'
+                : 'Everything it needs is filled in.'}
           </p>
         ) : (
           <div className='mt-2'>
@@ -380,6 +397,27 @@ export function PushReadinessChip({
                 onJump?.()
               }}
             />
+          </div>
+        )}
+        {state !== 'error' && asks.length > 0 && (
+          <div
+            className='mt-3 border-t border-slate-100 pt-2 dark:border-border'
+            data-preflight-asks={asks.length}
+          >
+            <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+              Asked for when you press it
+            </p>
+            <div className='mt-1.5'>
+              <PreflightIssueList
+                issues={asks}
+                collection={collection}
+                itemId={itemId}
+                onJump={() => {
+                  setOpen(false)
+                  onJump?.()
+                }}
+              />
+            </div>
           </div>
         )}
         {data?.pushes && data.pushes.length > 0 && (

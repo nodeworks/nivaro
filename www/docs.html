@@ -14756,14 +14756,13 @@ POST /api/message-actions/callback
           <!-- /SYNC:admin-i18n -->
         </div>
 
-        <div class="doc-section" id="s-admin-navigation" data-toc='[{"id":"admin-navigation","label":"Navigation & Favorites"},{"id":"admin-navigation-find","label":"Find a page"},{"id":"admin-navigation-favorites","label":"Favorites"}]'>
+        <div class="doc-section" id="s-admin-navigation" data-toc='[{"id":"admin-navigation","label":"Navigation &amp; Favorites"},{"id":"admin-navigation-find","label":"Find a page"},{"id":"admin-navigation-favorites","label":"Favorites"}]'>
           <!-- SYNC:admin-navigation -->
           <h1 class="doc-h1" id="admin-navigation">Navigation &amp; Favorites</h1>
           <p class="doc-p">The sidebar rail groups every admin page by the job you came to do. Hover a rail icon to see what its category covers; each category opens a panel split into short named sections. A thin rule in the rail separates the day-to-day categories from the ones for running the instance itself.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Category</th><th>What lives there</th></tr></thead>
-            <tbody>
-              <tr><td>Home</td><td>Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, Chat, Support</td></tr>
+            <tbody><tr><tr><td>Home</td><td>Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, Chat, Support</td></tr>
               <tr><td>Data</td><td>Records (collections, files, trash), structure (data model, hierarchies, virtual collections, ID sequences), templates &amp; forms, bulk changes (imports, find &amp; replace, M2M matrix, data integrity)</td></tr>
               <tr><td>Workflow</td><td>Processes (pipelines, approvals, queues), automations (flows, rules, automation tests), deadlines &amp; risk (SLA, at-risk, scheduled changes, blackout dates)</td></tr>
               <tr><td>People</td><td>Directory, access (roles, user scopes, access requests, access audit), availability (delegation, coverage gaps, presence), security &amp; privacy</td></tr>
@@ -14772,8 +14771,7 @@ POST /api/message-actions/callback
               <tr><td>Integrations</td><td>Integration health, ERP submissions, dead letters, and partner connections</td></tr>
               <tr><td>Operations</td><td>Health, background jobs, ops tools, and release (environments, config diff, readiness, promotion, blueprints, change sets)</td></tr>
               <tr><td>Developer</td><td>APIs, queries, extensions and test tooling, reference docs</td></tr>
-              <tr><td>System</td><td>Settings, feature flags, config health, config search, setup checklist</td></tr>
-            </tbody>
+              <tr><td>System</td><td>Settings, feature flags, config health, config search, setup checklist</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3" id="admin-navigation-find">Find a page</h3>
           <p class="doc-p">The Find box at the top of the panel searches every category at once — page names, section names and common synonyms ("email" finds Mail Log, "cron" finds Background Jobs). Each hit shows under its category so you learn where it lives. Enter opens the best match; Escape clears.</p>
